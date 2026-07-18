@@ -32,25 +32,6 @@
   margin-top: 7px;
 }
 
-.creator-inspiration { margin-top: 14px; }
-
-/* custom: section heading + explanatory hint pairing inside the composer
-   canvas (the kit has no heading-with-hint composite outside pane headers). */
-.creator-section-heading {
-  display: grid;
-  gap: 3px;
-  margin-bottom: 9px;
-}
-
-.creator-section-heading .ctox-field-label { margin: 0; }
-
-.creator-hint {
-  margin: 0;
-  color: var(--muted);
-}
-
-.creator-intro .creator-hint { margin-top: 6px; }
-
 .creator-url-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -84,17 +65,8 @@
   cursor: pointer;
 }
 
-/* custom: inline form-readiness status line (data-state is a JS hook). */
-.creator-request-diagnostics {
-  min-height: 18px;
-  margin: 9px 0 0;
-  color: var(--muted);
-}
-
-.creator-request-diagnostics[data-state="ready"] { color: var(--success); }
-.creator-request-diagnostics[data-state="pending"] { color: var(--warning); }
-
 .creator-examples { padding: 22px 0; }
+.creator-examples > .ctox-field-label { margin-bottom: 10px; }
 
 /* custom: prompt suggestion picker — a bordered two-column choice grid with
    accent hover, not a data list or table. */
@@ -114,12 +86,12 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: color 120ms ease, transform 120ms ease;
+  transition: color 120ms ease;
 }
 
 .creator-example:nth-child(odd) { border-right: 1px solid var(--hairline, var(--line)); }
 .creator-example:nth-child(even) { padding-left: 12px; }
-.creator-example:hover { color: var(--accent); transform: translateX(2px); }
+.creator-example:hover { color: var(--accent); }
 .creator-example:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
 .creator-example strong,
@@ -156,13 +128,6 @@
 .creator-form-group { display: grid; gap: 6px; }
 .creator-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .creator-options-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-
-.collections-editor {
-  padding: 8px;
-  border: 1px solid var(--hairline, var(--line));
-  border-radius: var(--control-radius);
-  background: var(--surface-2);
-}
 
 .collection-row {
   display: flex;

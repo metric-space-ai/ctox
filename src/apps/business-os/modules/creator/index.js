@@ -12,9 +12,6 @@ const state = {
   appCollections: [],
   inspirationUrls: [],
   appVersion: '0.1.0',
-  contextMenu: null,
-  contextMenuCleanup: null,
-  resizerCleanup: null,
   catalogSubscription: null,
   commandSubscription: null,
   streamGeneration: 0,
@@ -241,21 +238,12 @@ export async function mount(ctx) {
     addConsoleLog(`[WARN] Creator-Daten konnten nicht geladen werden: ${error.message}`, 'warning');
   });
 
-  // 5. Initialize CTOX unified context menu
-
-  // 6. Setup column resizer
-  state.resizerCleanup = setupResizers(ctx.host);
-
   return () => {
     if (streamGeneration === state.streamGeneration) state.streamGeneration += 1;
-    state.contextMenuCleanup?.();
-    state.resizerCleanup?.();
     cleanupSubscription(state.catalogSubscription);
     cleanupSubscription(state.commandSubscription);
     state.catalogSubscription = null;
     state.commandSubscription = null;
-    state.contextMenu?.remove();
-    state.contextMenu = null;
     console.log('[creator] Module unmounted and cleaned up.');
   };
 }
@@ -267,10 +255,6 @@ async function ensureStyles() {
   link.href = new URL('./index.css', import.meta.url).href;
   link.dataset.moduleStyles = 'creator';
   document.head.append(link);
-}
-
-function setupResizers() {
-  return () => {};
 }
 
 async function startCreatorDataStreams(ctx, host, streamGeneration) {
@@ -410,7 +394,6 @@ function wireUi(host) {
   const inputNewColl = host.querySelector('#input-new-collection');
   const btnDeploy = host.querySelector('#btn-deploy-app');
   const inputRequest = host.querySelector('#app-request-input');
-  const requestDiagnostics = host.querySelector('#creator-request-diagnostics');
   const inspirationInput = host.querySelector('#creator-inspiration-url');
   const addInspirationButton = host.querySelector('#btn-add-inspiration');
   const inspirationList = host.querySelector('[data-inspiration-list]');
@@ -450,10 +433,6 @@ function wireUi(host) {
       ? (state.ctx?.locale === 'en' ? 'Start app creation through CTOX' : 'App-Erstellung durch CTOX starten')
       : actionState.diagnostic;
     btnDeploy.dataset.state = actionState.deployReady ? 'ready' : 'blocked';
-    if (requestDiagnostics) {
-      requestDiagnostics.textContent = actionState.diagnostic;
-      requestDiagnostics.dataset.state = actionState.deployReady ? 'ready' : actionState.hasRequest ? 'pending' : 'blocked';
-    }
     if (!state.isDeploying && syncText && syncDot) {
       syncDot.style.background = '';
       syncText.textContent = actionState.diagnostic;
@@ -873,166 +852,6 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
     state.isDeploying = false;
     updateCreatorActionState();
   }
-}
-
-function initCreatorContextMenu(state) {
-  state.contextMenu?.remove();
-  const menu = document.createElement('div');
-  menu.className = 'ctox-context-menu creator-context-menu';
-  menu.hidden = true;
-  document.body.append(menu);
-  state.contextMenu = menu;
-
-  const handleContextMenu = (event) => {
-    if (state.ctx.module?.id !== 'creator') return;
-    const context = creatorCommandContextFromElement(state, event.target);
-    event.preventDefault();
-    event.stopPropagation();
-    renderCreatorContextMenu(state, context, event.clientX, event.clientY);
-  };
-  const handleOutsideClick = (event) => {
-    if (state.contextMenu?.contains(event.target)) return;
-    hideCreatorContextMenu(state);
-  };
-  const handleEscape = (event) => {
-    if (event.key === 'Escape') hideCreatorContextMenu(state);
-  };
-
-  window.addEventListener('click', handleOutsideClick, { capture: true });
-  window.addEventListener('keydown', handleEscape);
-
-  return () => {
-    window.removeEventListener('click', handleOutsideClick, { capture: true });
-    window.removeEventListener('keydown', handleEscape);
-    hideCreatorContextMenu(state);
-  };
-}
-
-function hideCreatorContextMenu(state) {
-  if (state.contextMenu) state.contextMenu.hidden = true;
-}
-
-function canModifyCreatorApp(state) {
-  if (typeof state.ctx.canModifyModule === 'function' && state.ctx.canModifyModule()) return true;
-  const user = state.ctx.session?.user || {};
-  const role = String(user.role || (user.is_admin ? 'admin' : 'user')).trim().toLowerCase().replace(/^business_os_/, '');
-  return ['admin', 'chef'].includes(role);
-}
-
-function creatorCommandContextFromElement(state, target) {
-  const element = target?.nodeType === Node.ELEMENT_NODE ? target : target?.parentElement;
-
-  return {
-    module: 'creator',
-    column: 'workspace',
-    record_type: 'app-request',
-    record_id: state.appId || 'creator',
-    label: state.appTitle || 'Creator App Request',
-    app_id: state.appId || '',
-    app_title: state.appTitle || '',
-    app_desc: state.appDesc || '',
-    app_category: state.appCategory || '',
-    app_layout: state.appLayout || '',
-    app_collections: state.appCollections || [],
-    selected_text: String(window.getSelection?.()?.toString?.() || '').trim().slice(0, 1000),
-    clicked_text: String(element?.innerText || element?.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 500),
-  };
-}
-
-function renderCreatorContextMenu(state, context, x, y) {
-  const canModifyApp = canModifyCreatorApp(state);
-  state.contextMenu.innerHTML = `
-    <form class="creator-context-chat" data-creator-context-chat-form>
-      <header>
-        <div>
-          <strong>Chat to CTOX</strong>
-          <span>${escapeHtml(context.label || 'Creator')}</span>
-        </div>
-        <button type="button" data-creator-context-close aria-label="Schließen">×</button>
-      </header>
-      ${canModifyApp ? `
-        <div class="ctox-context-mode" role="radiogroup" aria-label="CTOX Aufgabe">
-          <label><input type="radio" name="contextMode" value="data" checked /> Mit Daten arbeiten</label>
-          <label><input type="radio" name="contextMode" value="app" /> App modifizieren</label>
-        </div>
-      ` : ''}
-      <textarea data-creator-context-message placeholder="Was soll CTOX mit diesem App-Auftrag tun?"></textarea>
-      <footer>
-        <span data-creator-context-status></span>
-        <button type="submit">Senden</button>
-      </footer>
-    </form>
-  `;
-  state.contextMenu.hidden = false;
-  state.contextMenu.style.left = '0px';
-  state.contextMenu.style.top = '0px';
-  const rect = state.contextMenu.getBoundingClientRect();
-  const clampNumber = (val, min, max) => Math.min(max, Math.max(min, val));
-  const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
-  const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
-  state.contextMenu.style.left = `${clampNumber(x, 8, maxLeft)}px`;
-  state.contextMenu.style.top = `${clampNumber(y, 8, maxTop)}px`;
-
-  const form = state.contextMenu.querySelector('[data-creator-context-chat-form]');
-  const textarea = state.contextMenu.querySelector('[data-creator-context-message]');
-  state.contextMenu.querySelector('[data-creator-context-close]')?.addEventListener('click', () => hideCreatorContextMenu(state));
-  form?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const mode = canModifyApp ? (new FormData(form).get('contextMode') || 'data') : 'data';
-    await dispatchCreatorContextChat(state, context, textarea?.value || '', mode);
-  });
-  requestAnimationFrame(() => textarea?.focus());
-}
-
-async function dispatchCreatorContextChat(state, context, message, mode = 'data') {
-  const trimmed = String(message || '').trim();
-  const status = state.contextMenu?.querySelector('[data-creator-context-status]');
-  if (!trimmed) {
-    if (status) status.textContent = 'Nachricht fehlt.';
-    return;
-  }
-
-  const safeMode = mode === 'app' && canModifyCreatorApp(state) ? 'app' : 'data';
-  if (!document.querySelector('[data-ctox-chat-root]')) {
-    if (status) status.textContent = 'Chat ist noch nicht bereit.';
-    return;
-  }
-  if (status) status.textContent = 'Oeffne Chat...';
-  const title = `${safeMode === 'app' ? 'Creator App modifizieren' : 'App-Auftrag bearbeiten'} · ${context.label || 'Creator'}`;
-  const instruction = safeMode === 'app'
-    ? `Modifiziere die App-Creator-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, App-Auftraege selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
-    : trimmed;
-
-  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
-    detail: {
-      text: trimmed,
-      module: 'creator',
-      source_title: 'App Creator',
-      command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
-      record_id: safeMode === 'app' ? 'creator' : (context.record_id || 'creator'),
-      title,
-      instruction,
-      payload: {
-        title,
-        instruction,
-        request: trimmed,
-        user_message: trimmed,
-        mode: safeMode,
-        target: safeMode === 'app' ? 'app' : 'data',
-        context,
-        thread_key: 'business-os/creator',
-      },
-      client_context: {
-        action: 'context-chat',
-        mode: safeMode,
-        column: context.column,
-        record_type: context.record_type,
-        app_id: context.app_id,
-        app_title: context.app_title,
-      },
-    },
-  }));
-  hideCreatorContextMenu(state);
 }
 
 function escapeHtml(value) {

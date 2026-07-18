@@ -37,10 +37,13 @@ try {
   assert.match(await page.locator('#app-request-input').inputValue(), /CRM-App/);
   assert.equal(await page.locator('#btn-deploy-app').isEnabled(), true);
 
+  // Inspiration URLs live behind the collapsed options disclosure now.
+  await page.locator('.creator-options > summary').click();
   await page.locator('#creator-inspiration-url').fill('https://linear.app/#product');
   await page.locator('#btn-add-inspiration').click();
   assert.equal(await page.locator('[data-inspiration-list] .creator-url-chip').count(), 1);
   assert.match(await page.locator('[data-inspiration-list]').innerText(), /linear\.app/);
+  await page.locator('.creator-options > summary').click();
 
   await page.locator('#btn-deploy-app').click();
   await page.waitForFunction(() => globalThis.__creator.commands.length === 1);
@@ -53,7 +56,7 @@ try {
     const root = document.querySelector('[data-creator-root]');
     return {
       overflowX: root.scrollWidth - root.clientWidth,
-      title: document.querySelector('.creator-intro .os-title')?.textContent?.trim(),
+      title: document.querySelector('[data-t="centerTitle"]')?.textContent?.trim(),
       promptVisible: document.querySelector('#app-request-input')?.getBoundingClientRect().height > 100,
       technicalSettingsClosed: !document.querySelector('.creator-options')?.open,
       technicalStatusClosed: !document.querySelector('.creator-status-details')?.open,
