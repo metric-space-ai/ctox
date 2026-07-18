@@ -839,11 +839,29 @@ fn mark_maintenance_service_active(state_root: &Path, lease_id: &str) -> Result<
     Ok(())
 }
 
-fn native_replication_is_up(root: &Path) -> bool {
-    crate::business_os::native_peer_status(root)
+fn native_peer_maintenance_health(root: &Path) -> (bool, bool) {
+    let status = crate::business_os::native_peer_status(root);
+    native_peer_maintenance_health_from_status(&status)
+}
+
+fn native_peer_maintenance_health_from_status(status: &serde_json::Value) -> (bool, bool) {
+    let replication_up = status
         .get("replicationUp")
         .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let healthy = status
+        .get("running")
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false)
+        && status
+            .pointer("/heartbeat/fresh")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+    (healthy, replication_up)
+}
+
+fn maintenance_peer_owns_wait(state: &MaintenanceState, peer_healthy: bool) -> bool {
+    state.service_active && peer_healthy
 }
 
 fn reconcile_maintenance_runtime(
@@ -853,10 +871,28 @@ fn reconcile_maintenance_runtime(
     let Some(mut state) = load_maintenance_state_from_root(&layout.state_root)? else {
         return Ok(None);
     };
-    if state.is_terminal() || state.status == "stale" {
+    if state.is_terminal() {
         return Ok(Some(state));
     }
-    if state.service_active && !state.replication_up && native_replication_is_up(root) {
+    let (peer_healthy, replication_up) = native_peer_maintenance_health(root);
+    if state.status == "stale" {
+        if !maintenance_peer_owns_wait(&state, peer_healthy) {
+            return Ok(Some(state));
+        }
+        let lease_id = state.lease_id.clone();
+        state = update_maintenance(&layout.state_root, &lease_id, |state| {
+            state.status = "active".to_string();
+            state.phase = if replication_up {
+                "waiting_collections".to_string()
+            } else {
+                "waiting_replication".to_string()
+            };
+            state.retryable = false;
+            state.retry_action = None;
+            state.last_error = None;
+        })?;
+    }
+    if state.service_active && !state.replication_up && replication_up {
         let lease_id = state.lease_id.clone();
         state = update_maintenance(&layout.state_root, &lease_id, |state| {
             state.replication_up = true;
@@ -869,16 +905,24 @@ fn reconcile_maintenance_runtime(
     }
     if current_utc().timestamp_millis() > state.lease_expires_at_ms && !state.is_terminal() {
         let lease_id = state.lease_id.clone();
-        state = update_maintenance(&layout.state_root, &lease_id, |state| {
-            state.phase = "stale".to_string();
-            state.status = "stale".to_string();
-            state.retryable = true;
-            state.retry_action = Some("ctox upgrade --dev".to_string());
-            state.last_error = Some(
-                "Der Upgrade-Prozess sendet keinen aktuellen Lease-Heartbeat mehr.".to_string(),
-            );
-            state.progress.message = "Upgrade unterbrochen · Wiederholen möglich".to_string();
-        })?;
+        state = if maintenance_peer_owns_wait(&state, peer_healthy) {
+            // The upgrader exits after restarting the service. Large existing
+            // RxDB stores can legitimately need longer than the build-time
+            // lease to reconnect, so a live peer heartbeat owns the wait from
+            // here until the browser acknowledges its required collections.
+            update_maintenance(&layout.state_root, &lease_id, |_| {})?
+        } else {
+            update_maintenance(&layout.state_root, &lease_id, |state| {
+                state.phase = "stale".to_string();
+                state.status = "stale".to_string();
+                state.retryable = true;
+                state.retry_action = Some("ctox upgrade --dev".to_string());
+                state.last_error = Some(
+                    "Der Upgrade-Prozess sendet keinen aktuellen Lease-Heartbeat mehr.".to_string(),
+                );
+                state.progress.message = "Upgrade unterbrochen · Wiederholen möglich".to_string();
+            })?
+        };
     }
     Ok(Some(state))
 }
@@ -4420,6 +4464,31 @@ mod tests {
             .unwrap();
         assert_eq!(reconciled.status, "stale");
         assert!(reconciled.retryable);
+    }
+
+    #[test]
+    fn healthy_native_peer_owns_post_upgrade_wait() {
+        let temp = tempdir().unwrap();
+        let layout = maintenance_test_layout(temp.path());
+        let mut state = begin_maintenance(&layout, "branch:main").unwrap();
+        state.service_active = true;
+
+        let (healthy, replication_up) = native_peer_maintenance_health_from_status(&json!({
+            "running": true,
+            "replicationUp": false,
+            "heartbeat": {"fresh": true}
+        }));
+        assert!(healthy);
+        assert!(!replication_up);
+        assert!(maintenance_peer_owns_wait(&state, healthy));
+
+        let (healthy, _) = native_peer_maintenance_health_from_status(&json!({
+            "running": true,
+            "replicationUp": false,
+            "heartbeat": {"fresh": false}
+        }));
+        assert!(!healthy);
+        assert!(!maintenance_peer_owns_wait(&state, healthy));
     }
 
     #[test]
