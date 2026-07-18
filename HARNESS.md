@@ -174,11 +174,13 @@ Direct-session model events write token and timing forensics to
 `messages.agent_outcome` values rather than by scraping assistant text.
 
 On Linux, CTOX-managed in-process sessions select the stable Landlock backend
-for root workers, thread-spawn leaves, and reviewers. This avoids a runtime
-dependency on system `bwrap` and user namespaces, which are commonly absent on
-managed container hosts, while retaining the helper-enforced filesystem and
-seccomp policy. Standalone harness clients keep their configured Linux sandbox
-backend.
+for root workers and reviewers. Normal workers can read and write their current
+workspace plus the minimal system paths required to execute commands; sibling
+workspaces, runtime databases, and quarantined run artifacts are not readable.
+Reviewers keep their separate read-only policy. This avoids a runtime dependency
+on system `bwrap` and user namespaces, which are commonly absent on managed
+container hosts, while retaining helper-enforced filesystem and seccomp policy.
+Standalone harness clients keep their configured Linux sandbox backend.
 
 ## Context Protection
 

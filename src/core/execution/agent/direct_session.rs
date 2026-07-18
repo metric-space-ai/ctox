@@ -96,6 +96,33 @@ fn configure_managed_linux_sandbox(cli_overrides: &mut Vec<(String, toml::Value)
     let _ = cli_overrides;
 }
 
+fn managed_worker_sandbox_policy(read_only_sandbox: bool) -> SandboxPolicy {
+    if read_only_sandbox {
+        return SandboxPolicy::new_read_only_policy();
+    }
+
+    let mut policy = SandboxPolicy::new_workspace_write_policy();
+    if let SandboxPolicy::WorkspaceWrite { network_access, .. } = &mut policy {
+        *network_access = true;
+    }
+    #[cfg(target_os = "linux")]
+    if let SandboxPolicy::WorkspaceWrite {
+        read_only_access,
+        exclude_tmpdir_env_var,
+        exclude_slash_tmp,
+        ..
+    } = &mut policy
+    {
+        *read_only_access = ctox_protocol::protocol::ReadOnlyAccess::Restricted {
+            include_platform_defaults: true,
+            readable_roots: Vec::new(),
+        };
+        *exclude_tmpdir_env_var = true;
+        *exclude_slash_tmp = true;
+    }
+    policy
+}
+
 fn configure_worker_tool_stack(
     cli_overrides: &mut Vec<(String, toml::Value)>,
     disable_active_tools: bool,
@@ -1332,18 +1359,7 @@ impl PersistentSession {
             cwd: Some(cwd.to_path_buf()),
             approval_policy: Some(AskForApproval::Never.into()),
             approvals_reviewer: None,
-            sandbox_policy: Some(
-                if read_only_sandbox {
-                    SandboxPolicy::new_read_only_policy()
-                } else {
-                    let mut policy = SandboxPolicy::new_workspace_write_policy();
-                    if let SandboxPolicy::WorkspaceWrite { network_access, .. } = &mut policy {
-                        *network_access = true;
-                    }
-                    policy
-                }
-                .into(),
-            ),
+            sandbox_policy: Some(managed_worker_sandbox_policy(read_only_sandbox).into()),
             model: None,
             service_tier: None,
             effort: reasoning_effort,
@@ -1860,6 +1876,36 @@ mod tests {
                 toml::Value::Boolean(false),
             )]
         );
+    }
+
+    #[test]
+    fn managed_linux_workers_cannot_read_sibling_workspaces() {
+        use ctox_protocol::protocol::ReadOnlyAccess;
+
+        let policy = managed_worker_sandbox_policy(false);
+
+        #[cfg(target_os = "linux")]
+        assert!(matches!(
+            policy,
+            SandboxPolicy::WorkspaceWrite {
+                read_only_access: ReadOnlyAccess::Restricted {
+                    include_platform_defaults: true,
+                    readable_roots,
+                },
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+                ..
+            } if readable_roots.is_empty()
+        ));
+
+        #[cfg(not(target_os = "linux"))]
+        assert!(matches!(
+            policy,
+            SandboxPolicy::WorkspaceWrite {
+                read_only_access: ReadOnlyAccess::FullAccess,
+                ..
+            }
+        ));
     }
 
     #[test]
