@@ -409,7 +409,7 @@ pub fn append(root: &Path, args: &[String]) -> Result<()> {
     } else {
         df_new
     };
-    let df = normalize_evidence_dataframe(&table_key, df)?;
+    let df = normalize_evidence_dataframe(root, &table_key, df)?;
 
     commit_parquet(&path, df.clone())?;
     let now = now_rfc3339();
@@ -470,7 +470,7 @@ pub fn update(root: &Path, args: &[String]) -> Result<()> {
         .with_columns(exprs)
         .collect()
         .context("apply --set assignments")?;
-    let df = normalize_evidence_dataframe(&table_key, df)?;
+    let df = normalize_evidence_dataframe(root, &table_key, df)?;
 
     commit_parquet(&path, df.clone())?;
     let now = now_rfc3339();
@@ -512,7 +512,7 @@ pub fn delete_rows(root: &Path, args: &[String]) -> Result<()> {
         .filter(cond.not())
         .collect()
         .context("apply delete-rows filter")?;
-    let df = normalize_evidence_dataframe(&table_key, df)?;
+    let df = normalize_evidence_dataframe(root, &table_key, df)?;
     let after_n = df.height() as i64;
     let rows_deleted = before_n - after_n;
 
@@ -572,7 +572,7 @@ pub fn add_column(root: &Path, args: &[String]) -> Result<()> {
         .with_column(value_expr.alias(column.as_str()))
         .collect()
         .context("add-column collect")?;
-    let df = normalize_evidence_dataframe(&table_key, df)?;
+    let df = normalize_evidence_dataframe(root, &table_key, df)?;
 
     commit_parquet(&path, df.clone())?;
     let now = now_rfc3339();
@@ -609,7 +609,7 @@ pub fn drop_column(root: &Path, args: &[String]) -> Result<()> {
         .drop(selector)
         .collect()
         .context("drop-column collect")?;
-    let df = normalize_evidence_dataframe(&table_key, df)?;
+    let df = normalize_evidence_dataframe(root, &table_key, df)?;
 
     commit_parquet(&path, df.clone())?;
     let now = now_rfc3339();
@@ -702,7 +702,7 @@ pub fn import(root: &Path, args: &[String]) -> Result<()> {
     } else {
         df_new
     };
-    let df = normalize_evidence_dataframe(&table_key, df)?;
+    let df = normalize_evidence_dataframe(root, &table_key, df)?;
 
     commit_parquet(&path, df.clone())?;
     let now = now_rfc3339();
@@ -799,12 +799,13 @@ pub fn export(root: &Path, args: &[String]) -> Result<()> {
     }))
 }
 
-fn normalize_evidence_dataframe(table_key: &str, df: DataFrame) -> Result<DataFrame> {
+fn normalize_evidence_dataframe(root: &Path, table_key: &str, df: DataFrame) -> Result<DataFrame> {
     if !super::data::is_evidence_table(table_key) || df.height() == 0 {
         return Ok(df);
     }
     let rows = df_to_rows(&df)?;
-    let normalized = super::data::normalize_evidence_rows(table_key, rows)?;
+    let normalized =
+        super::data::normalize_evidence_rows_with_server_receipts(root, table_key, rows)?;
     rows_to_df(&normalized)
 }
 
@@ -862,6 +863,36 @@ mod tests {
                 "--key".to_string(),
                 "source_catalog".to_string(),
             ],
+        )?;
+        let cache_path = root.join("runtime/web_search_page_cache.json");
+        std::fs::create_dir_all(cache_path.parent().expect("cache parent"))?;
+        std::fs::write(
+            cache_path,
+            serde_json::to_vec(&json!({
+                "entries": {
+                    "valid": {
+                        "created_at_epoch": 1,
+                        "checked_at": 1,
+                        "original_url": "https://publisher.example/source",
+                        "final_url": "https://publisher.example/source",
+                        "canonical_url": "https://publisher.example/source",
+                        "evidence_eligible": true,
+                        "http_status": 200,
+                        "snapshot_hash": format!("sha256:{}", "c".repeat(64)),
+                        "doc": {
+                            "url": "https://publisher.example/source",
+                            "canonical_url": "https://publisher.example/source",
+                            "evidence_eligible": true,
+                            "response_receipt": {
+                                "requested_url": "https://publisher.example/source",
+                                "final_url": "https://publisher.example/source",
+                                "status": 200,
+                                "sha256": format!("sha256:{}", "c".repeat(64))
+                            }
+                        }
+                    }
+                }
+            }))?,
         )?;
 
         let rows = json!([

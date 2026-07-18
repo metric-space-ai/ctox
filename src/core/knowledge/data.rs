@@ -127,6 +127,133 @@ pub(super) fn normalize_evidence_rows(table_key: &str, rows: Vec<Value>) -> Resu
         .collect()
 }
 
+pub(super) fn normalize_evidence_rows_with_server_receipts(
+    root: &Path,
+    table_key: &str,
+    rows: Vec<Value>,
+) -> Result<Vec<Value>> {
+    let rows = normalize_evidence_rows(table_key, rows)?;
+    if !is_evidence_table(table_key) {
+        return Ok(rows);
+    }
+    let cache = fs::read(root.join("runtime/web_search_page_cache.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+    let entries = cache
+        .as_ref()
+        .and_then(|value| value.get("entries"))
+        .and_then(Value::as_object);
+
+    rows.into_iter()
+        .map(|row| {
+            let mut object = row
+                .as_object()
+                .cloned()
+                .context("evidence knowledge rows must be JSON objects")?;
+            if object.get("evidence_eligible") == Some(&Value::Bool(true))
+                && !has_matching_server_web_receipt(root, entries, &object)
+            {
+                object.insert("evidence_eligible".to_string(), Value::Bool(false));
+                object.insert(
+                    "evidence_rejection_reason".to_string(),
+                    Value::String("missing_server_web_receipt".to_string()),
+                );
+            }
+            Ok(Value::Object(object))
+        })
+        .collect()
+}
+
+fn has_matching_server_web_receipt(
+    root: &Path,
+    entries: Option<&Map<String, Value>>,
+    row: &Map<String, Value>,
+) -> bool {
+    let Some(entries) = entries else {
+        return false;
+    };
+    let Some(canonical_url) = row.get("canonical_url").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(http_status) = row.get("http_status").and_then(Value::as_u64) else {
+        return false;
+    };
+    let Some(snapshot_hash) = row
+        .get("snapshot_hash")
+        .and_then(Value::as_str)
+        .and_then(normalized_sha256)
+    else {
+        return false;
+    };
+
+    entries.values().any(|entry| {
+        let doc = entry.get("doc").unwrap_or(&Value::Null);
+        let receipt = doc.get("response_receipt").unwrap_or(&Value::Null);
+        let url_matches = ["original_url", "final_url", "canonical_url"]
+            .into_iter()
+            .any(|field| entry.get(field).and_then(Value::as_str) == Some(canonical_url))
+            || ["url", "canonical_url"]
+                .into_iter()
+                .any(|field| doc.get(field).and_then(Value::as_str) == Some(canonical_url))
+            || ["requested_url", "final_url"]
+                .into_iter()
+                .any(|field| receipt.get(field).and_then(Value::as_str) == Some(canonical_url));
+        url_matches
+            && entry.get("created_at_epoch").and_then(Value::as_u64) > Some(0)
+            && entry.get("checked_at").and_then(Value::as_u64) > Some(0)
+            && entry.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
+            && doc.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
+            && entry.get("http_status").and_then(Value::as_u64) == Some(http_status)
+            && hashes_match(
+                entry.get("snapshot_hash").and_then(Value::as_str),
+                snapshot_hash,
+            )
+            && receipt.get("status").and_then(Value::as_u64) == Some(http_status)
+            && hashes_match(receipt.get("sha256").and_then(Value::as_str), snapshot_hash)
+            && data_artifact_matches(root, doc, receipt, snapshot_hash)
+    })
+}
+
+fn normalized_sha256(value: &str) -> Option<&str> {
+    let digest = value.strip_prefix("sha256:").unwrap_or(value);
+    (digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(digest)
+}
+
+fn hashes_match(value: Option<&str>, expected: &str) -> bool {
+    value
+        .and_then(normalized_sha256)
+        .is_some_and(|digest| digest.eq_ignore_ascii_case(expected))
+}
+
+fn data_artifact_matches(root: &Path, doc: &Value, receipt: &Value, expected: &str) -> bool {
+    let is_data_file = receipt
+        .get("content_kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind.starts_with("data_"));
+    if !is_data_file {
+        return true;
+    }
+    let Some(raw_path) = doc.get("response_artifact_path").and_then(Value::as_str) else {
+        return false;
+    };
+    let Ok(cache_root) = root.join("runtime/web_search_data_cache").canonicalize() else {
+        return false;
+    };
+    let Ok(path) = Path::new(raw_path).canonicalize() else {
+        return false;
+    };
+    if !path.starts_with(cache_root) {
+        return false;
+    }
+    let Ok(bytes) = fs::read(path) else {
+        return false;
+    };
+    if receipt.get("byte_count").and_then(Value::as_u64) != Some(bytes.len() as u64) {
+        return false;
+    }
+    format!("{:x}", Sha256::digest(bytes)).eq_ignore_ascii_case(expected)
+}
+
 pub(super) fn is_evidence_table(table_key: &str) -> bool {
     let key = table_key.trim().to_ascii_lowercase().replace('-', "_");
     matches!(
@@ -1182,7 +1309,7 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
             (Vec::new(), row_count, catalog_schema_hash.clone())
         };
 
-        let rows = normalize_evidence_rows(&table_key, rows)?;
+        let rows = normalize_evidence_rows_with_server_receipts(root, &table_key, rows)?;
         let (rows, quality_notes) = enrich_knowledge_table_rows(&table_key, rows);
         let columns = knowledge_table_columns(&table_key, &rows);
         let schema_value = json!({ "columns": columns.clone() });
@@ -2153,6 +2280,170 @@ mod tests {
                 "{field}"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn imported_evidence_requires_matching_server_web_receipt() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let digest = "a".repeat(64);
+        let url = "https://publisher.example/source";
+        let row = json!({
+            "source_id": "src-1",
+            "canonical_url": url,
+            "source_type": "web",
+            "verification_status": "verified",
+            "transport_verified": true,
+            "content_extracted": true,
+            "actual_full_text_or_data": true,
+            "evidence_relevance_score": 9,
+            "metadata_only": false,
+            "http_status": 200,
+            "snapshot_hash": format!("sha256:{digest}"),
+            "source_tier": "primary",
+            "research_run_id": "run-1"
+        });
+
+        let missing = normalize_evidence_rows_with_server_receipts(
+            root,
+            "source_catalog",
+            vec![row.clone()],
+        )?;
+        assert_eq!(missing[0]["evidence_eligible"], json!(false));
+        assert_eq!(
+            missing[0]["evidence_rejection_reason"],
+            json!("missing_server_web_receipt")
+        );
+
+        let cache_path = root.join("runtime/web_search_page_cache.json");
+        fs::create_dir_all(cache_path.parent().expect("cache parent"))?;
+        fs::write(
+            &cache_path,
+            serde_json::to_vec(&json!({
+                "entries": {
+                    (url): {
+                        "created_at_epoch": 1,
+                        "checked_at": 1,
+                        "original_url": url,
+                        "final_url": url,
+                        "canonical_url": url,
+                        "evidence_eligible": true,
+                        "http_status": 200,
+                        "snapshot_hash": format!("sha256:{digest}"),
+                        "doc": {
+                            "url": url,
+                            "canonical_url": url,
+                            "evidence_eligible": true,
+                            "response_receipt": {
+                                "requested_url": url,
+                                "final_url": url,
+                                "status": 200,
+                                "sha256": format!("sha256:{digest}")
+                            }
+                        }
+                    }
+                }
+            }))?,
+        )?;
+
+        let admitted = normalize_evidence_rows_with_server_receipts(
+            root,
+            "source_catalog",
+            vec![row.clone()],
+        )?;
+        assert_eq!(admitted[0]["evidence_eligible"], json!(true));
+        assert!(admitted[0].get("evidence_rejection_reason").is_none());
+
+        let mut forged = row;
+        forged["snapshot_hash"] = json!(format!("sha256:{}", "b".repeat(64)));
+        let rejected =
+            normalize_evidence_rows_with_server_receipts(root, "source_catalog", vec![forged])?;
+        assert_eq!(rejected[0]["evidence_eligible"], json!(false));
+        assert_eq!(
+            rejected[0]["evidence_rejection_reason"],
+            json!("missing_server_web_receipt")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn imported_data_evidence_requires_untampered_server_artifact() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let artifact_dir = root.join("runtime/web_search_data_cache");
+        fs::create_dir_all(&artifact_dir)?;
+        let body = b"verified-original-data";
+        let digest = format!("{:x}", Sha256::digest(body));
+        let artifact = artifact_dir.join(format!("{digest}.csv"));
+        fs::write(&artifact, body)?;
+        let url = "https://publisher.example/data.csv";
+        fs::write(
+            root.join("runtime/web_search_page_cache.json"),
+            serde_json::to_vec(&json!({
+                "entries": {
+                    (url): {
+                        "created_at_epoch": 1,
+                        "checked_at": 1,
+                        "original_url": url,
+                        "final_url": url,
+                        "canonical_url": url,
+                        "evidence_eligible": true,
+                        "http_status": 200,
+                        "snapshot_hash": format!("sha256:{digest}"),
+                        "doc": {
+                            "url": url,
+                            "canonical_url": url,
+                            "evidence_eligible": true,
+                            "response_artifact_path": artifact,
+                            "response_receipt": {
+                                "requested_url": url,
+                                "final_url": url,
+                                "status": 200,
+                                "byte_count": body.len(),
+                                "sha256": format!("sha256:{digest}"),
+                                "content_kind": "data_csv"
+                            }
+                        }
+                    }
+                }
+            }))?,
+        )?;
+        let row = json!({
+            "source_id": "data-1",
+            "canonical_url": url,
+            "source_type": "dataset",
+            "verification_status": "verified",
+            "transport_verified": true,
+            "content_extracted": true,
+            "actual_full_text_or_data": true,
+            "evidence_relevance_score": 9,
+            "metadata_only": false,
+            "http_status": 200,
+            "snapshot_hash": format!("sha256:{digest}"),
+            "source_tier": "primary",
+            "research_run_id": "run-1"
+        });
+
+        let admitted = normalize_evidence_rows_with_server_receipts(
+            root,
+            "source_catalog",
+            vec![row.clone()],
+        )?;
+        assert_eq!(admitted[0]["evidence_eligible"], json!(true));
+
+        fs::write(
+            root.join("runtime/web_search_data_cache")
+                .join(format!("{digest}.csv")),
+            b"tampered",
+        )?;
+        let rejected =
+            normalize_evidence_rows_with_server_receipts(root, "source_catalog", vec![row])?;
+        assert_eq!(rejected[0]["evidence_eligible"], json!(false));
+        assert_eq!(
+            rejected[0]["evidence_rejection_reason"],
+            json!("missing_server_web_receipt")
+        );
         Ok(())
     }
 

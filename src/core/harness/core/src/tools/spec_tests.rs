@@ -3246,6 +3246,53 @@ fn code_mode_only_keeps_collaboration_controls_directly_visible() {
 }
 
 #[test]
+fn code_mode_only_keeps_server_authoritative_ctox_web_tools_directly_visible() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    features.enable(Feature::CodeModeOnly);
+    features.disable(Feature::Collab);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Live),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_ctox_web_stack_enabled(true);
+    let router = ToolRouter::from_config(
+        &tools_config,
+        ToolRouterParams {
+            mcp_tools: None,
+            app_tools: None,
+            discoverable_tools: None,
+            dynamic_tools: &[],
+        },
+    );
+    let tool_names = router
+        .model_visible_specs()
+        .into_iter()
+        .map(|spec| spec.name().to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        tool_names,
+        [
+            "exec",
+            "wait",
+            "ctox_web_search",
+            "ctox_web_read",
+            "ctox_scholarly_search",
+            "ctox_deep_research",
+        ]
+    );
+}
+
+#[test]
 fn code_mode_only_exec_description_includes_full_nested_tool_details() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);

@@ -198,6 +198,15 @@ this **exact order**. The first move is always `ctox web deep-research`;
 the lower-level surfaces are only for follow-up extraction once the
 catalog has its first entries.
 
+In a managed Harness run, invoke the directly exposed typed tools
+`ctox_deep_research`, `ctox_scholarly_search`, and `ctox_web_read`. Do not run
+their `ctox web ...` CLI equivalents through `exec_command`: the shell sandbox
+cannot write the server-owned receipt cache, so shell output is discovery-only
+and cannot satisfy the evidence guard. The CLI examples below are for an
+operator shell. If the typed tools are absent in a managed run, stop
+fail-closed and report the platform defect instead of substituting shell
+output, native web search, or memory.
+
 1. **`ctox web deep-research`** — mandatory first move for any technical
    library construction:
 
