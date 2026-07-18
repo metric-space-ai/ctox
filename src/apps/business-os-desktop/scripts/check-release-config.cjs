@@ -33,6 +33,12 @@ function main() {
 
   assert.equal(builderConfig.appId, "ai.metric-space.ctox.business-os-desktop");
   assert.equal(builderConfig.productName, "CTOX Business-OS Desktop Beta");
+  assert.equal(
+    builderConfig.artifactName,
+    "CTOX.Business-OS.Desktop.Beta-${version}-${os}-${arch}.${ext}",
+    "release artifact names must match GitHub's published names and updater metadata",
+  );
+  assert.doesNotMatch(builderConfig.artifactName, /\s/);
   assert.match(builderConfig.executableName, /^[A-Za-z0-9._ -]+$/);
   assert.equal(builderConfig.asar, true);
   assert.equal(builderConfig.icon, "build/icon.png");

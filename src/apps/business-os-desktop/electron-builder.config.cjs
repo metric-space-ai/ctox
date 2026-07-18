@@ -23,7 +23,7 @@ module.exports = {
   appId: "ai.metric-space.ctox.business-os-desktop",
   productName: "CTOX Business-OS Desktop Beta",
   executableName: "ctox-business-os-desktop",
-  artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
+  artifactName: "CTOX.Business-OS.Desktop.Beta-${version}-${os}-${arch}.${ext}",
   asar: true,
   directories: {
     output: "release",
