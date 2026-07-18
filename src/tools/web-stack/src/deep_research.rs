@@ -1415,7 +1415,7 @@ fn is_data_file_url(raw: &str) -> bool {
     };
     [
         ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".xlsx", ".xls", ".parquet", ".txt", ".zip",
-        ".gz", ".tgz",
+        ".gz", ".tgz", ".h5", ".hdf5",
     ]
     .iter()
     .any(|suffix| path.ends_with(suffix))
@@ -2249,11 +2249,14 @@ fn persist_source_snapshots(snapshot_dir: &Path, sources: &[Value], limit: usize
 }
 
 fn response_body_bytes(read: &Value) -> Option<Vec<u8>> {
-    read.get("response_body")?
-        .as_array()?
-        .iter()
-        .map(|byte| byte.as_u64().and_then(|value| u8::try_from(value).ok()))
-        .collect()
+    if let Some(bytes) = read.get("response_body").and_then(Value::as_array) {
+        return bytes
+            .iter()
+            .map(|byte| byte.as_u64().and_then(|value| u8::try_from(value).ok()))
+            .collect();
+    }
+    let path = read.get("response_artifact_path").and_then(Value::as_str)?;
+    fs::read(path).ok()
 }
 
 fn response_receipt_matches_bytes(read: &Value, bytes: &[u8]) -> bool {
@@ -2265,7 +2268,10 @@ fn response_receipt_matches_bytes(read: &Value, bytes: &[u8]) -> bool {
         && receipt
             .and_then(|value| value.get("sha256"))
             .and_then(Value::as_str)
-            .is_some_and(|hash| read.get("snapshot_hash").and_then(Value::as_str) == Some(hash))
+            .is_some_and(|hash| {
+                read.get("snapshot_hash").and_then(Value::as_str) == Some(hash)
+                    && crate::web_search::snapshot_hash(bytes) == hash
+            })
 }
 
 fn snapshot_extension(
@@ -2291,6 +2297,8 @@ fn snapshot_extension(
         "parquet"
     } else if content_kind == Some("data_xlsx") {
         "xlsx"
+    } else if content_kind == Some("data_hdf5") {
+        "h5"
     } else if content_type.is_some_and(|value| value.starts_with("text/")) {
         "txt"
     } else {
@@ -3550,12 +3558,13 @@ mod tests {
                 .map(|byte| Value::Number((*byte).into()))
                 .collect(),
         );
+        let body_hash = crate::web_search::snapshot_hash(&body);
         let source = json!({
             "source_type": "data_file",
             "evidence_eligible": true,
             "read": {
                 "url": "http://127.0.0.1:1/data.csv",
-                "snapshot_hash": "sha256:admitted-body",
+                "snapshot_hash": body_hash,
                 "response_body": body_json,
                 "response_metadata": {
                     "requested_url": "http://127.0.0.1:1/data.csv",
@@ -3564,7 +3573,7 @@ mod tests {
                     "content_type": "text/csv",
                     "content_kind": "data_delimited",
                     "byte_count": body.len(),
-                    "sha256": "sha256:admitted-body",
+                    "sha256": body_hash,
                     "lineage": "web_search.evidence_fetch",
                     "redirected": false,
                     "redirect_chain": ["http://127.0.0.1:1/data.csv"]

@@ -10812,6 +10812,37 @@ fn validate_systematic_research_web_receipts(
         left.and_then(normalized_sha256)
             .is_some_and(|digest| digest.eq_ignore_ascii_case(right))
     }
+    fn data_artifact_matches(root: &Path, doc: &Value, receipt: &Value, expected: &str) -> bool {
+        use sha2::Digest;
+
+        let is_data_file = receipt
+            .get("content_kind")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind.starts_with("data_"));
+        if !is_data_file {
+            return true;
+        }
+        let Some(raw_path) = doc.get("response_artifact_path").and_then(Value::as_str) else {
+            return false;
+        };
+        let Ok(cache_root) = root.join("runtime/web_search_data_cache").canonicalize() else {
+            return false;
+        };
+        let Ok(path) = Path::new(raw_path).canonicalize() else {
+            return false;
+        };
+        if !path.starts_with(cache_root) {
+            return false;
+        }
+        let Ok(bytes) = std::fs::read(&path) else {
+            return false;
+        };
+        if receipt.get("byte_count").and_then(Value::as_u64) != Some(bytes.len() as u64) {
+            return false;
+        }
+        let actual = format!("{:x}", sha2::Sha256::digest(&bytes));
+        actual.eq_ignore_ascii_case(expected)
+    }
 
     const MAX_WEB_RECEIPT_AGE_SECS: u64 = 7 * 24 * 60 * 60;
     let now = current_epoch_secs();
@@ -10890,6 +10921,7 @@ fn validate_systematic_research_web_receipts(
                     receipt.get("sha256").and_then(Value::as_str),
                     normalized_snapshot_hash,
                 )
+                && data_artifact_matches(root, doc, receipt, normalized_snapshot_hash)
         });
         if matching_entry.is_none() {
             anyhow::bail!(
@@ -24058,6 +24090,70 @@ mod tests {
         manifest["evidence"][0]["snapshot_sha256"] = Value::String(
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
         );
+        let error = validate_systematic_research_web_receipts(&root, &manifest, attempt_started_at)
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("not bound to a matching admitted"));
+    }
+
+    #[test]
+    fn systematic_research_data_receipt_requires_untampered_server_artifact() {
+        use sha2::Digest;
+
+        let root = temp_root("research-data-receipt");
+        let artifact_dir = root.join("runtime/web_search_data_cache");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        let body = b"PK\x03\x04verified-original-data";
+        let digest = format!("{:x}", sha2::Sha256::digest(body));
+        let artifact = artifact_dir.join(format!("{digest}.zip"));
+        std::fs::write(&artifact, body).unwrap();
+        let cache_path = root.join("runtime/web_search_page_cache.json");
+        std::fs::write(
+            &cache_path,
+            serde_json::to_vec(&serde_json::json!({
+                "entries": {
+                    "https://example.edu/data.zip": {
+                        "created_at_epoch": current_epoch_secs(),
+                        "checked_at": current_epoch_secs(),
+                        "original_url": "https://example.edu/data.zip",
+                        "final_url": "https://example.edu/data.zip",
+                        "canonical_url": "https://example.edu/data.zip",
+                        "evidence_eligible": true,
+                        "http_status": 200,
+                        "snapshot_hash": format!("sha256:{digest}"),
+                        "doc": {
+                            "url": "https://example.edu/data.zip",
+                            "canonical_url": "https://example.edu/data.zip",
+                            "evidence_eligible": true,
+                            "response_artifact_path": artifact,
+                            "response_receipt": {
+                                "requested_url": "https://example.edu/data.zip",
+                                "final_url": "https://example.edu/data.zip",
+                                "status": 200,
+                                "byte_count": body.len(),
+                                "sha256": format!("sha256:{digest}"),
+                                "content_kind": "data_zip"
+                            }
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let manifest = serde_json::json!({
+            "evidence": [{
+                "evidence_id": "data-1",
+                "canonical_url": "https://example.edu/data.zip",
+                "http_status": 200,
+                "snapshot_sha256": digest
+            }]
+        });
+        let attempt_started_at = current_epoch_secs().saturating_sub(1);
+        validate_systematic_research_web_receipts(&root, &manifest, attempt_started_at).unwrap();
+
+        std::fs::write(&artifact, b"tampered").unwrap();
         let error = validate_systematic_research_web_receipts(&root, &manifest, attempt_started_at)
             .unwrap_err();
         assert!(error

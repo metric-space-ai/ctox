@@ -207,6 +207,7 @@ impl OpenAiWebSearchCompatMode {
 
 #[derive(Debug, Clone)]
 struct SearchConfig {
+    root: PathBuf,
     enabled: bool,
     provider: ProviderKind,
     searxng_base_url: Option<String>,
@@ -220,6 +221,7 @@ struct SearchConfig {
     cache_ttl_secs: u64,
     page_cache_ttl_secs: u64,
     max_page_bytes: usize,
+    max_data_file_bytes: usize,
     max_page_chars: usize,
     max_pdf_pages: usize,
     /// Hosts that bypass the SSRF egress guard (operator-configured SearXNG plus
@@ -230,6 +232,7 @@ struct SearchConfig {
 impl SearchConfig {
     fn from_root(root: &Path) -> Self {
         Self {
+            root: root.to_path_buf(),
             enabled: read_bool(root, "CTOX_WEB_SEARCH_ENABLED", true),
             provider: ProviderKind::from_config_value(runtime_config::get(
                 root,
@@ -249,6 +252,11 @@ impl SearchConfig {
             cache_ttl_secs: read_u64(root, "CTOX_WEB_SEARCH_CACHE_TTL_SECS", 86_400),
             page_cache_ttl_secs: read_u64(root, "CTOX_WEB_SEARCH_PAGE_CACHE_TTL_SECS", 259_200),
             max_page_bytes: read_usize(root, "CTOX_WEB_SEARCH_MAX_PAGE_BYTES", 2_000_000),
+            max_data_file_bytes: read_usize(
+                root,
+                "CTOX_WEB_SEARCH_MAX_DATA_FILE_BYTES",
+                256_000_000,
+            ),
             max_page_chars: read_usize(root, "CTOX_WEB_SEARCH_MAX_PAGE_CHARS", 16_000),
             max_pdf_pages: read_usize(root, "CTOX_WEB_SEARCH_MAX_PDF_PAGES", 12),
             egress_allow_hosts: {
@@ -348,6 +356,10 @@ struct EvidenceDoc {
     /// from fetching a different representation of the same URL.
     #[serde(default)]
     response_body: Option<Vec<u8>>,
+    /// Server-owned, hash-addressed original response body. Large data files
+    /// live here instead of being serialized as JSON byte arrays.
+    #[serde(default)]
+    response_artifact_path: Option<String>,
     #[serde(default)]
     response_receipt: Option<ResponseReceipt>,
 }
@@ -935,6 +947,7 @@ fn render_direct_web_read_payload(
             .as_ref()
             .and_then(|receipt| receipt.admission_rejection_reason.clone()),
         "response_body": doc.response_body,
+        "response_artifact_path": doc.response_artifact_path,
         "source_tier": doc.source_tier,
         "evidence_eligible": evidence_doc_is_admitted_for_read(&doc),
         "evidence_content_kind": evidence_content_kind(&doc),
@@ -2740,7 +2753,58 @@ fn build_evidence_doc(
     if doc.evidence_eligible {
         doc.response_body = Some(fetched.body.clone());
     }
+    persist_original_data_artifact(config, &mut doc)?;
     Ok((doc, fetched.content_type))
+}
+
+fn persist_original_data_artifact(config: &SearchConfig, doc: &mut EvidenceDoc) -> Result<()> {
+    if !evidence_doc_is_data_file(doc) || !doc.evidence_eligible {
+        return Ok(());
+    }
+    if !evidence_doc_has_immutable_response(doc) {
+        bail!("admitted original data response is not hash-bound");
+    }
+    let body = doc
+        .response_body
+        .take()
+        .context("admitted original data response has no body")?;
+    let digest = snapshot_hash(&body);
+    let bare_digest = digest.strip_prefix("sha256:").unwrap_or(&digest);
+    let extension = doc
+        .response_receipt
+        .as_ref()
+        .map(|receipt| match receipt.content_kind.as_str() {
+            "data_zip" => "zip",
+            "data_gzip" => "gz",
+            "data_parquet" => "parquet",
+            "data_xlsx" => "xlsx",
+            "data_hdf5" => "h5",
+            "data_json" => "json",
+            "data_delimited" => "csv",
+            _ => "bin",
+        })
+        .unwrap_or("bin");
+    let cache_dir = config.root.join("runtime/web_search_data_cache");
+    fs::create_dir_all(&cache_dir)
+        .with_context(|| format!("create original-data cache {}", cache_dir.display()))?;
+    let target = cache_dir.join(format!("{bare_digest}.{extension}"));
+    let existing_matches = fs::read(&target)
+        .ok()
+        .is_some_and(|existing| snapshot_hash(&existing) == digest);
+    if !existing_matches {
+        let temporary = cache_dir.join(format!(".{bare_digest}.tmp-{}", std::process::id()));
+        fs::write(&temporary, &body)
+            .with_context(|| format!("write original-data cache {}", temporary.display()))?;
+        if target.exists() {
+            fs::remove_file(&target).with_context(|| {
+                format!("replace corrupt original-data cache {}", target.display())
+            })?;
+        }
+        fs::rename(&temporary, &target)
+            .with_context(|| format!("publish original-data cache {}", target.display()))?;
+    }
+    doc.response_artifact_path = Some(target.to_string_lossy().into_owned());
+    Ok(())
 }
 
 fn apply_evidence_gate(doc: &mut EvidenceDoc, hit: &SearchHit, fetched: &FetchedPageContent) {
@@ -2858,7 +2922,8 @@ fn response_content_kind(hit: &SearchHit, fetched: &FetchedPageContent) -> Strin
             "malformed_data".to_string()
         };
     }
-    if url_path_has_suffix(&hit.url, &[".xlsx"])
+    if content_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        || url_path_has_suffix(&hit.url, &[".xlsx"])
         || url_path_has_suffix(&fetched.final_url, &[".xlsx"])
     {
         return if body.starts_with(b"PK\x03\x04") {
@@ -2867,11 +2932,24 @@ fn response_content_kind(hit: &SearchHit, fetched: &FetchedPageContent) -> Strin
             "malformed_data".to_string()
         };
     }
-    if url_path_has_suffix(&hit.url, &[".parquet"])
+    if matches!(
+        content_type.as_str(),
+        "application/vnd.apache.parquet" | "application/x-parquet"
+    ) || url_path_has_suffix(&hit.url, &[".parquet"])
         || url_path_has_suffix(&fetched.final_url, &[".parquet"])
     {
         return if body.starts_with(b"PAR1") {
             "data_parquet".to_string()
+        } else {
+            "malformed_data".to_string()
+        };
+    }
+    let hdf5_hint = content_type == "application/x-hdf5"
+        || url_path_has_suffix(&hit.url, &[".h5", ".hdf5"])
+        || url_path_has_suffix(&fetched.final_url, &[".h5", ".hdf5"]);
+    if hdf5_hint {
+        return if body.starts_with(b"\x89HDF\r\n\x1a\n") {
+            "data_hdf5".to_string()
         } else {
             "malformed_data".to_string()
         };
@@ -2913,7 +2991,7 @@ fn is_data_url_suffix(raw: &str) -> bool {
         raw,
         &[
             ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".xlsx", ".xls", ".parquet", ".zip",
-            ".gz", ".tgz",
+            ".gz", ".tgz", ".h5", ".hdf5",
         ],
     )
 }
@@ -3046,6 +3124,7 @@ fn failed_evidence_doc(hit: &SearchHit, status: u16) -> (EvidenceDoc, Option<Str
             find_results: Vec::new(),
             raw_html: None,
             response_body: None,
+            response_artifact_path: None,
             response_receipt: Some(ResponseReceipt {
                 requested_url: hit.url.clone(),
                 final_url: hit.url.clone(),
@@ -3105,6 +3184,7 @@ fn build_query_evidence_doc(
             find_results: Vec::new(),
             raw_html: None,
             response_body: None,
+            response_artifact_path: None,
             response_receipt: None,
         },
     )
@@ -3181,6 +3261,7 @@ fn rebuild_cached_evidence_doc(
         find_results,
         raw_html: cached.raw_html.clone(),
         response_body: cached.response_body.clone(),
+        response_artifact_path: cached.response_artifact_path.clone(),
         response_receipt: cached.response_receipt.clone(),
     }
 }
@@ -3211,7 +3292,7 @@ fn canonical_page_url(hit: &SearchHit, fetched: &FetchedPageContent) -> String {
     }
 }
 
-fn snapshot_hash(bytes: &[u8]) -> String {
+pub(crate) fn snapshot_hash(bytes: &[u8]) -> String {
     // Keep the focused crate dependency-light while still giving cache
     // consumers a cryptographic content identity.
     const K: [u32; 64] = [
@@ -3365,11 +3446,13 @@ fn enforce_response_limits(
     hit: &SearchHit,
     fetched: FetchedPageContent,
 ) -> Result<FetchedPageContent> {
-    if fetched.body.len() > config.max_page_bytes {
+    let max_bytes =
+        response_byte_limit(config, &fetched.final_url, fetched.content_type.as_deref());
+    if fetched.body.len() > max_bytes {
         return Err(anyhow!(
             "evidence page {} exceeded {} bytes; response rejected without truncation",
             hit.url,
-            config.max_page_bytes
+            max_bytes
         ));
     }
     if content_type_is_disallowed(fetched.content_type.as_deref(), &fetched.final_url) {
@@ -3409,17 +3492,18 @@ fn fetch_http_page_content(config: &SearchConfig, hit: &SearchHit) -> Result<Fet
                         content_type
                     ));
                 }
+                let max_bytes = response_byte_limit(config, &final_url, content_type.as_deref());
                 let mut body = Vec::new();
                 response
                     .into_reader()
-                    .take(config.max_page_bytes.saturating_add(1) as u64)
+                    .take(max_bytes.saturating_add(1) as u64)
                     .read_to_end(&mut body)
                     .with_context(|| format!("failed to read evidence page {}", hit.url))?;
-                if body.len() > config.max_page_bytes {
+                if body.len() > max_bytes {
                     return Err(anyhow!(
                         "evidence page {} exceeded {} bytes; response rejected without truncation",
                         hit.url,
-                        config.max_page_bytes
+                        max_bytes
                     ));
                 }
                 return Ok(FetchedPageContent {
@@ -4341,6 +4425,11 @@ fn content_type_is_disallowed(content_type: Option<&str>, url: &str) -> bool {
         || lowered.contains("application/x-zip-compressed")
         || lowered.contains("application/gzip")
         || lowered.contains("application/x-gzip")
+        || lowered.contains("application/vnd.ms-excel")
+        || lowered.contains("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        || lowered.contains("application/vnd.apache.parquet")
+        || lowered.contains("application/x-parquet")
+        || lowered.contains("application/x-hdf5")
     {
         return false;
     }
@@ -4348,6 +4437,29 @@ fn content_type_is_disallowed(content_type: Option<&str>, url: &str) -> bool {
         || lowered.starts_with("audio/")
         || lowered.starts_with("video/")
         || (lowered.contains("application/octet-stream") && !is_data_url_suffix(url))
+}
+
+fn response_byte_limit(config: &SearchConfig, url: &str, content_type: Option<&str>) -> usize {
+    let content_type = content_type.unwrap_or_default().to_ascii_lowercase();
+    if is_data_url_suffix(url)
+        || content_type.contains("application/zip")
+        || content_type.contains("application/x-zip-compressed")
+        || content_type.contains("application/gzip")
+        || content_type.contains("application/x-gzip")
+        || content_type.contains("application/octet-stream")
+        || content_type.contains("application/vnd.ms-excel")
+        || content_type
+            .contains("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        || content_type.contains("application/vnd.apache.parquet")
+        || content_type.contains("application/x-parquet")
+        || content_type.contains("application/x-hdf5")
+        || content_type.contains("text/csv")
+        || content_type.contains("text/tab-separated-values")
+    {
+        config.max_data_file_bytes
+    } else {
+        config.max_page_bytes
+    }
 }
 
 fn mock_open_page_html(query: &str, hit: &SearchHit) -> String {
@@ -8255,11 +8367,20 @@ mod tests {
             .get(&normalize_url_cache_key(url))
             .expect("direct data cache entry");
         assert!(entry.evidence_eligible);
+        assert!(entry.doc.response_body.is_none());
+        let artifact = entry
+            .doc
+            .response_artifact_path
+            .as_deref()
+            .expect("hash-addressed original data artifact");
         assert_eq!(
-            entry.doc.response_body.as_deref(),
-            Some(b"PK\x03\x04ctox-mock-data-archive".as_slice())
+            fs::read(artifact).expect("original data artifact"),
+            b"PK\x03\x04ctox-mock-data-archive"
         );
-        assert!(evidence_doc_has_immutable_response(&entry.doc));
+        assert_eq!(
+            entry.doc.response_receipt.as_ref().unwrap().sha256,
+            entry.snapshot_hash
+        );
     }
 
     #[test]
@@ -8483,6 +8604,7 @@ mod tests {
             find_results: Vec::new(),
             raw_html: None,
             response_body: None,
+            response_artifact_path: None,
             response_receipt: None,
         };
 
@@ -8559,6 +8681,7 @@ mod tests {
                 find_results: Vec::new(),
                 raw_html: None,
                 response_body: None,
+                response_artifact_path: None,
                 response_receipt: None,
             }],
             executed_queries: vec!["propeller torque thrust".to_string()],
@@ -8613,6 +8736,7 @@ mod tests {
                 find_results: Vec::new(),
                 raw_html: None,
                 response_body: None,
+                response_artifact_path: None,
                 response_receipt: None,
             }],
             executed_queries: vec!["shell source".to_string()],
@@ -8670,6 +8794,7 @@ mod tests {
                 }],
                 raw_html: None,
                 response_body: None,
+                response_artifact_path: None,
                 response_receipt: None,
             }],
             executed_queries: vec!["find CTOX_REMOTE_WEB_OK".to_string()],
@@ -9618,6 +9743,7 @@ mod tests {
             find_results: Vec::new(),
             raw_html: None,
             response_body: None,
+            response_artifact_path: None,
             response_receipt: None,
         };
 
@@ -9825,6 +9951,7 @@ mod tests {
                     .to_string(),
             ),
             response_body: None,
+            response_artifact_path: None,
             response_receipt: None,
         };
         let url = doc.url.clone();
@@ -9978,6 +10105,7 @@ mod tests {
             find_results: Vec::new(),
             raw_html: None,
             response_body: Some(body.clone()),
+            response_artifact_path: None,
             response_receipt: Some(receipt.clone()),
         };
         let cases = [
@@ -11175,6 +11303,14 @@ mod tests {
 
     fn test_config(provider: ProviderKind) -> SearchConfig {
         SearchConfig {
+            root: std::env::temp_dir().join(format!(
+                "ctox_web_search_config_{}_{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            )),
             enabled: true,
             provider,
             searxng_base_url: None,
@@ -11188,6 +11324,7 @@ mod tests {
             cache_ttl_secs: 60,
             page_cache_ttl_secs: 60,
             max_page_bytes: 128_000,
+            max_data_file_bytes: 256_000_000,
             max_page_chars: 8_000,
             max_pdf_pages: 12,
             egress_allow_hosts: Vec::new(),

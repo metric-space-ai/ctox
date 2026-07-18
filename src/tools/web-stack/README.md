@@ -47,6 +47,13 @@ metadata-only, an aggregator, a third-party dataset reupload, or a
 reference/link collection. Rejected reads remain in the workspace with an
 `evidence_rejection_reason` for auditability.
 
+Admitted original data files are validated by media type and file signature,
+then stored under `runtime/web_search_data_cache/` using their SHA-256 digest as
+the filename. Evidence receipts bind the final URL, response status, byte count,
+content kind, and digest to that server-owned artifact. Large binary files are
+not serialized into the JSON tool response. Systematic-research completion
+recomputes the artifact digest before accepting data-backed evidence.
+
 Deep research also creates a persistent research workspace by default under
 `runtime/research/deep-research/<timestamp>-<slug>`. The folder contains the
 full evidence bundle, source JSONL, per-source read payloads, limited raw
@@ -99,6 +106,8 @@ cookie-bootstrap profile flow — Playwright owns the entire Google path.
 | `CTOX_WEB_SEARCH_SEARXNG_BASE_URL` | Required when `CTOX_WEB_SEARCH_PROVIDER=searxng`. |
 | `CTOX_WEB_SEARCH_LANGUAGE` / `CTOX_WEB_SEARCH_REGION` | Forwarded to providers as locale/`gl` hints. |
 | `CTOX_WEB_SEARCH_TIMEOUT_MS` | Per-request timeout for HTTP and Playwright paths (default 7000). |
+| `CTOX_WEB_SEARCH_MAX_PAGE_BYTES` | Maximum response size for ordinary evidence pages (default 2 MB). |
+| `CTOX_WEB_SEARCH_MAX_DATA_FILE_BYTES` | Maximum response size for recognized original data files stored in the hash-addressed artifact cache (default 256 MB). |
 | `CTOX_WEB_AUTO_PROVIDER_BUDGET` | Max providers tried per query in `auto` mode (default 4). |
 | `CTOX_WEB_BROWSER_REFERENCE_DIR` | Directory containing `node_modules/playwright`. Defaults to `runtime/browser/interactive-reference`. |
 | `CTOX_WEB_EGRESS_ALLOW` | Comma-separated host allow-list that bypasses the SSRF egress guard (for deliberately-internal endpoints, e.g. a self-hosted SearXNG). Empty by default. |
