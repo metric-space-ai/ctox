@@ -111,6 +111,41 @@ pub fn run_pi_turn(dist: &Path, request: &Value, faux: bool) -> anyhow::Result<V
     Ok(response)
 }
 
+/// Project a module's synced app source (`business_module_source_files` records)
+/// into a `{path -> content}` map for a `CtoxTurnRequest.files` snapshot. This is
+/// the app-source-projection workspace model: the sidecar edits a materialized
+/// view of the source records; its writes come back as P0 commits. No host FS.
+pub fn project_module_source(
+    root: &Path,
+    module_id: &str,
+) -> anyhow::Result<serde_json::Map<String, Value>> {
+    let records = crate::business_os::store::pull_collection_records(
+        root,
+        "business_module_source_files",
+        None,
+        None,
+    )?;
+    let mut files = serde_json::Map::new();
+    if let Some(documents) = records.get("documents").and_then(Value::as_array) {
+        for document in documents {
+            if document.get("module_id").and_then(Value::as_str) != Some(module_id) {
+                continue;
+            }
+            if document.get("_deleted").and_then(Value::as_bool) == Some(true) {
+                continue;
+            }
+            let (Some(path), Some(content)) = (
+                document.get("path").and_then(Value::as_str),
+                document.get("content").and_then(Value::as_str),
+            ) else {
+                continue;
+            };
+            files.insert(path.to_string(), Value::String(content.to_string()));
+        }
+    }
+    Ok(files)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,6 +198,44 @@ mod tests {
             })
             .unwrap_or(false);
         assert!(has_marker, "faux write should round-trip over the socket");
+        Ok(())
+    }
+
+    #[test]
+    fn projects_module_source_records_into_a_files_map() -> anyhow::Result<()> {
+        use crate::business_os::store::{load_module_source_records, ModuleSourceLoadMutation};
+
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let app_root = root.join("src").join("apps").join("business-os");
+        std::fs::create_dir_all(app_root.join("modules").join("widget"))?;
+        std::fs::write(app_root.join("index.html"), b"<!doctype html>")?;
+        std::fs::write(
+            app_root.join("modules").join("widget").join("module.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "id": "widget",
+                "title": "Widget",
+                "entry": "modules/widget/index.html"
+            }))?,
+        )?;
+        std::fs::write(
+            app_root.join("modules").join("widget").join("index.js"),
+            "export const v = 1;\n",
+        )?;
+
+        load_module_source_records(
+            root,
+            &ModuleSourceLoadMutation {
+                module_id: "widget".to_string(),
+            },
+        )?;
+
+        let files = project_module_source(root, "widget")?;
+        assert!(!files.is_empty(), "projected some source files");
+        let has_content = files
+            .values()
+            .any(|value| value.as_str() == Some("export const v = 1;\n"));
+        assert!(has_content, "widget source content projected into the files map");
         Ok(())
     }
 }
