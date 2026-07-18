@@ -164,7 +164,6 @@ export async function mount(ctx) {
     title: root.querySelector('[data-imp-title]'),
     subtitle: root.querySelector('[data-imp-subtitle]'),
     notice: root.querySelector('[data-imp-notice]'),
-    sourceTitle: root.querySelector('[data-imp-source-title]'),
     pickFolder: root.querySelector('[data-imp-pick-folder]'),
     or: root.querySelector('[data-imp-or]'),
     githubForm: root.querySelector('[data-imp-github-form]'),
@@ -172,7 +171,6 @@ export async function mount(ctx) {
     githubBtn: root.querySelector('[data-imp-github-btn]'),
     sourceHint: root.querySelector('[data-imp-source-hint]'),
     reportSection: root.querySelector('[data-imp-report-section]'),
-    reportTitle: root.querySelector('[data-imp-report-title]'),
     report: root.querySelector('[data-imp-report]'),
     reportHint: root.querySelector('[data-imp-report-hint]'),
     details: root.querySelector('[data-imp-details]'),
@@ -182,23 +180,19 @@ export async function mount(ctx) {
     moduleTitle: root.querySelector('[data-imp-module-title]'),
     install: root.querySelector('[data-imp-install]'),
     doneSection: root.querySelector('[data-imp-done-section]'),
-    doneTitle: root.querySelector('[data-imp-done-title]'),
     done: root.querySelector('[data-imp-done]'),
   };
 
   refs.title.textContent = t('title', FALLBACK_LABELS.title);
   refs.subtitle.textContent = t('subtitle', FALLBACK_LABELS.subtitle);
-  refs.sourceTitle.textContent = t('sourceTitle', 'Source');
   refs.pickFolder.textContent = t('pickFolder', 'Choose folder…');
   refs.or.textContent = t('or', 'or');
   refs.githubUrl.placeholder = t('githubPlaceholder', 'https://github.com/owner/repo');
   refs.githubBtn.textContent = t('fetchGithub', 'Fetch from GitHub');
   refs.sourceHint.textContent = t('sourceHint', '');
-  refs.reportTitle.textContent = t('reportTitle', 'Report');
   refs.idLabel.textContent = t('idLabel', 'Module id');
   refs.titleLabel.textContent = t('titleLabel', 'Title');
   refs.install.textContent = t('install', 'Install into local-modules…');
-  refs.doneTitle.textContent = t('installedTitle', 'Installed');
 
   const state = { files: null, result: null };
   let disposed = false;

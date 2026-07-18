@@ -10,8 +10,15 @@
 .importer-module .imp-github .ctox-input { flex: 1; min-width: 220px; }
 
 /* custom: vertical rhythm inside the importer cards (source row + hint,
-   report fields + install form); .ctox-card-body is a plain padded block. */
-.importer-module .imp-card-body { display: grid; gap: 10px; align-content: start; }
+   report fields + install form); .ctox-card-body is a plain padded block.
+   The cards no longer carry section-caption headers (the pane title already
+   names the flow), so we add the top padding the header used to provide. */
+.importer-module .imp-card-body {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding-top: 12px;
+}
 
 /* custom: muted hint/status copy under source and report — the kit ships no
    hint-text utility. */
