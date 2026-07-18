@@ -45,6 +45,21 @@
   color: var(--muted);
 }
 
+/* Optionale Erfassungs-Felder (Qualifikationen, Honorar, Garantie) und
+   kommerzielle Record-Metadaten sind nur bei Bedarf relevant — native
+   Disclosures, standardmäßig eingeklappt. */
+.ats-placements .ats-more { grid-column: 1 / -1; }
+
+.ats-placements .ats-more > summary,
+.ats-placements .ats-item-details > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ats-placements .ats-more[open] > summary { margin-bottom: 5px; }
+.ats-placements .ats-item-details > div { margin-top: 3px; }
+
 /* Grid placement only — the button itself is a kit .ctox-button. */
 .ats-placements .ats-action {
   grid-column: 2;
