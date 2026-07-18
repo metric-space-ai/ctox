@@ -95,8 +95,10 @@ export async function handleTurnRequest(
  * LocalTransport: newline-delimited JSON over a Unix socket. One
  * CtoxTurnRequest per line in, one CtoxTurnResponse per line out.
  */
-export function startSocketServer(socketPath: string): net.Server {
-  const streamFn = defaultStreamFn();
+export function startSocketServer(
+  socketPath: string,
+  streamFn: StreamFn = defaultStreamFn(),
+): net.Server {
   const server = net.createServer((socket) => {
     let buffer = "";
     socket.on("data", (chunk) => {
