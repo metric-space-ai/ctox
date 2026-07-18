@@ -49,6 +49,7 @@ use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -79,6 +80,11 @@ static NATIVE_PEER_SIGNALING_JOIN_ACCEPTED: AtomicBool = AtomicBool::new(false);
 static NATIVE_PEER_DATA_CHANNEL_OPEN: AtomicBool = AtomicBool::new(false);
 static NATIVE_PEER_CRITICAL_TASKS_ALIVE: AtomicBool = AtomicBool::new(false);
 static NATIVE_PEER_HEARTBEAT_THREAD_ALIVE: AtomicBool = AtomicBool::new(false);
+/// Last outbox depth observed by the async watchdog. The dedicated heartbeat
+/// thread must never open CTOX SQLite just to enrich its status payload:
+/// waiting on a busy database would make the heartbeat itself appear stale
+/// and cause a healthy WebRTC session to be cancelled mid-command.
+static NATIVE_PEER_PENDING_OUTBOX: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
 static DESKTOP_FILE_CHUNK_COMPLETENESS_CHECKS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
@@ -1114,10 +1120,7 @@ impl NativePeer {
     }
 
     fn task_liveness_json(&self) -> Value {
-        let command_backlog =
-            crate::mission::channels::business_command_core_diagnostics(&self.root)
-                .ok()
-                .and_then(|value| value.get("pending_outbox").and_then(Value::as_u64));
+        let command_backlog = NATIVE_PEER_PENDING_OUTBOX.load(Ordering::Relaxed);
         Value::Array(self.task_liveness().into_iter().map(|(name, alive)| {
             let metrics = native_peer_loop_metrics(name).map(NativePeerLoopMetrics::snapshot);
             json!({
@@ -1125,7 +1128,7 @@ impl NativePeer {
                 "alive": alive,
                 "lastSuccessAtMs": metrics.as_ref().and_then(|value| value.get("last_success_at_ms")).cloned().unwrap_or(Value::Null),
                 "lastErrorAtMs": metrics.as_ref().and_then(|value| value.get("last_error_at_ms")).cloned().unwrap_or(Value::Null),
-                "backlog": if name == "business_commands" { command_backlog.map(Value::from).unwrap_or(Value::Null) } else { Value::Null },
+                "backlog": if name == "business_commands" { Value::from(command_backlog) } else { Value::Null },
                 "metrics": metrics,
             })
         }).collect())
@@ -2641,6 +2644,7 @@ async fn run_native_peer(
     NATIVE_PEER_SIGNALING_JOIN_ACCEPTED.store(false, Ordering::SeqCst);
     NATIVE_PEER_DATA_CHANNEL_OPEN.store(false, Ordering::SeqCst);
     NATIVE_PEER_CRITICAL_TASKS_ALIVE.store(false, Ordering::SeqCst);
+    NATIVE_PEER_PENDING_OUTBOX.store(0, Ordering::Relaxed);
     let Some(process_lock) = acquire_native_peer_process_lock(&root)? else {
         eprintln!("[business-os] native rxdb peer already runs in another process");
         return Ok(NativePeerExit::LockHeldElsewhere);
@@ -3044,6 +3048,7 @@ async fn run_native_peer(
                 let pending_outbox = command_diagnostics.get("pending_outbox")
                     .and_then(Value::as_u64)
                     .unwrap_or_default();
+                NATIVE_PEER_PENDING_OUTBOX.store(pending_outbox, Ordering::Relaxed);
                 let outbox_age_ms = command_diagnostics.get("oldest_outbox_age_ms")
                     .and_then(Value::as_u64)
                     .unwrap_or_default();
@@ -3143,6 +3148,7 @@ async fn run_native_peer(
     NATIVE_PEER_SIGNALING_JOIN_ACCEPTED.store(false, Ordering::SeqCst);
     NATIVE_PEER_DATA_CHANNEL_OPEN.store(false, Ordering::SeqCst);
     NATIVE_PEER_CRITICAL_TASKS_ALIVE.store(false, Ordering::SeqCst);
+    NATIVE_PEER_PENDING_OUTBOX.store(0, Ordering::Relaxed);
     peer.shutdown().await;
     if let Ok(mut current) = NATIVE_PEER.lock() {
         if current
