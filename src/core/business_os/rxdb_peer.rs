@@ -2862,16 +2862,9 @@ async fn run_native_peer(
         };
         let document_read_authz: Option<DocumentReadAuthzHook> = {
             let doc_authz_root = root.clone();
-            Some(std::sync::Arc::new(
-                move |token: &str, collection: &str, document: &Value| {
-                    super::threads::may_replicate_document(
-                        &doc_authz_root,
-                        token,
-                        collection,
-                        document,
-                    )
-                },
-            ))
+            Some(std::sync::Arc::new(move |token: &str, collection: &str| {
+                super::threads::replication_document_filter(&doc_authz_root, token, collection)
+            }))
         };
         let document_write_authz: Option<DocumentWriteAuthzHook> = {
             let doc_write_authz_root = root.clone();

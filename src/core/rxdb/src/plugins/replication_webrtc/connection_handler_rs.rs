@@ -92,7 +92,8 @@ pub const ACTIVE_COLLECTIONS_METHOD: &str = "rxdb.activeCollections";
 pub type WebRTCRsPeer = PeerId;
 
 pub type CollectionAuthzHook = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
-pub type DocumentReadAuthzHook = Arc<dyn Fn(&str, &str, &Value) -> bool + Send + Sync>;
+pub type DocumentReadFilter = Arc<dyn Fn(&Value) -> bool + Send + Sync>;
+pub type DocumentReadAuthzHook = Arc<dyn Fn(&str, &str) -> DocumentReadFilter + Send + Sync>;
 pub type DocumentWriteAuthzHook = Arc<dyn Fn(&str, &str, &Value) -> bool + Send + Sync>;
 
 /// One peer's last presence report (ctox-presence-v1). Entries are opaque JSON
@@ -1155,10 +1156,7 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
             .get(peer)
             .cloned()
             .unwrap_or_default();
-        let collection = collection.to_string();
-        Some(Arc::new(move |document: &Value| {
-            hook(&token, &collection, document)
-        }))
+        Some(hook(&token, collection))
     }
 
     fn are_documents_write_authorized_for_peer(
@@ -2910,12 +2908,15 @@ mod tests {
         handler.set_collection_write_authz(Some(Arc::new(|token: &str, collection: &str| {
             token == "tok-abc" && collection == "business_commands"
         })));
-        handler.set_document_read_authz(Some(Arc::new(
-            |token: &str, _collection: &str, document: &Value| {
-                token == "tok-abc"
-                    && document.get("user_id").and_then(Value::as_str) == Some("alice")
-            },
-        )));
+        let document_filter_preparations = Arc::new(AtomicU64::new(0));
+        let document_filter_preparations_for_hook = Arc::clone(&document_filter_preparations);
+        handler.set_document_read_authz(Some(Arc::new(move |token: &str, _collection: &str| {
+            document_filter_preparations_for_hook.fetch_add(1, Ordering::Relaxed);
+            let authorized = token == "tok-abc";
+            Arc::new(move |document: &Value| {
+                authorized && document.get("user_id").and_then(Value::as_str) == Some("alice")
+            })
+        })));
         handler.set_document_write_authz(Some(Arc::new(
             |token: &str, collection: &str, document: &Value| {
                 token == "tok-abc"
@@ -2932,6 +2933,11 @@ mod tests {
             .expect("document filter");
         assert!(filter(&serde_json::json!({ "user_id": "alice" })));
         assert!(!filter(&serde_json::json!({ "user_id": "bob" })));
+        assert_eq!(
+            document_filter_preparations.load(Ordering::Relaxed),
+            1,
+            "one query filter must authorize the token once, not once per document"
+        );
         assert!(handler.are_documents_write_authorized_for_peer(
             &peer,
             "browser_input_events",

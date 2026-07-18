@@ -12,6 +12,7 @@ use serde_json::Map;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use uuid::Uuid;
@@ -214,11 +215,76 @@ pub(super) fn may_replicate_document(
     let Some((user_id, role)) = store::verify_capability_actor(root, token) else {
         return false;
     };
+    let collection_read_allowed = collection_read_allowed_for_actor(root, token, collection, &role);
+    actor_may_replicate_document(
+        root,
+        collection,
+        document,
+        &user_id,
+        &role,
+        collection_read_allowed,
+    )
+}
+
+pub(super) fn replication_document_filter(
+    root: &Path,
+    token: &str,
+    collection: &str,
+) -> Arc<dyn Fn(&Value) -> bool + Send + Sync> {
+    let Some((user_id, role)) = store::verify_capability_actor(root, token) else {
+        return Arc::new(|_| false);
+    };
+    let collection_read_allowed = collection_read_allowed_for_actor(root, token, collection, &role);
+    let root = root.to_path_buf();
+    let collection = collection.to_string();
+    Arc::new(move |document| {
+        actor_may_replicate_document(
+            &root,
+            &collection,
+            document,
+            &user_id,
+            &role,
+            collection_read_allowed,
+        )
+    })
+}
+
+fn collection_read_allowed_for_actor(
+    root: &Path,
+    token: &str,
+    collection: &str,
+    role: &str,
+) -> bool {
+    if is_browser_collection(collection)
+        || matches!(
+            super::policy::parse_role(role),
+            BusinessOsRole::Chef | BusinessOsRole::Admin
+        )
+        || matches!(collection, "user_notifications" | "user_thread_states")
+    {
+        return true;
+    }
+    store::capability_allows_collection_permission(
+        root,
+        token,
+        collection,
+        BusinessOsPermission::DataRead,
+    )
+}
+
+fn actor_may_replicate_document(
+    root: &Path,
+    collection: &str,
+    document: &Value,
+    user_id: &str,
+    role: &str,
+    collection_read_allowed: bool,
+) -> bool {
     if is_browser_collection(collection) {
-        return browser_document_visible_to_actor(root, collection, document, &user_id);
+        return browser_document_visible_to_actor(root, collection, document, user_id);
     }
     if matches!(
-        super::policy::parse_role(&role),
+        super::policy::parse_role(role),
         BusinessOsRole::Chef | BusinessOsRole::Admin
     ) {
         return true;
@@ -229,19 +295,14 @@ pub(super) fn may_replicate_document(
     if matches!(collection, "user_notifications" | "user_thread_states") {
         return value_string(document, "user_id") == user_id;
     }
-    if !store::capability_allows_collection_permission(
-        root,
-        token,
-        collection,
-        BusinessOsPermission::DataRead,
-    ) {
+    if !collection_read_allowed {
         return false;
     }
     if collection == "business_commands" {
-        return ctox_command_document_visible_to_user(document, &user_id);
+        return ctox_command_document_visible_to_user(document, user_id);
     }
     if collection == "ctox_queue_tasks" {
-        return ctox_task_document_visible_to_user(root, document, &user_id);
+        return ctox_task_document_visible_to_user(root, document, user_id);
     }
     if !is_threads_owned_collection(collection) {
         return true;
@@ -252,15 +313,17 @@ pub(super) fn may_replicate_document(
             value_string(document, "requester_user_id") == user_id
                 || value_string(document, "reviewer_user_id") == user_id
                 || value_string(document, "decision_by_id") == user_id
-                || thread_document_visible_to_user(root, document, &user_id)
+                || thread_document_visible_to_user(root, document, user_id)
         }
-        "user_threads" => thread_record_visible_to_user(document, &user_id),
+        "user_threads" => thread_record_visible_to_user(document, user_id),
         "user_thread_messages" => {
             value_string(document, "author_user_id") == user_id
-                || array_strings(document.get("target_user_ids")).contains(&user_id)
-                || thread_document_visible_to_user(root, document, &user_id)
+                || array_strings(document.get("target_user_ids"))
+                    .iter()
+                    .any(|target_user_id| target_user_id == user_id)
+                || thread_document_visible_to_user(root, document, user_id)
         }
-        "user_thread_links" => thread_document_visible_to_user(root, document, &user_id),
+        "user_thread_links" => thread_document_visible_to_user(root, document, user_id),
         _ => false,
     }
 }
@@ -5113,6 +5176,19 @@ mod tests {
             "user",
             now,
         )?;
+        let alice_notifications =
+            replication_document_filter(temp.path(), &alice_token, "user_notifications");
+        assert!(alice_notifications(
+            &json!({ "id": "prepared-n1", "user_id": "alice" })
+        ));
+        assert!(!alice_notifications(
+            &json!({ "id": "prepared-n2", "user_id": "bob" })
+        ));
+        let invalid_notifications =
+            replication_document_filter(temp.path(), "invalid", "user_notifications");
+        assert!(!invalid_notifications(
+            &json!({ "id": "prepared-n3", "user_id": "alice" })
+        ));
         assert!(may_replicate_document(
             temp.path(),
             &alice_token,
