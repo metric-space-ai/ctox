@@ -16180,14 +16180,6 @@ fn should_skip_idle_durable_queue_empty_probe(root: &Path) -> bool {
         };
         previous.last_empty_probe.elapsed() < backoff
     };
-    if should_skip
-        && channels::pending_queue_task_count_uncached(root)
-            .map(|count| count > 0)
-            .unwrap_or(false)
-    {
-        clear_idle_durable_queue_empty_gate(root);
-        return false;
-    }
     should_skip
 }
 
@@ -37059,8 +37051,14 @@ Use shell tools to create or update these files."
     }
 
     #[test]
-    fn idle_empty_gate_never_masks_pending_durable_queue_task() {
-        let root = temp_root("ctox-idle-empty-gate-pending-queue");
+    fn idle_empty_gate_reopens_when_durable_queue_source_changes() {
+        let root = temp_root("ctox-idle-empty-gate-source-change");
+        mark_idle_durable_queue_empty_probe(&root);
+        assert!(
+            should_skip_idle_durable_queue_empty_probe(&root),
+            "an unchanged empty queue source should stay behind the idle gate"
+        );
+
         let queue_task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
@@ -37076,10 +37074,9 @@ Use shell tools to create or update these files."
         )
         .expect("failed to seed durable queue task");
 
-        mark_idle_durable_queue_empty_probe(&root);
         assert!(
             !should_skip_idle_durable_queue_empty_probe(&root),
-            "empty-probe backoff must not hide a pending durable queue task"
+            "a queue write must reopen the idle gate through the durable source stamp"
         );
 
         let state = Arc::new(Mutex::new(SharedState::default()));
