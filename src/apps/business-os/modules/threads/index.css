@@ -373,3 +373,17 @@
     min-height: 44px;
   }
 }
+
+/* Actions/attention column is collapsible and hidden by default so reading a
+   thread gets the full width; the header toggle re-reveals it on demand. */
+.threads-module.is-actions-hidden {
+  grid-template-columns: var(--ctox-left-width, 320px) 12px minmax(0, 1fr);
+}
+.threads-module.is-actions-hidden .threads-right,
+.threads-module.is-actions-hidden > [data-resizer="right"] {
+  display: none;
+}
+.threads-toggle-actions[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}

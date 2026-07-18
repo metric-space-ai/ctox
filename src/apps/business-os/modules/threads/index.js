@@ -151,6 +151,7 @@ function bindElements(root) {
   els.watch = root.querySelector('[data-thread-watch]');
   els.snooze = root.querySelector('[data-thread-snooze]');
   els.archive = root.querySelector('[data-thread-archive]');
+  els.toggleActions = root.querySelector('[data-toggle-actions]');
   els.syncState = root.querySelector('[data-sync-state]');
   els.mobileBack = root.querySelector('[data-mobile-back]');
   els.mobileReply = root.querySelector('[data-mobile-reply]');
@@ -261,6 +262,10 @@ function wireUi() {
   els.watch?.addEventListener('click', () => toggleWatch().catch(showError));
   els.snooze?.addEventListener('click', () => snoozeSelectedThread().catch(showError));
   els.archive?.addEventListener('click', () => archiveSelectedThread().catch(showError));
+  els.toggleActions?.addEventListener('click', () => {
+    const hidden = els.root?.classList.toggle('is-actions-hidden');
+    els.toggleActions.setAttribute('aria-pressed', hidden ? 'false' : 'true');
+  });
   els.mobileBack?.addEventListener('click', () => {
     state.mobileView = 'list';
     persistNavigationState();
