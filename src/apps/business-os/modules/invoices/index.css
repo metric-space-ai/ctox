@@ -13,6 +13,26 @@
   min-height: 0;
 }
 
+/* --------------------------------------------------------------------------
+   Inspector pane is collapsible — hidden by default so the center workbench
+   (editor / detail / tabs) gets the full width. Toggled from the center
+   pane header (data-toggle-actions). Mirrors the threads / conversations /
+   buchhaltung collapse pattern.
+   -------------------------------------------------------------------------- */
+.invoices-module.is-actions-hidden {
+  grid-template-columns: var(--ctox-left-width, 320px) 12px minmax(0, 1fr);
+}
+
+.invoices-module.is-actions-hidden > [data-resizer="right"],
+.invoices-module.is-actions-hidden > .ctox-pane[data-rightContent] {
+  display: none;
+}
+
+.invoices-toggle-actions[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: color-mix(in srgb, var(--accent) 78%, var(--text));
+}
+
 /* Filter chips may wrap onto a second row in narrow left columns. */
 .invoices-filter-row {
   flex-wrap: wrap;
@@ -109,18 +129,6 @@
 
 .invoices-hint {
   margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-/* custom: party identity block inside the inspector customer card. */
-.invoices-inspector-party h3 {
-  margin: 0 0 4px;
-  font-size: 14px;
-}
-
-.invoices-inspector-party p {
-  margin: 0 0 4px;
   color: var(--muted);
   font-size: 12px;
 }

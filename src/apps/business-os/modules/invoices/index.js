@@ -45,8 +45,7 @@ const COPY = {
     downloadXml: 'XRechnung-XML herunterladen', xmlFailed: 'XRechnung-Vorschau fehlgeschlagen', amountCents: 'Betrag (Cent)', discountCents: 'Skonto (Cent)',
     paymentId: 'Zahlungs-ID', allocate: 'Zuordnen', discountHint: 'Skonto wird nur abgezogen, wenn das Zahlungsdatum vor dem Skonto-Deadline liegt. Das berechnet der native Handler.',
     dunningOnlyOverdue: 'Dunning ist nur für überfällige Rechnungen verfügbar.', dunningHint: 'Diese Rechnung ist überfällig. Starte einen Mahnlauf, um einen Brief zu erzeugen.',
-    dunningRun: 'Mahnlauf für diese Rechnung', inspectorEmpty: 'Inspector: keine Rechnung ausgewählt.', inspector: 'Inspector', noAddress: 'Keine Adresse hinterlegt.',
-    openItems: 'Offene Posten', actions: 'Aktionen', actionsHint: 'Verfügbare Aktionen erscheinen hier, sobald sie in der Befehls-Schiene freigeschaltet sind.',
+    dunningRun: 'Mahnlauf für diese Rechnung', inspectorEmpty: 'Keine Rechnung ausgewählt.', inspector: 'Inspector', inspectorShow: 'Inspector einblenden', inspectorHide: 'Inspector ausblenden', noAddress: 'Keine Adresse hinterlegt.',
     dependencyTitle: 'Rechnungen benötigt weitere Module', dependencyNote: 'Bitte installiere „buchhaltung“ (FIBU/Journal) und „customers“ (Party-Stamm) im App Store, dann lade das Rechnungen-Modul neu.',
     reload: 'Neu laden', missingDb: 'Invoices-Modul kann nicht starten: ctx.db fehlt.', noCustomer: 'Kein Kunde im CRM hinterlegt. Lege zuerst einen Kunden im „customers“-Modul an, dann erstelle die Rechnung hier.',
     deleteConfirm: 'Entwurf {id} löschen?', cannotPost: 'Rechnung kann nicht gebucht werden', resizeColumn: 'Spaltenbreite anpassen',
@@ -63,8 +62,7 @@ const COPY = {
     downloadXml: 'Download XRechnung XML', xmlFailed: 'XRechnung preview failed', amountCents: 'Amount (cents)', discountCents: 'Discount (cents)',
     paymentId: 'Payment ID', allocate: 'Allocate', discountHint: 'The native handler applies the discount only when payment occurs before the discount deadline.',
     dunningOnlyOverdue: 'Dunning is available only for overdue invoices.', dunningHint: 'This invoice is overdue. Start a dunning run to generate a letter.',
-    dunningRun: 'Run dunning for this invoice', inspectorEmpty: 'Inspector: no invoice selected.', inspector: 'Inspector', noAddress: 'No address recorded.',
-    openItems: 'Open items', actions: 'Actions', actionsHint: 'Available actions appear here when enabled on the command channel.',
+    dunningRun: 'Run dunning for this invoice', inspectorEmpty: 'No invoice selected.', inspector: 'Inspector', inspectorShow: 'Show inspector', inspectorHide: 'Hide inspector', noAddress: 'No address recorded.',
     dependencyTitle: 'Invoices requires additional modules', dependencyNote: 'Install “buchhaltung” (ledger/journal) and “customers” (party master data) from the App Store, then reload Invoices.',
     reload: 'Reload', missingDb: 'Invoices cannot start: ctx.db is missing.', noCustomer: 'No customer exists in CRM. Create a customer in “customers” before creating an invoice.',
     deleteConfirm: 'Delete draft {id}?', cannotPost: 'Invoice cannot be posted', resizeColumn: 'Adjust column width',
@@ -100,6 +98,14 @@ const FALLBACK_ICON_PATHS = Object.freeze({
   add: 'M12 5v14M5 12h14',
   close: 'M6 6l12 12M18 6L6 18',
 });
+
+// Inspector pane toggle icon (rectangle with a vertical seam — matches the
+// threads/conversations/buchhaltung collapse toggle).
+const INSPECTOR_TOGGLE_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>';
+
+// Per-shell-window storage key for the inspector visibility preference.
+// Mirrors the buchhaltung / conversations collapse toggle persistence.
+const INSPECTOR_LAYOUT_KEY = 'ctox.invoices.layout.actionsHidden';
 
 function actionIcon(name) {
   const svg = STATE.ctx?.getActionIcon?.(name, 16);
@@ -145,6 +151,9 @@ const STATE = {
   lastError: null,
   locale: 'de',
   frame: null,
+  // Persistent inspector-toggle button (built once in ensureFrame, re-appended
+  // to the center pane header on every render so it survives render cycles).
+  inspectorToggle: null,
 };
 
 const REQUIRED_MODULES = ['buchhaltung', 'customers'];
@@ -225,6 +234,7 @@ function resetState(ctx) {
   STATE.lastError = null;
   STATE.locale = String(ctx.locale || globalThis.document?.documentElement?.lang || 'de').toLowerCase().startsWith('en') ? 'en' : 'de';
   STATE.frame = null;
+  STATE.inspectorToggle = null;
 }
 
 function isReady() {
@@ -348,8 +358,11 @@ function render() {
 // silently kill column resizing.
 function ensureFrame(root) {
   if (STATE.frame) return STATE.frame;
+  // `is-actions-hidden` is the default — the inspector (right pane) is a
+  // situational detail panel; the center workbench gets the full width until
+  // the operator opens it via the header toggle (data-toggle-actions).
   const workspace = document.createElement('main');
-  workspace.className = 'ctox-workspace';
+  workspace.className = 'ctox-workspace invoices-module is-actions-hidden';
   workspace.dataset.resizeFrame = '';
 
   const leftPane = document.createElement('aside');
@@ -379,13 +392,49 @@ function ensureFrame(root) {
   banner.className = 'invoices-error-banner';
   banner.hidden = true;
 
+  // Persistent inspector-toggle button. Created once, re-attached to the
+  // center pane header on each render so the user's collapse preference and
+  // its event listener survive render cycles.
+  const inspectorToggle = document.createElement('button');
+  inspectorToggle.type = 'button';
+  inspectorToggle.className = 'ctox-pane-icon invoices-toggle-actions';
+  inspectorToggle.dataset.toggleActions = '';
+  inspectorToggle.innerHTML = INSPECTOR_TOGGLE_ICON_SVG;
+  STATE.inspectorToggle = inspectorToggle;
+
   // innerHTML='' + appendChild (not replaceChildren) so the fake-DOM test
   // shims — whose replaceChildren drops its arguments — still see the frame.
   root.innerHTML = '';
   root.appendChild(workspace);
   root.appendChild(banner);
-  STATE.frame = { leftPane, centerPane, rightPane, banner };
+  STATE.frame = { leftPane, centerPane, rightPane, banner, workspace };
+  wireInspectorToggle(workspace, inspectorToggle);
   return STATE.frame;
+}
+
+// Wires the inspector visibility toggle. The layout choice is persisted per
+// shell window so the operator's chosen layout survives across mounts.
+function wireInspectorToggle(workspace, toggle) {
+  const saved = STATE.ctx?.storageScope?.get?.(INSPECTOR_LAYOUT_KEY);
+  if (saved === 'false') {
+    workspace.classList.remove('is-actions-hidden');
+  }
+  syncInspectorToggleUi(workspace, toggle);
+  toggle.addEventListener('click', () => {
+    const willHide = workspace.classList.toggle('is-actions-hidden');
+    STATE.ctx?.storageScope?.set?.(INSPECTOR_LAYOUT_KEY, String(willHide));
+    syncInspectorToggleUi(workspace, toggle);
+  });
+}
+
+function syncInspectorToggleUi(workspace, toggle) {
+  const hidden = workspace.classList.contains('is-actions-hidden');
+  toggle.setAttribute('aria-pressed', hidden ? 'false' : 'true');
+  toggle.setAttribute(
+    'aria-label',
+    hidden ? t('inspectorShow') : t('inspectorHide'),
+  );
+  toggle.title = hidden ? t('inspectorShow') : t('inspectorHide');
 }
 
 function buildColumnResizer(side, cssVar) {
@@ -499,8 +548,37 @@ function renderCenterInto(pane) {
   pane.replaceChildren();
   delete pane.dataset.contextRecordId;
   delete pane.dataset.contextLabel;
+
+  // The inspector toggle is always reachable from the center pane header so
+  // the operator can reveal the inspector at any time, even with no invoice
+  // selected. The persistent button (built in ensureFrame) is re-attached
+  // here so render cycles don't strand its event listener.
+  const headerActions = document.createElement('div');
+  headerActions.className = 'ctox-pane-actions';
+  if (inv) {
+    // Lifecycle state is a status display, not a control — kit badge, never a chip.
+    const stateBadge = document.createElement('span');
+    stateBadge.className = ['ctox-badge', stateBadgeClass(inv.state)]
+      .filter(Boolean).join(' ');
+    stateBadge.dataset.state = inv.state;
+    stateBadge.textContent = invoiceStateLabel(inv.state);
+    headerActions.appendChild(stateBadge);
+    pane.dataset.contextRecordId = inv.id;
+    pane.dataset.contextLabel = inv.invoice_number || inv.id;
+  }
+  if (STATE.inspectorToggle) {
+    headerActions.appendChild(STATE.inspectorToggle);
+  }
+
+  const kicker = inv ? t('invoice') : t('invoices');
+  const title = inv
+    ? (inv.invoice_number
+      ? `${inv.invoice_number} · ${partyName(inv.party_id)}`
+      : `${t('draft')} · ${partyName(inv.party_id)}`)
+    : t('invoice');
+  pane.appendChild(buildPaneHeader(kicker, title, headerActions));
+
   if (!inv) {
-    pane.appendChild(buildPaneHeader(t('invoices'), t('invoice')));
     const body = document.createElement('div');
     body.className = 'ctox-pane-body';
     const empty = document.createElement('div');
@@ -510,26 +588,6 @@ function renderCenterInto(pane) {
     pane.appendChild(body);
     return;
   }
-  pane.dataset.contextRecordId = inv.id;
-  pane.dataset.contextLabel = inv.invoice_number || inv.id;
-
-  const headerActions = document.createElement('div');
-  headerActions.className = 'ctox-pane-actions';
-  // Lifecycle state is a status display, not a control — kit badge, never a chip.
-  const stateBadge = document.createElement('span');
-  stateBadge.className = ['ctox-badge', stateBadgeClass(inv.state)]
-    .filter(Boolean).join(' ');
-  stateBadge.dataset.state = inv.state;
-  stateBadge.textContent = invoiceStateLabel(inv.state);
-  headerActions.appendChild(stateBadge);
-
-  pane.appendChild(buildPaneHeader(
-    t('invoice'),
-    inv.invoice_number
-      ? `${inv.invoice_number} · ${partyName(inv.party_id)}`
-      : `${t('draft')} · ${partyName(inv.party_id)}`,
-    headerActions
-  ));
 
   const body = document.createElement('div');
   body.className = 'ctox-pane-scroll invoices-pane-scroll';
@@ -1038,6 +1096,10 @@ function renderInspectorInto(pane) {
     return;
   }
 
+  // Inspector content stays minimal: only the party card carries data the
+  // center pane summary does not already show (address + email). Totals,
+  // status and lines live in the workbench; an "actions" placeholder card
+  // was pure dead UI and has been removed.
   const body = document.createElement('div');
   body.className = 'ctox-pane-scroll invoices-pane-scroll invoices-stack';
 
@@ -1047,38 +1109,13 @@ function renderInspectorInto(pane) {
   partyCard.innerHTML = `
     <header>${escapeHtml(t('customer'))}</header>
     <div class="ctox-card-body">
-      <div class="invoices-inspector-party">
-        <h3>${escapeHtml(party.name || inv.party_id)}</h3>
-        <p>${escapeHtml(party.address || t('noAddress'))}</p>
-        <p>${escapeHtml(party.email || '')}</p>
-      </div>
+      <h3>${escapeHtml(party.name || inv.party_id)}</h3>
+      <p>${escapeHtml(party.address || t('noAddress'))}</p>
+      <p>${escapeHtml(party.email || '')}</p>
     </div>
   `;
   body.appendChild(partyCard);
 
-  const openCents = inv.open_cents ?? Math.max(0, (inv.total_cents || 0) - (inv.paid_cents || 0));
-  const openCard = document.createElement('div');
-  openCard.className = 'ctox-card';
-  openCard.innerHTML = `
-    <header>${escapeHtml(t('openItems'))}</header>
-    <div class="ctox-card-body">
-      <dl class="ctox-fields">
-        <dt>${escapeHtml(t('open'))}</dt><dd><strong>${formatCents(openCents)}</strong></dd>
-        <dt>${escapeHtml(t('paid'))}</dt><dd>${formatCents(inv.paid_cents || 0)}</dd>
-      </dl>
-    </div>
-  `;
-  body.appendChild(openCard);
-
-  const actionsCard = document.createElement('div');
-  actionsCard.className = 'ctox-card';
-  actionsCard.innerHTML = `
-    <header>${escapeHtml(t('actions'))}</header>
-    <div class="ctox-card-body">
-      <p class="invoices-hint">${escapeHtml(t('actionsHint'))}</p>
-    </div>
-  `;
-  body.appendChild(actionsCard);
   pane.appendChild(body);
 }
 
