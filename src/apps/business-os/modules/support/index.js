@@ -483,6 +483,18 @@ function renderTimelineItem(row) {
   `;
 }
 
+// Secondary reference sections sit in a collapsed <details> so the context
+// pane isn't a wall of cards; the agent expands the one they need. Empty
+// sections are dropped entirely rather than shown as "nicht gesetzt" cards.
+function contextDetails(title, innerHtml) {
+  if (!innerHtml) return '';
+  return `
+    <details class="support-context-details">
+      <summary>${escapeHtml(title)}</summary>
+      <div class="ctox-card-body">${innerHtml}</div>
+    </details>`;
+}
+
 function renderContext() {
   const context = rootEl().querySelector('[data-support-context]');
   if (!context) return;
@@ -500,6 +512,55 @@ function renderContext() {
   const commands = businessCommandsFor(item);
   const tasks = queueTasksFor(item, commands);
   const actorId = currentUserId();
+
+  // Secondary reference sections: only build the ones that actually have data,
+  // then render them as collapsed disclosures below the primary controls.
+  const relatedCustomerHtml = (account || contact) ? `
+    <dl class="ctox-fields ctox-fields--stacked">
+      ${fact(state.t('customer', 'Kunde'), account?.name || account?.id || item.customer_account_id)}
+      ${fact('Kontakt', contact?.name || contact?.display_name || contact?.email || item.customer_contact_id)}
+      ${fact('E-Mail', contact?.email || account?.domain || '')}
+    </dl>` : '';
+  const relatedTicketHtml = ticket ? `
+    <dl class="ctox-fields ctox-fields--stacked">
+      ${fact('ID', ticket.id || item.ticket_case_id)}
+      ${fact('Titel', ticket.title || ticket.summary || ticket.id)}
+      ${fact(state.t('status', 'Status'), ticket.status || ticket.state || '')}
+    </dl>` : '';
+  const communicationHtml = (threadLinks.length || messages.length) ? `
+    ${threadLinks.map((link) => `
+      <p class="support-linked-row">
+        <strong>${escapeHtml(link.channel || link.link_role || 'thread')}</strong>
+        <span>${escapeHtml(link.thread_key || '')}</span>
+      </p>
+    `).join('')}
+    ${messages.length ? `<p class="support-status">${escapeHtml(localMessagesLoadedLabel(messages.length))}</p>` : ''}` : '';
+  const ctoxWorkHtml = (commands.length || tasks.length) ? `
+    ${commands.slice(0, 3).map((command) => `
+      <p class="support-linked-row">
+        <strong>${escapeHtml(command.command_type || command.type || 'command')}</strong>
+        <span>${escapeHtml([command.status, command.task_status, command.task_id].filter(Boolean).join(' · '))}</span>
+      </p>
+    `).join('')}
+    ${tasks.slice(0, 3).map((task) => `
+      <p class="support-linked-row">
+        <strong>${escapeHtml(task.title || task.id || 'task')}</strong>
+        <span>${escapeHtml([task.status, task.task_status, task.id].filter(Boolean).join(' · '))}</span>
+      </p>
+    `).join('')}` : '';
+  // CTOX suggestions stay a top-level card, but only when there is one to act on.
+  const suggestionsHtml = suggestions.length ? suggestions.slice(0, 3).map((suggestion) => `
+    <div class="support-suggestion-row">
+      <p>${escapeHtml(suggestion.summary || suggestion.suggestion_kind || suggestion.id)}</p>
+      <small>${escapeHtml([suggestion.suggestion_kind, suggestion.status].filter(Boolean).join(' · '))}</small>
+      ${['applied', 'rejected'].includes(String(suggestion.status || '').toLowerCase()) ? '' : `
+        <div class="support-context-actions">
+          <button type="button" class="ctox-button" data-support-suggestion-action="apply" data-support-suggestion-id="${escapeAttr(suggestion.id)}">${escapeHtml(state.t('applySuggestion', 'Anwenden'))}</button>
+          <button type="button" class="ctox-button" data-support-suggestion-action="reject" data-support-suggestion-id="${escapeAttr(suggestion.id)}">${escapeHtml(state.t('rejectSuggestion', 'Ablehnen'))}</button>
+        </div>
+      `}
+    </div>
+  `).join('') : '';
   context.innerHTML = `
     <section class="ctox-card">
       <header>${escapeHtml(state.t('contextTitle', 'Kunde und Ticket'))}</header>
@@ -542,78 +603,14 @@ function renderContext() {
         </div>
       </div>
     </section>
-    <section class="ctox-card">
-      <header>${escapeHtml(state.t('relatedCustomer', 'Verknüpfter Kunde'))}</header>
-      <div class="ctox-card-body">
-        ${account || contact ? `
-          <dl class="ctox-fields ctox-fields--stacked">
-            ${fact(state.t('customer', 'Kunde'), account?.name || account?.id || item.customer_account_id)}
-            ${fact('Kontakt', contact?.name || contact?.display_name || contact?.email || item.customer_contact_id)}
-            ${fact('E-Mail', contact?.email || account?.domain || '')}
-          </dl>
-        ` : `<p class="support-status">${escapeHtml(state.t('noValue', 'nicht gesetzt'))}</p>`}
-      </div>
-    </section>
-    <section class="ctox-card">
-      <header>${escapeHtml(state.t('relatedTicket', 'Verknüpftes Ticket'))}</header>
-      <div class="ctox-card-body">
-        ${ticket ? `
-          <dl class="ctox-fields ctox-fields--stacked">
-            ${fact('ID', ticket.id || item.ticket_case_id)}
-            ${fact('Titel', ticket.title || ticket.summary || ticket.id)}
-            ${fact(state.t('status', 'Status'), ticket.status || ticket.state || '')}
-          </dl>
-        ` : `<p class="support-status">${escapeHtml(item.ticket_case_id || state.t('noValue', 'nicht gesetzt'))}</p>`}
-      </div>
-    </section>
-    <section class="ctox-card">
-      <header>${escapeHtml(state.t('linkedThreads', 'Kommunikation'))}</header>
-      <div class="ctox-card-body">
-        ${threadLinks.length ? threadLinks.map((link) => `
-          <p class="support-linked-row">
-            <strong>${escapeHtml(link.channel || link.link_role || 'thread')}</strong>
-            <span>${escapeHtml(link.thread_key || '')}</span>
-          </p>
-        `).join('') : `<p class="support-status">${escapeHtml(item.primary_thread_key || state.t('noValue', 'nicht gesetzt'))}</p>`}
-        <p class="support-status">${escapeHtml(messages.length ? localMessagesLoadedLabel(messages.length) : state.t('noMessages', 'Keine Nachrichten geladen.'))}</p>
-      </div>
-    </section>
-    <section class="ctox-card">
+    ${suggestionsHtml ? `<section class="ctox-card">
       <header>${escapeHtml(state.t('agentLabel', 'CTOX Vorschlag'))}</header>
-      <div class="ctox-card-body">
-        ${suggestions.length ? suggestions.slice(0, 3).map((suggestion) => `
-          <div class="support-suggestion-row">
-            <p>${escapeHtml(suggestion.summary || suggestion.suggestion_kind || suggestion.id)}</p>
-            <small>${escapeHtml([suggestion.suggestion_kind, suggestion.status].filter(Boolean).join(' · '))}</small>
-            ${['applied', 'rejected'].includes(String(suggestion.status || '').toLowerCase()) ? '' : `
-              <div class="support-context-actions">
-                <button type="button" class="ctox-button" data-support-suggestion-action="apply" data-support-suggestion-id="${escapeAttr(suggestion.id)}">${escapeHtml(state.t('applySuggestion', 'Anwenden'))}</button>
-                <button type="button" class="ctox-button" data-support-suggestion-action="reject" data-support-suggestion-id="${escapeAttr(suggestion.id)}">${escapeHtml(state.t('rejectSuggestion', 'Ablehnen'))}</button>
-              </div>
-            `}
-          </div>
-        `).join('') : `<p class="support-status">${escapeHtml(state.t('noTimelineBody', ''))}</p>`}
-      </div>
-    </section>
-    <section class="ctox-card">
-      <header>${escapeHtml(state.t('ctoxWork', 'CTOX Arbeit'))}</header>
-      <div class="ctox-card-body">
-        ${commands.length || tasks.length ? `
-          ${commands.slice(0, 3).map((command) => `
-            <p class="support-linked-row">
-              <strong>${escapeHtml(command.command_type || command.type || 'command')}</strong>
-              <span>${escapeHtml([command.status, command.task_status, command.task_id].filter(Boolean).join(' · '))}</span>
-            </p>
-          `).join('')}
-          ${tasks.slice(0, 3).map((task) => `
-            <p class="support-linked-row">
-              <strong>${escapeHtml(task.title || task.id || 'task')}</strong>
-              <span>${escapeHtml([task.status, task.task_status, task.id].filter(Boolean).join(' · '))}</span>
-            </p>
-          `).join('')}
-        ` : `<p class="support-status">${escapeHtml(state.t('noValue', 'nicht gesetzt'))}</p>`}
-      </div>
-    </section>
+      <div class="ctox-card-body">${suggestionsHtml}</div>
+    </section>` : ''}
+    ${contextDetails(state.t('relatedCustomer', 'Verknüpfter Kunde'), relatedCustomerHtml)}
+    ${contextDetails(state.t('relatedTicket', 'Verknüpftes Ticket'), relatedTicketHtml)}
+    ${contextDetails(state.t('linkedThreads', 'Kommunikation'), communicationHtml)}
+    ${contextDetails(state.t('ctoxWork', 'CTOX Arbeit'), ctoxWorkHtml)}
     <p class="support-status" data-support-status></p>
   `;
 }

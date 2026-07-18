@@ -258,3 +258,16 @@
     display: none;
   }
 }
+
+/* Secondary context reference sections: collapsed disclosures under the two
+   primary cards, so the context pane isn't a wall of cards. Kit-card look. */
+.support-context-details { border-top: 1px solid var(--line); }
+.support-context-details > summary {
+  cursor: pointer;
+  padding: 10px 2px;
+  font-weight: 600;
+  color: var(--text);
+  list-style-position: inside;
+}
+.support-context-details[open] > summary { color: var(--muted); }
+.support-context-details > .ctox-card-body { padding: 0 2px 12px; }
