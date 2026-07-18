@@ -16,9 +16,45 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-/// Path to the built sidecar bundle relative to the repo root.
+/// Path to the built sidecar bundle relative to the repo root (dev / tests).
 pub fn sidecar_dist_path(repo_root: &Path) -> PathBuf {
     repo_root.join("src/core/coding_agents/pi-sidecar/dist/ctox-pi-sidecar.mjs")
+}
+
+/// The pi-sidecar bundle is embedded into the ctox binary at build time so a
+/// deployed CTOX ships as one artifact (no source tree). Build order: the
+/// sidecar bundle (`npm run build` in pi-sidecar) must exist before `cargo
+/// build`; a CI/build step guarantees this.
+const SIDECAR_BUNDLE: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/src/core/coding_agents/pi-sidecar/dist/ctox-pi-sidecar.mjs"
+));
+
+/// Resolve a runnable sidecar bundle path for `root`, extracting the embedded
+/// bytes to `<root>/coding-agents/ctox-pi-sidecar.mjs` when missing or
+/// size-mismatched. An explicit `CTOX_PI_SIDECAR_DIST` override wins (dev /
+/// custom deployments). This is the runtime resolver the owner uses.
+pub fn resolve_sidecar_dist(root: &Path) -> anyhow::Result<PathBuf> {
+    if let Ok(override_path) = std::env::var("CTOX_PI_SIDECAR_DIST") {
+        let path = PathBuf::from(override_path);
+        anyhow::ensure!(
+            path.exists(),
+            "CTOX_PI_SIDECAR_DIST does not exist: {}",
+            path.display()
+        );
+        return Ok(path);
+    }
+    let dir = root.join("coding-agents");
+    std::fs::create_dir_all(&dir).context("create sidecar runtime dir")?;
+    let path = dir.join("ctox-pi-sidecar.mjs");
+    let needs_write = match std::fs::metadata(&path) {
+        Ok(meta) => meta.len() != SIDECAR_BUNDLE.len() as u64,
+        Err(_) => true,
+    };
+    if needs_write {
+        std::fs::write(&path, SIDECAR_BUNDLE).context("extract embedded sidecar bundle")?;
+    }
+    Ok(path)
 }
 
 /// A spawned sidecar daemon listening on a Unix socket. Killed + cleaned on drop
@@ -421,6 +457,43 @@ mod tests {
             after.get(&key).and_then(Value::as_str),
             Some("export const v = 2;\n"),
             "a real edit round-trips project -> apply to the same module path ({key})"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn embedded_sidecar_extracts_and_runs() -> anyhow::Result<()> {
+        // The override must not leak in from the environment for this test.
+        std::env::remove_var("CTOX_PI_SIDECAR_DIST");
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+
+        let dist = resolve_sidecar_dist(root)?;
+        assert!(dist.exists(), "embedded sidecar extracted to {}", dist.display());
+        assert_eq!(
+            std::fs::metadata(&dist)?.len(),
+            SIDECAR_BUNDLE.len() as u64,
+            "extracted bundle size matches the embedded bytes"
+        );
+        // Idempotent: a second resolve does not rewrite / returns the same path.
+        assert_eq!(resolve_sidecar_dist(root)?, dist);
+
+        if !node_available() {
+            eprintln!("SKIP: `node` not on PATH (extraction verified, run skipped)");
+            return Ok(());
+        }
+        // The extracted bundle must actually be runnable end-to-end.
+        let request = serde_json::json!({
+            "id": "embed-1",
+            "prompt": "x",
+            "files": { "index.js": "1\n" },
+            "maxAssistantTurns": 4
+        });
+        let response = run_pi_turn(&dist, &request, true)?;
+        assert_eq!(
+            response["ok"],
+            Value::Bool(true),
+            "the extracted embedded sidecar serves a turn"
         );
         Ok(())
     }
