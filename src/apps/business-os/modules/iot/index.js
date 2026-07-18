@@ -246,7 +246,7 @@ function renderLeft() {
       <div class="ctox-field-label iot-section-label">${esc(t('left.realmSection', 'Bereich'))}</div>
       ${realmRows.join('')}
       ${createForm && !state.creating.parentId ? createForm : ''}
-      <div class="ctox-field-label iot-section-label">${esc(t('left.structSection', 'Struktur · Rechtsklick auf ein Signal = Auftrag'))}</div>
+      <div class="ctox-field-label iot-section-label">${esc(t('left.structSection', 'Struktur'))}</div>
       <div class="iot-tree">${tree}</div>
     </div>`;
 }
@@ -323,7 +323,6 @@ function renderCenter() {
 
   if (!ds.length) {
     return toolbar + `<div class="ctox-empty">
-      <span class="iot-empty-art" aria-hidden="true">⌖</span>
       <strong>${esc(t('empty.title', 'Beauftrage CTOX, auf deine Signale aufzupassen'))}</strong>
       <p>${t('empty.body', 'Ein Dashboard bündelt <b>Aufträge</b>: pro Auftrag schreibst du <b>Wenn</b> &amp; <b>Dann</b> — CTOX programmiert den Wächter und handelt.')}</p>
       <div><button class="ctox-button" data-act="new-dash">${esc(t('empty.newDash', 'Dashboard anlegen'))}</button></div>
@@ -369,10 +368,8 @@ function renderWidgetCard(w) {
       <div class="iot-when"><span class="iot-tag">${esc(t('tag.when', 'Wenn'))}</span><span class="iot-when-text">${esc(w.cond_text || t('card.condPlaceholder', 'Bedingung wird mit CTOX festgelegt'))}</span></div>
       <div class="iot-then"><span class="iot-tag then">${esc(t('tag.then', 'Dann'))}</span><span class="iot-then-text">${esc(w.action_prompt || t('card.actionPlaceholder', 'Aktion wird mit CTOX festgelegt'))}</span></div>
       <div class="iot-widget-foot">
-        <span class="ctox-badge${statusBadgeClass(st.dot)} iot-widget-status">${esc(st.label)}</span>
-        <button class="ctox-button ctox-button--ghost ctox-button--sm" data-act="open-editor" data-id="${esc(w.id)}" title="${esc(t('card.codeHint', 'Von CTOX programmierter Code'))}">&lt;/&gt; ${esc(t('card.code', 'Code'))}</button>
-        <button class="ctox-button ctox-button--ghost ctox-button--sm" data-act="edit-cond" data-id="${esc(w.id)}">${esc(t('tag.when', 'Wenn'))} ✎</button>
-        <button class="ctox-button ctox-button--ghost ctox-button--sm" data-act="edit-action" data-id="${esc(w.id)}">${esc(t('tag.then', 'Dann'))} ✎</button>
+        <button class="ctox-button ctox-button--ghost ctox-button--sm" data-act="edit-cond" data-id="${esc(w.id)}" aria-label="${esc(t('tag.when', 'Wenn'))}">${esc(t('tag.when', 'Wenn'))} ✎</button>
+        <button class="ctox-button ctox-button--ghost ctox-button--sm" data-act="edit-action" data-id="${esc(w.id)}" aria-label="${esc(t('tag.then', 'Dann'))}">${esc(t('tag.then', 'Dann'))} ✎</button>
       </div>
     </div>`;
 }
@@ -487,7 +484,6 @@ function onClick(e) {
   if (act === 'widget-menu') { e.preventDefault(); openWidgetMenu(el.dataset.id, e); return; }
   if (act === 'edit-cond') { editField(el.dataset.id, 'cond'); return; }
   if (act === 'edit-action') { editField(el.dataset.id, 'action'); return; }
-  if (act === 'open-editor') { openWidgetEditor(el.dataset.id); return; }
   if (act === 'signal') { state.selectedAssetId = el.dataset.asset; render(); return; }
 }
 

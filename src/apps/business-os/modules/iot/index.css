@@ -42,7 +42,7 @@
    badges but no compact dot for tree rows and widget heads. */
 .iot-status-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--muted); }
 .iot-status-dot.ok, .iot-status-dot.armed { background: var(--success); }
-.iot-status-dot.fired { background: var(--warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 22%, transparent); }
+.iot-status-dot.fired { background: var(--warning); }
 .iot-status-dot.attention, .iot-status-dot.warn { background: var(--danger); }
 .iot-status-dot.paused { background: var(--muted); }
 .iot-status-dot.idle { background: color-mix(in srgb, var(--accent) 55%, var(--muted)); }
@@ -89,8 +89,7 @@
 .iot-tag.then { color: var(--muted); }
 .iot-when-text, .iot-then-text { color: var(--text); }
 
-.iot-widget-foot { display: flex; align-items: center; gap: 6px; margin-top: 2px; padding-top: 10px; border-top: 1px solid var(--line); }
-.iot-widget-foot .iot-widget-status { margin-right: auto; }
+.iot-widget-foot { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 2px; padding-top: 10px; border-top: 1px solid var(--line); }
 
 /* custom: list view footer below the kit table. */
 .iot-list-foot { padding: 14px 2px; }
@@ -100,9 +99,6 @@
   color: var(--muted); cursor: pointer; gap: 6px; min-height: 120px; }
 .iot-add-card:hover { border-color: var(--accent); color: var(--accent); }
 .iot-add-plus { font-size: 26px; line-height: 1; }
-
-/* custom: decorative glyph inside the kit .ctox-empty hero states. */
-.iot-empty-art { font-size: 28px; opacity: .55; }
 
 /* custom: editor modal layout — the three CTOX-programmed parts (Auftrag,
    Trigger-Logik, Widget-Code) sit behind tabs; code textareas are mono. */
