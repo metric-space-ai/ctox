@@ -2792,7 +2792,14 @@ fn persist_original_data_artifact(config: &SearchConfig, doc: &mut EvidenceDoc) 
         .ok()
         .is_some_and(|existing| snapshot_hash(&existing) == digest);
     if !existing_matches {
-        let temporary = cache_dir.join(format!(".{bare_digest}.tmp-{}", std::process::id()));
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let temporary = cache_dir.join(format!(
+            ".{bare_digest}.tmp-{}-{nonce}",
+            std::process::id()
+        ));
         fs::write(&temporary, &body)
             .with_context(|| format!("write original-data cache {}", temporary.display()))?;
         if target.exists() {
