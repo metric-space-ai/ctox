@@ -4,22 +4,49 @@
       <div class="ctox-callout" data-browser-auth-assist hidden></div>
       <div class="browser-session-list ctox-pane-tabs" data-browser-session-list aria-label="Browser Fenster"></div>
       <button type="button" class="ctox-icon-button browser-new-window" data-browser-start aria-label="Neues Browserfenster" title="Neues Browserfenster">+</button>
+      <button type="button" class="ctox-pane-icon browser-toggle-advanced" data-browser-toggle-advanced aria-label="Erweiterte Aktionen" title="Erweiterte Aktionen" aria-pressed="false">⋯</button>
     </div>
-    <div hidden aria-hidden="true">
-      <input type="checkbox" data-browser-private>
-      <select data-browser-viewport><option value="1280x720">Desktop</option></select>
-      <button type="button" data-browser-new-tab></button>
-      <button type="button" data-browser-upload></button>
-      <button type="button" data-browser-controller-acquire></button>
-      <button type="button" data-browser-controller-release></button>
-      <button type="button" data-browser-observer-grant></button>
-      <button type="button" data-browser-observer-revoke></button>
-      <button type="button" data-browser-clipboard-copy></button>
-      <button type="button" data-browser-clipboard-paste></button>
-      <button type="button" data-browser-clipboard-clear></button>
-      <button type="button" data-browser-send-to-ctox></button>
-      <button type="button" data-browser-stop></button>
+
+    <!-- Erweiterte Aktionen + Diagnose. Standardmäßig eingeklappt (is-advanced-hidden);
+         data-browser-toggle-advanced schaltet die Sichtbarkeit um. -->
+    <div class="browser-advanced is-advanced-hidden" data-browser-advanced>
+      <div class="browser-advanced-actions">
+        <label class="ctox-choice">
+          <input type="checkbox" data-browser-private> Privat-Modus
+        </label>
+        <label class="ctox-compact-field">
+          <span>Viewport</span>
+          <select class="ctox-select" data-browser-viewport>
+            <option value="1280x720">Desktop 1280×720</option>
+            <option value="390x844">Mobil 390×844</option>
+          </select>
+        </label>
+        <button type="button" class="ctox-button" data-browser-new-tab>Neuer Tab</button>
+        <button type="button" class="ctox-button" data-browser-upload>Upload</button>
+        <button type="button" class="ctox-button" data-browser-controller-acquire>Steuerung übernehmen</button>
+        <button type="button" class="ctox-button" data-browser-controller-release>Steuerung freigeben</button>
+        <button type="button" class="ctox-button" data-browser-observer-grant>Beobachter hinzufügen</button>
+        <button type="button" class="ctox-button" data-browser-observer-revoke>Beobachter entfernen</button>
+        <button type="button" class="ctox-button" data-browser-clipboard-copy>Clipboard kopieren</button>
+        <button type="button" class="ctox-button" data-browser-clipboard-paste>Clipboard einfügen</button>
+        <button type="button" class="ctox-button" data-browser-clipboard-clear>Clipboard leeren</button>
+        <button type="button" class="ctox-button" data-browser-send-to-ctox data-t="sendToCtox">An CTOX senden</button>
+        <button type="button" class="ctox-button is-danger" data-browser-stop data-t="close">Fenster schließen</button>
+      </div>
+      <div class="browser-diagnostics" hidden aria-hidden="true">
+        <span data-browser-session-card></span>
+        <span data-browser-status-meta></span>
+        <span data-browser-frame-id></span>
+        <span data-browser-frame-seq></span>
+        <span data-browser-frame-size></span>
+        <span data-browser-frame-time></span>
+        <span data-browser-input-state></span>
+        <span data-browser-command-state></span>
+        <span data-browser-command-history></span>
+        <span data-browser-handoff-history></span>
+      </div>
     </div>
+
     <div class="ctox-callout" data-browser-notice hidden></div>
     <header class="browser-toolbar ctox-toolbar">
       <div class="browser-nav-actions" aria-label="Navigation">
@@ -37,7 +64,6 @@
       <span data-browser-status-title data-t="noWindowOpen">Kein Browser-Fenster geoeffnet</span>
     </div>
     <div class="browser-download-strip" data-browser-downloads hidden></div>
-    <span data-browser-status-meta hidden></span>
   </section>
 
   <section class="browser-workbench" aria-label="Browser Inhalt">
@@ -46,16 +72,4 @@
       <div class="browser-empty ctox-empty" data-browser-empty data-t="framePreparing">Browser-Fenster wird vorbereitet</div>
     </div>
   </section>
-
-  <div class="browser-diagnostics" hidden aria-hidden="true">
-    <span data-browser-session-card></span>
-    <span data-browser-frame-id></span>
-    <span data-browser-frame-seq></span>
-    <span data-browser-frame-size></span>
-    <span data-browser-frame-time></span>
-    <span data-browser-input-state></span>
-    <span data-browser-command-state></span>
-    <span data-browser-command-history></span>
-    <span data-browser-handoff-history></span>
-  </div>
 </main>
