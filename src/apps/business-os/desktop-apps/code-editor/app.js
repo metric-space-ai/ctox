@@ -32,6 +32,7 @@ export async function mount(container, ctx) {
     usingMonaco: false,
     diffOpen: false,
     historyOpen: false,
+    agentOpen: false,
     commits: [],
     sourceDenied: false,
     lockedModule: Boolean(ctx.args?.lockedModule),
@@ -66,6 +67,7 @@ export async function mount(container, ctx) {
             <button type="button" data-source-save aria-label="Speichern" title="Speichern"><span aria-hidden="true">✓</span><span>Speichern</span></button>
             <button type="button" data-source-commit aria-label="Commit erstellen" title="Änderungen als Commit versiegeln"><span aria-hidden="true">⎇</span><span>Commit</span></button>
             <button type="button" data-source-history aria-label="History anzeigen" title="Commit-History"><span aria-hidden="true">≡</span><span>History</span></button>
+            <button type="button" data-source-agent aria-label="pi-Agent delegieren" title="Coding-Task an den pi-Agent delegieren"><span aria-hidden="true">✦</span><span>Agent</span></button>
           </div>
         </header>
         <div class="source-editor-workbench" data-source-workbench>
@@ -80,6 +82,18 @@ export async function mount(container, ctx) {
           </div>
           <aside class="source-editor-diff" data-source-diff-panel hidden></aside>
           <aside class="source-editor-diff source-editor-history" data-source-history-panel hidden></aside>
+          <aside class="source-editor-diff source-editor-agent" data-source-agent-panel hidden>
+            <form data-source-agent-form class="source-editor-agent-form">
+              <strong class="source-editor-agent-title">pi-Coding-Agent</strong>
+              <span class="source-editor-agent-sub">Delegiere eine Änderung an dieser App. Das Ergebnis wird als Versionspunkt versiegelt.</span>
+              <textarea data-source-agent-task class="source-editor-agent-task" rows="5" placeholder="Was soll der Agent an dieser App ändern?" required></textarea>
+              <div class="source-editor-agent-actions">
+                <span class="source-editor-agent-model">Model: CTOX (Standard)</span>
+                <button type="submit" data-source-agent-run class="source-editor-agent-run">Delegieren</button>
+              </div>
+              <p data-source-agent-hint class="source-editor-agent-hint" aria-live="polite"></p>
+            </form>
+          </aside>
         </div>
         <footer class="source-editor-status" data-source-status>Lade Source...</footer>
       </main>
@@ -107,6 +121,12 @@ export async function mount(container, ctx) {
     commit: container.querySelector('[data-source-commit]'),
     history: container.querySelector('[data-source-history]'),
     historyPanel: container.querySelector('[data-source-history-panel]'),
+    agent: container.querySelector('[data-source-agent]'),
+    agentPanel: container.querySelector('[data-source-agent-panel]'),
+    agentForm: container.querySelector('[data-source-agent-form]'),
+    agentTask: container.querySelector('[data-source-agent-task]'),
+    agentRun: container.querySelector('[data-source-agent-run]'),
+    agentHint: container.querySelector('[data-source-agent-hint]'),
     monacoHost: container.querySelector('[data-source-monaco]'),
     fallback: container.querySelector('[data-source-fallback]'),
     placeholder: container.querySelector('[data-source-placeholder]'),
@@ -169,6 +189,33 @@ export async function mount(container, ctx) {
     refs.history.classList.toggle('is-active', state.historyOpen);
     refs.history.setAttribute('aria-pressed', state.historyOpen ? 'true' : 'false');
     if (state.historyOpen) renderHistory();
+  });
+  refs.agent.addEventListener('click', () => {
+    if (!state.moduleId) return;
+    state.agentOpen = !state.agentOpen;
+    if (state.agentOpen) {
+      // Agent is a focused mode — close the diff and history panels.
+      if (state.diffOpen) {
+        state.diffOpen = false;
+        refs.diffPanel.hidden = true;
+        refs.diff.classList.remove('is-active');
+        refs.diff.setAttribute('aria-pressed', 'false');
+      }
+      if (state.historyOpen) {
+        state.historyOpen = false;
+        refs.historyPanel.hidden = true;
+        refs.history.classList.remove('is-active');
+        refs.history.setAttribute('aria-pressed', 'false');
+      }
+    }
+    refs.agentPanel.hidden = !state.agentOpen;
+    refs.agent.classList.toggle('is-active', state.agentOpen);
+    refs.agent.setAttribute('aria-pressed', state.agentOpen ? 'true' : 'false');
+    if (state.agentOpen) refs.agentTask.focus();
+  });
+  refs.agentForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    delegateAgentTurn();
   });
 
   const monacoReady = initMonaco().catch((error) => {
@@ -660,6 +707,8 @@ export async function mount(container, ctx) {
     refs.save.disabled = !actions.save;
     if (refs.commit) refs.commit.disabled = !state.moduleId || state.readonly || state.saving || state.loading;
     if (refs.history) refs.history.disabled = !state.moduleId;
+    if (refs.agent) refs.agent.disabled = !state.moduleId;
+    if (refs.agentRun) refs.agentRun.disabled = !state.moduleId || state.readonly || state.saving;
   }
 
   async function ensureSourceReplication() {
@@ -738,6 +787,52 @@ export async function mount(container, ctx) {
       state.saving = false;
       updateActionState();
     }
+  }
+
+  async function delegateAgentTurn() {
+    if (!state.moduleId || state.readonly || state.saving) return;
+    const task = String(refs.agentTask.value || '').trim();
+    if (!task) {
+      setAgentHint('Bitte beschreibe die gewünschte Änderung.', true);
+      refs.agentTask.focus();
+      return;
+    }
+    state.saving = true;
+    updateActionState();
+    setAgentHint('pi-Agent arbeitet… das kann einen Moment dauern.');
+    setStatus('pi-Agent arbeitet…');
+    try {
+      const accepted = await dispatchSourceCommand('ctox.coding.turn', {
+        module_id: state.moduleId,
+        prompt: task,
+        title: `Coding turn on ${state.moduleId}`,
+      });
+      const result = accepted?.result || {};
+      if (result.ok === false) {
+        setAgentHint(result.error || 'Turn fehlgeschlagen.', true);
+        setStatus(`Agent: ${result.error || 'Turn fehlgeschlagen.'}`, true);
+      } else {
+        const applied = Array.isArray(result.applied_files) ? result.applied_files.length : 0;
+        setAgentHint(`Fertig — ${applied} Datei${applied === 1 ? '' : 'en'} geändert.`);
+        setStatus(`pi-Agent fertig — ${applied} Datei${applied === 1 ? '' : 'en'} geändert. Lade neu…`);
+        refs.agentTask.value = '';
+        await loadBundle();
+        if (state.historyOpen) await renderHistory();
+      }
+    } catch (error) {
+      console.error('[source-editor] agent turn failed:', error);
+      setAgentHint(`Fehlgeschlagen: ${error?.message || error}`, true);
+      setStatus(`Agent fehlgeschlagen: ${error?.message || error}`, true);
+    } finally {
+      state.saving = false;
+      updateActionState();
+    }
+  }
+
+  function setAgentHint(text, isError = false) {
+    if (!refs.agentHint) return;
+    refs.agentHint.textContent = text || '';
+    refs.agentHint.classList.toggle('is-error', Boolean(isError));
   }
 
   async function loadSourceFilesFromRxdb() {
@@ -1387,6 +1482,71 @@ function ensureStyles() {
     .source-editor-placeholder span {
       color: var(--muted);
       font-size: 12px;
+    }
+    .source-editor-agent-form {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 14px;
+      height: 100%;
+      box-sizing: border-box;
+    }
+    .source-editor-agent-title {
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .source-editor-agent-sub {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .source-editor-agent-task {
+      flex: 1 1 auto;
+      min-height: 96px;
+      resize: none;
+      padding: 10px 12px;
+      border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--line) 8%, transparent);
+      color: inherit;
+      font: 13px/1.5 inherit;
+    }
+    .source-editor-agent-task:focus {
+      outline: none;
+      border-color: var(--accent, #6366f1);
+    }
+    .source-editor-agent-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .source-editor-agent-model {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .source-editor-agent-run {
+      padding: 7px 14px;
+      border: 0;
+      border-radius: 8px;
+      background: var(--accent, #6366f1);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .source-editor-agent-run:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    .source-editor-agent-hint {
+      margin: 0;
+      min-height: 16px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .source-editor-agent-hint.is-error {
+      color: var(--danger, #dc2626);
     }
     .source-editor-lines,
     .source-editor textarea {
