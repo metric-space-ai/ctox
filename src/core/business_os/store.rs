@@ -39728,6 +39728,11 @@ fn project_appsec_findings(
         let payload = parse_json_value(&payload_json);
         let evidence_artifacts =
             appsec_finding_evidence_summary(state, &id, evidence_artifact.as_deref(), &artifacts);
+        let updated_at_ms = evidence_artifacts
+            .iter()
+            .filter_map(|artifact| artifact.get("updated_at").and_then(Value::as_str))
+            .map(appsec_updated_at_ms)
+            .fold(appsec_updated_at_ms(&updated_at), i64::max);
         let record = serde_json::json!({
             "finding_id": id,
             "state_dir": state,
@@ -39744,7 +39749,6 @@ fn project_appsec_findings(
             "updated_at": updated_at,
             "source": "ctox-appsec-core-projection",
         });
-        let updated_at_ms = appsec_updated_at_ms(&updated_at);
         upsert_business_record(business, "appsec_findings", &id, updated_at_ms, record)?;
         pairs.push(("appsec_findings", id));
     }
@@ -41108,6 +41112,16 @@ mod tests {
                 .iter()
                 .all(|item| item["state_dir"] == "/workspace/a"),
             "embedded evidence must not cross assessment state"
+        );
+        let projected_updated_at_ms: i64 = business.query_row(
+            "SELECT updated_at_ms FROM business_records
+             WHERE collection = 'appsec_findings' AND record_id = 'F-001'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            projected_updated_at_ms, 1006,
+            "new evidence must advance the finding projection cursor"
         );
         Ok(())
     }

@@ -366,7 +366,9 @@ const BUSINESS_RECORD_PROJECTION_PARTIAL_SYNC_INTERVAL_SECS: u64 = 30;
 const BUSINESS_RECORD_PROJECTION_SYNC_LIMIT: usize = 2_000;
 const BUSINESS_RECORD_PROJECTION_PAGE_SIZE: usize = 25;
 const BUSINESS_RECORD_PROJECTION_WRITE_BATCH_SIZE: usize = 250;
-const BUSINESS_RECORD_PROJECTION_CURSOR_VERSION: u32 = 1;
+// Version 2 performs one bounded replay so legacy rows with pre-RxDB revision
+// envelopes are normalized and derived AppSec evidence fields are refreshed.
+const BUSINESS_RECORD_PROJECTION_CURSOR_VERSION: u32 = 2;
 const QUEUE_CHAT_REPAIR_ORPHAN_EPOCH_MS: i64 = 10 * 60 * 1_000;
 const BUSINESS_COMMAND_ACTIVE_POLL_SECS: u64 = 1;
 // Browser-originated commands are user-visible control-plane work. Same-process
@@ -9057,8 +9059,9 @@ async fn bulk_upsert_business_record_projection_documents(
                 return true;
             };
             existing_by_id.get(id).map_or(true, |existing| {
-                canonical_projection_document_for_compare(existing)
-                    != canonical_projection_document_for_compare(document)
+                !projection_document_has_valid_revision(existing)
+                    || canonical_projection_document_for_compare(existing)
+                        != canonical_projection_document_for_compare(document)
             })
         })
         .collect::<Vec<_>>();
@@ -10250,8 +10253,9 @@ async fn incremental_upsert_projection_if_changed(
         .into_iter()
         .next();
     if let Some(existing) = existing {
-        if canonical_projection_document_for_compare(&existing)
-            == canonical_projection_document_for_compare(&document)
+        if projection_document_has_valid_revision(&existing)
+            && canonical_projection_document_for_compare(&existing)
+                == canonical_projection_document_for_compare(&document)
         {
             return Ok(false);
         }
@@ -10276,6 +10280,16 @@ fn canonical_projection_document_for_compare(document: &Value) -> Value {
     let mut value = document.clone();
     remove_projection_compare_metadata(&mut value);
     value
+}
+
+fn projection_document_has_valid_revision(document: &Value) -> bool {
+    let Some(revision) = document.get("_rev").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some((height, token)) = revision.split_once('-') else {
+        return false;
+    };
+    !token.is_empty() && height.parse::<u64>().is_ok_and(|height| height > 0)
 }
 
 fn remove_projection_compare_metadata(value: &mut Value) {
@@ -18857,15 +18871,15 @@ mod tests {
 
             let updated = json!({
                 "id": "malformed_revision_projection",
-                "title": "Repaired title",
+                "title": "Initial title",
                 "filename": "revision.txt",
                 "mime_type": "text/plain",
                 "status": "imported",
                 "current_version_id": "",
-                "index_text": "Repaired body",
+                "index_text": "Initial body",
                 "is_deleted": false,
                 "created_at_ms": 1_000,
-                "updated_at_ms": 3_000
+                "updated_at_ms": 2_000
             });
             assert_eq!(
                 bulk_upsert_business_record_projection_documents(
@@ -18892,7 +18906,7 @@ mod tests {
             let repaired: Value = serde_json::from_str(&raw).expect("parse repaired projection");
             assert_eq!(
                 repaired.get("title").and_then(Value::as_str),
-                Some("Repaired title")
+                Some("Initial title")
             );
             assert!(
                 revision
