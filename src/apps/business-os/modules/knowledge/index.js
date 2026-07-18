@@ -171,7 +171,7 @@ function documentTemplate() {
         <!-- Row 2: filter section — search input + gear that expands advanced filters. -->
         <div class="knowledge-filterbar">
           <input class="ctox-pane-search" data-search placeholder="Suchen..." />
-          <button class="ctox-pane-icon knowledge-filter-toggle" type="button" data-action="toggle-filters" aria-expanded="false" aria-label="Erweiterte Filter" title="Erweiterte Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2.6"/><path d="M12 3.2v2.1M12 18.7v2.1M4.6 7.5l1.8 1M17.6 15.5l1.8 1M4.6 16.5l1.8-1M17.6 8.5l1.8-1"/></svg></button>
+          <button class="ctox-pane-icon knowledge-filter-toggle" type="button" data-action="toggle-filters" aria-expanded="false" aria-label="Erweiterte Filter" title="Erweiterte Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="8" x2="20" y2="8"/><line x1="4" y1="16" x2="20" y2="16"/><circle cx="10" cy="8" r="2.2" fill="var(--knowledge-surface)"/><circle cx="15" cy="16" r="2.2" fill="var(--knowledge-surface)"/></svg></button>
         </div>
         <div class="knowledge-filter-advanced" data-filter-advanced hidden>
           <p class="knowledge-filter-hint">Erweiterte Filter</p>
