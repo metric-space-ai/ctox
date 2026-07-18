@@ -11,6 +11,7 @@
 // network. The provider stream routes through the CTOX model gateway. See
 // PORTING.md / UPSTREAM.md.
 import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
 import { startSocketServer, fauxStreamFn } from "./server";
 
 export {
@@ -46,7 +47,9 @@ export {
 // When executed directly (`node ctox-pi-sidecar.mjs <unix-socket-path>`), run as
 // the LocalTransport daemon the Rust owner spawns and supervises. When imported
 // as a library (or by the smokes), this block is inert.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Resolve the entry path's symlinks (e.g. /tmp -> /private/tmp on macOS) so the
+// main-module check matches import.meta.url (which is already a real path URL).
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   const socketPath = process.argv[2];
   if (!socketPath) {
     console.error("usage: ctox-pi-sidecar <unix-socket-path>");
