@@ -5848,7 +5848,7 @@ fn start_prompt_worker(
                 if is_systematic_research_job(&job) {
                     let required_depth = required_systematic_research_depth(&job).as_str();
                     prompt.push_str(&format!(
-                        "\n\nServer-bound research attempt:\nResearch Attempt ID: {command_turn_id}\nRequired Deep Research Depth: {required_depth}\nWrite the exact attempt ID to research_attempt_id in validation/evidence-manifest.json. Invoke typed ctox_deep_research at the required depth with a persisted research workspace inside the task workspace. Completion rejects any other attempt ID, manifest path, shallower depth, or no-workspace run."
+                        "\n\nServer-bound research attempt:\nResearch Attempt ID: {command_turn_id}\nRequired Deep Research Depth: {required_depth}\nRequired Research Reviewer Model: {SYSTEMATIC_RESEARCH_REVIEWER_MODEL}\nWrite the exact attempt ID to research_attempt_id in validation/evidence-manifest.json. Invoke typed ctox_deep_research at the required depth with a persisted research workspace inside the task workspace. Every candidate-batch and final review spawn_agent call must set model to the exact required reviewer model. Completion rejects any other attempt ID, manifest path, shallower depth, no-workspace run, or reviewer model."
                     ));
                 }
                 outbound_email_first_execution_prompt(&job, prompt)
@@ -10766,6 +10766,8 @@ fn is_systematic_research_job(job: &QueuedPrompt) -> bool {
         || job.prompt.contains("research.knowledge.refresh")
 }
 
+const SYSTEMATIC_RESEARCH_REVIEWER_MODEL: &str = "gpt-5.6-luna";
+
 fn business_os_app_validation_may_own_completion(job: &QueuedPrompt) -> bool {
     !is_systematic_research_job(job)
         && business_os_app_module_target_from_prompt(&job.prompt).is_some()
@@ -11249,9 +11251,9 @@ fn validate_systematic_research_subagent_reviews_from_conn(
         .with_context(|| format!("canonicalize research workspace {}", workspace.display()))?;
     let mut parent_thread_id: Option<String> = None;
     for reviewer_thread_id in reviewer_thread_ids {
-        let (parent, created_at, cwd) = conn
+        let (parent, created_at, cwd, model) = conn
             .query_row(
-                "SELECT subagent_parent_thread_id, created_at, cwd \
+                "SELECT subagent_parent_thread_id, created_at, cwd, model \
                  FROM threads \
                  WHERE id = ?1 AND subagent_parent_thread_id IS NOT NULL",
                 params![reviewer_thread_id],
@@ -11260,6 +11262,7 @@ fn validate_systematic_research_subagent_reviews_from_conn(
                         row.get::<_, String>(0)?,
                         row.get::<_, u64>(1)?,
                         row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
                     ))
                 },
             )
@@ -11283,6 +11286,12 @@ fn validate_systematic_research_subagent_reviews_from_conn(
         if reviewer_cwd != workspace {
             anyhow::bail!(
                 "reviewer {reviewer_thread_id} is not bound to the current research workspace"
+            );
+        }
+        if model.as_deref() != Some(SYSTEMATIC_RESEARCH_REVIEWER_MODEL) {
+            anyhow::bail!(
+                "reviewer {reviewer_thread_id} used model {} instead of required model {SYSTEMATIC_RESEARCH_REVIEWER_MODEL}",
+                model.as_deref().unwrap_or("<unknown>")
             );
         }
         match &parent_thread_id {
@@ -24730,7 +24739,8 @@ mod tests {
                 id TEXT PRIMARY KEY,
                 subagent_parent_thread_id TEXT,
                 created_at INTEGER NOT NULL,
-                cwd TEXT NOT NULL
+                cwd TEXT NOT NULL,
+                model TEXT
             );",
         )
         .unwrap();
@@ -24746,9 +24756,14 @@ mod tests {
         .map(str::to_string);
         for thread_id in &reviewer_thread_ids {
             conn.execute(
-                "INSERT INTO threads (id, subagent_parent_thread_id, created_at, cwd)
-                 VALUES (?1, 'parent-thread', ?2, ?3)",
-                params![thread_id, current_epoch_secs(), workspace.to_string_lossy()],
+                "INSERT INTO threads (id, subagent_parent_thread_id, created_at, cwd, model)
+                 VALUES (?1, 'parent-thread', ?2, ?3, ?4)",
+                params![
+                    thread_id,
+                    current_epoch_secs(),
+                    workspace.to_string_lossy(),
+                    SYSTEMATIC_RESEARCH_REVIEWER_MODEL
+                ],
             )
             .unwrap();
         }
@@ -24776,6 +24791,24 @@ mod tests {
         assert!(error
             .to_string()
             .contains("is not a persisted harness subagent thread"));
+
+        conn.execute(
+            "UPDATE threads SET subagent_parent_thread_id = 'parent-thread',
+                                model = 'gpt-5.1-codex-mini'
+             WHERE id = 'source-review'",
+            [],
+        )
+        .unwrap();
+        let error = validate_systematic_research_subagent_reviews_from_conn(
+            &conn,
+            &workspace,
+            attempt_started_at,
+            &reviewer_thread_ids,
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("used model gpt-5.1-codex-mini instead of required model gpt-5.6-luna"));
     }
 
     #[test]
@@ -24788,18 +24821,20 @@ mod tests {
                 id TEXT PRIMARY KEY,
                 subagent_parent_thread_id TEXT,
                 created_at INTEGER NOT NULL,
-                cwd TEXT NOT NULL
+                cwd TEXT NOT NULL,
+                model TEXT
             );",
         )
         .unwrap();
         let attempt_started_at = current_epoch_secs();
         let reviewer_thread_ids = ["reviewer"].map(str::to_string);
         conn.execute(
-            "INSERT INTO threads (id, subagent_parent_thread_id, created_at, cwd)
-             VALUES ('reviewer', 'parent-thread', ?1, ?2)",
+            "INSERT INTO threads (id, subagent_parent_thread_id, created_at, cwd, model)
+             VALUES ('reviewer', 'parent-thread', ?1, ?2, ?3)",
             params![
                 attempt_started_at.saturating_sub(1),
-                workspace.to_string_lossy()
+                workspace.to_string_lossy(),
+                SYSTEMATIC_RESEARCH_REVIEWER_MODEL
             ],
         )
         .unwrap();
