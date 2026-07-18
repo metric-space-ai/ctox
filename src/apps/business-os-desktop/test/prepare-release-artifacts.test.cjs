@@ -52,6 +52,32 @@ test("release preparation merges macOS updater manifests for both architectures"
   assert.doesNotMatch(fs.readFileSync(path.join(outputRoot, "latest-mac.yml"), "utf8"), /CTOX Business/);
 });
 
+test("release preparation removes duplicate Linux updater entries", () => {
+  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ctox-release-linux-artifacts-"));
+  const inputRoot = path.join(temporaryRoot, "input");
+  const outputRoot = path.join(temporaryRoot, "output");
+  const directory = path.join(inputRoot, "ctox-business-os-desktop-linux-x64");
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(
+    path.join(directory, "latest-linux.yml"),
+    yaml.dump({
+      version: "0.3.52",
+      files: [
+        { url: "ctox.AppImage", sha512: "appimage", size: 200 },
+        { url: "ctox.deb", sha512: "deb", size: 100 },
+        { url: "ctox.deb", sha512: "deb", size: 100 },
+      ],
+      path: "ctox.AppImage",
+      sha512: "appimage",
+    }),
+  );
+
+  prepareReleaseArtifacts(inputRoot, outputRoot);
+
+  const normalized = yaml.load(fs.readFileSync(path.join(outputRoot, "latest-linux.yml"), "utf8"));
+  assert.deepEqual(normalized.files.map((file) => file.url), ["ctox.AppImage", "ctox.deb"]);
+});
+
 test("release preparation fails closed on unexpected conflicting artifacts", () => {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ctox-release-collision-"));
   const inputRoot = path.join(temporaryRoot, "input");

@@ -5,10 +5,29 @@ const path = require("node:path");
 const yaml = require("js-yaml");
 
 const MAC_MANIFEST_NAMES = new Set(["alpha-mac.yml", "beta-mac.yml", "latest-mac.yml"]);
+const LINUX_MANIFEST_NAMES = new Set(["alpha-linux.yml", "beta-linux.yml", "latest-linux.yml"]);
 
 function sameBytes(paths) {
   const first = fs.readFileSync(paths[0]);
   return paths.slice(1).every((candidate) => first.equals(fs.readFileSync(candidate)));
+}
+
+function deduplicateManifestFiles(value, manifestPath, platform) {
+  if (!Array.isArray(value?.files) || value.files.length === 0) {
+    throw new Error(`${platform} update manifest has no files: ${manifestPath}`);
+  }
+  const filesByUrl = new Map();
+  for (const file of value.files) {
+    if (!file?.url || !file.sha512) {
+      throw new Error(`${platform} update manifest file is incomplete: ${manifestPath}`);
+    }
+    const existing = filesByUrl.get(file.url);
+    if (existing && JSON.stringify(existing) !== JSON.stringify(file)) {
+      throw new Error(`${platform} update manifest file metadata disagrees for ${file.url}`);
+    }
+    filesByUrl.set(file.url, file);
+  }
+  return [...filesByUrl.values()].sort((left, right) => left.url.localeCompare(right.url));
 }
 
 function mergeMacManifests(manifestPaths) {
@@ -24,24 +43,15 @@ function mergeMacManifests(manifestPaths) {
     throw new Error(`macOS update manifest versions disagree: ${[...versions].join(", ")}`);
   }
 
-  const filesByUrl = new Map();
   for (const { manifestPath, value } of documents) {
-    if (!Array.isArray(value.files) || value.files.length === 0) {
-      throw new Error(`macOS update manifest has no files: ${manifestPath}`);
-    }
-    for (const file of value.files) {
-      if (!file?.url || !file.sha512) {
-        throw new Error(`macOS update manifest file is incomplete: ${manifestPath}`);
-      }
-      const existing = filesByUrl.get(file.url);
-      if (existing && JSON.stringify(existing) !== JSON.stringify(file)) {
-        throw new Error(`macOS update manifest file metadata disagrees for ${file.url}`);
-      }
-      filesByUrl.set(file.url, file);
-    }
+    value.files = deduplicateManifestFiles(value, manifestPath, "macOS");
   }
 
-  const files = [...filesByUrl.values()].sort((left, right) => left.url.localeCompare(right.url));
+  const files = deduplicateManifestFiles(
+    { files: documents.flatMap(({ value }) => value.files) },
+    manifestPaths.join(", "),
+    "macOS",
+  );
   const zipArchitectures = new Set(
     files
       .filter((file) => file.url.endsWith(".zip"))
@@ -95,6 +105,17 @@ function prepareReleaseArtifacts(inputRoot, outputRoot) {
       fs.writeFileSync(destination, yaml.dump(merged, { lineWidth: -1, noRefs: true }));
       continue;
     }
+    if (LINUX_MANIFEST_NAMES.has(name)) {
+      if (sources.length > 1 && !sameBytes(sources.map(({ source }) => source))) {
+        throw new Error(
+          `release artifacts contain conflicting files named ${name}: ${sources.map(({ artifact }) => artifact).join(", ")}`,
+        );
+      }
+      const value = yaml.load(fs.readFileSync(sources[0].source, "utf8"));
+      value.files = deduplicateManifestFiles(value, sources[0].source, "Linux");
+      fs.writeFileSync(destination, yaml.dump(value, { lineWidth: -1, noRefs: true }));
+      continue;
+    }
     if (sources.length === 1 || sameBytes(sources.map(({ source }) => source))) {
       fs.copyFileSync(sources[0].source, destination);
       continue;
@@ -119,4 +140,4 @@ if (require.main === module) {
   prepareReleaseArtifacts(path.resolve(inputRoot), path.resolve(outputRoot));
 }
 
-module.exports = { mergeMacManifests, prepareReleaseArtifacts };
+module.exports = { deduplicateManifestFiles, mergeMacManifests, prepareReleaseArtifacts };

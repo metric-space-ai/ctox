@@ -118,6 +118,11 @@ function assertDedicatedDesktopReleaseWorkflow() {
   assert.doesNotMatch(workflow, /merge-multiple:\s*true/);
   assert.match(
     workflow,
+    /find \. -maxdepth 1 -type f ! -name SHA256SUMS -print0/,
+    "release checksums must exclude the output file itself",
+  );
+  assert.match(
+    workflow,
     /APPLE_APP_SPECIFIC_PASSWORD:\s*\$\{\{ secrets\.APPLE_ID_PASSWORD \}\}/,
     "dedicated release must expose the app-specific password under Electron Builder's required env name",
   );
