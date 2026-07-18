@@ -7,10 +7,10 @@ const SIGN_COMMAND = 'ats.signature.sign';
 const SUBJECT_KINDS = ['arbeitsvertrag', 'vermittlungsvertrag', 'ueberlassungsvertrag'];
 const COPY = {
   de: {
-    kicker: 'E-Signatur', document: 'Dokument-ID', subjectKind: 'Vertragstyp', employment: 'Arbeitsvertrag', placement: 'Vermittlungsvertrag', staffing: 'Überlassungsvertrag', signers: 'Unterzeichner-IDs (Komma-getrennt)', create: 'Anlegen', entries: 'Einträge', empty: 'Noch keine Einträge.', offlineService: 'Offline: Befehlsdienst nicht verfügbar.', offlineSend: 'Offline: Befehl konnte nicht gesendet werden.', signatureCaptured: 'Signatur erfasst.', request: 'Anfrage', signer: 'Unterzeichner', status: 'Status', blocked: 'Blockiert.', documentRequired: 'Dokument-ID erforderlich.', requestCreated: 'Signatur-Anfrage angelegt.', sign: 'Signieren', artifact: 'Artefakt'
+    document: 'Dokument-ID', subjectKind: 'Vertragstyp', employment: 'Arbeitsvertrag', placement: 'Vermittlungsvertrag', staffing: 'Überlassungsvertrag', signers: 'Unterzeichner-IDs (Komma-getrennt)', create: 'Anlegen', entries: 'Einträge', empty: 'Noch keine Einträge.', offlineService: 'Offline: Befehlsdienst nicht verfügbar.', offlineSend: 'Offline: Befehl konnte nicht gesendet werden.', signatureCaptured: 'Signatur erfasst.', request: 'Anfrage', signer: 'Unterzeichner', status: 'Status', blocked: 'Blockiert.', documentRequired: 'Dokument-ID erforderlich.', requestCreated: 'Signatur-Anfrage angelegt.', sign: 'Signieren', artifact: 'Artefakt'
   },
   en: {
-    kicker: 'E-signature', document: 'Document ID', subjectKind: 'Agreement type', employment: 'Employment contract', placement: 'Placement agreement', staffing: 'Staffing agreement', signers: 'Signer IDs (comma-separated)', create: 'Create', entries: 'records', empty: 'No signature requests yet.', offlineService: 'Offline: command service unavailable.', offlineSend: 'Offline: command could not be sent.', signatureCaptured: 'Signature recorded.', request: 'Request', signer: 'Signer', status: 'Status', blocked: 'Blocked.', documentRequired: 'Document ID is required.', requestCreated: 'Signature request created.', sign: 'Sign', artifact: 'Artifact'
+    document: 'Document ID', subjectKind: 'Agreement type', employment: 'Employment contract', placement: 'Placement agreement', staffing: 'Staffing agreement', signers: 'Signer IDs (comma-separated)', create: 'Create', entries: 'records', empty: 'No signature requests yet.', offlineService: 'Offline: command service unavailable.', offlineSend: 'Offline: command could not be sent.', signatureCaptured: 'Signature recorded.', request: 'Request', signer: 'Signer', status: 'Status', blocked: 'Blocked.', documentRequired: 'Document ID is required.', requestCreated: 'Signature request created.', sign: 'Sign', artifact: 'Artifact'
   }
 };
 let text = COPY.de;
@@ -28,9 +28,7 @@ export async function mount(ctx) {
   const formEl = root?.querySelector('[data-ats-form]');
   const gateEl = root?.querySelector('[data-ats-gate]');
   const titleEl = root?.querySelector('[data-ats-title]');
-  const subEl = root?.querySelector('[data-ats-sub]');
   if (titleEl) titleEl.textContent = ctx.manifest?.title || TITLE;
-  if (subEl) subEl.textContent = ctx.manifest?.description || '';
   applyStaticCopy(root);
 
   let rowsCache = [];
@@ -211,7 +209,6 @@ function signatureRow(r) {
 
 function applyStaticCopy(root) {
   root.querySelectorAll('[data-copy]').forEach((node) => { node.textContent = text[node.dataset.copy] || node.textContent; });
-  root.querySelectorAll('[data-copy-placeholder]').forEach((node) => { node.placeholder = text[node.dataset.copyPlaceholder] || node.placeholder; });
 }
 
 async function ensureStyles() {
