@@ -22181,13 +22181,22 @@ pub fn accept_rxdb_business_command_with_origin(
                 .get("faux")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            // Optional model override: by default the coding agent uses the same
+            // model/provider as CTOX (the gateway); a payload `model` (any pi-ai
+            // provider model) overrides it, like plain pi.
+            let model_override = command.payload.get("model").cloned();
             // Delegate one bounded coding turn to the pi-sidecar owner. Errors
             // (e.g. sidecar not built, gateway unreachable) become an ok:false
             // outcome rather than a failed command.
             let outcome = (|| -> anyhow::Result<Value> {
                 let dist = crate::coding_agents::pi_sidecar::resolve_sidecar_dist(root)?;
                 crate::coding_agents::pi_sidecar::run_module_coding_turn(
-                    root, &dist, &module_id, prompt, faux,
+                    root,
+                    &dist,
+                    &module_id,
+                    prompt,
+                    faux,
+                    model_override,
                 )
             })()
             .unwrap_or_else(|error| serde_json::json!({ "ok": false, "error": error.to_string() }));

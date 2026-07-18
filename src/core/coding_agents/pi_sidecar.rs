@@ -253,6 +253,7 @@ pub fn run_module_coding_turn(
     module_id: &str,
     prompt: &str,
     faux: bool,
+    model_override: Option<Value>,
 ) -> anyhow::Result<Value> {
     let files = project_module_source(root, module_id)?;
     let mut request = serde_json::json!({
@@ -261,10 +262,12 @@ pub fn run_module_coding_turn(
         "files": files,
         "maxAssistantTurns": 8,
     });
-    // Real turns route through the CTOX model gateway; faux turns run the
-    // sidecar's deterministic no-model stream.
+    // Real turns need a model. Default = the SAME model/provider as CTOX (the
+    // gateway); callers may override with ANY pi-ai provider model (openai,
+    // anthropic, minimax, openrouter, …), just like plain pi. Faux turns run
+    // the sidecar's deterministic no-model stream.
     if !faux {
-        request["model"] = gateway_model(root);
+        request["model"] = model_override.unwrap_or_else(|| gateway_model(root));
     }
     let response = run_pi_turn(dist, &request, faux)?;
     anyhow::ensure!(
@@ -424,7 +427,7 @@ mod tests {
             },
         )?;
 
-        let summary = run_module_coding_turn(root, &dist, "widget", "add a marker", true)?;
+        let summary = run_module_coding_turn(root, &dist, "widget", "add a marker", true, None)?;
         assert_eq!(summary["ok"], Value::Bool(true), "owner turn ok");
 
         // The faux edit must now be part of the module's source records — proving
