@@ -11,21 +11,26 @@
   <div class="ctox-record-workbench__body">
     <form class="ctox-compact-form" data-ats-form>
       <div class="ctox-compact-form__fields">
-        <label class="ctox-compact-field"><span data-copy="name">Name</span><input class="ctox-input" type="text" name="name" placeholder="Name" required data-f data-copy-placeholder="name" /></label>
-        <label class="ctox-compact-field"><span data-copy="email">E-Mail</span><input class="ctox-input" type="email" name="email" placeholder="E-Mail" data-f data-copy-placeholder="email" /></label>
-        <label class="ctox-compact-field"><span data-copy="phone">Telefon</span><input class="ctox-input" type="text" name="phone" placeholder="Telefon" data-f data-copy-placeholder="phone" /></label>
-        <label class="ctox-compact-field"><span data-copy="vacancy">Vakanz-ID</span><input class="ctox-input" type="text" name="vacancy_id" placeholder="Vakanz-ID" data-f data-copy-placeholder="vacancy" /></label>
-        <label class="ctox-compact-field"><span data-copy="channel">Kanal</span><select class="ctox-select" name="channel" data-f>
-          <option value="career_site">Karriereseite</option>
-          <option value="job_board">Jobbörse</option>
-          <option value="easy_apply">Easy Apply</option>
-          <option value="email">E-Mail</option>
-          <option value="qr">QR</option>
-          <option value="walk_in">Walk-in</option>
-          <option value="referral">Empfehlung</option>
-        </select></label>
+        <label class="ctox-compact-field"><span data-copy="name">Name</span><input class="ctox-input" type="text" name="name" required data-f /></label>
+        <label class="ctox-compact-field"><span data-copy="email">E-Mail</span><input class="ctox-input" type="email" name="email" data-f /></label>
       </div>
       <div class="ctox-compact-form__actions"><button class="ctox-button is-primary" type="submit" data-copy="capture">Erfassen</button></div>
+      <details class="ats-more">
+        <summary data-copy="more">Weitere Angaben</summary>
+        <div class="ctox-compact-form__fields">
+          <label class="ctox-compact-field"><span data-copy="phone">Telefon</span><input class="ctox-input" type="text" name="phone" data-f /></label>
+          <label class="ctox-compact-field"><span data-copy="vacancy">Vakanz-ID</span><input class="ctox-input" type="text" name="vacancy_id" data-f /></label>
+          <label class="ctox-compact-field"><span data-copy="channel">Kanal</span><select class="ctox-select" name="channel" data-f>
+            <option value="career_site">Karriereseite</option>
+            <option value="job_board">Jobbörse</option>
+            <option value="easy_apply">Easy Apply</option>
+            <option value="email">E-Mail</option>
+            <option value="qr">QR</option>
+            <option value="walk_in">Walk-in</option>
+            <option value="referral">Empfehlung</option>
+          </select></label>
+        </div>
+      </details>
     </form>
     <div class="ctox-callout" data-ats-gate></div>
     <div class="ctox-record-workbench__status" data-ats-count></div>

@@ -52,5 +52,27 @@
   color: var(--muted);
 }
 
+/* Empfangsdatum in der rechten Spalte der Zeile. */
+.ats-intake .ats-item-date {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* Optionale Erfassungs-Felder (Telefon, Vakanz, Kanal) und interne
+   Record-Metadaten (ID, Dedupe, Vakanz, Dokumente) sind nur bei Bedarf
+   relevant — native Disclosures, standardmäßig eingeklappt. */
+.ats-intake .ats-more { grid-column: 1 / -1; }
+
+.ats-intake .ats-more > summary,
+.ats-intake .ats-item-details > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ats-intake .ats-more[open] > summary { margin-bottom: 5px; }
+.ats-intake .ats-item-details { margin-top: 3px; }
+
 /* Record-IDs rendern als Code. */
 .ats-intake .ats-tag { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); }
