@@ -863,3 +863,59 @@
 .knowledge-module [data-skill-toolbar]:has([data-action="save-markdown"]:not([hidden])) {
   display: flex;
 }
+
+/* ============================================================================
+   Canonical column template: header (title + action icons) → filter section
+   (search + gear) → view switcher band → content. Applied to both panes.
+   ========================================================================== */
+
+/* Robust vertical stacking (survives the hidden advanced-filter row). */
+.knowledge-module .knowledge-left { display: flex; flex-direction: column; }
+.knowledge-module .knowledge-left > .knowledge-scroll { flex: 1 1 auto; }
+.knowledge-module .knowledge-center { display: flex; flex-direction: column; }
+.knowledge-module .knowledge-center > .knowledge-tab-panel { flex: 1 1 auto; min-height: 0; }
+
+/* Row 2 — filter section: search input + a gear that expands advanced filters. */
+.knowledge-module .knowledge-filterbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--knowledge-line);
+  background: var(--knowledge-surface);
+}
+.knowledge-module .knowledge-filter-toggle[aria-expanded="true"] { color: var(--knowledge-accent); }
+.knowledge-module .knowledge-filter-advanced {
+  padding: 8px 12px 10px;
+  border-bottom: 1px solid var(--knowledge-line);
+  background: var(--knowledge-surface);
+}
+.knowledge-module .knowledge-filter-hint {
+  margin: 0;
+  color: var(--knowledge-muted);
+  font-size: var(--fs-meta);
+}
+
+/* Row 3 — view switcher band (never top-right). Same geometry as the scope
+   switch so both panes read identically at the switcher row. */
+.knowledge-module .knowledge-view-switch {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--knowledge-line);
+  background: var(--knowledge-surface);
+}
+.knowledge-module .knowledge-view-switch .ctox-pane-tabs {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+}
+.knowledge-module .knowledge-view-switch .ctox-pane-tab { flex: 1 1 0; min-width: 0; }
+
+/* Distinction: the left column is the persistence / management rail — a
+   subtly recessed surface — so it never reads as identical to the content
+   pane, even though it shares the same header grammar. */
+.knowledge-module .knowledge-left { background: var(--knowledge-surface-muted); }
+.knowledge-module .knowledge-left .ctox-pane-band,
+.knowledge-module .knowledge-left .knowledge-filterbar,
+.knowledge-module .knowledge-left .knowledge-scope-switch { background: transparent; }
+.knowledge-module .knowledge-left .ctox-pane-kicker { color: var(--knowledge-accent); }

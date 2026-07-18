@@ -154,6 +154,7 @@ function documentTemplate() {
   return `
     <main class="knowledge-module" data-knowledge-root data-resize-frame>
       <section class="ctox-pane knowledge-pane knowledge-left" aria-label="Knowledge">
+        <!-- Row 1: title + management-only icons (top-right). -->
         <header class="ctox-pane-header ctox-pane-band">
           <div class="ctox-pane-title-row">
             <div class="ctox-pane-titles">
@@ -162,15 +163,20 @@ function documentTemplate() {
             </div>
             <div class="ctox-pane-actions">
               <button class="ctox-pane-icon" type="button" data-action="create-knowledge-book" aria-label="Knowledge Book erstellen" title="Knowledge Book erstellen">${actionIcon('add')}</button>
-              <button class="ctox-pane-icon" type="button" data-action="configure-knowledge" aria-label="Knowledge konfigurieren" title="Knowledge konfigurieren">${actionIcon('settings')}</button>
               <button class="ctox-pane-icon" type="button" data-action="import-knowledge-book" aria-label="Knowledge Book importieren" title="Knowledge Book importieren">${actionIcon('download')}</button>
               <button class="ctox-pane-icon" type="button" data-action="export-knowledge-book" aria-label="Knowledge Books exportieren" title="Knowledge Books exportieren">${actionIcon('export')}</button>
             </div>
           </div>
-          <div class="ctox-pane-tools">
-            <input class="ctox-pane-search" data-search placeholder="Suchen..." />
-          </div>
         </header>
+        <!-- Row 2: filter section — search input + gear that expands advanced filters. -->
+        <div class="knowledge-filterbar">
+          <input class="ctox-pane-search" data-search placeholder="Suchen..." />
+          <button class="ctox-pane-icon knowledge-filter-toggle" type="button" data-action="toggle-filters" aria-expanded="false" aria-label="Erweiterte Filter" title="Erweiterte Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2.6"/><path d="M12 3.2v2.1M12 18.7v2.1M4.6 7.5l1.8 1M17.6 15.5l1.8 1M4.6 16.5l1.8-1M17.6 8.5l1.8-1"/></svg></button>
+        </div>
+        <div class="knowledge-filter-advanced" data-filter-advanced hidden>
+          <p class="knowledge-filter-hint">Erweiterte Filter</p>
+        </div>
+        <!-- Row 3: main switcher (source scope). -->
         <div class="knowledge-scope-switch">
           <div class="ctox-pane-tabs" role="tablist" aria-label="Knowledge Quelle">
             <button type="button" class="ctox-pane-tab" role="tab" data-scope="user" aria-selected="false">User</button>
@@ -184,6 +190,7 @@ function documentTemplate() {
       </section>
       <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--knowledge-left-width" data-resizer-min="300" data-resizer-max="720" aria-label="Spaltenbreite anpassen"></button>
       <section class="ctox-pane knowledge-pane knowledge-center" aria-label="Knowledge Dokument">
+        <!-- Row 1: title + action icon only (edit), top-right. -->
         <header class="ctox-pane-header ctox-pane-band knowledge-center-head">
           <div class="ctox-pane-title-row">
             <div class="ctox-pane-titles">
@@ -192,14 +199,17 @@ function documentTemplate() {
             </div>
             <div class="ctox-pane-actions">
               <button class="ctox-pane-icon knowledge-head-edit" type="button" data-action="edit-active" aria-label="Bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
-              <div class="ctox-pane-tabs" role="tablist" aria-label="Knowledge Ansicht">
-                <button type="button" class="ctox-pane-tab" role="tab" data-tab="skill" aria-selected="true">Skill</button>
-                <button type="button" class="ctox-pane-tab" role="tab" data-tab="runbooks" aria-selected="false">Runbooks</button>
-                <button type="button" class="ctox-pane-tab" role="tab" data-tab="data" aria-selected="false">Data</button>
-              </div>
             </div>
           </div>
         </header>
+        <!-- Row 3: view switcher (its own band below the header, never top-right). -->
+        <div class="knowledge-view-switch">
+          <div class="ctox-pane-tabs" role="tablist" aria-label="Knowledge Ansicht">
+            <button type="button" class="ctox-pane-tab" role="tab" data-tab="skill" aria-selected="true">Skill</button>
+            <button type="button" class="ctox-pane-tab" role="tab" data-tab="runbooks" aria-selected="false">Runbooks</button>
+            <button type="button" class="ctox-pane-tab" role="tab" data-tab="data" aria-selected="false">Data</button>
+          </div>
+        </div>
         <div class="knowledge-tab-panel" data-panel="skill">
           <div class="ctox-toolbar knowledge-edit-bar" data-skill-toolbar>
             <div class="knowledge-edit-actions">
@@ -284,7 +294,16 @@ function wireEvents() {
   state.ctx.host.querySelector('[data-action="create-knowledge-book"]')?.addEventListener('click', () => openCreateKnowledgeBookDrawer());
   state.ctx.host.querySelector('[data-action="import-knowledge-book"]')?.addEventListener('click', () => openImportKnowledgeBookDrawer());
   state.ctx.host.querySelector('[data-action="export-knowledge-book"]')?.addEventListener('click', () => openExportKnowledgeBookDrawer());
-  state.ctx.host.querySelector('[data-action="configure-knowledge"]').addEventListener('click', () => openKnowledgeConfig());
+  state.ctx.host.querySelector('[data-action="configure-knowledge"]')?.addEventListener('click', () => openKnowledgeConfig());
+  // Filter section: the gear toggles the advanced-filter panel in place.
+  state.ctx.host.querySelector('[data-action="toggle-filters"]')?.addEventListener('click', (event) => {
+    const btn = event.currentTarget;
+    const panel = state.ctx.host.querySelector('[data-filter-advanced]');
+    if (!panel) return;
+    const open = panel.hasAttribute('hidden');
+    if (open) panel.removeAttribute('hidden'); else panel.setAttribute('hidden', '');
+    btn.setAttribute('aria-expanded', String(open));
+  });
   // Fractal header edit: the pencil in the pane header edits whatever the
   // active tab shows — it just triggers that panel's own edit control.
   state.ctx.host.querySelector('[data-action="edit-active"]')?.addEventListener('click', () => {
