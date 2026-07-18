@@ -101,36 +101,42 @@
 
 .knowledge-module .knowledge-bundle-head {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr);
-  column-gap: 6px;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 4px;
   width: 100%;
   min-width: 0;
-  border: 0;
   border-radius: var(--knowledge-control-radius);
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  padding: 6px 7px;
-  text-align: left;
+  padding: 1px 3px;
+}
+
+.knowledge-module .knowledge-bundle-head:hover {
+  background: var(--kit-hover);
 }
 
 .knowledge-module .bundle-caret {
-  grid-row: 1 / 4;
-  align-self: center;
-  width: 14px;
-  height: 14px;
+  align-self: stretch;
+  width: 16px;
+  min-height: 26px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  opacity: 0.72;
+  opacity: 0.55;
   transform: rotate(0deg);
-  transition: transform 0.16s ease;
+  transition: transform 0.16s ease, opacity 0.12s ease;
+  padding: 0;
 }
+
+.knowledge-module .bundle-caret:hover { opacity: 1; }
 
 .knowledge-module .bundle-caret::before {
   content: "›";
-  font-size: 15px;
-  font-weight: 760;
+  font-size: var(--fs-title);
+  font-weight: 700;
   line-height: 1;
 }
 
@@ -138,9 +144,36 @@
   transform: rotate(90deg);
 }
 
-.knowledge-module .knowledge-bundle[aria-current="true"] .knowledge-bundle-head {
+.knowledge-module .bundle-select {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  padding: 5px 4px;
+  border-radius: var(--knowledge-control-radius);
+  display: grid;
+}
+
+.knowledge-module .knowledge-bundle[aria-current="true"] .bundle-select {
   background: color-mix(in srgb, var(--knowledge-accent) 13%, var(--knowledge-surface));
 }
+
+/* Fractal edit icon: same top-right grammar as the pane header, but quiet —
+   revealed on hover of the row, when the row is selected, or on focus. */
+.knowledge-module .bundle-edit {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.knowledge-module .knowledge-bundle-head:hover .bundle-edit,
+.knowledge-module .knowledge-bundle[aria-current="true"] .bundle-edit,
+.knowledge-module .bundle-edit:focus-visible {
+  opacity: 0.65;
+}
+
+.knowledge-module .bundle-edit:hover { opacity: 1; }
 
 .knowledge-module .knowledge-bundle-head .bundle-domain,
 .knowledge-module .knowledge-bundle-head strong,

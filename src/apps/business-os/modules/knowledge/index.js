@@ -25,6 +25,8 @@ const labels = {
     syncUnavailable: 'Knowledge Store ist noch nicht verbunden.',
     noRunbooks: 'Keine Runbooks vorhanden.',
     tableUnavailable: 'Für diesen Eintrag ist keine Tabelle verfügbar.',
+    dataIncomplete: 'Daten unvollständig',
+    dataIncompleteHint: 'Die Tabelle wird erst angezeigt, wenn alle Daten-Chunks konsistent und vollständig repliziert wurden.',
     queued: 'Command angelegt',
     queueFailed: 'Command konnte nicht angelegt werden',
     edit: 'Bearbeiten',
@@ -43,6 +45,8 @@ const labels = {
     syncUnavailable: 'Knowledge store is not connected yet.',
     noRunbooks: 'No runbooks available.',
     tableUnavailable: 'This item has no table.',
+    dataIncomplete: 'Incomplete data',
+    dataIncompleteHint: 'The table is shown only after all data chunks are replicated consistently and completely.',
     queued: 'Command queued',
     queueFailed: 'Could not queue command',
     edit: 'Edit',
@@ -74,6 +78,7 @@ const state = {
   localSubscriptionCleanup: null,
   syncWarmupPromise: null,
   refreshInFlight: false,
+  refreshPending: false,
   missingCollections: [],
   loadError: '',
 };
@@ -293,32 +298,47 @@ function wireEvents() {
 }
 
 async function loadKnowledgeFromLocal(options = {}) {
-  if (state.refreshInFlight) return;
-  state.refreshInFlight = true;
+  return runCoalescedRefresh(state, () => refreshKnowledgeFromLocal(options));
+}
+
+async function runCoalescedRefresh(status, refresh) {
+  if (status.refreshInFlight) {
+    status.refreshPending = true;
+    return;
+  }
+  status.refreshInFlight = true;
+  try {
+    await refresh();
+  } finally {
+    status.refreshInFlight = false;
+    if (status.refreshPending) {
+      status.refreshPending = false;
+      await runCoalescedRefresh(status, refresh);
+    }
+  }
+}
+
+async function refreshKnowledgeFromLocal(options = {}) {
   state.loadError = '';
   state.missingCollections = [];
-  try {
-    // Local-first: render whatever is in IndexedDB RIGHT NOW. Never block the
-    // first paint on a sync round trip — `wireLocalRealtime()` subscribes to
-    // the knowledge collections and re-renders the moment replicated records
-    // land, and the sync toast surfaces "data still loading". The old initial
-    // path awaited a sync warm-up AND polled up to 9s for records before
-    // showing anything, which made every Knowledge open feel frozen.
-    if (options.initial) {
-      // Kick sync off in the background; do NOT await it.
-      ensureKnowledgeDataSyncStarted().catch(() => {});
-    }
-    const snapshot = await readLocalKnowledgeSnapshot();
-    state.loadError = snapshot.error || '';
-    state.missingCollections = snapshot.missingCollections || [];
-    applyKnowledgeRecords(snapshot);
-    renderKnowledgeList();
-    renderRunbooks();
-    if (state.selectedId) await selectKnowledge(state.selectedId);
-    else renderEmptyKnowledgeSelection();
-  } finally {
-    state.refreshInFlight = false;
+  // Local-first: render whatever is in IndexedDB RIGHT NOW. Never block the
+  // first paint on a sync round trip — `wireLocalRealtime()` subscribes to
+  // the knowledge collections and re-renders the moment replicated records
+  // land, and the sync toast surfaces "data still loading". The old initial
+  // path awaited a sync warm-up AND polled up to 9s for records before
+  // showing anything, which made every Knowledge open feel frozen.
+  if (options.initial) {
+    // Kick sync off in the background; do NOT await it.
+    ensureKnowledgeDataSyncStarted().catch(() => {});
   }
+  const snapshot = await readLocalKnowledgeSnapshot();
+  state.loadError = snapshot.error || '';
+  state.missingCollections = snapshot.missingCollections || [];
+  applyKnowledgeRecords(snapshot);
+  renderKnowledgeList();
+  renderRunbooks();
+  if (state.selectedId) await selectKnowledge(state.selectedId);
+  else renderEmptyKnowledgeSelection();
 }
 
 function applyKnowledgeRecords({ items = [], runbooks = [], tables = [] }) {
@@ -1067,18 +1087,24 @@ function renderKnowledgeBundle(group) {
   const tableCount = group.tableIds.length;
   const runbookCount = group.runbookIds.length;
   const skillbookCount = skillbooksForGroup(group).length;
+  const isOpen = state.openGroups.has(group.id);
   section.innerHTML = `
-    <button class="knowledge-bundle-head" type="button">
-      <span class="bundle-caret" aria-hidden="true"></span>
-      <span class="bundle-domain">${escapeHtml(group.domainLabel || 'Knowledge')}</span>
-      <strong>${escapeHtml(group.title)}</strong>
-      <small>${escapeHtml(`${skillbookCount} Skillbooks · ${runbookCount} Runbooks · ${tableCount} Tabellen`)}</small>
-    </button>
+    <div class="knowledge-bundle-head">
+      <button class="bundle-caret" type="button" aria-label="Auf- oder zuklappen" aria-expanded="${isOpen}"></button>
+      <button class="bundle-select" type="button">
+        <span class="bundle-domain">${escapeHtml(group.domainLabel || 'Knowledge')}</span>
+        <strong>${escapeHtml(group.title)}</strong>
+        <small>${escapeHtml(`${skillbookCount} Skillbooks · ${runbookCount} Runbooks · ${tableCount} Tabellen`)}</small>
+      </button>
+      <button class="ctox-pane-icon bundle-edit" type="button" aria-label="${escapeHtml(group.title)} bearbeiten" title="Bearbeiten">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg>
+      </button>
+    </div>
     <div class="knowledge-bundle-items"></div>
   `;
-  section.querySelector('.knowledge-bundle-head').addEventListener('click', () => {
-    const wasOpen = state.openGroups.has(group.id);
-    const wasSelected = state.selectedGroupId === group.id;
+  // Fractal grammar: caret toggles expand, the row selects, the top-right
+  // pencil edits — three separate targets, mirroring the pane header.
+  const selectBundle = () => {
     state.selectedGroupId = group.id;
     const skillbook = selectedSkillbookForGroup(group);
     state.selectedSkillbookId = skillbook?.id || '';
@@ -1086,14 +1112,25 @@ function renderKnowledgeBundle(group) {
     state.selectedId = context.skill?.id || skillbook?.id || group.primaryItemId || group.entries[0]?.id || '';
     state.selectedTableId = context.tables[0]?.id || group.tableIds[0] || '';
     state.selectedRunbookId = normaliseRunbookId(context.runbooks[0]?.id || context.runbooks[0]?.runbook_id || group.runbookIds[0] || state.selectedRunbookId);
-    if (wasSelected && wasOpen) {
-      state.openGroups.delete(group.id);
-      renderKnowledgeList();
-      renderActiveTab();
-      return;
-    }
     state.openGroups.add(group.id);
     selectSkillbook(group, skillbook);
+  };
+  section.querySelector('.bundle-caret').addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (state.openGroups.has(group.id)) state.openGroups.delete(group.id);
+    else state.openGroups.add(group.id);
+    renderKnowledgeList();
+  });
+  section.querySelector('.bundle-select').addEventListener('click', selectBundle);
+  section.querySelector('.bundle-edit').addEventListener('click', (event) => {
+    event.stopPropagation();
+    selectBundle();
+    // Reuse the center editor for this entry (in-place edit of the selection).
+    requestAnimationFrame(() => {
+      const rootEl = document.querySelector('.knowledge-module, [data-knowledge-root]');
+      const editAction = rootEl?.querySelector('[data-action="edit-markdown"]:not([hidden]), [data-action="edit-runbook"]:not([hidden])');
+      if (editAction) editAction.click();
+    });
   });
   const list = section.querySelector('.knowledge-bundle-items');
   list.append(renderSkillbookList(group));
@@ -1480,7 +1517,14 @@ async function renderTable() {
     return;
   }
   try {
-    const localRows = localDataFrameRows(tableSource);
+    const completeness = dataFrameCompleteness(tableSource);
+    if (!completeness.complete) {
+      els.tableTitle.textContent = schemaTitleForTable(tableSource);
+      els.tableMeta.textContent = `${copy.dataIncomplete} · ${completeness.reason}`;
+      els.tableHost.innerHTML = `<div class="ctox-empty knowledge-error" role="alert"><strong>${escapeHtml(copy.dataIncomplete)}</strong><span>${escapeHtml(copy.dataIncompleteHint)}</span><span>${escapeHtml(completeness.reason)}</span></div>`;
+      return;
+    }
+    const localRows = completeness.rows;
     const schema = localDataFrameSchema(tableSource);
     const rows = localRows.length
       ? {
@@ -1496,6 +1540,10 @@ async function renderTable() {
   } catch (error) {
     els.tableHost.innerHTML = `<div class="ctox-empty knowledge-error"><strong>DataFrame konnte nicht geladen werden</strong><span>${escapeHtml(error.message || String(error))}</span></div>`;
   }
+}
+
+function schemaTitleForTable(table) {
+  return table?.title || table?.payload?.title || 'DataFrame';
 }
 
 function activeTableId() {
@@ -2208,7 +2256,8 @@ function handleShellMessage(event) {
 }
 
 function localDataFrameSchema(item) {
-  const rows = localDataFrameRows(item);
+  const completeness = dataFrameCompleteness(item);
+  const rows = completeness.rows;
   const rawColumns = firstArray(
     item?.columns,
     item?.schema?.columns,
@@ -2221,11 +2270,17 @@ function localDataFrameSchema(item) {
   return {
     title: item?.title || item?.payload?.title || 'DataFrame',
     columns,
-    row_count: Number(item?.row_count ?? item?.payload?.row_count ?? rows.length),
+    row_count: Number(completeness.expectedRows ?? item?.row_count ?? item?.payload?.row_count ?? rows.length),
+    complete: completeness.complete,
+    completeness,
   };
 }
 
 function localDataFrameRows(item) {
+  return dataFrameCompleteness(item).rows;
+}
+
+function rawDataFrameRows(item) {
   const rows = firstArray(
     item?.rows,
     item?.records,
@@ -2237,6 +2292,236 @@ function localDataFrameRows(item) {
     item?.payload?.dataframe?.rows,
   );
   return rows.map((row) => row && typeof row === 'object' ? row : { value: row });
+}
+
+function dataFrameCompleteness(item) {
+  const chunks = dataframeChunks(item);
+  const rootRowsComplete = explicitRowsComplete(item);
+  if (!chunks && rootRowsComplete !== undefined && rootRowsComplete !== true) {
+    return incompleteDataFrame(rootRowsComplete === false ? 'rows_complete=false' : 'invalid rows_complete');
+  }
+  if (!chunks) {
+    const rows = rawDataFrameRows(item);
+    return {
+      complete: true,
+      rows,
+      expectedRows: rows.length,
+      actualRows: rows.length,
+      chunkCount: 1,
+      reason: '',
+    };
+  }
+  return validateKnowledgeTableChunks(chunks, item);
+}
+
+function dataframeChunks(item) {
+  const explicitChunks = [
+    item?.chunks,
+    item?.payload?.chunks,
+    item?.dataframe?.chunks,
+    item?.payload?.dataframe?.chunks,
+  ].find(Array.isArray);
+  if (explicitChunks) return explicitChunks;
+  if (hasChunkMetadata(item)) return [item];
+  return null;
+}
+
+function hasChunkMetadata(record) {
+  return [
+    'chunk_index',
+    'chunk_count',
+    'row_offset',
+    'rows_offset',
+    'rows_complete',
+  ].some((key) => firstPresentValue(record, [key]) !== undefined);
+}
+
+function validateKnowledgeTableChunks(chunks, table = {}) {
+  const records = Array.isArray(chunks) ? chunks : [];
+  const metadataRecords = [table, ...records].filter((record) => record && typeof record === 'object');
+  if (!records.length) return incompleteDataFrame('no chunks');
+
+  const chunkCountCandidates = metadataRecords.flatMap((record) => numericFieldValues(record, ['chunk_count']));
+  if (chunkCountCandidates.some((value) => !Number.isFinite(value))) {
+    return incompleteDataFrame('invalid chunk_count');
+  }
+  const chunkCountValues = uniqueNumbers(chunkCountCandidates);
+  if (chunkCountValues.length !== 1 || chunkCountValues[0] < 1) {
+    return incompleteDataFrame('inconsistent chunk_count');
+  }
+  const expectedChunkCount = chunkCountValues[0];
+  if (expectedChunkCount !== records.length) {
+    return incompleteDataFrame(`chunk_count=${expectedChunkCount}, received=${records.length}`);
+  }
+
+  const normalized = records.map((record, position) => {
+    const rows = rawDataFrameRows(record);
+    if (['chunk_index', 'row_offset', 'rows_offset', 'row_start', 'start_row', 'start_offset', 'offset', 'chunk_row_count', 'rows_count', 'row_count_in_chunk', 'row_count']
+      .some((key) => numericFieldValues(record, [key]).length > 1 && new Set(numericFieldValues(record, [key])).size > 1)) {
+      return { record, position, invalidMetadata: true, rows };
+    }
+    return {
+      record,
+      position,
+      index: numericField(record, ['chunk_index']),
+      offset: numericField(record, ['row_offset', 'rows_offset', 'row_start', 'start_row', 'start_offset', 'offset']),
+      rowCount: numericField(record, ['chunk_row_count', 'rows_count', 'row_count_in_chunk']),
+      rows,
+      rowsComplete: explicitRowsComplete(record),
+    };
+  });
+
+  if (normalized.some((chunk) => chunk.invalidMetadata)) {
+    return incompleteDataFrame('conflicting chunk metadata');
+  }
+
+  if (normalized.some((chunk) => !Number.isInteger(chunk.index) || chunk.index < 0)) {
+    return incompleteDataFrame('invalid chunk_index');
+  }
+  if (new Set(normalized.map((chunk) => chunk.index)).size !== normalized.length) {
+    return incompleteDataFrame('duplicate chunk_index');
+  }
+  const sorted = [...normalized].sort((left, right) => left.index - right.index);
+  if (sorted.some((chunk, index) => chunk.index !== index)) {
+    return incompleteDataFrame('non-contiguous chunk_index');
+  }
+  if (sorted.some((chunk) => !Number.isInteger(chunk.offset) || chunk.offset < 0)) {
+    return incompleteDataFrame('missing or invalid row offset');
+  }
+  if (sorted.some((chunk) => chunk.rowCount != null && chunk.rowCount !== chunk.rows.length)) {
+    return incompleteDataFrame('chunk row total mismatch');
+  }
+  const rowsCompleteValues = metadataRecords.flatMap((record) => explicitRowsCompleteValues(record));
+  if (rowsCompleteValues.some((value) => value !== true && value !== false)) {
+    return incompleteDataFrame('invalid rows_complete');
+  }
+  if (rowsCompleteValues.some((value) => value === false)) {
+    return incompleteDataFrame('rows_complete=false');
+  }
+
+  const totalCandidates = [];
+  for (const key of ['rows_total', 'total_rows', 'total_row_count', 'expected_row_count']) {
+    for (const record of metadataRecords) {
+      totalCandidates.push(...numericFieldValues(record, [key]));
+    }
+  }
+  totalCandidates.push(...numericFieldValues(table, ['row_count']));
+  if (!totalCandidates.length) {
+    const chunkRowCounts = records.map((record) => numericField(record, ['row_count']));
+    if (chunkRowCounts.every((value) => value != null && value === chunkRowCounts[0])) {
+      totalCandidates.push(chunkRowCounts[0]);
+    }
+  }
+  const uniqueTotals = uniqueNumbers(totalCandidates);
+  if (totalCandidates.some((value) => !Number.isFinite(value)) || uniqueTotals.length !== 1 || uniqueTotals[0] < 0) {
+    return incompleteDataFrame('inconsistent or missing row total');
+  }
+  const expectedRows = uniqueTotals[0];
+
+  const chunkRowCountValues = records.map((record) => numericFieldValues(record, ['row_count']));
+  const presentChunkRowCounts = chunkRowCountValues.filter((values) => values.length);
+  if (presentChunkRowCounts.length && presentChunkRowCounts.length !== records.length) {
+    return incompleteDataFrame('missing chunk row_count');
+  }
+  if (presentChunkRowCounts.length === records.length) {
+    const rowCounts = sorted.map((chunk) => numericFieldValues(chunk.record, ['row_count'])[0]);
+    const countsAreTotal = rowCounts.every((value) => value === expectedRows);
+    const countsAreChunkSizes = rowCounts.every((value, index) => value === sorted[index].rows.length);
+    if (rowCounts.some((value) => !Number.isFinite(value)) || (!countsAreTotal && !countsAreChunkSizes)) {
+      return incompleteDataFrame('chunk row_count mismatch');
+    }
+  }
+
+  let nextOffset = 0;
+  for (const chunk of sorted) {
+    if (chunk.offset !== nextOffset) return incompleteDataFrame('row offsets contain a gap or overlap');
+    nextOffset += chunk.rows.length;
+  }
+  if (nextOffset !== expectedRows) {
+    return incompleteDataFrame(`row total=${expectedRows}, assembled=${nextOffset}`);
+  }
+
+  return {
+    complete: true,
+    rows: sorted.flatMap((chunk) => chunk.rows),
+    expectedRows,
+    actualRows: nextOffset,
+    chunkCount: expectedChunkCount,
+    reason: '',
+  };
+}
+
+function incompleteDataFrame(reason) {
+  return {
+    complete: false,
+    rows: [],
+    expectedRows: null,
+    actualRows: 0,
+    chunkCount: 0,
+    reason: String(reason || 'unknown chunk error'),
+  };
+}
+
+function explicitRowsComplete(record) {
+  const value = explicitRowsCompleteValues(record)[0];
+  if (value === undefined || value === null || value === '') return undefined;
+  return value;
+}
+
+function explicitRowsCompleteValues(record) {
+  return rawFieldValues(record, ['rows_complete']).map((value) => {
+    if (value === true || value === false) return value;
+    if (typeof value === 'string' && value.trim().toLowerCase() === 'true') return true;
+    if (typeof value === 'string' && value.trim().toLowerCase() === 'false') return false;
+    return value;
+  });
+}
+
+function numericField(record, keys) {
+  const value = numericFieldValues(record, keys)[0];
+  if (value === undefined || value === null || value === '') return null;
+  return Number.isFinite(value) ? value : null;
+}
+
+function numericFieldValues(record, keys) {
+  return rawFieldValues(record, keys).map((value) => Number(value));
+}
+
+function rawFieldValues(record, keys) {
+  const payload = record?.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload
+    : null;
+  const nested = record?.dataframe && typeof record.dataframe === 'object' && !Array.isArray(record.dataframe)
+    ? record.dataframe
+    : null;
+  const containers = [record, payload, nested].filter(Boolean);
+  return keys.flatMap((key) => containers
+    .filter((container) => valuePresent(container, key))
+    .map((container) => container[key])
+    .filter((value) => value !== undefined && value !== null && value !== ''));
+}
+
+function firstPresentValue(record, keys) {
+  const payload = record?.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload
+    : null;
+  const nested = record?.dataframe && typeof record.dataframe === 'object' && !Array.isArray(record.dataframe)
+    ? record.dataframe
+    : null;
+  for (const key of keys) {
+    if (valuePresent(record, key)) return record[key];
+    if (valuePresent(payload, key)) return payload[key];
+    if (valuePresent(nested, key)) return nested[key];
+  }
+  return undefined;
+}
+
+function valuePresent(record, key) {
+  return Boolean(record && Object.prototype.hasOwnProperty.call(record, key));
+}
+
+function uniqueNumbers(values) {
+  return [...new Set(values.filter((value) => Number.isFinite(value)))];
 }
 
 function firstArray(...values) {
@@ -2690,7 +2975,9 @@ function exportActiveTableCsv() {
   const tableRecord = tableForItem(item || { id: tableId }, state.tables);
   const tableSource = mergeKnowledgeTableData(item, tableRecord);
   if (!tableSource?.has_table) return;
-  const rows = localDataFrameRows(tableSource);
+  const completeness = dataFrameCompleteness(tableSource);
+  if (!completeness.complete) return;
+  const rows = completeness.rows;
   const schema = localDataFrameSchema(tableSource);
   const csv = dataframeToCsv(schema.columns || [], rows);
   downloadTextFile(
@@ -2749,6 +3036,9 @@ export const __knowledgeTestHooks = {
   knowledgeItemsFromTables,
   knowledgeGroupMatchesDomain,
   knowledgeEmptyStateMessage,
+  runCoalescedRefresh,
+  validateKnowledgeTableChunks,
+  dataFrameCompleteness,
   localDataFrameRows,
   localDataFrameSchema,
   mergeKnowledgeTableData,
