@@ -354,6 +354,8 @@ const BUSINESS_RECORD_PROJECTION_SYNC_INTERVAL_SECS: u64 = 3;
 const BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS: u64 =
     BUSINESS_OS_STANDBY_RECONCILE_INTERVAL_SECS;
 const BUSINESS_RECORD_PROJECTION_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
+const BUSINESS_RECORD_PROJECTION_ERROR_BACKOFF_BASE_SECS: u64 = 30;
+const BUSINESS_RECORD_PROJECTION_ERROR_BACKOFF_MAX_SECS: u64 = 5 * 60;
 const BUSINESS_RECORD_PROJECTION_SYNC_LIMIT: usize = 2_000;
 const BUSINESS_RECORD_PROJECTION_PAGE_SIZE: usize = 25;
 const BUSINESS_RECORD_PROJECTION_WRITE_BATCH_SIZE: usize = 250;
@@ -4381,6 +4383,7 @@ async fn sync_business_record_projections_background_loop(
     let mut queue_chat_repair_stamp = None;
     let mut last_source_stamp = None;
     let mut consecutive_idle_rounds = 0u32;
+    let mut consecutive_failure_rounds = 0u32;
     loop {
         let started = Instant::now();
         let result = async {
@@ -4402,6 +4405,11 @@ async fn sync_business_record_projections_background_loop(
         }
         .await;
         record_native_peer_loop_result(&BUSINESS_RECORDS_LOOP_METRICS, &result, started.elapsed());
+        if result.is_err() {
+            consecutive_failure_rounds = consecutive_failure_rounds.saturating_add(1);
+        } else {
+            consecutive_failure_rounds = 0;
+        }
         update_projection_idle_rounds(
             result,
             &mut consecutive_idle_rounds,
@@ -4409,6 +4417,7 @@ async fn sync_business_record_projections_background_loop(
         );
         tokio::time::sleep(Duration::from_secs(business_record_projection_sleep_secs(
             consecutive_idle_rounds,
+            consecutive_failure_rounds,
         )))
         .await;
     }
@@ -4445,7 +4454,16 @@ fn business_os_projection_sleep_secs(
     )
 }
 
-fn business_record_projection_sleep_secs(consecutive_idle_rounds: u32) -> u64 {
+fn business_record_projection_sleep_secs(
+    consecutive_idle_rounds: u32,
+    consecutive_failure_rounds: u32,
+) -> u64 {
+    if consecutive_failure_rounds > 0 {
+        let exponent = consecutive_failure_rounds.saturating_sub(1).min(10);
+        return BUSINESS_RECORD_PROJECTION_ERROR_BACKOFF_BASE_SECS
+            .saturating_mul(1u64 << exponent)
+            .min(BUSINESS_RECORD_PROJECTION_ERROR_BACKOFF_MAX_SECS);
+    }
     projection_sleep_secs(
         BUSINESS_RECORD_PROJECTION_SYNC_INTERVAL_SECS,
         BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS,
@@ -8085,9 +8103,6 @@ async fn reconcile_ctox_queue_task_projections(
     let queue = database
         .collection("ctox_queue_tasks")
         .context("ctox_queue_tasks collection is not registered")?;
-    let commands = database
-        .collection("business_commands")
-        .context("business_commands collection is not registered")?;
     let queue_docs = queue
         .find(Some(MangoQuery {
             selector: Some(json!({
@@ -8129,18 +8144,17 @@ async fn reconcile_ctox_queue_task_projections(
         let Some(command_id) = command_id else {
             continue;
         };
-        let command_doc = commands
-            .find_one(Some(MangoQuery {
-                selector: Some(json!({ "id": { "$eq": command_id } })),
-                ..Default::default()
-            }))
-            .map_err(|err| anyhow::anyhow!("query business_command {command_id}: {err}"))?
-            .exec(false)
-            .await
-            .map_err(|err| anyhow::anyhow!("exec business_command {command_id} query: {err}"))?;
-        if !command_doc.is_object() {
+        // This is an exact primary-key lookup. Routing it through Mango
+        // needlessly enters the query/doc-cache path and can surface UTL2
+        // when a long-lived cache still holds an older envelope revision.
+        // A single poisoned command then made the whole projection loop retry
+        // every three seconds forever. Read the authoritative storage row
+        // directly; reconciliation writes still use the collection API below.
+        let Some(command_doc) =
+            find_rxdb_document_by_id(database, "business_commands", command_id, false).await?
+        else {
             continue;
-        }
+        };
 
         let canonical_task = queue_doc
             .get("id")
@@ -14724,16 +14738,29 @@ mod tests {
     #[test]
     fn business_record_projection_sleep_backs_off_after_idle_round() {
         assert_eq!(
-            business_record_projection_sleep_secs(0),
+            business_record_projection_sleep_secs(0, 0),
             BUSINESS_RECORD_PROJECTION_SYNC_INTERVAL_SECS
         );
         assert_eq!(
-            business_record_projection_sleep_secs(1),
+            business_record_projection_sleep_secs(1, 0),
             BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS
         );
         assert_eq!(
-            business_record_projection_sleep_secs(u32::MAX),
+            business_record_projection_sleep_secs(u32::MAX, 0),
             BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS
+        );
+    }
+
+    #[test]
+    fn business_record_projection_errors_use_bounded_backoff() {
+        assert_eq!(
+            business_record_projection_sleep_secs(0, 1),
+            BUSINESS_RECORD_PROJECTION_ERROR_BACKOFF_BASE_SECS
+        );
+        assert_eq!(business_record_projection_sleep_secs(0, 2), 60);
+        assert_eq!(
+            business_record_projection_sleep_secs(0, u32::MAX),
+            BUSINESS_RECORD_PROJECTION_ERROR_BACKOFF_MAX_SECS
         );
     }
 

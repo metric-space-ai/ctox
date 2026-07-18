@@ -607,9 +607,11 @@ struct LcmLastAgentOutcomeStamp {
 
 #[derive(Debug, Clone)]
 struct LiveServiceSettingsCacheState {
+    loaded_at: Instant,
     root: PathBuf,
     db_path: PathBuf,
     stamp: CoreDbChangeStamp,
+    runtime_config_stamp: CoreDbChangeStamp,
     env_overlay: BTreeMap<String, String>,
     settings: BTreeMap<String, String>,
 }
@@ -14358,9 +14360,11 @@ fn auto_close_pending_approval_gates(root: &Path) -> Result<usize> {
 }
 
 fn live_service_settings(root: &Path) -> BTreeMap<String, String> {
+    const OWNER_PROFILE_RELOAD_INTERVAL: Duration = Duration::from_secs(60);
     let root_path = root.to_path_buf();
     let db_path = crate::paths::core_db(root);
     let stamp = core_db_change_stamp(&db_path);
+    let runtime_config_stamp = core_db_change_stamp(&runtime_env::runtime_config_path(root));
     let env_overlay = live_service_env_overlay();
     let cache = LIVE_SERVICE_SETTINGS_CACHE.get_or_init(|| Mutex::new(None));
     {
@@ -14370,8 +14374,10 @@ fn live_service_settings(root: &Path) -> BTreeMap<String, String> {
         if let Some(cached) = guard.as_ref() {
             if cached.root == root_path
                 && cached.db_path == db_path
-                && cached.stamp == stamp
+                && cached.runtime_config_stamp == runtime_config_stamp
                 && cached.env_overlay == env_overlay
+                && (cached.stamp == stamp
+                    || cached.loaded_at.elapsed() < OWNER_PROFILE_RELOAD_INTERVAL)
             {
                 return cached.settings.clone();
             }
@@ -14386,9 +14392,11 @@ fn live_service_settings(root: &Path) -> BTreeMap<String, String> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *guard = Some(LiveServiceSettingsCacheState {
+        loaded_at: Instant::now(),
         root: root_path,
         db_path,
         stamp,
+        runtime_config_stamp,
         env_overlay,
         settings: settings.clone(),
     });
