@@ -12,6 +12,22 @@
   --knowledge-panel-radius: var(--surface-radius);
   --knowledge-control-radius: var(--control-radius);
   --knowledge-shadow: none;
+  /* Self-contained kit tokens: defined here so this app is DECOUPLED from the
+     shell/base.css version. It renders correctly even when installed as a
+     runtime module against an older packaged shell (no --fs-*/--kit-* needed
+     from base.css). Values mirror the kit type + fill scale. */
+  --fs-micro: 10px;
+  --fs-meta: 11px;
+  --fs-sm: 12px;
+  --fs-base: 13px;
+  --fs-title: 15px;
+  --fs-hero: 19px;
+  --lh-tight: 1.25;
+  --lh-base: 1.45;
+  --kit-fill: color-mix(in srgb, var(--knowledge-text) 6%, transparent);
+  --kit-fill-strong: color-mix(in srgb, var(--knowledge-text) 10%, transparent);
+  --kit-hover: color-mix(in srgb, var(--knowledge-text) 5%, transparent);
+  --focus-ring: 0 0 0 2px color-mix(in srgb, var(--knowledge-accent) 42%, transparent);
   display: grid;
   /* Spalten: [linke Liste] [12px Resizer] [rechtes Detail]. Der shell-globale
    * Resizer (.ctox-column-resizer[data-resizer-var="--knowledge-left-width"])
@@ -94,43 +110,49 @@
 
 .knowledge-module .knowledge-bundle {
   display: grid;
-  gap: 4px;
+  gap: 2px;
   border-bottom: 1px solid var(--knowledge-soft-line);
   padding: 6px 0 8px;
 }
 
 .knowledge-module .knowledge-bundle-head {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr);
-  column-gap: 6px;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 4px;
   width: 100%;
   min-width: 0;
-  border: 0;
   border-radius: var(--knowledge-control-radius);
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  padding: 6px 7px;
-  text-align: left;
+  padding: 1px 3px;
+}
+
+.knowledge-module .knowledge-bundle-head:hover {
+  background: var(--kit-hover);
 }
 
 .knowledge-module .bundle-caret {
-  grid-row: 1 / 4;
-  align-self: center;
-  width: 14px;
-  height: 14px;
+  align-self: stretch;
+  width: 16px;
+  min-height: 26px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  opacity: 0.72;
+  opacity: 0.55;
   transform: rotate(0deg);
-  transition: transform 0.16s ease;
+  transition: transform 0.16s ease, opacity 0.12s ease;
+  padding: 0;
 }
+
+.knowledge-module .bundle-caret:hover { opacity: 1; }
 
 .knowledge-module .bundle-caret::before {
   content: "›";
-  font-size: 15px;
-  font-weight: 760;
+  font-size: var(--fs-title);
+  font-weight: 700;
   line-height: 1;
 }
 
@@ -138,9 +160,36 @@
   transform: rotate(90deg);
 }
 
-.knowledge-module .knowledge-bundle[aria-current="true"] .knowledge-bundle-head {
+.knowledge-module .bundle-select {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  padding: 5px 4px;
+  border-radius: var(--knowledge-control-radius);
+  display: grid;
+}
+
+.knowledge-module .knowledge-bundle[aria-current="true"] .bundle-select {
   background: color-mix(in srgb, var(--knowledge-accent) 13%, var(--knowledge-surface));
 }
+
+/* Fractal edit icon: same top-right grammar as the pane header, but quiet —
+   revealed on hover of the row, when the row is selected, or on focus. */
+.knowledge-module .bundle-edit {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.knowledge-module .knowledge-bundle-head:hover .bundle-edit,
+.knowledge-module .knowledge-bundle[aria-current="true"] .bundle-edit,
+.knowledge-module .bundle-edit:focus-visible {
+  opacity: 0.65;
+}
+
+.knowledge-module .bundle-edit:hover { opacity: 1; }
 
 .knowledge-module .knowledge-bundle-head .bundle-domain,
 .knowledge-module .knowledge-bundle-head strong,
@@ -154,28 +203,34 @@
 
 .knowledge-module .knowledge-bundle-head .bundle-domain {
   color: var(--knowledge-muted);
-  font-size: 10.5px;
-  font-weight: 820;
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
+  opacity: 0.7;
 }
 
 .knowledge-module .knowledge-bundle-head strong {
-  margin-top: 2px;
-  font-size: 13.5px;
-  line-height: 1.15;
+  margin-top: 1px;
+  font-size: var(--fs-base);
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 .knowledge-module .knowledge-bundle-head small {
-  margin-top: 3px;
+  margin-top: 2px;
   color: var(--knowledge-muted);
-  font-size: 10.5px;
-  font-weight: 700;
+  font-size: var(--fs-micro);
+  font-weight: 400;
+  opacity: 0.8;
 }
 
 .knowledge-module .knowledge-bundle-items {
   display: grid;
-  gap: 3px;
-  padding-left: 20px;
+  gap: 2px;
+  margin: 2px 0 2px 13px;
+  padding-left: 11px;
+  border-left: 1px solid var(--knowledge-soft-line);
 }
 
 .knowledge-module .knowledge-bundle[data-open="false"] .knowledge-bundle-items {
@@ -188,12 +243,13 @@
 }
 
 .knowledge-module .knowledge-kind-title {
-  padding: 6px 4px 1px;
+  padding: 5px 4px 1px;
   color: var(--knowledge-muted);
-  font-size: 10px;
-  font-weight: 820;
-  letter-spacing: 0.02em;
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
+  opacity: 0.65;
 }
 
 .knowledge-module .knowledge-item,
@@ -227,22 +283,23 @@
 
 .knowledge-module .knowledge-item strong,
 .knowledge-module .runbook-item strong {
-  font-size: 12.5px;
-  line-height: 1.2;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 1.25;
   white-space: nowrap;
 }
 
 .knowledge-module .knowledge-item span,
 .knowledge-module .runbook-item span {
   color: var(--knowledge-muted);
-  font-size: 11.5px;
-  line-height: 1.25;
+  font-size: var(--fs-meta);
+  line-height: 1.3;
 }
 
 .knowledge-module .knowledge-item small {
   color: var(--knowledge-accent);
-  font-size: 10.5px;
-  font-weight: 760;
+  font-size: var(--fs-micro);
+  font-weight: 600;
 }
 
 .knowledge-module .knowledge-tab-panel {
@@ -808,4 +865,352 @@
   .knowledge-module .knowledge-center-head .ctox-pane-tab {
     min-width: 0;
   }
+}
+
+/* Fractal header edit: the pane-header pencil (data-action="edit-active")
+   replaces the in-content "Bearbeiten" text button. The skill edit-bar only
+   appears while actually editing (its save control is visible), so there is
+   no empty toolbar strip in the reading view. */
+.knowledge-module .knowledge-edit-bar [data-action="edit-markdown"],
+.knowledge-module .knowledge-edit-bar [data-action="edit-runbook"] {
+  display: none;
+}
+.knowledge-module [data-skill-toolbar] { display: none; }
+.knowledge-module [data-skill-toolbar]:has([data-action="save-markdown"]:not([hidden])) {
+  display: flex;
+}
+
+/* ============================================================================
+   Canonical column template: header (title + action icons) → filter section
+   (search + gear) → view switcher band → content. Applied to both panes.
+   ========================================================================== */
+
+/* Robust vertical stacking (survives the hidden advanced-filter row). */
+.knowledge-module .knowledge-left { display: flex; flex-direction: column; }
+.knowledge-module .knowledge-left > .knowledge-scroll { flex: 1 1 auto; }
+.knowledge-module .knowledge-center { display: flex; flex-direction: column; }
+.knowledge-module .knowledge-center > .knowledge-tab-panel { flex: 1 1 auto; min-height: 0; }
+
+/* Row 2 — filter section: search input + a gear that expands advanced filters. */
+.knowledge-module .knowledge-filterbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--knowledge-line);
+  background: var(--knowledge-surface);
+}
+.knowledge-module .knowledge-filter-toggle[aria-expanded="true"] { color: var(--knowledge-accent); }
+.knowledge-module .knowledge-filter-advanced {
+  padding: 8px 12px 10px;
+  border-bottom: 1px solid var(--knowledge-line);
+  background: var(--knowledge-surface);
+}
+.knowledge-module .knowledge-filter-hint {
+  margin: 0;
+  color: var(--knowledge-muted);
+  font-size: var(--fs-meta);
+}
+
+/* Row 3 — view switcher band (never top-right). Same geometry as the scope
+   switch so both panes read identically at the switcher row. */
+.knowledge-module .knowledge-view-switch {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--knowledge-line);
+  background: var(--knowledge-surface);
+}
+.knowledge-module .knowledge-view-switch .ctox-pane-tabs {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+}
+.knowledge-module .knowledge-view-switch .ctox-pane-tab { flex: 1 1 0; min-width: 0; }
+
+/* Distinction: the left column is the persistence / management rail — a
+   subtly recessed surface — so it never reads as identical to the content
+   pane, even though it shares the same header grammar. */
+.knowledge-module .knowledge-left { background: var(--knowledge-surface-muted); }
+.knowledge-module .knowledge-left .ctox-pane-band,
+.knowledge-module .knowledge-left .knowledge-filterbar,
+.knowledge-module .knowledge-left .knowledge-scope-switch { background: transparent; }
+.knowledge-module .knowledge-left .ctox-pane-kicker { color: var(--knowledge-accent); }
+
+/* Content element = an element too → its own edit pencil, top-right of the
+   content panel (not up in the pane header). Hidden while actually editing. */
+.knowledge-module .knowledge-tab-panel { position: relative; }
+.knowledge-module .knowledge-content-edit {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 3;
+  opacity: 0.55;
+  transition: opacity 0.12s ease;
+}
+.knowledge-module .knowledge-content-edit:hover,
+.knowledge-module .knowledge-content-edit:focus-visible { opacity: 1; }
+.knowledge-module .knowledge-tab-panel:has([data-markdown-editor]:not([hidden])) .knowledge-content-edit,
+.knowledge-module .knowledge-tab-panel:has([data-runbook-form]:not([hidden])) .knowledge-content-edit {
+  display: none;
+}
+
+/* ============================================================================
+   Shards, learned from the Matching app: calm card (surface + hairline), a
+   left accent bar when selected, hover border — plus scannable count badges
+   (Research-style numbers) instead of a verbose "0 · 0 · 0" meta line.
+   ========================================================================== */
+.knowledge-module .knowledge-scroll { padding: 8px 10px; }
+.knowledge-module .knowledge-bundle {
+  gap: 2px;
+  margin-bottom: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--knowledge-soft-line);
+  border-bottom: 1px solid var(--knowledge-soft-line);
+  border-radius: var(--knowledge-control-radius);
+  background: var(--knowledge-surface);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.knowledge-module .knowledge-bundle:hover { border-color: var(--knowledge-line); }
+.knowledge-module .knowledge-bundle[aria-current="true"] {
+  border-color: var(--knowledge-accent);
+}
+/* the card carries the selection now — drop the inner row highlight */
+.knowledge-module .knowledge-bundle[aria-current="true"] .bundle-select { background: transparent; }
+
+.knowledge-module .bundle-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 5px;
+}
+.knowledge-module .kb-count {
+  font-size: var(--fs-micro);
+  color: var(--knowledge-muted);
+  background: var(--kit-fill);
+  border-radius: 999px;
+  padding: 1px 8px;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+.knowledge-module .kb-count b { color: var(--knowledge-text); font-weight: 600; }
+.knowledge-module .kb-count.kb-empty { background: transparent; padding-left: 0; opacity: 0.5; }
+
+/* ============================================================================
+   Second-level switchers = the first level's language, one size smaller
+   (differentiated by typography, not shape) — never round pills, and they
+   scale/scroll when there are many.
+   ========================================================================== */
+.knowledge-module .table-switcher,
+.knowledge-module .knowledge-secondary-switcher {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--knowledge-line);
+  background: var(--knowledge-surface);
+}
+.knowledge-module .table-switcher .ctox-chip,
+.knowledge-module .knowledge-secondary-switcher .ctox-chip {
+  flex: 1 1 0;
+  min-width: 64px;
+  max-width: 280px;
+  border: 0;
+  border-radius: var(--knowledge-control-radius);
+  background: transparent;
+  color: var(--knowledge-muted);
+  font-size: var(--fs-meta);
+  font-weight: 500;
+  line-height: 1.5;
+  padding: 4px 10px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+.knowledge-module .table-switcher .ctox-chip:hover,
+.knowledge-module .knowledge-secondary-switcher .ctox-chip:hover { background: var(--kit-hover); }
+.knowledge-module .table-switcher .ctox-chip.is-active,
+.knowledge-module .table-switcher .ctox-chip[aria-current="true"],
+.knowledge-module .knowledge-secondary-switcher .ctox-chip.is-active {
+  background: var(--kit-fill-strong);
+  color: var(--knowledge-text);
+  font-weight: 600;
+}
+/* the sort sub-tabs inside the filter panel are also one level down */
+.knowledge-module .knowledge-subtabs .ctox-pane-tab { font-size: var(--fs-meta); }
+
+/* Advanced filter contents */
+.knowledge-module .knowledge-filter-group { display: grid; gap: 5px; margin-bottom: 9px; }
+.knowledge-module .knowledge-filter-group:last-child { margin-bottom: 0; }
+.knowledge-module .knowledge-filter-label {
+  font-size: var(--fs-micro);
+  color: var(--knowledge-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.knowledge-module .knowledge-filter-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.knowledge-module .knowledge-filter-chips .ctox-chip { cursor: pointer; font-size: var(--fs-meta); }
+.knowledge-module .knowledge-filter-chips .ctox-chip[aria-pressed="true"] {
+  background: var(--knowledge-accent);
+  color: var(--knowledge-surface);
+  border-color: var(--knowledge-accent);
+}
+
+/* App floor — a status footer spanning the whole module, like the Files app. */
+.knowledge-module { grid-template-rows: minmax(0, 1fr) auto; }
+.knowledge-module .knowledge-footer {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-top: 1px solid var(--knowledge-line);
+  background: var(--knowledge-surface);
+  color: var(--knowledge-muted);
+  font-size: var(--fs-micro);
+}
+
+/* ============================================================================
+   De-frame pass: ONE frame only (the pane). Everything inside uses surfaces /
+   fills / a left accent bar — never nested borders. Kills frame-in-frame.
+   ========================================================================== */
+/* Shards: flat rows, not bordered cards. Selection = subtle fill + accent bar. */
+.knowledge-module .knowledge-bundle {
+  margin-bottom: 1px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: var(--knowledge-control-radius);
+  background: transparent;
+  box-shadow: none;
+}
+.knowledge-module .knowledge-bundle:hover { background: var(--kit-hover); }
+.knowledge-module .knowledge-bundle[aria-current="true"] {
+  background: color-mix(in srgb, var(--knowledge-accent) 8%, transparent);
+}
+/* Segmented controls: fill track, no border box (one less frame everywhere). */
+.knowledge-module .ctox-pane-tabs { border-color: transparent; }
+/* Filter chips: fill, not outlined pills. */
+.knowledge-module .knowledge-filter-chips .ctox-chip {
+  border-color: transparent;
+  background: var(--kit-fill);
+}
+/* Nested items: a single hairline guide is the only inner line, kept faint. */
+.knowledge-module .knowledge-bundle-items {
+  border-left-color: color-mix(in srgb, var(--knowledge-line) 55%, transparent);
+}
+/* Row separators between the header bands stay as single hairlines, but the
+   filter/scope/switch bands drop their own background so they read as one
+   surface, not stacked boxes. */
+.knowledge-module .knowledge-filterbar,
+.knowledge-module .knowledge-filter-advanced,
+.knowledge-module .knowledge-scope-switch,
+.knowledge-module .knowledge-view-switch { background: transparent; }
+
+/* ============================================================================
+   Items & sub-entries: a select area + edit/trash icons top-right (fractal),
+   flat (no box). The whole shard head is clickable (no dead zones).
+   ========================================================================== */
+.knowledge-module .knowledge-bundle-head { cursor: pointer; }
+.knowledge-module .knowledge-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  width: 100%;
+  border: 0;
+  border-radius: var(--knowledge-control-radius);
+  background: transparent;
+  padding: 0;
+}
+.knowledge-module .knowledge-item:hover { background: var(--kit-hover); }
+.knowledge-module .knowledge-item[aria-current="true"] {
+  background: color-mix(in srgb, var(--knowledge-accent) 8%, transparent);
+}
+.knowledge-module .item-select {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  padding: 6px 7px;
+  display: grid;
+}
+.knowledge-module .knowledge-item .ctox-pane-icon { opacity: 0; transition: opacity 0.12s ease; }
+.knowledge-module .knowledge-item:hover .ctox-pane-icon,
+.knowledge-module .knowledge-item[aria-current="true"] .ctox-pane-icon,
+.knowledge-module .knowledge-item .ctox-pane-icon:focus-visible { opacity: 0.6; }
+.knowledge-module .knowledge-item .ctox-pane-icon:hover { opacity: 1; }
+
+/* Count numbers on the view-switcher tabs. */
+.knowledge-module .view-count {
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  color: var(--knowledge-muted);
+  margin-left: 5px;
+}
+.knowledge-module .ctox-pane-tab[aria-selected="true"] .view-count { color: var(--knowledge-accent); }
+
+/* ============================================================================
+   Shards done right (Matching): a raised SURFACE card (fill, no border) with a
+   left accent bar on select. Defined by surface, not by a box → calm, and no
+   frame-in-frame. The left rail sits on the base surface so cards read raised.
+   ========================================================================== */
+.knowledge-module .knowledge-left { background: var(--knowledge-surface); }
+.knowledge-module .knowledge-bundle {
+  margin-bottom: 6px;
+  padding: 9px 11px;
+  border: 0;
+  border-radius: var(--knowledge-control-radius);
+  background: var(--knowledge-surface-muted);
+  box-shadow: none;
+  position: relative;
+}
+.knowledge-module .knowledge-bundle:hover {
+  background: color-mix(in srgb, var(--knowledge-text) 5%, var(--knowledge-surface-muted));
+}
+.knowledge-module .knowledge-bundle[aria-current="true"] {
+  background: color-mix(in srgb, var(--knowledge-accent) 12%, var(--knowledge-surface-muted));
+}
+/* Selection accent bar: a flat 2px fill via pseudo-element (no shadow, no thick
+   border) — keeps the Matching-style accent while staying inside kit discipline. */
+.knowledge-module .knowledge-bundle[aria-current="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--knowledge-accent);
+  border-radius: var(--knowledge-control-radius) 0 0 var(--knowledge-control-radius);
+}
+/* nested items sit inside the card — no own fill, just an indent guide */
+.knowledge-module .knowledge-bundle[aria-current="true"] .knowledge-item[aria-current="true"] {
+  background: color-mix(in srgb, var(--knowledge-accent) 10%, transparent);
+}
+
+/* ============================================================================
+   Mobile (narrow): master-detail. List full-width; picking an entry shows the
+   content full-width with a back button — no cramped stacking, no wasted space.
+   ========================================================================== */
+.knowledge-module .knowledge-mobile-back { display: none; }
+@container business-app-window (max-width: 640px) {
+  .knowledge-module {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    padding: 0;
+    gap: 0;
+  }
+  .knowledge-module .knowledge-left,
+  .knowledge-module .knowledge-center { grid-column: 1; grid-row: 1; }
+  .knowledge-module .ctox-column-resizer { display: none; }
+  .knowledge-module .knowledge-center { display: none; }
+  .knowledge-module.is-detail .knowledge-left { display: none; }
+  .knowledge-module.is-detail .knowledge-center { display: flex; }
+  .knowledge-module.is-detail .knowledge-mobile-back { display: inline-flex; }
+  /* tap-friendly rows, no wasted chrome */
+  .knowledge-module .knowledge-bundle { padding: 12px; margin-bottom: 8px; }
+  .knowledge-module .bundle-select { padding: 8px 6px; }
+  .knowledge-module .knowledge-item { min-height: 44px; }
+  .knowledge-module .ctox-pane-header { padding: 12px 14px 10px; }
 }
