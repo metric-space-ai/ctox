@@ -1,450 +1,107 @@
-/* ==============================================================================
-   CODING AGENTS MODULE CSS
+/* coding-agents — pi-coding workbench. Frame, panes, headers, lists, cards,
+   inputs, buttons, badges, callouts and empty states all come from the kit;
+   this file only keeps the workbench column flow, the turn-form control row,
+   the applied-file chips and the recent-turn rows. */
 
-   Migration to the shared design system: the frame (.ctox-workspace
-   .ctox-workspace--two-pane[data-resize-frame]), panes (.ctox-pane), the
-   declarative column resizer (.ctox-column-resizer[data-resizer-var]), pane
-   headers (.ctox-pane-header/-kicker/-title/-actions/-icon), the toolbar
-   (.ctox-toolbar), filter select (.ctox-pane-filter), inputs
-   (.ctox-input/.ctox-textarea), buttons (.ctox-button, .ctox-run-control),
-   badges (.ctox-badge), the workspace list rows (.ctox-list/.ctox-list-item),
-   empty states (.ctox-empty), settings cards (.ctox-card), key/value facts
-   (.ctox-fields), the auth log block (.ctox-pre) and the modals
-   (.ctox-modal*) all come from shared/base.css + app.css.
-
-   This file keeps only what is genuinely module-specific: the workspace
-   record-row content, the multi-turn chat transcript, the permission switch,
-   the diagnostics/switch hooks driven by index.js class assignments, and the
-   pane/dialog layout glue.
-   ============================================================================== */
-
-/* Pane row layouts on top of the kit .ctox-pane grid. */
-.coding-agents-left {
-  grid-template-rows: auto minmax(0, 1fr) auto;
-}
-
-.coding-agents-pane-footer {
-  padding: 12px;
-  border-top: 1px solid var(--hairline, var(--line));
-}
-
-.coding-agents-pane-footer .ctox-button {
-  width: 100%;
-}
-
+/* Center workbench: stacked card flow inside the kit scroll pane. */
 .coding-agents-workbench {
   display: flex;
   flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-/* Toolbar glue: kit label/select/button alignment inside .ctox-toolbar. */
-.coding-agents-module .ctox-toolbar > .ctox-field-label {
-  margin: 0;
-}
-
-.coding-agents-session-select {
-  min-width: 200px;
-}
-
-.coding-agents-new-session {
-  margin-left: auto;
-}
-
-.coding-agents-module .sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-/* Inline SVG sizing for icons inside kit .ctox-button (kit only sizes icons
-   inside .ctox-pane-icon). */
-.svg-inline {
-  width: 14px;
-  height: 14px;
-}
-
-/* Status dot inside the kit connection badge. JS hook: index.js assigns
-   `status-dot online|offline` on #workbench-status-dot. */
-.status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex: 0 0 auto;
-}
-
-.status-dot.online {
-  background: var(--success);
-}
-
-.status-dot.offline {
-  background: var(--danger);
-}
-
-/* Disabled-state affordance for the module's non-kit controls (the switch
-   checkbox and the hidden E2E compat controls). Kit controls disable
-   themselves. */
-.coding-agents-module button[disabled]:not([class*="ctox-"]),
-.coding-agents-module select[disabled]:not([class*="ctox-"]),
-.coding-agents-module input[disabled]:not([class*="ctox-"]),
-.coding-agents-module textarea[disabled]:not([class*="ctox-"]) {
-  cursor: not-allowed;
-  opacity: 0.48;
-}
-
-.form-error {
-  color: var(--danger);
-  font-size: 11.5px;
-  line-height: 1.4;
-}
-
-/* custom: workspace record row content — name + mono path + per-row agent
-   select + revoke action inside the kit .ctox-list-item row shell. The kit
-   styles the row itself (padding, hairline, hover, selection); it has no
-   vocabulary for this two-line record + inline action strip. */
-.workspace-info {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.workspace-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.workspace-path {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.workspace-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid var(--hairline, var(--line));
-}
-
-.workspace-actions .ctox-pane-filter {
-  min-height: 24px;
-}
-
-/* custom: multi-turn session chat — transcript bubbles, tool-run log lines
-   and the prompt composer bar. The kit has no conversation-feed component. */
-.session-chat-feed {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
   gap: 14px;
-  padding: 16px;
+  padding: 14px;
 }
 
-.feed-chat-bubble {
+.coding-agents-turn-card,
+.coding-agents-result-card { flex-shrink: 0; }
+
+.coding-agents-turn-body {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  max-width: 85%;
-  padding: 12px 14px;
-  border-radius: var(--panel-radius);
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-
-.feed-chat-bubble.user {
-  background: color-mix(in srgb, var(--text) 3%, transparent);
-  border: 1px solid var(--hairline, var(--line));
-  align-self: flex-start;
-  border-bottom-left-radius: var(--control-radius);
-}
-
-.feed-chat-bubble.assistant {
-  background: var(--surface-2);
-  border: 1px solid var(--hairline, var(--line));
-  align-self: flex-end;
-  border-bottom-right-radius: var(--control-radius);
-}
-
-.bubble-sender {
-  font-weight: 700;
-  font-size: 10px;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-}
-
-.feed-chat-bubble.user .bubble-sender {
-  color: var(--accent);
-}
-
-.feed-chat-bubble.assistant .bubble-sender {
-  color: var(--success);
-}
-
-.bubble-time {
-  font-size: 9px;
-  color: var(--muted);
-  align-self: flex-end;
-  margin-top: 4px;
-}
-
-.feed-tool-log {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  padding: 8px 12px;
-  background: color-mix(in srgb, var(--text) 6%, transparent);
-  border: 1px solid var(--hairline, var(--line));
-  border-radius: var(--kit-radius, 6px);
-  width: fit-content;
-  margin-left: 20px;
-}
-
-.tool-log-indicator {
-  font-size: 10px;
-}
-
-.tool-log-indicator.success { color: var(--success); }
-.tool-log-indicator.fail { color: var(--danger); }
-
-.tool-log-text {
-  color: var(--muted);
-}
-
-.tool-name-highlight {
-  color: var(--accent);
-}
-
-.workbench-chat-input-bar {
-  flex: 0 0 auto;
-  padding: 10px 14px;
-  border-top: 1px solid var(--hairline, var(--line));
-  background: var(--surface-2);
-}
-
-.workbench-prompt-form {
-  display: flex;
-  gap: 8px;
-  margin: 0;
-}
-
-/* Settings dialog layout glue (kit .ctox-modal/.ctox-card shell). */
-.settings-container {
-  width: min(650px, 100%);
-}
-
-.coding-agents-dialog-sm {
-  width: min(450px, 100%);
-}
-
-.coding-agents-dialog-md {
-  width: min(520px, 100%);
-}
-
-.settings-body {
-  display: grid;
-  gap: 16px;
-}
-
-.coding-agents-dialog-form {
-  display: grid;
-  gap: 12px;
-}
-
-.section-desc {
-  margin: 0 0 8px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.lifecycle-controls-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: space-between;
   gap: 10px;
 }
 
-.lifecycle-buttons-row {
+/* Control row: model picker grows, the signature run control stays put. */
+.coding-agents-turn-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.coding-agents-turn-controls .ctox-field-label { margin: 0; }
+.coding-agents-turn-controls .ctox-pane-filter { flex: 1; min-width: 0; }
+
+.coding-agents-hint {
+  margin: 0;
+  min-height: 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.coding-agents-hint.is-error { color: var(--danger); }
+
+/* custom: applied-file chips — mono path pills that wrap; the kit has no
+   inline file-list pattern (lists are selectable rows). Tokens only. */
+.coding-agents-files {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
 }
-
-.daemon-port-field {
-  display: grid;
-  gap: 3px;
-}
-
-.daemon-port-field .ctox-field-label {
-  margin: 0;
-}
-
-.daemon-port-field .ctox-input {
-  width: 96px;
-}
-
-/* Diagnostics facts rendered as the kit .ctox-fields definition list.
-   JS hook: index.js assigns `diag-val text-glow-green|text-red` on
-   #diag-installed. */
-.lifecycle-status-row {
-  margin: 12px 0 0;
-}
-
-.diag-val {
+.coding-agents-file {
+  padding: 2px 8px;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: 999px;
+  background: var(--surface);
   font-family: var(--font-mono);
   font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
-/* custom: permission bypass switch row — a labeled on/off control; the kit
-   ships no switch component. */
-.permission-toggle-row {
+/* custom: app picker rows — title plus mono module id; the kit list item is
+   a single-line row, the two-line record look is module-specific. */
+.coding-agents-app-row { display: flex; flex-direction: column; gap: 2px; }
+.coding-agents-app-title { font-weight: 600; }
+.coding-agents-app-id {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+/* Recent turns: section stacking plus per-row meta line. */
+.coding-agents-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.coding-agents-recent-title { margin: 0; }
+.coding-agents-recent-list {
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--panel-radius);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.coding-agents-turn-row { cursor: default; }
+.coding-agents-turn-row:hover { background: transparent; }
+.coding-agents-turn-row-main {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--hairline, var(--line));
-  border-radius: var(--control-radius);
-  background: var(--surface);
+  gap: 10px;
 }
-
-.toggle-info {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.coding-agents-turn-row-prompt {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-
-.toggle-title {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.toggle-subtitle {
+.coding-agents-turn-row-meta {
+  margin-top: 2px;
+  color: var(--muted);
   font-size: 11px;
-  color: var(--muted);
 }
 
-.switch-toggle {
-  position: relative;
-  display: inline-block;
-  flex: 0 0 auto;
-  width: 44px;
-  height: 24px;
-}
-
-.switch-toggle input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-
-.slider-round {
-  position: absolute;
-  cursor: pointer;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background-color: color-mix(in srgb, var(--text) 14%, transparent);
-  transition: 0.3s;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-}
-
-.slider-round:before {
-  position: absolute;
-  content: "";
-  height: 18px; width: 18px;
-  left: 2px; bottom: 2px;
-  background-color: var(--surface);
-  transition: 0.3s;
-  border-radius: 50%;
-}
-
-.switch-toggle input:checked + .slider-round {
-  background-color: var(--accent);
-}
-
-.switch-toggle input:checked + .slider-round:before {
-  transform: translateX(20px);
-}
-
-/* custom: provider authentication log — a mono line stream rendered into the
-   kit .ctox-pre block. JS hooks: .browser-log-card/.browser-log-box ids and
-   the .terminal-line/.text-* classes index.js assigns per log line. */
-.subscription-auth-form {
-  margin-top: 10px;
-}
-
-.browser-log-card {
-  display: grid;
-  gap: 6px;
-  margin-top: 12px;
-}
-
-.browser-log-card .ctox-field-label {
-  margin: 0;
-}
-
-.browser-log-box {
-  max-height: 150px;
-}
-
-.browser-log-box .terminal-line {
-  display: block;
-}
-
-.terminal-line.dim {
-  color: var(--muted);
-}
-
-.text-green { color: var(--success); }
-.text-yellow { color: var(--warning); }
-.text-red { color: var(--danger); }
-.text-bold { font-weight: 700; }
-.text-glow-green { color: var(--success); }
-.text-glow-yellow { color: var(--warning); }
-
-/* Narrow window: the kit already collapses the .ctox-workspace frame to one
-   column; these rules only stack the module's own bars. */
-@container business-app-window (max-width: 760px) {
-  .coding-agents-workbench .ctox-toolbar {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .coding-agents-session-select,
-  .coding-agents-new-session {
-    width: 100%;
-    margin-left: 0;
-  }
-
-  .workbench-prompt-form {
-    flex-direction: column;
-  }
-
-  .lifecycle-controls-row,
-  .permission-toggle-row {
-    flex-direction: column;
-    align-items: stretch;
-  }
+@container business-app-window (max-width: 720px) {
+  .coding-agents-turn-controls { flex-wrap: wrap; }
+  .coding-agents-turn-controls .ctox-pane-filter { flex: 1 1 100%; }
 }

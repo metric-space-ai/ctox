@@ -28,184 +28,118 @@ test('presentation layer stays compact and shell-native', () => {
   assert.match(html, /class="ctox-column-resizer"[^>]*data-resizer-var="--ctox-left-width"/);
   assert.doesNotMatch(js, /CtoxResizer/);
   assert.doesNotMatch(css, /--coding-agents-left-width/);
-  assert.match(css, /\.lifecycle-status-row/);
-  assert.match(css, /\.browser-log-box/);
+  assert.match(css, /\.coding-agents-workbench/);
+  assert.match(css, /\.coding-agents-turn-controls/);
 });
 
-test('workspace path validation blocks empty and relative paths', () => {
-  assert.equal(hooks.validateWorkspacePath('').valid, false);
-  assert.equal(hooks.validateWorkspacePath('relative/project').valid, false);
-  assert.equal(hooks.validateWorkspacePath('/Users/you/Documents/ctox').valid, true);
-  assert.equal(hooks.validateWorkspacePath('~/Documents/ctox').valid, true);
+test('task validation requires a meaningful instruction', () => {
+  assert.equal(hooks.validateTaskPrompt('').valid, false);
+  assert.equal(hooks.validateTaskPrompt('fix').valid, false);
+  assert.equal(hooks.validateTaskPrompt('Fix failing billing parser test').valid, true);
 });
 
-test('workspace grants parser preserves spaces in absolute paths', () => {
-  const grants = hooks.parseGrantsStdout(`
-    Grants
-      * /Users/you/Documents/Client Project
-      * command(*)
-  `);
-
-  assert.deepEqual(grants, ['/Users/you/Documents/Client Project', 'command(*)']);
-});
-
-test('new session validation requires a meaningful first instruction', () => {
-  assert.equal(hooks.validateNewSessionPrompt('').valid, false);
-  assert.equal(hooks.validateNewSessionPrompt('fix').valid, false);
-  assert.equal(hooks.validateNewSessionPrompt('Fix failing billing parser test').valid, true);
-});
-
-test('session table output parses selectable sessions', () => {
-  const sessions = hooks.parseSessionsStdout(`
-SHORT ID | ID | UPDATED AT | PROMPT
-abc123 | sess_full_1 | 2026-05-27 12:00 | Fix reports empty state
-def456 | sess_full_2 | 2026-05-27 12:05 | Review agent logs
-`, 'codex');
-
-  assert.deepEqual(sessions.map((session) => session.id), ['sess_full_1', 'sess_full_2']);
-  assert.equal(sessions[0].app, 'codex');
-});
-
-test('session detail parser keeps user, assistant, and tool records', () => {
-  const records = hooks.parseSessionGetStdout(`
-[12:01] User: Run the app smoke test
-[12:02] Assistant: The smoke test is green
-OK Tool Run: node --test
-`);
-
-  assert.deepEqual(records.map((record) => record.type), ['user', 'assistant', 'tool']);
-  assert.equal(records[2].status, 'success');
-});
-
-test('workspace backend errors stay diagnostic instead of becoming empty state', () => {
-  assert.match(hooks.workspaceLoadErrorFromResult(null), /Command-Bus/);
-  assert.equal(
-    hooks.workspaceLoadErrorFromResult({ ok: false, stderr: 'backend offline' }),
-    'backend offline'
-  );
-});
-
-test('typed agent commands carry provider and structured payloads', () => {
-  assert.deepEqual(hooks.buildAgyCommandArgs(['status'], 'codex'), ['--app', 'codex', 'status']);
-
-  assert.deepEqual(
-    hooks.buildCodingAgentCommand(['status'], 'codex'),
-    {
-      commandType: 'ctox.coding_agent.status',
-      payload: { provider: 'codex' }
-    }
-  );
-  assert.deepEqual(
-    hooks.buildCodingAgentCommand(['install', '--apply'], 'codex'),
-    {
-      commandType: 'ctox.coding_agent.install',
-      payload: { provider: 'codex', apply: true }
-    }
-  );
-  assert.deepEqual(
-    hooks.buildCodingAgentCommand(['config', 'grant', '/Users/you/Documents/ctox'], 'claude'),
-    {
-      commandType: 'ctox.coding_agent.workspace.grant',
-      payload: { provider: 'claude', path: '/Users/you/Documents/ctox' }
-    }
-  );
-  assert.deepEqual(
-    hooks.buildCodingAgentCommand(
-      ['session', 'create', '-p', '/Users/you/Documents/ctox', 'Fix failing billing parser test'],
-      'antigravity'
-    ),
-    {
-      commandType: 'ctox.coding_agent.session.create',
-      payload: {
-        provider: 'antigravity',
-        workspace_root: '/Users/you/Documents/ctox',
-        prompt: 'Fix failing billing parser test'
-      }
-    }
-  );
-
-  assert.equal(
-    hooks.codingAgentCommandWaitTimeoutMs('ctox.coding_agent.session.create'),
-    10 * 60 * 1000
-  );
-  assert.equal(
-    hooks.codingAgentCommandWaitTimeoutMs('ctox.coding_agent.session.prompt'),
-    10 * 60 * 1000
-  );
-  assert.equal(hooks.codingAgentCommandWaitTimeoutMs('ctox.coding_agent.status'), undefined);
-});
-
-test('diagnostics status refresh does not create idle polling command traffic', () => {
-  let scheduledIntervals = 0;
-  let refreshCalls = 0;
-  const handle = hooks.startDiagnosticsAutoRefresh({
-    setIntervalFn: () => {
-      scheduledIntervals += 1;
-      return { id: 'unexpected-interval' };
-    },
-    refresh: () => {
-      refreshCalls += 1;
-    }
+test('turn payload omits the model on the CTOX default preset', () => {
+  const payload = hooks.buildTurnPayload({
+    moduleId: 'notes',
+    prompt: 'Add an empty state to the list',
+    presetId: hooks.DEFAULT_MODEL_PRESET,
   });
 
-  assert.equal(handle, null);
-  assert.equal(scheduledIntervals, 0);
-  assert.equal(refreshCalls, 0);
+  assert.deepEqual(payload, {
+    module_id: 'notes',
+    prompt: 'Add an empty state to the list',
+  });
+  assert.equal('model' in payload, false);
+});
 
+test('turn payload only carries a model for an explicit provider pick', () => {
+  const anthropic = hooks.buildTurnPayload({
+    moduleId: 'notes',
+    prompt: 'Add an empty state to the list',
+    presetId: 'anthropic',
+  });
+  assert.equal(anthropic.model.provider, 'anthropic');
+  assert.equal(anthropic.model.api, 'anthropic-messages');
+  assert.equal(typeof anthropic.model.id, 'string');
+
+  const openai = hooks.buildTurnPayload({
+    moduleId: 'notes',
+    prompt: 'Add an empty state to the list',
+    presetId: 'openai',
+  });
+  assert.equal(openai.model.provider, 'openai');
+  assert.equal(openai.model.api, 'openai-responses');
+
+  // Unknown preset ids fall back to the CTOX default (no model override).
+  const fallback = hooks.buildTurnPayload({ moduleId: 'notes', prompt: 'x', presetId: 'nope' });
+  assert.equal('model' in fallback, false);
+});
+
+test('app catalog normalization keeps visible editable modules sorted by title', () => {
+  const modules = hooks.normalizeCatalogModules([
+    { id: 'zebra', title: 'Zebra' },
+    { id: 'alpha', title: 'Alpha' },
+    { id: 'hidden-mod', title: 'Hidden', hidden: true },
+    { id: 'readonly-mod', title: 'Readonly', editable: false },
+    { id: 'alpha', title: 'Duplicate' },
+    { id: '', title: 'No id' },
+    null,
+  ]);
+
+  assert.deepEqual(modules, [
+    { id: 'alpha', title: 'Alpha' },
+    { id: 'zebra', title: 'Zebra' },
+  ]);
+});
+
+test('command log records map to recent turns', () => {
+  const turn = hooks.turnFromCommand({
+    id: 'cmd_1',
+    command_type: 'ctox.coding.turn',
+    status: 'completed',
+    created_at_ms: 1781297405320,
+    payload: { module_id: 'notes', prompt: 'Add an empty state' },
+    result: { ok: true, module_id: 'notes', applied_files: ['index.js', 'index.css'], message_count: 4 },
+  });
+
+  assert.equal(turn.moduleId, 'notes');
+  assert.equal(turn.ok, true);
+  assert.equal(turn.appliedCount, 2);
+  assert.equal(turn.timeMs, 1781297405320);
+
+  const failed = hooks.turnFromCommand({
+    id: 'cmd_2',
+    command_type: 'ctox.coding.turn',
+    status: 'completed',
+    payload: { module_id: 'notes', prompt: 'No-op' },
+    result: { ok: false, error: 'nothing to commit' },
+  });
+  assert.equal(failed.ok, false);
+  assert.equal(failed.error, 'nothing to commit');
+
+  assert.equal(hooks.turnFromCommand({ id: 'cmd_3', is_deleted: true }), null);
+});
+
+test('projection errors surface policy denials and failed commands', () => {
+  assert.equal(hooks.turnErrorFromProjection({ status: 'completed', result: { ok: true } }), '');
+  assert.equal(
+    hooks.turnErrorFromProjection({ status: 'failed', error: 'sidecar missing' }),
+    'sidecar missing'
+  );
+  assert.equal(
+    hooks.turnErrorFromProjection({
+      status: 'completed',
+      result: { policy_decision: { allowed: false, display_reason: 'AppsModify denied' } },
+    }),
+    'AppsModify denied'
+  );
+});
+
+test('module stays free of idle polling loops', () => {
   const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
   assert.equal(source.includes('setInterval('), false);
-  const initialLoadBody = source.match(/function startInitialLoadWithTimeout\(\) \{([\s\S]*?)\n\}/)?.[1] || '';
-  assert.match(initialLoadBody, /refreshProjectedData\(\)/);
-  assert.doesNotMatch(initialLoadBody, /refreshAllData\(\)/);
 });
 
-test('structured command outcomes avoid stdout parsing where available', () => {
-  const grants = hooks.grantsFromOutcome({ data: { grants: ['/Users/project with spaces'] } });
-  assert.deepEqual(grants, ['/Users/project with spaces']);
-
-  const sessions = hooks.sessionsFromOutcome({
-    data: {
-      sessions: [
-        {
-          session_id: 'ca_codex_abcdef123456',
-          provider: 'codex',
-          updated_at_ms: 1781297405320,
-          last_prompt: 'Continue task',
-          workspace_root: '/Users/project',
-          status: 'running'
-        }
-      ]
-    }
-  }, 'codex');
-  assert.equal(sessions[0].shortId, 'abcdef12');
-  assert.equal(sessions[0].prompt, 'Continue task');
-
-  const events = hooks.sessionEventsFromOutcome({
-    data: {
-      events: [
-        { role: 'user', text: 'Run test', status: 'accepted', created_at_ms: 1 },
-        { role: 'assistant', text: 'Done', status: 'completed', created_at_ms: 2 }
-      ]
-    }
-  });
-  assert.deepEqual(events.map((event) => event.type), ['user', 'assistant']);
-  assert.equal(events[1].text, 'Done');
-
-  const diag = hooks.diagnosticsFromOutcome({
-    data: {
-      installed: true,
-      controllable: true,
-      mode: 'claude-code-cli',
-      binary: '/opt/homebrew/bin/claude',
-      label: 'Anthropic Claude Code',
-      version: '2.1.163',
-      auth: { ready: true }
-    }
-  });
-  assert.equal(diag.online, true);
-  assert.equal(diag.port, 'claude-code-cli');
-});
-
-test('escaped session text is safe to inject into render fragments', () => {
+test('escaped text is safe to inject into render fragments', () => {
   assert.equal(hooks.escapeHtml('<script>alert(1)</script>'), '&lt;script&gt;alert(1)&lt;/script&gt;');
 });

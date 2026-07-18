@@ -1,225 +1,81 @@
-<main class="ctox-workspace ctox-workspace--two-pane coding-agents-module theme-antigravity" data-coding-agents-root data-resize-frame>
+<main class="ctox-workspace ctox-workspace--two-pane coding-agents-module" data-coding-agents-root data-resize-frame>
 
-  <!-- Column 1: Left Pane (Workspace Sidebar) -->
-  <section class="ctox-pane coding-agents-left" aria-label="Coding Agents Sidebar">
-
+  <!-- Column 1: Left Pane (App/Module Picker) -->
+  <section class="ctox-pane coding-agents-left" aria-label="Apps">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">CTOX</span>
-          <h2 class="ctox-pane-title">Workspaces</h2>
+          <span class="ctox-pane-kicker" data-ca-left-kicker>pi Coding Agent</span>
+          <h2 class="ctox-pane-title" data-ca-left-title>Apps</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button type="button" class="ctox-pane-icon" id="add-workspace-btn" title="Add Workspace" aria-label="Add workspace">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          <button type="button" class="ctox-pane-icon" id="ca-refresh-apps" title="Aktualisieren" aria-label="Aktualisieren">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4"/></svg>
           </button>
         </div>
       </div>
     </header>
 
-    <!-- Workspaces List -->
+    <!-- Installed Business OS apps the pi agent can target -->
     <div class="ctox-pane-body">
-      <div class="ctox-list" id="workspaces-list-box">
-        <div class="ctox-empty">Loading workspaces...</div>
+      <div class="ctox-list" id="ca-app-list">
+        <div class="ctox-empty"><strong>Apps werden geladen…</strong></div>
       </div>
     </div>
-
-    <!-- Left Sidebar Footer -->
-    <footer class="coding-agents-pane-footer">
-      <button type="button" class="ctox-button" id="open-settings-btn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="svg-inline" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
-        System Settings
-      </button>
-    </footer>
   </section>
 
   <!-- Left Resizer Handle (shell-owned declarative resizer) -->
-  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="260" data-resizer-max="450" aria-label="Workspace-Spalte anpassen"></button>
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="240" data-resizer-max="420" aria-label="App-Spalte anpassen"></button>
 
-  <!-- Column 2: Center Pane (Workbench - Multi-turn Session View) -->
-  <section class="ctox-pane coding-agents-center" aria-label="Coding Agents Workbench">
-
+  <!-- Column 2: Center Pane (Delegation Workbench) -->
+  <section class="ctox-pane coding-agents-center" aria-label="pi-Coding Workbench">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" id="active-app-desc">Select a Workspace</span>
-          <h2 class="ctox-pane-title" id="active-app-title">Coding Agent Workbench</h2>
+          <span class="ctox-pane-kicker" id="ca-active-app-kicker">pi Coding Agent</span>
+          <h2 class="ctox-pane-title" id="ca-active-app-title">Workbench</h2>
         </div>
         <div class="ctox-pane-actions">
-          <span class="ctox-badge connection-status-pill" id="workbench-status-badge">
-            <span class="status-dot online" id="workbench-status-dot"></span>
-            <span id="workbench-status-text">Connected</span>
-          </span>
+          <span class="ctox-badge" id="ca-model-badge">CTOX (Standard)</span>
         </div>
       </div>
     </header>
 
-    <div class="coding-agents-workbench">
-      <!-- Session Bar -->
-      <div class="ctox-toolbar">
-        <label class="ctox-field-label" for="workbench-session-select">Active Session</label>
-        <select id="workbench-session-select" class="ctox-pane-filter coding-agents-session-select" disabled>
-          <option value="">No Active Sessions</option>
-        </select>
-        <button type="button" class="ctox-button is-primary coding-agents-new-session" id="new-session-btn" disabled aria-describedby="new-session-help">+ New Session</button>
-      </div>
-      <div id="new-session-help" class="sr-only">Requires a selected workspace. Opens a confirmation dialog before creating a session.</div>
+    <div class="ctox-pane-scroll coding-agents-workbench">
 
-      <!-- Dynamic Chat History Logs -->
-      <div class="ctox-pane-scroll session-chat-feed" id="workbench-chat-feed">
-        <div class="ctox-empty">Please select a workspace on the left to start coding.</div>
-      </div>
+      <!-- Task delegation form -->
+      <form class="ctox-card coding-agents-turn-card" id="ca-turn-form">
+        <header><span data-ca-form-title>Neuer Coding-Turn</span></header>
+        <div class="ctox-card-body coding-agents-turn-body">
+          <div>
+            <label class="ctox-field-label" for="ca-task-input" data-ca-task-label>Aufgabe</label>
+            <textarea id="ca-task-input" class="ctox-textarea" rows="5" placeholder="Beschreibe, was der pi-Agent an dieser App ändern soll…" required disabled></textarea>
+          </div>
+          <div class="coding-agents-turn-controls">
+            <label class="ctox-field-label" for="ca-model-select" data-ca-model-label>Modell</label>
+            <select id="ca-model-select" class="ctox-pane-filter"></select>
+            <button type="submit" class="ctox-run-control" id="ca-run" disabled><span aria-hidden="true">▶</span> <span data-ca-run-label>Delegieren</span></button>
+          </div>
+          <p class="coding-agents-hint" id="ca-hint" aria-live="polite"></p>
+        </div>
+      </form>
 
-      <!-- Bottom Form Prompt Input -->
-      <div class="workbench-chat-input-bar">
-        <form id="workbench-prompt-form" class="workbench-prompt-form">
-          <input type="text" id="workbench-prompt-input" class="ctox-input" placeholder="Type instruction for active coding agent session..." required disabled>
-          <button type="submit" class="ctox-run-control" id="workbench-prompt-submit" disabled><span aria-hidden="true">▶</span> Send Instruction</button>
-        </form>
-      </div>
+      <!-- Last turn result -->
+      <section class="ctox-card coding-agents-result-card" id="ca-result" hidden>
+        <header>
+          <span data-ca-result-title>Letzter Turn</span>
+          <span class="ctox-badge" id="ca-result-badge"></span>
+        </header>
+        <div class="ctox-card-body" id="ca-result-body"></div>
+      </section>
+
+      <!-- Recent turns from the command log -->
+      <section class="coding-agents-recent">
+        <h3 class="ctox-field-label coding-agents-recent-title" data-ca-recent-title>Letzte Turns</h3>
+        <div class="ctox-list coding-agents-recent-list" id="ca-recent-list"></div>
+      </section>
+
     </div>
   </section>
-
-  <!-- Overlay Modal: System Settings & Subscription -->
-  <div class="ctox-modal" id="settings-modal" hidden role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
-    <div class="ctox-modal-card ctox-modal-card--wide settings-container">
-      <header class="ctox-modal-header">
-        <h3 class="ctox-modal-title" id="settings-modal-title">System Settings & Subscriptions</h3>
-        <button type="button" class="ctox-pane-icon" id="close-settings-btn" aria-label="Close system settings" title="Close system settings">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
-        </button>
-      </header>
-
-      <div class="ctox-modal-body settings-body">
-
-        <!-- Lifecycle & Port selection -->
-        <section class="ctox-card settings-section">
-          <header>Lifecycle & Service Control</header>
-          <div class="ctox-card-body">
-            <p class="section-desc">Manage the local background Electron GUI and headless daemon service.</p>
-            <div class="lifecycle-controls-row">
-              <div class="lifecycle-buttons-row">
-                <button type="button" class="ctox-button" data-action="install-provider">Install / Repair CLI</button>
-                <button type="button" class="ctox-button is-primary" data-action="start-app">Launch GUI App</button>
-                <button type="button" class="ctox-button" data-action="start-headless">Spawn Headless</button>
-                <button type="button" class="ctox-button is-danger" data-action="stop-app">Terminate App</button>
-              </div>
-              <div class="daemon-port-field">
-                <label class="ctox-field-label" for="daemon-port-input">Headless Port</label>
-                <input type="number" id="daemon-port-input" value="8083" class="ctox-input" placeholder="8083">
-              </div>
-            </div>
-            <dl class="ctox-fields lifecycle-status-row">
-              <dt>Service Uptime</dt>
-              <dd><strong id="diag-uptime">N/A</strong></dd>
-              <dt>Resources</dt>
-              <dd><strong id="diag-resources">N/A</strong></dd>
-              <dt>Electron App</dt>
-              <dd><strong id="diag-installed">Checking...</strong> (PID: <span id="diag-electron-pid">N/A</span>)</dd>
-            </dl>
-          </div>
-        </section>
-
-        <!-- Permissions Bypass manager -->
-        <section class="ctox-card settings-section">
-          <header>Permissions Bypass Policy</header>
-          <div class="ctox-card-body">
-            <p class="section-desc">Automatically confirm read/write and script executions in workspaces without interactive dialog popups.</p>
-            <div class="permission-toggle-row">
-              <div class="toggle-info">
-                <span class="toggle-title">Bypass All Permission Confirmation Dialogs</span>
-                <span class="toggle-subtitle">Trust all actions inside active workspaces</span>
-              </div>
-              <label class="switch-toggle">
-                <input type="checkbox" id="bypass-permissions-toggle">
-                <span class="slider-round"></span>
-              </label>
-            </div>
-          </div>
-        </section>
-
-        <!-- Account Subscription portal -->
-        <section class="ctox-card settings-section">
-          <header>
-            Account Subscription Registration
-            <span class="ctox-badge" id="auth-status">UNAUTHORIZED</span>
-          </header>
-          <div class="ctox-card-body">
-            <p class="section-desc">Use the provider-owned CLI authentication flow on this machine.</p>
-            <form class="subscription-auth-form" id="sub-login-form">
-              <button type="submit" class="ctox-button is-primary" id="btn-trigger-signup">
-                Start Provider Authentication
-              </button>
-            </form>
-
-            <div class="browser-log-card">
-              <span class="ctox-field-label">Provider Authentication Logs</span>
-              <pre class="ctox-pre browser-log-box" id="browser-log-box"><span class="terminal-line dim">Awaiting subscription login trigger...</span></pre>
-            </div>
-          </div>
-        </section>
-
-      </div>
-    </div>
-  </div>
-
-  <!-- Overlay Modal: Add Workspace Path -->
-  <div class="ctox-modal" id="add-workspace-modal" hidden role="dialog" aria-modal="true" aria-labelledby="add-workspace-title">
-    <div class="ctox-modal-card coding-agents-dialog-sm">
-      <header class="ctox-modal-header">
-        <h3 class="ctox-modal-title" id="add-workspace-title">Add Workspace</h3>
-        <button type="button" class="ctox-pane-icon" id="close-add-workspace-btn" aria-label="Close add workspace" title="Close add workspace">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
-        </button>
-      </header>
-      <div class="ctox-modal-body">
-        <form id="add-workspace-form" class="coding-agents-dialog-form">
-          <p class="section-desc">Enter the absolute directory path to authorize as a clean Coding Workspace.</p>
-          <input type="text" id="add-workspace-input" class="ctox-input" placeholder="e.g. ~/Documents/my-project" required aria-describedby="add-workspace-error" autocomplete="off">
-          <div id="add-workspace-error" class="form-error" role="alert" hidden></div>
-          <button type="submit" class="ctox-button is-primary" id="add-workspace-submit" disabled>Authorize & Add Workspace</button>
-        </form>
-      </div>
-    </div>
-  </div>
-
-  <!-- Overlay Modal: New Agent Session -->
-  <div class="ctox-modal" id="new-session-modal" hidden role="dialog" aria-modal="true" aria-labelledby="new-session-title">
-    <div class="ctox-modal-card coding-agents-dialog-md">
-      <header class="ctox-modal-header">
-        <h3 class="ctox-modal-title" id="new-session-title">New Coding Session</h3>
-        <button type="button" class="ctox-pane-icon" id="close-new-session-btn" aria-label="Close new session" title="Close new session">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
-        </button>
-      </header>
-      <div class="ctox-modal-body">
-        <form id="new-session-form" class="coding-agents-dialog-form">
-          <p class="section-desc" id="new-session-context">Select a workspace first, then describe the first task for the agent.</p>
-          <textarea id="new-session-prompt" class="ctox-textarea" rows="5" placeholder="Describe the initial task for this coding agent session..." required aria-describedby="new-session-error"></textarea>
-          <div id="new-session-error" class="form-error" role="alert" hidden></div>
-          <button type="submit" class="ctox-button is-primary" id="new-session-submit" disabled>Create Session</button>
-        </form>
-      </div>
-    </div>
-  </div>
-
-  <!-- Hidden elements for E2E backwards compatibility -->
-  <div style="position: absolute; left: 0; top: 0; width: 20px; height: 20px; opacity: 0.01; z-index: 1;" aria-hidden="true">
-    <button type="button" class="app-switch-btn" data-app="antigravity" id="diag-dot-antigravity" aria-label="Antigravity auswählen" style="position: absolute; left: 0px; top: 0px; width: 1px; height: 1px; border: none; background: transparent; padding: 0;"></button>
-    <button type="button" class="app-switch-btn" data-app="claude" id="diag-dot-claude" aria-label="Claude auswählen" style="position: absolute; left: 2px; top: 0px; width: 1px; height: 1px; border: none; background: transparent; padding: 0;"></button>
-    <button type="button" class="app-switch-btn" data-app="codex" id="diag-dot-codex" aria-label="Codex auswählen" style="position: absolute; left: 4px; top: 0px; width: 1px; height: 1px; border: none; background: transparent; padding: 0;"></button>
-    <span id="diag-badge-antigravity">OFFLINE</span>
-    <span id="diag-badge-claude">OFFLINE</span>
-    <span id="diag-badge-codex">OFFLINE</span>
-    <!-- Persistent third pane justification: session/history inspection must stay reachable while workspace selection and active prompting remain visible. -->
-    <button type="button" class="right-tab-btn" data-right-tab="subscription" aria-label="Abonnement anzeigen" style="position: absolute; left: 6px; top: 0px; width: 1px; height: 1px; border: none; background: transparent; padding: 0;"></button>
-    <div id="diag-ls-pid">N/A</div>
-    <div id="diag-active-port">8083</div>
-    <form id="path-auth-form">
-      <input type="text" id="new-path-input">
-    </form>
-    <div id="trusted-paths-box"></div>
-    <div id="sessions-list-box"></div>
-  </div>
 
 </main>
