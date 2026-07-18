@@ -10837,6 +10837,7 @@ fn required_systematic_research_depth(job: &QueuedPrompt) -> SystematicResearchD
 fn validate_systematic_research_deep_research_receipt(
     job: &QueuedPrompt,
     workspace: &Path,
+    expected_attempt_id: &str,
     attempt_started_at: u64,
 ) -> Result<Value> {
     let codex_home =
@@ -10857,6 +10858,7 @@ fn validate_systematic_research_deep_research_receipt(
         &conn,
         &codex_home,
         workspace,
+        expected_attempt_id,
         attempt_started_at,
         required_systematic_research_depth(job),
     )
@@ -10866,6 +10868,7 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
     conn: &Connection,
     codex_home: &Path,
     workspace: &Path,
+    expected_attempt_id: &str,
     attempt_started_at: u64,
     required_depth: SystematicResearchDepth,
 ) -> Result<Value> {
@@ -10879,27 +10882,17 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
         )
     })?;
     let mut stmt = conn.prepare(
-        "SELECT id, rollout_path, cwd
+        "SELECT id, rollout_path
          FROM threads
          WHERE subagent_parent_thread_id IS NULL",
     )?;
     let rows = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-        ))
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     })?;
 
     let mut observed_depths = Vec::new();
     for row in rows {
-        let (thread_id, rollout_path, cwd) = row?;
-        let Ok(thread_cwd) = Path::new(&cwd).canonicalize() else {
-            continue;
-        };
-        if thread_cwd != workspace {
-            continue;
-        }
+        let (thread_id, rollout_path) = row?;
         let rollout_path = PathBuf::from(rollout_path);
         let Ok(rollout_path) = rollout_path.canonicalize() else {
             continue;
@@ -10910,6 +10903,8 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
         let file = std::fs::File::open(&rollout_path)
             .with_context(|| format!("open harness rollout {}", rollout_path.display()))?;
         let mut calls = BTreeMap::<String, (SystematicResearchDepth, u64)>::new();
+        let mut attempt_bound = false;
+        let mut workspace_bound = false;
         for line in BufReader::new(file).lines() {
             let line = line?;
             let Ok(value) = serde_json::from_str::<Value>(&line) else {
@@ -10927,11 +10922,29 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
                 continue;
             }
             let payload = value.get("payload").unwrap_or(&Value::Null);
+            if payload.get("type").and_then(Value::as_str) == Some("task_started") {
+                attempt_bound = false;
+                workspace_bound = false;
+                calls.clear();
+            }
+            if line.contains(expected_attempt_id) {
+                attempt_bound = true;
+            }
+            if value.get("type").and_then(Value::as_str) == Some("turn_context") {
+                workspace_bound = payload
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .and_then(|cwd| Path::new(cwd).canonicalize().ok())
+                    .is_some_and(|cwd| cwd == workspace);
+            }
             match payload.get("type").and_then(Value::as_str) {
                 Some("function_call")
                     if payload.get("name").and_then(Value::as_str)
                         == Some("ctox_deep_research") =>
                 {
+                    if !attempt_bound || !workspace_bound {
+                        continue;
+                    }
                     let Some(call_id) = payload.get("call_id").and_then(Value::as_str) else {
                         continue;
                     };
@@ -11354,6 +11367,7 @@ fn validate_systematic_research_workspace(
         let deep_research_receipt = validate_systematic_research_deep_research_receipt(
             job,
             &workspace,
+            expected_attempt_id,
             attempt_started_at,
         )?;
         validate_systematic_research_web_receipts(root, &manifest_value, attempt_started_at)?;
@@ -24438,57 +24452,124 @@ mod tests {
         conn.execute(
             "INSERT INTO threads (id, rollout_path, cwd, subagent_parent_thread_id)
              VALUES ('parent-thread', ?1, ?2, NULL)",
-            params![rollout.to_string_lossy(), workspace.to_string_lossy()],
+            params![rollout.to_string_lossy(), codex_home.to_string_lossy()],
         )
         .unwrap();
         let timestamp = now_iso_string();
+        let expected_attempt_id = "business-command-turn:current-attempt";
         let attempt_started_at = current_epoch_secs().saturating_sub(1);
-        let write_rollout = |depth: &str, no_workspace: bool| {
-            let arguments = serde_json::json!({
-                "query": "verified bearing research",
-                "depth": depth,
-                "no_workspace": no_workspace,
-            });
-            let output = serde_json::json!({
-                "ok": true,
-                "depth": depth,
-                "research_workspace": research_workspace,
-            });
-            std::fs::write(
-                &rollout,
-                [
-                    serde_json::json!({
-                        "timestamp": timestamp,
-                        "type": "response_item",
-                        "payload": {
-                            "type": "function_call",
-                            "name": "ctox_deep_research",
-                            "call_id": "call-1",
-                            "arguments": arguments.to_string(),
-                        }
-                    })
-                    .to_string(),
-                    serde_json::json!({
-                        "timestamp": timestamp,
-                        "type": "response_item",
-                        "payload": {
-                            "type": "function_call_output",
-                            "call_id": "call-1",
-                            "output": output.to_string(),
-                        }
-                    })
-                    .to_string(),
-                ]
-                .join("\n"),
-            )
-            .unwrap();
-        };
+        let write_rollout =
+            |depth: &str, no_workspace: bool, attempt_id: &str, turn_workspace: &Path| {
+                let arguments = serde_json::json!({
+                    "query": "verified bearing research",
+                    "depth": depth,
+                    "no_workspace": no_workspace,
+                });
+                let output = serde_json::json!({
+                    "ok": true,
+                    "depth": depth,
+                    "research_workspace": research_workspace,
+                });
+                std::fs::write(
+                    &rollout,
+                    [
+                        serde_json::json!({
+                            "timestamp": timestamp,
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "task_started",
+                                "turn_id": "turn-1",
+                            }
+                        })
+                        .to_string(),
+                        serde_json::json!({
+                            "timestamp": timestamp,
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": [{
+                                    "type": "input_text",
+                                    "text": format!("Research Attempt ID: {attempt_id}"),
+                                }],
+                            }
+                        })
+                        .to_string(),
+                        serde_json::json!({
+                            "timestamp": timestamp,
+                            "type": "turn_context",
+                            "payload": {
+                                "turn_id": "turn-1",
+                                "cwd": turn_workspace,
+                            }
+                        })
+                        .to_string(),
+                        serde_json::json!({
+                            "timestamp": timestamp,
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call",
+                                "name": "ctox_deep_research",
+                                "call_id": "call-1",
+                                "arguments": arguments.to_string(),
+                            }
+                        })
+                        .to_string(),
+                        serde_json::json!({
+                            "timestamp": timestamp,
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call_output",
+                                "call_id": "call-1",
+                                "output": output.to_string(),
+                            }
+                        })
+                        .to_string(),
+                    ]
+                    .join("\n"),
+                )
+                .unwrap();
+            };
 
-        write_rollout("standard", false);
+        write_rollout(
+            "exhaustive",
+            false,
+            "business-command-turn:foreign-attempt",
+            &workspace,
+        );
+        let foreign_attempt = validate_systematic_research_deep_research_receipt_from_conn(
+            &conn,
+            &codex_home,
+            &workspace,
+            expected_attempt_id,
+            attempt_started_at,
+            SystematicResearchDepth::Exhaustive,
+        )
+        .unwrap_err();
+        assert!(foreign_attempt
+            .to_string()
+            .contains("observed current-attempt calls: none"));
+
+        write_rollout("exhaustive", false, expected_attempt_id, &codex_home);
+        let foreign_workspace = validate_systematic_research_deep_research_receipt_from_conn(
+            &conn,
+            &codex_home,
+            &workspace,
+            expected_attempt_id,
+            attempt_started_at,
+            SystematicResearchDepth::Exhaustive,
+        )
+        .unwrap_err();
+        assert!(foreign_workspace
+            .to_string()
+            .contains("observed current-attempt calls: none"));
+
+        write_rollout("standard", false, expected_attempt_id, &workspace);
         let shallow = validate_systematic_research_deep_research_receipt_from_conn(
             &conn,
             &codex_home,
             &workspace,
+            expected_attempt_id,
             attempt_started_at,
             SystematicResearchDepth::Exhaustive,
         )
@@ -24497,11 +24578,12 @@ mod tests {
             .to_string()
             .contains("observed current-attempt calls: standard"));
 
-        write_rollout("exhaustive", true);
+        write_rollout("exhaustive", true, expected_attempt_id, &workspace);
         let unpersisted = validate_systematic_research_deep_research_receipt_from_conn(
             &conn,
             &codex_home,
             &workspace,
+            expected_attempt_id,
             attempt_started_at,
             SystematicResearchDepth::Exhaustive,
         )
@@ -24510,11 +24592,12 @@ mod tests {
             .to_string()
             .contains("exhaustive (no_workspace)"));
 
-        write_rollout("exhaustive", false);
+        write_rollout("exhaustive", false, expected_attempt_id, &workspace);
         let receipt = validate_systematic_research_deep_research_receipt_from_conn(
             &conn,
             &codex_home,
             &workspace,
+            expected_attempt_id,
             attempt_started_at,
             SystematicResearchDepth::Exhaustive,
         )
