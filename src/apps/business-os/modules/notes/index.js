@@ -451,6 +451,8 @@ function bindElements(host) {
   els.lockNoteBtn = host.querySelector('[data-action="lock-note"]');
   els.deleteBtn = host.querySelector('[data-action="delete-note"]');
   els.createNoteBtn = host.querySelector('[data-action="create-note"]');
+  els.noteMetaMenu = host.querySelector('[data-note-meta-menu]');
+  els.noteMetaMenuToggle = host.querySelector('[data-action="toggle-note-meta"]');
   
   // Editor Lock Screen
   els.noteLockScreen = host.querySelector('[data-note-lock-screen]');
@@ -511,9 +513,16 @@ function wireEvents() {
   els.tagsSelectBtn?.addEventListener('click', handleTagsSelectBtnClick);
   
   els.starBtn?.addEventListener('click', handleStarNoteClick);
-  els.lockNoteBtn?.addEventListener('click', handleLockNoteClick);
-  els.deleteBtn?.addEventListener('click', handleDeleteNote);
+  els.lockNoteBtn?.addEventListener('click', () => {
+    handleLockNoteClick();
+    closeAllDropdowns();
+  });
+  els.deleteBtn?.addEventListener('click', () => {
+    handleDeleteNote();
+    closeAllDropdowns();
+  });
   els.createNoteBtn?.addEventListener('click', handleCreateNote);
+  els.noteMetaMenuToggle?.addEventListener('click', handleNoteMetaMenuToggle);
   
   // Decrypt locked notes click/keypress handlers
   els.decryptNoteBtn?.addEventListener('click', handleDecryptNoteClick);
@@ -2181,10 +2190,11 @@ function handleTimestampBtnClick() {
 }
 
 function handleGlobalClick(e) {
-  if (e.target.closest('.nn-meta-select-wrap') || 
-      e.target.closest('.nn-format-wrapper') || 
-      e.target.closest('.nn-filter-trigger') || 
-      e.target.closest('[data-action="toggle-filter"]')) {
+  if (e.target.closest('.nn-meta-select-wrap') ||
+      e.target.closest('.nn-format-wrapper') ||
+      e.target.closest('.nn-filter-trigger') ||
+      e.target.closest('[data-action="toggle-filter"]') ||
+      e.target.closest('[data-action="toggle-note-meta"]')) {
     return;
   }
   closeAllDropdowns();
@@ -2210,6 +2220,17 @@ function closeAllDropdowns() {
   if (els.filterPopover) els.filterPopover.hidden = true;
   if (els.headersDropdown) els.headersDropdown.hidden = true;
   if (els.calloutsDropdown) els.calloutsDropdown.hidden = true;
+  if (els.noteMetaMenu) els.noteMetaMenu.hidden = true;
+  if (els.noteMetaMenuToggle) els.noteMetaMenuToggle.setAttribute('aria-expanded', 'false');
+}
+
+function handleNoteMetaMenuToggle(e) {
+  e.stopPropagation();
+  if (!els.noteMetaMenu) return;
+  const wasHidden = els.noteMetaMenu.hidden;
+  closeAllDropdowns();
+  els.noteMetaMenu.hidden = !wasHidden;
+  els.noteMetaMenuToggle?.setAttribute('aria-expanded', wasHidden ? 'true' : 'false');
 }
 
 function showActionToast(message, actionLabel = '', onAction = null) {

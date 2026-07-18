@@ -163,21 +163,6 @@
   outline-offset: -2px;
 }
 
-/* --- Left Sidebar Footer (Lock App) --- */
-.nn-sidebar-footer {
-  padding: 8px 8px 64px;
-  border-top: 1px solid var(--hairline, var(--line));
-}
-
-.nn-sidebar-footer .ctox-button {
-  width: 100%;
-}
-
-.nn-sidebar-footer .ctox-button svg {
-  width: 14px;
-  height: 14px;
-}
-
 /* --- Middle Pane (Notes List) ---
    Header band, kicker/title, filter icon button and search all come from the
    kit. The head needs visible overflow so the sort popover can escape it. */
@@ -276,6 +261,16 @@
   background: var(--accent-soft);
   color: color-mix(in srgb, var(--accent) 78%, var(--text));
   font-weight: 600;
+}
+
+.nn-dropdown-item.is-danger {
+  color: var(--danger);
+}
+.nn-dropdown-item.is-danger svg {
+  color: var(--danger);
+}
+.nn-dropdown-item.is-danger:hover {
+  background: var(--danger-soft);
 }
 
 .nn-popover-divider {
@@ -1147,10 +1142,6 @@
   /* Frame collapse (single column, hidden resizers) comes from the kit. */
   .nn-nav-list {
     padding: 8px;
-  }
-
-  .nn-sidebar-footer {
-    padding: 8px 8px 72px;
   }
 
   .nn-editor-head {
