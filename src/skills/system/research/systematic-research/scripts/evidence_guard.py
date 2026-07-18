@@ -79,7 +79,15 @@ def resolve_path(base_dir: Path, raw: Any) -> Path:
     if not isinstance(raw, str) or not raw.strip():
         raise GuardError("missing_path")
     path = Path(raw)
-    return path if path.is_absolute() else base_dir / path
+    if path.is_absolute():
+        raise GuardError("absolute_paths_are_forbidden")
+    workspace = base_dir.resolve()
+    resolved = (workspace / path).resolve()
+    try:
+        resolved.relative_to(workspace)
+    except ValueError as exc:
+        raise GuardError("path_escapes_workspace") from exc
+    return resolved
 
 
 def require_dict(value: Any, label: str) -> dict[str, Any]:
@@ -93,6 +101,17 @@ def require_string(obj: dict[str, Any], key: str, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise GuardError(f"{label}_missing_{key}")
     return value.strip()
+
+
+def validate_artifact_receipt(value: Any, base_dir: Path, label: str) -> Path:
+    receipt = require_dict(value, f"{label}_receipt")
+    path = resolve_path(base_dir, receipt.get("path"))
+    expected_hash = require_string(receipt, "sha256", f"{label}_receipt")
+    if not path.is_file() or path.stat().st_size == 0:
+        raise GuardError(f"{label}_receipt_missing")
+    if sha256_file(path) != expected_hash:
+        raise GuardError(f"{label}_receipt_sha256_mismatch")
+    return path
 
 
 def validate_url(url: Any, role: Any) -> None:
@@ -124,6 +143,9 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
     if manifest.get("schema_version") != SCHEMA_VERSION:
         raise GuardError("unsupported_schema_version")
     require_string(manifest, "run_id", "manifest")
+    require_string(manifest, "research_run_id", "manifest")
+    require_string(manifest, "research_command_id", "manifest")
+    require_string(manifest, "research_attempt_id", "manifest")
     require_string(manifest, "as_of", "manifest")
     sources = manifest.get("sources")
     evidence = manifest.get("evidence")
@@ -159,8 +181,8 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
         if url != source.get("canonical_url"):
             raise GuardError("evidence_source_url_mismatch")
         validate_url(url, item.get("url_role"))
-        if not isinstance(item.get("http_status"), int) or not 200 <= item["http_status"] < 300:
-            raise GuardError("evidence_requires_current_2xx")
+        if not isinstance(item.get("http_status"), int) or not 200 <= item["http_status"] < 204:
+            raise GuardError("evidence_requires_current_content_2xx")
         if item.get("freshness_status") != "current":
             raise GuardError("evidence_not_current")
         if not isinstance(item.get("relevance_score"), (int, float)) or item["relevance_score"] < 8:
@@ -181,6 +203,25 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
             raise GuardError("snapshot_source_lineage_mismatch")
         if item.get("snapshot_id") != snapshot_id:
             raise GuardError("evidence_snapshot_id_mismatch")
+        retrieval = require_dict(item.get("retrieval_receipt"), "retrieval_receipt")
+        if retrieval.get("tool") not in {"ctox_web_read", "ctox_deep_research"}:
+            raise GuardError("evidence_requires_ctox_web_stack_receipt")
+        request_url = require_string(retrieval, "request_url", "retrieval_receipt")
+        request_parsed = urlparse(request_url)
+        if request_parsed.scheme not in {"http", "https"} or not request_parsed.hostname:
+            raise GuardError("retrieval_receipt_request_url_invalid")
+        if retrieval.get("final_url") != url:
+            raise GuardError("retrieval_receipt_url_mismatch")
+        if retrieval.get("http_status") != item.get("http_status"):
+            raise GuardError("retrieval_receipt_status_mismatch")
+        if retrieval.get("body_sha256") != actual_hash:
+            raise GuardError("retrieval_receipt_body_hash_mismatch")
+        if retrieval.get("byte_count") != snapshot_path.stat().st_size:
+            raise GuardError("retrieval_receipt_byte_count_mismatch")
+        require_string(retrieval, "checked_at", "retrieval_receipt")
+        validate_artifact_receipt(
+            retrieval.get("receipt_artifact"), base_dir, "retrieval"
+        )
 
     data_files = manifest.get("data_files", [])
     if not isinstance(data_files, list):
@@ -227,6 +268,7 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
     for claim in claims:
         claim = require_dict(claim, "claim")
         require_string(claim, "claim_id", "claim")
+        require_string(claim, "claim_text", "claim")
         evidence_id = require_string(claim, "evidence_id", "claim")
         item = evidence_by_id.get(evidence_id)
         if item is None:
@@ -257,6 +299,25 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
             target_ids = {str(claim.get("claim_id")) for claim in claims} or set(evidence_by_id)
         if set(review["reviewed_ids"]) != target_ids:
             raise GuardError("review_does_not_cover_full_target_set")
+        review_path = validate_artifact_receipt(
+            review.get("receipt_artifact"), base_dir, f"{review_type}_review"
+        )
+        try:
+            review_receipt = json.loads(review_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise GuardError(f"{review_type}_review_receipt_invalid_json") from exc
+        review_receipt = require_dict(review_receipt, f"{review_type}_review_receipt")
+        if (
+            review_receipt.get("schema_version") != "ctox.research.review.v1"
+            or review_receipt.get("review_type") != review_type
+            or review_receipt.get("reviewer_id") != reviewer_id
+            or review_receipt.get("status") != "pass"
+            or set(review_receipt.get("reviewed_ids", [])) != target_ids
+            or review_receipt.get("research_run_id") != manifest.get("research_run_id")
+            or review_receipt.get("research_command_id") != manifest.get("research_command_id")
+            or review_receipt.get("research_attempt_id") != manifest.get("research_attempt_id")
+        ):
+            raise GuardError(f"{review_type}_review_receipt_contract_mismatch")
         seen_review_types.add(review_type)
         reviewer_ids.add(reviewer_id)
     if seen_review_types != required_reviews:
@@ -266,8 +327,26 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
     if knowledge.get("living") is True:
         versions = knowledge.get("versions")
         current = require_string(knowledge, "current_version_id", "knowledge")
-        if not isinstance(versions, list) or not any(v.get("version_id") == current and v.get("status") == "current" for v in versions if isinstance(v, dict)):
+        if not isinstance(versions, list):
             raise GuardError("knowledge_version_missing")
+        current_versions = [
+            v for v in versions
+            if isinstance(v, dict)
+            and v.get("version_id") == current
+            and v.get("status") == "current"
+        ]
+        if len(current_versions) != 1:
+            raise GuardError("knowledge_version_missing")
+        current_version = current_versions[0]
+        knowledge_path = validate_artifact_receipt(
+            current_version.get("artifact"), base_dir, "knowledge_version"
+        )
+        claim_ids = {str(claim.get("claim_id")) for claim in claims}
+        if set(current_version.get("claim_ids", [])) != claim_ids:
+            raise GuardError("knowledge_version_claim_lineage_incomplete")
+        knowledge_text = knowledge_path.read_text(encoding="utf-8", errors="ignore")
+        if any(claim_id not in knowledge_text for claim_id in claim_ids):
+            raise GuardError("knowledge_artifact_missing_claim_lineage")
         if knowledge.get("mutable_in_place") is True or not isinstance(knowledge.get("invalidations"), list):
             raise GuardError("knowledge_update_invalidation_required")
 
@@ -278,6 +357,18 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
             report_versions = reports.get("versions")
             if not isinstance(report_versions, list) or not report_versions:
                 raise GuardError("report_version_missing")
+            claim_ids = {str(claim.get("claim_id")) for claim in claims}
+            for index, report_version in enumerate(report_versions):
+                report_version = require_dict(report_version, f"report_version_{index}")
+                report_path = validate_artifact_receipt(
+                    report_version.get("artifact"), base_dir, f"report_version_{index}"
+                )
+                referenced_claims = set(report_version.get("claim_ids", []))
+                if not referenced_claims or not referenced_claims.issubset(claim_ids):
+                    raise GuardError("report_version_claim_lineage_invalid")
+                report_text = report_path.read_text(encoding="utf-8", errors="ignore")
+                if any(claim_id not in report_text for claim_id in referenced_claims):
+                    raise GuardError("report_artifact_missing_claim_lineage")
             if reports.get("mutable_in_place") is True or not isinstance(reports.get("invalidations"), list):
                 raise GuardError("report_update_invalidation_required")
 

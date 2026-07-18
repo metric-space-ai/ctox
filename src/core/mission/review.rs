@@ -776,6 +776,9 @@ fn assess_review_requirement(
             "email:owner" | "email:founder" | "email:admin"
         );
     let mut reasons = Vec::new();
+    if matches!(request.review_scope, ReviewScope::FullEvidence) {
+        reasons.push("full_evidence_scope".to_string());
+    }
     if durable_work {
         reasons.push("durable_queue_or_ticket_work".to_string());
     }
@@ -1982,6 +1985,22 @@ mod tests {
             "Explained the current queue backlog and highlighted the blocked task.",
         );
         assert!(required);
+    }
+
+    #[test]
+    fn full_evidence_scope_requires_review_for_unknown_source_label() {
+        let request = CompletionReviewRequest {
+            preview: "Systematic research".to_string(),
+            source_label: "research".to_string(),
+            owner_visible: false,
+            review_scope: ReviewScope::FullEvidence,
+            ..CompletionReviewRequest::default()
+        };
+        let (required, score, reasons) =
+            assess_review_requirement(&request, "Research artifacts were produced.");
+        assert!(required);
+        assert!(score >= 3);
+        assert!(reasons.iter().any(|reason| reason == "full_evidence_scope"));
     }
 
     #[test]

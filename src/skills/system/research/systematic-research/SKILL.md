@@ -270,6 +270,10 @@ the evidence manifest passes the deterministic guard and all checks below pass:
 
 1. **Transport/freshness**: the canonical non-metadata URL returned 2xx and
    the snapshot is current, downloaded bytes, and SHA-256 verified.
+   HTTP 204 is not content evidence. Every admitted item must include the
+   immutable `ctox_web_read` or `ctox_deep_research` retrieval receipt with
+   request/final URL, status, timestamp, byte count, body hash, and a hashed
+   receipt artifact inside the current workspace.
 2. **Content**: the snapshot contains actual full text or original data. A
    title, abstract, metadata card, cookie/login wall, empty shell, snippet,
    DOI landing page, mirror, or aggregator is never evidence.
@@ -281,6 +285,18 @@ the evidence manifest passes the deterministic guard and all checks below pass:
 5. **Claim trace**: every factual or numerical claim records the exact file,
    table/figure, row/range, column, unit, conversion, derivation, and the
    immutable Claim -> Evidence -> Snapshot -> Source lineage.
+
+The evidence manifest must copy the task's exact `Research Run ID` and
+`Research Command ID` into `research_run_id` and `research_command_id`.
+It must also copy the server-injected `Research Attempt ID` into
+`research_attempt_id`; `run_id` must equal `research_run_id`. The only accepted
+manifest path is `validation/evidence-manifest.json`, and every admitted Web
+Stack receipt must have been created during that server attempt.
+All artifact paths are workspace-relative; absolute paths, `..` escapes, and
+symlink escapes are rejected. Each Source/Data/Claim review includes a hashed
+`ctox.research.review.v1` receipt artifact created by its distinct reviewer and
+bound to the same run, command, and attempt. Living Knowledge and Report
+versions include hashed artifacts plus the exact claim IDs they consume.
 
 Retain rejected candidates with their rejection reason for auditability, but
 exclude them from knowledge construction, calculations, and report evidence

@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import source_review_reading as reading  # noqa: E402
 import source_review_report as report  # noqa: E402
-from evidence_guard import SCHEMA_VERSION  # noqa: E402
+from evidence_guard import SCHEMA_VERSION, lineage_hash  # noqa: E402
 
 
 class SourceReviewManifestBindingTests(unittest.TestCase):
@@ -36,9 +36,25 @@ class SourceReviewManifestBindingTests(unittest.TestCase):
 
     def _manifest(self, source_id: str, evidence_id: str, snapshot_id: str, url: str) -> dict:
         digest = hashlib.sha256(self.snapshot.read_bytes()).hexdigest()
+        retrieval = self._artifact(
+            f"{evidence_id}-retrieval.json",
+            json.dumps({"tool": "ctox_web_read", "url": url}),
+        )
+        claim = {
+            "claim_id": f"claim-{evidence_id}",
+            "claim_text": "The source reports a measured thrust.",
+            "evidence_id": evidence_id,
+            "snapshot_id": snapshot_id,
+            "source_id": source_id,
+            "canonical_url": url,
+        }
+        claim["lineage_sha256"] = lineage_hash(claim)
         return {
             "schema_version": SCHEMA_VERSION,
             "run_id": "run-1",
+            "research_run_id": "run-1",
+            "research_command_id": "command-1",
+            "research_attempt_id": "attempt-1",
             "as_of": "2026-07-17",
             "sources": [{"source_id": source_id, "canonical_url": url}],
             "evidence": [{
@@ -62,16 +78,67 @@ class SourceReviewManifestBindingTests(unittest.TestCase):
                     "source_id": source_id,
                     "canonical_url": url,
                 },
+                "retrieval_receipt": {
+                    "tool": "ctox_web_read",
+                    "request_url": url,
+                    "final_url": url,
+                    "http_status": 200,
+                    "checked_at": "2026-07-17T08:00:00Z",
+                    "body_sha256": digest,
+                    "byte_count": self.snapshot.stat().st_size,
+                    "receipt_artifact": retrieval,
+                },
             }],
-            "claims": [],
+            "claims": [claim],
             "data_files": [],
             "reviews": [
-                {"review_type": "source", "reviewer_id": "reviewer-source", "status": "pass", "reviewed_ids": [evidence_id]},
-                {"review_type": "data", "reviewer_id": "reviewer-data", "status": "pass", "reviewed_ids": [evidence_id]},
-                {"review_type": "claim", "reviewer_id": "reviewer-claim", "status": "pass", "reviewed_ids": [evidence_id]},
+                {"review_type": "source", "reviewer_id": "reviewer-source", "status": "pass",
+                 "reviewed_ids": [evidence_id],
+                 "receipt_artifact": self._review_artifact(
+                     f"{evidence_id}-source-review.json", "source", "reviewer-source", [evidence_id]
+                 )},
+                {"review_type": "data", "reviewer_id": "reviewer-data", "status": "pass",
+                 "reviewed_ids": [evidence_id],
+                 "receipt_artifact": self._review_artifact(
+                     f"{evidence_id}-data-review.json", "data", "reviewer-data", [evidence_id]
+                 )},
+                {"review_type": "claim", "reviewer_id": "reviewer-claim", "status": "pass",
+                 "reviewed_ids": [f"claim-{evidence_id}"],
+                 "receipt_artifact": self._review_artifact(
+                     f"{evidence_id}-claim-review.json", "claim", "reviewer-claim", [f"claim-{evidence_id}"]
+                 )},
             ],
             "knowledge": {"living": False},
         }
+
+    def _artifact(self, name: str, content: str) -> dict[str, str]:
+        path = self.base / name
+        path.write_text(content, encoding="utf-8")
+        return {
+            "path": name,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
+
+    def _review_artifact(
+        self,
+        name: str,
+        review_type: str,
+        reviewer_id: str,
+        reviewed_ids: list[str],
+    ) -> dict[str, str]:
+        return self._artifact(
+            name,
+            json.dumps({
+                "schema_version": "ctox.research.review.v1",
+                "review_type": review_type,
+                "reviewer_id": reviewer_id,
+                "status": "pass",
+                "reviewed_ids": reviewed_ids,
+                "research_run_id": "run-1",
+                "research_command_id": "command-1",
+                "research_attempt_id": "attempt-1",
+            }),
+        )
 
     def _eligible_status_row(self, binding: dict[str, object] | None = None) -> dict[str, str]:
         binding = binding or self.bindings["ev-1"]

@@ -5804,6 +5804,7 @@ fn start_prompt_worker(
             let conversation_id =
                 turn_loop::conversation_id_for_thread_key(conversation_thread_key.as_deref());
             let command_turn_id = format!("business-command-turn:{}", uuid::Uuid::new_v4());
+            let research_attempt_started_at = current_epoch_secs();
             // Plan-step messages force a continuity refresh directly.
             // Internal-work closures (which the service performs after the
             // turn, post completion review) are picked up by the turn
@@ -5843,7 +5844,14 @@ fn start_prompt_worker(
                 &command_turn_id,
                 conversation_thread_key.as_deref(),
             )
-            .map(|prompt| outbound_email_first_execution_prompt(&job, prompt));
+            .map(|mut prompt| {
+                if is_systematic_research_job(&job) {
+                    prompt.push_str(&format!(
+                        "\n\nServer-bound research attempt:\nResearch Attempt ID: {command_turn_id}\nWrite this exact value to research_attempt_id in validation/evidence-manifest.json. Completion rejects any other attempt ID or manifest path."
+                    ));
+                }
+                outbound_email_first_execution_prompt(&job, prompt)
+            });
             let session_options = chat_turn_session_options_for_queue_job(&job);
             let result = execution_prompt.and_then(|execution_prompt| {
                 if queue_job_reuses_persistent_session(&session_options) {
@@ -6134,9 +6142,14 @@ fn start_prompt_worker(
                 }
             }
             let app_validation_precompleted = false;
-            let research_validation_failure = if result.is_ok() && is_systematic_research_job(&job)
-            {
-                match validate_systematic_research_workspace(&root, &job) {
+            let systematic_research = is_systematic_research_job(&job);
+            let research_validation_failure = if result.is_ok() && systematic_research {
+                match validate_systematic_research_workspace(
+                    &root,
+                    &job,
+                    &command_turn_id,
+                    research_attempt_started_at,
+                ) {
                     Ok(receipt) => {
                         push_event(
                             &state,
@@ -6168,7 +6181,7 @@ fn start_prompt_worker(
                 None
             };
             let app_validation_before_review = if result.is_ok()
-                && business_os_app_module_target_from_prompt(&job.prompt).is_some()
+                && business_os_app_validation_may_own_completion(&job)
             {
                 match business_os_app_module_validation_feedback(&root, &job) {
                     Ok(Some(feedback)) => {
@@ -6361,7 +6374,7 @@ fn start_prompt_worker(
                                 CompletionReviewDisposition::NoSend { .. }
                                     | CompletionReviewDisposition::TerminalQueueFailure { .. }
                             )
-                            && business_os_app_module_target_from_prompt(&job.prompt).is_some();
+                            && business_os_app_validation_may_own_completion(&job);
                         app_validation_rework = false;
                         app_validation_terminal_failure = false;
                         let expected_artifact_refs = expected_outcome_artifacts_for_job(&job);
@@ -7211,7 +7224,7 @@ fn start_prompt_worker(
                         let mut app_validation_worker_failure_reason: Option<String> = None;
                         let mut app_validation_verified_after_worker_error = false;
                         if !job.leased_message_keys.is_empty()
-                            && business_os_app_module_target_from_prompt(&job.prompt).is_some()
+                            && business_os_app_validation_may_own_completion(&job)
                         {
                             match business_os_app_module_validation_feedback(&root, &job) {
                                 Ok(Some(feedback))
@@ -10744,6 +10757,30 @@ fn is_business_os_chat_queue_job(root: &Path, job: &QueuedPrompt) -> bool {
 fn is_systematic_research_job(job: &QueuedPrompt) -> bool {
     job.suggested_skill.as_deref() == Some("systematic-research")
         || job.prompt.contains("research.systematic.run")
+        || job.prompt.contains("research.systematic.report.create")
+        || job.prompt.contains("research.knowledge.refresh")
+}
+
+fn business_os_app_validation_may_own_completion(job: &QueuedPrompt) -> bool {
+    !is_systematic_research_job(job)
+        && business_os_app_module_target_from_prompt(&job.prompt).is_some()
+}
+
+fn systematic_research_binding(job: &QueuedPrompt) -> Result<(&str, &str)> {
+    fn prompt_value<'a>(prompt: &'a str, label: &str) -> Option<&'a str> {
+        prompt.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix(label)
+                .map(str::trim)
+                .filter(|value| !value.is_empty() && *value != "latest")
+        })
+    }
+
+    let run_id = prompt_value(&job.prompt, "Research Run ID:")
+        .context("systematic research task is missing an explicit Research Run ID")?;
+    let command_id = prompt_value(&job.prompt, "Research Command ID:")
+        .context("systematic research task is missing an explicit Research Command ID")?;
+    Ok((run_id, command_id))
 }
 
 fn systematic_research_validation_receipt_path(job: &QueuedPrompt) -> Option<PathBuf> {
@@ -10757,41 +10794,99 @@ fn systematic_research_validation_receipt_path(job: &QueuedPrompt) -> Option<Pat
         })
 }
 
-fn collect_systematic_research_manifests(
-    directory: &Path,
-    depth: usize,
-    manifests: &mut Vec<PathBuf>,
+fn validate_systematic_research_web_receipts(
+    root: &Path,
+    manifest: &Value,
+    attempt_started_at: u64,
 ) -> Result<()> {
-    if depth > 8 {
-        return Ok(());
-    }
-    for entry in std::fs::read_dir(directory)
-        .with_context(|| format!("read research workspace {}", directory.display()))?
-    {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            if path.file_name().and_then(|name| name.to_str()) == Some(".ctox") {
-                continue;
-            }
-            collect_systematic_research_manifests(&path, depth + 1, manifests)?;
-            continue;
-        }
-        let name = path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if name.ends_with(".json") && name.contains("evidence") && name.contains("manifest") {
-            manifests.push(path);
+    const MAX_WEB_RECEIPT_AGE_SECS: u64 = 7 * 24 * 60 * 60;
+    let now = current_epoch_secs();
+    let cache_path = root.join("runtime/web_search_page_cache.json");
+    let cache_bytes = std::fs::read(&cache_path).with_context(|| {
+        format!(
+            "systematic research requires the server-owned CTOX Web Stack cache: {}",
+            cache_path.display()
+        )
+    })?;
+    let cache: Value = serde_json::from_slice(&cache_bytes)
+        .with_context(|| format!("parse CTOX Web Stack cache {}", cache_path.display()))?;
+    let entries = cache
+        .get("entries")
+        .and_then(Value::as_object)
+        .context("CTOX Web Stack cache has no entries")?;
+    let evidence = manifest
+        .get("evidence")
+        .and_then(Value::as_array)
+        .context("evidence manifest has no evidence array")?;
+
+    for item in evidence {
+        let evidence_id = item
+            .get("evidence_id")
+            .and_then(Value::as_str)
+            .unwrap_or("<unknown>");
+        let canonical_url = item
+            .get("canonical_url")
+            .and_then(Value::as_str)
+            .with_context(|| format!("evidence {evidence_id} has no canonical_url"))?;
+        let snapshot_hash = item
+            .get("snapshot_sha256")
+            .and_then(Value::as_str)
+            .with_context(|| format!("evidence {evidence_id} has no snapshot_sha256"))?;
+        let http_status = item
+            .get("http_status")
+            .and_then(Value::as_u64)
+            .with_context(|| format!("evidence {evidence_id} has no http_status"))?;
+
+        let matching_entry = entries.values().find(|entry| {
+            let doc = entry.get("doc").unwrap_or(&Value::Null);
+            let receipt = doc.get("response_receipt").unwrap_or(&Value::Null);
+            let url_matches = ["original_url", "final_url", "canonical_url"]
+                .into_iter()
+                .any(|field| entry.get(field).and_then(Value::as_str) == Some(canonical_url))
+                || ["url", "canonical_url"]
+                    .into_iter()
+                    .any(|field| doc.get(field).and_then(Value::as_str) == Some(canonical_url))
+                || ["requested_url", "final_url"]
+                    .into_iter()
+                    .any(|field| receipt.get(field).and_then(Value::as_str) == Some(canonical_url));
+            let created_at = entry
+                .get("created_at_epoch")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let checked_at = entry
+                .get("checked_at")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            url_matches
+                && created_at > 0
+                && checked_at > 0
+                && created_at >= attempt_started_at
+                && now.saturating_sub(created_at) <= MAX_WEB_RECEIPT_AGE_SECS
+                && entry.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
+                && doc.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
+                && entry.get("http_status").and_then(Value::as_u64) == Some(http_status)
+                && entry.get("snapshot_hash").and_then(Value::as_str) == Some(snapshot_hash)
+                && receipt.get("status").and_then(Value::as_u64) == Some(http_status)
+                && receipt.get("sha256").and_then(Value::as_str) == Some(snapshot_hash)
+        });
+        if matching_entry.is_none() {
+            anyhow::bail!(
+                "evidence {evidence_id} is not bound to a matching admitted CTOX Web Stack retrieval for {canonical_url}"
+            );
         }
     }
     Ok(())
 }
 
-fn validate_systematic_research_workspace(root: &Path, job: &QueuedPrompt) -> Result<PathBuf> {
+fn validate_systematic_research_workspace(
+    root: &Path,
+    job: &QueuedPrompt,
+    expected_attempt_id: &str,
+    attempt_started_at: u64,
+) -> Result<PathBuf> {
     use sha2::Digest;
 
+    let (expected_run_id, expected_command_id) = systematic_research_binding(job)?;
     let workspace = job
         .workspace_root
         .as_deref()
@@ -10803,14 +10898,11 @@ fn validate_systematic_research_workspace(root: &Path, job: &QueuedPrompt) -> Re
             workspace.display()
         );
     }
-    let mut manifests = Vec::new();
-    collect_systematic_research_manifests(&workspace, 0, &mut manifests)?;
-    manifests.sort();
-    manifests.dedup();
-    if manifests.is_empty() {
+    let manifest = workspace.join("validation/evidence-manifest.json");
+    if !manifest.is_file() {
         anyhow::bail!(
-            "no evidence manifest found under {}; expected a JSON filename containing both `evidence` and `manifest`",
-            workspace.display()
+            "no evidence manifest found at {}; systematic research accepts only this server-defined path",
+            manifest.display()
         );
     }
 
@@ -10824,12 +10916,42 @@ fn validate_systematic_research_workspace(root: &Path, job: &QueuedPrompt) -> Re
     }
 
     let mut checked = Vec::new();
-    for manifest in manifests {
+    {
+        let manifest_bytes = std::fs::read(&manifest)?;
+        let manifest_value: Value = serde_json::from_slice(&manifest_bytes)
+            .with_context(|| format!("parse evidence manifest {}", manifest.display()))?;
+        let actual_run_id = manifest_value
+            .get("research_run_id")
+            .and_then(Value::as_str)
+            .context("evidence manifest is missing research_run_id")?;
+        let actual_command_id = manifest_value
+            .get("research_command_id")
+            .and_then(Value::as_str)
+            .context("evidence manifest is missing research_command_id")?;
+        let actual_attempt_id = manifest_value
+            .get("research_attempt_id")
+            .and_then(Value::as_str)
+            .context("evidence manifest is missing research_attempt_id")?;
+        let manifest_run_id = manifest_value
+            .get("run_id")
+            .and_then(Value::as_str)
+            .context("evidence manifest is missing run_id")?;
+        if actual_run_id != expected_run_id
+            || manifest_run_id != expected_run_id
+            || actual_command_id != expected_command_id
+            || actual_attempt_id != expected_attempt_id
+        {
+            anyhow::bail!(
+                "stale or foreign evidence manifest {}: expected run/command/attempt {expected_run_id}/{expected_command_id}/{expected_attempt_id}, found {actual_run_id}/{actual_command_id}/{actual_attempt_id}",
+                manifest.display()
+            );
+        }
+        validate_systematic_research_web_receipts(root, &manifest_value, attempt_started_at)?;
         let output = Command::new("python3")
             .arg(&validator)
             .arg(&manifest)
             .arg("--base-dir")
-            .arg(manifest.parent().unwrap_or(&workspace))
+            .arg(&workspace)
             .output()
             .with_context(|| {
                 format!(
@@ -10851,7 +10973,6 @@ fn validate_systematic_research_workspace(root: &Path, job: &QueuedPrompt) -> Re
                 }
             );
         }
-        let manifest_bytes = std::fs::read(&manifest)?;
         checked.push(serde_json::json!({
             "manifest_path": manifest,
             "manifest_sha256": format!("{:x}", sha2::Sha256::digest(&manifest_bytes)),
@@ -10869,6 +10990,9 @@ fn validate_systematic_research_workspace(root: &Path, job: &QueuedPrompt) -> Re
         "schema_version": "ctox.systematic-research.validation.v1",
         "status": "pass",
         "checked_at": now_iso_string(),
+        "research_run_id": expected_run_id,
+        "research_command_id": expected_command_id,
+        "research_attempt_id": expected_attempt_id,
         "validator_path": validator,
         "manifests": checked,
     });
@@ -23683,7 +23807,7 @@ mod tests {
 
     fn systematic_research_test_job(workspace: &Path) -> QueuedPrompt {
         QueuedPrompt {
-            prompt: "business_os.chat.task\nresearch.systematic.run".to_string(),
+            prompt: "business_os.chat.task\nresearch.systematic.run\nResearch Run ID: run-1\nResearch Command ID: command-1\nBusiness OS app task metadata:\n- module_id: research\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/research".to_string(),
             goal: "Build verified research".to_string(),
             preview: "Build verified research".to_string(),
             source_label: "queue".to_string(),
@@ -23707,6 +23831,8 @@ mod tests {
 
         let (scope, _, _) = completion_review_contract_for_job(&root, &job);
         assert!(matches!(scope, review::ReviewScope::FullEvidence));
+        assert!(business_os_app_module_target_from_prompt(&job.prompt).is_some());
+        assert!(!business_os_app_validation_may_own_completion(&job));
         let expected = expected_outcome_artifacts_for_job(&job);
         assert_eq!(expected.len(), 1);
         assert_eq!(expected[0].kind, ArtifactKind::WorkspaceFile);
@@ -23735,11 +23861,73 @@ mod tests {
         std::fs::create_dir_all(&workspace).unwrap();
         let job = systematic_research_test_job(&workspace);
 
-        let error = validate_systematic_research_workspace(&root, &job).unwrap_err();
+        let error =
+            validate_systematic_research_workspace(&root, &job, "attempt-1", current_epoch_secs())
+                .unwrap_err();
         assert!(error.to_string().contains("no evidence manifest found"));
         assert!(!workspace
             .join(".ctox/systematic-research-validation.json")
             .exists());
+    }
+
+    #[test]
+    fn systematic_research_rejects_foreign_manifest_binding() {
+        let root = temp_root("research-foreign-manifest");
+        let validator =
+            root.join("src/skills/system/research/systematic-research/scripts/evidence_guard.py");
+        std::fs::create_dir_all(validator.parent().unwrap()).unwrap();
+        std::fs::write(&validator, "#!/usr/bin/env python3\n").unwrap();
+        let workspace = root.join("workspace");
+        let validation = workspace.join("validation");
+        std::fs::create_dir_all(&validation).unwrap();
+        std::fs::write(
+            validation.join("evidence-manifest.json"),
+            r#"{"schema_version":"ctox.research.evidence.v1","run_id":"old-run","research_run_id":"old-run","research_command_id":"old-command","research_attempt_id":"old-attempt","evidence":[]}"#,
+        )
+        .unwrap();
+        let job = systematic_research_test_job(&workspace);
+
+        let error =
+            validate_systematic_research_workspace(&root, &job, "attempt-1", current_epoch_secs())
+                .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("stale or foreign evidence manifest"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn systematic_research_web_receipts_require_server_cache_binding() {
+        let root = temp_root("research-web-receipt");
+        let cache_path = root.join("runtime/web_search_page_cache.json");
+        std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &cache_path,
+            format!(
+                r#"{{"entries":{{"https://example.edu/paper":{{"created_at_epoch":{},"checked_at":{},"original_url":"https://example.edu/paper","final_url":"https://example.edu/paper","canonical_url":"https://example.edu/paper","evidence_eligible":true,"http_status":200,"snapshot_hash":"abc","doc":{{"url":"https://example.edu/paper","canonical_url":"https://example.edu/paper","evidence_eligible":true,"response_receipt":{{"requested_url":"https://example.edu/paper","final_url":"https://example.edu/paper","status":200,"sha256":"abc"}}}}}}}}}}"#,
+                current_epoch_secs(),
+                current_epoch_secs()
+            ),
+        )
+        .unwrap();
+        let mut manifest = serde_json::json!({
+            "evidence": [{
+                "evidence_id": "ev-1",
+                "canonical_url": "https://example.edu/paper",
+                "http_status": 200,
+                "snapshot_sha256": "abc"
+            }]
+        });
+        let attempt_started_at = current_epoch_secs().saturating_sub(1);
+        validate_systematic_research_web_receipts(&root, &manifest, attempt_started_at).unwrap();
+        manifest["evidence"][0]["snapshot_sha256"] = Value::String("invented".to_string());
+        let error = validate_systematic_research_web_receipts(&root, &manifest, attempt_started_at)
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("not bound to a matching admitted"));
     }
 
     #[test]

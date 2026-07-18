@@ -25,9 +25,16 @@ class EvidenceGuardTests(unittest.TestCase):
             encoding="utf-8",
         )
         digest = hashlib.sha256(self.content.read_bytes()).hexdigest()
+        retrieval_receipt = self._artifact(
+            "retrieval.json",
+            json.dumps({"tool": "ctox_web_read", "source_id": "src-1"}),
+        )
         self.manifest = {
             "schema_version": SCHEMA_VERSION,
             "run_id": "run-1",
+            "research_run_id": "run-1",
+            "research_command_id": "command-1",
+            "research_attempt_id": "attempt-1",
             "as_of": "2026-07-17",
             "sources": [{"source_id": "src-1", "canonical_url": "https://example.edu/paper/full-text"}],
             "evidence": [{
@@ -40,6 +47,16 @@ class EvidenceGuardTests(unittest.TestCase):
                 "snapshot_sha256": digest,
                 "snapshot": {"snapshot_id": "snap-1", "path": "original.txt", "sha256": digest,
                               "source_id": "src-1", "canonical_url": "https://example.edu/paper/full-text"},
+                "retrieval_receipt": {
+                    "tool": "ctox_web_read",
+                    "request_url": "https://example.edu/paper/full-text",
+                    "final_url": "https://example.edu/paper/full-text",
+                    "http_status": 200,
+                    "checked_at": "2026-07-17T10:00:00Z",
+                    "body_sha256": digest,
+                    "byte_count": self.content.stat().st_size,
+                    "receipt_artifact": retrieval_receipt,
+                },
             }],
             "claims": [{
                 "claim_id": "c-1",
@@ -51,13 +68,39 @@ class EvidenceGuardTests(unittest.TestCase):
             }],
             "data_files": [],
             "reviews": [
-                {"review_type": "source", "reviewer_id": "r-source", "status": "pass", "reviewed_ids": ["ev-1"]},
-                {"review_type": "data", "reviewer_id": "r-data", "status": "pass", "reviewed_ids": ["ev-1"]},
-                {"review_type": "claim", "reviewer_id": "r-claim", "status": "pass", "reviewed_ids": ["c-1"]},
+                {"review_type": "source", "reviewer_id": "r-source", "status": "pass",
+                 "reviewed_ids": ["ev-1"], "receipt_artifact": self._review_artifact("source", "r-source", ["ev-1"])},
+                {"review_type": "data", "reviewer_id": "r-data", "status": "pass",
+                 "reviewed_ids": ["ev-1"], "receipt_artifact": self._review_artifact("data", "r-data", ["ev-1"])},
+                {"review_type": "claim", "reviewer_id": "r-claim", "status": "pass",
+                 "reviewed_ids": ["c-1"], "receipt_artifact": self._review_artifact("claim", "r-claim", ["c-1"])},
             ],
             "knowledge": {"living": False},
         }
         self.manifest["claims"][0]["lineage_sha256"] = lineage_hash(self.manifest["claims"][0])
+
+    def _artifact(self, name: str, content: str) -> dict[str, str]:
+        path = self.base / name
+        path.write_text(content, encoding="utf-8")
+        return {
+            "path": name,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
+
+    def _review_artifact(self, review_type: str, reviewer_id: str, reviewed_ids: list[str]) -> dict[str, str]:
+        return self._artifact(
+            f"{review_type}-review.json",
+            json.dumps({
+                "schema_version": "ctox.research.review.v1",
+                "review_type": review_type,
+                "reviewer_id": reviewer_id,
+                "status": "pass",
+                "reviewed_ids": reviewed_ids,
+                "research_run_id": "run-1",
+                "research_command_id": "command-1",
+                "research_attempt_id": "attempt-1",
+            }),
+        )
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -70,6 +113,8 @@ class EvidenceGuardTests(unittest.TestCase):
         self.manifest["sources"][0]["canonical_url"] = url
         self.manifest["evidence"][0]["canonical_url"] = url
         self.manifest["evidence"][0]["snapshot"]["canonical_url"] = url
+        self.manifest["evidence"][0]["retrieval_receipt"]["request_url"] = url
+        self.manifest["evidence"][0]["retrieval_receipt"]["final_url"] = url
         self.manifest["claims"][0]["canonical_url"] = url
         self.manifest["claims"][0]["lineage_sha256"] = lineage_hash(self.manifest["claims"][0])
         validate_manifest(self.manifest, self.base)
@@ -103,12 +148,16 @@ class EvidenceGuardTests(unittest.TestCase):
                 item["url_role"] = role
                 self.manifest["sources"][0]["canonical_url"] = url
                 self.manifest["evidence"][0]["snapshot"]["canonical_url"] = url
+                self.manifest["evidence"][0]["retrieval_receipt"]["request_url"] = url
+                self.manifest["evidence"][0]["retrieval_receipt"]["final_url"] = url
                 with self.assertRaisesRegex(ValueError, needle):
                     validate_manifest(self.manifest, self.base)
                 item["canonical_url"] = "https://example.edu/paper/full-text"
                 item["url_role"] = "original_content"
                 self.manifest["sources"][0]["canonical_url"] = "https://example.edu/paper/full-text"
                 self.manifest["evidence"][0]["snapshot"]["canonical_url"] = "https://example.edu/paper/full-text"
+                self.manifest["evidence"][0]["retrieval_receipt"]["request_url"] = "https://example.edu/paper/full-text"
+                self.manifest["evidence"][0]["retrieval_receipt"]["final_url"] = "https://example.edu/paper/full-text"
 
     def test_interstitial_and_metadata_content_fail_closed(self) -> None:
         for text in ("Please log in to continue", "Accept all cookies", "Title: Only metadata\nDOI: 10.1/x", "Enable JavaScript"):
@@ -120,12 +169,16 @@ class EvidenceGuardTests(unittest.TestCase):
             digest = hashlib.sha256(self.content.read_bytes()).hexdigest()
             self.manifest["evidence"][0]["snapshot_sha256"] = digest
             self.manifest["evidence"][0]["snapshot"]["sha256"] = digest
+            self.manifest["evidence"][0]["retrieval_receipt"]["body_sha256"] = digest
+            self.manifest["evidence"][0]["retrieval_receipt"]["byte_count"] = self.content.stat().st_size
 
     def test_incidental_login_phrase_in_long_fulltext_is_allowed(self) -> None:
         self.content.write_text("Sign in is discussed as a study limitation. " * 60, encoding="utf-8")
         digest = hashlib.sha256(self.content.read_bytes()).hexdigest()
         self.manifest["evidence"][0]["snapshot_sha256"] = digest
         self.manifest["evidence"][0]["snapshot"]["sha256"] = digest
+        self.manifest["evidence"][0]["retrieval_receipt"]["body_sha256"] = digest
+        self.manifest["evidence"][0]["retrieval_receipt"]["byte_count"] = self.content.stat().st_size
         validate_manifest(self.manifest, self.base)
 
     def test_deterministic_data_check_requires_all_proofs(self) -> None:
@@ -138,6 +191,12 @@ class EvidenceGuardTests(unittest.TestCase):
         item = manifest["evidence"][0]
         item.update({"canonical_url": url, "content_scope": "data_file", "content_kind": "data_file", "snapshot_sha256": digest})
         item["snapshot"].update({"path": "data.csv", "sha256": digest, "canonical_url": url})
+        item["retrieval_receipt"].update({
+            "request_url": url,
+            "final_url": url,
+            "body_sha256": digest,
+            "byte_count": data_path.stat().st_size,
+        })
         manifest["claims"][0]["canonical_url"] = url
         manifest["claims"][0]["lineage_sha256"] = lineage_hash(manifest["claims"][0])
         manifest["data_files"] = [{
@@ -150,6 +209,9 @@ class EvidenceGuardTests(unittest.TestCase):
             },
         }]
         manifest["reviews"][1]["reviewed_ids"] = ["data-1"]
+        manifest["reviews"][1]["receipt_artifact"] = self._review_artifact(
+            "data", "r-data", ["data-1"]
+        )
         validate_manifest(manifest, self.base)
         for field in ("sha256", "columns", "row_count", "encoding", "delimiter", "units", "null_handling"):
             broken = copy.deepcopy(manifest)
@@ -169,9 +231,44 @@ class EvidenceGuardTests(unittest.TestCase):
         claim["lineage_sha256"] = lineage_hash(claim)
         self.manifest["claims"].append(claim)
         self.manifest["reviews"][2]["reviewed_ids"] = ["c-1", "c-2"]
+        self.manifest["reviews"][2]["receipt_artifact"] = self._review_artifact(
+            "claim", "r-claim", ["c-1", "c-2"]
+        )
         validate_manifest(self.manifest, self.base)
         claim["claim_text"] = "Changed without a new lineage hash."
         with self.assertRaisesRegex(ValueError, "lineage_hash"):
+            validate_manifest(self.manifest, self.base)
+
+    def test_http_204_is_not_content_evidence(self) -> None:
+        self.manifest["evidence"][0]["http_status"] = 204
+        self.manifest["evidence"][0]["retrieval_receipt"]["http_status"] = 204
+        with self.assertRaisesRegex(ValueError, "current_content_2xx"):
+            validate_manifest(self.manifest, self.base)
+
+    def test_workspace_escape_and_absolute_paths_fail(self) -> None:
+        for path, needle in (("../outside.txt", "escapes_workspace"), (str(self.content), "absolute_paths")):
+            with self.subTest(path=path):
+                self.manifest["evidence"][0]["snapshot"]["path"] = path
+                with self.assertRaisesRegex(ValueError, needle):
+                    validate_manifest(self.manifest, self.base)
+        self.manifest["evidence"][0]["snapshot"]["path"] = "original.txt"
+
+    def test_retrieval_and_review_receipts_are_hash_bound(self) -> None:
+        self.manifest["evidence"][0]["retrieval_receipt"]["body_sha256"] = "bad"
+        with self.assertRaisesRegex(ValueError, "retrieval_receipt_body_hash"):
+            validate_manifest(self.manifest, self.base)
+        self.manifest["evidence"][0]["retrieval_receipt"]["body_sha256"] = self.manifest["evidence"][0]["snapshot_sha256"]
+        self.manifest["reviews"][0]["receipt_artifact"]["sha256"] = "bad"
+        with self.assertRaisesRegex(ValueError, "source_review_receipt_sha256"):
+            validate_manifest(self.manifest, self.base)
+
+    def test_review_receipt_must_be_typed_and_attempt_bound(self) -> None:
+        path = self.base / "source-review.json"
+        path.write_text("{}", encoding="utf-8")
+        self.manifest["reviews"][0]["receipt_artifact"]["sha256"] = hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest()
+        with self.assertRaisesRegex(ValueError, "source_review_receipt_contract"):
             validate_manifest(self.manifest, self.base)
 
 

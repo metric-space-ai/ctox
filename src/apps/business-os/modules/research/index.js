@@ -2412,6 +2412,8 @@ async function dispatchGraphDocumentTask(task) {
   const commandId = `cmd_${crypto.randomUUID()}`;
   const instruction = [
     `Erstelle ein belastbares Word-Dokument aus dem Research-Graph "${task.title}".`,
+    `Research Run ID: ${latestRun?.id || ''}`,
+    `Research Command ID: ${commandId}`,
     `Fokus: ${focus}`,
     `Knowledge domain: ${task.knowledge_domain}`,
     `Knowledge version: ${lineage.knowledge_version_id}`,
@@ -3948,7 +3950,7 @@ function graphDocumentLineage(task, base, latestRun, sourceModels, selectedSourc
   };
 }
 
-function knowledgeRefreshPayload(task, base, latestRun) {
+function knowledgeRefreshPayload(task, base, latestRun, commandId) {
   const lineage = knowledgeLineageForPayload(base, latestRun);
   const tables = base?.tables || [];
   const tableRefs = Object.fromEntries(tables
@@ -3957,7 +3959,8 @@ function knowledgeRefreshPayload(task, base, latestRun) {
   const instruction = [
     `Baue oder aktualisiere die Knowledge Base fuer das abgeschlossene Research "${task.title}".`,
     `Research Task ID: ${task.id}`,
-    `Research Run ID: ${latestRun?.id || 'latest'}`,
+    `Research Run ID: ${latestRun?.id || ''}`,
+    `Research Command ID: ${commandId}`,
     `Knowledge domain: ${task.knowledge_domain}`,
     '',
     'Erzeuge bzw. aktualisiere einen fachlichen Skill/Skillbook und die dazugehoerigen Runbooks und Ressourcen.',
@@ -3977,6 +3980,7 @@ function knowledgeRefreshPayload(task, base, latestRun) {
     thread_key: `business-os/research/${task.id}/knowledge`,
     research_task_id: task.id,
     research_run_id: latestRun?.id || '',
+    research_command_id: commandId,
     knowledge_domain: task.knowledge_domain,
     knowledge_version_id: lineage.knowledge_version_id,
     knowledge_version: lineage.knowledge_version,
@@ -4038,7 +4042,7 @@ async function buildKnowledgeFromResearch() {
   const base = knowledgeBaseForTask(task);
   const latestRun = latestEvidenceRunForTask(task.id, state.runs);
   const commandId = `cmd_${crypto.randomUUID()}`;
-  const payload = knowledgeRefreshPayload(task, base, latestRun);
+  const payload = knowledgeRefreshPayload(task, base, latestRun, commandId);
   const result = await state.ctx.commandBus.dispatch({
     id: commandId,
     command_id: commandId,

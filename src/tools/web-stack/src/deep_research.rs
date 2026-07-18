@@ -354,7 +354,6 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
 
     let source_mix = summarize_source_mix(&enriched);
     let figure_candidates = collect_figure_candidates(&enriched);
-    let data_links = collect_data_links(&enriched);
     let sources_with_read = enriched
         .iter()
         .filter(|source| source.get("read").is_some())
@@ -375,6 +374,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
         .filter(|source| source.get("evidence_eligible").and_then(Value::as_bool) == Some(true))
         .cloned()
         .collect::<Vec<_>>();
+    let data_links = collect_data_links(&verified_sources);
     let rejected_source_count = enriched.len().saturating_sub(verified_sources.len());
     let evidence_status = if verified_sources.is_empty() {
         "no_verified_sources"
@@ -1973,6 +1973,18 @@ fn persist_research_workspace(
     request: &DeepResearchRequest,
     payload: &Value,
 ) -> Result<Value> {
+    let verified_sources = payload
+        .get("sources")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|source| source.get("evidence_eligible").and_then(Value::as_bool) == Some(true))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut persisted_payload = payload.clone();
+    persisted_payload["sources"] = Value::Array(verified_sources.clone());
+    persisted_payload["data_links"] = Value::Array(collect_data_links(&verified_sources));
+    let payload = &persisted_payload;
     let workspace = request
         .workspace
         .clone()
@@ -3605,11 +3617,13 @@ mod tests {
                 {
                     "source_id": "accepted",
                     "url": "https://example.test/evidence",
+                    "snippet": "Verified data at https://github.com/example/verified",
                     "evidence_eligible": true
                 },
                 {
                     "source_id": "rejected-404",
                     "url": "https://example.test/missing",
+                    "snippet": "Unverified data at https://github.com/example/rejected",
                     "http_status": 404,
                     "evidence_eligible": false,
                     "evidence_rejection_reason": "http_status_not_success"
@@ -3619,13 +3633,14 @@ mod tests {
                 {
                     "source_id": "accepted",
                     "url": "https://example.test/evidence",
+                    "snippet": "Verified data at https://github.com/example/verified",
                     "evidence_eligible": true
                 }
             ],
             "search_runs": [],
             "database_runs": [],
             "figure_candidates": [],
-            "data_links": [],
+            "data_links": [{"url": "https://github.com/example/rejected"}],
         });
         let summary = persist_research_workspace(&root, &request, &payload).unwrap();
         assert!(workspace.join("manifest.json").is_file());
@@ -3640,6 +3655,9 @@ mod tests {
         assert!(!sources.contains("rejected-404"));
         assert!(candidates.contains("rejected-404"));
         assert!(rejected.contains("rejected-404"));
+        let data_links = fs::read_to_string(workspace.join("data_links.json")).unwrap();
+        assert!(data_links.contains("https://github.com/example/verified"));
+        assert!(!data_links.contains("https://github.com/example/rejected"));
         let continuation = fs::read_to_string(workspace.join("CONTINUE.md")).unwrap();
         assert!(continuation.contains("Treat only `sources.jsonl` as admissible evidence"));
         assert!(continuation.contains("never cite them as evidence"));
