@@ -1,4 +1,4 @@
-const MOD_BUILD = '20260706-kit1';
+const MOD_BUILD = '20260718-kit2';
 const MODULE_ID = 'submissions';
 const PRIMARY = 'submissions';
 const TITLE = 'submissions';
@@ -36,9 +36,11 @@ export async function mount(ctx) {
   let rowsCache = [];
   const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || null; } catch { return null; } };
 
+  // Gate callout → kit .ctox-callout variants (base.css).
+  const GATE_VARIANTS = { ok: ' is-success', block: ' is-danger', offline: ' is-warning' };
   function setGate(html, kind) {
     if (!gateEl) return;
-    gateEl.className = 'ats-gate' + (kind ? ' ats-gate--' + kind : '');
+    gateEl.className = 'ctox-callout' + (GATE_VARIANTS[kind] || '');
     gateEl.innerHTML = html || '';
   }
 
@@ -193,8 +195,9 @@ function submissionRow(r) {
   if (feedbackOutcome) meta.push(`${esc(text.feedback)}: ` + esc(feedbackOutcome));
   if (sentAt) meta.push(`${esc(text.sent)}: ` + esc(sentAt));
   const main = esc(r?.candidate_id || '—') + ' &rarr; ' + esc(r?.client_account_id || '—');
+  const badgeClass = ('ctox-badge' + badgeStateClass(status)).trim();
   const action = r?.id
-    ? '<div class="ats-actions"><button type="button" class="ctox-button" data-copy-id="' + esc(r.id) + '">' + esc(text.copyId) + '</button></div>'
+    ? '<button type="button" class="ctox-button ats-action" data-copy-id="' + esc(r.id) + '">' + esc(text.copyId) + '</button>'
     : '';
   const ctxLabel = r?.candidate_id || r?.id || '';
   return ''
@@ -202,11 +205,8 @@ function submissionRow(r) {
     + ' data-context-record-id="' + esc(r?.id || '') + '"'
     + ' data-context-record-type="submission"'
     + ' data-context-label="' + esc(ctxLabel) + '">'
-    + '<div class="ats-item-main">'
-    + '<span class="ctox-badge' + badgeStateClass(status) + '">' + esc(status) + '</span>'
-    + '<span class="ats-item-title">' + main + '</span>'
+    + '<div class="ats-item-main"><span class="' + badgeClass + '">' + esc(status) + '</span> <strong>' + main + '</strong></div>'
     + '<div class="ats-item-meta">' + meta.join(' · ') + '</div>'
-    + '</div>'
     + action
     + '</div>';
 }
