@@ -1136,3 +1136,55 @@
   margin-left: 5px;
 }
 .knowledge-module .ctox-pane-tab[aria-selected="true"] .view-count { color: var(--knowledge-accent); }
+
+/* ============================================================================
+   Shards done right (Matching): a raised SURFACE card (fill, no border) with a
+   left accent bar on select. Defined by surface, not by a box → calm, and no
+   frame-in-frame. The left rail sits on the base surface so cards read raised.
+   ========================================================================== */
+.knowledge-module .knowledge-left { background: var(--knowledge-surface); }
+.knowledge-module .knowledge-bundle {
+  margin-bottom: 6px;
+  padding: 9px 11px;
+  border: 0;
+  border-radius: var(--knowledge-control-radius);
+  background: var(--knowledge-surface-muted);
+  box-shadow: none;
+}
+.knowledge-module .knowledge-bundle:hover {
+  background: color-mix(in srgb, var(--knowledge-text) 5%, var(--knowledge-surface-muted));
+}
+.knowledge-module .knowledge-bundle[aria-current="true"] {
+  background: color-mix(in srgb, var(--knowledge-accent) 12%, var(--knowledge-surface-muted));
+  box-shadow: inset 2px 0 0 var(--knowledge-accent);
+}
+/* nested items sit inside the card — no own fill, just an indent guide */
+.knowledge-module .knowledge-bundle[aria-current="true"] .knowledge-item[aria-current="true"] {
+  background: color-mix(in srgb, var(--knowledge-accent) 10%, transparent);
+}
+
+/* ============================================================================
+   Mobile (narrow): master-detail. List full-width; picking an entry shows the
+   content full-width with a back button — no cramped stacking, no wasted space.
+   ========================================================================== */
+.knowledge-module .knowledge-mobile-back { display: none; }
+@container business-app-window (max-width: 640px) {
+  .knowledge-module {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    padding: 0;
+    gap: 0;
+  }
+  .knowledge-module .knowledge-left,
+  .knowledge-module .knowledge-center { grid-column: 1; grid-row: 1; }
+  .knowledge-module .ctox-column-resizer { display: none; }
+  .knowledge-module .knowledge-center { display: none; }
+  .knowledge-module.is-detail .knowledge-left { display: none; }
+  .knowledge-module.is-detail .knowledge-center { display: flex; }
+  .knowledge-module.is-detail .knowledge-mobile-back { display: inline-flex; }
+  /* tap-friendly rows, no wasted chrome */
+  .knowledge-module .knowledge-bundle { padding: 12px; margin-bottom: 8px; }
+  .knowledge-module .bundle-select { padding: 8px 6px; }
+  .knowledge-module .knowledge-item { min-height: 44px; }
+  .knowledge-module .ctox-pane-header { padding: 12px 14px 10px; }
+}

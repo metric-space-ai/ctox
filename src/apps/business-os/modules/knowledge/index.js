@@ -210,6 +210,7 @@ function documentTemplate() {
         <!-- Row 1: title + action icon only (edit), top-right. -->
         <header class="ctox-pane-header ctox-pane-band knowledge-center-head">
           <div class="ctox-pane-title-row">
+            <button class="ctox-pane-icon knowledge-mobile-back" type="button" data-action="mobile-back" aria-label="Zurück zur Liste" title="Zurück zur Liste"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
             <div class="ctox-pane-titles">
               <span class="ctox-pane-kicker" data-selected-kind>${escapeHtml(copy.selected)}</span>
               <h2 class="ctox-pane-title" data-selected-title>${escapeHtml(copy.noSelection)}</h2>
@@ -340,6 +341,10 @@ function wireEvents() {
       chip.setAttribute('aria-pressed', String(state.flagFilters.has(flag)));
       renderKnowledgeList();
     });
+  });
+  // Mobile master-detail: back to the list.
+  state.ctx.host.querySelector('[data-action="mobile-back"]')?.addEventListener('click', () => {
+    state.ctx.host.querySelector('[data-knowledge-root]')?.classList.remove('is-detail');
   });
   // Fractal header edit: the pencil in the pane header edits whatever the
   // active tab shows — it just triggers that panel's own edit control.
@@ -1088,6 +1093,8 @@ function relatedToSkillbook(skillbook, entry) {
 
 async function selectSkillbook(group, skillbook) {
   if (!group) return;
+  // Mobile master-detail: selecting an entry switches to the content view.
+  state.ctx?.host?.querySelector('[data-knowledge-root]')?.classList.add('is-detail');
   const skillbookEntry = typeof skillbook === 'string' ? group.entries.find((entry) => entry.id === skillbook) : skillbook;
   const context = skillbookContext(group, skillbookEntry);
   state.selectedGroupId = group.id;
