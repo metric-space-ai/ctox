@@ -422,6 +422,11 @@ const NATIVE_PEER_WATCHDOG_INTERVAL_SECS: u64 = 15;
 /// Detect them promptly so a client-only app does not sit behind the general
 /// 15-second watchdog cadence before its collections become native-visible.
 const NATIVE_PEER_RUNTIME_SCHEMA_WATCH_INTERVAL_SECS: u64 = 1;
+/// Reconfiguration must not wait forever for a stale WebRTC transport or
+/// SQLite close. Runtime-installed apps can add collections, so a wedged
+/// shutdown here otherwise leaves the newly installed app absent from the
+/// shell catalog until the whole CTOX service is restarted.
+const NATIVE_PEER_SHUTDOWN_TIMEOUT_SECS: u64 = 10;
 /// FIX 2: maximum tolerated heartbeat staleness before the watchdog considers
 /// its own liveness machinery wedged. Generously above the write interval and
 /// the published TTL so a healthy peer never trips it.
@@ -1162,9 +1167,10 @@ impl NativePeer {
     }
 
     async fn shutdown(&self) {
-        for pool in &self._pools {
-            pool.cancel().await;
-        }
+        // Stop producers before awaiting transport/database cleanup. A pool
+        // cancellation can block on a stale data channel; leaving the workers
+        // alive during that wait keeps mutating the database and makes a clean
+        // close even less likely.
         self._command_consumer.abort();
         self._command_outbox.abort();
         self._notes_sync.abort();
@@ -1188,12 +1194,36 @@ impl NativePeer {
             }
             *heartbeat = None;
         }
-        // Tear down any live browser processes so stop leaves no zombies.
-        for session_id in browser_runtime_manager().active_session_ids() {
-            browser_runtime_manager().stop(&session_id).await;
+        let cleanup = async {
+            for pool in &self._pools {
+                pool.cancel().await;
+            }
+            // Tear down any live browser processes so stop leaves no zombies.
+            for session_id in browser_runtime_manager().active_session_ids() {
+                browser_runtime_manager().stop(&session_id).await;
+            }
+            let _ = self.database.close().await;
+        };
+        if !complete_native_peer_cleanup_within(
+            cleanup,
+            Duration::from_secs(NATIVE_PEER_SHUTDOWN_TIMEOUT_SECS),
+        )
+        .await
+        {
+            eprintln!(
+                "[business-os] native rxdb peer cleanup exceeded {}s; \
+                 releasing the run for supervised reconfiguration",
+                NATIVE_PEER_SHUTDOWN_TIMEOUT_SECS
+            );
         }
-        let _ = self.database.close().await;
     }
+}
+
+async fn complete_native_peer_cleanup_within<F>(cleanup: F, max_wait: Duration) -> bool
+where
+    F: std::future::Future<Output = ()>,
+{
+    tokio::time::timeout(max_wait, cleanup).await.is_ok()
 }
 
 struct Sha256HashFunction;
@@ -15510,6 +15540,23 @@ mod tests {
             "runtime app schema edits must force a native peer respawn"
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_peer_cleanup_timeout_keeps_reconfiguration_bounded() {
+        assert!(
+            complete_native_peer_cleanup_within(std::future::ready(()), Duration::from_millis(20))
+                .await,
+            "completed cleanup must be reported as successful"
+        );
+        assert!(
+            !complete_native_peer_cleanup_within(
+                std::future::pending::<()>(),
+                Duration::from_millis(20)
+            )
+            .await,
+            "stalled cleanup must return at its deadline so supervision can respawn"
+        );
     }
 
     #[test]
