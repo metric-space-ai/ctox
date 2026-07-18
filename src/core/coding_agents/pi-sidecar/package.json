@@ -1,0 +1,27 @@
+{
+  "name": "@ctox/pi-coding-sidecar",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "CTOX pi-code coding sidecar. Headless port of the Pi coding-agent (Upstream Pi v0.80.2), driven by CTOX over LocalTransport. ExecutionEnv projects Business OS app source (business_module_source_files); provider routes through the CTOX model gateway. Derived from MRP-learn-buddy packages/agent-runtime.",
+  "exports": {
+    ".": "./dist/ctox-pi-sidecar.mjs"
+  },
+  "bin": {
+    "ctox-pi-sidecar": "./dist/ctox-pi-sidecar.mjs"
+  },
+  "scripts": {
+    "build": "esbuild src/index.mjs --bundle --platform=node --format=esm --target=node20 --outfile=dist/ctox-pi-sidecar.mjs --banner:js=\"// CTOX pi-coding sidecar. Self-contained bundle; upstream Pi v0.80.2.\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "0.80.2",
+    "@earendil-works/pi-ai": "0.80.2",
+    "@earendil-works/pi-coding-agent": "0.80.2",
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.0",
+    "typescript": "^5.8.0"
+  }
+}
