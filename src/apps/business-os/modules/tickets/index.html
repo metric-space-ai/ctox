@@ -1,5 +1,5 @@
-<main class="tickets-module" data-tickets-root data-resize-frame>
-  <aside class="tickets-pane tickets-left" aria-label="Tickets">
+<main class="ctox-workspace tickets-module" data-tickets-root data-resize-frame>
+  <aside class="ctox-pane tickets-pane tickets-left" aria-label="Tickets">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
@@ -24,10 +24,12 @@
       </div>
       <p class="tickets-command-status" data-ticket-command-status hidden></p>
     </header>
-    <div class="tickets-list os-scrollbar" data-ticket-list></div>
+    <div class="ctox-pane-body">
+      <div class="ctox-list os-scrollbar" data-ticket-list></div>
+    </div>
   </aside>
-  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--tickets-left-width" data-resizer-min="260" data-resizer-max="520" aria-label="Spaltenbreite anpassen"></button>
-  <section class="tickets-pane tickets-center" aria-label="Ticket detail" data-ticket-detail></section>
-  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--tickets-right-width" data-resizer-min="260" data-resizer-max="560" aria-label="Rechte Spaltenbreite anpassen"></button>
-  <aside class="tickets-pane tickets-right" aria-label="Ticket operations context" data-ticket-context></aside>
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="260" data-resizer-max="520" aria-label="Spaltenbreite anpassen"></button>
+  <section class="ctox-pane tickets-pane tickets-center" aria-label="Ticket detail" data-ticket-detail></section>
+  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="260" data-resizer-max="560" aria-label="Rechte Spaltenbreite anpassen"></button>
+  <aside class="ctox-pane tickets-pane tickets-right" aria-label="Ticket operations context" data-ticket-context></aside>
 </main>

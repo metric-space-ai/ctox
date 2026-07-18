@@ -25,10 +25,13 @@ assert.doesNotMatch(presentationSource, forbiddenSurfacePattern);
 assert.doesNotMatch(presentationSource, /border-(?:left|right)\s*:\s*(?:[2-9]|[0-9]{2,})px/);
 assert.doesNotMatch(presentationSource, /border-radius:\s*(?:8|10|12|14|16|18|20|24)px/);
 assert.doesNotMatch(presentationSource, /box-shadow:\s*(?:0|inset|rgba|color-mix)/);
-assert.match(css, /grid-template-columns: var\(--tickets-left-width\) 6px minmax\(420px, 1fr\) 6px var\(--tickets-right-width\)/);
+assert.match(html, /class="ctox-workspace tickets-module"/);
+assert.match(html, /class="ctox-pane tickets-pane tickets-left"/);
+assert.match(css, /--ctox-left-width: 340px/);
+assert.match(css, /--ctox-right-width: 360px/);
 assert.match(css, /@container business-app-window \(max-width: 1160px\)/);
 assert.match(css, /@container business-app-window \(max-width: 640px\)/);
-assert.match(html, /data-resizer-var="--tickets-left-width"/);
-assert.match(html, /data-resizer-var="--tickets-right-width"/);
+assert.match(html, /data-resizer-var="--ctox-left-width"/);
+assert.match(html, /data-resizer-var="--ctox-right-width"/);
 
 console.log('tickets module context and failure contract smoke OK');
