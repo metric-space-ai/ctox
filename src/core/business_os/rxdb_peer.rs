@@ -1247,6 +1247,23 @@ pub fn is_native_peer_running_for_root(root: &Path) -> bool {
     is_native_peer_running() || native_peer_heartbeat_is_fresh(root)
 }
 
+pub fn native_peer_maintenance_health(root: &Path) -> (bool, bool) {
+    let heartbeat = read_native_peer_heartbeat(root);
+    let fresh = heartbeat_updated_at_ms(heartbeat.as_ref())
+        .map(|updated_at_ms| {
+            let now = now_ms() as u64;
+            now.saturating_sub(updated_at_ms) <= NATIVE_PEER_HEARTBEAT_TTL_MS
+        })
+        .unwrap_or(false);
+    let replication_up = fresh
+        && heartbeat
+            .as_ref()
+            .and_then(|value| value.get("replicationUp"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    (fresh, replication_up)
+}
+
 pub fn native_peer_status(root: &Path) -> Value {
     let circuit_breaker = native_peer_circuit_snapshot();
     let circuit_open = circuit_breaker.get("state").and_then(Value::as_str) == Some("open");
@@ -16052,6 +16069,29 @@ mod tests {
         .expect("write heartbeat");
 
         assert!(!native_peer_heartbeat_is_fresh(root.path()));
+    }
+
+    #[test]
+    fn maintenance_health_uses_the_heartbeat_snapshot() {
+        let root = tempfile::tempdir().expect("temp root");
+        let path = native_peer_heartbeat_path(root.path());
+        std::fs::create_dir_all(path.parent().expect("heartbeat parent"))
+            .expect("create heartbeat dir");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "version": NATIVE_PEER_STATUS_VERSION,
+                "running": true,
+                "pid": 1,
+                "peer_session_id": "rxdb-rs-maintenance",
+                "updated_at_ms": now_ms() as u64,
+                "replicationUp": true,
+            }))
+            .expect("serialize heartbeat"),
+        )
+        .expect("write heartbeat");
+
+        assert_eq!(native_peer_maintenance_health(root.path()), (true, true));
     }
 
     #[test]

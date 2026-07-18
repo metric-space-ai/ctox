@@ -33,7 +33,7 @@ pub use rxdb_peer::sync_desktop_file_from_path;
 pub use rxdb_peer::sync_desktop_files_from_workspace_root;
 pub(crate) use rxdb_peer::sync_knowledge_tables;
 pub use rxdb_peer::BrowserContextCaptureRequest;
-pub use rxdb_peer::{ensure_native_peer, restart_native_peer};
+pub use rxdb_peer::{ensure_native_peer, native_peer_maintenance_health, restart_native_peer};
 pub use server::serve_business_os;
 pub use server::BusinessOsServeOptions;
 

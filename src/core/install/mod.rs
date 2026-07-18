@@ -840,10 +840,10 @@ fn mark_maintenance_service_active(state_root: &Path, lease_id: &str) -> Result<
 }
 
 fn native_peer_maintenance_health(root: &Path) -> (bool, bool) {
-    let status = crate::business_os::native_peer_status(root);
-    native_peer_maintenance_health_from_status(&status)
+    crate::business_os::native_peer_maintenance_health(root)
 }
 
+#[cfg(test)]
 fn native_peer_maintenance_health_from_status(status: &serde_json::Value) -> (bool, bool) {
     let replication_up = status
         .get("replicationUp")
