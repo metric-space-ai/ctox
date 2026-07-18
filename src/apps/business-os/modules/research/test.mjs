@@ -113,6 +113,15 @@ test('systematic research pins every write to one immutable run and command', ()
   assert.match(targetedSource, /id: researchRunId/);
 });
 
+test('systematic research keeps discovery candidates out of the verified source registry', () => {
+  assert.match(researchSource, /source_candidates:\s*\{\s*title: 'Discovery Candidates'/);
+  assert.match(researchSource, /source_catalog:\s*\{\s*title: 'Verified Source Registry'/);
+  assert.match(researchSource, /Schreibe jede Discovery-Runde vollständig nach source_candidates/);
+  assert.match(researchSource, /Promoviere ausschließlich Quellen, die evidence_guard\.py bestanden haben, nach source_catalog/);
+  assert.match(researchSource, /source_candidates: task\.candidate_catalog_key \|\| 'source_candidates'/);
+  assert.doesNotMatch(researchSource, /Schreibe jede Discovery-Runde sofort nach source_catalog/);
+});
+
 test('knowledge refresh contract preserves living research lineage and source provenance', () => {
   const task = { id: 'task-1', title: 'Bearing loads', knowledge_domain: 'drone_bearing_design' };
   const snapshotHash = `sha256:${'a'.repeat(64)}`;

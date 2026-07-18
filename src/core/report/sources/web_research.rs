@@ -161,7 +161,16 @@ fn persisted_workspace_path(bundle: &Value) -> Result<PathBuf> {
 }
 
 fn bind_persisted_snapshots(bundle: &mut Value, workspace: &Path) -> Result<()> {
-    let Some(sources) = bundle.get_mut("sources").and_then(Value::as_array_mut) else {
+    let source_field = if bundle
+        .get("source_candidates")
+        .and_then(Value::as_array)
+        .is_some()
+    {
+        "source_candidates"
+    } else {
+        "sources"
+    };
+    let Some(sources) = bundle.get_mut(source_field).and_then(Value::as_array_mut) else {
         return Ok(());
     };
     let snapshot_dir = workspace.join("snapshots");
@@ -212,6 +221,15 @@ fn bind_persisted_snapshots(bundle: &mut Value, workspace: &Path) -> Result<()> 
             });
         source["snapshot_path"] = Value::String(snapshot.to_string_lossy().into_owned());
         source["snapshot_id"] = Value::String(snapshot_id.to_string());
+    }
+    if source_field == "source_candidates" {
+        bundle["sources"] = Value::Array(
+            sources
+                .iter()
+                .filter(|source| is_evidence_eligible_source(source))
+                .cloned()
+                .collect(),
+        );
     }
     Ok(())
 }
@@ -558,6 +576,53 @@ mod tests {
         assert!(!blob.contains("10.8888/dead"));
         assert_eq!(extract_dois(&blob), vec!["10.5678/xyz.qq"]);
         drop(snapshot_dir);
+    }
+
+    #[test]
+    fn snapshot_binding_preserves_candidates_but_rebuilds_sources_from_admitted_evidence() {
+        let (workspace, snapshot_hash) = snapshot_fixture();
+        fs::create_dir_all(workspace.path().join("snapshots")).unwrap();
+        fs::rename(
+            workspace.path().join("source-0000.txt"),
+            workspace.path().join("snapshots/source-0000.txt"),
+        )
+        .unwrap();
+        let mut bundle = json!({
+            "source_candidates": [
+                {
+                    "source_id": "accepted",
+                    "canonical_url": "https://publisher.example/source",
+                    "source_type": "web",
+                    "source_tier": "primary",
+                    "verification_status": "verified",
+                    "transport_verified": true,
+                    "content_extracted": true,
+                    "actual_full_text_or_data": true,
+                    "evidence_relevance_score": 9,
+                    "http_status": 200,
+                    "snapshot_hash": snapshot_hash,
+                    "evidence_eligible": true
+                },
+                {
+                    "source_id": "rejected",
+                    "canonical_url": "https://publisher.example/missing",
+                    "verification_status": "failed",
+                    "http_status": 404,
+                    "evidence_eligible": false
+                }
+            ],
+            "sources": []
+        });
+
+        bind_persisted_snapshots(&mut bundle, workspace.path()).unwrap();
+
+        assert_eq!(bundle["source_candidates"].as_array().unwrap().len(), 2);
+        assert_eq!(bundle["sources"].as_array().unwrap().len(), 1);
+        assert_eq!(bundle["sources"][0]["source_id"], "accepted");
+        assert!(bundle["sources"][0]["snapshot_path"]
+            .as_str()
+            .unwrap()
+            .ends_with("snapshots/source-0000.txt"));
     }
 
     #[test]

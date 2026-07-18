@@ -370,6 +370,17 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
         })
         .count();
     let failed_page_reads = sources_with_read.saturating_sub(successful_page_reads);
+    let verified_sources = enriched
+        .iter()
+        .filter(|source| source.get("evidence_eligible").and_then(Value::as_bool) == Some(true))
+        .cloned()
+        .collect::<Vec<_>>();
+    let rejected_source_count = enriched.len().saturating_sub(verified_sources.len());
+    let evidence_status = if verified_sources.is_empty() {
+        "no_verified_sources"
+    } else {
+        "verified_sources_available"
+    };
     let mut payload = json!({
         "ok": true,
         "tool": "ctox_deep_research",
@@ -402,6 +413,8 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
             "executed_search_queries": search_runs.len(),
             "database_queries": database_runs.len(),
             "deduplicated_sources": enriched.len(),
+            "verified_sources": verified_sources.len(),
+            "rejected_source_candidates": rejected_source_count,
             "sources_with_page_read_attempts": sources_with_read,
             "successful_page_reads": successful_page_reads,
             "failed_page_reads": failed_page_reads,
@@ -413,7 +426,9 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
         },
         "data_links": data_links,
         "figure_candidates": figure_candidates,
-        "sources": enriched,
+        "source_candidates": enriched,
+        "sources": verified_sources,
+        "evidence_status": evidence_status,
         "report_scaffold": report_scaffold(&query_text, profile),
     });
 
@@ -1974,10 +1989,30 @@ fn persist_research_workspace(
         continuation_markdown(payload),
     )?;
 
-    if let Some(items) = payload.get("sources").and_then(Value::as_array) {
+    if let Some(items) = payload
+        .get("source_candidates")
+        .or_else(|| payload.get("sources"))
+        .and_then(Value::as_array)
+    {
+        let mut candidates_jsonl = fs::File::create(workspace.join("source_candidates.jsonl"))?;
+        let mut rejected_jsonl = fs::File::create(workspace.join("rejected_sources.jsonl"))?;
+        for source in items {
+            writeln!(candidates_jsonl, "{}", serde_json::to_string(source)?)?;
+            if source.get("evidence_eligible").and_then(Value::as_bool) != Some(true) {
+                writeln!(rejected_jsonl, "{}", serde_json::to_string(source)?)?;
+            }
+        }
+
         let mut sources_jsonl = fs::File::create(workspace.join("sources.jsonl"))?;
-        for (index, source) in items.iter().enumerate() {
+        for source in payload
+            .get("sources")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
             writeln!(sources_jsonl, "{}", serde_json::to_string(source)?)?;
+        }
+        for (index, source) in items.iter().enumerate() {
             if let Some(read) = source.get("read") {
                 write_json_pretty(
                     &workspace
@@ -1999,7 +2034,9 @@ fn persist_research_workspace(
             "search_query": payload.get("search_query").cloned().unwrap_or(Value::Null),
             "depth": payload.get("depth").cloned().unwrap_or(Value::Null),
             "research_call_counts": payload.get("research_call_counts").cloned().unwrap_or(Value::Null),
-            "source_count": items.len(),
+            "candidate_source_count": items.len(),
+            "source_count": payload.get("sources").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
+            "rejected_source_count": items.iter().filter(|source| source.get("evidence_eligible").and_then(Value::as_bool) != Some(true)).count(),
             "read_artifact_count": items.iter().filter(|source| source.get("read").is_some()).count(),
             "snapshot_count": snapshot_count,
             "data_link_count": payload.get("data_links").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
@@ -2007,6 +2044,8 @@ fn persist_research_workspace(
             "files": {
                 "evidence_bundle": "evidence_bundle.json",
                 "sources_jsonl": "sources.jsonl",
+                "source_candidates_jsonl": "source_candidates.jsonl",
+                "rejected_sources_jsonl": "rejected_sources.jsonl",
                 "continuation": "CONTINUE.md",
                 "reads_dir": "reads/",
                 "snapshots_dir": "snapshots/",
@@ -2040,6 +2079,8 @@ fn persist_research_workspace(
         "continuation": workspace.join("CONTINUE.md"),
         "evidence_bundle": workspace.join("evidence_bundle.json"),
         "sources_jsonl": workspace.join("sources.jsonl"),
+        "source_candidates_jsonl": workspace.join("source_candidates.jsonl"),
+        "rejected_sources_jsonl": workspace.join("rejected_sources.jsonl"),
     }))
 }
 
@@ -2102,10 +2143,12 @@ fn continuation_markdown(payload: &Value) -> String {
         "# Continue Deep Research\n\n\
          Resume from this folder after context compaction or handoff.\n\n\
          1. Read `manifest.json` and `evidence_bundle.json`.\n\
-         2. Inspect `sources.jsonl`, `reads/`, and `snapshots/` before synthesis.\n\
-         3. Inspect `data_links.json`; follow GitHub/data links when relevant and build diagrams/tables from data if useful.\n\
-         4. Write intermediate notes into `synthesis/` before producing the final report.\n\
-         5. Keep source-backed claims linked to `sources.jsonl` records or DOI/URL references.\n\n\
+         2. Treat only `sources.jsonl` as admissible evidence. It contains sources that passed the fail-closed evidence gate.\n\
+         3. Inspect `source_candidates.jsonl` and `rejected_sources.jsonl` only for discovery/audit context; never cite them as evidence.\n\
+         4. Inspect `reads/` and `snapshots/` before synthesis.\n\
+         5. Inspect `data_links.json`; follow GitHub/data links when relevant and build diagrams/tables from data if useful.\n\
+         6. Write intermediate notes into `synthesis/` before producing the final report.\n\
+         7. Keep every factual claim linked to a `sources.jsonl` record and its persisted snapshot. A DOI/URL alone is not evidence.\n\n\
          Research call counts:\n\n```json\n{}\n```\n",
         serde_json::to_string_pretty(&counts).unwrap_or_else(|_| "null".to_string())
     )
@@ -3553,8 +3596,32 @@ mod tests {
             "query": "test query",
             "search_query": "test query",
             "depth": "quick",
-            "research_call_counts": {"deduplicated_sources": 0},
-            "sources": [],
+            "research_call_counts": {
+                "deduplicated_sources": 2,
+                "verified_sources": 1,
+                "rejected_source_candidates": 1
+            },
+            "source_candidates": [
+                {
+                    "source_id": "accepted",
+                    "url": "https://example.test/evidence",
+                    "evidence_eligible": true
+                },
+                {
+                    "source_id": "rejected-404",
+                    "url": "https://example.test/missing",
+                    "http_status": 404,
+                    "evidence_eligible": false,
+                    "evidence_rejection_reason": "http_status_not_success"
+                }
+            ],
+            "sources": [
+                {
+                    "source_id": "accepted",
+                    "url": "https://example.test/evidence",
+                    "evidence_eligible": true
+                }
+            ],
             "search_runs": [],
             "database_runs": [],
             "figure_candidates": [],
@@ -3563,7 +3630,19 @@ mod tests {
         let summary = persist_research_workspace(&root, &request, &payload).unwrap();
         assert!(workspace.join("manifest.json").is_file());
         assert!(workspace.join("CONTINUE.md").is_file());
+        assert!(workspace.join("source_candidates.jsonl").is_file());
+        assert!(workspace.join("rejected_sources.jsonl").is_file());
         assert!(workspace.join("synthesis").is_dir());
+        let sources = fs::read_to_string(workspace.join("sources.jsonl")).unwrap();
+        let candidates = fs::read_to_string(workspace.join("source_candidates.jsonl")).unwrap();
+        let rejected = fs::read_to_string(workspace.join("rejected_sources.jsonl")).unwrap();
+        assert!(sources.contains("\"source_id\":\"accepted\""));
+        assert!(!sources.contains("rejected-404"));
+        assert!(candidates.contains("rejected-404"));
+        assert!(rejected.contains("rejected-404"));
+        let continuation = fs::read_to_string(workspace.join("CONTINUE.md")).unwrap();
+        assert!(continuation.contains("Treat only `sources.jsonl` as admissible evidence"));
+        assert!(continuation.contains("never cite them as evidence"));
         assert_eq!(
             summary.get("path").and_then(Value::as_str),
             Some(workspace.to_str().unwrap())

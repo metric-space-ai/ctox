@@ -74,8 +74,25 @@ const COMPETITIVE_AI_AXES = Object.freeze([
 ]);
 
 const RESEARCH_TABLE_CONTRACT = Object.freeze({
+  source_candidates: {
+    title: 'Discovery Candidates',
+    columns: [
+      'source_id',
+      'title',
+      'source_url',
+      'source_type',
+      'publisher',
+      'discovery_query',
+      'discovered_at',
+      'verification_status',
+      'http_status',
+      'evidence_eligible',
+      'evidence_rejection_reason',
+      'review_status',
+    ],
+  },
   source_catalog: {
-    title: 'Source Catalog',
+    title: 'Verified Source Registry',
     columns: [
       'source_id',
       'title',
@@ -844,6 +861,7 @@ async function ensureTasksFromKnowledgeBases() {
       criteria: state.t('evidenceNoteText', 'Nutze die vorhandene Knowledge Base als Ausgangspunkt. Score nur belegte Quellen und trenne Rohkandidaten von kuratierten Dashboard-Ergebnissen.'),
       status: 'ready',
       knowledge_domain: base.domain,
+      candidate_catalog_key: tableKey(base, ['source_candidates']) || 'source_candidates',
       source_catalog_key: tableKey(base, ['source_catalog', 'sources', 'curated_sources']) || 'source_catalog',
       curated_table_key: tableKey(base, ['evaluation_matrix', 'load_data_library', 'curated_sources', 'source_library']) || 'evaluation_matrix',
       measurements_table_key: tableKey(base, ['evidence_points', 'measured_load_points', 'measurements']) || 'evidence_points',
@@ -1041,6 +1059,7 @@ function isBusinessOsPermissionDenied(error) {
 function scoreResearchBase(base) {
   const keys = new Set(base.tables.map((table) => table.table_key));
   let score = 0;
+  if (keys.has('source_candidates')) score += 2;
   if (keys.has('source_catalog')) score += 6;
   if (keys.has('curated_sources') || keys.has('load_data_library')) score += 4;
   if (keys.has('measured_load_points') || keys.has('measurements')) score += 3;
@@ -3159,8 +3178,8 @@ function renderRight() {
       </section>
       ${renderScoringModel(task)}
       <section class="research-metric-grid">
-        <div><strong>${state.sourceModels.length}</strong><span>${escapeHtml(state.t('sources', 'Sources'))}</span></div>
-        <div><strong>${evidenceRankedSources().length}</strong><span>${escapeHtml(state.t('verified', 'Verified'))}</span></div>
+        <div><strong>${state.sourceModels.length}</strong><span>${escapeHtml(state.t('candidates', 'Candidates'))}</span></div>
+        <div><strong>${evidenceRankedSources().length}</strong><span>${escapeHtml(state.t('sources', 'Sources'))}</span></div>
         <div><strong>${filterMeasurementRowsForEvidence(state.measurementRows, state.sourceModels).length}</strong><span>${escapeHtml(state.t('measurements', 'Measurements'))}</span></div>
         <div><strong>${avgScore()}</strong><span>${escapeHtml(state.t('avgScore', 'Avg score'))}</span></div>
         <div><strong>${runInfo.status || latestRun?.status || task?.status || 'ready'}</strong><span>${escapeHtml(state.t('status', 'Status'))}</span></div>
@@ -3566,6 +3585,7 @@ async function createTaskFromForm(form) {
     criteria,
     status: current?.status || 'ready',
     knowledge_domain: domain,
+    candidate_catalog_key: current?.candidate_catalog_key || tableKey(base, ['source_candidates']) || 'source_candidates',
     source_catalog_key: current?.source_catalog_key || tableKey(base, ['source_catalog', 'sources', 'curated_sources']) || 'source_catalog',
     curated_table_key: current?.curated_table_key || tableKey(base, ['evaluation_matrix', 'load_data_library', 'curated_sources', 'source_library']) || 'evaluation_matrix',
     measurements_table_key: current?.measurements_table_key || tableKey(base, ['evidence_points', 'measured_load_points', 'measurements']) || 'evidence_points',
@@ -3615,7 +3635,8 @@ async function runSelectedResearch() {
     `Research Run ID: ${researchRunId}`,
     `Research Command ID: ${commandId}`,
     `Knowledge domain: ${task.knowledge_domain}`,
-    `Source catalog: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.source_catalog_key || 'source_catalog'}`,
+    `Discovery candidates: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.candidate_catalog_key || 'source_candidates'}`,
+    `Verified source registry: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.source_catalog_key || 'source_catalog'}`,
     `Evaluation matrix: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.curated_table_key || 'evaluation_matrix'}`,
     `Evidence points: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.measurements_table_key || 'evidence_points'}`,
     missingTables.length ? `Missing tables to create first: ${missingTables.join(', ')}` : 'Required Knowledge tables already exist in the catalog.',
@@ -3628,7 +3649,7 @@ async function runSelectedResearch() {
     `Scoring-Modell:\n${scoringDimensions.map((axis) => `- ${axis.id}: ${axis.label}; weight=${axis.weight || scoringWeights(scoringDimensions)[axis.id] || 1}`).join('\n')}`,
     `Portfolio axes: x=${normalizedAxisPair(task).x}, y=${normalizedAxisPair(task).y}`,
     '',
-    'Nutze den systematic-research Skill. Starte mit ctox knowledge search, dann ctox web deep-research. Schreibe jede Discovery-Runde sofort nach source_catalog. Lies/prüfe jede kanonische Quelle, extrahiere Fakten nach evidence_points und schreibe nur belegte Optionen mit gewichteten Scores nach evaluation_matrix. Aktualisiere bestehende Zeilen, wenn sich Fokus oder Kriterien ändern, statt parallele Tabellen zu erzeugen. Die UI-Evidence-Gate-Felder verification_status=verified, transport_verified=true, content_extracted=true, actual_full_text_or_data=true, evidence_relevance_score>=8, http_status 2xx (nicht 204), snapshot_hash als SHA-256, canonical_url auf die Originalquelle, evidence_eligible=true und ein nicht-aggregierter source_tier sind zwingend; Metadaten-URLs, alte, fehlende, metadata_only, fachfremde oder rejected Zeilen bleiben ungescored.',
+    'Nutze den systematic-research Skill. Starte mit ctox knowledge search, dann ctox web deep-research. Schreibe jede Discovery-Runde vollständig nach source_candidates; diese Tabelle ist nur Audit/Discovery und niemals Evidence. Promoviere ausschließlich Quellen, die evidence_guard.py bestanden haben, nach source_catalog. Lies/prüfe jede kanonische Quelle, extrahiere Fakten nach evidence_points und schreibe nur belegte Optionen mit gewichteten Scores nach evaluation_matrix. Aktualisiere bestehende Zeilen, wenn sich Fokus oder Kriterien ändern, statt parallele Tabellen zu erzeugen. Die UI-Evidence-Gate-Felder verification_status=verified, transport_verified=true, content_extracted=true, actual_full_text_or_data=true, evidence_relevance_score>=8, http_status 2xx (nicht 204), snapshot_hash als SHA-256, canonical_url auf die Originalquelle, evidence_eligible=true und ein nicht-aggregierter source_tier sind zwingend; Metadaten-URLs, alte, fehlende, metadata_only, fachfremde oder rejected Zeilen bleiben ausschließlich in source_candidates.',
     `Schreibe auf jede in diesem Lauf erzeugte oder aktualisierte Knowledge-Zeile research_run_id=${researchRunId} und research_command_id=${commandId}. Ohne beide exakten IDs gilt die Zeile nicht als Ergebnis dieses Laufs.`,
     'Vor Abschluss sind drei voneinander getrennte Audits auszuführen: Source-Audit (URL, Autorität, Inhalt, Snapshot), Data-Audit (Originaldatei, Zeile/Spalte, Einheit, Parsing, Umrechnung, Row-Count) und Claim-Audit (jede Knowledge- und Report-Aussage gegen freigegebene Evidence). Nicht bestandene Aussagen oder Quellen dürfen nicht in Knowledge, Scores oder Reports gelangen.',
     'Pflege parallel semantic_graph_nodes und semantic_graph_edges: kanonische fachliche Themen und Konzepte ausschließlich aus verifizierten Titeln, Zusammenfassungen und Evidenz; klare Definitionen, Aliase und Themenfeld-Bezeichnungen; typisierte belegte Relationen; Source-IDs, Konfidenz und Provenienz an jedem Datensatz. Technische Schlüssel, IDs, Hashes, URLs und generische Metadaten sind keine Konzepte. Schreibe inkrementell, damit die laufende Research-App über RxDB/WebRTC live aktualisiert wird.',
@@ -3646,6 +3667,7 @@ async function runSelectedResearch() {
     research_run_id: researchRunId,
     research_command_id: commandId,
     knowledge_domain: task.knowledge_domain,
+    candidate_catalog_key: task.candidate_catalog_key || 'source_candidates',
     source_catalog_key: task.source_catalog_key,
     curated_table_key: task.curated_table_key,
     measurements_table_key: task.measurements_table_key,
@@ -3672,6 +3694,7 @@ async function runSelectedResearch() {
     writeback_contract: {
       collections: ['research_runs', 'research_tasks', 'knowledge_tables'],
       dashboard_tables: {
+        source_candidates: task.candidate_catalog_key || 'source_candidates',
         source_catalog: task.source_catalog_key || 'source_catalog',
         evaluation_matrix: task.curated_table_key || 'evaluation_matrix',
         evidence_points: task.measurements_table_key || 'evidence_points',

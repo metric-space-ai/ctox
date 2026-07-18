@@ -6132,6 +6132,39 @@ fn start_prompt_worker(
                 }
             }
             let app_validation_precompleted = false;
+            let research_validation_failure = if result.is_ok() && is_systematic_research_job(&job)
+            {
+                match validate_systematic_research_workspace(&root, &job) {
+                    Ok(receipt) => {
+                        push_event(
+                            &state,
+                            format!(
+                                "Systematic research evidence guard passed for {} with receipt {}",
+                                job.source_label,
+                                receipt.display()
+                            ),
+                        );
+                        None
+                    }
+                    Err(err) => {
+                        let feedback = format!(
+                            "Systematic research evidence validation failed closed: {}",
+                            clip_text(&err.to_string(), 1600)
+                        );
+                        push_event(
+                            &state,
+                            format!(
+                                "Systematic research evidence guard rejected {} before completion review: {}",
+                                job.source_label,
+                                clip_text(&err.to_string(), 220)
+                            ),
+                        );
+                        Some(feedback)
+                    }
+                }
+            } else {
+                None
+            };
             let app_validation_before_review = if result.is_ok()
                 && business_os_app_module_target_from_prompt(&job.prompt).is_some()
             {
@@ -6215,6 +6248,14 @@ fn start_prompt_worker(
                     ),
                 );
                 CompletionReviewDisposition::None
+            } else if let Some(feedback) = research_validation_failure {
+                CompletionReviewDisposition::FeedbackRetry {
+                    feedback_prompt: format!(
+                        "{feedback}\n\nRepair the existing research workspace in place. Do not claim completion until the server-side evidence guard passes."
+                    ),
+                    review_summary: feedback,
+                    persist_on_leased_queue: true,
+                }
             } else if completion_review_should_skip_feedback_turn(&root, &job) {
                 push_event(
                     &state,
@@ -10698,10 +10739,152 @@ fn is_business_os_chat_queue_job(root: &Path, job: &QueuedPrompt) -> bool {
     })
 }
 
+fn is_systematic_research_job(job: &QueuedPrompt) -> bool {
+    job.suggested_skill.as_deref() == Some("systematic-research")
+        || job.prompt.contains("research.systematic.run")
+}
+
+fn systematic_research_validation_receipt_path(job: &QueuedPrompt) -> Option<PathBuf> {
+    job.workspace_root
+        .as_deref()
+        .map(PathBuf::from)
+        .map(|workspace| {
+            workspace
+                .join(".ctox")
+                .join("systematic-research-validation.json")
+        })
+}
+
+fn collect_systematic_research_manifests(
+    directory: &Path,
+    depth: usize,
+    manifests: &mut Vec<PathBuf>,
+) -> Result<()> {
+    if depth > 8 {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(directory)
+        .with_context(|| format!("read research workspace {}", directory.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            if path.file_name().and_then(|name| name.to_str()) == Some(".ctox") {
+                continue;
+            }
+            collect_systematic_research_manifests(&path, depth + 1, manifests)?;
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if name.ends_with(".json") && name.contains("evidence") && name.contains("manifest") {
+            manifests.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn validate_systematic_research_workspace(root: &Path, job: &QueuedPrompt) -> Result<PathBuf> {
+    use sha2::Digest;
+
+    let workspace = job
+        .workspace_root
+        .as_deref()
+        .map(PathBuf::from)
+        .context("systematic research requires a typed workspace root")?;
+    if !workspace.is_dir() {
+        anyhow::bail!(
+            "systematic research workspace does not exist: {}",
+            workspace.display()
+        );
+    }
+    let mut manifests = Vec::new();
+    collect_systematic_research_manifests(&workspace, 0, &mut manifests)?;
+    manifests.sort();
+    manifests.dedup();
+    if manifests.is_empty() {
+        anyhow::bail!(
+            "no evidence manifest found under {}; expected a JSON filename containing both `evidence` and `manifest`",
+            workspace.display()
+        );
+    }
+
+    let validator =
+        root.join("src/skills/system/research/systematic-research/scripts/evidence_guard.py");
+    if !validator.is_file() {
+        anyhow::bail!(
+            "systematic research evidence guard is missing: {}",
+            validator.display()
+        );
+    }
+
+    let mut checked = Vec::new();
+    for manifest in manifests {
+        let output = Command::new("python3")
+            .arg(&validator)
+            .arg(&manifest)
+            .arg("--base-dir")
+            .arg(manifest.parent().unwrap_or(&workspace))
+            .output()
+            .with_context(|| {
+                format!(
+                    "execute systematic research evidence guard for {}",
+                    manifest.display()
+                )
+            })?;
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if !output.status.success() {
+            anyhow::bail!(
+                "evidence guard rejected {}: {}{}",
+                manifest.display(),
+                stdout,
+                if stderr.is_empty() {
+                    String::new()
+                } else {
+                    format!("; stderr={}", clip_text(&stderr, 500))
+                }
+            );
+        }
+        let manifest_bytes = std::fs::read(&manifest)?;
+        checked.push(serde_json::json!({
+            "manifest_path": manifest,
+            "manifest_sha256": format!("{:x}", sha2::Sha256::digest(&manifest_bytes)),
+            "validator_output": stdout,
+        }));
+    }
+
+    let receipt_path = systematic_research_validation_receipt_path(job)
+        .context("systematic research validation receipt requires a workspace root")?;
+    let parent = receipt_path
+        .parent()
+        .context("systematic research validation receipt has no parent")?;
+    std::fs::create_dir_all(parent)?;
+    let receipt = serde_json::json!({
+        "schema_version": "ctox.systematic-research.validation.v1",
+        "status": "pass",
+        "checked_at": now_iso_string(),
+        "validator_path": validator,
+        "manifests": checked,
+    });
+    std::fs::write(&receipt_path, serde_json::to_vec_pretty(&receipt)?)?;
+    Ok(receipt_path)
+}
+
 fn completion_review_contract_for_job(
     root: &Path,
     job: &QueuedPrompt,
 ) -> (review::ReviewScope, String, String) {
+    if is_systematic_research_job(job) {
+        return (
+            review::ReviewScope::FullEvidence,
+            job.goal.clone(),
+            job.prompt.clone(),
+        );
+    }
     for message_key in &job.leased_message_keys {
         let Ok(Some(context)) = channels::inspect_business_command_for_task(root, message_key)
         else {
@@ -10855,6 +11038,37 @@ fn collect_review_evidence_summaries(
     artifact_attachments: &[String],
 ) -> Vec<String> {
     let mut evidence = Vec::new();
+    if is_systematic_research_job(job) {
+        match systematic_research_validation_receipt_path(job) {
+            Some(path) => match std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            {
+                Some(receipt) => evidence.push(format!(
+                    "Systematic research validator receipt: path={} status={} checked_at={} manifests={}",
+                    path.display(),
+                    receipt.get("status").and_then(Value::as_str).unwrap_or("missing"),
+                    receipt
+                        .get("checked_at")
+                        .and_then(Value::as_str)
+                        .unwrap_or("missing"),
+                    receipt
+                        .get("manifests")
+                        .and_then(Value::as_array)
+                        .map(Vec::len)
+                        .unwrap_or(0),
+                )),
+                None => evidence.push(format!(
+                    "Systematic research validator receipt is missing or malformed at {}.",
+                    path.display()
+                )),
+            },
+            None => evidence.push(
+                "Systematic research validator receipt path is unavailable because the task has no typed workspace root."
+                    .to_string(),
+            ),
+        }
+    }
     evidence.extend(attachment_evidence_summaries(artifact_attachments));
     evidence.extend(review_delivery_evidence_summaries(root, job));
     evidence.extend(review_thread_evidence_summaries(root, job));
@@ -11820,10 +12034,19 @@ fn xlsx_cell_text(cell: roxmltree::Node<'_, '_>, shared_strings: &[String]) -> S
 }
 
 fn expected_outcome_artifacts_for_job(job: &QueuedPrompt) -> Vec<ArtifactRef> {
-    if job.prompt.contains("business_os.chat.task") {
-        return Vec::new();
-    }
     let mut refs = Vec::new();
+    if is_systematic_research_job(job) {
+        if let Some(path) = systematic_research_validation_receipt_path(job) {
+            refs.push(ArtifactRef {
+                kind: ArtifactKind::WorkspaceFile,
+                primary_key: path.to_string_lossy().into_owned(),
+                expected_terminal_state: "fresh".to_string(),
+            });
+        }
+    }
+    if job.prompt.contains("business_os.chat.task") {
+        return refs;
+    }
     let workspace_terminal_state = if workspace_file_artifacts_require_fresh_write(job) {
         "fresh"
     } else {
@@ -23448,6 +23671,67 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    fn systematic_research_test_job(workspace: &Path) -> QueuedPrompt {
+        QueuedPrompt {
+            prompt: "business_os.chat.task\nresearch.systematic.run".to_string(),
+            goal: "Build verified research".to_string(),
+            preview: "Build verified research".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("systematic-research".to_string()),
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("business-os/research/test".to_string()),
+            workspace_root: Some(workspace.to_string_lossy().into_owned()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        }
+    }
+
+    #[test]
+    fn systematic_research_never_uses_semantic_answer_only_review() {
+        let root = temp_root("research-full-review");
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let job = systematic_research_test_job(&workspace);
+
+        let (scope, _, _) = completion_review_contract_for_job(&root, &job);
+        assert!(matches!(scope, review::ReviewScope::FullEvidence));
+        let expected = expected_outcome_artifacts_for_job(&job);
+        assert_eq!(expected.len(), 1);
+        assert_eq!(expected[0].kind, ArtifactKind::WorkspaceFile);
+        assert!(expected[0]
+            .primary_key
+            .ends_with(".ctox/systematic-research-validation.json"));
+        let receipt = PathBuf::from(&expected[0].primary_key);
+        std::fs::create_dir_all(receipt.parent().unwrap()).unwrap();
+        std::fs::write(
+            &receipt,
+            r#"{"status":"pass","checked_at":"2026-07-18T00:00:00Z","manifests":[{"manifest_sha256":"abc"}]}"#,
+        )
+        .unwrap();
+        let evidence = collect_review_evidence_summaries(&root, &job, 1, &[]);
+        assert!(evidence.iter().any(
+            |line| line.contains("Systematic research validator receipt")
+                && line.contains("status=pass")
+                && line.contains("manifests=1")
+        ));
+    }
+
+    #[test]
+    fn systematic_research_fails_closed_without_evidence_manifest() {
+        let root = temp_root("research-missing-manifest");
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let job = systematic_research_test_job(&workspace);
+
+        let error = validate_systematic_research_workspace(&root, &job).unwrap_err();
+        assert!(error.to_string().contains("no evidence manifest found"));
+        assert!(!workspace
+            .join(".ctox/systematic-research-validation.json")
+            .exists());
     }
 
     #[test]

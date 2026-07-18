@@ -336,6 +336,16 @@ falls back to full evidence review. If the task or answer claims a side effect,
 the semantic reviewer must fail it; action-mode commands remain on the full
 evidence path.
 
+Tasks bound to `systematic-research` are never answer-only work. Before the
+completion reviewer runs, the service executes the repository's
+`evidence_guard.py` against every evidence manifest in the typed task
+workspace. A missing manifest, unreachable/non-original source, stale or
+mismatched snapshot, incomplete claim lineage, unverified data file, or
+incomplete independent source/data/claim review sends the same queue item back
+to rework. A passing guard writes a content-hash-bound validation receipt under
+`<workspace>/.ctox/`; that receipt is a required outcome artifact, so
+`validation-not-required` cannot close research work.
+
 Rejected or incomplete work is fed back into the same durable queue item or
 internal work item where possible. The review path has finite retry budgets and eventually
 fails terminally instead of creating unbounded review/rework cascades.
