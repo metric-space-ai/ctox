@@ -439,6 +439,11 @@ fn execute_cli(root: &Path, args: &[String]) -> anyhow::Result<Value> {
                 "usage: ctox coding-agent workspace list|grant|revoke [--path] <path>",
             )),
         },
+        // Harness delegation surface: the CTOX harness delegates a coding task on
+        // a Business OS app by shelling out to this. Symmetric with the app-side
+        // `ctox.coding.turn` business command, but with local operator authority
+        // (the trusted owner side, not a browser-asserted actor).
+        Some("turn") => run_coding_turn_cli(root, &command_args[1..]),
         Some(other) => Ok(error_outcome(
             provider,
             other,
@@ -446,6 +451,47 @@ fn execute_cli(root: &Path, args: &[String]) -> anyhow::Result<Value> {
         )),
         None => Ok(help_outcome()),
     }
+}
+
+/// `ctox coding-agent turn --module <id> --prompt <text> [--faux] [--model <json>]`
+/// — run one bounded coding turn on a Business OS module through the embedded pi
+/// sidecar (the harness's delegation entrypoint). Default model = the CTOX
+/// gateway; `--model` (a pi-ai model JSON) overrides it, like plain pi.
+fn run_coding_turn_cli(root: &Path, args: &[String]) -> anyhow::Result<Value> {
+    let mut module = String::new();
+    let mut prompt = String::new();
+    let mut faux = false;
+    let mut model: Option<Value> = None;
+    let mut idx = 0;
+    while idx < args.len() {
+        match args[idx].as_str() {
+            "--module" | "-m" => {
+                module = args.get(idx + 1).context("--module value is required")?.clone();
+                idx += 2;
+            }
+            "--prompt" | "-p" => {
+                prompt = args.get(idx + 1).context("--prompt value is required")?.clone();
+                idx += 2;
+            }
+            "--faux" => {
+                faux = true;
+                idx += 1;
+            }
+            "--model" => {
+                let raw = args.get(idx + 1).context("--model value is required")?;
+                model = Some(serde_json::from_str(raw).context("--model must be JSON")?);
+                idx += 2;
+            }
+            other => bail!(
+                "unexpected argument '{other}' (usage: ctox coding-agent turn \
+--module <id> --prompt <text> [--faux] [--model <json>])"
+            ),
+        }
+    }
+    anyhow::ensure!(!module.is_empty(), "--module is required");
+    anyhow::ensure!(!prompt.is_empty(), "--prompt is required");
+    let dist = pi_sidecar::resolve_sidecar_dist(root)?;
+    pi_sidecar::run_module_coding_turn(root, &dist, &module, &prompt, faux, model)
 }
 
 fn parse_cli_args(args: &[String]) -> anyhow::Result<(Provider, Vec<String>)> {

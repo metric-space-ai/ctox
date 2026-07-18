@@ -9328,6 +9328,73 @@ pub fn save_module_source_record(
     }))
 }
 
+/// Record one coding turn under the module's coding session. There is exactly
+/// one session per app (`pi:<module_id>`), upserted each turn, plus one appended
+/// event per turn. Written into the RxDB-synced `coding_agent_sessions` /
+/// `coding_agent_events` collections so the coding-agents workbench shows a
+/// per-app history. Best-effort projection: if a collection has not synced a
+/// table yet, the write no-ops — the source edit itself is already durable.
+pub fn record_coding_agent_session_turn(
+    root: &Path,
+    module_id: &str,
+    prompt: &str,
+    applied_files: &[String],
+    message_count: usize,
+) -> anyhow::Result<()> {
+    let now = now_ms() as i64;
+    let session_id = format!("pi:{module_id}");
+    let summary = if applied_files.is_empty() {
+        "No files changed".to_string()
+    } else {
+        format!(
+            "Edited {} file(s): {}",
+            applied_files.len(),
+            applied_files.join(", ")
+        )
+    };
+    upsert_rxdb_collection_record(
+        root,
+        "coding_agent_sessions",
+        &session_id,
+        now,
+        serde_json::json!({
+            "id": session_id,
+            "session_id": session_id,
+            "provider": "pi",
+            "workspace_root": module_id,
+            "status": "active",
+            "title": module_id,
+            "last_prompt": prompt,
+            "metadata": {
+                "applied_files": applied_files,
+                "message_count": message_count,
+            },
+            "updated_at_ms": now,
+            "is_deleted": false,
+        }),
+    )?;
+    let event_id = format!("pievt_{}", Uuid::new_v4().simple());
+    upsert_rxdb_collection_record(
+        root,
+        "coding_agent_events",
+        &event_id,
+        now,
+        serde_json::json!({
+            "id": event_id,
+            "event_id": event_id,
+            "session_id": session_id,
+            "provider": "pi",
+            "role": "turn",
+            "text": format!("{prompt}\n\n{summary}"),
+            "status": "completed",
+            "created_at_ms": now,
+            "updated_at_ms": now,
+            "is_deleted": false,
+        }),
+    )?;
+    Ok(())
+}
+
 pub fn materialize_desktop_file_command(
     root: &Path,
     _session: &BusinessOsSession,

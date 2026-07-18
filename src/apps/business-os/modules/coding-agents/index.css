@@ -100,6 +100,9 @@
   color: var(--muted);
   font-size: 11px;
 }
+.coding-agents-session-banner { cursor: default; }
+.coding-agents-session-banner:hover { background: transparent; }
+.coding-agents-session-banner .coding-agents-turn-row-prompt { font-weight: 600; }
 
 @container business-app-window (max-width: 720px) {
   .coding-agents-turn-controls { flex-wrap: wrap; }

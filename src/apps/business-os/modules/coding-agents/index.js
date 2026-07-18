@@ -9,6 +9,7 @@ import { loadModuleMessages } from '../../shared/i18n.js';
 const ROOT_CLASSES = 'ctox-workspace ctox-workspace--two-pane coding-agents-module';
 const CODING_TURN_COMMAND = 'ctox.coding.turn';
 const COMMAND_LOG_COLLECTION = 'business_commands';
+const SESSIONS_COLLECTION = 'coding_agent_sessions';
 const RECENT_TURNS_LIMIT = 8;
 
 // Optional model override. DEFAULT = no `model` in the payload, so the turn
@@ -58,6 +59,7 @@ const state = {
   listState: 'loading',
   running: false,
   recentTurns: [],
+  activeSession: null,
   projectionTimers: {},
 };
 
@@ -91,6 +93,10 @@ const labels = {
     statusCompleted: 'abgeschlossen',
     statusFailed: 'fehlgeschlagen',
     statusRunning: 'läuft',
+    sessionLabel: 'Session',
+    sessionActive: 'aktiv',
+    sessionTurns: 'Turns',
+    sessionNone: 'Noch keine Session — der erste Turn startet sie.',
   },
   en: {
     leftKicker: 'pi Coding Agent',
@@ -121,6 +127,10 @@ const labels = {
     statusCompleted: 'completed',
     statusFailed: 'failed',
     statusRunning: 'running',
+    sessionLabel: 'Session',
+    sessionActive: 'active',
+    sessionTurns: 'turns',
+    sessionNone: 'No session yet — the first turn starts it.',
   },
 };
 
@@ -313,6 +323,7 @@ function selectApp(moduleId) {
   updateWorkbenchHeader();
   updateFormState();
   setHint('');
+  loadActiveSession();
   loadRecentTurns();
 }
 
@@ -427,6 +438,7 @@ async function delegateTurn() {
   } finally {
     state.running = false;
     updateFormState();
+    loadActiveSession();
     loadRecentTurns();
   }
 }
@@ -512,11 +524,16 @@ function renderResult(result) {
 
 function subscribeProjectionUpdates() {
   const subscriptions = [];
-  const collection = state.ctx?.db?.collection?.(COMMAND_LOG_COLLECTION);
-  const subscription = collection?.$?.subscribe?.(() => {
+  const commandLog = state.ctx?.db?.collection?.(COMMAND_LOG_COLLECTION);
+  const commandSub = commandLog?.$?.subscribe?.(() => {
     scheduleProjectionRefresh(COMMAND_LOG_COLLECTION, () => loadRecentTurns());
   });
-  if (subscription) subscriptions.push(subscription);
+  if (commandSub) subscriptions.push(commandSub);
+  const sessions = state.ctx?.db?.collection?.(SESSIONS_COLLECTION);
+  const sessionSub = sessions?.$?.subscribe?.(() => {
+    scheduleProjectionRefresh(SESSIONS_COLLECTION, () => loadActiveSession());
+  });
+  if (sessionSub) subscriptions.push(sessionSub);
   return subscriptions;
 }
 
@@ -535,6 +552,25 @@ function scheduleProjectionRefresh(key, fn) {
 function clearProjectionTimers() {
   Object.values(state.projectionTimers || {}).forEach((timer) => clearTimeout(timer));
   state.projectionTimers = {};
+}
+
+// One coding session per app (native `coding_agent_sessions`, id `pi:<module>`).
+async function loadActiveSession() {
+  if (!state.activeModuleId) {
+    state.activeSession = null;
+    renderRecentTurns();
+    return;
+  }
+  const docs = await readCollectionDocs(SESSIONS_COLLECTION);
+  const session = (Array.isArray(docs) ? docs : []).find(
+    (doc) =>
+      doc &&
+      doc.is_deleted !== true &&
+      doc._deleted !== true &&
+      String(doc.workspace_root || '') === state.activeModuleId,
+  );
+  state.activeSession = session || null;
+  renderRecentTurns();
 }
 
 async function loadRecentTurns() {
@@ -570,8 +606,15 @@ function renderRecentTurns() {
   if (!box) return;
   box.innerHTML = '';
 
+  if (state.activeModuleId) {
+    box.appendChild(renderSessionBanner());
+  }
+
   if (!state.recentTurns.length) {
-    box.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(t('recentEmpty'))}</strong></div>`;
+    const empty = document.createElement('div');
+    empty.className = 'ctox-empty';
+    empty.innerHTML = `<strong>${escapeHtml(t('recentEmpty'))}</strong>`;
+    box.appendChild(empty);
     return;
   }
 
@@ -600,6 +643,32 @@ function renderRecentTurns() {
     `;
     box.appendChild(row);
   });
+}
+
+function renderSessionBanner() {
+  const banner = document.createElement('div');
+  banner.className = 'ctox-list-item coding-agents-session-banner';
+  const session = state.activeSession;
+  if (!session) {
+    banner.innerHTML = `
+      <div class="coding-agents-turn-row-main">
+        <span class="coding-agents-turn-row-prompt">${escapeHtml(t('sessionLabel'))} · ${escapeHtml(state.activeModuleId)}</span>
+      </div>
+      <div class="coding-agents-turn-row-meta">${escapeHtml(t('sessionNone'))}</div>
+    `;
+    return banner;
+  }
+  const metaParts = [`${state.recentTurns.length} ${t('sessionTurns')}`];
+  const updated = formatRecordTime(Number(session.updated_at_ms || 0));
+  if (updated) metaParts.push(updated);
+  banner.innerHTML = `
+    <div class="coding-agents-turn-row-main">
+      <span class="coding-agents-turn-row-prompt">${escapeHtml(t('sessionLabel'))} · ${escapeHtml(state.activeModuleId)}</span>
+      <span class="ctox-badge is-success">${escapeHtml(t('sessionActive'))}</span>
+    </div>
+    <div class="coding-agents-turn-row-meta">${escapeHtml(metaParts.filter(Boolean).join(' · '))}</div>
+  `;
+  return banner;
 }
 
 /* Helpers */

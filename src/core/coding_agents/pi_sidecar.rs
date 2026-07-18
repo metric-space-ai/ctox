@@ -57,6 +57,30 @@ pub fn resolve_sidecar_dist(root: &Path) -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
+/// The Business OS app skill: the system prompt that teaches the coding agent
+/// how Business OS app modules are structured (module.json, `mount(ctx)`, the
+/// shared kit, RxDB/WebRTC data boundary, command dispatch). This is
+/// CTOX-specific knowledge, so it lives in the owner and is injected per turn —
+/// the sidecar port stays a generic pi engine.
+const BUSINESS_OS_APP_SKILL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/src/core/coding_agents/business-os-app-skill.md"
+));
+
+/// The coding agent's system prompt for a Business OS module turn: the app skill
+/// plus the minimal tool-usage footer (the workspace is an in-memory projection
+/// of the module's synced source, edited through the pi tools — no host FS).
+pub fn business_os_system_prompt() -> String {
+    format!(
+        "{skill}\n\n## Tools and workspace\n\nUse the pi coding tools (read, \
+edit, write, grep, find, ls) to inspect and change files. The filesystem is an \
+isolated in-memory projection of this module's synced source — not the host \
+filesystem. Make changes through write/edit; your edits are applied back as \
+versioned commits to the module source.",
+        skill = BUSINESS_OS_APP_SKILL
+    )
+}
+
 /// Build the pi model config that points the sidecar's stream at the local CTOX
 /// model gateway — a loopback Responses HTTP server. The provider api is pi-ai's
 /// OpenAI Responses provider (`openai-responses`); the exact protocol + auth
@@ -268,6 +292,9 @@ pub fn run_module_coding_turn(
         "prompt": prompt,
         "files": files,
         "maxAssistantTurns": 8,
+        // The agent gets the Business OS app skill so it edits modules the way
+        // the shell/kit/data-boundary contract requires (not as a generic web page).
+        "systemPrompt": business_os_system_prompt(),
     });
     // Real turns need a model. Default = the SAME model/provider as CTOX (the
     // gateway); callers may override with ANY pi-ai provider model (openai,
@@ -291,15 +318,28 @@ pub fn run_module_coding_turn(
         .and_then(Value::as_array)
         .unwrap_or(&empty);
     let applied = apply_turn_snapshot(root, module_id, snapshot)?;
+    let message_count = response
+        .get("messages")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    // Record the turn under the module's coding session (one session per app) so
+    // the workbench can show a per-app history. Best-effort: a session-log hiccup
+    // must not discard an edit that already landed in the source.
+    if let Err(error) = crate::business_os::store::record_coding_agent_session_turn(
+        root,
+        module_id,
+        prompt,
+        &applied,
+        message_count,
+    ) {
+        eprintln!("coding session log failed for {module_id}: {error}");
+    }
     Ok(serde_json::json!({
         "ok": true,
         "module_id": module_id,
         "applied_files": applied,
-        "message_count": response
-            .get("messages")
-            .and_then(Value::as_array)
-            .map(Vec::len)
-            .unwrap_or(0),
+        "message_count": message_count,
     }))
 }
 
@@ -535,6 +575,25 @@ mod tests {
             "the extracted embedded sidecar serves a turn"
         );
         Ok(())
+    }
+
+    #[test]
+    fn business_os_system_prompt_carries_the_app_skill() {
+        let prompt = business_os_system_prompt();
+        // The agent must be taught the load-bearing Business OS app conventions,
+        // not just generic file tools.
+        for marker in [
+            "Business OS app",
+            "mount(ctx)",
+            "WebRTC",
+            "kit",
+            "in-memory projection",
+        ] {
+            assert!(
+                prompt.contains(marker),
+                "system prompt should mention `{marker}`"
+            );
+        }
     }
 
     #[test]
