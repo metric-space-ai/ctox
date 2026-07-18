@@ -437,7 +437,7 @@ function renderConversationRows() {
     const risk = isSlaRisk(item) ? `<span class="ctox-badge is-warning">${escapeHtml(state.t('slaRisk', 'SLA'))}</span>` : '';
     const agent = Number(item.agent_draft_count || 0) > 0 ? `<span class="ctox-badge is-info">${escapeHtml(state.t('agentDrafts', 'CTOX'))}</span>` : '';
     return `
-      <button type="button" class="support-conversation-row ${selected}" data-support-conversation-id="${escapeAttr(item.id)}" data-context-record-id="${escapeAttr(item.id)}" data-context-record-type="support_conversation" data-context-label="${escapeAttr(label)}">
+      <button type="button" class="ctox-list-item support-conversation-row ${selected}" data-support-conversation-id="${escapeAttr(item.id)}" data-context-record-id="${escapeAttr(item.id)}" data-context-record-type="support_conversation" data-context-label="${escapeAttr(label)}">
         <span class="support-row-meta">
           <span>${escapeHtml(item.inbox_id || state.t('inbox', 'Inbox'))}</span>
           <span>${escapeHtml(item.priority || 'normal')}</span>

@@ -1,118 +1,86 @@
+/* Migration to the shared design system: the frame (.ctox-workspace +
+   [data-resize-frame] with declarative .ctox-column-resizer handles), panes
+   (.ctox-pane), pane headers/bands, search (.ctox-pane-search), filter chips
+   (.ctox-chip/.ctox-chip-count), list rows (.ctox-list-item with
+   .is-selected), inspector cards (.ctox-card/.ctox-card-body), key/value
+   fields (.ctox-fields), status pills (.ctox-badge + is-* variants), buttons
+   (.ctox-button), inputs (.ctox-select/.ctox-textarea/.ctox-field-label) and
+   empty states (.ctox-empty) all come from shared/base.css + app.css. This
+   file only keeps what is support-specific: the chat-style timeline, the
+   note composer, the row/card content grids, and the responsive
+   context-pane swap. */
+
+/* Standard frame defaults for the declarative resizers — the shell writes
+   inline --ctox-*-width onto the frame while dragging. */
 .support-module {
-  --support-left-width: minmax(260px, 320px);
-  --support-right-width: minmax(280px, 360px);
-  display: grid;
-  grid-template-columns: var(--support-left-width) minmax(420px, 1fr) var(--support-right-width);
-  min-height: 100%;
-  height: 100%;
-  background: var(--bg);
-  color: var(--text);
-  overflow: hidden;
+  --ctox-left-width: 300px;
+  --ctox-right-width: 340px;
 }
 
-.support-pane {
-  min-width: 0;
-  min-height: 0;
-  border-right: 1px solid var(--line);
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
-  display: flex;
-  flex-direction: column;
+/* Center pane stacks header + timeline body + composer footer. */
+.ctox-pane.support-center {
+  grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
-.support-right {
-  /* third_pane_justification: Support operators need customer identity, linked tickets, SLA state, and CTOX suggestions visible while reading and replying. */
-  border-right: 0;
-  border-left: 1px solid var(--line);
-}
-
-.support-center {
-  background: color-mix(in srgb, var(--bg) 72%, var(--surface) 28%);
-}
-
-.support-filter-list {
-  overflow: auto;
-  padding: 8px;
-}
-
-.support-context-list {
-  overflow: auto;
-  padding: 8px;
-  display: grid;
-  gap: 8px;
-  align-content: start;
-}
-
+/* Queue filter strip: kit .ctox-chip buttons; only the strip layout is local. */
 .support-queue-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin: 0 0 8px;
+  gap: 4px;
+  padding: 4px 10px 10px;
+  border-bottom: 1px solid var(--hairline, var(--line));
 }
 
-.support-conversation-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.support-conversation-row {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  background: color-mix(in srgb, var(--surface) 92%, var(--bg) 8%);
-  color: var(--text);
-  font: inherit;
-  padding: 8px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.support-conversation-row.is-selected {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent-soft) 54%, var(--surface) 46%);
-}
-
-.support-row-meta,
-.support-row-foot {
+/* custom: conversation-row content (inbox/priority meta, subject, status
+   foot) inside kit .ctox-list-item rows — border, hover and the selected
+   accent bar come from the kit. */
+.support-conversation-row .support-row-meta,
+.support-conversation-row .support-row-foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .support-conversation-row strong {
   display: block;
-  margin: 6px 0;
-  color: var(--text-strong);
-  font-size: 14px;
+  margin: 4px 0;
+  font-size: 13px;
   line-height: 1.35;
 }
 
+.support-row-foot > span:last-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* custom: support timeline — note/event/agent-suggestion entries with
+   kind-tinted hairlines. A message timeline is a special view the kit does
+   not express (cf. the conversations module chat timeline). */
 .support-timeline {
-  flex: 1 1 auto;
-  overflow: auto;
-  padding: 10px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding: 10px 12px;
 }
 
 .support-timeline-item {
   max-width: 760px;
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  background: var(--surface);
   padding: 8px 10px;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--control-radius);
+  background: var(--surface-2);
 }
 
 .support-timeline-item.is-note {
-  border-color: color-mix(in srgb, var(--accent) 28%, var(--line) 72%);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
 }
 
 .support-timeline-item.is-agent_suggestion {
-  border-color: color-mix(in srgb, var(--warning) 30%, var(--line) 70%);
+  border-color: color-mix(in srgb, var(--warning) 30%, var(--line));
 }
 
 .support-timeline-item header {
@@ -120,9 +88,9 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .support-timeline-item p {
@@ -131,30 +99,35 @@
   white-space: pre-wrap;
 }
 
+/* custom: note composer docked to the bottom of the conversation pane
+   (textarea + primary action row) — the kit has no composer pattern. */
 .support-composer {
-  border-top: 1px solid var(--line);
-  padding: 8px;
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   align-items: end;
+  padding: 8px 10px;
+  border-top: 1px solid var(--hairline, var(--line));
 }
 
+/* Inspector card stack (kit .ctox-card sections) in the context pane. */
+.support-context-list {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  padding: 8px;
+}
+
+/* custom: two-column grids for status/priority controls and the routine
+   conversation actions inside inspector cards. */
+.support-control-grid,
 .support-context-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
 
-.support-context-actions.is-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
 .support-control-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
   margin-bottom: 8px;
 }
 
@@ -168,6 +141,8 @@
   margin-bottom: 0;
 }
 
+/* custom: compact two-line record rows inside inspector cards (linked
+   threads, CTOX commands/tasks) — record content, not kit list items. */
 .support-linked-row {
   display: grid;
   gap: 2px;
@@ -175,20 +150,20 @@
 }
 
 .support-linked-row strong {
-  color: var(--text-strong);
   font-size: 12px;
 }
 
 .support-linked-row span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   overflow-wrap: anywhere;
 }
 
+/* custom: suggestion entries separated by hairlines inside the agent card. */
 .support-suggestion-row {
   display: grid;
   gap: 6px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--hairline, var(--line));
   padding-top: 8px;
   margin-top: 8px;
 }
@@ -206,34 +181,39 @@
 
 .support-suggestion-row small {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
+/* Quiet status line (command feedback) — mirrors the kit's muted meta text. */
 .support-status {
-  min-height: 20px;
+  min-height: 18px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .support-status.is-error {
   color: var(--danger);
 }
 
+/* custom: responsive context-pane swap. Below 1180px the right inspector
+   pane is hidden behind the .ctox-pane-icon context toggle instead of
+   squeezing three columns. */
 .support-context-toggle {
   display: none;
 }
 
 @container business-app-window (max-width: 1180px) {
   .support-module {
-    grid-template-columns: minmax(240px, 300px) minmax(360px, 1fr);
+    grid-template-columns: var(--ctox-left-width, 300px) 12px minmax(0, 1fr);
   }
 
-  .support-right {
+  .support-module .support-right,
+  .support-module [data-resizer="right"] {
     display: none;
   }
 
   .support-context-toggle {
-    display: grid;
+    display: inline-flex;
   }
 
   .support-module.is-context-open .support-center {
@@ -248,18 +228,30 @@
 
 @container business-app-window (max-width: 760px) {
   .support-module {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(200px, 34vh) minmax(320px, 1fr) minmax(220px, 36vh);
+    height: auto;
+    min-height: 100%;
+    overflow-y: auto;
+    gap: 8px;
   }
 
-  .support-left {
+  .support-left,
+  .support-center,
+  .support-right {
     min-height: 220px;
-    max-height: 42vh;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
+  }
+
+  .support-module [data-resizer] {
+    display: none !important;
   }
 
   .support-composer {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .support-module.is-context-open {
+    grid-template-rows: minmax(0, 1fr);
   }
 
   .support-module.is-context-open .support-left {
