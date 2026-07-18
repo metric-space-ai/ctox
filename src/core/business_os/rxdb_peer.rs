@@ -9066,10 +9066,24 @@ async fn bulk_upsert_business_record_projection_documents(
     let mut changed = 0usize;
     for batch in changed_documents.chunks(BUSINESS_RECORD_PROJECTION_WRITE_BATCH_SIZE) {
         let batch_documents = batch.to_vec();
-        let result = collection
-            .bulk_upsert(batch_documents.clone())
-            .await
-            .map_err(|err| anyhow::anyhow!("bulk upsert projection batch: {err}"))?;
+        let result = match collection.bulk_upsert(batch_documents.clone()).await {
+            Ok(result) => result,
+            Err(err) if is_recoverable_projection_write_error(&err) => {
+                for document in batch_documents {
+                    upsert_business_record_projection_document(
+                        collection,
+                        collection_name,
+                        document,
+                    )
+                    .await?;
+                    changed = changed.saturating_add(1);
+                }
+                continue;
+            }
+            Err(err) => {
+                return Err(anyhow::anyhow!("bulk upsert projection batch: {err}"));
+            }
+        };
         changed = changed.saturating_add(result.success.len());
         if result.error.is_empty() {
             continue;
@@ -18757,6 +18771,140 @@ mod tests {
                 .await
                 .expect("projected documents");
             assert_eq!(count.as_array().map(Vec::len), Some(501));
+        });
+    }
+
+    #[test]
+    fn bulk_business_record_projection_repairs_malformed_persisted_revision() {
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            database
+                .add_collections(collection_creators())
+                .await
+                .expect("register collections");
+            let documents = database
+                .collection("documents")
+                .expect("documents collection");
+            let initial = json!({
+                "id": "malformed_revision_projection",
+                "title": "Initial title",
+                "filename": "revision.txt",
+                "mime_type": "text/plain",
+                "status": "imported",
+                "current_version_id": "",
+                "index_text": "Initial body",
+                "is_deleted": false,
+                "created_at_ms": 1_000,
+                "updated_at_ms": 2_000
+            });
+            assert_eq!(
+                bulk_upsert_business_record_projection_documents(
+                    &documents,
+                    "documents",
+                    vec![initial],
+                )
+                .await
+                .expect("initial projection"),
+                1
+            );
+
+            let path = store::rxdb_store_path(root.path());
+            let conn = Connection::open(&path).expect("open projection sqlite");
+            let documents_table: String = conn
+                .query_row(
+                    "SELECT name FROM sqlite_master
+                     WHERE type = 'table'
+                       AND name LIKE '%__documents__v%'
+                     ORDER BY name DESC
+                     LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("resolve documents projection table");
+            let raw: String = conn
+                .query_row(
+                    &format!(
+                        "SELECT data FROM {documents_table}
+                         WHERE id = 'malformed_revision_projection'"
+                    ),
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("load projected row");
+            let mut damaged: Value = serde_json::from_str(&raw).expect("parse projected row");
+            damaged
+                .as_object_mut()
+                .expect("projected object")
+                .insert("_rev".to_string(), json!("rev_legacy_uuid"));
+            conn.execute(
+                &format!(
+                    "UPDATE {documents_table}
+                     SET revision = 'rev_legacy_uuid', data = ?1
+                     WHERE id = 'malformed_revision_projection'"
+                ),
+                [serde_json::to_string(&damaged).expect("serialize damaged row")],
+            )
+            .expect("damage persisted revision");
+            drop(conn);
+
+            let updated = json!({
+                "id": "malformed_revision_projection",
+                "title": "Repaired title",
+                "filename": "revision.txt",
+                "mime_type": "text/plain",
+                "status": "imported",
+                "current_version_id": "",
+                "index_text": "Repaired body",
+                "is_deleted": false,
+                "created_at_ms": 1_000,
+                "updated_at_ms": 3_000
+            });
+            assert_eq!(
+                bulk_upsert_business_record_projection_documents(
+                    &documents,
+                    "documents",
+                    vec![updated],
+                )
+                .await
+                .expect("repair malformed persisted revision"),
+                1
+            );
+
+            let conn = Connection::open(path).expect("reopen repaired projection sqlite");
+            let (revision, raw): (String, String) = conn
+                .query_row(
+                    &format!(
+                        "SELECT revision, data FROM {documents_table}
+                         WHERE id = 'malformed_revision_projection'"
+                    ),
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("load repaired projection");
+            let repaired: Value = serde_json::from_str(&raw).expect("parse repaired projection");
+            assert_eq!(
+                repaired.get("title").and_then(Value::as_str),
+                Some("Repaired title")
+            );
+            assert!(
+                revision
+                    .split_once('-')
+                    .and_then(|(height, _)| height.parse::<u64>().ok())
+                    .is_some(),
+                "storage revision must be valid after repair: {revision}"
+            );
+            assert_eq!(
+                repaired.get("_rev").and_then(Value::as_str),
+                Some(revision.as_str())
+            );
         });
     }
 
