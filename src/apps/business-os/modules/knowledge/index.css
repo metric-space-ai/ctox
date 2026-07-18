@@ -973,7 +973,6 @@
 .knowledge-module .knowledge-bundle:hover { border-color: var(--knowledge-line); }
 .knowledge-module .knowledge-bundle[aria-current="true"] {
   border-color: var(--knowledge-accent);
-  box-shadow: inset 2px 0 0 var(--knowledge-accent);
 }
 /* the card carries the selection now — drop the inner row highlight */
 .knowledge-module .knowledge-bundle[aria-current="true"] .bundle-select { background: transparent; }
@@ -1088,7 +1087,6 @@
 .knowledge-module .knowledge-bundle:hover { background: var(--kit-hover); }
 .knowledge-module .knowledge-bundle[aria-current="true"] {
   background: color-mix(in srgb, var(--knowledge-accent) 8%, transparent);
-  box-shadow: inset 2px 0 0 var(--knowledge-accent);
 }
 /* Segmented controls: fill track, no border box (one less frame everywhere). */
 .knowledge-module .ctox-pane-tabs { border-color: transparent; }
@@ -1166,13 +1164,25 @@
   border-radius: var(--knowledge-control-radius);
   background: var(--knowledge-surface-muted);
   box-shadow: none;
+  position: relative;
 }
 .knowledge-module .knowledge-bundle:hover {
   background: color-mix(in srgb, var(--knowledge-text) 5%, var(--knowledge-surface-muted));
 }
 .knowledge-module .knowledge-bundle[aria-current="true"] {
   background: color-mix(in srgb, var(--knowledge-accent) 12%, var(--knowledge-surface-muted));
-  box-shadow: inset 2px 0 0 var(--knowledge-accent);
+}
+/* Selection accent bar: a flat 2px fill via pseudo-element (no shadow, no thick
+   border) — keeps the Matching-style accent while staying inside kit discipline. */
+.knowledge-module .knowledge-bundle[aria-current="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--knowledge-accent);
+  border-radius: var(--knowledge-control-radius) 0 0 var(--knowledge-control-radius);
 }
 /* nested items sit inside the card — no own fill, just an indent guide */
 .knowledge-module .knowledge-bundle[aria-current="true"] .knowledge-item[aria-current="true"] {

@@ -133,7 +133,7 @@ async function ensureStyles() {
   document.head.append(link);
 }
 
-// Monochrome stroke icons for header/close buttons. Delegates to the shell's
+// Monochrome stroke icons for header/close buttons. Delegates to the shell
 // getActionIcon (shared/icons.js via mount ctx); the inline paths are the same
 // actionIconPaths glyphs as a fallback for older shells.
 const ACTION_ICON_FALLBACK_PATHS = {
@@ -347,7 +347,7 @@ function wireEvents() {
     state.ctx.host.querySelector('[data-knowledge-root]')?.classList.remove('is-detail');
   });
   // Fractal header edit: the pencil in the pane header edits whatever the
-  // active tab shows — it just triggers that panel's own edit control.
+  // active tab shows — it just triggers the edit control of that panel.
   state.ctx.host.querySelector('[data-action="edit-active"]')?.addEventListener('click', () => {
     const editBtn = state.ctx.host.querySelector('.knowledge-tab-panel:not([hidden]) [data-action="edit-markdown"], .knowledge-tab-panel:not([hidden]) [data-action="edit-runbook"]');
     if (editBtn) editBtn.click();
@@ -590,7 +590,7 @@ function renderEmptyKnowledgeSelection() {
   els.markdownView.hidden = false;
   els.markdownEditor.value = '';
   // The list-pane on the left already shows the "no entries" empty-state.
-  // Don't repeat it inside the detail-view; show a brief hint instead.
+  // Do not repeat it inside the detail-view; show a brief hint instead.
   els.markdownView.innerHTML = `<p>${escapeHtml(copy.detailEmptyHint || (state.lang === 'en' ? 'Pick a knowledge entry on the left to view it here.' : 'Wähle links einen Knowledge-Eintrag, um ihn hier anzuzeigen.'))}</p>`;
   els.tableHost.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(copy.tableUnavailable)}</strong></div>`;
   if (els.runbookSwitcher) els.runbookSwitcher.innerHTML = '';
@@ -1350,7 +1350,7 @@ function renderSkillbookItem(item, group) {
   return wrap;
 }
 
-// Deletion is destructive — always confirm. Wired to the module's delete path
+// Deletion is destructive — always confirm. Wired to the module delete path
 // if present; otherwise it surfaces a clear message rather than silently no-op.
 function deleteKnowledgeEntry(item, group) {
   const name = item.title || item.id;
