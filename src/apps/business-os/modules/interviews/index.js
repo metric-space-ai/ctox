@@ -1,7 +1,7 @@
 import { isMeetingState, isNoShow } from './core/scheduling.js';
 import { scoreScorecard, isScorecardComplete } from './core/scorecard.js';
 
-const MOD_BUILD = '20260706-kit1';
+const MOD_BUILD = '20260718-kit2';
 const MODULE_ID = 'interviews';
 // Interview coordination has two record families, both plain RxDB collection
 // writes (there is no native `ats.interview.*` business command — STT
@@ -65,10 +65,13 @@ export async function mount(ctx) {
 
   const collection = (name) => { try { return ctx.db?.collection?.(name) || null; } catch { return null; } };
 
+  // Gate results render in the kit callout; kinds map onto its state variants.
+  const GATE_KINDS = { ok: 'is-success', block: 'is-danger', offline: 'is-warning' };
   function setGate(html, kind) {
     if (!gateEl) return;
-    gateEl.className = 'ats-gate' + (kind ? ' ats-gate--' + kind : '');
+    gateEl.className = 'ctox-callout' + (GATE_KINDS[kind] ? ' ' + GATE_KINDS[kind] : '');
     gateEl.innerHTML = html || '';
+    gateEl.hidden = !html;
   }
 
   async function loadRows(name) {
