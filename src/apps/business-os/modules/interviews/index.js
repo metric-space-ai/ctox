@@ -1,7 +1,7 @@
 import { isMeetingState, isNoShow } from './core/scheduling.js';
 import { scoreScorecard, isScorecardComplete } from './core/scorecard.js';
 
-const MOD_BUILD = '20260718-kit2';
+const MOD_BUILD = '20260718-reduce1';
 const MODULE_ID = 'interviews';
 // Interview coordination has two record families, both plain RxDB collection
 // writes (there is no native `ats.interview.*` business command — STT
@@ -12,8 +12,8 @@ const SCORECARDS = 'interview_scorecards';
 const TITLE = 'interviews';
 const COPY = {
   de: {
-    kicker: 'Interviews', candidatePlaceholder: 'Kandidat-ID', vacancyPlaceholder: 'Vakanz-ID',
-    partiesPlaceholder: 'Parteien (Komma-getrennt)', startLabel: 'Start', durationPlaceholder: 'Dauer (Min)', locationLabel: 'Ort',
+    candidatePlaceholder: 'Kandidat-ID', vacancyPlaceholder: 'Vakanz-ID',
+    partiesLabel: 'Parteien', partiesPlaceholder: 'Komma-getrennt', startLabel: 'Start', durationPlaceholder: 'Dauer (Min)', locationLabel: 'Ort',
     modeVideo: 'Video', modeOnsite: 'Vor Ort', modePhone: 'Telefon',
     videoLinkPlaceholder: 'Video-Link', createMeeting: 'Termin anlegen', meetings: 'Termine',
     scorecards: 'Scorecards', entriesEmpty: 'Noch keine Einträge.', meetingMissing: 'Termin nicht gefunden.',
@@ -24,10 +24,11 @@ const COPY = {
     link: 'Link', transcript: 'Transkript', confirm: 'Bestätigen', attended: 'Stattgefunden',
     noShow: 'No-Show', cancel: 'Absagen', criteria: 'Kriterien', score: 'Score',
     interviewer: 'Interviewer', complete: 'vollständig', open: 'offen', generic: 'allgemein',
+    toggleForm: 'Neuer Termin', rowActions: 'Aktionen',
   },
   en: {
-    kicker: 'Interviews', candidatePlaceholder: 'Candidate ID', vacancyPlaceholder: 'Vacancy ID',
-    partiesPlaceholder: 'Participants (comma-separated)', startLabel: 'Start', durationPlaceholder: 'Duration (min)', locationLabel: 'Location',
+    candidatePlaceholder: 'Candidate ID', vacancyPlaceholder: 'Vacancy ID',
+    partiesLabel: 'Participants', partiesPlaceholder: 'comma-separated', startLabel: 'Start', durationPlaceholder: 'Duration (min)', locationLabel: 'Location',
     modeVideo: 'Video', modeOnsite: 'On site', modePhone: 'Phone',
     videoLinkPlaceholder: 'Video link', createMeeting: 'Schedule meeting', meetings: 'Meetings',
     scorecards: 'Scorecards', entriesEmpty: 'No entries yet.', meetingMissing: 'Meeting not found.',
@@ -38,6 +39,7 @@ const COPY = {
     link: 'Link', transcript: 'Transcript', confirm: 'Confirm', attended: 'Attended',
     noShow: 'No-show', cancel: 'Cancel', criteria: 'criteria', score: 'Score',
     interviewer: 'Interviewer', complete: 'complete', open: 'open', generic: 'generic',
+    toggleForm: 'New meeting', rowActions: 'Actions',
   },
 };
 
@@ -54,9 +56,11 @@ export async function mount(ctx) {
   root?.setAttribute('lang', locale);
   root?.querySelectorAll('[data-i18n]').forEach((node) => { node.textContent = t(node.dataset.i18n); });
   root?.querySelectorAll('[data-i18n-placeholder]').forEach((node) => { node.placeholder = t(node.dataset.i18nPlaceholder); });
+  root?.querySelectorAll('[data-i18n-title]').forEach((node) => { node.title = t(node.dataset.i18nTitle); node.setAttribute('aria-label', t(node.dataset.i18nTitle)); });
   const listEl = root?.querySelector('[data-ats-list]');
   const countEl = root?.querySelector('[data-ats-count]');
   const formEl = root?.querySelector('[data-ats-form]');
+  const toggleFormEl = root?.querySelector('[data-toggle-form]');
   const gateEl = root?.querySelector('[data-ats-gate]');
   const titleEl = root?.querySelector('[data-ats-title]');
   const subEl = root?.querySelector('[data-ats-sub]');
@@ -119,6 +123,15 @@ export async function mount(ctx) {
   }
 
   async function onListClick(event) {
+    // The per-row "…" toggle reveals that record's action cluster on demand;
+    // rows default to badge + body only.
+    const toggle = event.target?.closest?.('[data-meeting-actions-toggle]');
+    if (toggle) {
+      const row = toggle.closest('.ats-item');
+      const open = row?.classList.toggle('is-actions-open') || false;
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      return;
+    }
     const btn = event.target?.closest?.('[data-meeting-action]');
     if (!btn) return;
     const meetingId = btn.getAttribute('data-meeting-id');
@@ -185,6 +198,15 @@ export async function mount(ctx) {
   }
   formEl?.addEventListener('submit', onSubmit);
 
+  // Create form is hidden by default (is-form-hidden on root); the header
+  // toggle reveals it on demand, consent's data-toggle-rights idiom.
+  function onToggleForm() {
+    const hidden = root?.classList.toggle('is-form-hidden');
+    toggleFormEl?.setAttribute('aria-pressed', hidden ? 'false' : 'true');
+    if (!hidden) formEl?.querySelector('input')?.focus?.();
+  }
+  toggleFormEl?.addEventListener('click', onToggleForm);
+
   const subs = [];
   for (const name of [PRIMARY, SCORECARDS]) {
     const col = collection(name);
@@ -195,6 +217,7 @@ export async function mount(ctx) {
   return () => {
     for (const s of subs) { try { s?.unsubscribe?.(); } catch {} }
     formEl?.removeEventListener('submit', onSubmit);
+    toggleFormEl?.removeEventListener('click', onToggleForm);
     listEl?.removeEventListener('click', onListClick);
     ctx.host.replaceChildren();
     delete ctx.host.dataset.atsModule;
@@ -246,7 +269,9 @@ function meetingRow(r, nowMs, t, locale) {
     + '<div class="ats-item-main">' + badgeSpan(badge) + ' ' + cand + vac + '</div>'
     + '<div class="ats-item-meta">' + metaBits.map(esc).join(' · ') + '</div>'
     + '</div>'
-    + (actions.length ? '<div class="ats-actions">' + actions.join('') + '</div>' : '')
+    + (actions.length
+      ? '<div class="ats-item-trail">' + actionsToggleBtn(r.id, t('rowActions')) + '<div class="ats-actions">' + actions.join('') + '</div></div>'
+      : '')
     + '</div>';
 }
 
@@ -280,6 +305,13 @@ function scorecardRow(r, t) {
 
 function actionBtn(meetingId, action, label) {
   return '<button type="button" class="ctox-button" data-meeting-action="' + esc(action) + '" data-meeting-id="' + esc(meetingId || '') + '">' + esc(label) + '</button>';
+}
+
+// Per-row "…" disclosure that reveals the record's state-transition actions.
+function actionsToggleBtn(meetingId, label) {
+  return '<button type="button" class="ctox-pane-icon" data-meeting-actions-toggle="' + esc(meetingId || '') + '" title="' + esc(label) + '" aria-label="' + esc(label) + '" aria-expanded="false">'
+    + '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>'
+    + '</button>';
 }
 
 function fmtTime(ms, locale) {

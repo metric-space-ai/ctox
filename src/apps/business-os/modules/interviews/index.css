@@ -3,11 +3,21 @@
    badges, status line, record list, callout and empty state all come from
    the kit (.ctox-record-workbench, .ctox-compact-form, .ctox-input/.ctox-select,
    .ctox-button, .ctox-badge, .ctox-callout, .ctox-empty). Only the interviews
-   group heads, rich list rows, score column and gate result rows live here. */
+   group heads, rich list rows, score column and gate result rows live here.
+   The create form and per-row action clusters are hidden by default and
+   revealed via toggles (is-form-hidden / is-actions-open). */
 
 /* The kit only re-asserts [hidden] inside .ctox-workspace; the gate callout
    lives in a record workbench, so mirror the rule here. */
 .ats-interviews .ctox-callout[hidden] {
+  display: none;
+}
+
+/* The create form is situational: hidden by default (is-form-hidden on root),
+   revealed via the header toggle — consent's data-toggle-rights /
+   threads' data-toggle-actions idiom. Pressed-state tint comes from the kit's
+   .ctox-pane-icon[aria-pressed="true"] rule. */
+.ats-interviews.is-form-hidden [data-ats-form] {
   display: none;
 }
 
@@ -60,11 +70,25 @@
   color: var(--muted);
 }
 
-.ats-interviews .ats-actions {
+/* Trailing cell of a rich row: per-row "…" toggle plus the on-demand action
+   cluster (or the score figure on scorecard rows). */
+.ats-interviews .ats-item-trail {
   display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Per-record actions are hidden until the row's "…" toggle opens them —
+   the row's default state is badge + body only. */
+.ats-interviews .ats-actions {
+  display: none;
   flex-wrap: wrap;
   gap: 6px;
   justify-content: flex-end;
+}
+
+.ats-interviews .ats-item.is-actions-open .ats-actions {
+  display: flex;
 }
 
 /* custom: scorecard overall-score figure (large tabular number at row end). */
