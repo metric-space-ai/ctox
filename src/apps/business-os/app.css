@@ -259,15 +259,28 @@ body[data-maintenance-status="stale"] .ctox-maintenance-banner {
   display: none !important;
 }
 
+/* Floating toast — must never sit in the content flow or it shifts the app
+   header/content down. Overlaid at the bottom of the module content instead. */
 .ctox-maintenance-data-placeholder {
-  margin: 8px;
-  padding: 9px 11px;
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  margin: 0;
+  max-width: calc(100% - 24px);
+  padding: 6px 14px;
   border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
-  border-radius: var(--panel-radius);
-  background: color-mix(in srgb, var(--accent-soft) 58%, var(--surface));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-soft) 88%, var(--surface));
   color: var(--text);
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
 }
 
 @keyframes ctox-maintenance-spin {
