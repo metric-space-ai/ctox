@@ -25,6 +25,12 @@ use crate::types::{
 };
 
 const DESKTOP_FILE_CHUNKS_MASTER_RESPONSE_MAX_BYTES: usize = 96 * 1024;
+// Knowledge table chunks are large row-bearing documents (the SKF dataset is
+// roughly 380-414 KiB per document). Keep a single response comfortably below
+// the WebRTC transfer ceiling even when an older browser still asks for a
+// larger replication batch. The browser pull loop drains these truncated
+// responses until it receives an empty answer.
+const KNOWLEDGE_TABLES_MASTER_RESPONSE_MAX_BYTES: usize = 512 * 1024;
 
 // ref: rxdb/src/replication-protocol/index.ts:119-132
 /// Resolves once both initial syncs (down + up) have completed.
@@ -217,6 +223,7 @@ impl crate::types::RxReplicationHandler for StorageReplicationHandler {
 
         let has_attachments = self.instance.schema().extra.get("attachments").is_some();
         let is_file_chunks = self.instance.collection_name() == "desktop_file_chunks";
+        let is_knowledge_tables = self.instance.collection_name() == "knowledge_tables";
         let result = self
             .instance
             .get_changed_documents_since(batch_size, checkpoint.as_ref())
@@ -226,15 +233,20 @@ impl crate::types::RxReplicationHandler for StorageReplicationHandler {
         } else {
             result.checkpoint
         };
-        let documents = if is_file_chunks {
+        let documents = if is_file_chunks || is_knowledge_tables {
             let primary_path =
                 get_primary_field_of_primary_key(&self.instance.schema().primary_key);
-            let limited = limit_desktop_file_chunk_response(
+            let max_bytes = if is_file_chunks {
+                DESKTOP_FILE_CHUNKS_MASTER_RESPONSE_MAX_BYTES
+            } else {
+                KNOWLEDGE_TABLES_MASTER_RESPONSE_MAX_BYTES
+            };
+            let limited = limit_master_response(
                 result.documents,
                 &primary_path,
                 has_attachments,
                 self.keep_meta,
-                DESKTOP_FILE_CHUNKS_MASTER_RESPONSE_MAX_BYTES,
+                max_bytes,
                 &next_checkpoint,
             );
             return Ok(crate::types::DocumentsWithCheckpoint {
@@ -384,7 +396,7 @@ struct LimitedMasterResponse {
     checkpoint: serde_json::Value,
 }
 
-fn limit_desktop_file_chunk_response(
+fn limit_master_response(
     raw_documents: Vec<serde_json::Value>,
     primary_path: &str,
     has_attachments: bool,
@@ -448,7 +460,7 @@ mod tests {
     use super::*;
     use std::collections::{BTreeSet, HashMap};
 
-    use serde_json::json;
+    use serde_json::{json, Value};
     use tokio::time::{timeout, Duration};
 
     use crate::plugins::storage_memory::get_rx_storage_memory;
@@ -493,14 +505,8 @@ mod tests {
             json!({"id":"b","data":"y".repeat(48),"_meta":{"lwt":2.0}}),
             json!({"id":"c","data":"z".repeat(48),"_meta":{"lwt":3.0}}),
         ];
-        let limited = limit_desktop_file_chunk_response(
-            docs,
-            "id",
-            false,
-            true,
-            120,
-            &json!({"id":"c","lwt":3.0}),
-        );
+        let limited =
+            limit_master_response(docs, "id", false, true, 120, &json!({"id":"c","lwt":3.0}));
 
         assert_eq!(limited.documents.len(), 1);
         assert_eq!(limited.checkpoint, json!({"id":"a","lwt":1.0}));
@@ -513,10 +519,84 @@ mod tests {
             json!({"id":"b","data":"y","_meta":{"lwt":2.0}}),
         ];
         let fallback = json!({"id":"b","lwt":2.0});
-        let limited = limit_desktop_file_chunk_response(docs, "id", false, true, 4096, &fallback);
+        let limited = limit_master_response(docs, "id", false, true, 4096, &fallback);
 
         assert_eq!(limited.documents.len(), 2);
         assert_eq!(limited.checkpoint, fallback);
+    }
+
+    #[test]
+    fn knowledge_tables_response_limit_drains_57_large_chunks_without_skipping_rows() {
+        let mut docs = Vec::with_capacity(57);
+        let mut expected_rows = 0usize;
+        for chunk_index in 0..57usize {
+            let row_count = if chunk_index < 31 { 86 } else { 85 };
+            expected_rows += row_count;
+            let rows = (0..row_count)
+                .map(|row_index| {
+                    json!({
+                        "row_id": chunk_index * 100 + row_index,
+                        "value": "x".repeat(4550),
+                    })
+                })
+                .collect::<Vec<_>>();
+            let document = json!({
+                "id": format!("measured_load_points:{chunk_index}"),
+                "chunk_index": chunk_index,
+                "chunk_count": 57,
+                "row_count": row_count,
+                "rows": rows,
+                "_meta": { "lwt": chunk_index as f64 + 1.0 },
+            });
+            let encoded_size = serde_json::to_vec(&document).unwrap().len();
+            assert!(
+                (380 * 1024..=414 * 1024).contains(&encoded_size),
+                "fixture chunk {chunk_index} is {encoded_size} bytes, outside the production range"
+            );
+            docs.push(document);
+        }
+        assert_eq!(expected_rows, 4_876);
+
+        // Simulate the browser pull loop: every byte-bounded response must
+        // advance to the last document actually sent, and the loop must drain
+        // all 57 responses before accepting the final checkpoint.
+        let mut offset = 0usize;
+        let mut checkpoint = json!(null);
+        let mut received = Vec::new();
+        while offset < docs.len() {
+            let fallback = checkpoint_from_document(docs.last().unwrap(), "id").unwrap();
+            let limited = limit_master_response(
+                docs[offset..].to_vec(),
+                "id",
+                false,
+                true,
+                KNOWLEDGE_TABLES_MASTER_RESPONSE_MAX_BYTES,
+                &fallback,
+            );
+            assert!(
+                !limited.documents.is_empty(),
+                "large knowledge response made no progress"
+            );
+            checkpoint = limited.checkpoint;
+            let sent = limited.documents.len();
+            received.extend(limited.documents);
+            offset += sent;
+        }
+
+        let received_rows: usize = received
+            .iter()
+            .map(|doc| {
+                doc.get("rows")
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len)
+            })
+            .sum();
+        assert_eq!(received.len(), 57);
+        assert_eq!(received_rows, expected_rows);
+        assert_eq!(
+            checkpoint.get("id").and_then(Value::as_str),
+            Some("measured_load_points:56")
+        );
     }
 
     #[tokio::test]
