@@ -57,6 +57,30 @@ pub fn resolve_sidecar_dist(root: &Path) -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
+/// Build the pi model config that points the sidecar's stream at the local CTOX
+/// model gateway — a loopback Responses HTTP server. The provider api is pi-ai's
+/// OpenAI Responses provider (`openai-responses`); the exact protocol + auth
+/// match is confirmed by a real turn against the running gateway (decision-1).
+pub fn gateway_model(root: &Path) -> Value {
+    let gateway = crate::execution::responses::gateway::GatewayConfig::resolve_with_root(root);
+    let base_url = format!("http://{}:{}", gateway.listen_host, gateway.listen_port);
+    let model_id = gateway
+        .active_model
+        .unwrap_or_else(|| "ctox-gateway".to_string());
+    serde_json::json!({
+        "id": model_id,
+        "name": "CTOX Model Gateway",
+        "api": "openai-responses",
+        "provider": "ctox-gateway",
+        "baseUrl": base_url,
+        "reasoning": false,
+        "input": ["text"],
+        "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+        "contextWindow": 0,
+        "maxTokens": 0
+    })
+}
+
 /// A spawned sidecar daemon listening on a Unix socket. Killed + cleaned on drop
 /// so a turn can never leak a live agent process.
 struct SidecarDaemon {
@@ -231,12 +255,17 @@ pub fn run_module_coding_turn(
     faux: bool,
 ) -> anyhow::Result<Value> {
     let files = project_module_source(root, module_id)?;
-    let request = serde_json::json!({
+    let mut request = serde_json::json!({
         "id": module_id,
         "prompt": prompt,
         "files": files,
         "maxAssistantTurns": 8,
     });
+    // Real turns route through the CTOX model gateway; faux turns run the
+    // sidecar's deterministic no-model stream.
+    if !faux {
+        request["model"] = gateway_model(root);
+    }
     let response = run_pi_turn(dist, &request, faux)?;
     anyhow::ensure!(
         response.get("ok").and_then(Value::as_bool) == Some(true),
@@ -494,6 +523,27 @@ mod tests {
             response["ok"],
             Value::Bool(true),
             "the extracted embedded sidecar serves a turn"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn gateway_model_points_at_the_loopback_responses_gateway() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let model = gateway_model(temp.path());
+        let base_url = model["baseUrl"].as_str().unwrap_or_default();
+        assert!(
+            base_url.starts_with("http://") && base_url.ends_with(":12434"),
+            "gateway model targets the loopback Responses gateway on :12434 (got {base_url})"
+        );
+        assert_eq!(
+            model["api"].as_str(),
+            Some("openai-responses"),
+            "uses pi-ai's OpenAI Responses provider"
+        );
+        assert!(
+            model["id"].as_str().map(|id| !id.is_empty()).unwrap_or(false),
+            "an active model id is resolved from the gateway config"
         );
         Ok(())
     }
