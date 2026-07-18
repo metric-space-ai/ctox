@@ -45,8 +45,31 @@
   color: var(--muted);
 }
 
-/* Grid placement only — the button itself is a kit .ctox-button. */
+/* Optionale Formularfelder (Vakanz, Kontakt) und interne Record-IDs
+   (Submission, Vakanz, Kontakt, Consent) sind nur bei Bedarf relevant —
+   native Disclosures, standardmäßig eingeklappt. */
+.ats-submissions .ats-more > summary,
+.ats-submissions .ats-item-details > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ats-submissions .ats-more[open] > summary { margin-bottom: 5px; }
+.ats-submissions .ats-item-details { grid-column: 1; min-width: 0; }
+
+/* Grid placement only — the button itself is a kit .ctox-button. The
+   copy-ID action is secondary: revealed on hover/focus instead of
+   permanently occupying every row. */
 .ats-submissions .ats-action {
   grid-column: 2;
-  grid-row: 1 / span 2;
+  grid-row: 1 / -1;
+  opacity: 0;
+}
+
+.ats-submissions .ats-item:hover .ats-action,
+.ats-submissions .ats-item:focus-within .ats-action { opacity: 1; }
+
+@media (hover: none) {
+  .ats-submissions .ats-action { opacity: 1; }
 }

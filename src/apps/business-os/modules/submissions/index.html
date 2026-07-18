@@ -3,21 +3,24 @@
     <header class="ctox-pane-header ctox-pane-band ctox-record-workbench__header">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">Submissions</span>
           <h2 class="ctox-pane-title" data-ats-title></h2>
         </div>
       </div>
-      <p class="ctox-record-workbench__subtitle" data-ats-sub></p>
     </header>
     <div class="ctox-record-workbench__body">
       <form class="ctox-compact-form" data-ats-form>
         <div class="ctox-compact-form__fields">
-          <label class="ctox-compact-field"><span data-copy="candidate">Kandidat-ID</span><input class="ctox-input" type="text" name="candidate_id" placeholder="Kandidat-ID" required data-f data-copy-placeholder="candidate" /></label>
-          <label class="ctox-compact-field"><span data-copy="client">Kunden-Account-ID</span><input class="ctox-input" type="text" name="client_account_id" placeholder="Kunden-Account-ID" required data-f data-copy-placeholder="client" /></label>
-          <label class="ctox-compact-field"><span data-copy="vacancyLabel">Vakanz</span><input class="ctox-input" type="text" name="vacancy_id" placeholder="Vakanz-ID (optional)" data-f data-copy-placeholder="vacancy" /></label>
-          <label class="ctox-compact-field"><span data-copy="contactLabel">Kontakt</span><input class="ctox-input" type="text" name="client_contact_id" placeholder="Kontakt-ID (optional)" data-f data-copy-placeholder="contact" /></label>
+          <label class="ctox-compact-field"><span data-copy="candidate">Kandidat-ID</span><input class="ctox-input" type="text" name="candidate_id" required data-f /></label>
+          <label class="ctox-compact-field"><span data-copy="client">Kunden-Account-ID</span><input class="ctox-input" type="text" name="client_account_id" required data-f /></label>
         </div>
         <div class="ctox-compact-form__actions"><button type="submit" class="ctox-button is-primary" data-copy="present">Vorstellen</button></div>
+        <details class="ats-more">
+          <summary data-copy="more">Weitere Angaben</summary>
+          <div class="ctox-compact-form__fields">
+            <label class="ctox-compact-field"><span data-copy="vacancyLabel">Vakanz</span><input class="ctox-input" type="text" name="vacancy_id" data-f /></label>
+            <label class="ctox-compact-field"><span data-copy="contactLabel">Kontakt</span><input class="ctox-input" type="text" name="client_contact_id" data-f /></label>
+          </div>
+        </details>
       </form>
       <div class="ctox-callout" data-ats-gate></div>
       <div class="ctox-record-workbench__status" data-ats-count></div>
