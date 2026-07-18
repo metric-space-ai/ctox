@@ -937,3 +937,45 @@
 .knowledge-module .knowledge-tab-panel:has([data-runbook-form]:not([hidden])) .knowledge-content-edit {
   display: none;
 }
+
+/* ============================================================================
+   Shards, learned from the Matching app: calm card (surface + hairline), a
+   left accent bar when selected, hover border — plus scannable count badges
+   (Research-style numbers) instead of a verbose "0 · 0 · 0" meta line.
+   ========================================================================== */
+.knowledge-module .knowledge-scroll { padding: 8px 10px; }
+.knowledge-module .knowledge-bundle {
+  gap: 2px;
+  margin-bottom: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--knowledge-soft-line);
+  border-bottom: 1px solid var(--knowledge-soft-line);
+  border-radius: var(--knowledge-control-radius);
+  background: var(--knowledge-surface);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.knowledge-module .knowledge-bundle:hover { border-color: var(--knowledge-line); }
+.knowledge-module .knowledge-bundle[aria-current="true"] {
+  border-color: var(--knowledge-accent);
+  box-shadow: inset 2px 0 0 var(--knowledge-accent);
+}
+/* the card carries the selection now — drop the inner row highlight */
+.knowledge-module .knowledge-bundle[aria-current="true"] .bundle-select { background: transparent; }
+
+.knowledge-module .bundle-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 5px;
+}
+.knowledge-module .kb-count {
+  font-size: var(--fs-micro);
+  color: var(--knowledge-muted);
+  background: var(--kit-fill);
+  border-radius: 999px;
+  padding: 1px 8px;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+.knowledge-module .kb-count b { color: var(--knowledge-text); font-weight: 600; }
+.knowledge-module .kb-count.kb-empty { background: transparent; padding-left: 0; opacity: 0.5; }

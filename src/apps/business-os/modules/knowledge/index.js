@@ -1099,6 +1099,14 @@ function sourceScopeFor(entry) {
   return 'user';
 }
 
+// Scannable count badges (Research-style numbers) — only non-zero kinds show,
+// so you can tell whether a shard has content before clicking it.
+function bundleCountsHtml(skillbooks, runbooks, tables) {
+  const pill = (n, label) => (n > 0 ? `<span class="kb-count"><b>${n}</b> ${label}</span>` : '');
+  const pills = [pill(skillbooks, 'Skillbooks'), pill(runbooks, 'Runbooks'), pill(tables, 'Tabellen')].filter(Boolean).join('');
+  return pills || '<span class="kb-count kb-empty">leer</span>';
+}
+
 function renderKnowledgeBundle(group) {
   const section = document.createElement('section');
   section.className = 'knowledge-bundle';
@@ -1120,7 +1128,7 @@ function renderKnowledgeBundle(group) {
       <button class="bundle-select" type="button">
         <span class="bundle-domain">${escapeHtml(group.domainLabel || 'Knowledge')}</span>
         <strong>${escapeHtml(group.title)}</strong>
-        <small>${escapeHtml(`${skillbookCount} Skillbooks · ${runbookCount} Runbooks · ${tableCount} Tabellen`)}</small>
+        <span class="bundle-counts">${bundleCountsHtml(skillbookCount, runbookCount, tableCount)}</span>
       </button>
       <button class="ctox-pane-icon bundle-edit" type="button" aria-label="${escapeHtml(group.title)} bearbeiten" title="Bearbeiten">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg>
