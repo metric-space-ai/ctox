@@ -356,9 +356,11 @@ const BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS: u64 =
 const BUSINESS_RECORD_PROJECTION_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const BUSINESS_RECORD_PROJECTION_ERROR_BACKOFF_BASE_SECS: u64 = 30;
 const BUSINESS_RECORD_PROJECTION_ERROR_BACKOFF_MAX_SECS: u64 = 5 * 60;
+const BUSINESS_RECORD_PROJECTION_PARTIAL_SYNC_INTERVAL_SECS: u64 = 30;
 const BUSINESS_RECORD_PROJECTION_SYNC_LIMIT: usize = 2_000;
 const BUSINESS_RECORD_PROJECTION_PAGE_SIZE: usize = 25;
 const BUSINESS_RECORD_PROJECTION_WRITE_BATCH_SIZE: usize = 250;
+const BUSINESS_RECORD_PROJECTION_CURSOR_VERSION: u32 = 1;
 const QUEUE_CHAT_REPAIR_ORPHAN_EPOCH_MS: i64 = 10 * 60 * 1_000;
 const BUSINESS_COMMAND_ACTIVE_POLL_SECS: u64 = 1;
 // Browser-originated commands are user-visible control-plane work. Same-process
@@ -4379,29 +4381,52 @@ async fn sync_business_record_projections_background_loop(
     database: Arc<RxDatabase>,
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
-    let mut since_by_collection = HashMap::<String, i64>::new();
+    let persisted_progress = load_business_record_projection_progress(&root);
+    let mut since_by_collection = persisted_progress.since_by_collection;
+    let mut after_record_id_by_collection = persisted_progress.after_record_id_by_collection;
+    let mut next_collection_index = persisted_progress.next_collection_index;
     let mut queue_chat_repair_stamp = None;
     let mut last_source_stamp = None;
     let mut consecutive_idle_rounds = 0u32;
     let mut consecutive_failure_rounds = 0u32;
     loop {
         let started = Instant::now();
+        let mut slice_incomplete = false;
         let result = async {
             let source_stamp = business_record_projection_source_stamp(&root).await?;
             if last_source_stamp.as_ref() == Some(&source_stamp) {
                 return Ok(0);
             }
 
-            let synced = sync_business_record_projections_with_database(
+            let (synced, caught_up) = sync_business_record_projections_slice_with_database(
                 &root,
                 &database,
                 &database_write_lock,
                 &mut since_by_collection,
+                &mut after_record_id_by_collection,
+                &mut next_collection_index,
                 &mut queue_chat_repair_stamp,
+                Some(BUSINESS_RECORD_PROJECTION_SYNC_LIMIT),
             )
             .await?;
-            last_source_stamp = Some(source_stamp);
-            Ok(synced)
+            if caught_up {
+                last_source_stamp = Some(source_stamp);
+            } else {
+                slice_incomplete = true;
+            }
+            persist_business_record_projection_progress(
+                &root,
+                &BusinessRecordProjectionProgress {
+                    version: BUSINESS_RECORD_PROJECTION_CURSOR_VERSION,
+                    since_by_collection: since_by_collection.clone(),
+                    after_record_id_by_collection: after_record_id_by_collection.clone(),
+                    next_collection_index,
+                },
+            )?;
+            // An incomplete slice is active reconciliation work even when it
+            // only advanced across empty collections. Keep the short active
+            // interval until all source collections have been visited.
+            Ok(if caught_up { synced } else { synced.max(1) })
         }
         .await;
         record_native_peer_loop_result(&BUSINESS_RECORDS_LOOP_METRICS, &result, started.elapsed());
@@ -4415,11 +4440,107 @@ async fn sync_business_record_projections_background_loop(
             &mut consecutive_idle_rounds,
             "[business-os] native rxdb business record projection sync failed",
         );
-        tokio::time::sleep(Duration::from_secs(business_record_projection_sleep_secs(
+        let sleep_secs = business_record_projection_loop_sleep_secs(
             consecutive_idle_rounds,
             consecutive_failure_rounds,
-        )))
-        .await;
+            slice_incomplete,
+        );
+        tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
+    }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+struct BusinessRecordProjectionProgress {
+    version: u32,
+    #[serde(default)]
+    since_by_collection: HashMap<String, i64>,
+    #[serde(default)]
+    after_record_id_by_collection: HashMap<String, String>,
+    #[serde(default)]
+    next_collection_index: usize,
+}
+
+fn business_record_projection_progress_path(root: &Path) -> PathBuf {
+    root.join("runtime")
+        .join("business-record-projection-progress.json")
+}
+
+fn load_business_record_projection_progress(root: &Path) -> BusinessRecordProjectionProgress {
+    let path = business_record_projection_progress_path(root);
+    let Ok(bytes) = fs::read(&path) else {
+        return BusinessRecordProjectionProgress {
+            version: BUSINESS_RECORD_PROJECTION_CURSOR_VERSION,
+            ..Default::default()
+        };
+    };
+    match serde_json::from_slice::<BusinessRecordProjectionProgress>(&bytes) {
+        Ok(progress) if progress.version == BUSINESS_RECORD_PROJECTION_CURSOR_VERSION => progress,
+        Ok(_) => BusinessRecordProjectionProgress {
+            version: BUSINESS_RECORD_PROJECTION_CURSOR_VERSION,
+            ..Default::default()
+        },
+        Err(err) => {
+            eprintln!(
+                "[business-os] ignoring corrupt business record projection progress {}: {err}",
+                path.display()
+            );
+            BusinessRecordProjectionProgress {
+                version: BUSINESS_RECORD_PROJECTION_CURSOR_VERSION,
+                ..Default::default()
+            }
+        }
+    }
+}
+
+fn persist_business_record_projection_progress(
+    root: &Path,
+    progress: &BusinessRecordProjectionProgress,
+) -> anyhow::Result<()> {
+    let path = business_record_projection_progress_path(root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temporary_path = path.with_extension("json.tmp");
+    fs::write(&temporary_path, serde_json::to_vec_pretty(progress)?)
+        .with_context(|| format!("write projection progress {}", temporary_path.display()))?;
+    replace_file_atomically(&temporary_path, &path)
+        .with_context(|| format!("publish projection progress {}", path.display()))?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_file_atomically(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::rename(source, destination)
+}
+
+#[cfg(windows)]
+fn replace_file_atomically(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source_wide = source
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination_wide = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let moved = unsafe {
+        MoveFileExW(
+            source_wide.as_ptr(),
+            destination_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if moved == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
     }
 }
 
@@ -4470,6 +4591,18 @@ fn business_record_projection_sleep_secs(
         BUSINESS_RECORD_PROJECTION_IDLE_BACKOFF_AFTER_TICKS,
         consecutive_idle_rounds,
     )
+}
+
+fn business_record_projection_loop_sleep_secs(
+    consecutive_idle_rounds: u32,
+    consecutive_failure_rounds: u32,
+    slice_incomplete: bool,
+) -> u64 {
+    if slice_incomplete {
+        BUSINESS_RECORD_PROJECTION_PARTIAL_SYNC_INTERVAL_SECS
+    } else {
+        business_record_projection_sleep_secs(consecutive_idle_rounds, consecutive_failure_rounds)
+    }
 }
 
 fn projection_sleep_secs(
@@ -7914,6 +8047,38 @@ async fn sync_business_record_projections_with_database(
     since_by_collection: &mut HashMap<String, i64>,
     queue_chat_repair_stamp: &mut Option<QueueChatRepairProjectionStamp>,
 ) -> anyhow::Result<usize> {
+    let mut after_record_id_by_collection = HashMap::<String, String>::new();
+    let mut next_collection_index = 0usize;
+    let mut count = 0usize;
+    loop {
+        let (synced, caught_up) = sync_business_record_projections_slice_with_database(
+            root,
+            database,
+            database_write_lock,
+            since_by_collection,
+            &mut after_record_id_by_collection,
+            &mut next_collection_index,
+            queue_chat_repair_stamp,
+            None,
+        )
+        .await?;
+        count = count.saturating_add(synced);
+        if caught_up {
+            return Ok(count);
+        }
+    }
+}
+
+async fn sync_business_record_projections_slice_with_database(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+    database_write_lock: &Arc<AsyncMutex<()>>,
+    since_by_collection: &mut HashMap<String, i64>,
+    after_record_id_by_collection: &mut HashMap<String, String>,
+    next_collection_index: &mut usize,
+    queue_chat_repair_stamp: &mut Option<QueueChatRepairProjectionStamp>,
+    document_budget: Option<usize>,
+) -> anyhow::Result<(usize, bool)> {
     let mut count = sync_knowledge_catalog_with_database(root, database).await?;
     let support_intake_root = root.to_path_buf();
     let support_intake_since_ms = *since_by_collection
@@ -7978,10 +8143,45 @@ async fn sync_business_record_projections_with_database(
     count += support_intake_count.changed_count
         + threads_relevance.changed_count
         + threads_app_relevance.changed_count;
-    for collection_name in collections {
+    for (collection, record_id) in &threads_relevance.projections {
+        let _database_guard = database_write_lock.lock().await;
+        let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
+        upsert_business_record_projection(root.clone(), database, *collection, record_id.clone())
+            .await?;
+    }
+    for (collection, record_id) in &threads_app_relevance.projections {
+        let _database_guard = database_write_lock.lock().await;
+        let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
+        upsert_business_record_projection(root.clone(), database, *collection, record_id.clone())
+            .await?;
+    }
+    for (source_collection, max_updated_at_ms) in &threads_relevance.source_cursors {
+        let cursor_key = match *source_collection {
+            "business_commands" => THREADS_CTOX_RELEVANCE_COMMANDS_SINCE_KEY,
+            "ctox_queue_tasks" => THREADS_CTOX_RELEVANCE_TASKS_SINCE_KEY,
+            _ => continue,
+        };
+        let previous = *since_by_collection.get(cursor_key).unwrap_or(&0);
+        if *max_updated_at_ms >= previous {
+            since_by_collection.insert(cursor_key.to_string(), max_updated_at_ms.saturating_add(1));
+        }
+    }
+    for (source_collection, max_updated_at_ms) in &threads_app_relevance.source_cursors {
+        let cursor_key = threads_app_relevance_cursor_key(source_collection);
+        let previous = *since_by_collection.get(&cursor_key).unwrap_or(&0);
+        if *max_updated_at_ms >= previous {
+            since_by_collection.insert(cursor_key, max_updated_at_ms.saturating_add(1));
+        }
+    }
+
+    let mut projected_documents = 0usize;
+    while *next_collection_index < collections.len() {
+        let collection_name = collections[*next_collection_index].clone();
         let mut since_ms = *since_by_collection.get(&collection_name).unwrap_or(&0);
-        let mut after_record_id = String::new();
-        let mut processed_page = false;
+        let mut after_record_id = after_record_id_by_collection
+            .get(&collection_name)
+            .cloned()
+            .unwrap_or_default();
         loop {
             // Keep the cross-loop lock bounded to one small page. Holding it
             // while comparing every Business OS record blocked command
@@ -8009,14 +8209,17 @@ async fn sync_business_record_projections_with_database(
             if documents.is_empty() {
                 since_by_collection.insert(
                     collection_name.clone(),
-                    if processed_page {
-                        since_ms.saturating_add(1)
-                    } else {
+                    if after_record_id.is_empty() {
                         since_ms
+                    } else {
+                        since_ms.saturating_add(1)
                     },
                 );
+                after_record_id_by_collection.remove(&collection_name);
+                *next_collection_index = next_collection_index.saturating_add(1);
                 break;
             }
+            let document_count = documents.len();
             let page_is_full = documents.len() >= BUSINESS_RECORD_PROJECTION_PAGE_SIZE;
             let collection = database
                 .collection(&collection_name)
@@ -8045,44 +8248,27 @@ async fn sync_business_record_projections_with_database(
             })?;
             since_ms = page_cursor_ms;
             after_record_id = page_cursor_id;
-            processed_page = true;
+            since_by_collection.insert(collection_name.clone(), since_ms);
+            after_record_id_by_collection.insert(collection_name.clone(), after_record_id.clone());
+            projected_documents = projected_documents.saturating_add(document_count);
             drop(_write_guard);
             drop(_database_guard);
             if !page_is_full {
                 since_by_collection.insert(collection_name.clone(), since_ms.saturating_add(1));
+                after_record_id_by_collection.remove(&collection_name);
+                *next_collection_index = next_collection_index.saturating_add(1);
                 break;
+            }
+            if document_budget.is_some_and(|budget| projected_documents >= budget) {
+                return Ok((count, false));
             }
             tokio::task::yield_now().await;
         }
-    }
-    for (collection, record_id) in threads_relevance.projections {
-        let _database_guard = database_write_lock.lock().await;
-        let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
-        upsert_business_record_projection(root.clone(), database, collection, record_id).await?;
-    }
-    for (collection, record_id) in threads_app_relevance.projections {
-        let _database_guard = database_write_lock.lock().await;
-        let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
-        upsert_business_record_projection(root.clone(), database, collection, record_id).await?;
-    }
-    for (source_collection, max_updated_at_ms) in threads_relevance.source_cursors {
-        let cursor_key = match source_collection {
-            "business_commands" => THREADS_CTOX_RELEVANCE_COMMANDS_SINCE_KEY,
-            "ctox_queue_tasks" => THREADS_CTOX_RELEVANCE_TASKS_SINCE_KEY,
-            _ => continue,
-        };
-        let previous = *since_by_collection.get(cursor_key).unwrap_or(&0);
-        if max_updated_at_ms >= previous {
-            since_by_collection.insert(cursor_key.to_string(), max_updated_at_ms.saturating_add(1));
+        if document_budget.is_some_and(|budget| projected_documents >= budget) {
+            return Ok((count, false));
         }
     }
-    for (source_collection, max_updated_at_ms) in threads_app_relevance.source_cursors {
-        let cursor_key = threads_app_relevance_cursor_key(source_collection);
-        let previous = *since_by_collection.get(&cursor_key).unwrap_or(&0);
-        if max_updated_at_ms >= previous {
-            since_by_collection.insert(cursor_key, max_updated_at_ms.saturating_add(1));
-        }
-    }
+    *next_collection_index = 0;
     {
         let _database_guard = database_write_lock.lock().await;
         let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
@@ -8093,7 +8279,7 @@ async fn sync_business_record_projections_with_database(
         )
         .await?;
     }
-    Ok(count)
+    Ok((count, true))
 }
 
 async fn reconcile_ctox_queue_task_projections(
@@ -14761,6 +14947,18 @@ mod tests {
         assert_eq!(
             business_record_projection_sleep_secs(0, u32::MAX),
             BUSINESS_RECORD_PROJECTION_ERROR_BACKOFF_MAX_SECS
+        );
+    }
+
+    #[test]
+    fn business_record_projection_partial_slices_leave_runtime_headroom() {
+        assert_eq!(
+            business_record_projection_loop_sleep_secs(0, 0, true),
+            BUSINESS_RECORD_PROJECTION_PARTIAL_SYNC_INTERVAL_SECS
+        );
+        assert_eq!(
+            business_record_projection_loop_sleep_secs(0, 0, false),
+            BUSINESS_RECORD_PROJECTION_SYNC_INTERVAL_SECS
         );
     }
 
