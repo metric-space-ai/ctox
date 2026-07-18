@@ -13,6 +13,8 @@ const COPY = {
     exportArticle15: 'Auskunft (Art. 15)', eraseArticle17: 'Löschen (Art. 17)',
     exportTitle: 'Recht auf Auskunft (DSGVO Art. 15)', eraseTitle: 'Recht auf Löschung (DSGVO Art. 17)',
     entries: 'Einträge', entriesEmpty: 'Noch keine Einträge.', commandOffline: 'Offline: Befehlsdienst nicht verfügbar.',
+    dataLocked: 'Datenzugriff gesperrt.',
+    dataLockedHint: 'Die App ist installiert. Gib business_consents im App Store frei, um vorhandene Einwilligungen zu sehen.',
     subjectRequired: 'Subjekt-ID erforderlich.', dispatchOffline: 'Offline: Befehl konnte nicht gesendet werden.',
     checkFailed: 'Prüfung fehlgeschlagen.', consentPresent: 'Einwilligung vorhanden.', consentMissing: 'Keine gültige Einwilligung.',
     subject: 'Subjekt', purpose: 'Zweck', existenceOnly: '— (nur Existenzprüfung)', decision: 'Entscheidung',
@@ -27,6 +29,8 @@ const COPY = {
     exportArticle15: 'Access request (Art. 15)', eraseArticle17: 'Erase (Art. 17)',
     exportTitle: 'Right of access (GDPR Art. 15)', eraseTitle: 'Right to erasure (GDPR Art. 17)',
     entries: 'entries', entriesEmpty: 'No entries yet.', commandOffline: 'Offline: command service unavailable.',
+    dataLocked: 'Data access is locked.',
+    dataLockedHint: 'The app is installed. Grant business_consents in the App Store to view existing consent records.',
     subjectRequired: 'Subject ID is required.', dispatchOffline: 'Offline: command could not be sent.',
     checkFailed: 'Consent check failed.', consentPresent: 'Valid consent exists.', consentMissing: 'No valid consent.',
     subject: 'Subject', purpose: 'Purpose', existenceOnly: '— (existence check only)', decision: 'Decision',
@@ -63,6 +67,26 @@ export async function mount(ctx) {
 
   let rowsCache = [];
   const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || null; } catch { return null; } };
+  const canReadCollection = () => {
+    const permissionCheck = ctx.permissions?.canReadCollection;
+    return typeof permissionCheck !== 'function' || permissionCheck(PRIMARY) === true;
+  };
+
+  function isPermissionDenied(error) {
+    return error?.code === 'CTOX_BUSINESS_OS_PERMISSION_DENIED'
+      || error?.name === 'BusinessOsPermissionError';
+  }
+
+  function renderLockedCollection() {
+    rowsCache = [];
+    if (countEl) countEl.textContent = '— ' + t('entries');
+    if (listEl) {
+      listEl.innerHTML = '<div class="ctox-empty ctox-empty--locked" role="status">'
+        + '<strong>' + esc(t('dataLocked')) + '</strong>'
+        + '<span>' + esc(t('dataLockedHint')) + '</span>'
+        + '</div>';
+    }
+  }
 
   function setGate(html, kind) {
     if (!gateEl) return;
@@ -71,11 +95,23 @@ export async function mount(ctx) {
   }
 
   async function render() {
+    if (!canReadCollection()) {
+      renderLockedCollection();
+      return;
+    }
     const col = collection();
     let rows = [];
     if (col?.find) {
-      try { const docs = await col.find({ selector: {} }).exec(); rows = docs.map((d) => (typeof d.toJSON === 'function' ? d.toJSON() : d)).filter((r) => !r._deleted); }
-      catch (e) { console.error('[consent] load failed:', e); }
+      try {
+        const docs = await col.find({ selector: {} }).exec();
+        rows = docs.map((d) => (typeof d.toJSON === 'function' ? d.toJSON() : d)).filter((r) => !r._deleted);
+      } catch (error) {
+        if (isPermissionDenied(error)) {
+          renderLockedCollection();
+          return;
+        }
+        console.error('[consent] load failed:', error);
+      }
     }
     rowsCache = rows;
     if (countEl) countEl.textContent = rows.length + ' ' + t('entries');
