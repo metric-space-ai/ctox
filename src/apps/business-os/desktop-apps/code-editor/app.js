@@ -89,10 +89,12 @@ export async function mount(container, ctx) {
               <textarea data-source-agent-task class="source-editor-agent-task" rows="5" placeholder="Was soll der Agent an dieser App ändern?" required></textarea>
               <div class="source-editor-agent-actions">
                 <span class="source-editor-agent-model">Model: CTOX (Standard)</span>
+                <button type="button" data-source-agent-open-app class="source-editor-agent-openapp" title="Diese App in der Coding-Agent-App öffnen"><span aria-hidden="true">↗</span><span>Coding-Agent-App</span></button>
                 <button type="submit" data-source-agent-run class="source-editor-agent-run">Delegieren</button>
               </div>
               <p data-source-agent-hint class="source-editor-agent-hint" aria-live="polite"></p>
             </form>
+            <div class="source-editor-agent-thread" data-source-agent-thread aria-live="polite"></div>
           </aside>
         </div>
         <footer class="source-editor-status" data-source-status>Lade Source...</footer>
@@ -127,6 +129,8 @@ export async function mount(container, ctx) {
     agentTask: container.querySelector('[data-source-agent-task]'),
     agentRun: container.querySelector('[data-source-agent-run]'),
     agentHint: container.querySelector('[data-source-agent-hint]'),
+    agentThread: container.querySelector('[data-source-agent-thread]'),
+    agentOpenApp: container.querySelector('[data-source-agent-open-app]'),
     monacoHost: container.querySelector('[data-source-monaco]'),
     fallback: container.querySelector('[data-source-fallback]'),
     placeholder: container.querySelector('[data-source-placeholder]'),
@@ -211,11 +215,19 @@ export async function mount(container, ctx) {
     refs.agentPanel.hidden = !state.agentOpen;
     refs.agent.classList.toggle('is-active', state.agentOpen);
     refs.agent.setAttribute('aria-pressed', state.agentOpen ? 'true' : 'false');
-    if (state.agentOpen) refs.agentTask.focus();
+    if (state.agentOpen) {
+      refs.agentTask.focus();
+      loadAgentThread();
+    }
   });
   refs.agentForm.addEventListener('submit', (event) => {
     event.preventDefault();
     delegateAgentTurn();
+  });
+  refs.agentOpenApp?.addEventListener('click', () => {
+    if (!state.moduleId) return;
+    // Cross-link into the aggregate coding-agent app, focused on this app.
+    ctx.openDesktopApp?.('coding-agents', { args: { moduleId: state.moduleId, moduleTitle: state.moduleTitle } });
   });
 
   const monacoReady = initMonaco().catch((error) => {
@@ -817,6 +829,7 @@ export async function mount(container, ctx) {
         setStatus(`pi-Agent fertig — ${applied} Datei${applied === 1 ? '' : 'en'} geändert. Lade neu…`);
         refs.agentTask.value = '';
         await loadBundle();
+        await loadAgentThread();
         if (state.historyOpen) await renderHistory();
       }
     } catch (error) {
@@ -833,6 +846,66 @@ export async function mount(container, ctx) {
     if (!refs.agentHint) return;
     refs.agentHint.textContent = text || '';
     refs.agentHint.classList.toggle('is-error', Boolean(isError));
+  }
+
+  // The per-app agent thread: this module's coding turns from the command log,
+  // so the source editor is where you operate the app's coding conversation.
+  async function loadAgentThread() {
+    if (!refs.agentThread) return;
+    if (!state.moduleId) { refs.agentThread.innerHTML = ''; return; }
+    const toPlain = (doc) => (typeof doc?.toJSON === 'function' ? doc.toJSON() : doc);
+    let turns = [];
+    try {
+      const collection = ctx.db?.collection?.('business_commands');
+      let docs = [];
+      if (collection?.find) docs = ((await collection.find().exec()) || []).map(toPlain);
+      else if (collection?.toArray) docs = (await collection.toArray()).map(toPlain);
+      turns = docs
+        .filter((doc) => doc && doc.is_deleted !== true && doc._deleted !== true)
+        .filter((doc) => String(doc.command_type || doc.type || '') === 'ctox.coding.turn')
+        .map((doc) => {
+          const payload = doc.payload && typeof doc.payload === 'object' ? doc.payload : {};
+          const result = doc.result && typeof doc.result === 'object' ? doc.result : {};
+          return {
+            moduleId: String(payload.module_id || result.module_id || ''),
+            prompt: String(payload.prompt || ''),
+            status: String(doc.status || ''),
+            ok: result.ok !== false,
+            error: result.ok === false ? String(result.error || '') : '',
+            applied: Array.isArray(result.applied_files) ? result.applied_files.length : 0,
+            timeMs: Number(doc.created_at_ms || doc.updated_at_ms || 0),
+          };
+        })
+        .filter((turn) => turn.moduleId === state.moduleId)
+        .sort((a, b) => b.timeMs - a.timeMs)
+        .slice(0, 12);
+    } catch (error) {
+      console.warn('[source-editor] agent thread load failed:', error);
+    }
+    renderAgentThread(turns);
+  }
+
+  function renderAgentThread(turns) {
+    if (!refs.agentThread) return;
+    if (!turns.length) {
+      refs.agentThread.innerHTML = '<p class="source-editor-agent-thread-empty">Noch keine Agent-Turns für diese App.</p>';
+      return;
+    }
+    const rows = turns.map((turn) => {
+      const cls = turn.status === 'failed' || !turn.ok
+        ? 'is-error'
+        : turn.status === 'completed' ? 'is-ok' : '';
+      const meta = [];
+      if (turn.timeMs > 0) meta.push(new Date(turn.timeMs).toLocaleString());
+      if (turn.applied) meta.push(`${turn.applied} Datei${turn.applied === 1 ? '' : 'en'}`);
+      if (turn.error) meta.push(turn.error);
+      return `<div class="source-editor-agent-turn ${cls}">
+        <span class="source-editor-agent-turn-prompt">${escapeHtml(turn.prompt || turn.moduleId)}</span>
+        <span class="source-editor-agent-turn-meta">${escapeHtml(meta.filter(Boolean).join(' · '))}</span>
+      </div>`;
+    }).join('');
+    refs.agentThread.innerHTML =
+      `<strong class="source-editor-agent-thread-title">Thread — ${escapeHtml(state.moduleId)}</strong>${rows}`;
   }
 
   async function loadSourceFilesFromRxdb() {
@@ -1547,6 +1620,63 @@ function ensureStyles() {
     }
     .source-editor-agent-hint.is-error {
       color: var(--danger, #dc2626);
+    }
+    .source-editor-agent-openapp {
+      padding: 6px 10px;
+      border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text, inherit);
+      font-size: 12px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .source-editor-agent-openapp:hover {
+      background: color-mix(in srgb, var(--accent, #6366f1) 12%, transparent);
+    }
+    .source-editor-agent-thread {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 12px;
+      overflow-y: auto;
+    }
+    .source-editor-agent-thread-title {
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .source-editor-agent-thread-empty {
+      margin: 0;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .source-editor-agent-turn {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 7px 9px;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--line) 22%, transparent);
+    }
+    .source-editor-agent-turn.is-ok {
+      background: color-mix(in srgb, var(--success, #16a34a) 12%, transparent);
+    }
+    .source-editor-agent-turn.is-error {
+      background: color-mix(in srgb, var(--danger, #dc2626) 12%, transparent);
+    }
+    .source-editor-agent-turn-prompt {
+      font-size: 13px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .source-editor-agent-turn-meta {
+      font-size: 11px;
+      color: var(--muted);
     }
     .source-editor-lines,
     .source-editor textarea {

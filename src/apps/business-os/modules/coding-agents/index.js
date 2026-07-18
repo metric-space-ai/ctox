@@ -188,6 +188,7 @@ function bindElements(root) {
   els.activeAppKicker = root.querySelector('#ca-active-app-kicker');
   els.activeAppTitle = root.querySelector('#ca-active-app-title');
   els.modelBadge = root.querySelector('#ca-model-badge');
+  els.openEditor = root.querySelector('#ca-open-editor');
   els.turnForm = root.querySelector('#ca-turn-form');
   els.taskInput = root.querySelector('#ca-task-input');
   els.modelSelect = root.querySelector('#ca-model-select');
@@ -238,6 +239,14 @@ function wireEvents() {
       delegateTurn();
     });
   }
+  if (els.openEditor) {
+    els.openEditor.addEventListener('click', () => {
+      const mod = selectedModule();
+      if (!mod) return;
+      // Cross-link into the app's source editor (the per-app IDE + agent thread).
+      state.ctx?.openDesktopApp?.('code-editor', { args: { moduleId: mod.id, moduleTitle: mod.title } });
+    });
+  }
 }
 
 /* App/Module picker */
@@ -259,8 +268,14 @@ async function loadApps() {
     state.listState = 'error';
   }
   renderAppList();
+  // A cross-link from an app's source editor can launch this app focused on that
+  // app (ctx.args.moduleId); otherwise fall back to the first app.
+  const requested = String(state.ctx?.args?.moduleId || '').trim();
   if (state.modules.length && !state.modules.some((mod) => mod.id === state.activeModuleId)) {
-    selectApp(state.modules[0].id);
+    const target = requested && state.modules.some((mod) => mod.id === requested)
+      ? requested
+      : state.modules[0].id;
+    selectApp(target);
   } else {
     updateWorkbenchHeader();
     updateFormState();
@@ -335,6 +350,7 @@ function updateWorkbenchHeader() {
   const mod = selectedModule();
   if (els.activeAppKicker) els.activeAppKicker.textContent = mod ? mod.id : t('workbenchKicker');
   if (els.activeAppTitle) els.activeAppTitle.textContent = mod ? mod.title : t('workbenchEmptyTitle');
+  if (els.openEditor) els.openEditor.disabled = !mod;
 }
 
 function updateFormState() {
