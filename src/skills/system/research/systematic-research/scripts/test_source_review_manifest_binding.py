@@ -91,23 +91,6 @@ class SourceReviewManifestBindingTests(unittest.TestCase):
             }],
             "claims": [claim],
             "data_files": [],
-            "reviews": [
-                {"review_type": "source", "reviewer_id": "reviewer-source", "status": "pass",
-                 "reviewed_ids": [evidence_id],
-                 "receipt_artifact": self._review_artifact(
-                     f"{evidence_id}-source-review.json", "source", "reviewer-source", [evidence_id]
-                 )},
-                {"review_type": "data", "reviewer_id": "reviewer-data", "status": "pass",
-                 "reviewed_ids": [evidence_id],
-                 "receipt_artifact": self._review_artifact(
-                     f"{evidence_id}-data-review.json", "data", "reviewer-data", [evidence_id]
-                 )},
-                {"review_type": "claim", "reviewer_id": "reviewer-claim", "status": "pass",
-                 "reviewed_ids": [f"claim-{evidence_id}"],
-                 "receipt_artifact": self._review_artifact(
-                     f"{evidence_id}-claim-review.json", "claim", "reviewer-claim", [f"claim-{evidence_id}"]
-                 )},
-            ],
             "knowledge": {"living": False},
         }
 
@@ -118,27 +101,6 @@ class SourceReviewManifestBindingTests(unittest.TestCase):
             "path": name,
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         }
-
-    def _review_artifact(
-        self,
-        name: str,
-        review_type: str,
-        reviewer_id: str,
-        reviewed_ids: list[str],
-    ) -> dict[str, str]:
-        return self._artifact(
-            name,
-            json.dumps({
-                "schema_version": "ctox.research.review.v1",
-                "review_type": review_type,
-                "reviewer_id": reviewer_id,
-                "status": "pass",
-                "reviewed_ids": reviewed_ids,
-                "research_run_id": "run-1",
-                "research_command_id": "command-1",
-                "research_attempt_id": "attempt-1",
-            }),
-        )
 
     def _eligible_status_row(self, binding: dict[str, object] | None = None) -> dict[str, str]:
         binding = binding or self.bindings["ev-1"]

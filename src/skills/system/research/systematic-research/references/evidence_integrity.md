@@ -46,16 +46,17 @@ checksums. Only `downloaded=true`, `original_data=true`, `generated=false`,
 table or claim. Missing, corrupt, ambiguous, transformed, or invented rows go
 to a quarantine record with a reason; do not impute or fabricate replacements.
 
-## Independent review and living outputs
+## Review gate and living outputs
 
-Before promotion, persist three independent, passing reviews with distinct
-reviewer identities: `source` (authority, URL, 2xx, freshness, full content,
-relevance), `data` (download and deterministic parsing), and `claim` (scope,
-units, derivation, and exact lineage). The parent agent resolves conflicts;
-one review cannot self-approve another.
+Before promotion, the deterministic evidence guard checks source authority,
+canonical URL, current 2xx full content, freshness, hashes, original data,
+parsing, units, derivations, and exact claim lineage. CTOX then runs its
+independent service-owned completion review. Free subagents and parent-created
+review threads are forbidden.
 
 Living Knowledge and reports are append-only versions. A refresh creates a new
-Knowledge version from new snapshots, reruns all three reviews, and records
+Knowledge version from new snapshots, reruns the evidence and completion
+review gates, and records
 explicit invalidations for claims/tables/reports that depended on superseded
 snapshots. A report records its Knowledge version and claim IDs. A superseded
 or invalidated version is never silently made current.

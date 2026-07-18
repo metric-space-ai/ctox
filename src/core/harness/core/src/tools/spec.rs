@@ -48,7 +48,6 @@ use ctox_protocol::openai_models::ModelPreset;
 use ctox_protocol::openai_models::WebSearchToolType;
 use ctox_protocol::protocol::SandboxPolicy;
 use ctox_protocol::protocol::SessionSource;
-use ctox_protocol::protocol::SubAgentSource;
 use ctox_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
@@ -63,6 +62,7 @@ const TOOL_SEARCH_DESCRIPTION_TEMPLATE: &str =
 const TOOL_SUGGEST_DESCRIPTION_TEMPLATE: &str =
     include_str!("../../templates/search_tool/tool_suggest_description.md");
 const WEB_SEARCH_CONTENT_TYPES: [&str; 2] = ["text", "image"];
+const FREE_SUBAGENT_TOOLS_REMOVED: bool = true;
 
 fn unified_exec_output_schema() -> JsonValue {
     json!({
@@ -371,14 +371,12 @@ impl ToolsConfig {
         let include_js_repl = features.enabled(Feature::JsRepl);
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
-        let subagent_session = matches!(session_source, SessionSource::SubAgent(_));
-        let include_collab_tools = features.enabled(Feature::Collab) && !subagent_session;
-        let include_agent_jobs = features.enabled(Feature::SpawnCsv) && !subagent_session;
-        let include_agent_job_worker_tools = matches!(
-            session_source,
-            SessionSource::SubAgent(SubAgentSource::Other(label))
-                if label.starts_with("agent_job:")
-        );
+        // CTOX owns durable work decomposition. A model-controlled parent may
+        // never create free child agents; coding agents use the separate
+        // persisted Business OS provider channel.
+        let include_collab_tools = false;
+        let include_agent_jobs = false;
+        let include_agent_job_worker_tools = false;
         let include_request_user_input = !matches!(session_source, SessionSource::SubAgent(_));
         let include_default_mode_request_user_input =
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
@@ -433,14 +431,7 @@ impl ToolsConfig {
         };
 
         let agent_jobs_worker_tools = include_agent_job_worker_tools;
-        // Review sessions may use a WorkspaceWrite sandbox whose cwd is an
-        // isolated scratch directory. Their authoritative workspace remains
-        // outside that cwd and read-only, so the role — not only the raw
-        // sandbox enum — must keep the reviewer tool surface non-mutating.
-        let read_only_surface = matches!(
-            session_source,
-            SessionSource::SubAgent(SubAgentSource::Review)
-        ) || matches!(sandbox_policy, SandboxPolicy::ReadOnly { .. });
+        let read_only_surface = matches!(sandbox_policy, SandboxPolicy::ReadOnly { .. });
 
         Self {
             available_models: available_models_ref.to_vec(),
@@ -4355,7 +4346,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler("artifacts", artifacts_handler);
     }
 
-    if config.collab_tools && !config.read_only_surface {
+    if !FREE_SUBAGENT_TOOLS_REMOVED && config.collab_tools && !config.read_only_surface {
         push_tool_spec(
             &mut builder,
             create_spawn_agent_tool(config),
@@ -4400,7 +4391,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler("close_agent", Arc::new(CloseAgentHandler));
     }
 
-    if config.agent_jobs_tools && !config.read_only_surface {
+    if !FREE_SUBAGENT_TOOLS_REMOVED && config.agent_jobs_tools && !config.read_only_surface {
         let agent_jobs_handler = Arc::new(BatchJobHandler);
         push_tool_spec(
             &mut builder,
@@ -4410,7 +4401,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         );
         builder.register_handler("spawn_agents_on_csv", agent_jobs_handler.clone());
     }
-    if config.agent_jobs_worker_tools && !config.read_only_surface {
+    if !FREE_SUBAGENT_TOOLS_REMOVED && config.agent_jobs_worker_tools && !config.read_only_surface {
         let agent_jobs_handler = Arc::new(BatchJobHandler);
         push_tool_spec(
             &mut builder,

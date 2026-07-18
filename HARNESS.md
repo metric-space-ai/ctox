@@ -7,15 +7,15 @@ There are three related layers:
    runs one bounded worker slice, reviews the result, records state, and then
    releases or requeues the durable item.
 2. The forked Codex runtime under `src/core/harness/` provides the in-process agent
-   runtime, tools, thread control, subagents, state store, hooks, policy checks,
-   and API/client crates.
+   runtime, tools, thread control, state store, hooks, policy checks, and
+   API/client crates. CTOX-managed sessions do not expose free subagents.
 3. The harness-flow feature in `src/core/service/harness_flow.rs` is an
    observability renderer. It does not execute work. It reads runtime evidence
    and renders the current work path as JSON or ASCII for CLI, TUI, desktop, and
    web surfaces.
 
 The core design rule is still durable-state first: prompts may describe work,
-but completion, review, retries, subagent activity, spawn edges, and outcome
+but completion, review, retries, durable spawn edges, and outcome
 evidence must be explainable from persisted state, not from assistant prose.
 
 ## Runtime State
@@ -416,30 +416,23 @@ Current contract families:
 Unregistered, unstable, cyclic-without-budget, over-budget, and exhausted-budget
 spawns are rejected and recorded as evidence.
 
-## Subagents
+## No Free Subagents
 
-Subagents are implemented in the forked Codex runtime under `src/core/harness/core`.
-The CTOX fork record is `src/core/harness/FORK.md`.
+CTOX-managed harness sessions never expose `spawn_agent`,
+`spawn_agents_on_csv`, or the related child-control tools. The parent model
+cannot choose a child model, create a child thread, or delegate completion.
+Work decomposition belongs to the durable CTOX state machine and therefore
+uses registered queue/work-item spawn contracts with finite budgets.
 
-Subagents are leaf workers:
+The only external agent exception is the Coding Agents module. It is a
+separate Business OS provider channel under `src/core/coding_agents/`: commands,
+workspace grants, sessions, events, and outcomes are persisted and policy
+checked. It is not a Harness child-agent capability.
 
-- The parent owns the user-visible task, review, rework, completion, and
-  owner-visible claims.
-- Subagent sessions do not get recursive collaboration/spawn tools.
-- `spawn_agents_on_csv` is removed from subagent sessions.
-- Agent-job workers keep workspace tools plus `report_agent_job_result`; they
-  do not receive spawn, channel, meeting, acknowledgement, or control-plane
-  mutation tools.
-- Thread-spawn subagents are bounded by `agents.max_depth` and
-  `agents.max_threads`.
-- Local model providers serialize subagent work; API-backed providers may run
-  parallel work.
-
-The static liveness analyzer in
-`src/core/harness/core/src/harness_spawn_liveness.rs` checks thread-spawn,
-agent-job-worker, and internal-subagent contracts. Its ranking functions are
-`max_depth - child_depth`, `pending_agent_job_items`, and single internal task
-invocation respectively.
+Completion review is also server-owned. CTOX starts a bounded read-only
+`Exec` session after deterministic validation; it is never represented as a
+child or subagent session. The parent cannot invoke, configure, message, or
+reuse it, and its tool surface contains no collaboration or mutation tools.
 
 ## Session Capability Profiles
 
@@ -449,10 +442,9 @@ session metadata. The enforced surfaces are:
 | Profile | Effective boundary |
 | --- | --- |
 | `WorkspaceWorker` | workspace write, network as configured; `runtime/`, `.ctox`, `.codex`, `.agents`, and Git metadata are read-only sandbox subpaths |
-| `Reviewer` | authoritative workspace/runtime read-only; a disposable scratch CWD is writable for copied build/check inputs; no patch, channel, meeting, artifact, collaboration, or mutating MCP surface |
+| `Reviewer` | full filesystem read-only; no patch, channel, meeting, artifact, collaboration, or mutating MCP surface |
 | `Planner` | read-only planning surface; no active mutation tools |
 | `Summarizer` | explicit `Some([])` dynamic-tool contract and no active tools |
-| `AgentJobLeaf` | workspace tools plus `report_agent_job_result`; no spawn/channel/meeting/control-plane mutation |
 
 An explicitly persisted empty dynamic-tool list is authoritative and deletes
 older restored dynamic-tool state; it never means “restore defaults”. Durable
@@ -544,8 +536,8 @@ ctox process-mining prune --sqlite-access-window 200000
 ```
 
 `spawn-liveness` combines the core durable-spawn analyzer with the forked
-Codex subagent analyzer and exits non-zero when either layer is not provably
-bounded.
+Harness no-subagent conformance analyzer. It exits non-zero if durable spawning
+is not bounded or if any free child-agent capability becomes reachable.
 
 ## Business OS Acceptance Bench
 

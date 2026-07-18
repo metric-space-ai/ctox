@@ -53,16 +53,21 @@ pub(crate) struct ToolRouterParams<'a> {
 fn is_direct_code_mode_runtime_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,
+        "ctox_web_search" | "ctox_web_read" | "ctox_scholarly_search" | "ctox_deep_research"
+    )
+}
+
+fn is_removed_free_subagent_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
         "spawn_agent"
+            | "spawn_agents_on_csv"
             | "send_input"
             | "list_agents"
             | "resume_agent"
             | "wait_agent"
             | "close_agent"
-            | "ctox_web_search"
-            | "ctox_web_read"
-            | "ctox_scholarly_search"
-            | "ctox_deep_research"
+            | "report_agent_job_result"
     )
 }
 
@@ -87,8 +92,9 @@ impl ToolRouter {
                 .iter()
                 .filter_map(|configured_tool| {
                     let tool_name = configured_tool.spec.name();
-                    if !is_code_mode_nested_tool(tool_name)
-                        || is_direct_code_mode_runtime_tool(tool_name)
+                    if !is_removed_free_subagent_tool(tool_name)
+                        && (!is_code_mode_nested_tool(tool_name)
+                            || is_direct_code_mode_runtime_tool(tool_name))
                     {
                         Some(configured_tool.spec.clone())
                     } else {
@@ -99,6 +105,9 @@ impl ToolRouter {
         } else {
             specs
                 .iter()
+                .filter(|configured_tool| {
+                    !is_removed_free_subagent_tool(configured_tool.spec.name())
+                })
                 .map(|configured_tool| configured_tool.spec.clone())
                 .collect()
         };
@@ -262,6 +271,12 @@ impl ToolRouter {
             call_id,
             payload,
         } = call;
+        if is_removed_free_subagent_tool(&tool_name) {
+            return Err(FunctionCallError::RespondToModel(
+                "free subagent tools are removed from CTOX; durable work decomposition belongs to CTOX and coding agents use the Business OS provider channel"
+                    .to_string(),
+            ));
+        }
         let payload_outputs_custom = matches!(payload, ToolPayload::Custom { .. });
         let payload_outputs_tool_search = matches!(payload, ToolPayload::ToolSearch { .. });
         let failure_call_id = call_id.clone();

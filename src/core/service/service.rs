@@ -5848,7 +5848,7 @@ fn start_prompt_worker(
                 if is_systematic_research_job(&job) {
                     let required_depth = required_systematic_research_depth(&job).as_str();
                     prompt.push_str(&format!(
-                        "\n\nServer-bound research attempt:\nResearch Attempt ID: {command_turn_id}\nRequired Deep Research Depth: {required_depth}\nRequired Research Reviewer Model: {SYSTEMATIC_RESEARCH_REVIEWER_MODEL}\nWrite the exact attempt ID to research_attempt_id in validation/evidence-manifest.json. Invoke typed ctox_deep_research at the required depth with a persisted research workspace inside the task workspace. Every candidate-batch and final review spawn_agent call must set model to the exact required reviewer model. Completion rejects any other attempt ID, manifest path, shallower depth, no-workspace run, or reviewer model."
+                        "\n\nServer-bound research attempt:\nResearch Attempt ID: {command_turn_id}\nRequired Deep Research Depth: {required_depth}\nWrite the exact attempt ID to research_attempt_id in validation/evidence-manifest.json. Invoke typed ctox_deep_research at the required depth with a persisted research workspace inside the task workspace. Do not spawn or delegate to child agents. CTOX validates original-content receipts, hashes, data integrity, and claim lineage deterministically before its independent service-owned completion-review gate. Completion rejects any other attempt ID, manifest path, shallower depth, no-workspace run, or missing evidence."
                     ));
                 }
                 outbound_email_first_execution_prompt(&job, prompt)
@@ -6222,12 +6222,12 @@ fn start_prompt_worker(
                 None
             };
             // Completion review gate: when the executor's slice succeeded,
-            // hand the slice to a separate, skeptical reviewer agent (a fresh
-            // PersistentSession with its own clean context — no executor turn
-            // history). The reviewer either ratifies the result (PASS) or
-            // CTOX enqueues a rework slice with the reviewer's report as
-            // input. Reviewer errors/timeouts hold terminal completion; they
-            // must not silently complete the worker slice.
+            // hand the slice to the server-owned skeptical evaluator (a fresh
+            // read-only Exec session with clean context and no executor turn
+            // history). The evaluator either ratifies the result (PASS) or
+            // CTOX enqueues a rework slice with its report as input. Evaluator
+            // errors/timeouts hold terminal completion; they must not silently
+            // complete the worker slice.
             let typed_result = result
                 .as_ref()
                 .ok()
@@ -8055,14 +8055,14 @@ fn start_prompt_worker(
     });
 }
 
-/// Hand the just-completed slice to a separate completion-reviewer agent.
+/// Hand the just-completed slice to the server-owned completion evaluator.
 ///
-/// The reviewer runs in a fresh `PersistentSession` (its own clean codex-core
-/// thread, no executor turn history) with a skeptical, scope-bound system
-/// prompt. It either ratifies the slice (PASS) or surfaces concrete
+/// The evaluator runs in a fresh read-only `Exec` session (its own clean
+/// codex-core thread, no executor turn history) with a skeptical, scope-bound
+/// system prompt. It either ratifies the slice (PASS) or surfaces concrete
 /// objections (FAIL/PARTIAL). On rejection, the sanitized feedback is fed back
-/// to the same main-agent work item; the raw reviewer report remains audit
-/// evidence and must not become a new review-owned worker task.
+/// to the same main work item; the raw report remains audit evidence and must
+/// not become evaluator-owned work.
 ///
 /// Failures inside the review path (session start errors, gateway timeouts) are
 /// fail-closed for review-required work. A missing reviewer verdict is not a
@@ -10766,8 +10766,6 @@ fn is_systematic_research_job(job: &QueuedPrompt) -> bool {
         || job.prompt.contains("research.knowledge.refresh")
 }
 
-const SYSTEMATIC_RESEARCH_REVIEWER_MODEL: &str = "gpt-5.6-luna";
-
 fn business_os_app_validation_may_own_completion(job: &QueuedPrompt) -> bool {
     !is_systematic_research_job(job)
         && business_os_app_module_target_from_prompt(&job.prompt).is_some()
@@ -11170,141 +11168,6 @@ fn validate_systematic_research_web_receipts(
     Ok(())
 }
 
-fn validate_systematic_research_subagent_reviews(
-    manifest: &Value,
-    workspace: &Path,
-    attempt_started_at: u64,
-) -> Result<()> {
-    let reviews = manifest
-        .get("reviews")
-        .and_then(Value::as_array)
-        .context("evidence manifest has no reviews array")?;
-    let batch_reviewers = manifest
-        .get("batch_reviewer_thread_ids")
-        .and_then(Value::as_array)
-        .context("evidence manifest has no batch_reviewer_thread_ids array")?;
-    if batch_reviewers.len() < 3 {
-        anyhow::bail!(
-            "systematic research requires at least three candidate-batch subagent reviews"
-        );
-    }
-
-    let mut reviewer_thread_ids = reviews
-        .iter()
-        .map(|review| {
-            review
-                .get("reviewer_thread_id")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .context("research review is missing reviewer_thread_id")
-        })
-        .collect::<Result<Vec<_>>>()?;
-    reviewer_thread_ids.extend(
-        batch_reviewers
-            .iter()
-            .map(|value| {
-                value
-                    .as_str()
-                    .map(str::to_string)
-                    .context("batch_reviewer_thread_ids contains a non-string value")
-            })
-            .collect::<Result<Vec<_>>>()?,
-    );
-
-    let distinct = reviewer_thread_ids
-        .iter()
-        .collect::<std::collections::BTreeSet<_>>();
-    if distinct.len() != reviewer_thread_ids.len() {
-        anyhow::bail!("research batch and completion reviews must use distinct subagent threads");
-    }
-
-    let codex_home =
-        ctox_core::config::find_codex_home().context("resolve harness state directory")?;
-    let state_db = [
-        codex_home.join("state_5.sqlite"),
-        codex_home.join("sqlite/state_5.sqlite"),
-    ]
-    .into_iter()
-    .find(|path| path.is_file())
-    .context("systematic research requires the durable harness state database")?;
-    let conn = Connection::open_with_flags(
-        &state_db,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .with_context(|| format!("open harness state database {}", state_db.display()))?;
-    validate_systematic_research_subagent_reviews_from_conn(
-        &conn,
-        workspace,
-        attempt_started_at,
-        &reviewer_thread_ids,
-    )
-}
-
-fn validate_systematic_research_subagent_reviews_from_conn(
-    conn: &Connection,
-    workspace: &Path,
-    attempt_started_at: u64,
-    reviewer_thread_ids: &[String],
-) -> Result<()> {
-    let workspace = workspace
-        .canonicalize()
-        .with_context(|| format!("canonicalize research workspace {}", workspace.display()))?;
-    let mut parent_thread_id: Option<String> = None;
-    for reviewer_thread_id in reviewer_thread_ids {
-        let (parent, created_at, cwd, model) = conn
-            .query_row(
-                "SELECT subagent_parent_thread_id, created_at, cwd, model \
-                 FROM threads \
-                 WHERE id = ?1 AND subagent_parent_thread_id IS NOT NULL",
-                params![reviewer_thread_id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, u64>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                    ))
-                },
-            )
-            .optional()
-            .with_context(|| {
-                format!(
-                    "inspect durable harness provenance for reviewer thread {reviewer_thread_id}"
-                )
-            })?
-            .with_context(|| {
-                format!("reviewer {reviewer_thread_id} is not a persisted harness subagent thread")
-            })?;
-        if created_at < attempt_started_at {
-            anyhow::bail!(
-                "reviewer {reviewer_thread_id} predates the current systematic research attempt"
-            );
-        }
-        let reviewer_cwd = Path::new(&cwd).canonicalize().with_context(|| {
-            format!("canonicalize reviewer {reviewer_thread_id} workspace {cwd}")
-        })?;
-        if reviewer_cwd != workspace {
-            anyhow::bail!(
-                "reviewer {reviewer_thread_id} is not bound to the current research workspace"
-            );
-        }
-        if model.as_deref() != Some(SYSTEMATIC_RESEARCH_REVIEWER_MODEL) {
-            anyhow::bail!(
-                "reviewer {reviewer_thread_id} used model {} instead of required model {SYSTEMATIC_RESEARCH_REVIEWER_MODEL}",
-                model.as_deref().unwrap_or("<unknown>")
-            );
-        }
-        match &parent_thread_id {
-            Some(expected) if expected != &parent => {
-                anyhow::bail!("research reviewers do not share the current parent harness thread");
-            }
-            None => parent_thread_id = Some(parent),
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
 fn validate_systematic_research_workspace(
     root: &Path,
     job: &QueuedPrompt,
@@ -11380,11 +11243,6 @@ fn validate_systematic_research_workspace(
             attempt_started_at,
         )?;
         validate_systematic_research_web_receipts(root, &manifest_value, attempt_started_at)?;
-        validate_systematic_research_subagent_reviews(
-            &manifest_value,
-            &workspace,
-            attempt_started_at,
-        )?;
         let output = Command::new("python3")
             .arg(&validator)
             .arg(&manifest)
@@ -24728,142 +24586,6 @@ mod tests {
         assert!(error
             .to_string()
             .contains("not bound to a matching admitted"));
-    }
-
-    #[test]
-    fn systematic_research_reviews_require_persisted_current_workspace_subagents() {
-        let workspace = temp_root("research-subagent-provenance");
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE threads (
-                id TEXT PRIMARY KEY,
-                subagent_parent_thread_id TEXT,
-                created_at INTEGER NOT NULL,
-                cwd TEXT NOT NULL,
-                model TEXT
-            );",
-        )
-        .unwrap();
-        let attempt_started_at = current_epoch_secs().saturating_sub(1);
-        let reviewer_thread_ids = [
-            "batch-1",
-            "batch-2",
-            "batch-3",
-            "source-review",
-            "data-review",
-            "claim-review",
-        ]
-        .map(str::to_string);
-        for thread_id in &reviewer_thread_ids {
-            conn.execute(
-                "INSERT INTO threads (id, subagent_parent_thread_id, created_at, cwd, model)
-                 VALUES (?1, 'parent-thread', ?2, ?3, ?4)",
-                params![
-                    thread_id,
-                    current_epoch_secs(),
-                    workspace.to_string_lossy(),
-                    SYSTEMATIC_RESEARCH_REVIEWER_MODEL
-                ],
-            )
-            .unwrap();
-        }
-
-        validate_systematic_research_subagent_reviews_from_conn(
-            &conn,
-            &workspace,
-            attempt_started_at,
-            &reviewer_thread_ids,
-        )
-        .unwrap();
-
-        conn.execute(
-            "UPDATE threads SET subagent_parent_thread_id = NULL WHERE id = 'source-review'",
-            [],
-        )
-        .unwrap();
-        let error = validate_systematic_research_subagent_reviews_from_conn(
-            &conn,
-            &workspace,
-            attempt_started_at,
-            &reviewer_thread_ids,
-        )
-        .unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("is not a persisted harness subagent thread"));
-
-        conn.execute(
-            "UPDATE threads SET subagent_parent_thread_id = 'parent-thread',
-                                model = 'gpt-5.1-codex-mini'
-             WHERE id = 'source-review'",
-            [],
-        )
-        .unwrap();
-        let error = validate_systematic_research_subagent_reviews_from_conn(
-            &conn,
-            &workspace,
-            attempt_started_at,
-            &reviewer_thread_ids,
-        )
-        .unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("used model gpt-5.1-codex-mini instead of required model gpt-5.6-luna"));
-    }
-
-    #[test]
-    fn systematic_research_reviews_reject_foreign_or_stale_subagents() {
-        let workspace = temp_root("research-subagent-binding");
-        let foreign_workspace = temp_root("research-subagent-foreign");
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE threads (
-                id TEXT PRIMARY KEY,
-                subagent_parent_thread_id TEXT,
-                created_at INTEGER NOT NULL,
-                cwd TEXT NOT NULL,
-                model TEXT
-            );",
-        )
-        .unwrap();
-        let attempt_started_at = current_epoch_secs();
-        let reviewer_thread_ids = ["reviewer"].map(str::to_string);
-        conn.execute(
-            "INSERT INTO threads (id, subagent_parent_thread_id, created_at, cwd, model)
-             VALUES ('reviewer', 'parent-thread', ?1, ?2, ?3)",
-            params![
-                attempt_started_at.saturating_sub(1),
-                workspace.to_string_lossy(),
-                SYSTEMATIC_RESEARCH_REVIEWER_MODEL
-            ],
-        )
-        .unwrap();
-        let stale = validate_systematic_research_subagent_reviews_from_conn(
-            &conn,
-            &workspace,
-            attempt_started_at,
-            &reviewer_thread_ids,
-        )
-        .unwrap_err();
-        assert!(stale
-            .to_string()
-            .contains("predates the current systematic research attempt"));
-
-        conn.execute(
-            "UPDATE threads SET created_at = ?1, cwd = ?2 WHERE id = 'reviewer'",
-            params![current_epoch_secs(), foreign_workspace.to_string_lossy()],
-        )
-        .unwrap();
-        let foreign = validate_systematic_research_subagent_reviews_from_conn(
-            &conn,
-            &workspace,
-            attempt_started_at,
-            &reviewer_thread_ids,
-        )
-        .unwrap_err();
-        assert!(foreign
-            .to_string()
-            .contains("is not bound to the current research workspace"));
     }
 
     #[test]

@@ -38,9 +38,7 @@ use ctox_core::ThreadManager;
 use ctox_feedback::CodexFeedback;
 use ctox_protocol::config_types::SandboxMode;
 use ctox_protocol::openai_models::ReasoningEffort;
-use ctox_protocol::protocol::{
-    AskForApproval, EventMsg, ReadOnlyAccess, SandboxPolicy, SessionSource, SubAgentSource,
-};
+use ctox_protocol::protocol::{AskForApproval, EventMsg, SandboxPolicy, SessionSource};
 use ctox_protocol::user_input::UserInput;
 use ctox_utils_absolute_path::AbsolutePathBuf;
 
@@ -105,12 +103,21 @@ fn configure_worker_tool_stack(
     if disable_active_tools {
         return;
     }
-    const REQUIRED_WORKER_OVERRIDES: &[&str] = &["tools.ctox_web", "features.multi_agent"];
-    cli_overrides.retain(|(key, _)| !REQUIRED_WORKER_OVERRIDES.contains(&key.as_str()));
+    const REQUIRED_WORKER_OVERRIDES: &[(&str, bool)] = &[
+        ("tools.ctox_web", true),
+        ("features.multi_agent", false),
+        ("features.enable_fanout", false),
+        ("features.memory_tool", false),
+    ];
+    cli_overrides.retain(|(key, _)| {
+        !REQUIRED_WORKER_OVERRIDES
+            .iter()
+            .any(|(required_key, _)| key == required_key)
+    });
     cli_overrides.extend(
         REQUIRED_WORKER_OVERRIDES
             .iter()
-            .map(|key| ((*key).to_string(), toml::Value::Boolean(true))),
+            .map(|(key, enabled)| ((*key).to_string(), toml::Value::Boolean(*enabled))),
     );
 }
 
@@ -122,20 +129,6 @@ fn persistent_worker_thread_name(root: &Path) -> String {
         value
     });
     format!("{CTOX_PERSISTENT_WORKER_THREAD_NAME}-{}", suffix)
-}
-
-fn create_reviewer_scratch_workspace() -> Result<PathBuf> {
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "ctox-review-scratch-{}-{unique}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&path)
-        .with_context(|| format!("failed to create reviewer scratch at {}", path.display()))?;
-    Ok(path)
 }
 
 const CTOX_DIRECT_SESSION_BASE_INSTRUCTIONS: &str = r#"You are an agent working inside CTOX.
@@ -475,7 +468,6 @@ pub(crate) struct PersistentSession {
     disable_mcp_servers: bool,
     read_only_sandbox: bool,
     persistent_worker: bool,
-    reviewer_scratch_workspace: Option<PathBuf>,
     /// Set when a turn ended ambiguously (e.g. `turn/start` timed out with
     /// the request still detached server-side). A poisoned session refuses
     /// further turns: reusing it could overlap or steer into the original
@@ -638,14 +630,10 @@ impl PersistentSession {
 
         let composed_base_instructions =
             compose_base_instructions(root, settings, base_instructions)?;
-        let reviewer_scratch_workspace = read_only_sandbox
-            .then(create_reviewer_scratch_workspace)
-            .transpose()?;
-        let session_cwd = reviewer_scratch_workspace.as_deref().unwrap_or(root);
         let start_result = rt.block_on(async {
             Self::start_client_and_thread(
                 root,
-                session_cwd,
+                root,
                 settings,
                 &composed_base_instructions,
                 disable_active_tools,
@@ -658,12 +646,7 @@ impl PersistentSession {
         let (client, thread_id, cwd, seq, model, model_provider, api_provider, reasoning_effort) =
             match start_result {
                 Ok(started) => started,
-                Err(err) => {
-                    if let Some(scratch) = reviewer_scratch_workspace.as_ref() {
-                        let _ = std::fs::remove_dir_all(scratch);
-                    }
-                    return Err(err);
-                }
+                Err(err) => return Err(err),
             };
 
         let mut policy = CompactPolicy::from_settings(
@@ -733,7 +716,6 @@ impl PersistentSession {
             disable_mcp_servers,
             read_only_sandbox,
             persistent_worker,
-            reviewer_scratch_workspace,
             poisoned: false,
         })
     }
@@ -1031,10 +1013,14 @@ impl PersistentSession {
             model_provider: selected_provider_id.clone(),
             cwd: Some(cwd.clone()),
             approval_policy: Some(AskForApproval::Never),
-            // Reviewers write only inside their disposable scratch cwd. The
-            // authoritative workspace and runtime tree are outside the cwd
-            // and therefore read-only under WorkspaceWrite.
-            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            // Completion review is a server-owned, independent read-only
+            // execution profile. It is not a child agent and cannot write
+            // anywhere, including the authoritative workspace/runtime tree.
+            sandbox_mode: Some(if read_only_sandbox {
+                SandboxMode::ReadOnly
+            } else {
+                SandboxMode::WorkspaceWrite
+            }),
             include_apply_patch_tool: Some(true),
             ephemeral: Some(true),
             disable_mcp_servers,
@@ -1074,11 +1060,7 @@ impl PersistentSession {
             .await
             .map_err(|err| anyhow::anyhow!("config build: {err}"))?;
         let config = Arc::new(config);
-        let session_source = if read_only_sandbox {
-            SessionSource::SubAgent(SubAgentSource::Review)
-        } else {
-            SessionSource::Exec
-        };
+        let session_source = SessionSource::Exec;
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager.clone(),
@@ -1351,15 +1333,14 @@ impl PersistentSession {
             approval_policy: Some(AskForApproval::Never.into()),
             approvals_reviewer: None,
             sandbox_policy: Some(
-                SandboxPolicy::WorkspaceWrite {
-                    writable_roots: Vec::new(),
-                    read_only_access: ReadOnlyAccess::FullAccess,
-                    network_access: true,
-                    // Reviewer scratch lives under the temp directory, but cwd
-                    // remains explicitly writable. Do not grant the rest of
-                    // the host temp tree as an additional writable surface.
-                    exclude_tmpdir_env_var: read_only_sandbox,
-                    exclude_slash_tmp: read_only_sandbox,
+                if read_only_sandbox {
+                    SandboxPolicy::new_read_only_policy()
+                } else {
+                    let mut policy = SandboxPolicy::new_workspace_write_policy();
+                    if let SandboxPolicy::WorkspaceWrite { network_access, .. } = &mut policy {
+                        *network_access = true;
+                    }
+                    policy
                 }
                 .into(),
             ),
@@ -1882,12 +1863,12 @@ mod tests {
     }
 
     #[test]
-    fn worker_sessions_enable_typed_ctox_web_stack_and_subagents() {
+    fn worker_sessions_enable_web_stack_and_forbid_free_subagents() {
         let mut overrides = vec![
             ("tools.ctox_web".to_string(), toml::Value::Boolean(false)),
             (
                 "features.multi_agent".to_string(),
-                toml::Value::Boolean(false),
+                toml::Value::Boolean(true),
             ),
         ];
 
@@ -1899,7 +1880,15 @@ mod tests {
                 ("tools.ctox_web".to_string(), toml::Value::Boolean(true)),
                 (
                     "features.multi_agent".to_string(),
-                    toml::Value::Boolean(true),
+                    toml::Value::Boolean(false),
+                ),
+                (
+                    "features.enable_fanout".to_string(),
+                    toml::Value::Boolean(false),
+                ),
+                (
+                    "features.memory_tool".to_string(),
+                    toml::Value::Boolean(false)
                 ),
             ]
         );
@@ -2024,19 +2013,6 @@ mod tests {
         // contract must not leak in and instruct worker actions.
         assert!(!instructions.contains("required durable outcome exists"));
         assert!(!instructions.contains("You are CTOX, the personal CTO agent"));
-    }
-
-    #[test]
-    fn reviewer_scratch_workspaces_are_unique_and_removable() {
-        let first = create_reviewer_scratch_workspace().expect("create first scratch");
-        let second = create_reviewer_scratch_workspace().expect("create second scratch");
-        assert_ne!(first, second);
-        assert!(first.is_dir());
-        assert!(second.is_dir());
-        std::fs::remove_dir_all(&first).expect("remove first scratch");
-        std::fs::remove_dir_all(&second).expect("remove second scratch");
-        assert!(!first.exists());
-        assert!(!second.exists());
     }
 
     #[test]
@@ -2287,9 +2263,6 @@ impl PersistentSession {
                     );
                     client.abort_now();
                     runtime.shutdown_background();
-                    if let Some(scratch) = self.reviewer_scratch_workspace.take() {
-                        let _ = std::fs::remove_dir_all(&scratch);
-                    }
                     return;
                 }
                 // Try a bounded graceful shutdown first. `abort_now` skips
@@ -2314,14 +2287,6 @@ impl PersistentSession {
                 }
             }
             runtime.shutdown_timeout(Duration::from_secs(2));
-        }
-        if let Some(scratch) = self.reviewer_scratch_workspace.take() {
-            if let Err(err) = std::fs::remove_dir_all(&scratch) {
-                eprintln!(
-                    "[ctox direct-session] failed to remove reviewer scratch {}: {err}",
-                    scratch.display()
-                );
-            }
         }
     }
 }

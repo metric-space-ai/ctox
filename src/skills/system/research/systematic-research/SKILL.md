@@ -302,16 +302,14 @@ It must also copy the server-injected `Research Attempt ID` into
 manifest path is `validation/evidence-manifest.json`, and every admitted Web
 Stack receipt must have been created during that server attempt.
 All artifact paths are workspace-relative; absolute paths, `..` escapes, and
-symlink escapes are rejected. Each Source/Data/Claim review includes a hashed
-`ctox.research.review.v1` receipt artifact created by its distinct reviewer and
-bound to the same run, command, and attempt. Each review and receipt also
-records the actual `reviewer_thread_id` returned by `spawn_agent`. The manifest
-records at least three additional candidate-batch child IDs in
-`batch_reviewer_thread_ids`; batch and completion reviewers must be distinct
-current-attempt subagents in the research workspace. Parent-authored review
-files are invalid even when their JSON shape and hashes are otherwise correct.
-Living Knowledge and Report versions include hashed artifacts plus the exact
-claim IDs they consume.
+symlink escapes are rejected. Free subagents are not part of CTOX research:
+never call `spawn_agent`, `spawn_agents_on_csv`, or related collaboration
+tools. The deterministic evidence guard verifies every original-content
+receipt, content hash, data artifact, row/schema/unit constraint, and
+Claim -> Evidence -> Snapshot -> Source lineage. After that gate passes, the
+CTOX service runs its independent completion review outside the parent tool
+surface. Living Knowledge and Report versions include hashed artifacts plus
+the exact claim IDs they consume.
 
 Retain rejected candidates with their rejection reason for auditability, but
 exclude them from knowledge construction, calculations, and report evidence
@@ -330,11 +328,9 @@ a controlled facet sweep, not a single call:
    into independent angles that each surface a different ranked list —
    e.g. by source-class, by sub-phenomenon, by data type, by methodology,
    or by regime/region. Each facet is its own `ctox web deep-research`
-   call. Run dependent facets serially. Independent, orthogonal facets may use
-   bounded subagents, but the parent owns deduplication, verification, and
-   promotion decisions. If the sweep needs to span turns, persist an internal
-   work item and resume. Vary the query string between calls; re-issuing the
-   same query just returns the same top hits.
+   call. Run facets serially in the parent. If the sweep needs to span turns,
+   persist an internal work item and resume. Vary the query string between
+   calls; re-issuing the same query just returns the same top hits.
 
 2. **Exclude what you already hold.** The source-catalog table you are
    appending to *is* your exclusion list. Before each new facet, steer the
@@ -382,26 +378,21 @@ verify that all rows attributed to this run carry the exact immutable
 `research_run_id` and `research_command_id` from the command. Missing or mixed
 lineage is a failed run, not a partial success.
 
-Before closing discovery, run three independent reviews over the persisted
-receipts. They must be distinct, passing reviews, not three labels on one
-agent's unchecked output:
+Before closing discovery, the parent must complete all three audit passes over
+the persisted material:
 
-- **Source auditor**: reopens every eligible canonical URL and confirms
-  authority, content extraction, topical relevance, and snapshot hash.
-- **Data auditor**: reproduces every imported numeric field from the original
-  archive/table and verifies units, parsing, conversions, nulls, and row counts.
-- **Claim auditor**: checks each knowledge statement and report claim against
-  eligible source or data receipts and rejects unsupported strength or scope.
+- **Source integrity**: reopen every eligible canonical URL and confirm
+  authority, full-content extraction, topical relevance, status, and snapshot
+  hash through CTOX Web Stack receipts.
+- **Data integrity**: reproduce every imported numeric field from the original
+  archive/table and verify units, parsing, conversions, nulls, and row counts.
+- **Claim integrity**: bind every knowledge statement and report claim to the
+  exact eligible source/data receipt and reject unsupported strength or scope.
 
-For a legacy candidate recheck, first partition candidates into batches of at
-most ten and assign each batch to its own leaf subagent. Persist those child
-thread IDs separately from the three full-corpus auditor thread IDs. Do not
-reuse a batch worker as a final Source/Data/Claim auditor.
-
-Run `scripts/evidence_guard.py` after these reviews. A failed check blocks
-library import, Knowledge promotion, and report publication.
-
-The parent agent resolves disagreements and owns the final promotion decision.
+These are deterministic build checks, not model-authored review labels. Run
+`scripts/evidence_guard.py` after the passes. A failed check blocks library
+import, Knowledge promotion, and report publication. The independent
+service-owned completion review runs only after this guard succeeds.
 
 ## Phase 2A — Library mode
 

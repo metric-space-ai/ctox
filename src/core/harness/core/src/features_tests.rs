@@ -137,35 +137,35 @@ fn image_detail_original_feature_is_under_development() {
 }
 
 #[test]
-fn collab_is_legacy_alias_for_multi_agent() {
+fn removed_multi_agent_has_no_collab_legacy_alias() {
     assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
-    assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
+    assert_eq!(feature_for_key("collab"), None);
 }
 
 #[test]
-fn multi_agent_is_stable_and_enabled_by_default() {
-    assert_eq!(Feature::Collab.stage(), Stage::Stable);
-    assert_eq!(Feature::Collab.default_enabled(), true);
+fn multi_agent_is_removed_and_disabled_by_default() {
+    assert_eq!(Feature::Collab.stage(), Stage::Removed);
+    assert_eq!(Feature::Collab.default_enabled(), false);
 }
 
 #[test]
-fn enable_fanout_is_under_development() {
-    assert_eq!(Feature::SpawnCsv.stage(), Stage::UnderDevelopment);
+fn enable_fanout_is_removed() {
+    assert_eq!(Feature::SpawnCsv.stage(), Stage::Removed);
     assert_eq!(Feature::SpawnCsv.default_enabled(), false);
 }
 
 #[test]
-fn enable_fanout_normalization_enables_multi_agent_one_way() {
+fn normalization_disables_removed_free_subagent_features() {
     let mut enable_fanout_features = Features::with_defaults();
     enable_fanout_features.enable(Feature::SpawnCsv);
     enable_fanout_features.normalize_dependencies();
-    assert_eq!(enable_fanout_features.enabled(Feature::SpawnCsv), true);
-    assert_eq!(enable_fanout_features.enabled(Feature::Collab), true);
+    assert_eq!(enable_fanout_features.enabled(Feature::SpawnCsv), false);
+    assert_eq!(enable_fanout_features.enabled(Feature::Collab), false);
 
     let mut collab_features = Features::with_defaults();
     collab_features.enable(Feature::Collab);
     collab_features.normalize_dependencies();
-    assert_eq!(collab_features.enabled(Feature::Collab), true);
+    assert_eq!(collab_features.enabled(Feature::Collab), false);
     assert_eq!(collab_features.enabled(Feature::SpawnCsv), false);
 }
 
