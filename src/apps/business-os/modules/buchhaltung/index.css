@@ -30,6 +30,25 @@
 }
 
 /* --------------------------------------------------------------------------
+   Right "Assistent" pane is collapsible — hidden by default so the center
+   workbench gets the full width. Toggled from the center pane header
+   (data-toggle-actions). Mirrors threads / conversations UX pattern.
+   -------------------------------------------------------------------------- */
+.fibu-module.is-actions-hidden {
+  grid-template-columns: var(--ctox-left-width, 284px) 12px minmax(0, 1fr);
+}
+
+.fibu-module.is-actions-hidden .fibu-right,
+.fibu-module.is-actions-hidden > [data-resizer="right"] {
+  display: none;
+}
+
+.fibu-toggle-actions[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: color-mix(in srgb, var(--accent) 78%, var(--text));
+}
+
+/* --------------------------------------------------------------------------
    custom: gruppierte Navigationsrail mit Sektionstiteln und Monogramm-Kacheln.
    Kit-Listen (.ctox-list-item) sind flache Record-Listen ohne Sektionen und
    ohne Kürzel-Kacheln — diese Rail hat kein Kit-Pendant.
@@ -379,9 +398,7 @@
   color: var(--muted);
   letter-spacing: 0.1em;
   margin-bottom: 8px;
-  padding: 5px 8px;
-  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
-  border-radius: var(--control-radius);
+  padding: 5px 0;
 }
 
 .fibu-bilanz-divider {
@@ -842,7 +859,6 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 .fibu-agent-chat-input-wrap {
   padding: 10px;
   border-top: 1px solid var(--hairline, var(--line));
-  background: color-mix(in srgb, var(--surface-2) 40%, transparent);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -916,17 +932,18 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 
 /* --------------------------------------------------------------------------
    custom: Fahrtenbuch-Kennzahlenstrip (Geschäftlich/Privat/Arbeitsweg-
-   Anteile mit Farbpunkten) in der Mileage-Toolbar.
+   Anteile mit Farbpunkten) in der Mileage-Toolbar. Collapsed by default
+   until JS populates it with real data.
    -------------------------------------------------------------------------- */
 #mileage-dashboard-summary {
   display: flex;
   gap: 16px;
   align-items: center;
   font-size: 12.5px;
-  background: var(--surface-2);
-  padding: 6px 12px;
-  border-radius: var(--kit-radius, 6px);
-  border: 1px solid var(--hairline, var(--line));
+}
+
+#mileage-dashboard-summary:empty {
+  display: none;
 }
 
 .mileage-dash-wrapper {

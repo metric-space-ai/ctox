@@ -641,6 +641,28 @@ function wireEvents() {
   const els = state.els;
   if (!els.root) return;
 
+  // Right Companion pane toggle — hidden by default so the center workbench
+  // gets the full width; persistence is per-shell-window via storageScope so
+  // the operator's chosen layout survives across mounts.
+  const toggleActions = els.root.querySelector('[data-toggle-actions]');
+  const storageKey = 'ctox.buchhaltung.layout.actionsHidden';
+  if (toggleActions) {
+    const saved = state.ctx?.storageScope?.get?.(storageKey);
+    if (saved === 'false') {
+      els.root.classList.remove('is-actions-hidden');
+      toggleActions.setAttribute('aria-pressed', 'true');
+    }
+    toggleActions.addEventListener('click', () => {
+      const willHide = els.root.classList.toggle('is-actions-hidden');
+      toggleActions.setAttribute('aria-pressed', String(!willHide));
+      toggleActions.setAttribute(
+        'aria-label',
+        willHide ? 'Assistent einblenden' : 'Assistent ausblenden'
+      );
+      state.ctx?.storageScope?.set?.(storageKey, String(willHide));
+    });
+  }
+
   // Left Nav Click Events
   els.navItems.forEach(item => {
     item.addEventListener('click', () => {
