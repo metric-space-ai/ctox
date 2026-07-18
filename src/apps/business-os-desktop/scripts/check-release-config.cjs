@@ -17,6 +17,7 @@ function main() {
   assert.equal(packageJson.dependencies?.["electron-updater"], "^6.8.3");
   assert.equal(packageJson.devDependencies?.electron, "^39.8.10");
   assert.equal(packageJson.devDependencies?.["electron-builder"], "^26.8.1");
+  assert.equal(packageJson.devDependencies?.["js-yaml"], "^4.1.0");
   for (const script of [
     "dist",
     "pack:dir",
@@ -113,6 +114,8 @@ function assertDedicatedDesktopReleaseWorkflow() {
     "dedicated release must disable certificate auto-discovery for Microsoft Store packages",
   );
   assert.match(workflow, /Verify macOS signing secrets/);
+  assert.match(workflow, /prepare-release-artifacts\.cjs artifact-inputs artifacts/);
+  assert.doesNotMatch(workflow, /merge-multiple:\s*true/);
   assert.match(
     workflow,
     /APPLE_APP_SPECIFIC_PASSWORD:\s*\$\{\{ secrets\.APPLE_ID_PASSWORD \}\}/,
