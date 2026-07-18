@@ -1,15 +1,17 @@
 /* Spreadsheets Module Styling for CTOX Business OS.
-   Themed entirely from the shell design tokens (app.css :root /
-   :root[data-theme="dark"] + shared/base.css derived tokens). No module
-   palette, no shell-token redefinition (module conformance guard) and no
-   theme-scoped duplicate blocks: light/dark follow the shell theme switch
-   automatically because every color below derives from a shell token. */
+   Normal UI (pane headers, search/filters, lists, badges, buttons, fields,
+   empty states, context menu) uses the shared kit classes from
+   shared/base.css + app.css and is not restyled here. What remains below is
+   module layout glue and the genuinely unique surfaces: the third-party
+   spreadsheet grid theme and the save-state indicator. Everything derives
+   from shell tokens, so light/dark follow the shell theme switch. */
 
+/* Module frame: the shell provides the 3-pane workspace (left/right panes
+   and column resizers); the module host is the center pane. */
 .spreadsheets-module {
   height: 100%;
   min-height: 0;
   display: block;
-  background: var(--surface);
   color: var(--text);
   overflow: hidden;
 }
@@ -18,7 +20,6 @@
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  padding: 0;
 }
 
 .spreadsheets-editor-shell {
@@ -29,31 +30,14 @@
   overflow: hidden;
 }
 
-.spreadsheets-empty,
-.spreadsheets-loading,
-.spreadsheets-error {
-  display: grid;
-  place-content: center;
-  gap: 8px;
-  min-height: 360px;
-  color: var(--muted);
-  text-align: center;
-}
-
-.spreadsheets-empty strong,
-.spreadsheets-loading strong,
-.spreadsheets-error strong {
-  color: var(--text);
-  font-size: 14px;
-}
-
+/* Loading skeleton: shell-provided .module-loading-* parts, centered. */
 .spreadsheets-loading-shell {
   min-height: 100%;
-  grid-template-columns: minmax(0, 1fr);
   display: grid;
   place-content: center;
 }
 
+/* Left/right pane content wrappers (rendered into the shell panes). */
 .spreadsheets-explorer,
 .spreadsheets-runbooks {
   display: flex;
@@ -61,162 +45,69 @@
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  background: var(--surface-2);
 }
 
-/* Module-specific grid for the pane tools row; the controls themselves are
-   the base.css .ctox-pane-search / .ctox-pane-filter components. */
-.spreadsheets-explorer .spreadsheets-filter-bar {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: center;
-  gap: 8px;
-}
-
-.spreadsheets-explorer .ctox-pane-search,
-.spreadsheets-explorer .spreadsheets-filter-control {
-  width: 100%;
+/* custom: the filter row packs three kit .ctox-pane-filter selects; they
+   share the row width equally instead of sizing to content. */
+.spreadsheets-filter-bar .ctox-pane-filter {
+  flex: 1 1 0;
   min-width: 0;
-}
-
-.spreadsheets-explorer .ctox-pane-search,
-.spreadsheets-explorer [data-spreadsheets-sort] {
-  grid-column: 1 / -1;
-}
-
-.spreadsheets-explorer .spreadsheets-filter-control {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.spreadsheets-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px 0;
-  overflow-y: auto;
-  flex-grow: 1;
+/* Let the kit empty state fill the scrollable list area. */
+.spreadsheets-list > .ctox-empty,
+.spreadsheets-runbook-list > .ctox-empty {
+  flex: 1 1 auto;
 }
 
+/* The kit lists own scrolling; the pane wrappers are flex columns, so the
+   lists must grow into the remaining height below the pane header. */
+.spreadsheets-explorer .ctox-list,
+.spreadsheets-runbooks .ctox-list {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* custom: record-card composition — a kit .ctox-list-item with an overlaid
+   manage icon button (.ctox-pane-icon) pinned to the card's top-right. */
 .spreadsheets-card {
-  width: calc(100% - 16px);
-  margin: 4px 8px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 30px;
-  gap: 4px;
-  align-items: start;
-  border: 1px solid transparent;
-  border-radius: var(--surface-radius);
-  background: transparent;
-  color: inherit;
-  box-sizing: border-box;
-  transition: background-color 0.12s ease, border-color 0.12s ease;
+  position: relative;
 }
 
-.spreadsheets-card:hover {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
-}
-
-.spreadsheets-card[aria-current="true"] {
-  background: var(--surface);
-  border-color: color-mix(in srgb, var(--accent) 36%, var(--line));
+.spreadsheets-card .spreadsheets-card-manage {
+  position: absolute;
+  top: 6px;
+  right: 6px;
 }
 
 .spreadsheets-card-main {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  padding: 10px 4px 10px 12px;
-  text-align: left;
-  box-sizing: border-box;
+  padding-right: 40px; /* room for the overlaid manage icon */
 }
 
-.spreadsheets-card-manage {
-  display: grid;
-  width: 26px;
-  height: 26px;
-  margin: 8px 8px 0 0;
-  place-items: center;
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
-}
-
-.spreadsheets-card-manage:hover,
-.spreadsheets-card-manage:focus-visible {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--surface);
-  outline: none;
-}
-
-.spreadsheets-card-manage svg {
-  width: 15px;
-  height: 15px;
-}
-
+/* Card content typography (kit covers the row chrome, not this content). */
 .spreadsheets-card-main strong {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   white-space: normal;
   overflow-wrap: anywhere;
-  font-size: 13px;
   font-weight: 600;
   color: var(--text);
 }
 
 .spreadsheets-card-main .spreadsheets-card-filename {
   display: block;
+  margin-top: 2px;
   color: var(--muted);
   font-size: 11.5px;
-  margin-top: 2px;
   text-overflow: ellipsis;
   overflow: hidden;
   white-space: nowrap;
 }
 
-.spreadsheets-card-main .spreadsheets-card-description {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  color: color-mix(in srgb, var(--text) 70%, var(--muted));
-  font-size: 11.5px;
-  margin-top: 4px;
-}
-
-.spreadsheets-card-main small {
-  display: block;
-  margin-top: 4px;
-  color: var(--accent);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.spreadsheets-card-main .spreadsheets-card-diagnostics {
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 650;
-}
-
-.spreadsheets-card-main .spreadsheets-card-updated {
-  margin-top: 6px;
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 500;
-}
-
-/* Status badge (.ctox-badge) + tag pills row inside a card. */
 .spreadsheets-card-badges {
   display: flex;
   flex-wrap: wrap;
@@ -225,32 +116,21 @@
   margin-top: 4px;
 }
 
-.spreadsheets-card-tag {
-  display: inline-flex;
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
-  border-radius: var(--control-radius);
-  padding: 1px 6px;
-  color: var(--accent);
-  font-size: 10px;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.spreadsheets-card-main small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
 }
 
-/* Center Editor Header & Surface */
-
-/* Extras on top of the canonical .ctox-pane-header.ctox-pane-band frame:
-   the header must not shrink inside the flex editor shell and keeps its own
-   surface above the grid canvas. */
+/* Center editor header: must not shrink inside the flex editor shell. */
 .spreadsheets-editor-header {
   flex-shrink: 0;
   background: var(--surface);
 }
 
-/* Save-state extras on top of .ctox-badge (state colors + pulsing dot). */
+/* custom: save-state indicator on top of .ctox-badge — state colors plus a
+   pulsing status dot (dirty = danger, saving = accent pulse). */
 .spreadsheets-dirty-badge.is-dirty {
   background: var(--danger-soft);
   border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
@@ -284,8 +164,17 @@
   100% { opacity: 1; }
 }
 
-/* JSpreadsheet Premium Overrides */
+/* custom: error emphasis inside the shared .ctox-empty component. */
+.spreadsheets-error strong {
+  color: var(--danger);
+}
 
+/* --------------------------------------------------------------------------
+   custom: third-party spreadsheet grid (jspreadsheet / ctox-office) theme.
+   The editor renders its own table DOM with jexcel/jss classes and inline
+   styles, so kit table classes cannot reach it; these overrides map the
+   grid onto the shell tokens. This is the app's genuinely unique surface.
+   -------------------------------------------------------------------------- */
 .spreadsheets-editor-canvas {
   flex-grow: 1;
   overflow: auto;
@@ -295,7 +184,6 @@
   box-sizing: border-box;
 }
 
-/* Scrollbars */
 .spreadsheets-editor-canvas::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -311,7 +199,6 @@
   background: var(--muted);
 }
 
-/* Theme Integration for jspreadsheet classes */
 .spreadsheets-editor-canvas .jexcel_container {
   font-family: inherit !important;
   border: 1px solid var(--line) !important;
@@ -420,7 +307,6 @@
   background: var(--surface) !important;
 }
 
-
 /* Selected cells */
 .spreadsheets-editor-canvas .jexcel .highlight {
   background-color: color-mix(in srgb, var(--accent) 12%, transparent) !important;
@@ -472,206 +358,6 @@
   border-color: var(--surface) !important;
 }
 
-/* The former class-based dark-mode section collapsed into the base rules
-   above: every dark value was a shell token, so the shell's
-   :root[data-theme="dark"] token flip now produces the same rendering. */
-
-/* Right pane (Runbooks) */
-.spreadsheets-runbook-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px 0;
-  overflow-y: auto;
-  flex-grow: 1;
-}
-
-.spreadsheets-runbook-card {
-  border: 1px solid var(--line);
-  border-radius: var(--surface-radius);
-  background: var(--surface);
-  padding: 10px;
-  cursor: pointer;
-  transition: background-color 0.12s ease, border-color 0.12s ease;
-}
-
-.spreadsheets-runbook-card:hover {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
-}
-
-.spreadsheets-runbook-card.is-active {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
-}
-
-.spreadsheets-runbook-card strong {
-  display: block;
-  font-size: 13px;
-  color: var(--text);
-  font-weight: 600;
-}
-
-.spreadsheets-runbook-card span {
-  display: block;
-  font-size: 11.5px;
-  color: var(--muted);
-  margin-top: 4px;
-}
-
-.spreadsheets-runbook-workbench {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-  border-top: 1px solid var(--line);
-  background: var(--surface-2);
-  flex-shrink: 0;
-}
-
-.spreadsheets-runbook-workbench textarea {
-  width: 100%;
-  min-height: 80px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 12.5px;
-  resize: vertical;
-  box-sizing: border-box;
-}
-
-.spreadsheets-runbook-workbench textarea:focus {
-  border-color: var(--accent);
-  outline: none;
-  box-shadow: none;
-}
-
-.spreadsheets-runbook-workbench button {
-  min-height: 42px;
-  border: 1px solid color-mix(in srgb, var(--accent) 76%, var(--line));
-  border-radius: var(--surface-radius);
-  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 88%, var(--surface)), color-mix(in srgb, var(--success) 40%, var(--accent)));
-  color: var(--surface);
-  font-weight: 800;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  transition: filter 0.12s ease, opacity 0.12s ease;
-}
-
-.spreadsheets-runbook-workbench button:hover:not(:disabled) {
-  filter: brightness(1.04);
-}
-
-.spreadsheets-runbook-workbench button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  border-color: color-mix(in srgb, var(--line) 40%, transparent);
-  color: var(--muted);
-  background: var(--surface-2);
-  filter: none;
-}
-
-/* Drawer Dialog Styles */
-.spreadsheets-drawer-form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.spreadsheets-drawer-copy,
-.spreadsheets-form-status {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.spreadsheets-form-status:not([hidden]) {
-  color: var(--danger);
-  font-weight: 700;
-}
-
-.spreadsheets-drawer-form label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.spreadsheets-drawer-form label > span {
-  font-size: 11px;
-  font-weight: 800;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.spreadsheets-drawer-form input,
-.spreadsheets-drawer-form select,
-.spreadsheets-drawer-form textarea {
-  width: 100%;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 13px;
-  box-sizing: border-box;
-}
-
-.spreadsheets-drawer-form textarea {
-  min-height: 80px;
-  resize: vertical;
-}
-
-.spreadsheets-drawer-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.spreadsheets-drawer-actions button {
-  min-height: 32px;
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  background: var(--surface);
-  color: var(--text);
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
-}
-
-.spreadsheets-drawer-actions button[type="submit"] {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.spreadsheets-drawer-actions button[type="submit"]:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
-}
-
-.spreadsheets-drawer-actions button:disabled {
-  opacity: 0.48;
-  cursor: not-allowed;
-}
-
-.spreadsheets-drawer-actions button.danger-button {
-  border-color: var(--danger);
-  color: var(--danger);
-}
-
-.spreadsheets-drawer-actions button.danger-button:hover {
-  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
-}
-
-/* Formula Errors */
 .spreadsheets-editor-canvas .jexcel td.formula-error {
   color: var(--danger) !important;
   background-color: color-mix(in srgb, var(--danger) 8%, transparent) !important;
@@ -692,67 +378,87 @@
   pointer-events: none;
 }
 
-body[data-active-module="spreadsheets"] .workspace-pane-left,
-body[data-active-module="spreadsheets"] .workspace-pane-right {
-  min-width: 240px;
+/* Right pane: runbook list content (rows are kit .ctox-list-item). */
+.spreadsheets-runbook-card strong {
+  display: block;
+  font-weight: 600;
+  color: var(--text);
 }
 
-body[data-active-module="spreadsheets"] .workspace-col-resizer,
-body[data-active-module="spreadsheets"] [data-resizer] {
-  min-height: 100%;
+.spreadsheets-runbook-card span {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11.5px;
 }
 
-body[data-active-module="spreadsheets"] .workspace-col-resizer::before,
-body[data-active-module="spreadsheets"] [data-resizer]::before {
-  border-radius: 0;
-  opacity: 0.45;
+/* custom: prompt composer docked at the bottom of the runbook pane. The
+   field is a kit .ctox-textarea, the action the kit .ctox-run-control. */
+.spreadsheets-runbook-workbench {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  margin-top: 8px;
+  border-top: 1px solid var(--hairline, var(--line));
+  flex-shrink: 0;
 }
 
-body[data-active-module="spreadsheets"] .workspace-col-resizer::before {
-  height: calc(100% - 16px);
+.spreadsheets-runbook-workbench .ctox-textarea {
+  min-height: 80px;
 }
 
-body[data-active-module="spreadsheets"] [data-resizer]::before {
-  top: 0;
-  bottom: 0;
-  height: auto;
-  min-height: 100%;
+.spreadsheets-runbook-workbench .ctox-run-control {
+  width: 100%;
+}
+
+/* Drawer forms: kit .ctox-field-label / .ctox-input / .ctox-select /
+   .ctox-button components; only the stacked layout glue lives here. */
+.spreadsheets-drawer-form,
+.spreadsheets-drawer-form form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.spreadsheets-drawer-form h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.spreadsheets-drawer-form label {
+  display: flex;
+  flex-direction: column;
+}
+
+.spreadsheets-drawer-copy,
+.spreadsheets-form-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.spreadsheets-form-status:not([hidden]) {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.spreadsheets-drawer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.spreadsheets-drawer-actions [data-action="delete"] {
+  margin-right: auto;
 }
 
 @container business-app-window (max-width: 760px) {
-  .spreadsheets-explorer .spreadsheets-filter-bar {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 6px;
-  }
-
   .spreadsheets-editor-canvas {
     padding: 6px;
-  }
-
-  .spreadsheets-runbook-list {
-    gap: 6px;
-    padding: 8px 0;
-  }
-
-  .spreadsheets-runbook-workbench {
-    padding: 8px;
-  }
-}
-
-@container business-app-window (max-width: 600px) {
-  .spreadsheets-empty,
-  .spreadsheets-loading,
-  .spreadsheets-error {
-    min-height: 220px;
-    padding: 12px;
-  }
-
-  .spreadsheets-runbook-workbench button {
-    min-height: 40px;
-  }
-
-  .spreadsheets-runbook-workbench textarea {
-    min-height: 56px;
-    max-height: 72px;
   }
 }
