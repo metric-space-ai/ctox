@@ -23095,22 +23095,22 @@ fn render_runtime_retry_prompt(job: &QueuedPrompt, error_text: &str) -> String {
     }
     let prompt = format!(
         "HARNESS FEEDBACK\nProblem: {problem}\n\nCURRENT TASK\n{}\n\nRUNTIME FAILURE\n{}\n\nREQUIRED ACTIONS\n- {}\n\nEXIT GATE\nFinish only after the durable outcome exists in runtime state. If the runtime is still unavailable, keep the work pending instead of claiming completion.",
-        runtime_retry_current_task_summary(job),
+        runtime_retry_current_task(job),
         clip_text(error_text.trim(), 220),
         required_actions.join("\n- ")
     );
     prepend_workspace_contract(&prompt, job.workspace_root.as_deref())
 }
 
-fn runtime_retry_current_task_summary(job: &QueuedPrompt) -> String {
+fn runtime_retry_current_task(job: &QueuedPrompt) -> String {
     let prompt = strip_harness_feedback_wrappers(&job.prompt);
     let goal = strip_harness_feedback_wrappers(&job.goal);
-    let candidate = if !prompt.trim().is_empty() && prompt.trim() != job.prompt.trim() {
+    let candidate = if !prompt.trim().is_empty() {
         prompt
     } else {
         goal
     };
-    summarize_follow_up_goal(candidate)
+    candidate.trim().to_string()
 }
 
 fn strip_harness_feedback_wrappers(value: &str) -> &str {
@@ -35665,6 +35665,32 @@ Use shell tools to create or update these files."
         assert_eq!(prompt.matches("RUNTIME FAILURE").count(), 1);
         assert!(!prompt.contains("CURRENT TASK\nHARNESS FEEDBACK"));
         assert!(prompt.starts_with("Work only inside this workspace:\n/tmp/workspace"));
+    }
+
+    #[test]
+    fn runtime_retry_prompt_preserves_complete_systematic_research_contract() {
+        let original = "Research Run ID: skf-run-001\nResearch Command ID: skf-command-001\n\n1. Fetch sources through the typed CTOX Web Stack.\n2. Persist hash-bound receipts.\n3. Run independent reviews.\n4. Build Knowledge and reports only after review.";
+        let job = QueuedPrompt {
+            prompt: original.to_string(),
+            goal: "SKF verified legacy source re-research".to_string(),
+            preview: "SKF verified legacy source re-research".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("systematic-research".to_string()),
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/skf-research".to_string()),
+            workspace_root: Some("/tmp/workspace".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let prompt = render_runtime_retry_prompt(&job, "429 Too Many Requests");
+
+        assert!(prompt.contains("Research Run ID: skf-run-001"));
+        assert!(prompt.contains("Research Command ID: skf-command-001"));
+        assert!(prompt.contains("4. Build Knowledge and reports only after review."));
+        assert!(!prompt.contains("CURRENT TASK\nSKF verified legacy source re-research"));
     }
 
     #[test]
