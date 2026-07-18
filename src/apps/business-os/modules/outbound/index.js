@@ -17,7 +17,7 @@ import {
   activeOutreachCounts,
 } from './active-outreach.js?v=20260605-rxdb-cancel1';
 
-const BUILD = '20260606-outbound-ux-repair9';
+const BUILD = '20260718-outbound-ux-reduction';
 let loadedOutboundLang = '';
 let t = (key, fallback, ...args) => {
   let val = fallback ?? key;
@@ -768,6 +768,7 @@ const state = {
   outreachView: false,
   campaignEditDrafts: new Map(),
   campaignCreateDraft: null,
+  detailPaneUserHidden: false,
 };
 
 export async function mount(ctx) {
@@ -2146,6 +2147,11 @@ function wireEvents(root) {
       }
     }
     if (action === 'export-table') exportQualificationTable();
+    if (action === 'toggle-details') {
+      state.detailPaneUserHidden = !state.detailPaneUserHidden;
+      render();
+      return;
+    }
     if (action === 'sort-table') {
       const column = event.target.closest('[data-column]')?.dataset.column;
       if (column) {
@@ -2950,15 +2956,6 @@ function formatCount(value) {
   return number.toLocaleString('de-DE');
 }
 
-function renderSourceItem(source) {
-  return `
-    <div class="ctox-list-item outbound-source-item">
-      <strong>${escapeHtml(source.title)}</strong>
-      <span class="outbound-muted">${escapeHtml(source.source_type)} · ${escapeHtml(source.status)} · ${source.imported_count || 0}/${source.row_count || 0} ${escapeHtml(t('companiesCount', 'Firmen'))}</span>
-    </div>
-  `;
-}
-
 function renderCenter(force = false) {
   const root = state.ctx.host.querySelector('.outbound-center');
   if (!root) return;
@@ -2991,25 +2988,19 @@ function renderCenter(force = false) {
 
   // SMART INLINE UPDATE DETECT
   if (!force && scrollUnified && tbody) {
-    // 1. Update counts in the header
-    const countsEl = root.querySelector('.outbound-header-counts');
-    if (countsEl) {
-      countsEl.textContent = `${currentSources().length} ${t('importJobsCount', 'Importjobs')} · ${currentCompanies().length} ${t('companiesCount', 'Firmen')} · ${buildActiveTableColumns(settings, state.viewMode).length} ${t('columnsCount', 'Spalten')}`;
-    }
-
-    // 2. Update active research summary
+    // 1. Update active research summary
     const summaryContainer = root.querySelector('.outbound-active-research-container');
     if (summaryContainer) {
       summaryContainer.innerHTML = renderActiveResearchSummary(campaign);
     }
 
-    // 3. Update research activity panel
+    // 2. Update research activity panel
     const activityContainer = root.querySelector('.outbound-research-activity-container');
     if (activityContainer) {
       activityContainer.innerHTML = renderResearchActivityPanel(campaign);
     }
 
-    // 4. Update Status/Tag selects and "Versteckte Firmen" count
+    // 3. Update Status/Tag selects and "Versteckte Firmen" count
     const statusSelect = root.querySelector('#status-filter');
     if (statusSelect) {
       const activeVal = state.statusFilter;
@@ -3027,7 +3018,7 @@ function renderCenter(force = false) {
       hiddenCountBadge.textContent = hiddenCount;
     }
 
-    // 5. Update tbody with table rows
+    // 4. Update tbody with table rows
     const rows = filteredQualificationRows();
     const visibleRows = rows.slice(0, OUTBOUND_TABLE_RENDER_LIMIT);
     const emptyCompanyMessage = state.filter === 'all'
@@ -3069,6 +3060,14 @@ function renderCenter(force = false) {
           <button
             class="ctox-pane-icon"
             type="button"
+            data-action="toggle-details"
+            title="${escapeHtml(t('toggleDetails', 'Detailbereich ein-/ausblenden'))}"
+            aria-label="${escapeHtml(t('toggleDetails', 'Detailbereich ein-/ausblenden'))}"
+            aria-pressed="${state.detailPaneUserHidden ? 'false' : 'true'}"
+          >${actionIcon('columns')}</button>
+          <button
+            class="ctox-pane-icon"
+            type="button"
             data-action="open-research-settings"
             title="${escapeHtml(t('settingsFields', 'Research-Felder einstellen'))}"
             aria-label="${escapeHtml(t('settingsFields', 'Research-Felder einstellen'))}"
@@ -3099,8 +3098,6 @@ function renderCenter(force = false) {
           <span>${escapeHtml(t('hiddenCompanies', 'Versteckte Firmen'))}</span>
           <span>${hiddenCount}</span>
         </button>
-
-        <div class="outbound-muted outbound-header-counts">${currentSources().length} ${t('importJobsCount', 'Importjobs')} · ${currentCompanies().length} ${t('companiesCount', 'Firmen')} · ${buildActiveTableColumns(settings, state.viewMode).length} ${t('columnsCount', 'Spalten')}</div>
       </div>
     </header>
     <div class="outbound-center-content">
@@ -3638,7 +3635,8 @@ function renderQualificationSplit(campaign) {
   const hasSelectedDetail = state.activeView === 'pipeline'
     ? Boolean(state.selectedPipelineId && currentPipeline().some((item) => item.id === state.selectedPipelineId))
     : Boolean(state.selectedCompanyId && currentCompanies().some((item) => item.id === state.selectedCompanyId || item.duplicate_company_ids?.includes(state.selectedCompanyId)));
-  const detailPaneHtml = hasSelectedDetail
+  const showDetail = hasSelectedDetail && !state.detailPaneUserHidden;
+  const detailPaneHtml = showDetail
     ? `
       <button class="outbound-center-resizer" type="button" data-outbound-center-resizer aria-label="${escapeHtml(t('resizeDetailsPane', 'Tabellen- und Detailbereich anpassen'))}"></button>
       <aside class="ctox-pane outbound-right" aria-label="${escapeHtml(t('researchDetails', 'Research Details'))}">
@@ -3648,7 +3646,7 @@ function renderQualificationSplit(campaign) {
     : '';
 
   return `
-    <div class="outbound-split-workbench${hasSelectedDetail ? '' : ' is-detail-hidden'}" data-outbound-center-split>
+    <div class="outbound-split-workbench${showDetail ? '' : ' is-detail-hidden'}" data-outbound-center-split>
       <div class="outbound-unified-workbench" data-view="${state.viewMode}">
         <div class="outbound-table-scroll-unified">
           <table class="crm-table">
@@ -3726,19 +3724,21 @@ function renderResearchActivityPanel(campaign) {
     .filter((item) => item.kind !== 'done' && item.kind !== 'idle')
     .slice(0, 5);
   return `
-    <section class="outbound-research-activity ${isProblem ? 'warn' : counts.running ? 'running' : 'waiting'}" aria-label="CTOX Research Aktivität">
-      <div>
-        <span>CTOX Research</span>
-        <strong>${escapeHtml(title)}</strong>
-      </div>
-      <div class="outbound-research-activity-counts">
-        ${renderActivityCount(t('running', 'läuft'), counts.running)}
-        ${renderActivityCount(t('waiting', 'wartet'), counts.waiting)}
-        ${renderActivityCount(t('failed', 'Fehler'), counts.failed, counts.failed ? 'warn' : '')}
-        ${renderActivityCount(t('cancelled', 'abgebrochen'), counts.cancelled, counts.cancelled ? 'warn' : '')}
-      </div>
+    <details class="outbound-research-activity ${isProblem ? 'warn' : counts.running ? 'running' : 'waiting'}">
+      <summary>
+        <div class="outbound-research-activity-head">
+          <span>CTOX Research</span>
+          <strong>${escapeHtml(title)}</strong>
+        </div>
+        <div class="outbound-research-activity-counts">
+          ${renderActivityCount(t('running', 'läuft'), counts.running)}
+          ${renderActivityCount(t('waiting', 'wartet'), counts.waiting)}
+          ${renderActivityCount(t('failed', 'Fehler'), counts.failed, counts.failed ? 'warn' : '')}
+          ${renderActivityCount(t('cancelled', 'abgebrochen'), counts.cancelled, counts.cancelled ? 'warn' : '')}
+        </div>
+      </summary>
       ${items.length ? `
-        <ol>
+        <ol class="outbound-research-activity-list">
           ${items.map((item) => `
             <li class="${escapeHtml(item.kind)}">
               <b>${escapeHtml(item.label)}</b>
@@ -3747,7 +3747,7 @@ function renderResearchActivityPanel(campaign) {
           `).join('')}
         </ol>
       ` : ''}
-    </section>
+    </details>
   `;
 }
 

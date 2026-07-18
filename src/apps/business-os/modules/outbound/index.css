@@ -387,10 +387,6 @@
   box-sizing: border-box;
 }
 
-.outbound-header-counts {
-  white-space: nowrap;
-}
-
 /* custom: checkbox toggle label in the pane tools row. */
 .outbound-toggle-label {
   display: inline-flex;
@@ -485,13 +481,9 @@
 }
 
 /* custom: research activity strip above the table — running agent work with
-   per-state count chips and the latest activity items. */
+   per-state count chips and the latest activity items. Collapsed by default;
+   users expand on demand. */
 .outbound-research-activity {
-  display: grid;
-  grid-template-columns: minmax(260px, 1fr) auto;
-  gap: 8px 12px;
-  align-items: center;
-  padding: 9px 12px;
   border: 1px solid var(--hairline, var(--line));
   border-radius: var(--panel-radius);
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
@@ -501,11 +493,31 @@
   background: color-mix(in srgb, var(--danger) 9%, var(--surface));
 }
 
-.outbound-research-activity > div:first-child {
+.outbound-research-activity > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 9px 12px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.outbound-research-activity > summary::-webkit-details-marker {
+  display: none;
+}
+
+.outbound-research-activity > summary::marker {
+  display: none;
+  content: '';
+}
+
+.outbound-research-activity-head {
   min-width: 0;
 }
 
-.outbound-research-activity > div:first-child span {
+.outbound-research-activity-head span {
   display: block;
   color: var(--muted);
   font-size: 10px;
@@ -514,7 +526,7 @@
   text-transform: uppercase;
 }
 
-.outbound-research-activity > div:first-child strong {
+.outbound-research-activity-head strong {
   display: block;
   margin-top: 2px;
   overflow: hidden;
@@ -554,17 +566,16 @@
   color: var(--text);
 }
 
-.outbound-research-activity ol {
-  grid-column: 1 / -1;
+.outbound-research-activity-list {
   display: flex;
   gap: 6px;
   margin: 0;
-  padding: 0;
+  padding: 0 12px 12px;
   overflow: hidden;
   list-style: none;
 }
 
-.outbound-research-activity li {
+.outbound-research-activity-list li {
   min-width: 140px;
   max-width: 260px;
   padding: 5px 7px;
@@ -573,27 +584,27 @@
   background: color-mix(in srgb, var(--surface-2) 58%, transparent);
 }
 
-.outbound-research-activity li.failed,
-.outbound-research-activity li.blocked,
-.outbound-research-activity li.cancelled {
+.outbound-research-activity-list li.failed,
+.outbound-research-activity-list li.blocked,
+.outbound-research-activity-list li.cancelled {
   border-color: color-mix(in srgb, var(--danger) 34%, transparent);
 }
 
-.outbound-research-activity li b,
-.outbound-research-activity li span {
+.outbound-research-activity-list li b,
+.outbound-research-activity-list li span {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.outbound-research-activity li b {
+.outbound-research-activity-list li b {
   color: var(--text);
   font-size: 11px;
   line-height: 1.15;
 }
 
-.outbound-research-activity li span {
+.outbound-research-activity-list li span {
   margin-top: 2px;
   color: var(--muted);
   font-size: 10px;
