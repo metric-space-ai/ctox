@@ -1,6 +1,6 @@
-<div class="app">
+<main class="ctox-workspace app" data-resize-frame>
     <!-- LEFT: Anforderungen -->
-    <section class="panel" id="left">
+    <section class="ctox-pane" id="left">
       <header class="ctox-pane-header ctox-pane-band">
         <div class="ctox-pane-title-row">
           <div class="ctox-pane-titles">
@@ -24,7 +24,7 @@
         </div>
         <div class="ctox-pane-tools">
           <input class="ctox-pane-search" id="sourceSearch" type="search" placeholder="Anforderung, Quellen oder Bereich suchen…" aria-label="Anforderungen suchen" />
-          <select class="ctox-pane-filter" id="sourceGroupMode" aria-label="Anforderungen gruppieren und sortieren" style="width: 110px; flex-shrink: 0;">
+          <select class="ctox-pane-filter" id="sourceGroupMode" aria-label="Anforderungen gruppieren und sortieren">
             <option value="source">Gruppe: Quellen</option>
             <option value="area">Gruppe: Bereiche</option>
             <option value="recent">Neueste zuerst</option>
@@ -39,9 +39,10 @@
       </div>
     </section>
 
+    <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="260" data-resizer-max="560" aria-label="Spaltenbreite links anpassen"></button>
 
     <!-- MIDDLE: Matches -->
-    <section class="panel requirements-wrap" id="center">
+    <section class="ctox-pane requirements-wrap" id="center">
       <header class="ctox-pane-header ctox-pane-band">
         <div class="ctox-pane-title-row">
           <div class="ctox-pane-titles">
@@ -66,7 +67,7 @@
         </div>
         <div class="ctox-pane-tools" id="listTools">
           <input class="ctox-pane-search" id="requirementSearch" type="search" placeholder="Match, Kriterium oder Quelle suchen…" />
-          <select class="ctox-pane-filter" id="requirementFilter" style="width: 110px; flex-shrink: 0;">
+          <select class="ctox-pane-filter" id="requirementFilter">
             <option value="all">Alle Matches</option>
           </select>
           <button class="ctox-pane-icon" type="button" aria-label="Matches Suche und Sortierung konfigurieren" title="Suche und Sortierung konfigurieren" data-column="matches" data-column-action="search-sort" data-drawer-side="bottom">
@@ -84,8 +85,10 @@
       </div>
     </section>
 
+    <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="260" data-resizer-max="560" aria-label="Spaltenbreite rechts anpassen"></button>
+
     <!-- RIGHT: Objekte -->
-    <section class="panel object-panel" id="right">
+    <section class="ctox-pane object-panel" id="right">
       <header class="ctox-pane-header ctox-pane-band">
         <div class="ctox-pane-title-row">
           <div class="ctox-pane-titles">
@@ -106,7 +109,7 @@
         </div>
         <div class="ctox-pane-tools">
           <input class="ctox-pane-search" id="objectSearch" type="search" placeholder="Objekt, Skill, Ort oder Stichwort suchen…" />
-          <select class="ctox-pane-filter" id="objectSort" style="width: 110px; flex-shrink: 0;">
+          <select class="ctox-pane-filter" id="objectSort">
             <option value="best">Sortieren: Bester Match</option>
             <option value="created_desc">Sortieren: Neueste zuerst</option>
             <option value="created_asc">Sortieren: Älteste zuerst</option>
@@ -125,7 +128,7 @@
 
     </section>
 
-  </div>
+  </main>
 
   <div class="column-drawer-backdrop" data-column-drawer-backdrop hidden></div>
   <aside class="column-drawer column-drawer-left" data-column-drawer="left" aria-hidden="true"></aside>
@@ -147,7 +150,7 @@
           <input id="noteProgress" class="range" type="range" min="0" max="100" step="5" />
           <span id="noteProgressVal">0%</span>
         </div>
-        <textarea id="noteText" placeholder="Notizen zum Matchingprozess…"></textarea>
+        <textarea id="noteText" class="ctox-textarea" placeholder="Notizen zum Matchingprozess…"></textarea>
       </div>
       <footer class="ctox-modal-footer">
         <button class="ctox-button is-primary" type="button" id="saveNote" title="Speichern">Speichern</button>
@@ -160,7 +163,7 @@
     <div class="object-header">
       <strong id="objectTitle">Objekt</strong>
       <div class="space"></div>
-      <button class="icon-btn" id="objectClose" title="Schließen">
+      <button class="icon-btn ctox-pane-icon" id="objectClose" title="Schließen">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </div>
@@ -169,7 +172,7 @@
   <!-- Anforderung Slide-over (links) -->
   <aside class="jp" id="requirementPanel" aria-hidden="true">
     <div class="jp-header">
-      <button class="icon-btn" id="jpClose" title="Schließen">
+      <button class="icon-btn ctox-pane-icon" id="jpClose" title="Schließen">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
       <strong id="jpTitle" style="margin-left:6px">Anforderung</strong>
@@ -220,7 +223,7 @@
   </div>
 
   <div class="image-lightbox" id="imageLightbox" aria-hidden="true">
-    <button class="icon-btn image-lightbox-close" id="imageLightboxClose" title="Schließen">
+    <button class="icon-btn ctox-pane-icon image-lightbox-close" id="imageLightboxClose" title="Schließen">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
     </button>
     <img id="imageLightboxImg" alt="Bildvorschau" />
@@ -240,7 +243,7 @@
           </div>
         </div>
         <div class="match-bar-score" id="matchBarScore">–</div>
-        <button class="icon-btn" id="matchBarClose" title="Details schließen">
+        <button class="icon-btn ctox-pane-icon" id="matchBarClose" title="Details schließen">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
         </button>
       </header>
