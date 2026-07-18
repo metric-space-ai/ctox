@@ -346,6 +346,15 @@ to rework. A passing guard writes a content-hash-bound validation receipt under
 `<workspace>/.ctox/`; that receipt is a required outcome artifact, so
 `validation-not-required` cannot close research work.
 
+The service also verifies the parent worker's durable rollout before accepting
+systematic research. It requires a successful typed `ctox_deep_research` call
+from the current attempt at the depth declared by the server-bound task and a
+persisted research workspace inside the task workspace. Shallower calls and
+`no_workspace` discovery runs cannot satisfy completion. Agent prose,
+externally imported SQLite rows, and files written after the fact are not
+substitutes for this tool receipt or for independently persisted reviewer
+provenance.
+
 Rejected or incomplete work is fed back into the same durable queue item or
 internal work item where possible. The review path has finite retry budgets and eventually
 fails terminally instead of creating unbounded review/rework cascades.

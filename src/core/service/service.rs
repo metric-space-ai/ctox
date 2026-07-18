@@ -5846,8 +5846,9 @@ fn start_prompt_worker(
             )
             .map(|mut prompt| {
                 if is_systematic_research_job(&job) {
+                    let required_depth = required_systematic_research_depth(&job).as_str();
                     prompt.push_str(&format!(
-                        "\n\nServer-bound research attempt:\nResearch Attempt ID: {command_turn_id}\nWrite this exact value to research_attempt_id in validation/evidence-manifest.json. Completion rejects any other attempt ID or manifest path."
+                        "\n\nServer-bound research attempt:\nResearch Attempt ID: {command_turn_id}\nRequired Deep Research Depth: {required_depth}\nWrite the exact attempt ID to research_attempt_id in validation/evidence-manifest.json. Invoke typed ctox_deep_research at the required depth with a persisted research workspace inside the task workspace. Completion rejects any other attempt ID, manifest path, shallower depth, or no-workspace run."
                     ));
                 }
                 outbound_email_first_execution_prompt(&job, prompt)
@@ -10787,6 +10788,228 @@ fn systematic_research_binding(job: &QueuedPrompt) -> Result<(&str, &str)> {
     Ok((run_id, command_id))
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum SystematicResearchDepth {
+    Quick,
+    Standard,
+    Exhaustive,
+}
+
+impl SystematicResearchDepth {
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "quick" => Some(Self::Quick),
+            "standard" => Some(Self::Standard),
+            "exhaustive" => Some(Self::Exhaustive),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Quick => "quick",
+            Self::Standard => "standard",
+            Self::Exhaustive => "exhaustive",
+        }
+    }
+}
+
+fn required_systematic_research_depth(job: &QueuedPrompt) -> SystematicResearchDepth {
+    let prompt = job.prompt.to_ascii_lowercase();
+    if [
+        "deep research depth: exhaustive",
+        "required deep research depth: exhaustive",
+        "--depth exhaustive",
+        "\"depth\":\"exhaustive\"",
+        "\"depth\": \"exhaustive\"",
+        "with exhaustive depth",
+        "exhaustive depth",
+    ]
+    .iter()
+    .any(|marker| prompt.contains(marker))
+    {
+        SystematicResearchDepth::Exhaustive
+    } else {
+        SystematicResearchDepth::Standard
+    }
+}
+
+fn validate_systematic_research_deep_research_receipt(
+    job: &QueuedPrompt,
+    workspace: &Path,
+    attempt_started_at: u64,
+) -> Result<Value> {
+    let codex_home =
+        ctox_core::config::find_codex_home().context("resolve harness state directory")?;
+    let state_db = [
+        codex_home.join("state_5.sqlite"),
+        codex_home.join("sqlite/state_5.sqlite"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+    .context("systematic research requires the durable harness state database")?;
+    let conn = Connection::open_with_flags(
+        &state_db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("open harness state database {}", state_db.display()))?;
+    validate_systematic_research_deep_research_receipt_from_conn(
+        &conn,
+        &codex_home,
+        workspace,
+        attempt_started_at,
+        required_systematic_research_depth(job),
+    )
+}
+
+fn validate_systematic_research_deep_research_receipt_from_conn(
+    conn: &Connection,
+    codex_home: &Path,
+    workspace: &Path,
+    attempt_started_at: u64,
+    required_depth: SystematicResearchDepth,
+) -> Result<Value> {
+    let workspace = workspace
+        .canonicalize()
+        .with_context(|| format!("canonicalize research workspace {}", workspace.display()))?;
+    let codex_home = codex_home.canonicalize().with_context(|| {
+        format!(
+            "canonicalize harness state directory {}",
+            codex_home.display()
+        )
+    })?;
+    let mut stmt = conn.prepare(
+        "SELECT id, rollout_path, cwd
+         FROM threads
+         WHERE subagent_parent_thread_id IS NULL",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+
+    let mut observed_depths = Vec::new();
+    for row in rows {
+        let (thread_id, rollout_path, cwd) = row?;
+        let Ok(thread_cwd) = Path::new(&cwd).canonicalize() else {
+            continue;
+        };
+        if thread_cwd != workspace {
+            continue;
+        }
+        let rollout_path = PathBuf::from(rollout_path);
+        let Ok(rollout_path) = rollout_path.canonicalize() else {
+            continue;
+        };
+        if !rollout_path.starts_with(&codex_home) {
+            continue;
+        }
+        let file = std::fs::File::open(&rollout_path)
+            .with_context(|| format!("open harness rollout {}", rollout_path.display()))?;
+        let mut calls = BTreeMap::<String, (SystematicResearchDepth, u64)>::new();
+        for line in BufReader::new(file).lines() {
+            let line = line?;
+            let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            let Some(timestamp) = value
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .and_then(|timestamp| DateTime::parse_from_rfc3339(timestamp).ok())
+                .and_then(|timestamp| u64::try_from(timestamp.timestamp()).ok())
+            else {
+                continue;
+            };
+            if timestamp < attempt_started_at {
+                continue;
+            }
+            let payload = value.get("payload").unwrap_or(&Value::Null);
+            match payload.get("type").and_then(Value::as_str) {
+                Some("function_call")
+                    if payload.get("name").and_then(Value::as_str)
+                        == Some("ctox_deep_research") =>
+                {
+                    let Some(call_id) = payload.get("call_id").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let Some(arguments) = payload.get("arguments").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let Ok(arguments_value) = serde_json::from_str::<Value>(arguments) else {
+                        continue;
+                    };
+                    let depth = arguments_value
+                        .get("depth")
+                        .and_then(Value::as_str)
+                        .and_then(SystematicResearchDepth::parse)
+                        .unwrap_or(SystematicResearchDepth::Standard);
+                    if arguments_value.get("no_workspace").and_then(Value::as_bool) == Some(true) {
+                        observed_depths.push(format!("{} (no_workspace)", depth.as_str()));
+                        continue;
+                    }
+                    calls.insert(call_id.to_string(), (depth, timestamp));
+                }
+                Some("function_call_output") => {
+                    let Some(call_id) = payload.get("call_id").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let Some((depth, called_at)) = calls.get(call_id) else {
+                        continue;
+                    };
+                    let Some(output) = payload.get("output").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let Ok(output) = serde_json::from_str::<Value>(output) else {
+                        observed_depths.push(format!("{} (invalid output)", depth.as_str()));
+                        continue;
+                    };
+                    let research_workspace = output
+                        .get("research_workspace")
+                        .and_then(Value::as_str)
+                        .map(PathBuf::from);
+                    let persisted_workspace = research_workspace
+                        .as_deref()
+                        .and_then(|path| path.canonicalize().ok())
+                        .is_some_and(|path| path.starts_with(&workspace));
+                    if output.get("ok").and_then(Value::as_bool) != Some(true)
+                        || !persisted_workspace
+                    {
+                        observed_depths.push(format!("{} (not persisted)", depth.as_str()));
+                        continue;
+                    }
+                    observed_depths.push(depth.as_str().to_string());
+                    if *depth >= required_depth {
+                        return Ok(serde_json::json!({
+                            "tool": "ctox_deep_research",
+                            "depth": depth.as_str(),
+                            "required_depth": required_depth.as_str(),
+                            "thread_id": thread_id,
+                            "call_id": call_id,
+                            "called_at_epoch": called_at,
+                            "research_workspace": research_workspace,
+                            "rollout_path": rollout_path,
+                        }));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    anyhow::bail!(
+        "systematic research requires a successful persisted typed ctox_deep_research call at depth {}; observed current-attempt calls: {}",
+        required_depth.as_str(),
+        if observed_depths.is_empty() {
+            "none".to_string()
+        } else {
+            observed_depths.join(", ")
+        }
+    )
+}
+
 fn systematic_research_validation_receipt_path(job: &QueuedPrompt) -> Option<PathBuf> {
     job.workspace_root
         .as_deref()
@@ -11128,6 +11351,11 @@ fn validate_systematic_research_workspace(
                 manifest.display()
             );
         }
+        let deep_research_receipt = validate_systematic_research_deep_research_receipt(
+            job,
+            &workspace,
+            attempt_started_at,
+        )?;
         validate_systematic_research_web_receipts(root, &manifest_value, attempt_started_at)?;
         validate_systematic_research_subagent_reviews(
             &manifest_value,
@@ -11164,6 +11392,7 @@ fn validate_systematic_research_workspace(
             "manifest_path": manifest,
             "manifest_sha256": format!("{:x}", sha2::Sha256::digest(&manifest_bytes)),
             "validator_output": stdout,
+            "deep_research_receipt": deep_research_receipt,
         }));
     }
 
@@ -24193,6 +24422,129 @@ mod tests {
                 .to_string()
                 .contains("stale or foreign evidence manifest"),
             "{error:#}"
+        );
+    }
+
+    #[test]
+    fn systematic_research_requires_contract_depth_in_persisted_parent_rollout() {
+        let workspace = temp_root("research-depth-workspace");
+        let research_workspace = workspace.join("research/deep-research/call-1");
+        std::fs::create_dir_all(&research_workspace).unwrap();
+        let codex_home = temp_root("research-depth-codex-home");
+        let rollout = codex_home.join("sessions/rollout-parent.jsonl");
+        std::fs::create_dir_all(rollout.parent().unwrap()).unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                subagent_parent_thread_id TEXT
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads (id, rollout_path, cwd, subagent_parent_thread_id)
+             VALUES ('parent-thread', ?1, ?2, NULL)",
+            params![rollout.to_string_lossy(), workspace.to_string_lossy()],
+        )
+        .unwrap();
+        let timestamp = now_iso_string();
+        let attempt_started_at = current_epoch_secs().saturating_sub(1);
+        let write_rollout = |depth: &str, no_workspace: bool| {
+            let arguments = serde_json::json!({
+                "query": "verified bearing research",
+                "depth": depth,
+                "no_workspace": no_workspace,
+            });
+            let output = serde_json::json!({
+                "ok": true,
+                "depth": depth,
+                "research_workspace": research_workspace,
+            });
+            std::fs::write(
+                &rollout,
+                [
+                    serde_json::json!({
+                        "timestamp": timestamp,
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "name": "ctox_deep_research",
+                            "call_id": "call-1",
+                            "arguments": arguments.to_string(),
+                        }
+                    })
+                    .to_string(),
+                    serde_json::json!({
+                        "timestamp": timestamp,
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call_output",
+                            "call_id": "call-1",
+                            "output": output.to_string(),
+                        }
+                    })
+                    .to_string(),
+                ]
+                .join("\n"),
+            )
+            .unwrap();
+        };
+
+        write_rollout("standard", false);
+        let shallow = validate_systematic_research_deep_research_receipt_from_conn(
+            &conn,
+            &codex_home,
+            &workspace,
+            attempt_started_at,
+            SystematicResearchDepth::Exhaustive,
+        )
+        .unwrap_err();
+        assert!(shallow
+            .to_string()
+            .contains("observed current-attempt calls: standard"));
+
+        write_rollout("exhaustive", true);
+        let unpersisted = validate_systematic_research_deep_research_receipt_from_conn(
+            &conn,
+            &codex_home,
+            &workspace,
+            attempt_started_at,
+            SystematicResearchDepth::Exhaustive,
+        )
+        .unwrap_err();
+        assert!(unpersisted
+            .to_string()
+            .contains("exhaustive (no_workspace)"));
+
+        write_rollout("exhaustive", false);
+        let receipt = validate_systematic_research_deep_research_receipt_from_conn(
+            &conn,
+            &codex_home,
+            &workspace,
+            attempt_started_at,
+            SystematicResearchDepth::Exhaustive,
+        )
+        .unwrap();
+        assert_eq!(receipt["depth"], "exhaustive");
+        assert_eq!(receipt["required_depth"], "exhaustive");
+        assert_eq!(receipt["thread_id"], "parent-thread");
+    }
+
+    #[test]
+    fn systematic_research_depth_contract_defaults_to_standard_and_honors_exhaustive() {
+        let workspace = temp_root("research-depth-contract");
+        let mut job = systematic_research_test_job(&workspace);
+        assert_eq!(
+            required_systematic_research_depth(&job),
+            SystematicResearchDepth::Standard
+        );
+        job.prompt
+            .push_str("\nRequired Deep Research Depth: exhaustive");
+        assert_eq!(
+            required_systematic_research_depth(&job),
+            SystematicResearchDepth::Exhaustive
         );
     }
 
