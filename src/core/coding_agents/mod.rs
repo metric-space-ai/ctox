@@ -14,7 +14,7 @@ use crate::business_os::store::BusinessCommand;
 /// existing provider machinery below is the legacy vendor-CLI-wrapper surface;
 /// the pi-sidecar owner replaces "install + wrap a vendor CLI" with driving the
 /// embedded, bounded pi engine over a Unix socket.
-mod pi_sidecar;
+pub(crate) mod pi_sidecar;
 
 const CODEX_STATUS_TIMEOUT_SECS: u64 = 10;
 const CODEX_EXEC_TIMEOUT_SECS: u64 = 600;

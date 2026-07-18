@@ -22152,6 +22152,54 @@ pub fn accept_rxdb_business_command_with_origin(
                 outcome,
             );
         }
+        "ctox.coding.turn" => {
+            let session = rxdb_authenticated_session(root, &command)?;
+            let module_id = source_sanitize_slug(
+                command
+                    .payload
+                    .get("module_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            );
+            anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsModify,
+                &module_id,
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let prompt = command
+                .payload
+                .get("prompt")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let faux = command
+                .payload
+                .get("faux")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            // Delegate one bounded coding turn to the pi-sidecar owner. Errors
+            // (e.g. sidecar not built, gateway unreachable) become an ok:false
+            // outcome rather than a failed command.
+            let outcome = (|| -> anyhow::Result<Value> {
+                let dist = crate::coding_agents::pi_sidecar::resolve_sidecar_dist(root)?;
+                crate::coding_agents::pi_sidecar::run_module_coding_turn(
+                    root, &dist, &module_id, prompt, faux,
+                )
+            })()
+            .unwrap_or_else(|error| serde_json::json!({ "ok": false, "error": error.to_string() }));
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
         "ctox.file.materialize" => {
             let mutation: DesktopFileMaterializeRequest =
                 serde_json::from_value(command.payload.clone())

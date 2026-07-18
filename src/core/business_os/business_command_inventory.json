@@ -19,6 +19,7 @@
     "ctox.business_os.support.export_diagnostics",
     "ctox.business_os.user.upsert",
     "ctox.business_os.why",
+    "ctox.coding.turn",
     "ctox.command.cancel",
     "ctox.file.export",
     "ctox.file.materialize",
