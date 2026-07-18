@@ -101,7 +101,7 @@
 
 .knowledge-module .knowledge-bundle-head {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) auto;
+  grid-template-columns: 16px minmax(0, 1fr);
   align-items: center;
   column-gap: 4px;
   width: 100%;

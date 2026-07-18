@@ -1130,9 +1130,6 @@ function renderKnowledgeBundle(group) {
         <strong>${escapeHtml(group.title)}</strong>
         <span class="bundle-counts">${bundleCountsHtml(skillbookCount, runbookCount, tableCount)}</span>
       </button>
-      <button class="ctox-pane-icon bundle-edit" type="button" aria-label="${escapeHtml(group.title)} bearbeiten" title="Bearbeiten">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg>
-      </button>
     </div>
     <div class="knowledge-bundle-items"></div>
   `;
@@ -1156,16 +1153,6 @@ function renderKnowledgeBundle(group) {
     renderKnowledgeList();
   });
   section.querySelector('.bundle-select').addEventListener('click', selectBundle);
-  section.querySelector('.bundle-edit').addEventListener('click', (event) => {
-    event.stopPropagation();
-    selectBundle();
-    // Reuse the center editor for this entry (in-place edit of the selection).
-    requestAnimationFrame(() => {
-      const rootEl = document.querySelector('.knowledge-module, [data-knowledge-root]');
-      const editAction = rootEl?.querySelector('[data-action="edit-markdown"]:not([hidden]), [data-action="edit-runbook"]:not([hidden])');
-      if (editAction) editAction.click();
-    });
-  });
   const list = section.querySelector('.knowledge-bundle-items');
   list.append(renderSkillbookList(group));
   return section;
