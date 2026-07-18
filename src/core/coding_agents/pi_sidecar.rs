@@ -106,6 +106,13 @@ fn spawn_sidecar(dist: &Path, socket_path: &Path, faux: bool) -> anyhow::Result<
     command
         .arg(dist)
         .arg(socket_path)
+        // Sandbox invariant: the sidecar is a bounded leaf executor whose rights
+        // must be a strict SUBSET of the CTOX daemon's. It must NOT inherit the
+        // daemon's environment (secret store, tokens, state-root paths). Start
+        // from an empty env and grant only PATH (needed to resolve `node`) plus
+        // the flags the turn needs; a real turn adds ONLY the gateway auth here.
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
