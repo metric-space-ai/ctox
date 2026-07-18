@@ -50,6 +50,18 @@ pub(crate) struct ToolRouterParams<'a> {
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
 }
 
+fn is_direct_code_mode_control(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "spawn_agent"
+            | "send_input"
+            | "list_agents"
+            | "resume_agent"
+            | "wait_agent"
+            | "close_agent"
+    )
+}
+
 impl ToolRouter {
     pub fn from_config(config: &ToolsConfig, params: ToolRouterParams<'_>) -> Self {
         let ToolRouterParams {
@@ -70,7 +82,10 @@ impl ToolRouter {
             specs
                 .iter()
                 .filter_map(|configured_tool| {
-                    if !is_code_mode_nested_tool(configured_tool.spec.name()) {
+                    let tool_name = configured_tool.spec.name();
+                    if !is_code_mode_nested_tool(tool_name)
+                        || is_direct_code_mode_control(tool_name)
+                    {
                         Some(configured_tool.spec.clone())
                     } else {
                         None

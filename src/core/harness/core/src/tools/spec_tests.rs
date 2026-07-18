@@ -3211,12 +3211,37 @@ fn code_mode_only_restricts_model_tools_to_exec_tools() {
     let mut features = Features::with_defaults();
     features.enable(Feature::CodeMode);
     features.enable(Feature::CodeModeOnly);
+    features.disable(Feature::Collab);
 
     assert_model_tools(
         "gpt-5.1-codex",
         &features,
         Some(WebSearchMode::Live),
         &["exec", "wait"],
+    );
+}
+
+#[test]
+fn code_mode_only_keeps_collaboration_controls_directly_visible() {
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    features.enable(Feature::CodeModeOnly);
+    features.enable(Feature::Collab);
+
+    assert_model_tools(
+        "gpt-5.1-codex",
+        &features,
+        Some(WebSearchMode::Live),
+        &[
+            "exec",
+            "wait",
+            "spawn_agent",
+            "send_input",
+            "list_agents",
+            "resume_agent",
+            "wait_agent",
+            "close_agent",
+        ],
     );
 }
 
@@ -3247,7 +3272,7 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
     assert!(!description.contains("Enabled nested tools:"));
     assert!(!description.contains("Nested tool reference:"));
     assert!(description.starts_with(
-        "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly"
+        "Use `exec/wait` to run nested tools. Collaboration controls may also be exposed directly."
     ));
     assert!(description.contains("### `update_plan` (`update_plan`)"));
     assert!(description.contains("### `view_image` (`view_image`)"));
