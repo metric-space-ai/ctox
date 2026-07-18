@@ -2,7 +2,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { accumulateUeberlassung, checkDailyHours, checkRestPeriods } from './core/arbzg.js';
 
-const MOD_BUILD = '20260605-rxdb-cancel1';
+const MOD_BUILD = '20260718-ux-reduce-v1';
 const PLANNING_COLLECTIONS = Object.freeze([
   'planning_employees',
   'planning_projects',
@@ -137,7 +137,10 @@ export async function mount(ctx) {
     // Center tabs
     viewSchedulerTabBtn: ctx.host.querySelector('#viewSchedulerTabBtn'),
     viewTimesheetsTabBtn: ctx.host.querySelector('#viewTimesheetsTabBtn'),
-    viewBillingTabBtn: ctx.host.querySelector('#viewBillingTabBtn')
+    viewBillingTabBtn: ctx.host.querySelector('#viewBillingTabBtn'),
+
+    // Right-pane visibility toggle (UX reduction: hidden by default)
+    toggleActions: ctx.host.querySelector('[data-toggle-actions]')
   };
 
   // Seed default dates in Billing selector (current month)
@@ -341,6 +344,10 @@ function applyTimelineState(els) {
 }
 
 function showInspectorSection(els) {
+  // Reveal the collapsible right pane too, otherwise the inspector would open
+  // inside a hidden pane and the user would have to discover the toggle.
+  els.app?.classList.remove('is-actions-hidden');
+  els.toggleActions?.setAttribute('aria-pressed', 'true');
   els.aiPlannerSection.classList.add('hidden');
   els.detailInspectorSection.classList.remove('hidden');
   els.detailInspectorSection.classList.add('is-open');
@@ -2374,6 +2381,14 @@ function bindEventListeners(ctx, els) {
 
   els.btnFindReplacements.addEventListener('click', () => {
     alert(t('aiReplacementAlert', 'Planungs-Assistent: Suche qualifizierten Ersatz für gemeldete Abwesenheiten...'));
+  });
+
+  // Right-pane (AI planner + inspector) collapse toggle. Mirrors the threads /
+  // tickets pattern: hidden by default, header icon re-reveals on demand.
+  els.toggleActions?.addEventListener('click', () => {
+    if (!els.app) return;
+    const nowHidden = els.app.classList.toggle('is-actions-hidden');
+    els.toggleActions.setAttribute('aria-pressed', nowHidden ? 'false' : 'true');
   });
 }
 

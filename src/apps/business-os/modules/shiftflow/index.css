@@ -17,8 +17,27 @@
    What remains here is only what the kit cannot express: the week calendar
    grid with department-coded shift cards and drag & drop, the AI planner
    panel, the colored avatar presence dots, the quick-assign weekday matrix,
-   the project color picker, and the module's responsive re-layout.
+   the project color picker, the module's responsive re-layout, and the
+   collapsible right pane (UX reduction — hidden by default).
    ========================================================================== */
+
+/* The right pane (AI planner + shift/employee detail inspector) collapses and
+   hides by default so the schedule grid gets the full width; the center-pane
+   header toggle re-reveals it on demand. Mirrors the threads / tickets
+   module pattern. */
+.shiftflow-app.is-actions-hidden {
+  grid-template-columns: var(--ctox-left-width, 280px) 12px minmax(0, 1fr);
+}
+
+.shiftflow-app.is-actions-hidden .shiftflow-right-pane,
+.shiftflow-app.is-actions-hidden > [data-resizer="right"] {
+  display: none;
+}
+
+.shiftflow-app .ctox-pane-actions [data-toggle-actions][aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
 
 .shiftflow-app {
   /* Workspace column defaults; the shell resizer persists overrides inline. */

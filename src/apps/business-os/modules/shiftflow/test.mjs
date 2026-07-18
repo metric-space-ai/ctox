@@ -70,10 +70,42 @@ test('presentation follows compact Business OS planning contract', async () => {
   assert.doesNotMatch(css, /border-(?:left|right):\s*(?:[2-9]|[0-9]{2,})px/);
   assert.doesNotMatch(css, /@keyframes\s+shiftflow-pulse-active/);
   assert.doesNotMatch(js, /border-radius:12px/);
-  assert.match(css, /--shiftflow-radius:\s*var\(--control-radius\)/);
-  assert.match(css, /--shiftflow-panel-radius:\s*var\(--surface-radius\)/);
-  assert.match(css, /\.shiftflow-panel\s*\{[\s\S]*?box-shadow:\s*none;/);
-  assert.match(css, /\.shiftflow-grid-cell\.drag-over\s*\{[\s\S]*?outline:\s*2px solid var\(--shiftflow-accent\)/);
+  // No kit-migration residue: removed custom radius variables and panel classes
+  // are gone — the kit supplies those tokens now.
+  assert.doesNotMatch(css, /--shiftflow-radius:/);
+  assert.doesNotMatch(css, /--shiftflow-panel-radius:/);
+  assert.doesNotMatch(css, /--shiftflow-accent:/);
+  assert.doesNotMatch(css, /\.shiftflow-panel\b/);
+  // Drag-over highlight uses the kit's --accent token, not a stale local copy.
+  assert.match(
+    css,
+    /\.shiftflow-grid-cell\.drag-over\s*\{[\s\S]*?outline:\s*2px solid var\(--accent\)/,
+  );
+});
+
+test('right pane (AI planner + inspector) is collapsible, hidden by default', async () => {
+  const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
+  const css = await readFile(new URL('./index.css', import.meta.url), 'utf8');
+  const js = await readFile(new URL('./index.js', import.meta.url), 'utf8');
+
+  // 1. Root carries is-actions-hidden on first paint so the schedule grid
+  //    gets the full width by default.
+  assert.match(html, /class="ctox-workspace shiftflow-app is-actions-hidden"/);
+  // 2. Header exposes a data-toggle-actions button next to the week navigator
+  //    so the user can re-open the AI planner / inspector on demand.
+  assert.match(html, /<button[^>]*data-toggle-actions/);
+  // 3. CSS actually collapses the right pane + its resizer when hidden.
+  assert.match(
+    css,
+    /\.shiftflow-app\.is-actions-hidden\s*\{[\s\S]*?grid-template-columns:\s*var\(--ctox-left-width/,
+  );
+  assert.match(
+    css,
+    /\.shiftflow-app\.is-actions-hidden[^{]*\{[^}]*display:\s*none/,
+  );
+  // 4. JS wires the toggle (classList.toggle on the root + aria-pressed sync).
+  assert.match(js, /classList\.toggle\(['"]is-actions-hidden['"]/);
+  assert.match(js, /setAttribute\(['"]aria-pressed['"]/);
 });
 
 let passed = 0;
