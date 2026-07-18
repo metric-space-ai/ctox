@@ -1489,6 +1489,22 @@ async function runStoreCommand({ label, success, commandType, moduleId, payload 
       },
     }, { until: 'accepted', timeoutMs: STORE_COMMAND_TIMEOUT_MS });
     await loadCatalog();
+    if ([
+      'ctox.app_store.install',
+      'ctox.app_store.uninstall',
+      'ctox.module.install_template',
+      'ctox.module.update',
+      'ctox.module.rollback_version',
+      'ctox.module.release',
+    ].includes(commandType)) {
+      window.dispatchEvent(new CustomEvent('ctox-business-os-modules-changed', {
+        detail: {
+          source: 'app-store',
+          command_type: commandType,
+          module_id: moduleId,
+        },
+      }));
+    }
     setOperation(moduleId, {
       kind: 'success',
       text: success,

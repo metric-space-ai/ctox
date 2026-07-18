@@ -4809,8 +4809,19 @@ async function openModule(moduleId, options = {}) {
   if (requestedId !== moduleId && currentHashModuleId() === moduleId) {
     history.replaceState(null, '', `#${requestedId}`);
   }
-  const mod = state.modules.find((item) => item.id === requestedId) || state.modules[0];
-  if (!mod) return;
+  let mod = state.modules.find((item) => item.id === requestedId);
+  if (!mod && requestedId) {
+    // Runtime-installed apps arrive through the replicated module catalog.
+    // Refresh once before resolving the route so a just-installed app opens
+    // itself instead of silently falling back to the first visible module.
+    await refreshModules();
+    mod = state.modules.find((item) => item.id === requestedId);
+  }
+  if (!mod) {
+    console.warn(`[business-os] requested module is not available: ${requestedId || '(empty)'}`);
+    setStatus(`${requestedId || 'App'} ist noch nicht im Modulkatalog verfügbar.`);
+    return;
+  }
   if (!canSeeModuleForAppVersion(mod)) {
     const lifecycle = appLifecycleState(mod, {
       session: state.session,
