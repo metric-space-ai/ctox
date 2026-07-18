@@ -20,6 +20,14 @@
   grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 
+/* Pin the thread list to row 4 so it always fills the remaining vertical
+   space, even when the secondary-filters row (row 3) is collapsed via
+   [hidden]. Without this, auto-placement would put the list in row 3 when
+   the filters are display:none and the row 4 (1fr) would stay empty. */
+.conv-left-body {
+  grid-row: 4;
+}
+
 .conv-pane.conv-center {
   grid-template-rows: auto auto minmax(0, 1fr);
 }
@@ -462,11 +470,9 @@ details[open] > .conv-message-details-summary::before {
   column-gap: 10px;
   row-gap: 4px;
   margin-top: 6px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  background: color-mix(in srgb, var(--surface-2) 50%, var(--surface));
+  padding-top: 6px;
   font-size: 11px;
+  border-top: 1px solid var(--hairline, var(--line));
 }
 
 .conv-message-details-body dt {
@@ -489,7 +495,7 @@ details[open] > .conv-message-details-summary::before {
   margin: 4px 0 0;
   padding: 6px;
   border-radius: var(--control-radius);
-  background: var(--bg);
+  background: var(--surface-2);
   font-family: var(--font-mono);
   font-size: 10px;
   overflow: auto;
@@ -531,7 +537,10 @@ details[open] > .conv-message-details-summary::before {
 
 /* Right pane — inspector cards use the kit .ctox-card/.ctox-card-body
    (border, radius, surface, uppercase header label). Only the stacked
-   content layout inside the body is local. */
+   content layout inside the body is local. The right pane itself is
+   collapsible (data-toggle-actions / is-actions-hidden) so the timeline
+   gets the full width by default; the kit's surface card supplies the
+   grouping, no local frame needed around the rows below. */
 .conv-right-empty span {
   overflow-wrap: anywhere;
 }
@@ -546,34 +555,7 @@ details[open] > .conv-message-details-summary::before {
 
 .conv-card-body {
   display: grid;
-  gap: 6px;
-}
-
-.conv-contact-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.conv-contact-meta {
-  display: grid;
-  min-width: 0;
-}
-
-.conv-contact-meta strong {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 14px;
-}
-
-.conv-contact-meta span {
-  color: var(--muted);
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  gap: 4px;
 }
 
 /* custom: outbound highlight — the one accent-tinted inspector card */
@@ -601,13 +583,11 @@ details[open] > .conv-message-details-summary::before {
   line-height: 1.35;
 }
 
-/* custom: boxed variant of .ctox-fields inside the outbound card */
+/* custom: flat hairline rows inside inspector cards (channel / account /
+   folder). The kit .ctox-card body already provides the surface; these
+   rows only need a hairline separator. */
 .conv-outbound-facts {
   margin: 2px 0;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  background: var(--surface);
 }
 
 .conv-outbound-actions {
@@ -619,10 +599,9 @@ details[open] > .conv-message-details-summary::before {
 .conv-outbound-reply-classifier {
   display: grid;
   gap: 8px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  background: var(--surface);
+  padding: 8px 0 0;
+  border-top: 1px solid var(--hairline, var(--line));
+  margin-top: 4px;
 }
 
 .conv-outbound-reply-classifier label {
@@ -638,17 +617,18 @@ details[open] > .conv-message-details-summary::before {
   text-transform: uppercase;
 }
 
-/* custom: compact bordered fact rows inside inspector cards (channel /
-   account / folder) — record-specific content rows, not kit list items */
+/* compact fact rows inside inspector cards (channel / account / folder) */
 .conv-channel-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  background: var(--surface);
+  padding: 5px 0;
+  border-bottom: 1px solid var(--hairline, var(--line));
+}
+
+.conv-channel-row:last-child {
+  border-bottom: 0;
 }
 
 .conv-channel-row-name {
@@ -668,10 +648,12 @@ details[open] > .conv-message-details-summary::before {
   display: grid;
   grid-template-columns: 12px 1fr;
   gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  background: var(--surface);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--hairline, var(--line));
+}
+
+.conv-account-row:last-child {
+  border-bottom: 0;
 }
 
 .conv-account-health {
@@ -717,11 +699,13 @@ details[open] > .conv-message-details-summary::before {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  background: var(--surface);
+  padding: 5px 0;
+  border-bottom: 1px solid var(--hairline, var(--line));
   font-size: 12px;
+}
+
+.conv-folder-row:last-child {
+  border-bottom: 0;
 }
 
 .conv-folder-row-count {
@@ -734,6 +718,24 @@ details[open] > .conv-message-details-summary::before {
 .conv-load-older {
   justify-self: center;
   margin-bottom: 16px;
+}
+
+/* Right pane (Kontext/Status) is collapsible and hidden by default so the
+   conversation timeline gets the full width; the left-pane header toggle
+   (data-toggle-actions) re-reveals it on demand. Mirrors threads' UX
+   reduction pattern. */
+.conv-module.is-actions-hidden {
+  grid-template-columns: var(--ctox-left-width, 320px) 12px minmax(0, 1fr);
+}
+
+.conv-module.is-actions-hidden .conv-right,
+.conv-module.is-actions-hidden > [data-resizer="right"] {
+  display: none;
+}
+
+.conv-toggle-actions[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 
 @container business-app-window (max-width: 1080px) {
