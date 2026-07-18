@@ -38,6 +38,13 @@
 - Keep utility chrome visually quiet and space-efficient. Reserve prominent
   color/space for at most one real signature AI automation per visible work
   surface, with trackable command/run state.
+- Hide optional, secondary, or rarely-used controls, filters, forms, and
+  reference panels by default; reveal them on demand via a collapsible pane
+  (`is-<x>-hidden` + `data-toggle-...`), a `<details>/<summary>`, the native
+  `[hidden]` attribute, or a `⋯` overflow menu. The default view is the minimal
+  common case. Hiding is not deleting — keep every feature reachable.
+- Render a section or card only when it has data; collapse an empty state to one
+  muted `.ctox-empty` line, never a placeholder card.
 - Use shell-owned container queries and column resizers. Switch from floating
   window to mobile sheet at the shell breakpoint and keep every pane reachable.
 - Prefer one or two panes inside the app only when both panes contain real
@@ -114,6 +121,15 @@
   oversized hero cards/buttons. Do not show two competing signature actions.
 - Do not hide a pane at a compact breakpoint without a visible tab, drawer,
   stack, or back path that restores its workflow and selection.
+- Do not leave a detail/inspector pane hidden by default unless selecting a
+  record auto-reveals it (`visible = hasSelection && !userCollapsed`, recomputed
+  every render). A default-hidden detail pane with no auto-reveal means a click
+  shows nothing.
+- Do not render empty reference cards or "not set" placeholder cards to fill a
+  pane; a section renders only when it has data.
+- Do not overload a surface with secondary controls, filters, or reference cards
+  that are used only occasionally yet always shown; put them behind a toggle,
+  `<details>`, or `⋯` menu.
 - Do not put category/title hero blocks, duplicate app names, version bars,
   metrics strips, date strips, and filters into separate header rows. Fold the
   minimum controls into one compact commandbar or make the calendar/work grid

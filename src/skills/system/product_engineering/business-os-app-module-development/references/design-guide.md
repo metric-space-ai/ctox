@@ -137,11 +137,46 @@ Do not rebuild any of these locally.
   `data-context-record-type`, and `data-context-label`.
 - Use right-click annotations instead of app-owned context menus.
 
+### Progressive Disclosure (hide until needed)
+
+The default state of a surface is the minimal, most-common view. Optional,
+secondary, or rarely-used elements are not permanently visible — reveal them on
+demand. Decluttering never means deleting the feature; it means hiding it until
+asked for.
+
+- Keep permanently visible only the common case: the primary content, the
+  primary action, and primary navigation/search. Everything situational is
+  revealed on demand.
+- Mechanisms, in rough order of preference: a collapsible pane (root class
+  `is-<x>-hidden` + a header toggle `data-toggle-...` with `aria-pressed`, the
+  threads idiom), a native `<details>/<summary>` disclosure, the native
+  `[hidden]` attribute, or a `⋯` overflow menu for secondary per-row/per-pane
+  actions.
+- **A select-driven detail or inspector pane may be hidden by default ONLY if
+  selecting a record auto-reveals it.** Use the model
+  `visible = hasSelectedRecord && !userCollapsed`, recomputed on every render:
+  the empty state shows no inspector, clicking a record reveals it, and the user
+  can still collapse it (the `outbound` app is the reference). Shipping a
+  default-hidden detail pane *without* the auto-reveal is a regression — the user
+  selects a row and sees nothing.
+- A deliberately-opened *panel* not tied to a selection (assistant, runbooks,
+  holds, a rights/settings form) can simply be default-hidden behind its toggle;
+  no auto-reveal needed.
+- Only render a section or card when it has data. Do not emit empty
+  "nicht gesetzt" placeholder cards; collapse an empty state to a single muted
+  `.ctox-empty` line, never a bordered card.
+- Only show a reveal control when there is something to reveal (e.g. hide the
+  inspector toggle when nothing is selected).
+
 ## Anti-Patterns
 
 - Landing-page hero instead of the actual app.
 - A generic CRUD scaffold when the domain has a clear primary action.
 - Empty or decorative side columns.
+- A surface overloaded with secondary controls, filters, or reference cards that
+  are needed only occasionally yet shown permanently.
+- A default-hidden detail/inspector pane that does not auto-reveal when a record
+  is selected.
 - Visible AI/queue buttons that do not dispatch real commands.
 - Copying App Creator, App Store, Browser, CTOX, Credentials, or Coding Agents
   as a business-app UI template.
