@@ -4546,7 +4546,7 @@ async fn deliver_business_command_outbox_background_loop(root: PathBuf) {
             }
             Ok(_) => {
                 idle_rounds = 0;
-                tokio::task::yield_now().await;
+                tokio::time::sleep(Duration::from_millis(250)).await;
             }
             Err(err) => {
                 idle_rounds = 0;
