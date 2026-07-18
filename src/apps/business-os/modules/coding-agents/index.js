@@ -16,7 +16,7 @@ const RECENT_TURNS_LIMIT = 8;
 // runs on the SAME model/provider as CTOX (the gateway). Only an explicit
 // non-default pick sends a pi-ai provider model.
 const MODEL_PRESETS = [
-  { id: 'ctox', label: 'CTOX (Standard)', model: null },
+  { id: 'ctox', label: 'CTOX · Kimi K3 (Standard)', model: null },
   {
     id: 'anthropic',
     label: 'Anthropic · Claude Sonnet 4.5',

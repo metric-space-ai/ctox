@@ -88,7 +88,7 @@ export async function mount(container, ctx) {
               <span class="source-editor-agent-sub">Delegiere eine Änderung an dieser App. Das Ergebnis wird als Versionspunkt versiegelt.</span>
               <textarea data-source-agent-task class="source-editor-agent-task" rows="5" placeholder="Was soll der Agent an dieser App ändern?" required></textarea>
               <div class="source-editor-agent-actions">
-                <span class="source-editor-agent-model">Model: CTOX (Standard)</span>
+                <span class="source-editor-agent-model">Model: Kimi K3 (CTOX)</span>
                 <button type="button" data-source-agent-open-app class="source-editor-agent-openapp" title="Diese App in der Coding-Agent-App öffnen"><span aria-hidden="true">↗</span><span>Coding-Agent-App</span></button>
                 <button type="submit" data-source-agent-run class="source-editor-agent-run">Delegieren</button>
               </div>
