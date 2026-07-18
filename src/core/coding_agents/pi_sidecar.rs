@@ -371,4 +371,57 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn apply_snapshot_round_trips_a_seeded_file_edit() -> anyhow::Result<()> {
+        use crate::business_os::store::{load_module_source_records, ModuleSourceLoadMutation};
+
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let app_root = root.join("src").join("apps").join("business-os");
+        std::fs::create_dir_all(app_root.join("modules").join("widget"))?;
+        std::fs::write(app_root.join("index.html"), b"<!doctype html>")?;
+        std::fs::write(
+            app_root.join("modules").join("widget").join("module.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "id": "widget",
+                "title": "Widget",
+                "entry": "modules/widget/index.html"
+            }))?,
+        )?;
+        std::fs::write(
+            app_root.join("modules").join("widget").join("index.js"),
+            "export const v = 1;\n",
+        )?;
+        load_module_source_records(
+            root,
+            &ModuleSourceLoadMutation {
+                module_id: "widget".to_string(),
+            },
+        )?;
+
+        // Learn the projected path key for index.js, then simulate a turn snapshot
+        // that edited exactly that file (with the sidecar env cwd prefix).
+        let before = project_module_source(root, "widget")?;
+        let key = before
+            .keys()
+            .find(|path| path.ends_with("index.js"))
+            .cloned()
+            .expect("index.js is projected");
+        let snapshot = vec![serde_json::json!({
+            "path": format!("/workspace/{key}"),
+            "kind": "file",
+            "content": "export const v = 2;\n"
+        })];
+        apply_turn_snapshot(root, "widget", &snapshot)?;
+
+        // The SAME path must now carry the edit — not a nested duplicate.
+        let after = project_module_source(root, "widget")?;
+        assert_eq!(
+            after.get(&key).and_then(Value::as_str),
+            Some("export const v = 2;\n"),
+            "a real edit round-trips project -> apply to the same module path ({key})"
+        );
+        Ok(())
+    }
 }
