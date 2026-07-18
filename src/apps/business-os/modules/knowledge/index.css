@@ -1055,3 +1055,40 @@
   color: var(--knowledge-muted);
   font-size: var(--fs-micro);
 }
+
+/* ============================================================================
+   De-frame pass: ONE frame only (the pane). Everything inside uses surfaces /
+   fills / a left accent bar — never nested borders. Kills frame-in-frame.
+   ========================================================================== */
+/* Shards: flat rows, not bordered cards. Selection = subtle fill + accent bar. */
+.knowledge-module .knowledge-bundle {
+  margin-bottom: 1px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: var(--knowledge-control-radius);
+  background: transparent;
+  box-shadow: none;
+}
+.knowledge-module .knowledge-bundle:hover { background: var(--kit-hover); }
+.knowledge-module .knowledge-bundle[aria-current="true"] {
+  background: color-mix(in srgb, var(--knowledge-accent) 8%, transparent);
+  box-shadow: inset 2px 0 0 var(--knowledge-accent);
+}
+/* Segmented controls: fill track, no border box (one less frame everywhere). */
+.knowledge-module .ctox-pane-tabs { border-color: transparent; }
+/* Filter chips: fill, not outlined pills. */
+.knowledge-module .knowledge-filter-chips .ctox-chip {
+  border-color: transparent;
+  background: var(--kit-fill);
+}
+/* Nested items: a single hairline guide is the only inner line, kept faint. */
+.knowledge-module .knowledge-bundle-items {
+  border-left-color: color-mix(in srgb, var(--knowledge-line) 55%, transparent);
+}
+/* Row separators between the header bands stay as single hairlines, but the
+   filter/scope/switch bands drop their own background so they read as one
+   surface, not stacked boxes. */
+.knowledge-module .knowledge-filterbar,
+.knowledge-module .knowledge-filter-advanced,
+.knowledge-module .knowledge-scope-switch,
+.knowledge-module .knowledge-view-switch { background: transparent; }
