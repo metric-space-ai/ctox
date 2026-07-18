@@ -105,6 +105,30 @@ pub fn gateway_model(root: &Path) -> Value {
     })
 }
 
+/// The coding default model: Kimi K3 through the CTOX gateway/proxy. Per the
+/// model policy, coding turns default to K3 (coding-strong) while CTOX
+/// automation defaults to M3 — both served by `llm.ctox.dev` behind the local
+/// gateway, chosen purely by the public model id (`kimi-k3`, which the proxy
+/// translates to Kimi Code upstream `k3`). Callers may override with ANY pi-ai
+/// provider model. The proxy holds the Kimi upstream key (`KIMI_CODE_API_KEY`)
+/// server-side; the sidecar only ever speaks the gateway's Responses shape.
+pub fn coding_default_model(root: &Path) -> Value {
+    let gateway = crate::execution::responses::gateway::GatewayConfig::resolve_with_root(root);
+    let base_url = format!("http://{}:{}", gateway.listen_host, gateway.listen_port);
+    serde_json::json!({
+        "id": "kimi-k3",
+        "name": "Kimi K3 (CTOX gateway)",
+        "api": "openai-responses",
+        "provider": "ctox-gateway",
+        "baseUrl": base_url,
+        "reasoning": true,
+        "input": ["text"],
+        "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+        "contextWindow": 200000,
+        "maxTokens": 8192
+    })
+}
+
 /// A spawned sidecar daemon listening on a Unix socket. Killed + cleaned on drop
 /// so a turn can never leak a live agent process.
 struct SidecarDaemon {
@@ -296,12 +320,12 @@ pub fn run_module_coding_turn(
         // the shell/kit/data-boundary contract requires (not as a generic web page).
         "systemPrompt": business_os_system_prompt(),
     });
-    // Real turns need a model. Default = the SAME model/provider as CTOX (the
-    // gateway); callers may override with ANY pi-ai provider model (openai,
-    // anthropic, minimax, openrouter, …), just like plain pi. Faux turns run
-    // the sidecar's deterministic no-model stream.
+    // Real turns need a model. Default = Kimi K3 through the CTOX gateway/proxy
+    // (the coding default; CTOX automation defaults to M3 separately). Callers
+    // may override with ANY pi-ai provider model (openai, anthropic, minimax,
+    // …), just like plain pi. Faux turns run the sidecar's no-model stream.
     if !faux {
-        request["model"] = model_override.unwrap_or_else(|| gateway_model(root));
+        request["model"] = model_override.unwrap_or_else(|| coding_default_model(root));
     }
     let response = run_pi_turn(dist, &request, faux)?;
     anyhow::ensure!(
@@ -594,6 +618,28 @@ mod tests {
                 "system prompt should mention `{marker}`"
             );
         }
+    }
+
+    #[test]
+    fn coding_default_is_kimi_k3_through_the_gateway() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let model = coding_default_model(temp.path());
+        assert_eq!(
+            model["id"].as_str(),
+            Some("kimi-k3"),
+            "coding turns default to the Kimi K3 public gateway model id"
+        );
+        assert_eq!(
+            model["api"].as_str(),
+            Some("openai-responses"),
+            "the coding default speaks the gateway's Responses shape"
+        );
+        let base_url = model["baseUrl"].as_str().unwrap_or_default();
+        assert!(
+            base_url.starts_with("http://") && base_url.ends_with(":12434"),
+            "coding default routes through the loopback gateway on :12434 (got {base_url})"
+        );
+        Ok(())
     }
 
     #[test]

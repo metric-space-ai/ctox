@@ -8,9 +8,10 @@ commit in the app's source history.
 The module dispatches through the shared `business_commands` shell collection:
 
 - `ctox.coding.turn` — run one bounded coding turn on a module. Payload
-  `{ module_id, prompt, model? }`. `model` is optional: by default the agent uses
-  the **same model/provider as CTOX**; any pi provider can be sent to override
-  it. The native owner (`src/core/coding_agents`) projects the app source, drives
+  `{ module_id, prompt, model? }`. `model` is optional: by default coding turns
+  use **Kimi K3** (`kimi-k3`) through the CTOX gateway/`llm.ctox.dev` proxy —
+  coding-strong, while CTOX automation defaults to MiniMax M3. Any pi provider
+  can be sent to override it. The native owner (`src/core/coding_agents`) projects the app source, drives
   one bounded turn through the embedded pi sidecar, and applies the resulting
   snapshot back as source versions/commits.
 
