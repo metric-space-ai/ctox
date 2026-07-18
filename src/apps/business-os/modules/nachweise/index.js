@@ -5,7 +5,7 @@ import {
   isDeploymentBlocking,
 } from './core/credential.js';
 
-const MOD_BUILD = '20260706-kit1';
+const MOD_BUILD = '20260718-kit2';
 const MODULE_ID = 'nachweise';
 const PRIMARY = 'business_credentials';
 const DEPLOY_COMMAND = 'ats.deployment.check';
@@ -20,7 +20,7 @@ const TYPE_LABEL_EN = new Map([
 ]);
 const COPY = {
   de: {
-    title: 'Nachweise', subtitle: 'Ablaufende, verifizierte Nachweise je Subjekt mit Einsatz-Gate und Leistungsnachweis-Freigabe.',
+    title: 'Nachweise', kicker: 'Nachweise', subtitle: 'Ablaufende, verifizierte Nachweise je Subjekt mit Einsatz-Gate und Leistungsnachweis-Freigabe.',
     subjectLabel: 'Subjekt', credentialTypeLabel: 'Nachweistyp', validUntilLabel: 'Gültig bis', deploymentSubjectLabel: 'Einsatz-Subjekt', requiredTypesLabel: 'Pflicht-Typen', recordLabel: 'Leistungsnachweis', rateLabel: 'Verrechnungssatz', clientLabel: 'Entleiher', signatureLabel: 'Signatur-Anfrage', collectionLabel: 'Collection',
     subjectPlaceholder: 'Subjekt-ID (Kandidat/Mitarbeiter)', issuerPlaceholder: 'Aussteller', addCredential: 'Nachweis hinzufügen',
     deploymentSubjectPlaceholder: 'Subjekt-ID für Einsatz-Prüfung', requiredTypesPlaceholder: 'Pflicht-Typen (kommagetrennt)',
@@ -39,7 +39,7 @@ const COPY = {
     statusValid: 'gültig', statusExpiring: 'läuft ab', statusExpired: 'abgelaufen', statusNotYetValid: 'noch nicht gültig', statusUnverified: 'nicht verifiziert',
   },
   en: {
-    title: 'Credentials', subtitle: 'Expiring, verified credentials per subject with deployment gate and performance-record billing release.',
+    title: 'Credentials', kicker: 'Credentials', subtitle: 'Expiring, verified credentials per subject with deployment gate and performance-record billing release.',
     subjectLabel: 'Subject', credentialTypeLabel: 'Credential type', validUntilLabel: 'Valid until', deploymentSubjectLabel: 'Deployment subject', requiredTypesLabel: 'Required types', recordLabel: 'Performance record', rateLabel: 'Charge rate', clientLabel: 'Client', signatureLabel: 'Signature request', collectionLabel: 'Collection',
     subjectPlaceholder: 'Subject ID (candidate/employee)', issuerPlaceholder: 'Issuer', addCredential: 'Add credential',
     deploymentSubjectPlaceholder: 'Subject ID for deployment check', requiredTypesPlaceholder: 'Required types (comma-separated)',
@@ -95,10 +95,13 @@ export async function mount(ctx) {
     try { return ctx.db?.collection?.(PRIMARY) || null; } catch { return null; }
   };
 
+  // Gate result → kit callout state (base.css .ctox-callout modifiers).
+  const GATE_KINDS = { ok: 'is-success', block: 'is-danger', offline: 'is-warning' };
   function setGate(html, kind) {
     if (!gateEl) return;
-    gateEl.className = 'ats-gate' + (kind ? ' ats-gate--' + kind : '');
+    gateEl.className = 'ctox-callout' + (GATE_KINDS[kind] ? ' ' + GATE_KINDS[kind] : '');
     gateEl.innerHTML = html || '';
+    gateEl.hidden = !html;
   }
 
   async function render() {
