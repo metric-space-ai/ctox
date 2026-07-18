@@ -122,9 +122,10 @@
   padding: 10px;
 }
 
-/* custom: collapsible task group accordion (the kit has no collapsible section) */
+/* custom: collapsible task group accordion (the kit has no collapsible section).
+   Surface step only — no full border, no extra wrapper around the
+   .ctox-pane background, so it doesn't read as a frame-in-a-frame. */
 .ctox-work-section {
-  border: 1px solid var(--hairline);
   border-radius: var(--panel-radius);
   background: var(--surface-2);
   overflow: hidden;
@@ -290,13 +291,20 @@
   border-color: color-mix(in srgb, var(--danger) 42%, var(--line));
 }
 
-/* custom: collapsible aux panels (inbound channels, web stack) */
+/* custom: collapsible aux panels (inbound channels, web stack).
+   Same surface-step treatment as .ctox-work-section — no border. */
 .ctox-aux-section {
   min-width: 0;
-  border: 1px solid var(--hairline);
   border-radius: var(--panel-radius);
   background: var(--surface-2);
   overflow: hidden;
+}
+
+/* The aux block (channels + web stack status) is hidden by default; the
+   workspace's `data-ctox-aux` attribute (toggled by the header button) reveals
+   it. Most of the time the user only needs the task work overview. */
+.ctox-harness[data-ctox-aux="hidden"] .ctox-harness-aux {
+  display: none;
 }
 
 .ctox-aux-section > summary {
@@ -512,13 +520,16 @@
   border-color: color-mix(in srgb, var(--muted) 42%, transparent);
 }
 
-/* custom: live metric strip for the flow console */
+/* custom: live metric strip for the flow console. One hairline between cards,
+   no gap-as-frame trick. */
 .ctox-metrics-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1px;
   border-bottom: 1px solid var(--hairline);
-  background: var(--hairline);
+}
+
+.ctox-metric-card + .ctox-metric-card {
+  border-left: 1px solid var(--hairline);
 }
 
 .ctox-metric-card {
@@ -593,7 +604,8 @@
   cursor: grabbing;
 }
 
-/* custom: floating zoom toolbar over the canvas */
+/* custom: floating zoom toolbar over the canvas. Plain surface, no blur
+   or drop shadow — the controls are what matter, the chrome is not. */
 .ctox-flow-toolbar {
   position: absolute;
   bottom: 16px;
@@ -603,12 +615,9 @@
   align-items: center;
   gap: 2px;
   border: 1px solid var(--line);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--surface-2) 65%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  border-radius: var(--control-radius);
+  background: var(--surface-2);
   padding: 3px 6px;
-  box-shadow: var(--shadow-lg);
 }
 
 .ctox-flow-toolbar button {

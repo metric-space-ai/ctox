@@ -161,6 +161,8 @@ const labels = {
     harnessWarningMessage: '{count} Aufgaben warten; noch keine Lease sichtbar.',
     harnessOpenTask: 'Task öffnen',
     harnessHealthy: 'Harness verarbeitet Queue',
+    auxShow: 'Status & Quellen',
+    auxHide: 'Status & Quellen ausblenden',
   },
   en: {
     now: 'Now',
@@ -303,6 +305,8 @@ const labels = {
     harnessWarningMessage: '{count} tasks are waiting; no lease is visible yet.',
     harnessOpenTask: 'Open task',
     harnessHealthy: 'Harness is processing queue',
+    auxShow: 'Status & sources',
+    auxHide: 'Hide status & sources',
   },
 };
 
@@ -417,6 +421,7 @@ export async function mount(ctx) {
     focusTask: launchFocusTask || readFocusTask(),
     detailDrawer: null,
     openTaskSections: new Set(['current']),
+    showAux: false,
     userNavigatedTimeline: false,
     liveBaseSeconds: 0,
     liveStartedAt: Date.now(),
@@ -801,12 +806,18 @@ function renderLeft(state) {
   const visibleGroups = filterTaskGroups(groups, selectedCategory);
   const activeCount = groups.current.length;
   syncOpenTaskSections(state, groups);
+  const auxOpen = !!state.showAux;
   left.innerHTML = `
     <header class="ctox-pane-header ctox-pane-band ctox-context-item" data-harness-health-tooltip data-context-label="${escapeAttr(t.tasks)}" data-context-record-id="ctox-tasks">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker">${escapeHtml(t.tasks)}</span>
           <h2 class="ctox-pane-title">${escapeHtml(model.tasks.length ? `${activeCount} ${t.active}` : t.noActiveWork)}</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon ${auxOpen ? 'is-active' : ''}" data-ctox-toggle-aux aria-pressed="${auxOpen}" aria-label="${escapeAttr(auxOpen ? t.auxHide : t.auxShow)}" title="${escapeAttr(auxOpen ? t.auxHide : t.auxShow)}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
+          </button>
         </div>
       </div>
       ${taskCategoryChips(model.tasks, selectedCategory, state)}
@@ -843,7 +854,18 @@ function renderLeft(state) {
       selectTask(state, button.dataset.taskId, { drawer: true, center: true });
     });
   });
+  left.querySelector('[data-ctox-toggle-aux]')?.addEventListener('click', () => {
+    state.showAux = !state.showAux;
+    renderLeft(state);
+  });
+  syncAuxVisibility(state);
   wireWebStackPanel(state, left);
+}
+
+function syncAuxVisibility(state) {
+  const harness = state.ctx.host.querySelector('[data-ctox-harness]');
+  if (!harness) return;
+  harness.dataset.ctoxAux = state.showAux ? 'shown' : 'hidden';
 }
 
 function taskCategoryChips(tasks, selectedCategory, state) {
