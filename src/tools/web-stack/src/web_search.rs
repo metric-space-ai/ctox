@@ -779,7 +779,7 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
         },
         rank: 1,
     };
-    let (doc, _) = match build_evidence_doc(&config, &read_query, &hit) {
+    let (doc, content_type) = match build_evidence_doc(&config, &read_query, &hit) {
         Ok(primary) if evidence_doc_has_meaningful_content(&primary.0) => primary,
         Ok(primary) => {
             let Some(fallback_url) = canonical_read_fallback_url(&url) else {
@@ -822,6 +822,15 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
             })?
         }
     };
+    let final_url = doc
+        .response_receipt
+        .as_ref()
+        .map(|receipt| receipt.final_url.as_str())
+        .unwrap_or(doc.canonical_url.as_str());
+    let mut session = WebSearchSession::new(root, &config)?;
+    session.store_page_doc(&url, final_url, content_type, &doc);
+    session.persist_page_cache()?;
+
     Ok(render_direct_web_read_payload(
         &url,
         &read_query,
@@ -1907,7 +1916,17 @@ impl<'a> WebSearchSession<'a> {
             doc: doc.clone(),
         };
 
-        for url in [original_url, final_url] {
+        let mut aliases = vec![
+            original_url,
+            final_url,
+            doc.url.as_str(),
+            doc.canonical_url.as_str(),
+        ];
+        if let Some(receipt) = doc.response_receipt.as_ref() {
+            aliases.push(receipt.requested_url.as_str());
+            aliases.push(receipt.final_url.as_str());
+        }
+        for url in aliases {
             let key = normalize_url_cache_key(url);
             if !key.is_empty() {
                 self.page_cache.entries.insert(key, entry.clone());
@@ -8119,6 +8138,29 @@ mod tests {
         assert_eq!(payload["ok"], json!(true));
         assert_eq!(payload["url"], "https://example.com/mock-result");
         assert_eq!(payload["find_results"][0]["pattern"], "ctox remote web ok");
+
+        let cache: PageCacheFile = serde_json::from_str(
+            &fs::read_to_string(page_cache_path(&root)).expect("direct read page cache"),
+        )
+        .expect("valid direct read page cache");
+        let entry = cache
+            .entries
+            .get(&normalize_url_cache_key("https://example.com/mock-result"))
+            .expect("direct read cache entry");
+        assert!(entry.evidence_eligible);
+        assert_eq!(entry.http_status, Some(200));
+        assert_eq!(
+            entry.snapshot_hash,
+            payload["snapshot_hash"].as_str().map(ToOwned::to_owned)
+        );
+        assert_eq!(
+            entry
+                .doc
+                .response_receipt
+                .as_ref()
+                .and_then(|receipt| receipt.sha256.as_deref()),
+            entry.snapshot_hash.as_deref()
+        );
     }
 
     #[test]
