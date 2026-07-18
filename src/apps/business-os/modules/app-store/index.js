@@ -127,6 +127,8 @@ function bindElements(root) {
   els.refresh = root.querySelector('[data-refresh-marketplace]');
   els.message = root.querySelector('[data-store-message]');
   els.marketplaceState = root.querySelector('[data-marketplace-state]');
+  els.toggleExtras = root.querySelector('[data-toggle-sidebar-extras]');
+  els.sidebarExtras = root.querySelector('[data-sidebar-extras]');
 }
 
 function wireEvents() {
@@ -180,6 +182,12 @@ function wireEvents() {
   });
 
   els.refresh?.addEventListener('click', () => refreshMarketplace({ force: true }));
+
+  els.toggleExtras?.addEventListener('click', () => {
+    if (!els.sidebarExtras) return;
+    const isHidden = els.sidebarExtras.toggleAttribute('hidden');
+    els.toggleExtras.setAttribute('aria-pressed', isHidden ? 'false' : 'true');
+  });
 
   state.ctx.host.querySelector('#btn-create-scratch')?.addEventListener('click', () => {
     openCreatorFromStore({ mode: 'scratch' });
