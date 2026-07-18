@@ -41,15 +41,23 @@ class EvidenceGuardTests(unittest.TestCase):
                 "snapshot": {"snapshot_id": "snap-1", "path": "original.txt", "sha256": digest,
                               "source_id": "src-1", "canonical_url": "https://example.edu/paper/full-text"},
             }],
-            "claims": [],
+            "claims": [{
+                "claim_id": "c-1",
+                "claim_text": "The source contains methods, results, tables, units, and conclusions.",
+                "evidence_id": "ev-1",
+                "snapshot_id": "snap-1",
+                "source_id": "src-1",
+                "canonical_url": "https://example.edu/paper/full-text",
+            }],
             "data_files": [],
             "reviews": [
                 {"review_type": "source", "reviewer_id": "r-source", "status": "pass", "reviewed_ids": ["ev-1"]},
                 {"review_type": "data", "reviewer_id": "r-data", "status": "pass", "reviewed_ids": ["ev-1"]},
-                {"review_type": "claim", "reviewer_id": "r-claim", "status": "pass", "reviewed_ids": ["ev-1"]},
+                {"review_type": "claim", "reviewer_id": "r-claim", "status": "pass", "reviewed_ids": ["c-1"]},
             ],
             "knowledge": {"living": False},
         }
+        self.manifest["claims"][0]["lineage_sha256"] = lineage_hash(self.manifest["claims"][0])
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -62,11 +70,25 @@ class EvidenceGuardTests(unittest.TestCase):
         self.manifest["sources"][0]["canonical_url"] = url
         self.manifest["evidence"][0]["canonical_url"] = url
         self.manifest["evidence"][0]["snapshot"]["canonical_url"] = url
+        self.manifest["claims"][0]["canonical_url"] = url
+        self.manifest["claims"][0]["lineage_sha256"] = lineage_hash(self.manifest["claims"][0])
         validate_manifest(self.manifest, self.base)
 
     def test_discovery_candidate_cannot_be_evidence(self) -> None:
         self.manifest["evidence"][0]["evidence_status"] = "candidate"
         with self.assertRaisesRegex(ValueError, "discovery_candidate"):
+            validate_manifest(self.manifest, self.base)
+
+    def test_empty_research_cannot_pass_with_empty_reviews(self) -> None:
+        self.manifest["sources"] = []
+        self.manifest["evidence"] = []
+        self.manifest["claims"] = []
+        self.manifest["reviews"] = [
+            {"review_type": "source", "reviewer_id": "r-source", "status": "pass", "reviewed_ids": []},
+            {"review_type": "data", "reviewer_id": "r-data", "status": "pass", "reviewed_ids": []},
+            {"review_type": "claim", "reviewer_id": "r-claim", "status": "pass", "reviewed_ids": []},
+        ]
+        with self.assertRaisesRegex(ValueError, "at_least_one_verified_source"):
             validate_manifest(self.manifest, self.base)
 
     def test_rejected_url_classes_fail_closed(self) -> None:
@@ -116,6 +138,8 @@ class EvidenceGuardTests(unittest.TestCase):
         item = manifest["evidence"][0]
         item.update({"canonical_url": url, "content_scope": "data_file", "content_kind": "data_file", "snapshot_sha256": digest})
         item["snapshot"].update({"path": "data.csv", "sha256": digest, "canonical_url": url})
+        manifest["claims"][0]["canonical_url"] = url
+        manifest["claims"][0]["lineage_sha256"] = lineage_hash(manifest["claims"][0])
         manifest["data_files"] = [{
             "data_file_id": "data-1", "evidence_id": "ev-1", "path": "data.csv",
             "downloaded": True, "original_data": True, "generated": False, "quarantine_status": "accepted",
@@ -140,11 +164,11 @@ class EvidenceGuardTests(unittest.TestCase):
             validate_manifest(self.manifest, self.base)
 
     def test_claim_lineage_hash_is_bound(self) -> None:
-        claim = {"claim_id": "c-1", "claim_text": "Measured value is 42.", "evidence_id": "ev-1",
+        claim = {"claim_id": "c-2", "claim_text": "Measured value is 42.", "evidence_id": "ev-1",
                  "snapshot_id": "snap-1", "source_id": "src-1", "canonical_url": "https://example.edu/paper/full-text"}
         claim["lineage_sha256"] = lineage_hash(claim)
-        self.manifest["claims"] = [claim]
-        self.manifest["reviews"][2]["reviewed_ids"] = ["c-1"]
+        self.manifest["claims"].append(claim)
+        self.manifest["reviews"][2]["reviewed_ids"] = ["c-1", "c-2"]
         validate_manifest(self.manifest, self.base)
         claim["claim_text"] = "Changed without a new lineage hash."
         with self.assertRaisesRegex(ValueError, "lineage_hash"):

@@ -133,6 +133,8 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
         raise GuardError("sources_evidence_claims_must_be_arrays")
     if not isinstance(reviews, list):
         raise GuardError("independent_reviews_required")
+    if not sources or not evidence:
+        raise GuardError("at_least_one_verified_source_and_evidence_required")
 
     source_by_id: dict[str, dict[str, Any]] = {}
     for source in sources:
@@ -183,6 +185,8 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
     data_files = manifest.get("data_files", [])
     if not isinstance(data_files, list):
         raise GuardError("data_files_must_be_array")
+    if not claims and not data_files:
+        raise GuardError("at_least_one_claim_or_verified_data_file_required")
     data_by_id: dict[str, dict[str, Any]] = {}
     for data in data_files:
         data = require_dict(data, "data_file")
