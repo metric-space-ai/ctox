@@ -122,6 +122,31 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   await state.cancel();
 }
 
+// --- 1c. urgent command writes bypass an unrelated collection backlog -------
+{
+  const state = await makeState('business_commands');
+  const pushed = [];
+  state.collection.schema.primaryPath = 'id';
+  state.openPeerIds = () => ['p1'];
+  state.shared.peer = {
+    async request(peerId, method, [rows], _timeoutMs, collection) {
+      assert(peerId === 'p1', `unexpected peer ${peerId}`);
+      assert(method === 'masterWrite', `expected masterWrite, got ${method}`);
+      assert(collection === 'business_commands', `unexpected collection ${collection}`);
+      pushed.push(...rows.map((row) => row.newDocumentState));
+      return [];
+    },
+  };
+  state.demandSidecar = { markDirty: async () => new Promise(() => {}) };
+  state.pushInProgressPromise = new Promise(() => {});
+
+  await state.pushDocumentsToRemotePeers([{ id: 'cmd-urgent', status: 'pending_sync' }]);
+
+  assert(pushed.length === 1, `targeted push must write one command, got ${pushed.length}`);
+  assert(pushed[0].id === 'cmd-urgent', 'targeted push wrote the wrong command');
+  await state.cancel();
+}
+
 // --- 2. push scan continues after empty scan-limit batches ------------------
 {
   const state = await makeState('push-scan-limit');

@@ -1188,6 +1188,39 @@ class CtoxWebRtcReplicationState {
     return this.pushInProgressPromise;
   }
 
+  async pushDocumentsToRemotePeers(documents = []) {
+    if (!this.push || this.cancelled || !documents.length) return;
+    const peerIds = this.openPeerIds();
+    const results = await Promise.allSettled(
+      peerIds.map((peerId) => this.pushDocumentsToPeer(peerId, documents)),
+    );
+    this.reportPeerResults(results, peerIds);
+    const rejected = results.find((result) => result.status === 'rejected');
+    if (rejected) {
+      this.schedulePushRetry();
+      throw rejected.reason;
+    }
+  }
+
+  async pushDocumentsToPeer(peerId, documents) {
+    const unique = new Map();
+    for (const document of documents) {
+      const id = primaryValue(document, this.collection.schema.primaryPath);
+      if (id) unique.set(id, document);
+    }
+    const pending = [...unique.values()];
+    if (!pending.length) return;
+    for (const document of pending) {
+      const id = primaryValue(document, this.collection.schema.primaryPath);
+      Promise.resolve(this.demandSidecar?.markDirty?.(this.collection.name, id, true)).catch(() => {});
+    }
+    await this.writeDocumentsToPeer(peerId, pending);
+    for (const document of pending) {
+      const id = primaryValue(document, this.collection.schema.primaryPath);
+      Promise.resolve(this.demandSidecar?.markDirty?.(this.collection.name, id, false)).catch(() => {});
+    }
+  }
+
   async pushToPeer(peerId) {
     if (!this.push || this.cancelled) return;
     const batchSize = Number(this.push?.batchSize || 10);
@@ -1221,46 +1254,7 @@ class CtoxWebRtcReplicationState {
         await this.persistCheckpointsForPeer(peerId);
         break;
       }
-      let rows = documents.map((doc) => ({
-        newDocumentState: doc,
-        assumedMasterState: null,
-      }));
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        const conflicts = await this.peer.request(
-          peerId,
-          'masterWrite',
-          [rows],
-          this.requestTimeoutMsFor('masterWrite'),
-          this.collection.name,
-        );
-        const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath);
-        if (!conflictMap.size) {
-          rows = [];
-          break;
-        }
-        rows = rows
-          .map((row) => {
-            const id = primaryValue(row.newDocumentState, this.collection.schema.primaryPath);
-            const assumedMasterState = conflictMap.get(id);
-            return assumedMasterState ? { ...row, assumedMasterState } : null;
-          })
-          .filter(Boolean);
-        if (!rows.length) break;
-        if (this.collection.storageCollection?.conflictStrategy !== 'field-merge') {
-          rows = await this.resolveWholeDocumentLwwConflicts(rows, peerId);
-          if (!rows.length) break;
-        }
-        // Field-merge collections: absorb the master's concurrent state into
-        // the retry rows instead of force-overwriting it whole-doc (the
-        // default LWW retry keeps its local-wins semantics unchanged).
-        rows = await this.absorbMasterStateIntoConflictRows(rows);
-      }
-      if (rows.length) {
-        rows = await this.absorbAuthoritativeCommandConflicts(rows, peerId);
-      }
-      if (rows.length) {
-        throw new Error(`masterWrite conflicts remained for ${this.collection.name}`);
-      }
+      await this.writeDocumentsToPeer(peerId, documents);
       for (const document of documents) {
         const id = primaryValue(document, this.collection.schema.primaryPath);
         if (id) await this.demandSidecar?.markDirty?.(this.collection.name, id, false);
@@ -1269,6 +1263,48 @@ class CtoxWebRtcReplicationState {
       this.pushCheckpointsByPeer.set(peerId, checkpoint);
       await this.persistCheckpointsForPeer(peerId);
       if (documents.length < batchSize) break;
+    }
+  }
+
+  async writeDocumentsToPeer(peerId, documents) {
+    let rows = documents.map((doc) => ({
+      newDocumentState: doc,
+      assumedMasterState: null,
+    }));
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const conflicts = await this.peer.request(
+        peerId,
+        'masterWrite',
+        [rows],
+        this.requestTimeoutMsFor('masterWrite'),
+        this.collection.name,
+      );
+      const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath);
+      if (!conflictMap.size) {
+        rows = [];
+        break;
+      }
+      rows = rows
+        .map((row) => {
+          const id = primaryValue(row.newDocumentState, this.collection.schema.primaryPath);
+          const assumedMasterState = conflictMap.get(id);
+          return assumedMasterState ? { ...row, assumedMasterState } : null;
+        })
+        .filter(Boolean);
+      if (!rows.length) break;
+      if (this.collection.storageCollection?.conflictStrategy !== 'field-merge') {
+        rows = await this.resolveWholeDocumentLwwConflicts(rows, peerId);
+        if (!rows.length) break;
+      }
+      // Field-merge collections absorb the master's concurrent state into
+      // retry rows instead of force-overwriting the whole document.
+      rows = await this.absorbMasterStateIntoConflictRows(rows);
+    }
+    if (rows.length) {
+      rows = await this.absorbAuthoritativeCommandConflicts(rows, peerId);
+    }
+    if (rows.length) {
+      throw new Error(`masterWrite conflicts remained for ${this.collection.name}`);
     }
   }
 

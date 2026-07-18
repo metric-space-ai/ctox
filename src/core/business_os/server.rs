@@ -20,6 +20,8 @@ use std::net::IpAddr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::mpsc::sync_channel;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::thread;
@@ -44,6 +46,8 @@ const CHATGPT_AUTH_SCOPE: &str =
     "openid profile email offline_access api.connectors.read api.connectors.invoke";
 const CHATGPT_AUTH_SECRET_SCOPE: &str = "ctox-auth";
 const CHATGPT_AUTH_SECRET_NAME: &str = "chatgpt_subscription_auth_json";
+const BUSINESS_OS_HTTP_WORKERS: usize = 4;
+const BUSINESS_OS_HTTP_QUEUE_CAPACITY: usize = 256;
 
 #[derive(Clone)]
 struct PendingChatgptSubscriptionLogin {
@@ -184,14 +188,34 @@ pub fn serve_business_os(root: &Path, options: BusinessOsServeOptions) -> anyhow
         .map_err(|err| anyhow::anyhow!("failed to bind Business OS server: {err}"))?;
     println!("CTOX Business OS listening on http://{}", options.addr);
     println!("Serving {}", app_root.display());
-    for request in server.incoming_requests() {
+    let (request_tx, request_rx) = sync_channel(BUSINESS_OS_HTTP_QUEUE_CAPACITY);
+    let request_rx = Arc::new(Mutex::new(request_rx));
+    for worker_index in 0..BUSINESS_OS_HTTP_WORKERS {
         let root = root.to_path_buf();
         let app_root = app_root.clone();
-        std::thread::spawn(move || {
-            if let Err(err) = handle_request(&root, &app_root, request) {
-                eprintln!("[business-os] request failed: {err:#}");
-            }
-        });
+        let request_rx = Arc::clone(&request_rx);
+        thread::Builder::new()
+            .name(format!("business-os-http-{worker_index}"))
+            .spawn(move || loop {
+                let request = {
+                    let receiver = request_rx
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    receiver.recv()
+                };
+                let Ok(request) = request else {
+                    break;
+                };
+                if let Err(err) = handle_request(&root, &app_root, request) {
+                    eprintln!("[business-os] request failed: {err:#}");
+                }
+            })
+            .context("failed to start Business OS HTTP worker")?;
+    }
+    for request in server.incoming_requests() {
+        if request_tx.send(request).is_err() {
+            anyhow::bail!("Business OS HTTP workers stopped");
+        }
     }
     Ok(())
 }

@@ -12093,24 +12093,25 @@ pub fn session_with_persisted_user(
     let Some(session_user) = session.user.clone() else {
         return Ok(session);
     };
-    let conn = open_store(root)?;
-    if let Some(user) = business_user_by_id(&conn, &session_user.id)? {
-        if !user.active {
-            session.authenticated = false;
-            session.user = None;
-            session.reason = Some("business_user_inactive".to_owned());
+    with_store_connection(root, |conn| {
+        if let Some(user) = business_user_by_id(conn, &session_user.id)? {
+            if !user.active {
+                session.authenticated = false;
+                session.user = None;
+                session.reason = Some("business_user_inactive".to_owned());
+                return Ok(session);
+            }
+            session.user = Some(BusinessOsSessionUser {
+                id: user.id,
+                display_name: user.display_name,
+                role: user.role.clone(),
+                is_admin: role_can_manage(&user.role),
+            });
             return Ok(session);
         }
-        session.user = Some(BusinessOsSessionUser {
-            id: user.id,
-            display_name: user.display_name,
-            role: user.role.clone(),
-            is_admin: role_can_manage(&user.role),
-        });
-        return Ok(session);
-    }
-    seed_session_user(&conn, &session)?;
-    Ok(session)
+        seed_session_user(conn, &session)?;
+        Ok(session)
+    })
 }
 
 pub fn remember_authenticated_session_user(
@@ -12120,8 +12121,7 @@ pub fn remember_authenticated_session_user(
     if !session.authenticated {
         return Ok(());
     }
-    let conn = open_store(root)?;
-    seed_session_user(&conn, session)
+    with_store_connection(root, |conn| seed_session_user(conn, session))
 }
 
 fn query_users(conn: &Connection) -> anyhow::Result<Vec<BusinessOsUser>> {
@@ -12304,43 +12304,44 @@ pub fn session_from_cookie_token(
         return Ok(None);
     }
     let token_hash = hash_session_token(token);
-    let conn = open_store(root)?;
     let now = now_ms() as i64;
-    let row = conn
-        .query_row(
-            "SELECT user_id, role, display_name FROM business_sessions
-             WHERE token_hash = ?1 AND revoked = 0 AND expires_at_ms > ?2",
+    with_store_connection(root, |conn| {
+        let row = conn
+            .query_row(
+                "SELECT user_id, role, display_name FROM business_sessions
+                 WHERE token_hash = ?1 AND revoked = 0 AND expires_at_ms > ?2",
+                params![token_hash, now],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((user_id, role, display_name)) = row else {
+            return Ok(None);
+        };
+        let _ = conn.execute(
+            "UPDATE business_sessions SET last_seen_ms = ?2 WHERE token_hash = ?1",
             params![token_hash, now],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            },
-        )
-        .optional()?;
-    let Some((user_id, role, display_name)) = row else {
-        return Ok(None);
-    };
-    let _ = conn.execute(
-        "UPDATE business_sessions SET last_seen_ms = ?2 WHERE token_hash = ?1",
-        params![token_hash, now],
-    );
-    let role = normalize_business_role(&role);
-    Ok(Some(BusinessOsSession {
-        ok: true,
-        authenticated: true,
-        auth_required: false,
-        user: Some(BusinessOsSessionUser {
-            id: user_id,
-            display_name,
-            role: role.clone(),
-            is_admin: role_can_manage(&role),
-        }),
-        login_url: None,
-        reason: None,
-    }))
+        );
+        let role = normalize_business_role(&role);
+        Ok(Some(BusinessOsSession {
+            ok: true,
+            authenticated: true,
+            auth_required: false,
+            user: Some(BusinessOsSessionUser {
+                id: user_id,
+                display_name,
+                role: role.clone(),
+                is_admin: role_can_manage(&role),
+            }),
+            login_url: None,
+            reason: None,
+        }))
+    })
 }
 
 /// Revoke a single session by its cookie token (logout).
@@ -27913,9 +27914,8 @@ fn verified_capability_claims(
     }
     let secret = capability_signing_secret(root).ok()?;
     let claims = super::capability::verify_capability_token(&secret, token, now_ms() as i64)?;
-    let conn = open_store(root).ok()?;
-    let (role, epoch): (String, i64) = conn
-        .query_row(
+    let (role, epoch): (String, i64) = with_store_connection(root, |conn| {
+        conn.query_row(
             "SELECT role, capability_epoch
              FROM business_users
              WHERE user_id = ?1 AND active = 1",
@@ -27923,7 +27923,9 @@ fn verified_capability_claims(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
-        .ok()??;
+        .map_err(Into::into)
+    })
+    .ok()??;
     if normalize_business_role(&role) != normalize_business_role(&claims.role)
         || epoch != claims.actor_epoch
     {
@@ -27943,12 +27945,11 @@ pub(super) fn capability_allows_collection_permission(
     };
     let actor = BusinessOsActor::new(Some(claims.user_id), claims.role);
     let scope = BusinessOsScope::collection(collection.trim());
-    let Ok(conn) = open_store(root) else {
-        return false;
-    };
-    evaluate_policy_with_explicit_grants(&conn, &actor, permission, &scope)
-        .map(|decision| decision.allowed)
-        .unwrap_or(false)
+    with_store_connection(root, |conn| {
+        evaluate_policy_with_explicit_grants(conn, &actor, permission, &scope)
+    })
+    .map(|decision| decision.allowed)
+    .unwrap_or(false)
 }
 
 /// Preserve the pre-hardening ordinary-data behavior by materializing it as

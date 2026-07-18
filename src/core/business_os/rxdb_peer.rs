@@ -1038,6 +1038,7 @@ struct NativePeer {
     _process_lock: File,
     _pools: Vec<WebRtcPool>,
     _command_consumer: tokio::task::JoinHandle<()>,
+    _command_outbox: tokio::task::JoinHandle<()>,
     _notes_sync: tokio::task::JoinHandle<()>,
     _file_index_sync: tokio::task::JoinHandle<()>,
     _channel_state_sync: tokio::task::JoinHandle<()>,
@@ -1057,9 +1058,13 @@ struct NativePeer {
 }
 
 impl NativePeer {
-    fn task_liveness(&self) -> [(&'static str, bool); 13] {
+    fn task_liveness(&self) -> [(&'static str, bool); 14] {
         [
             ("business_commands", !self._command_consumer.is_finished()),
+            (
+                "business_command_outbox",
+                !self._command_outbox.is_finished(),
+            ),
             ("notes", !self._notes_sync.is_finished()),
             ("desktop_file_index", !self._file_index_sync.is_finished()),
             ("channel_state", !self._channel_state_sync.is_finished()),
@@ -1152,6 +1157,7 @@ impl NativePeer {
             pool.cancel().await;
         }
         self._command_consumer.abort();
+        self._command_outbox.abort();
         self._notes_sync.abort();
         self._file_index_sync.abort();
         self._channel_state_sync.abort();
@@ -2891,7 +2897,9 @@ async fn run_native_peer(
     let command_consumer = tokio::spawn(consume_business_commands_loop(
         root.clone(),
         Arc::clone(&database),
-        Arc::clone(&database_write_lock),
+    ));
+    let command_outbox = tokio::spawn(deliver_business_command_outbox_background_loop(
+        root.clone(),
     ));
 
     let notes_sync = tokio::spawn(sync_notes_background_loop(root.clone()));
@@ -2972,6 +2980,7 @@ async fn run_native_peer(
         _process_lock: process_lock,
         _pools: pools,
         _command_consumer: command_consumer,
+        _command_outbox: command_outbox,
         _notes_sync: notes_sync,
         _file_index_sync: file_index_sync,
         _channel_state_sync: channel_state_sync,
@@ -4458,65 +4467,31 @@ fn projection_sleep_secs(
     }
 }
 
-async fn consume_business_commands_loop(
-    root: PathBuf,
-    database: Arc<RxDatabase>,
-    database_write_lock: Arc<AsyncMutex<()>>,
-) {
+async fn consume_business_commands_loop(root: PathBuf, database: Arc<RxDatabase>) {
     // Per-command failure budget. A command that keeps failing to accept
     // (e.g. a corrupt document) used to abort the WHOLE round via `?`, get
     // re-sorted to the head on the next 1s tick, and starve every command
     // behind it — browser-issued commands then appeared to hang forever.
     let mut accept_failures: HashMap<String, u32> = HashMap::new();
     let mut last_source_stamp: Option<BusinessCommandsSourceStamp> = None;
-    let mut consecutive_idle_rounds = 0u32;
+    // Do not run the comparatively expensive invariant sweep before the first
+    // command intake opportunity after peer startup.
+    let mut consecutive_idle_rounds = 1u32;
     loop {
         let started = Instant::now();
         let result: anyhow::Result<usize> = async {
-            let _guard = database_write_lock.lock().await;
-            if consecutive_idle_rounds % 60 == 0 {
-                let reconcile_root = root.clone();
-                tokio::task::spawn_blocking(move || {
-                    crate::mission::channels::reconcile_business_command_invariants(
-                        &reconcile_root,
-                        true,
-                    )
-                })
-                .await
-                .context("join business command invariant reconciliation")??;
-            }
-            let outbox_root = root.clone();
-            let outbox = tokio::task::spawn_blocking(move || {
-                store::deliver_business_command_outbox(&outbox_root, 50)
-            })
-            .await
-            .context("join business command outbox delivery")??;
-            let outbox_processed = outbox
-                .get("processed")
-                .and_then(Value::as_u64)
-                .unwrap_or_default() as usize;
             if business_commands_source_change(&root, &mut last_source_stamp)
                 .await?
-                .is_none()
+                .is_some()
             {
-                return Ok(outbox_processed);
+                let consumed =
+                    consume_pending_business_commands(&root, &database, &mut accept_failures)
+                        .await?;
+                refresh_business_commands_source_stamp(&root, &mut last_source_stamp).await?;
+                return Ok(consumed);
             }
 
-            let consumed =
-                consume_pending_business_commands(&root, &database, &mut accept_failures).await?;
-            let outbox_root = root.clone();
-            let post_accept_outbox = tokio::task::spawn_blocking(move || {
-                store::deliver_business_command_outbox(&outbox_root, 50)
-            })
-            .await
-            .context("join post-accept command outbox delivery")??;
-            refresh_business_commands_source_stamp(&root, &mut last_source_stamp).await?;
-            Ok(consumed.saturating_add(outbox_processed).saturating_add(
-                post_accept_outbox
-                    .get("processed")
-                    .and_then(Value::as_u64)
-                    .unwrap_or_default() as usize,
-            ))
+            Ok(0)
         }
         .await;
         record_native_peer_loop_result(&BUSINESS_COMMANDS_LOOP_METRICS, &result, started.elapsed());
@@ -4534,6 +4509,51 @@ async fn consume_business_commands_loop(
         }
         wait_for_business_command_wake(&root, last_source_stamp.as_ref(), consecutive_idle_rounds)
             .await;
+    }
+}
+
+async fn deliver_business_command_outbox_background_loop(root: PathBuf) {
+    let mut idle_rounds = 0u32;
+    loop {
+        let result: anyhow::Result<usize> = async {
+            if idle_rounds > 0 && idle_rounds % 60 == 0 {
+                let reconcile_root = root.clone();
+                tokio::task::spawn_blocking(move || {
+                    crate::mission::channels::reconcile_business_command_invariants(
+                        &reconcile_root,
+                        true,
+                    )
+                })
+                .await
+                .context("join business command invariant reconciliation")??;
+            }
+            let outbox_root = root.clone();
+            let outbox = tokio::task::spawn_blocking(move || {
+                store::deliver_business_command_outbox(&outbox_root, 10)
+            })
+            .await
+            .context("join business command outbox delivery")??;
+            Ok(outbox
+                .get("processed")
+                .and_then(Value::as_u64)
+                .unwrap_or_default() as usize)
+        }
+        .await;
+        match result {
+            Ok(0) => {
+                idle_rounds = idle_rounds.saturating_add(1);
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            Ok(_) => {
+                idle_rounds = 0;
+                tokio::task::yield_now().await;
+            }
+            Err(err) => {
+                idle_rounds = 0;
+                eprintln!("[business-os] native business command outbox delivery failed: {err:#}");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
     }
 }
 
@@ -5091,25 +5111,43 @@ fn pending_business_command_documents_sync(
     } else {
         "CAST(COALESCE(json_extract(data, '$._meta.lwt'), json_extract(data, '$.updated_at_ms'), 0) AS REAL)"
     };
-    let mut stmt = conn
-        .prepare(&format!(
-            "SELECT data
-             FROM {quoted}
-             WHERE {deleted_expr} = 0
-               AND json_extract(data, '$.status') IN ('pending_sync', 'waiting_dependencies')
-             ORDER BY {lwt_expr} ASC
-             LIMIT ?1"
-        ))
-        .with_context(|| format!("prepare pending business_commands scan in {table}"))?;
-    let rows = stmt
-        .query_map([limit as i64], |row| row.get::<_, String>(0))
-        .with_context(|| format!("query pending business_commands in {table}"))?;
+    let oldest_limit = limit.saturating_add(1) / 2;
+    let newest_limit = limit.saturating_sub(oldest_limit);
     let mut documents = Vec::new();
-    for row in rows {
-        let raw = row.context("read pending business_command row")?;
-        let document = serde_json::from_str::<Value>(&raw)
-            .with_context(|| format!("parse pending business_command JSON in {table}"))?;
-        documents.push(document);
+    let mut seen_ids = HashSet::new();
+    for (direction, batch_limit) in [("ASC", oldest_limit), ("DESC", newest_limit)] {
+        if batch_limit == 0 {
+            continue;
+        }
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT data
+                 FROM {quoted}
+                 WHERE {deleted_expr} = 0
+                   AND json_extract(data, '$.status') IN ('pending_sync', 'waiting_dependencies')
+                 ORDER BY {lwt_expr} {direction}
+                 LIMIT ?1"
+            ))
+            .with_context(|| {
+                format!("prepare pending business_commands {direction} scan in {table}")
+            })?;
+        let rows = stmt
+            .query_map([batch_limit as i64], |row| row.get::<_, String>(0))
+            .with_context(|| format!("query pending business_commands {direction} in {table}"))?;
+        for row in rows {
+            let raw = row.context("read pending business_command row")?;
+            let document = serde_json::from_str::<Value>(&raw)
+                .with_context(|| format!("parse pending business_command JSON in {table}"))?;
+            let id = document
+                .get("command_id")
+                .or_else(|| document.get("id"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            if id.is_empty() || seen_ids.insert(id) {
+                documents.push(document);
+            }
+        }
     }
     Ok(documents)
 }
@@ -5188,6 +5226,9 @@ async fn accept_pending_business_command(
 
     let mut accepted = match accepted_result {
         Ok(Ok(val)) => val,
+        Ok(Err(err)) if is_transient_business_command_store_error(&err) => {
+            return Err(err).context("transient native business command store contention");
+        }
         Ok(Err(err)) => {
             eprintln!("[business-os] native business command store execution failed: {err:#}");
             let command_id = document
@@ -5443,6 +5484,9 @@ async fn accept_pending_business_command(
     }
     if command_type.starts_with("support.") {
         project_support_command_result(root.clone(), database, &accepted).await?;
+    }
+    if command_type.starts_with("ctox.appsec.") {
+        project_appsec_command_result(root.clone(), database, &accepted).await?;
     }
     if command_type.starts_with("threads.") {
         project_threads_command_result(root.clone(), database, &accepted).await?;
@@ -5763,6 +5807,66 @@ async fn project_threads_command_result(
         upsert_business_record_projection(root.clone(), database, collection, record_id).await?;
     }
     Ok(())
+}
+
+fn is_transient_business_command_store_error(error: &anyhow::Error) -> bool {
+    let message = format!("{error:#}").to_ascii_lowercase();
+    [
+        "database is locked",
+        "database table is locked",
+        "sqlite_busy",
+        "cannot promote read transaction",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
+}
+
+async fn project_appsec_command_result(
+    root: PathBuf,
+    database: &Arc<RxDatabase>,
+    accepted: &Value,
+) -> anyhow::Result<()> {
+    let projections = accepted
+        .pointer("/result/ctox_durable_projection/business_os_projection/projected_records")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for projection in projections {
+        let Some(collection) = projection
+            .get("collection")
+            .and_then(Value::as_str)
+            .and_then(appsec_projection_collection)
+        else {
+            continue;
+        };
+        let Some(record_id) = projection
+            .get("record_id")
+            .or_else(|| projection.get("id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        upsert_business_record_projection(root.clone(), database, collection, record_id).await?;
+    }
+    Ok(())
+}
+
+fn appsec_projection_collection(collection: &str) -> Option<&'static str> {
+    match collection {
+        "appsec_assessments" => Some("appsec_assessments"),
+        "appsec_runs" => Some("appsec_runs"),
+        "appsec_artifacts" => Some("appsec_artifacts"),
+        "appsec_findings" => Some("appsec_findings"),
+        "appsec_investigations" => Some("appsec_investigations"),
+        "appsec_coverage" => Some("appsec_coverage"),
+        "appsec_pipeline_stages" => Some("appsec_pipeline_stages"),
+        "appsec_scanner_inventory" => Some("appsec_scanner_inventory"),
+        "appsec_approvals" => Some("appsec_approvals"),
+        _ => None,
+    }
 }
 
 fn threads_projection_collection(collection: &str) -> Option<&'static str> {

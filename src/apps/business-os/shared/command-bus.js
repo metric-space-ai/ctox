@@ -242,7 +242,7 @@ async function submitRxdbCommand({ db, sync, session, command }) {
     await insertOrPatchCommandDocument(collection, commandId, doc);
     emitCommandLifecycle(commandId, command.command_type || command.type, 'local_inserted', submitStartedAt);
     recordCommandMetric(sync, 'local_submit', commandId, Date.now() - localWriteStartedAt);
-    await flushSyncBridges(syncPlan.submitBridges);
+    await flushSyncBridges(syncPlan.submitBridges, [doc]);
     emitCommandLifecycle(commandId, command.command_type || command.type, 'push_confirmed', submitStartedAt);
     recordCommandMetric(sync, 'submit_receipt', commandId, Date.now() - submitStartedAt);
     return {
@@ -1144,11 +1144,11 @@ function syncBridgeStatusSummary(status) {
   return `active peers: ${activePeerCount}, connections: ${connectionCount}, collection peer: ${demandPeer}`;
 }
 
-async function flushSyncBridges(bridges) {
-  await Promise.all((bridges || []).map((bridge) => flushSyncBridge(bridge)));
+async function flushSyncBridges(bridges, documents = []) {
+  await Promise.all((bridges || []).map((bridge) => flushSyncBridge(bridge, documents)));
 }
 
-async function flushSyncBridge(bridge) {
+async function flushSyncBridge(bridge, documents = []) {
   const resolvedBridge = syncBridgeFromHandle(bridge);
   if (resolvedBridge?.mode === 'follower') {
     if (typeof resolvedBridge.flush !== 'function') {
@@ -1171,6 +1171,9 @@ async function flushSyncBridge(bridge) {
   if (!state) return;
   await withTimeout(
     () => {
+      if (documents.length && typeof state.pushDocumentsToRemotePeers === 'function') {
+        return state.pushDocumentsToRemotePeers(documents);
+      }
       if (typeof state.pushToRemotePeers === 'function') return state.pushToRemotePeers();
       return state.awaitInSync?.();
     },

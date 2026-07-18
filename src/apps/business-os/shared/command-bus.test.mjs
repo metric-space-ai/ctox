@@ -270,6 +270,7 @@ test('submit writes an immutable lifecycle-v2 shadow envelope and returns locall
 test('submit can push a new command before historical command pull is complete', async () => {
   let stored = null;
   let pushCount = 0;
+  let targetedPushCount = 0;
   let initialReplicationAwaited = false;
   const collection = {
     async insert(doc) {
@@ -296,6 +297,11 @@ test('submit can push a new command before historical command pull is complete',
               async pushToRemotePeers() {
                 pushCount += 1;
               },
+              async pushDocumentsToRemotePeers(documents) {
+                targetedPushCount += 1;
+                assert.equal(documents.length, 1);
+                assert.equal(documents[0].id, 'cmd_cold_history_push');
+              },
             },
           },
         };
@@ -314,7 +320,8 @@ test('submit can push a new command before historical command pull is complete',
   assert.equal(receipt.command_id, 'cmd_cold_history_push');
   assert.equal(stored.id, 'cmd_cold_history_push');
   assert.equal(initialReplicationAwaited, false);
-  assert.equal(pushCount, 1);
+  assert.equal(targetedPushCount, 1);
+  assert.equal(pushCount, 0);
 });
 
 test('submit waits for the negotiated collection peer before inserting the command', async () => {

@@ -26,7 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
 use serde_json::Value;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use tokio_stream::StreamExt;
 use webrtc::peer_connection::RTCIceServer;
 
@@ -66,6 +66,7 @@ use protocol_contract_generated::{
 
 const FORK_RESYNC_INTERVAL: Duration = Duration::from_secs(5);
 const PROTOCOL_ROOM_PAYLOAD_CACHE_TTL: Duration = Duration::from_secs(5);
+const MAX_CONCURRENT_MASTER_PULLS: usize = 4;
 const CTOX_RXDB_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-rxdb-native-v1",
     "ctox-file-chunks-v1",
@@ -210,6 +211,9 @@ pub struct RxWebRTCReplicationPool<H: WebRTCConnectionHandler> {
     /// one in-flight build and reuse it briefly; individual target collection
     /// payloads are still resolved per response.
     protocol_room_payload_cache: AsyncMutex<ProtocolRoomPayloadCache>,
+    /// Historical pulls perform synchronous SQLite work below an async
+    /// boundary. Bound them so command writes retain a runnable Tokio worker.
+    master_pull_semaphore: Semaphore,
     /// Per-peer sub-tasks (the master-change relay tasks, one per collection).
     peer_states: Mutex<HashMap<H::Peer, PeerState>>,
     /// Fork replication states keyed by (collection, peer). One entry per
@@ -286,6 +290,7 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
             file_fetch_registry: file_registry,
             collections: collection_map,
             protocol_room_payload_cache: AsyncMutex::new(ProtocolRoomPayloadCache::default()),
+            master_pull_semaphore: Semaphore::new(MAX_CONCURRENT_MASTER_PULLS),
             peer_states: Mutex::new(HashMap::new()),
             fork_states: Mutex::new(HashMap::new()),
             tasks: Mutex::new(Vec::new()),
@@ -845,6 +850,11 @@ where
                             } else {
                                 match pool_task.master_handler_for(&target_name) {
                                     Some(master) => {
+                                        let _pull_permit = if method == "masterChangesSince" {
+                                            pool_task.master_pull_semaphore.acquire().await.ok()
+                                        } else {
+                                            None
+                                        };
                                         let document_filter = if method == "masterChangesSince" {
                                             handler_task
                                                 .document_filter_for_peer(&item.peer, &target_name)
