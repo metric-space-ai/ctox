@@ -1,14 +1,17 @@
-// CTOX pi-coding sidecar — library entry.
+// CTOX pi-coding sidecar — library entry + LocalTransport daemon.
 //
-// Re-exports the vendored Pi coding-agent turn primitive and the
-// app-source-projection ExecutionEnv under CTOX names. The native Rust owner
-// (src/core/coding_agents) seeds the ExecutionEnv from a module's
-// `business_module_source_files` snapshot, drives a single bounded turn, and
-// reads back the modified snapshot to record as P0 commits.
+// Re-exports the vendored Pi coding-agent turn primitive, the
+// app-source-projection ExecutionEnv, and the LocalTransport server under CTOX
+// names. The native Rust owner (src/core/coding_agents) spawns this sidecar,
+// seeds the ExecutionEnv from a module's `business_module_source_files`
+// snapshot, drives a single bounded turn over a Unix socket, and reads back the
+// modified snapshot to record as P0 commits.
 //
-// This is a headless turn/session primitive — no pi-tui, no host filesystem,
-// no direct network. The provider stream (`streamFn`) is injected by the owner
-// and routes through the CTOX model gateway. See PORTING.md / UPSTREAM.md.
+// Headless turn/session primitive — no pi-tui, no host filesystem, no direct
+// network. The provider stream routes through the CTOX model gateway. See
+// PORTING.md / UPSTREAM.md.
+import { pathToFileURL } from "node:url";
+import { startSocketServer } from "./server";
 
 export {
   VercelVirtualExecutionEnv as CtoxSourceExecutionEnv,
@@ -31,3 +34,24 @@ export {
   type VercelPiCodingToolName,
   type VercelPiCodingToolsMode,
 } from "./pi-turn";
+
+export {
+  handleTurnRequest,
+  startSocketServer,
+  defaultStreamFn,
+  type CtoxTurnRequest,
+  type CtoxTurnResponse,
+} from "./server";
+
+// When executed directly (`node ctox-pi-sidecar.mjs <unix-socket-path>`), run as
+// the LocalTransport daemon the Rust owner spawns and supervises. When imported
+// as a library (or by the smokes), this block is inert.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const socketPath = process.argv[2];
+  if (!socketPath) {
+    console.error("usage: ctox-pi-sidecar <unix-socket-path>");
+    process.exit(2);
+  }
+  startSocketServer(socketPath);
+  console.error(`[ctox-pi-sidecar] LocalTransport listening on ${socketPath}`);
+}
