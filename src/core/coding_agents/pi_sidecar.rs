@@ -146,6 +146,88 @@ pub fn project_module_source(
     Ok(files)
 }
 
+/// Apply a turn's returned snapshot back into the module's app source. Each file
+/// is written through the same policy-gated source path that records P0
+/// versions/commits — the agent proposed, the trusted owner disposes. The
+/// sidecar env cwd prefix (`/workspace/`) is stripped to the module-relative
+/// path. Returns the paths written.
+pub fn apply_turn_snapshot(
+    root: &Path,
+    module_id: &str,
+    snapshot: &[Value],
+) -> anyhow::Result<Vec<String>> {
+    let mut applied = Vec::new();
+    for entry in snapshot {
+        if entry.get("kind").and_then(Value::as_str) != Some("file") {
+            continue;
+        }
+        let Some(raw_path) = entry.get("path").and_then(Value::as_str) else {
+            continue;
+        };
+        let path = raw_path
+            .strip_prefix("/workspace/")
+            .unwrap_or_else(|| raw_path.trim_start_matches('/'));
+        let Some(content) = entry.get("content").and_then(Value::as_str) else {
+            continue;
+        };
+        crate::business_os::store::save_module_source_record(
+            root,
+            crate::business_os::store::ModuleSourceSaveMutation {
+                module_id: module_id.to_string(),
+                path: path.to_string(),
+                content: content.to_string(),
+            },
+        )?;
+        applied.push(path.to_string());
+    }
+    Ok(applied)
+}
+
+/// The owner's core delegation primitive: one bounded coding turn against a
+/// module's app source. Project the source into the request, run the pi turn
+/// through the sidecar (`faux` = offline no-model), then apply the resulting
+/// snapshot back into the source (recording P0 versions). Returns a summary.
+pub fn run_module_coding_turn(
+    root: &Path,
+    dist: &Path,
+    module_id: &str,
+    prompt: &str,
+    faux: bool,
+) -> anyhow::Result<Value> {
+    let files = project_module_source(root, module_id)?;
+    let request = serde_json::json!({
+        "id": module_id,
+        "prompt": prompt,
+        "files": files,
+        "maxAssistantTurns": 8,
+    });
+    let response = run_pi_turn(dist, &request, faux)?;
+    anyhow::ensure!(
+        response.get("ok").and_then(Value::as_bool) == Some(true),
+        "pi-sidecar turn failed: {}",
+        response
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+    );
+    let empty = Vec::new();
+    let snapshot = response
+        .get("snapshot")
+        .and_then(Value::as_array)
+        .unwrap_or(&empty);
+    let applied = apply_turn_snapshot(root, module_id, snapshot)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "module_id": module_id,
+        "applied_files": applied,
+        "message_count": response
+            .get("messages")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,6 +318,57 @@ mod tests {
             .values()
             .any(|value| value.as_str() == Some("export const v = 1;\n"));
         assert!(has_content, "widget source content projected into the files map");
+        Ok(())
+    }
+
+    #[test]
+    fn run_module_coding_turn_records_the_faux_edit() -> anyhow::Result<()> {
+        use crate::business_os::store::{load_module_source_records, ModuleSourceLoadMutation};
+
+        let dist = sidecar_dist_path(&repo_root());
+        if !dist.exists() {
+            eprintln!("SKIP: pi-sidecar bundle not built ({})", dist.display());
+            return Ok(());
+        }
+        if !node_available() {
+            eprintln!("SKIP: `node` not on PATH");
+            return Ok(());
+        }
+
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let app_root = root.join("src").join("apps").join("business-os");
+        std::fs::create_dir_all(app_root.join("modules").join("widget"))?;
+        std::fs::write(app_root.join("index.html"), b"<!doctype html>")?;
+        std::fs::write(
+            app_root.join("modules").join("widget").join("module.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "id": "widget",
+                "title": "Widget",
+                "entry": "modules/widget/index.html"
+            }))?,
+        )?;
+        std::fs::write(
+            app_root.join("modules").join("widget").join("index.js"),
+            "export const v = 1;\n",
+        )?;
+        load_module_source_records(
+            root,
+            &ModuleSourceLoadMutation {
+                module_id: "widget".to_string(),
+            },
+        )?;
+
+        let summary = run_module_coding_turn(root, &dist, "widget", "add a marker", true)?;
+        assert_eq!(summary["ok"], Value::Bool(true), "owner turn ok");
+
+        // The faux edit must now be part of the module's source records — proving
+        // the full owner loop project -> pi turn -> apply -> P0 source records.
+        let files = project_module_source(root, "widget")?;
+        assert!(
+            files.keys().any(|path| path.ends_with("faux-marker.js")),
+            "faux edit recorded into module source via the owner loop"
+        );
         Ok(())
     }
 }
