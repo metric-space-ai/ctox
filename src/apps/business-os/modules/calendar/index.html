@@ -1,4 +1,4 @@
-<main class="ctox-workspace calendar-app" data-calendar-root data-resize-frame>
+<main class="ctox-workspace calendar-app is-right-hidden" data-calendar-root data-resize-frame>
   <!-- LEFT PANEL: Calendars List & Booking Pages -->
   <aside class="ctox-pane ctox-pane--glass" id="calendar-left">
     <header class="ctox-pane-header ctox-pane-band">
@@ -49,11 +49,10 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" id="calendarViewTitle">Heute</span>
-          <h2 class="ctox-pane-title" id="calendarRangeTitle">Kalenderansicht</h2>
-          <span class="ctox-badge calendar-data-status" id="calendarDataStatus" aria-live="polite">Daten werden geladen</span>
+          <h2 class="ctox-pane-title" data-t="calendar">Kalender</h2>
         </div>
         <div class="ctox-pane-actions">
+          <span class="ctox-badge calendar-data-status" id="calendarDataStatus" hidden aria-live="polite"></span>
           <button class="ctox-pane-icon" id="btnNewEvent" type="button" data-t-title="newEvent" data-t-aria="newEvent" title="Neuer Termin" aria-label="Neuer Termin">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
           </button>
@@ -68,6 +67,9 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
             </button>
           </div>
+          <button class="ctox-pane-icon calendar-toggle-right" data-toggle-right type="button" title="Buchungen einblenden" aria-label="Buchungen einblenden" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
+          </button>
         </div>
       </div>
     </header>
@@ -86,7 +88,6 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-t="bookingHolds">Reservierungen</span>
           <h2 class="ctox-pane-title" data-t="bookings">Buchungen</h2>
         </div>
       </div>

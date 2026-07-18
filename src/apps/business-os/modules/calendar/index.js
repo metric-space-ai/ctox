@@ -296,8 +296,6 @@ function bindElements(host) {
   els.root = host.querySelector('[data-calendar-root]');
   els.calendarList = host.querySelector('#calendarListContainer');
   els.bookingPagesList = host.querySelector('#bookingPagesListContainer');
-  els.calendarTitle = host.querySelector('#calendarViewTitle');
-  els.calendarRangeTitle = host.querySelector('#calendarRangeTitle');
   els.calendarDataStatus = host.querySelector('#calendarDataStatus');
   els.eventCalendarMount = host.querySelector('#eventCalendarView');
 
@@ -319,6 +317,9 @@ function bindElements(host) {
   els.drawerTitle = host.querySelector('#drawerTitle');
   els.drawerContent = host.querySelector('#drawerContent');
   els.closeDrawerBtn = host.querySelector('#closeDrawerBtn');
+
+  // Pane visibility toggles
+  els.toggleRight = host.querySelector('[data-toggle-right]');
 }
 
 function wireEvents() {
@@ -329,6 +330,7 @@ function wireEvents() {
     today: () => state.calendarViewInstance?.today(),
     newCalendar: () => openCalendarForm(),
     newBookingPage: () => openBookingPageForm(),
+    toggleRight: () => toggleRightPane(),
     renderedEventClick: (event) => {
       const eventEl = event.target?.closest?.('.ec-event');
       if (!eventEl || !els.eventCalendarMount?.contains(eventEl)) return;
@@ -353,6 +355,7 @@ function wireEvents() {
   els.btnToday?.addEventListener('click', state.domHandlers.today);
   els.btnAddNewCalendar?.addEventListener('click', state.domHandlers.newCalendar);
   els.btnAddBookingPage?.addEventListener('click', state.domHandlers.newBookingPage);
+  els.toggleRight?.addEventListener('click', state.domHandlers.toggleRight);
   els.eventCalendarMount?.addEventListener('click', state.domHandlers.renderedEventClick, true);
   els.closeDrawerBtn?.addEventListener('click', state.domHandlers.closeDrawer);
   document.addEventListener('keydown', state.domHandlers.keydown);
@@ -367,10 +370,29 @@ function unbindEvents() {
   els.btnToday?.removeEventListener('click', handlers.today);
   els.btnAddNewCalendar?.removeEventListener('click', handlers.newCalendar);
   els.btnAddBookingPage?.removeEventListener('click', handlers.newBookingPage);
+  els.toggleRight?.removeEventListener('click', handlers.toggleRight);
   els.eventCalendarMount?.removeEventListener('click', handlers.renderedEventClick, true);
   els.closeDrawerBtn?.removeEventListener('click', handlers.closeDrawer);
   document.removeEventListener('keydown', handlers.keydown);
   state.domHandlers = null;
+}
+
+function toggleRightPane() {
+  const root = els.root;
+  const toggle = els.toggleRight;
+  if (!root || !toggle) return;
+  const hidden = root.classList.toggle('is-right-hidden');
+  toggle.setAttribute('aria-pressed', hidden ? 'false' : 'true');
+  toggle.setAttribute(
+    'aria-label',
+    hidden ? 'Buchungen einblenden' : 'Buchungen ausblenden',
+  );
+  toggle.setAttribute(
+    'title',
+    hidden ? 'Buchungen einblenden' : 'Buchungen ausblenden',
+  );
+  // EventCalendar observes its own root; the grid re-flows on its own once the
+  // pane resizes, no extra resize call required.
 }
 
 // ----------------------------------------------------
@@ -578,20 +600,19 @@ function renderAll() {
 
 function renderDataStatus() {
   if (!els.calendarDataStatus) return;
-  const setStatus = (text, variant) => {
-    els.calendarDataStatus.textContent = text;
-    els.calendarDataStatus.classList.toggle('is-danger', variant === 'error');
-    els.calendarDataStatus.classList.toggle('is-info', variant === 'ready');
-  };
+  const badge = els.calendarDataStatus;
+  // The badge is reserved for real status changes (no DB / errors). Decorative
+  // count summaries are kept out of the chrome so the calendar speaks for itself.
   if (!calendarDb()) {
-    setStatus(state.t('noDatabase', labels[state.lang].noDatabase), 'error');
+    badge.hidden = false;
+    badge.textContent = state.t('noDatabase', labels[state.lang].noDatabase);
+    badge.classList.add('is-danger');
+    badge.classList.remove('is-info');
     return;
   }
-  const selectedEvents = state.events.filter(e => state.selectedCalendarIds.has(e.calendar_id));
-  setStatus(
-    `${selectedEvents.length} Termine · ${state.calendars.length} Kalender · ${state.bookingPages.length} Buchungsseiten`,
-    selectedEvents.length > 0 ? 'ready' : 'empty'
-  );
+  badge.hidden = true;
+  badge.textContent = '';
+  badge.classList.remove('is-danger', 'is-info');
 }
 
 // ----------------------------------------------------
