@@ -10803,6 +10803,16 @@ fn validate_systematic_research_web_receipts(
     manifest: &Value,
     attempt_started_at: u64,
 ) -> Result<()> {
+    fn normalized_sha256(value: &str) -> Option<&str> {
+        let digest = value.strip_prefix("sha256:").unwrap_or(value);
+        (digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            .then_some(digest)
+    }
+    fn sha256_matches(left: Option<&str>, right: &str) -> bool {
+        left.and_then(normalized_sha256)
+            .is_some_and(|digest| digest.eq_ignore_ascii_case(right))
+    }
+
     const MAX_WEB_RECEIPT_AGE_SECS: u64 = 7 * 24 * 60 * 60;
     let now = current_epoch_secs();
     let cache_path = root.join("runtime/web_search_page_cache.json");
@@ -10836,6 +10846,8 @@ fn validate_systematic_research_web_receipts(
             .get("snapshot_sha256")
             .and_then(Value::as_str)
             .with_context(|| format!("evidence {evidence_id} has no snapshot_sha256"))?;
+        let normalized_snapshot_hash = normalized_sha256(snapshot_hash)
+            .with_context(|| format!("evidence {evidence_id} has an invalid snapshot_sha256"))?;
         let http_status = item
             .get("http_status")
             .and_then(Value::as_u64)
@@ -10869,9 +10881,15 @@ fn validate_systematic_research_web_receipts(
                 && entry.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
                 && doc.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
                 && entry.get("http_status").and_then(Value::as_u64) == Some(http_status)
-                && entry.get("snapshot_hash").and_then(Value::as_str) == Some(snapshot_hash)
+                && sha256_matches(
+                    entry.get("snapshot_hash").and_then(Value::as_str),
+                    normalized_snapshot_hash,
+                )
                 && receipt.get("status").and_then(Value::as_u64) == Some(http_status)
-                && receipt.get("sha256").and_then(Value::as_str) == Some(snapshot_hash)
+                && sha256_matches(
+                    receipt.get("sha256").and_then(Value::as_str),
+                    normalized_snapshot_hash,
+                )
         });
         if matching_entry.is_none() {
             anyhow::bail!(
@@ -24021,7 +24039,7 @@ mod tests {
         std::fs::write(
             &cache_path,
             format!(
-                r#"{{"entries":{{"https://example.edu/paper":{{"created_at_epoch":{},"checked_at":{},"original_url":"https://example.edu/paper","final_url":"https://example.edu/paper","canonical_url":"https://example.edu/paper","evidence_eligible":true,"http_status":200,"snapshot_hash":"abc","doc":{{"url":"https://example.edu/paper","canonical_url":"https://example.edu/paper","evidence_eligible":true,"response_receipt":{{"requested_url":"https://example.edu/paper","final_url":"https://example.edu/paper","status":200,"sha256":"abc"}}}}}}}}}}"#,
+                r#"{{"entries":{{"https://example.edu/paper":{{"created_at_epoch":{},"checked_at":{},"original_url":"https://example.edu/paper","final_url":"https://example.edu/paper","canonical_url":"https://example.edu/paper","evidence_eligible":true,"http_status":200,"snapshot_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","doc":{{"url":"https://example.edu/paper","canonical_url":"https://example.edu/paper","evidence_eligible":true,"response_receipt":{{"requested_url":"https://example.edu/paper","final_url":"https://example.edu/paper","status":200,"sha256":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}}}}}}}}"#,
                 current_epoch_secs(),
                 current_epoch_secs()
             ),
@@ -24032,12 +24050,14 @@ mod tests {
                 "evidence_id": "ev-1",
                 "canonical_url": "https://example.edu/paper",
                 "http_status": 200,
-                "snapshot_sha256": "abc"
+                "snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             }]
         });
         let attempt_started_at = current_epoch_secs().saturating_sub(1);
         validate_systematic_research_web_receipts(&root, &manifest, attempt_started_at).unwrap();
-        manifest["evidence"][0]["snapshot_sha256"] = Value::String("invented".to_string());
+        manifest["evidence"][0]["snapshot_sha256"] = Value::String(
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+        );
         let error = validate_systematic_research_web_receipts(&root, &manifest, attempt_started_at)
             .unwrap_err();
         assert!(error

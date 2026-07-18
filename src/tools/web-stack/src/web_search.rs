@@ -780,27 +780,23 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
         rank: 1,
     };
     let (doc, content_type) = match build_evidence_doc(&config, &read_query, &hit) {
-        Ok(primary) if evidence_doc_has_meaningful_content(&primary.0) => primary,
+        Ok(primary) if evidence_doc_is_admitted_for_read(&primary.0) => primary,
         Ok(primary) => {
-            let Some(fallback_url) = canonical_read_fallback_url(&url) else {
-                return Ok(render_direct_web_read_payload(
-                    &url,
-                    &read_query,
-                    request,
-                    primary.0,
-                ));
-            };
-            crate::egress::assert_fetchable_url(&fallback_url)?;
-            let fallback_hit = SearchHit {
-                title: display_url(&fallback_url),
-                url: fallback_url,
-                snippet: hit.snippet.clone(),
-                source: format!("{}_canonical_fallback", hit.source),
-                rank: hit.rank,
-            };
-            match build_evidence_doc(&config, &read_query, &fallback_hit) {
-                Ok(fallback) if evidence_doc_has_meaningful_content(&fallback.0) => fallback,
-                _ => primary,
+            if let Some(fallback_url) = canonical_read_fallback_url(&url) {
+                crate::egress::assert_fetchable_url(&fallback_url)?;
+                let fallback_hit = SearchHit {
+                    title: display_url(&fallback_url),
+                    url: fallback_url,
+                    snippet: hit.snippet.clone(),
+                    source: format!("{}_canonical_fallback", hit.source),
+                    rank: hit.rank,
+                };
+                match build_evidence_doc(&config, &read_query, &fallback_hit) {
+                    Ok(fallback) if evidence_doc_is_admitted_for_read(&fallback.0) => fallback,
+                    _ => primary,
+                }
+            } else {
+                primary
             }
         }
         Err(primary_error) => {
@@ -965,7 +961,14 @@ fn evidence_doc_is_admitted(doc: &EvidenceDoc, hit: &SearchHit) -> bool {
 }
 
 fn evidence_doc_is_admitted_for_read(doc: &EvidenceDoc) -> bool {
-    doc.evidence_eligible && evidence_doc_has_meaningful_content(doc)
+    doc.evidence_eligible
+        && (evidence_doc_has_meaningful_content(doc) || evidence_doc_is_data_file(doc))
+}
+
+fn evidence_doc_is_data_file(doc: &EvidenceDoc) -> bool {
+    doc.response_receipt
+        .as_ref()
+        .is_some_and(|receipt| receipt.content_kind.starts_with("data_"))
 }
 
 fn evidence_doc_has_immutable_response(doc: &EvidenceDoc) -> bool {
@@ -1016,6 +1019,8 @@ fn evidence_content_kind(doc: &EvidenceDoc) -> &'static str {
         // Zenodo's record endpoint is a canonical archive receipt: it proves
         // record identity and file checksum, but does not parse the archive.
         "metadata_receipt"
+    } else if evidence_doc_is_data_file(doc) {
+        "data_file"
     } else {
         "page_content"
     }
@@ -2707,12 +2712,23 @@ fn build_evidence_doc(
     let fetched = fetch_page_content(config, query, hit)?;
     let canonical_url = canonical_page_url(hit, &fetched);
     let is_pdf = is_pdf_content(hit, &fetched);
-    let opened_page = if is_pdf {
+    let response_kind = response_content_kind(hit, &fetched);
+    let opened_page = if response_kind.starts_with("data_") {
+        OpenedPage {
+            title: hit.title.clone(),
+            summary: "Immutable original data file retrieved.".to_string(),
+            is_pdf: false,
+            pdf_total_pages: None,
+            page_sections: Vec::new(),
+            excerpts: Vec::new(),
+            page_text: String::new(),
+        }
+    } else if is_pdf {
         extract_pdf_opened_page(config, query, hit, &fetched)?
     } else {
         extract_opened_page(query, hit, &String::from_utf8_lossy(&fetched.body))
     };
-    let raw_html = if is_pdf {
+    let raw_html = if is_pdf || response_kind.starts_with("data_") {
         None
     } else {
         Some(String::from_utf8_lossy(&fetched.body).into_owned())
@@ -2749,8 +2765,9 @@ fn apply_evidence_gate(doc: &mut EvidenceDoc, hit: &SearchHit, fetched: &Fetched
     doc.evidence_eligible = (200..300).contains(&fetched.http_status)
         && !fetched.body.is_empty()
         && doc.snapshot_hash.is_some()
-        && evidence_doc_has_meaningful_content(doc)
-        && normalize_ws(&doc.page_text) != normalize_ws(&hit.snippet)
+        && (evidence_doc_has_meaningful_content(doc) || evidence_doc_is_data_file(doc))
+        && (evidence_doc_is_data_file(doc)
+            || normalize_ws(&doc.page_text) != normalize_ws(&hit.snippet))
         && !metadata_fallback
         && rejection.is_none();
     if let Some(reason) = rejection {
@@ -2841,8 +2858,8 @@ fn response_content_kind(hit: &SearchHit, fetched: &FetchedPageContent) -> Strin
             "malformed_data".to_string()
         };
     }
-    if hit.url.to_ascii_lowercase().ends_with(".xlsx")
-        || fetched.final_url.to_ascii_lowercase().ends_with(".xlsx")
+    if url_path_has_suffix(&hit.url, &[".xlsx"])
+        || url_path_has_suffix(&fetched.final_url, &[".xlsx"])
     {
         return if body.starts_with(b"PK\x03\x04") {
             "data_xlsx".to_string()
@@ -2850,11 +2867,36 @@ fn response_content_kind(hit: &SearchHit, fetched: &FetchedPageContent) -> Strin
             "malformed_data".to_string()
         };
     }
-    if hit.url.to_ascii_lowercase().ends_with(".parquet")
-        || fetched.final_url.to_ascii_lowercase().ends_with(".parquet")
+    if url_path_has_suffix(&hit.url, &[".parquet"])
+        || url_path_has_suffix(&fetched.final_url, &[".parquet"])
     {
         return if body.starts_with(b"PAR1") {
             "data_parquet".to_string()
+        } else {
+            "malformed_data".to_string()
+        };
+    }
+    let zip_hint = content_type == "application/zip"
+        || content_type == "application/x-zip-compressed"
+        || url_path_has_suffix(&hit.url, &[".zip"])
+        || url_path_has_suffix(&fetched.final_url, &[".zip"]);
+    if zip_hint {
+        return if body.starts_with(b"PK\x03\x04")
+            || body.starts_with(b"PK\x05\x06")
+            || body.starts_with(b"PK\x07\x08")
+        {
+            "data_zip".to_string()
+        } else {
+            "malformed_data".to_string()
+        };
+    }
+    let gzip_hint = content_type == "application/gzip"
+        || content_type == "application/x-gzip"
+        || url_path_has_suffix(&hit.url, &[".gz", ".tgz"])
+        || url_path_has_suffix(&fetched.final_url, &[".gz", ".tgz"]);
+    if gzip_hint {
+        return if body.starts_with(b"\x1f\x8b") {
+            "data_gzip".to_string()
         } else {
             "malformed_data".to_string()
         };
@@ -2867,15 +2909,21 @@ fn response_content_kind(hit: &SearchHit, fetched: &FetchedPageContent) -> Strin
 }
 
 fn is_data_url_suffix(raw: &str) -> bool {
+    url_path_has_suffix(
+        raw,
+        &[
+            ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".xlsx", ".xls", ".parquet", ".zip",
+            ".gz", ".tgz",
+        ],
+    )
+}
+
+fn url_path_has_suffix(raw: &str, suffixes: &[&str]) -> bool {
     let path = Url::parse(raw)
         .ok()
         .map(|url| url.path().to_ascii_lowercase())
         .unwrap_or_default();
-    [
-        ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".xlsx", ".xls", ".parquet",
-    ]
-    .iter()
-    .any(|suffix| path.ends_with(suffix))
+    suffixes.iter().any(|suffix| path.ends_with(suffix))
 }
 
 fn looks_like_delimited_data(body: &[u8]) -> bool {
@@ -3281,6 +3329,18 @@ fn fetch_page_content(
                 },
             );
         }
+        if hit.url.to_ascii_lowercase().ends_with(".zip") {
+            return enforce_response_limits(
+                config,
+                hit,
+                FetchedPageContent {
+                    body: b"PK\x03\x04ctox-mock-data-archive".to_vec(),
+                    content_type: Some("application/zip".to_string()),
+                    final_url: hit.url.clone(),
+                    http_status: 200,
+                },
+            );
+        }
         return enforce_response_limits(
             config,
             hit,
@@ -3312,7 +3372,7 @@ fn enforce_response_limits(
             config.max_page_bytes
         ));
     }
-    if content_type_is_disallowed(fetched.content_type.as_deref()) {
+    if content_type_is_disallowed(fetched.content_type.as_deref(), &fetched.final_url) {
         return Err(anyhow!(
             "evidence page {} returned unsupported content type {:?}",
             hit.url,
@@ -3341,14 +3401,14 @@ fn fetch_http_page_content(config: &SearchConfig, hit: &SearchHit) -> Result<Fet
             Ok(Ok(response)) => {
                 let http_status = response.status();
                 let content_type = response.header("content-type").map(ToString::to_string);
-                if content_type_is_disallowed(content_type.as_deref()) {
+                let final_url = response.get_url().to_string();
+                if content_type_is_disallowed(content_type.as_deref(), &final_url) {
                     return Err(anyhow!(
                         "evidence page {} returned unsupported content type {:?}",
                         hit.url,
                         content_type
                     ));
                 }
-                let final_url = response.get_url().to_string();
                 let mut body = Vec::new();
                 response
                     .into_reader()
@@ -4267,7 +4327,7 @@ fn github_fetch_text(config: &SearchConfig, url: &str, accept: &str) -> Result<S
     Ok(raw)
 }
 
-fn content_type_is_disallowed(content_type: Option<&str>) -> bool {
+fn content_type_is_disallowed(content_type: Option<&str>, url: &str) -> bool {
     let Some(content_type) = content_type else {
         return false;
     };
@@ -4277,15 +4337,17 @@ fn content_type_is_disallowed(content_type: Option<&str>) -> bool {
         || lowered.contains("html")
         || lowered.contains("xml")
         || lowered.contains("json")
+        || lowered.contains("application/zip")
+        || lowered.contains("application/x-zip-compressed")
+        || lowered.contains("application/gzip")
+        || lowered.contains("application/x-gzip")
     {
         return false;
     }
     lowered.starts_with("image/")
         || lowered.starts_with("audio/")
         || lowered.starts_with("video/")
-        || lowered.contains("application/zip")
-        || lowered.contains("application/gzip")
-        || lowered.contains("application/octet-stream")
+        || (lowered.contains("application/octet-stream") && !is_data_url_suffix(url))
 }
 
 fn mock_open_page_html(query: &str, hit: &SearchHit) -> String {
@@ -8164,6 +8226,43 @@ mod tests {
     }
 
     #[test]
+    fn ctox_web_read_tool_persists_admitted_original_data_file() {
+        let root = unique_test_root("ctox_web_read_data_file");
+        set_runtime_config(&root, "CTOX_WEB_SEARCH_PROVIDER", "mock");
+        let url = "https://example.com/original-dataset.zip";
+
+        let payload = run_ctox_web_read_tool(
+            &root,
+            &DirectWebReadRequest {
+                url: url.to_string(),
+                query: Some("original dataset".to_string()),
+                find: Vec::new(),
+                country: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(payload["evidence_eligible"], true);
+        assert_eq!(payload["evidence_content_kind"], "data_file");
+        assert_eq!(payload["response_content_kind"], "data_zip");
+        assert!(payload["page_text_excerpt"].as_str().unwrap().is_empty());
+        let cache: PageCacheFile = serde_json::from_str(
+            &fs::read_to_string(page_cache_path(&root)).expect("direct data page cache"),
+        )
+        .expect("valid direct data page cache");
+        let entry = cache
+            .entries
+            .get(&normalize_url_cache_key(url))
+            .expect("direct data cache entry");
+        assert!(entry.evidence_eligible);
+        assert_eq!(
+            entry.doc.response_body.as_deref(),
+            Some(b"PK\x03\x04ctox-mock-data-archive".as_slice())
+        );
+        assert!(evidence_doc_has_immutable_response(&entry.doc));
+    }
+
+    #[test]
     fn extracts_latest_user_query_from_structured_input() {
         let payload = json!({
             "input": [
@@ -10934,6 +11033,24 @@ mod tests {
         let (doc, _) = build_evidence_doc(&config, "data", &hit).expect("data evidence");
         let receipt = doc.response_receipt.expect("response receipt");
         assert_eq!(receipt.content_kind, "malformed_data");
+        assert_eq!(
+            receipt.admission_rejection_reason.as_deref(),
+            Some("invalid_data_response")
+        );
+        assert!(!doc.evidence_eligible);
+        assert_eq!(server.join().expect("fixture server"), 1);
+    }
+
+    #[test]
+    fn local_fixture_rejects_html_disguised_as_zip_data() {
+        let body = b"<html><body><h1>Download unavailable</h1></body></html>".to_vec();
+        let (url, server) = spawn_http_fixture(vec![FixtureReply::ok("application/zip", body)], 1);
+        let mut config = test_config(ProviderKind::Brave);
+        config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+        let hit = fixture_hit(&format!("{url}/dataset.zip"));
+        let (doc, _) = build_evidence_doc(&config, "dataset", &hit).expect("data response");
+        let receipt = doc.response_receipt.expect("response receipt");
+        assert_eq!(receipt.content_kind, "html");
         assert_eq!(
             receipt.admission_rejection_reason.as_deref(),
             Some("invalid_data_response")

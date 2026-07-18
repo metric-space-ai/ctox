@@ -1332,6 +1332,14 @@ fn read_body_evidence_text(read: &Value) -> String {
 }
 
 fn read_has_actual_full_text_or_data(source: &Value, read: &Value) -> bool {
+    if read
+        .get("response_content_kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind.starts_with("data_"))
+        && read.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
+    {
+        return true;
+    }
     let evidence_text = read_body_evidence_text(read);
     if !is_meaningful_evidence_text(&evidence_text) {
         return false;
@@ -1406,7 +1414,8 @@ fn is_data_file_url(raw: &str) -> bool {
         return false;
     };
     [
-        ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".xlsx", ".xls", ".parquet", ".txt",
+        ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".xlsx", ".xls", ".parquet", ".txt", ".zip",
+        ".gz", ".tgz",
     ]
     .iter()
     .any(|suffix| path.ends_with(suffix))
@@ -2274,6 +2283,14 @@ fn snapshot_extension(
         || content_type.is_some_and(|value| value.contains("csv") || value.contains("tab"))
     {
         "csv"
+    } else if content_kind == Some("data_zip") {
+        "zip"
+    } else if content_kind == Some("data_gzip") {
+        "gz"
+    } else if content_kind == Some("data_parquet") {
+        "parquet"
+    } else if content_kind == Some("data_xlsx") {
+        "xlsx"
     } else if content_type.is_some_and(|value| value.starts_with("text/")) {
         "txt"
     } else {
@@ -3582,6 +3599,26 @@ mod tests {
             "page_text_excerpt": "The login page returned instead of the requested data file.",
         });
         assert!(!read_has_actual_full_text_or_data(&source, &read));
+    }
+
+    #[test]
+    fn admitted_data_response_does_not_require_invented_page_text() {
+        let source = json!({
+            "source_type": "data_file",
+            "url": "https://example.test/original-data.zip",
+        });
+        let read = json!({
+            "url": "https://example.test/original-data.zip",
+            "canonical_url": "https://example.test/original-data.zip",
+            "response_content_kind": "data_zip",
+            "evidence_eligible": true,
+            "page_text_excerpt": "",
+        });
+        assert!(read_has_actual_full_text_or_data(&source, &read));
+
+        let mut rejected = read;
+        rejected["evidence_eligible"] = Value::Bool(false);
+        assert!(!read_has_actual_full_text_or_data(&source, &rejected));
     }
 
     #[test]
