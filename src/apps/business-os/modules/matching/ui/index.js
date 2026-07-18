@@ -8879,6 +8879,7 @@ export async function mountMatchingDashboard(ctx = {}){
   renderMap();
   persistMatchingRuntimeState();
   bindCreateRequirementButton();
+  setupMatchingOverflowMenus();
 
   // ✅ Live UI Sync: reagiert auf Background-Sync/Replication automatisch
   try {
@@ -8886,6 +8887,94 @@ export async function mountMatchingDashboard(ctx = {}){
   } catch (e) {
     console.warn('[rxdb-live] setup failed:', e);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Per-pane overflow menu (kebab) — collapses the secondary configure/import/
+// export/search-sort icon buttons into a single trigger per pane header. The
+// menu items still carry data-column / data-column-action / data-drawer-side,
+// so the existing businessOsControls.js delegated listener that opens the
+// column-drawer fires unchanged. The menu is moved to <body> on first open so
+// it escapes the .ctox-pane { overflow: hidden } clip.
+// ---------------------------------------------------------------------------
+function setupMatchingOverflowMenus() {
+  const root = getMatchingModuleHost();
+  if (!root) return;
+  if (root.dataset.matchingOverflowWired === '1') return;
+  root.dataset.matchingOverflowWired = '1';
+
+  // Menus get re-parented to <body> on first open so they escape the
+  // .ctox-pane { overflow: hidden } clip — query from the document so close
+  // still finds them after re-parenting.
+  const allTriggers = () => root.querySelectorAll('[data-toggle-pane-options]');
+  const allMenus = () => document.querySelectorAll('.matching-overflow-menu');
+
+  const closeAll = () => {
+    allMenus().forEach((menu) => { menu.hidden = true; });
+    allTriggers().forEach((trigger) => { trigger.setAttribute('aria-expanded', 'false'); });
+  };
+
+  const openMenu = (trigger, menu) => {
+    const rect = trigger.getBoundingClientRect();
+    const menuWidth = Math.max(menu.offsetWidth || 0, 220);
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+    let left = rect.right - menuWidth;
+    if (left < 8) left = 8;
+    if (left + menuWidth > viewportWidth - 8) left = viewportWidth - 8 - menuWidth;
+    const top = rect.bottom + 4;
+    if (menu.parentElement !== document.body) {
+      document.body.appendChild(menu);
+    }
+    menu.style.top = `${top}px`;
+    menu.style.left = `${left}px`;
+    menu.hidden = false;
+    trigger.setAttribute('aria-expanded', 'true');
+  };
+
+  allTriggers().forEach((trigger) => {
+    const side = trigger.getAttribute('data-toggle-pane-options');
+    if (!side) return;
+    const menu = root.querySelector(`[data-pane-menu="${side}"]`);
+    if (!menu) return;
+
+    trigger.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const wasOpen = !menu.hidden;
+      closeAll();
+      if (!wasOpen) openMenu(trigger, menu);
+    });
+
+    // Close the menu when an item is clicked — the existing column-drawer
+    // delegation will already open the corresponding drawer from this same
+    // click; we just hide the menu so it doesn't sit open behind the drawer.
+    menu.addEventListener('click', (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest('.matching-overflow-item')) closeAll();
+    });
+  });
+
+  // Click outside any open menu closes it. The delegated column-drawer listener
+  // already handles item clicks via [data-column-action], so we don't intercept
+  // them here.
+  document.addEventListener('click', (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (target.closest('[data-toggle-pane-options]')) return;
+    if (target.closest('.matching-overflow-menu')) return;
+    closeAll();
+  });
+
+  // Escape closes open menus.
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    const anyOpen = Array.from(allMenus()).some((menu) => !menu.hidden);
+    if (anyOpen) closeAll();
+  });
+
+  // Close menus on resize so the fixed coords don't drift from the trigger.
+  window.addEventListener('resize', closeAll, { passive: true });
 }
 
 function bindCreateRequirementButton() {

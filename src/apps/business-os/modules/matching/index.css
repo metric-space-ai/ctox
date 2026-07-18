@@ -26,6 +26,74 @@
 .module-root[data-module-root="matching"] .space { flex: 1; }
 .module-root[data-module-root="matching"] .more:empty { display: none; }
 
+/* custom: per-pane overflow menu — collapses the configure/import/export/
+   search-sort secondary actions into one kebab trigger per pane header.
+   The existing column-drawer delegation (`document.addEventListener('click', …)`
+   that matches `[data-column-action]`) still fires from the menu items, so no
+   JS re-wire was needed. The menu is moved to <body> on first open and
+   position:fixed so it escapes the .ctox-pane { overflow: hidden } clip. */
+.module-root[data-module-root="matching"] .matching-overflow {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.module-root[data-module-root="matching"] .matching-overflow-menu {
+  position: fixed;
+  z-index: 80;
+  display: grid;
+  gap: 2px;
+  min-width: 220px;
+  padding: 4px;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--control-radius);
+  background: var(--surface);
+  box-shadow: var(--panel-shadow);
+}
+
+.matching-overflow-menu[hidden] {
+  display: none;
+}
+
+.module-root[data-module-root="matching"] .matching-overflow-item {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: max(2px, calc(var(--control-radius) - 2px));
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: left;
+  cursor: pointer;
+}
+
+.module-root[data-module-root="matching"] .matching-overflow-item:hover {
+  background: var(--kit-hover);
+}
+
+.module-root[data-module-root="matching"] .matching-overflow-item svg {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+
+/* custom: pull the active-source label (matches pane) to the right edge of
+   the tools row when something is selected. */
+.module-root[data-module-root="matching"] .matching-pane-tools-source {
+  margin-left: auto;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* custom: die mittlere/rechte Spalte stapelt Header + wechselnde Ansichten
    (Liste <-> Matrix) vertikal; .ctox-pane ist ein 2-Zeilen-Grid und kann den
    View-Swap nicht ausdrücken. */

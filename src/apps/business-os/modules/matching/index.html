@@ -11,15 +11,29 @@
             <button class="ctox-pane-icon" type="button" id="createRequirementBtn" aria-label="Anforderung anlegen" title="Anforderung anlegen">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
             </button>
-            <button class="ctox-pane-icon" type="button" aria-label="Anforderungen konfigurieren" title="Anforderungen konfigurieren" data-column="requirements" data-column-action="configure" data-drawer-side="left">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
-            </button>
-            <button class="ctox-pane-icon" type="button" aria-label="Anforderungen importieren" title="Anforderungen importieren" data-column="requirements" data-column-action="import" data-drawer-side="left">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg>
-            </button>
-            <button class="ctox-pane-icon" type="button" aria-label="Anforderungen exportieren" title="Anforderungen exportieren" data-column="requirements" data-column-action="export" data-drawer-side="left">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M12 4 8 8M12 4l4 4M5 19h14"/></svg>
-            </button>
+            <div class="matching-overflow">
+              <button class="ctox-pane-icon" type="button" data-toggle-pane-options="requirements" aria-label="Spaltenoptionen" title="Spaltenoptionen" aria-expanded="false" aria-haspopup="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg>
+              </button>
+              <div class="matching-overflow-menu" data-pane-menu="requirements" role="menu" hidden>
+                <button class="matching-overflow-item" type="button" role="menuitem" data-column="requirements" data-column-action="configure" data-drawer-side="left">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
+                  <span>Konfigurieren</span>
+                </button>
+                <button class="matching-overflow-item" type="button" role="menuitem" data-column="requirements" data-column-action="import" data-drawer-side="left">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg>
+                  <span>Importieren</span>
+                </button>
+                <button class="matching-overflow-item" type="button" role="menuitem" data-column="requirements" data-column-action="export" data-drawer-side="left">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M12 4 8 8M12 4l4 4M5 19h14"/></svg>
+                  <span>Exportieren</span>
+                </button>
+                <button class="matching-overflow-item" type="button" role="menuitem" data-column="requirements" data-column-action="search-sort" data-drawer-side="left">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+                  <span>Suche &amp; Sortierung</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
         <div class="ctox-pane-tools">
@@ -29,9 +43,6 @@
             <option value="area">Gruppe: Bereiche</option>
             <option value="recent">Neueste zuerst</option>
           </select>
-          <button class="ctox-pane-icon" type="button" aria-label="Anforderungen Suche und Sortierung konfigurieren" title="Suche und Sortierung konfigurieren" data-column="requirements" data-column-action="search-sort" data-drawer-side="left">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
-          </button>
         </div>
       </header>
       <div class="sources">
@@ -54,15 +65,29 @@
               <button class="ctox-pane-tab active" type="button" id="tabList" role="tab" aria-selected="true" aria-pressed="true">Liste</button>
               <button class="ctox-pane-tab" type="button" id="tabMap" role="tab" aria-selected="false" aria-pressed="false">Tabelle</button>
             </div>
-            <button class="ctox-pane-icon" type="button" aria-label="Matches konfigurieren" title="Matches konfigurieren" data-column="matches" data-column-action="configure" data-drawer-side="bottom">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
-            </button>
-            <button class="ctox-pane-icon" type="button" aria-label="Matches importieren" title="Matches importieren" data-column="matches" data-column-action="import" data-drawer-side="bottom">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg>
-            </button>
-            <button class="ctox-pane-icon" type="button" aria-label="Matches exportieren" title="Matches exportieren" data-column="matches" data-column-action="export" data-drawer-side="bottom">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M12 4 8 8M12 4l4 4M5 19h14"/></svg>
-            </button>
+            <div class="matching-overflow">
+              <button class="ctox-pane-icon" type="button" data-toggle-pane-options="matches" aria-label="Spaltenoptionen" title="Spaltenoptionen" aria-expanded="false" aria-haspopup="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg>
+              </button>
+              <div class="matching-overflow-menu" data-pane-menu="matches" role="menu" hidden>
+                <button class="matching-overflow-item" type="button" role="menuitem" data-column="matches" data-column-action="configure" data-drawer-side="bottom">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
+                  <span>Konfigurieren</span>
+                </button>
+                <button class="matching-overflow-item" type="button" role="menuitem" data-column="matches" data-column-action="import" data-drawer-side="bottom">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg>
+                  <span>Importieren</span>
+                </button>
+                <button class="matching-overflow-item" type="button" role="menuitem" data-column="matches" data-column-action="export" data-drawer-side="bottom">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M12 4 8 8M12 4l4 4M5 19h14"/></svg>
+                  <span>Exportieren</span>
+                </button>
+                <button class="matching-overflow-item" type="button" role="menuitem" data-column="matches" data-column-action="search-sort" data-drawer-side="bottom">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+                  <span>Suche &amp; Sortierung</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
         <div class="ctox-pane-tools" id="listTools">
@@ -70,11 +95,7 @@
           <select class="ctox-pane-filter" id="requirementFilter">
             <option value="all">Alle Matches</option>
           </select>
-          <button class="ctox-pane-icon" type="button" aria-label="Matches Suche und Sortierung konfigurieren" title="Suche und Sortierung konfigurieren" data-column="matches" data-column-action="search-sort" data-drawer-side="bottom">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
-          </button>
-          <div class="space" style="display:none"></div>
-          <span class="muted" id="sourceName" style="display:none">—</span>
+          <span class="muted matching-pane-tools-source" id="sourceName">Alle Quellen</span>
         </div>
       </header>
       <div class="requirement-list" id="requirementList"></div>
@@ -96,15 +117,32 @@
             <h2 class="ctox-pane-title column-title">Objekte</h2>
           </div>
           <div class="ctox-pane-actions">
-            <button class="ctox-pane-icon" type="button" aria-label="Objekte konfigurieren" title="Objekte konfigurieren" data-column="objects" data-column-action="configure" data-drawer-side="right">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
-            </button>
-            <button class="ctox-pane-icon" type="button" id="objectImportPdfBtn" aria-label="Objekte importieren" title="Objekte importieren" data-column="objects" data-column-action="import" data-drawer-side="right">
+            <button class="ctox-pane-icon" type="button" id="objectImportPdfBtn" aria-label="Objekte importieren" title="Objekte importieren" hidden>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg>
             </button>
-            <button class="ctox-pane-icon" type="button" aria-label="Objekte exportieren" title="Objekte exportieren" data-column="objects" data-column-action="export" data-drawer-side="right">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M12 4 8 8M12 4l4 4M5 19h14"/></svg>
-            </button>
+            <div class="matching-overflow">
+              <button class="ctox-pane-icon" type="button" data-toggle-pane-options="objects" aria-label="Spaltenoptionen" title="Spaltenoptionen" aria-expanded="false" aria-haspopup="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg>
+              </button>
+              <div class="matching-overflow-menu" data-pane-menu="objects" role="menu" hidden>
+                <button class="matching-overflow-item" type="button" role="menuitem" data-column="objects" data-column-action="configure" data-drawer-side="right">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
+                  <span>Konfigurieren</span>
+                </button>
+                <button class="matching-overflow-item" type="button" role="menuitem" data-column="objects" data-column-action="import" data-drawer-side="right">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg>
+                  <span>Importieren</span>
+                </button>
+                <button class="matching-overflow-item" type="button" role="menuitem" data-column="objects" data-column-action="export" data-drawer-side="right">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M12 4 8 8M12 4l4 4M5 19h14"/></svg>
+                  <span>Exportieren</span>
+                </button>
+                <button class="matching-overflow-item" type="button" role="menuitem" data-column="objects" data-column-action="search-sort" data-drawer-side="right">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+                  <span>Suche &amp; Sortierung</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
         <div class="ctox-pane-tools">
@@ -116,9 +154,6 @@
             <option value="name">Sortieren: Name</option>
             <option value="tax">Sortieren: Taxonomie</option>
           </select>
-          <button class="ctox-pane-icon" type="button" aria-label="Objekte Suche und Sortierung konfigurieren" title="Suche und Sortierung konfigurieren" data-column="objects" data-column-action="search-sort" data-drawer-side="right">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
-          </button>
         </div>
       </header>
 
