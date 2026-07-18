@@ -12,6 +12,22 @@
   --knowledge-panel-radius: var(--surface-radius);
   --knowledge-control-radius: var(--control-radius);
   --knowledge-shadow: none;
+  /* Self-contained kit tokens: defined here so this app is DECOUPLED from the
+     shell/base.css version. It renders correctly even when installed as a
+     runtime module against an older packaged shell (no --fs-*/--kit-* needed
+     from base.css). Values mirror the kit type + fill scale. */
+  --fs-micro: 10px;
+  --fs-meta: 11px;
+  --fs-sm: 12px;
+  --fs-base: 13px;
+  --fs-title: 15px;
+  --fs-hero: 19px;
+  --lh-tight: 1.25;
+  --lh-base: 1.45;
+  --kit-fill: color-mix(in srgb, var(--knowledge-text) 6%, transparent);
+  --kit-fill-strong: color-mix(in srgb, var(--knowledge-text) 10%, transparent);
+  --kit-hover: color-mix(in srgb, var(--knowledge-text) 5%, transparent);
+  --focus-ring: 0 0 0 2px color-mix(in srgb, var(--knowledge-accent) 42%, transparent);
   display: grid;
   /* Spalten: [linke Liste] [12px Resizer] [rechtes Detail]. Der shell-globale
    * Resizer (.ctox-column-resizer[data-resizer-var="--knowledge-left-width"])
