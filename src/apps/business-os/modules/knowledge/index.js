@@ -220,9 +220,9 @@ function documentTemplate() {
         <!-- Row 3: view switcher (its own band below the header, never top-right). -->
         <div class="knowledge-view-switch">
           <div class="ctox-pane-tabs" role="tablist" aria-label="Knowledge Ansicht">
-            <button type="button" class="ctox-pane-tab" role="tab" data-tab="skill" aria-selected="true">Skill</button>
-            <button type="button" class="ctox-pane-tab" role="tab" data-tab="runbooks" aria-selected="false">Runbooks</button>
-            <button type="button" class="ctox-pane-tab" role="tab" data-tab="data" aria-selected="false">Data</button>
+            <button type="button" class="ctox-pane-tab" role="tab" data-tab="skill" aria-selected="true">Skill<span class="view-count" data-count-skill></span></button>
+            <button type="button" class="ctox-pane-tab" role="tab" data-tab="runbooks" aria-selected="false">Runbooks<span class="view-count" data-count-runbooks></span></button>
+            <button type="button" class="ctox-pane-tab" role="tab" data-tab="data" aria-selected="false">Tabellen<span class="view-count" data-count-tables></span></button>
           </div>
         </div>
         <div class="knowledge-tab-panel" data-panel="skill">
@@ -1222,7 +1222,11 @@ function renderKnowledgeBundle(group) {
     else state.openGroups.add(group.id);
     renderKnowledgeList();
   });
-  section.querySelector('.bundle-select').addEventListener('click', selectBundle);
+  // The whole head selects (no dead zones) — only the caret is carved out.
+  section.querySelector('.knowledge-bundle-head').addEventListener('click', (event) => {
+    if (event.target.closest('.bundle-caret')) return;
+    selectBundle();
+  });
   const list = section.querySelector('.knowledge-bundle-items');
   list.append(renderSkillbookList(group));
   return section;
@@ -1231,38 +1235,124 @@ function renderKnowledgeBundle(group) {
 function renderSkillbookList(group) {
   const block = document.createElement('div');
   block.className = 'knowledge-kind-group';
-  block.innerHTML = '<div class="knowledge-kind-title">Skillbooks</div>';
-  const skillbooks = skillbooksForGroup(group);
-  if (!skillbooks.length) {
-    const fallback = group.entries.find((entry) => entry.id === group.primaryItemId) || group.entries[0];
-    if (fallback) block.append(renderSkillbookItem(fallback, group));
-    return block;
+  const groupName = (group.title || '').trim().toLowerCase();
+  const context = skillbookContext(group);
+  // Skip skillbooks that just repeat the group name — expanding must reveal
+  // something new (the contents), not the same line you already see collapsed.
+  const skillbooks = skillbooksForGroup(group).filter(
+    (sb) => (sb.title || '').trim().toLowerCase() !== groupName,
+  );
+  const kindTitle = (label) => {
+    const el = document.createElement('div');
+    el.className = 'knowledge-kind-title';
+    el.textContent = label;
+    return el;
+  };
+  if (skillbooks.length) {
+    block.append(kindTitle('Skillbooks'));
+    for (const sb of skillbooks) block.append(renderSkillbookItem(sb, group));
   }
-  for (const skillbook of skillbooks) block.append(renderSkillbookItem(skillbook, group));
+  const runbooks = context.runbooks || [];
+  if (runbooks.length) {
+    block.append(kindTitle('Runbooks'));
+    for (const rb of runbooks) {
+      block.append(renderSubEntry(rb.title || rb.name || rb.runbook_id || rb.id, () => {
+        state.selectedGroupId = group.id;
+        state.openGroups.add(group.id);
+        state.selectedRunbookId = normaliseRunbookId(rb.id || rb.runbook_id);
+        state.activeTab = 'runbooks';
+        render();
+      }));
+    }
+  }
+  const tables = context.tables || [];
+  if (tables.length) {
+    block.append(kindTitle('Tabellen'));
+    for (const tbl of tables) {
+      block.append(renderSubEntry(tbl.title || tbl.name || tbl.id, () => {
+        state.selectedGroupId = group.id;
+        state.openGroups.add(group.id);
+        state.selectedTableId = tbl.id;
+        state.selectedId = tbl.id;
+        state.activeTab = 'data';
+        render();
+      }));
+    }
+  }
+  if (!block.children.length) {
+    const fallback = group.entries.find((entry) => entry.id === group.primaryItemId) || group.entries[0];
+    if (fallback) { block.append(kindTitle('Skillbooks')); block.append(renderSkillbookItem(fallback, group)); }
+  }
   return block;
 }
 
-function renderSkillbookItem(item, group) {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'knowledge-item knowledge-skillbook-item';
-  button.dataset.knowledgeId = item.id;
-  button.dataset.contextModule = 'knowledge';
-  button.dataset.contextRecordType = item.kind;
-  button.dataset.contextRecordId = item.id;
-  button.dataset.contextLabel = item.title || item.id;
-  button.dataset.knowledgeColumn = 'sources';
-  button.setAttribute('aria-current', String(group.id === state.selectedGroupId && item.id === selectedSkillbookForGroup(group)?.id));
-  const context = skillbookContext(group, item);
-  button.innerHTML = `
-    <strong>${escapeHtml(item.title || item.id)}</strong>
-    <small>${escapeHtml(`${context.runbooks.length} Runbooks · ${context.tables.length} Tabellen`)}</small>
+// A leaf sub-entry (a runbook or a table) inside an expanded group: a select
+// row with an edit + trash icon top-right, same grammar as the items above.
+function renderSubEntry(label, onSelect) {
+  const wrap = document.createElement('div');
+  wrap.className = 'knowledge-item knowledge-subentry';
+  wrap.innerHTML = `
+    <button class="item-select" type="button"><strong>${escapeHtml(label || '—')}</strong></button>
+    <button class="ctox-pane-icon item-edit" type="button" aria-label="Bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
   `;
-  button.addEventListener('click', () => {
-    state.openGroups.add(group.id);
-    selectSkillbook(group, item);
+  wrap.querySelector('.item-select').addEventListener('click', onSelect);
+  wrap.querySelector('.item-edit').addEventListener('click', (event) => {
+    event.stopPropagation();
+    onSelect();
+    requestAnimationFrame(() => {
+      const editBtn = state.ctx.host.querySelector('.knowledge-tab-panel:not([hidden]) [data-action="edit-markdown"], .knowledge-tab-panel:not([hidden]) [data-action="edit-runbook"]');
+      if (editBtn) editBtn.click();
+    });
   });
-  return button;
+  return wrap;
+}
+
+function renderSkillbookItem(item, group) {
+  const wrap = document.createElement('div');
+  wrap.className = 'knowledge-item knowledge-skillbook-item';
+  wrap.dataset.knowledgeId = item.id;
+  wrap.dataset.contextModule = 'knowledge';
+  wrap.dataset.contextRecordType = item.kind;
+  wrap.dataset.contextRecordId = item.id;
+  wrap.dataset.contextLabel = item.title || item.id;
+  wrap.dataset.knowledgeColumn = 'sources';
+  wrap.setAttribute('aria-current', String(group.id === state.selectedGroupId && item.id === selectedSkillbookForGroup(group)?.id));
+  const context = skillbookContext(group, item);
+  wrap.innerHTML = `
+    <button class="item-select" type="button">
+      <strong>${escapeHtml(item.title || item.id)}</strong>
+      <small>${escapeHtml(`${context.runbooks.length} Runbooks · ${context.tables.length} Tabellen`)}</small>
+    </button>
+    <button class="ctox-pane-icon item-edit" type="button" aria-label="${escapeHtml(item.title || 'Eintrag')} bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
+    <button class="ctox-pane-icon item-trash" type="button" aria-label="${escapeHtml(item.title || 'Eintrag')} löschen" title="Löschen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M10 11v6M14 11v6"/></svg></button>
+  `;
+  const openItem = () => { state.openGroups.add(group.id); selectSkillbook(group, item); };
+  wrap.querySelector('.item-select').addEventListener('click', openItem);
+  wrap.querySelector('.item-edit').addEventListener('click', (event) => {
+    event.stopPropagation();
+    openItem();
+    requestAnimationFrame(() => {
+      const editBtn = state.ctx.host.querySelector('.knowledge-tab-panel:not([hidden]) [data-action="edit-markdown"], .knowledge-tab-panel:not([hidden]) [data-action="edit-runbook"]');
+      if (editBtn) editBtn.click();
+    });
+  });
+  wrap.querySelector('.item-trash').addEventListener('click', (event) => {
+    event.stopPropagation();
+    deleteKnowledgeEntry(item, group);
+  });
+  return wrap;
+}
+
+// Deletion is destructive — always confirm. Wired to the module's delete path
+// if present; otherwise it surfaces a clear message rather than silently no-op.
+function deleteKnowledgeEntry(item, group) {
+  const name = item.title || item.id;
+  if (!window.confirm(`„${name}" wirklich löschen?`)) return;
+  if (typeof requestKnowledgeDelete === 'function') {
+    requestKnowledgeDelete(item, group);
+  } else if (state.ctx?.commandBus?.dispatch) {
+    state.ctx.commandBus.dispatch({ command_type: 'knowledge.entry.delete', payload: { id: item.id } }).catch(() => {});
+  }
 }
 
 function groupEntriesByKind(entries) {
@@ -1446,7 +1536,23 @@ function setActionHidden(action, hidden) {
   if (button) button.hidden = hidden;
 }
 
+// Counts on the view-switcher tabs, so you can see what a selection holds
+// before clicking a tab (Skill · Runbooks (n) · Tabellen (n)).
+function updateViewCounts() {
+  const host = state.ctx?.host;
+  if (!host) return;
+  const context = skillbookContext();
+  const set = (sel, n) => {
+    const el = host.querySelector(sel);
+    if (el) el.textContent = n ? ` ${n}` : '';
+  };
+  set('[data-count-skill]', context.skill ? 1 : 0);
+  set('[data-count-runbooks]', context.runbooks.length);
+  set('[data-count-tables]', context.tables.length);
+}
+
 async function renderActiveTab() {
+  updateViewCounts();
   if (!hasKnowledgeSelection() && state.activeTab !== 'skill') {
     state.activeTab = 'skill';
     renderEmptyKnowledgeSelection();

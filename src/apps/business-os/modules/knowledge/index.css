@@ -1092,3 +1092,47 @@
 .knowledge-module .knowledge-filter-advanced,
 .knowledge-module .knowledge-scope-switch,
 .knowledge-module .knowledge-view-switch { background: transparent; }
+
+/* ============================================================================
+   Items & sub-entries: a select area + edit/trash icons top-right (fractal),
+   flat (no box). The whole shard head is clickable (no dead zones).
+   ========================================================================== */
+.knowledge-module .knowledge-bundle-head { cursor: pointer; }
+.knowledge-module .knowledge-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  width: 100%;
+  border: 0;
+  border-radius: var(--knowledge-control-radius);
+  background: transparent;
+  padding: 0;
+}
+.knowledge-module .knowledge-item:hover { background: var(--kit-hover); }
+.knowledge-module .knowledge-item[aria-current="true"] {
+  background: color-mix(in srgb, var(--knowledge-accent) 8%, transparent);
+}
+.knowledge-module .item-select {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  padding: 6px 7px;
+  display: grid;
+}
+.knowledge-module .knowledge-item .ctox-pane-icon { opacity: 0; transition: opacity 0.12s ease; }
+.knowledge-module .knowledge-item:hover .ctox-pane-icon,
+.knowledge-module .knowledge-item[aria-current="true"] .ctox-pane-icon,
+.knowledge-module .knowledge-item .ctox-pane-icon:focus-visible { opacity: 0.6; }
+.knowledge-module .knowledge-item .ctox-pane-icon:hover { opacity: 1; }
+
+/* Count numbers on the view-switcher tabs. */
+.knowledge-module .view-count {
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  color: var(--knowledge-muted);
+  margin-left: 5px;
+}
+.knowledge-module .ctox-pane-tab[aria-selected="true"] .view-count { color: var(--knowledge-accent); }
