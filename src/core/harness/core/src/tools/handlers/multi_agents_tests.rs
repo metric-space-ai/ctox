@@ -381,6 +381,8 @@ async fn spawn_agent_does_not_inherit_parent_context_prompts() {
         .expect("child should use the sub-agent developer profile");
     assert!(developer_instructions.contains("stateless Codex sub-agent"));
     assert!(developer_instructions.contains("Do not spawn additional sub-agents"));
+    assert!(developer_instructions.contains("CODEX_AGENT_ID"));
+    assert!(developer_instructions.contains("exact unmodified value"));
     assert!(!developer_instructions.contains("parent developer prompt"));
     let compact_prompt = child_turn
         .compact_prompt
@@ -1428,6 +1430,8 @@ async fn apply_subagent_context_profile_wraps_role_instructions() {
         .as_deref()
         .expect("developer profile should be set");
     assert!(developer_instructions.contains("stateless Codex sub-agent"));
+    assert!(developer_instructions.contains("CODEX_AGENT_ID"));
+    assert!(developer_instructions.contains("Never invent, decorate, prefix, or infer"));
     assert!(developer_instructions.contains("role-specific guidance"));
     assert!(developer_instructions.contains("subordinate to the sub-agent context strategy"));
     let compact_prompt = config
