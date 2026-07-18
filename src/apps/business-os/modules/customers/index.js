@@ -6,8 +6,9 @@ import {
   openUniversalImporter,
 } from '../../shared/universal-importer.js';
 
-const BUILD = '20260717-kit-standard1';
+const BUILD = '20260718-reduction-2';
 const CUSTOMERS_LAYOUT_KEY = 'ctox.businessOs.customers.columnLayout';
+const CUSTOMERS_INSPECTOR_KEY = 'ctox.businessOs.customers.inspectorHidden';
 const CUSTOMERS_COLLECTIONS = Object.freeze([
   'business_commands',
   'customer_accounts',
@@ -116,6 +117,8 @@ const labels = {
     sync: 'Abgleich',
     savedViews: 'Ansichten',
     saveView: 'Ansicht speichern',
+    toggleInspector: 'Inspector ausblenden',
+    showInspector: 'Inspector einblenden',
     allAccounts: 'Alle Kunden',
     activeCustomers: 'Aktive Kunden',
     renewal: 'Renewal',
@@ -277,6 +280,8 @@ const labels = {
     sync: 'Sync',
     savedViews: 'Views',
     saveView: 'Save view',
+    toggleInspector: 'Hide inspector',
+    showInspector: 'Show inspector',
     allAccounts: 'All customers',
     activeCustomers: 'Active customers',
     renewal: 'Renewal',
@@ -467,6 +472,7 @@ const state = {
   },
   cleanup: [],
   renderTimer: 0,
+  inspectorHidden: false,
 };
 
 export async function mount(ctx) {
@@ -486,6 +492,7 @@ export async function mount(ctx) {
   ctx.right.replaceChildren();
 
   const root = ctx.host.querySelector('[data-customers-root]');
+  applyInspectorVisibility(root);
   wireUi(root);
   state.cleanup.push(setupResizers(root));
   let disposed = false;
@@ -552,6 +559,7 @@ function resetState(ctx) {
   state.cleanup = [];
   state.renderTimer = 0;
   state.presenceRemote = [];
+  state.inspectorHidden = readInspectorHidden();
 }
 
 function translateFallback(lang) {
@@ -628,6 +636,33 @@ function readLayout() {
   } catch {
     return {};
   }
+}
+
+function readInspectorHidden() {
+  try { return localStorage.getItem(CUSTOMERS_INSPECTOR_KEY) === '1'; } catch { return false; }
+}
+
+function writeInspectorHidden(hidden) {
+  try { localStorage.setItem(CUSTOMERS_INSPECTOR_KEY, hidden ? '1' : '0'); } catch {}
+}
+
+// The inspector is a detail pane: it only holds something when a record is
+// selected or a form is open. Mirrors renderRight()'s non-empty branches.
+function inspectorHasContent() {
+  if (state.formMode) return true;
+  if (state.selectedOutboundCompanyId && state.centerView === 'handoff') return true;
+  if (state.selectedDedupeCandidateId && state.centerView === 'dedupe') return true;
+  return !!selectedAccount();
+}
+
+// Show the inspector only when it has content AND the user hasn't collapsed it
+// (an open form always wins). So the empty state stays clean, selecting a
+// record auto-reveals the detail, and the toggle can still tuck it away.
+function applyInspectorVisibility(root) {
+  const el = root || state.ctx?.host?.querySelector('[data-customers-root]');
+  if (!el) return;
+  const visible = state.formMode || (inspectorHasContent() && !state.inspectorHidden);
+  el.classList.toggle('is-inspector-hidden', !visible);
 }
 
 function saveLayout(patch) {
@@ -793,6 +828,11 @@ async function handleAction(action, element) {
     await refreshData({ restartSync: true, renderLoading: true });
   } else if (action === 'export-customers') {
     exportCurrentView();
+  } else if (action === 'toggle-inspector') {
+    state.inspectorHidden = !state.inspectorHidden;
+    writeInspectorHidden(state.inspectorHidden);
+    applyInspectorVisibility();
+    renderCenter();
   } else if (action === 'clear-filters') {
     state.stage = 'all';
     state.health = 'all';
@@ -1177,6 +1217,7 @@ function render() {
   renderLeft();
   renderCenter();
   renderRight();
+  applyInspectorVisibility(root);
 }
 
 // Publish this user's current focus as a presence entry. Derived from the
@@ -1362,6 +1403,7 @@ function renderCenter() {
           <button class="ctox-pane-icon" type="button" data-customers-action="import-customers" aria-label="${escapeAttribute(state.t('importCustomers', labels.de.importCustomers))}" title="${escapeAttribute(state.t('importCustomers', labels.de.importCustomers))}"${mutableDisabledAttr()}>${actionIcon('upload')}</button>
           <button class="ctox-pane-icon" type="button" data-customers-action="export-customers" aria-label="${escapeAttribute(state.t('exportCustomers', labels.de.exportCustomers))}" title="${escapeAttribute(state.t('exportCustomers', labels.de.exportCustomers))}">${actionIcon('export')}</button>
           ${primaryAction ? `<button class="ctox-pane-icon" type="button" data-customers-action="${escapeAttribute(primaryAction.action)}"${primaryAction.recordAttr || ''} aria-label="${escapeAttribute(primaryAction.label)}" title="${escapeAttribute(primaryAction.label)}"${mutableDisabledAttr()}>${actionIcon(primaryAction.icon || 'add')}</button>` : ''}
+          ${inspectorHasContent() ? `<button class="ctox-pane-icon${state.inspectorHidden ? ' is-active' : ''}" type="button" data-customers-action="toggle-inspector" aria-pressed="${state.inspectorHidden ? 'true' : 'false'}" aria-label="${escapeAttribute(state.t(state.inspectorHidden ? 'showInspector' : 'toggleInspector', labels.de[state.inspectorHidden ? 'showInspector' : 'toggleInspector']))}" title="${escapeAttribute(state.t(state.inspectorHidden ? 'showInspector' : 'toggleInspector', labels.de[state.inspectorHidden ? 'showInspector' : 'toggleInspector']))}">${actionIcon('columns')}</button>` : ''}
         </div>
       </div>
       <div class="ctox-pane-tools">
@@ -1808,42 +1850,27 @@ function renderRight() {
   }
   const account = selectedAccount();
   if (!account) {
-    target.innerHTML = `
-      <header class="ctox-pane-header ctox-pane-band">
-        <div class="ctox-pane-title-row">
-          <div class="ctox-pane-titles">
-            <span class="ctox-pane-kicker">Inspector</span>
-            <h2 class="ctox-pane-title">${escapeHtml(state.t('title', labels.de.title))}</h2>
-          </div>
-        </div>
-      </header>
-      <div class="ctox-empty">
-        <strong>${escapeHtml(state.t('inspectorEmpty', labels.de.inspectorEmpty))}</strong>
-        <span>${escapeHtml(state.t('inspectorEmptyBody', labels.de.inspectorEmptyBody))}</span>
-      </div>
-    `;
+    target.innerHTML = renderInspectorEmpty();
     return;
   }
   const context = activeRecordContext();
   const title = context?.title || account.name || account.id;
   const subtitle = context?.subtitle || [account.domain, account.industry].filter(Boolean).join(' · ') || account.website_url || '';
+  const chips = recordChipNodes(context);
   target.innerHTML = `
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker">${escapeHtml(context?.typeLabel || 'Inspector')}</span>
           <h2 class="ctox-pane-title">${escapeHtml(title)}</h2>
+          ${subtitle ? `<p class="customers-detail-subtitle">${escapeHtml(subtitle)}</p>` : ''}
         </div>
         ${renderRecordHeaderActions(context)}
       </div>
+      ${chips ? `<div class="customers-chip-row customers-pane-chips">${chips}</div>` : ''}
     </header>
     <div class="ctox-pane-scroll customers-right-scroll">
       ${renderPermissionNotice()}
-      <section class="customers-detail-block">
-        <h3 class="customers-detail-title">${escapeHtml(title)}</h3>
-        <p class="customers-detail-subtitle">${escapeHtml(subtitle)}</p>
-        ${renderRecordChips(context)}
-      </section>
       <section class="customers-detail-tabs">
         <div class="ctox-pane-tabs" role="tablist" aria-label="${escapeAttribute(state.t('recordDetails', labels.de.recordDetails))}">
         ${detailTabButton('overview', state.t('overview', labels.de.overview))}
@@ -1864,27 +1891,25 @@ function renderOutboundInspector() {
   const row = outboundHandoffRowByCompanyId(state.selectedOutboundCompanyId);
   if (!row) return renderInspectorEmpty();
   const contacts = row.pipeline?.contacts || [];
+  const subtitle = [row.domain, row.company.city, row.company.country].filter(Boolean).join(' · ');
   return `
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker">${escapeHtml(state.t('handoff', labels.de.handoff))}</span>
           <h2 class="ctox-pane-title">${escapeHtml(row.company.name || row.company.id)}</h2>
+          ${subtitle ? `<p class="customers-detail-subtitle">${escapeHtml(subtitle)}</p>` : ''}
         </div>
         ${row.status === 'ready' ? `<div class="ctox-pane-actions"><button class="ctox-pane-icon" type="button" data-customers-action="import-outbound" data-outbound-company-id="${escapeAttribute(row.company.id)}" aria-label="${escapeAttribute(state.t('importFromOutbound', labels.de.importFromOutbound))}" title="${escapeAttribute(state.t('importFromOutbound', labels.de.importFromOutbound))}"${mutableDisabledAttr()}>${actionIcon('download')}</button></div>` : ''}
+      </div>
+      <div class="customers-chip-row customers-pane-chips">
+        <span class="ctox-badge">${escapeHtml(row.company.qualification_status || 'outbound')}</span>
+        <span class="ctox-badge">${escapeHtml(row.company.research_status || 'research')}</span>
+        <span class="ctox-badge">${escapeHtml(row.status)}</span>
       </div>
     </header>
     <div class="ctox-pane-scroll customers-right-scroll">
       ${renderPermissionNotice()}
-      <section class="customers-detail-block">
-        <h3 class="customers-detail-title">${escapeHtml(row.company.name || row.company.id)}</h3>
-        <p class="customers-detail-subtitle">${escapeHtml([row.domain, row.company.city, row.company.country].filter(Boolean).join(' · '))}</p>
-        <div class="customers-chip-row">
-          <span class="ctox-badge">${escapeHtml(row.company.qualification_status || 'outbound')}</span>
-          <span class="ctox-badge">${escapeHtml(row.company.research_status || 'research')}</span>
-          <span class="ctox-badge">${escapeHtml(row.status)}</span>
-        </div>
-      </section>
       <section class="customers-detail-block">
         <dl class="ctox-fields">
           ${metric('Fit', Number(row.company.fit_score || 0) ? `${Number(row.company.fit_score)}%` : '—')}
@@ -1909,25 +1934,23 @@ function renderDedupeInspector() {
   if (!candidate) return renderInspectorEmpty();
   const existing = accountById(candidate.existing_record_id);
   const outboundCompany = candidate.payload?.outbound_company || outboundCompanyById(candidate.source_record_id) || {};
+  const subtitle = [candidate.object_type, candidate.match_type, `${Math.round(Number(candidate.confidence || 0) * 100)}%`].filter(Boolean).join(' · ');
   return `
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker">${escapeHtml(state.t('dedupe', labels.de.dedupe))}</span>
           <h2 class="ctox-pane-title">${escapeHtml(candidate.match_key || candidate.id)}</h2>
+          ${subtitle ? `<p class="customers-detail-subtitle">${escapeHtml(subtitle)}</p>` : ''}
         </div>
+      </div>
+      <div class="customers-chip-row customers-pane-chips">
+        <span class="ctox-badge">${escapeHtml(candidate.status || 'open')}</span>
+        ${candidate.decision ? `<span class="ctox-badge">${escapeHtml(candidate.decision)}</span>` : ''}
       </div>
     </header>
     <div class="ctox-pane-scroll customers-right-scroll">
       ${renderPermissionNotice()}
-      <section class="customers-detail-block">
-        <h3 class="customers-detail-title">${escapeHtml(candidate.match_key || candidate.id)}</h3>
-        <p class="customers-detail-subtitle">${escapeHtml([candidate.object_type, candidate.match_type, `${Math.round(Number(candidate.confidence || 0) * 100)}%`].filter(Boolean).join(' · '))}</p>
-        <div class="customers-chip-row">
-          <span class="ctox-badge">${escapeHtml(candidate.status || 'open')}</span>
-          ${candidate.decision ? `<span class="ctox-badge">${escapeHtml(candidate.decision)}</span>` : ''}
-        </div>
-      </section>
       <section class="customers-detail-block">
         <dl class="ctox-fields">
           ${metric(state.t('source', labels.de.source), outboundCompany.name || candidate.source_record_id || '—')}
@@ -1994,38 +2017,32 @@ function renderRecordHeaderActions(context) {
   `;
 }
 
-function renderRecordChips(context) {
+function recordChipNodes(context) {
   if (!context) return '';
   if (context.type === 'opportunity') {
     const opportunity = context.opportunity;
     return `
-      <div class="customers-chip-row">
         <span class="ctox-badge${stageBadgeClass(opportunity.stage)}">${escapeHtml(labelFor(OPPORTUNITY_STAGE_LABELS, opportunity.stage))}</span>
         <span class="ctox-badge">${escapeHtml(labelFor(OPPORTUNITY_TYPE_LABELS, opportunity.opportunity_type))}</span>
         <span class="ctox-badge">${escapeHtml(formatMoney(opportunity.amount_cents, opportunity.currency))}</span>
         ${presenceChip('customer_opportunities', context.id)}
-      </div>
     `;
   }
   if (context.type === 'contact') {
     const contact = context.contact;
     return `
-      <div class="customers-chip-row">
         ${contact.is_primary_contact ? `<span class="ctox-badge is-success">${escapeHtml(state.t('primary', labels.de.primary))}</span>` : ''}
         ${contact.email ? `<span class="ctox-badge">${escapeHtml(contact.email)}</span>` : ''}
         ${contact.phone ? `<span class="ctox-badge">${escapeHtml(contact.phone)}</span>` : ''}
         ${presenceChip('customer_contacts', context.id)}
-      </div>
     `;
   }
   const account = context.account;
   return `
-    <div class="customers-chip-row">
       <span class="ctox-badge">${escapeHtml(labelFor(ACCOUNT_STATUS_LABELS, account.account_status))}</span>
       <span class="ctox-badge${stageBadgeClass(account.customer_stage)}">${escapeHtml(labelFor(STAGE_LABELS, account.customer_stage))}</span>
       <span class="ctox-badge${healthBadgeClass(account.health_status)}">${escapeHtml(labelFor(HEALTH_LABELS, account.health_status))}</span>
       ${presenceChip('customer_accounts', context.id)}
-    </div>
   `;
 }
 
