@@ -40,8 +40,6 @@ const labels = {
     installing: 'Installiere...',
     installed: 'Installiert',
     notInstalled: 'Nicht installiert',
-    active: 'AKTIV',
-    inactive: 'INAKTIV',
     automating: 'AUTOMATISIERE...',
     authSuccessful: 'Erfolgreich Authentifiziert!'
   },
@@ -54,8 +52,6 @@ const labels = {
     installing: 'Installing...',
     installed: 'Installed',
     notInstalled: 'Not installed',
-    active: 'ACTIVE',
-    inactive: 'INACTIVE',
     automating: 'AUTOMATING...',
     authSuccessful: 'Successfully Authenticated!'
   }
@@ -176,7 +172,6 @@ function bindElements(root) {
   els.diagUptime = root.querySelector('#diag-uptime');
 
   // Service elements
-  els.serviceStatus = root.querySelector('#service-status');
   els.bypassToggle = root.querySelector('#bypass-permissions-toggle');
 
   // Workspaces list elements
@@ -684,18 +679,6 @@ function clearProjectionTimers() {
   state.projectionTimers = {};
 }
 
-function openModal(modal, focusTarget) {
-  if (!modal) return;
-  modal.removeAttribute('hidden');
-  requestAnimationFrame(() => focusTarget?.focus?.());
-}
-
-function closeModal(modal, restoreFocus) {
-  if (!modal) return;
-  modal.setAttribute('hidden', '');
-  restoreFocus?.focus?.();
-}
-
 function setWorkspaceLoadState(status, error = '') {
   state.workspaceLoadState = status;
   state.workspaceLoadError = error;
@@ -780,18 +763,6 @@ function validateNewSessionPrompt(input) {
   return { valid: true, prompt, error: '' };
 }
 
-function syncWorkspaceFormState() {
-  const validation = validateWorkspacePath(els.addWorkspaceInput?.value || '');
-  setFormError(els.addWorkspaceInput, els.addWorkspaceError, validation.error);
-  if (els.addWorkspaceSubmit) els.addWorkspaceSubmit.disabled = !validation.valid;
-}
-
-function syncNewSessionFormState() {
-  const validation = validateNewSessionPrompt(els.newSessionPrompt?.value || '');
-  setFormError(els.newSessionPrompt, els.newSessionError, validation.error);
-  if (els.newSessionSubmit) els.newSessionSubmit.disabled = !validation.valid || !state.activeWorkspace;
-}
-
 function setFormError(inputEl, errorEl, message) {
   if (inputEl) inputEl.setAttribute('aria-invalid', message ? 'true' : 'false');
   if (!errorEl) return;
@@ -834,12 +805,6 @@ function updateUI() {
   if (els.diagElectronPid) els.diagElectronPid.textContent = diag.electronPid;
   if (els.diagResources) els.diagResources.textContent = diag.resources;
   if (els.diagUptime) els.diagUptime.textContent = diag.uptime;
-
-  // Service indicator
-  if (els.serviceStatus) {
-    els.serviceStatus.textContent = isOnline ? t('active') : t('inactive');
-    els.serviceStatus.className = `ctox-badge ${isOnline ? 'is-success' : ''}`;
-  }
 
   // Auth Status indicator
   const hasAuth = Boolean(diag.authorized || diag.authReady);

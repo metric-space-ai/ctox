@@ -10,6 +10,9 @@
           <h2 class="ctox-pane-title">Workspaces</h2>
         </div>
         <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon" id="open-settings-btn" title="System Settings" aria-label="Open system settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
+          </button>
           <button type="button" class="ctox-pane-icon" id="add-workspace-btn" title="Add Workspace" aria-label="Add workspace">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
           </button>
@@ -23,14 +26,6 @@
         <div class="ctox-empty">Loading workspaces...</div>
       </div>
     </div>
-
-    <!-- Left Sidebar Footer -->
-    <footer class="coding-agents-pane-footer">
-      <button type="button" class="ctox-button" id="open-settings-btn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="svg-inline" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
-        System Settings
-      </button>
-    </footer>
   </section>
 
   <!-- Left Resizer Handle (shell-owned declarative resizer) -->
@@ -46,7 +41,7 @@
           <h2 class="ctox-pane-title" id="active-app-title">Coding Agent Workbench</h2>
         </div>
         <div class="ctox-pane-actions">
-          <span class="ctox-badge connection-status-pill" id="workbench-status-badge">
+          <span class="ctox-badge" id="workbench-status-badge">
             <span class="status-dot online" id="workbench-status-dot"></span>
             <span id="workbench-status-text">Connected</span>
           </span>
@@ -57,8 +52,7 @@
     <div class="coding-agents-workbench">
       <!-- Session Bar -->
       <div class="ctox-toolbar">
-        <label class="ctox-field-label" for="workbench-session-select">Active Session</label>
-        <select id="workbench-session-select" class="ctox-pane-filter coding-agents-session-select" disabled>
+        <select id="workbench-session-select" class="ctox-pane-filter coding-agents-session-select" aria-label="Active session" disabled>
           <option value="">No Active Sessions</option>
         </select>
         <button type="button" class="ctox-button is-primary coding-agents-new-session" id="new-session-btn" disabled aria-describedby="new-session-help">+ New Session</button>
@@ -96,7 +90,6 @@
         <section class="ctox-card settings-section">
           <header>Lifecycle & Service Control</header>
           <div class="ctox-card-body">
-            <p class="section-desc">Manage the local background Electron GUI and headless daemon service.</p>
             <div class="lifecycle-controls-row">
               <div class="lifecycle-buttons-row">
                 <button type="button" class="ctox-button" data-action="install-provider">Install / Repair CLI</button>
@@ -122,9 +115,8 @@
 
         <!-- Permissions Bypass manager -->
         <section class="ctox-card settings-section">
-          <header>Permissions Bypass Policy</header>
+          <header>Permissions Bypass</header>
           <div class="ctox-card-body">
-            <p class="section-desc">Automatically confirm read/write and script executions in workspaces without interactive dialog popups.</p>
             <div class="permission-toggle-row">
               <div class="toggle-info">
                 <span class="toggle-title">Bypass All Permission Confirmation Dialogs</span>
@@ -141,12 +133,11 @@
         <!-- Account Subscription portal -->
         <section class="ctox-card settings-section">
           <header>
-            Account Subscription Registration
+            Account Subscription
             <span class="ctox-badge" id="auth-status">UNAUTHORIZED</span>
           </header>
           <div class="ctox-card-body">
-            <p class="section-desc">Use the provider-owned CLI authentication flow on this machine.</p>
-            <form class="subscription-auth-form" id="sub-login-form">
+            <form id="sub-login-form">
               <button type="submit" class="ctox-button is-primary" id="btn-trigger-signup">
                 Start Provider Authentication
               </button>
@@ -174,8 +165,7 @@
       </header>
       <div class="ctox-modal-body">
         <form id="add-workspace-form" class="coding-agents-dialog-form">
-          <p class="section-desc">Enter the absolute directory path to authorize as a clean Coding Workspace.</p>
-          <input type="text" id="add-workspace-input" class="ctox-input" placeholder="e.g. ~/Documents/my-project" required aria-describedby="add-workspace-error" autocomplete="off">
+          <input type="text" id="add-workspace-input" class="ctox-input" placeholder="Absolute path, e.g. ~/Documents/my-project" required aria-describedby="add-workspace-error" autocomplete="off">
           <div id="add-workspace-error" class="form-error" role="alert" hidden></div>
           <button type="submit" class="ctox-button is-primary" id="add-workspace-submit" disabled>Authorize & Add Workspace</button>
         </form>
