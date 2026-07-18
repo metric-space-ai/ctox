@@ -283,12 +283,16 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
     required_reviews = {"source", "data", "claim"}
     seen_review_types: set[str] = set()
     reviewer_ids: set[str] = set()
+    reviewer_thread_ids: set[str] = set()
     for review in reviews:
         review = require_dict(review, "review")
         review_type = require_string(review, "review_type", "review")
         reviewer_id = require_string(review, "reviewer_id", "review")
+        reviewer_thread_id = require_string(review, "reviewer_thread_id", "review")
         if review_type in seen_review_types or reviewer_id in reviewer_ids:
             raise GuardError("reviews_must_be_independent")
+        if reviewer_thread_id in reviewer_thread_ids:
+            raise GuardError("reviews_must_use_distinct_subagent_threads")
         if review.get("status") != "pass" or not isinstance(review.get("reviewed_ids"), list):
             raise GuardError("source_data_claim_reviews_must_pass")
         if review_type == "source":
@@ -311,6 +315,7 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
             review_receipt.get("schema_version") != "ctox.research.review.v1"
             or review_receipt.get("review_type") != review_type
             or review_receipt.get("reviewer_id") != reviewer_id
+            or review_receipt.get("reviewer_thread_id") != reviewer_thread_id
             or review_receipt.get("status") != "pass"
             or set(review_receipt.get("reviewed_ids", [])) != target_ids
             or review_receipt.get("research_run_id") != manifest.get("research_run_id")
@@ -320,8 +325,23 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
             raise GuardError(f"{review_type}_review_receipt_contract_mismatch")
         seen_review_types.add(review_type)
         reviewer_ids.add(reviewer_id)
+        reviewer_thread_ids.add(reviewer_thread_id)
     if seen_review_types != required_reviews:
         raise GuardError("source_data_claim_reviews_required")
+    batch_reviewer_thread_ids = manifest.get("batch_reviewer_thread_ids")
+    if (
+        not isinstance(batch_reviewer_thread_ids, list)
+        or len(batch_reviewer_thread_ids) < 3
+        or any(
+            not isinstance(value, str) or not value.strip()
+            for value in batch_reviewer_thread_ids
+        )
+    ):
+        raise GuardError("three_candidate_batch_subagent_reviews_required")
+    if len(reviewer_thread_ids | set(batch_reviewer_thread_ids)) != (
+        len(reviewer_thread_ids) + len(batch_reviewer_thread_ids)
+    ):
+        raise GuardError("batch_and_completion_reviews_must_use_distinct_subagent_threads")
 
     knowledge = require_dict(manifest.get("knowledge"), "knowledge")
     if knowledge.get("living") is True:

@@ -295,8 +295,14 @@ Stack receipt must have been created during that server attempt.
 All artifact paths are workspace-relative; absolute paths, `..` escapes, and
 symlink escapes are rejected. Each Source/Data/Claim review includes a hashed
 `ctox.research.review.v1` receipt artifact created by its distinct reviewer and
-bound to the same run, command, and attempt. Living Knowledge and Report
-versions include hashed artifacts plus the exact claim IDs they consume.
+bound to the same run, command, and attempt. Each review and receipt also
+records the actual `reviewer_thread_id` returned by `spawn_agent`. The manifest
+records at least three additional candidate-batch child IDs in
+`batch_reviewer_thread_ids`; batch and completion reviewers must be distinct
+current-attempt subagents in the research workspace. Parent-authored review
+files are invalid even when their JSON shape and hashes are otherwise correct.
+Living Knowledge and Report versions include hashed artifacts plus the exact
+claim IDs they consume.
 
 Retain rejected candidates with their rejection reason for auditability, but
 exclude them from knowledge construction, calculations, and report evidence
@@ -377,6 +383,11 @@ agent's unchecked output:
   archive/table and verifies units, parsing, conversions, nulls, and row counts.
 - **Claim auditor**: checks each knowledge statement and report claim against
   eligible source or data receipts and rejects unsupported strength or scope.
+
+For a legacy candidate recheck, first partition candidates into batches of at
+most ten and assign each batch to its own leaf subagent. Persist those child
+thread IDs separately from the three full-corpus auditor thread IDs. Do not
+reuse a batch worker as a final Source/Data/Claim auditor.
 
 Run `scripts/evidence_guard.py` after these reviews. A failed check blocks
 library import, Knowledge promotion, and report publication.

@@ -68,13 +68,23 @@ class EvidenceGuardTests(unittest.TestCase):
             }],
             "data_files": [],
             "reviews": [
-                {"review_type": "source", "reviewer_id": "r-source", "status": "pass",
-                 "reviewed_ids": ["ev-1"], "receipt_artifact": self._review_artifact("source", "r-source", ["ev-1"])},
-                {"review_type": "data", "reviewer_id": "r-data", "status": "pass",
-                 "reviewed_ids": ["ev-1"], "receipt_artifact": self._review_artifact("data", "r-data", ["ev-1"])},
-                {"review_type": "claim", "reviewer_id": "r-claim", "status": "pass",
-                 "reviewed_ids": ["c-1"], "receipt_artifact": self._review_artifact("claim", "r-claim", ["c-1"])},
+                {"review_type": "source", "reviewer_id": "r-source",
+                 "reviewer_thread_id": "source-thread", "status": "pass",
+                 "reviewed_ids": ["ev-1"], "receipt_artifact": self._review_artifact(
+                     "source", "r-source", "source-thread", ["ev-1"]
+                 )},
+                {"review_type": "data", "reviewer_id": "r-data",
+                 "reviewer_thread_id": "data-thread", "status": "pass",
+                 "reviewed_ids": ["ev-1"], "receipt_artifact": self._review_artifact(
+                     "data", "r-data", "data-thread", ["ev-1"]
+                 )},
+                {"review_type": "claim", "reviewer_id": "r-claim",
+                 "reviewer_thread_id": "claim-thread", "status": "pass",
+                 "reviewed_ids": ["c-1"], "receipt_artifact": self._review_artifact(
+                     "claim", "r-claim", "claim-thread", ["c-1"]
+                 )},
             ],
+            "batch_reviewer_thread_ids": ["batch-thread-1", "batch-thread-2", "batch-thread-3"],
             "knowledge": {"living": False},
         }
         self.manifest["claims"][0]["lineage_sha256"] = lineage_hash(self.manifest["claims"][0])
@@ -87,13 +97,20 @@ class EvidenceGuardTests(unittest.TestCase):
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         }
 
-    def _review_artifact(self, review_type: str, reviewer_id: str, reviewed_ids: list[str]) -> dict[str, str]:
+    def _review_artifact(
+        self,
+        review_type: str,
+        reviewer_id: str,
+        reviewer_thread_id: str,
+        reviewed_ids: list[str],
+    ) -> dict[str, str]:
         return self._artifact(
             f"{review_type}-review.json",
             json.dumps({
                 "schema_version": "ctox.research.review.v1",
                 "review_type": review_type,
                 "reviewer_id": reviewer_id,
+                "reviewer_thread_id": reviewer_thread_id,
                 "status": "pass",
                 "reviewed_ids": reviewed_ids,
                 "research_run_id": "run-1",
@@ -210,7 +227,7 @@ class EvidenceGuardTests(unittest.TestCase):
         }]
         manifest["reviews"][1]["reviewed_ids"] = ["data-1"]
         manifest["reviews"][1]["receipt_artifact"] = self._review_artifact(
-            "data", "r-data", ["data-1"]
+            "data", "r-data", "data-thread", ["data-1"]
         )
         validate_manifest(manifest, self.base)
         for field in ("sha256", "columns", "row_count", "encoding", "delimiter", "units", "null_handling"):
@@ -232,7 +249,7 @@ class EvidenceGuardTests(unittest.TestCase):
         self.manifest["claims"].append(claim)
         self.manifest["reviews"][2]["reviewed_ids"] = ["c-1", "c-2"]
         self.manifest["reviews"][2]["receipt_artifact"] = self._review_artifact(
-            "claim", "r-claim", ["c-1", "c-2"]
+            "claim", "r-claim", "claim-thread", ["c-1", "c-2"]
         )
         validate_manifest(self.manifest, self.base)
         claim["claim_text"] = "Changed without a new lineage hash."
@@ -269,6 +286,26 @@ class EvidenceGuardTests(unittest.TestCase):
             path.read_bytes()
         ).hexdigest()
         with self.assertRaisesRegex(ValueError, "source_review_receipt_contract"):
+            validate_manifest(self.manifest, self.base)
+
+    def test_reviews_require_distinct_subagent_thread_ids(self) -> None:
+        self.manifest["reviews"][1]["reviewer_thread_id"] = "source-thread"
+        with self.assertRaisesRegex(ValueError, "distinct_subagent_threads"):
+            validate_manifest(self.manifest, self.base)
+
+    def test_review_receipt_is_bound_to_subagent_thread_id(self) -> None:
+        self.manifest["reviews"][0]["reviewer_thread_id"] = "different-thread"
+        with self.assertRaisesRegex(ValueError, "source_review_receipt_contract"):
+            validate_manifest(self.manifest, self.base)
+
+    def test_candidate_batches_require_three_additional_subagent_threads(self) -> None:
+        self.manifest["batch_reviewer_thread_ids"] = ["batch-thread-1", "batch-thread-2"]
+        with self.assertRaisesRegex(ValueError, "three_candidate_batch_subagent_reviews"):
+            validate_manifest(self.manifest, self.base)
+
+    def test_batch_and_completion_threads_must_be_distinct(self) -> None:
+        self.manifest["batch_reviewer_thread_ids"][0] = "source-thread"
+        with self.assertRaisesRegex(ValueError, "batch_and_completion_reviews"):
             validate_manifest(self.manifest, self.base)
 
 
