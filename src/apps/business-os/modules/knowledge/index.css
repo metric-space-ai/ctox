@@ -94,7 +94,7 @@
 
 .knowledge-module .knowledge-bundle {
   display: grid;
-  gap: 4px;
+  gap: 2px;
   border-bottom: 1px solid var(--knowledge-soft-line);
   padding: 6px 0 8px;
 }
@@ -154,28 +154,34 @@
 
 .knowledge-module .knowledge-bundle-head .bundle-domain {
   color: var(--knowledge-muted);
-  font-size: 10.5px;
-  font-weight: 820;
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
+  opacity: 0.7;
 }
 
 .knowledge-module .knowledge-bundle-head strong {
-  margin-top: 2px;
-  font-size: 13.5px;
-  line-height: 1.15;
+  margin-top: 1px;
+  font-size: var(--fs-base);
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 .knowledge-module .knowledge-bundle-head small {
-  margin-top: 3px;
+  margin-top: 2px;
   color: var(--knowledge-muted);
-  font-size: 10.5px;
-  font-weight: 700;
+  font-size: var(--fs-micro);
+  font-weight: 400;
+  opacity: 0.8;
 }
 
 .knowledge-module .knowledge-bundle-items {
   display: grid;
-  gap: 3px;
-  padding-left: 20px;
+  gap: 2px;
+  margin: 2px 0 2px 13px;
+  padding-left: 11px;
+  border-left: 1px solid var(--knowledge-soft-line);
 }
 
 .knowledge-module .knowledge-bundle[data-open="false"] .knowledge-bundle-items {
@@ -188,12 +194,13 @@
 }
 
 .knowledge-module .knowledge-kind-title {
-  padding: 6px 4px 1px;
+  padding: 5px 4px 1px;
   color: var(--knowledge-muted);
-  font-size: 10px;
-  font-weight: 820;
-  letter-spacing: 0.02em;
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
+  opacity: 0.65;
 }
 
 .knowledge-module .knowledge-item,
@@ -227,22 +234,23 @@
 
 .knowledge-module .knowledge-item strong,
 .knowledge-module .runbook-item strong {
-  font-size: 12.5px;
-  line-height: 1.2;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 1.25;
   white-space: nowrap;
 }
 
 .knowledge-module .knowledge-item span,
 .knowledge-module .runbook-item span {
   color: var(--knowledge-muted);
-  font-size: 11.5px;
-  line-height: 1.25;
+  font-size: var(--fs-meta);
+  line-height: 1.3;
 }
 
 .knowledge-module .knowledge-item small {
   color: var(--knowledge-accent);
-  font-size: 10.5px;
-  font-weight: 760;
+  font-size: var(--fs-micro);
+  font-weight: 600;
 }
 
 .knowledge-module .knowledge-tab-panel {
