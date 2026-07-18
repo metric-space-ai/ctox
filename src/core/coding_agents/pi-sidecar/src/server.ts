@@ -4,13 +4,19 @@
 // it over a Unix socket: one newline-delimited JSON CtoxTurnRequest in, one
 // CtoxTurnResponse out. Each request is one bounded turn. The core mapping
 // (`handleTurnRequest`) takes an injected `streamFn`, so it is testable without
-// a live model provider; the socket glue uses the CTOX gateway provider.
+// a live model provider; the socket glue uses the CTOX gateway provider (or the
+// deterministic `fauxStreamFn` in CTOX_PI_SIDECAR_FAUX offline-test mode).
 import net from "node:net";
 import { stream as piStream, registerBuiltInApiProviders } from "@earendil-works/pi-ai/compat";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, type Api, type Model } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { createVercelVirtualExecutionEnv } from "./execution-env";
-import { runVercelPiCodingAgentTurn, type VercelPiCodingToolName } from "./pi-turn";
+import {
+  runVercelPiCodingAgentTurn,
+  createVercelPiCodingTextMessage,
+  createVercelPiCodingToolCallMessage,
+  type VercelPiCodingToolName,
+} from "./pi-turn";
 
 type TurnResult = Awaited<ReturnType<typeof runVercelPiCodingAgentTurn>>;
 
@@ -50,6 +56,28 @@ export function defaultStreamFn(): StreamFn {
     providersRegistered = true;
   }
   return piStream as unknown as StreamFn;
+}
+
+/**
+ * Deterministic write-then-stop stream for offline integration tests and the
+ * `CTOX_PI_SIDECAR_FAUX` daemon mode — NO real model. It issues one `write`
+ * tool call, then stops once the tool result returns. Never used for real turns.
+ */
+export function fauxStreamFn(
+  write: { path: string; content: string } = { path: "faux-marker.js", content: "// faux\n" },
+): StreamFn {
+  return (_model, context) => {
+    const stream = createAssistantMessageEventStream();
+    const hasToolResult = context.messages.some((message) => message.role === "toolResult");
+    stream.push({
+      type: "done",
+      reason: hasToolResult ? "stop" : "toolUse",
+      message: hasToolResult
+        ? createVercelPiCodingTextMessage("Done (faux).")
+        : createVercelPiCodingToolCallMessage("write", write, "faux-w1"),
+    });
+    return stream;
+  };
 }
 
 /**

@@ -11,7 +11,7 @@
 // network. The provider stream routes through the CTOX model gateway. See
 // PORTING.md / UPSTREAM.md.
 import { pathToFileURL } from "node:url";
-import { startSocketServer } from "./server";
+import { startSocketServer, fauxStreamFn } from "./server";
 
 export {
   VercelVirtualExecutionEnv as CtoxSourceExecutionEnv,
@@ -52,6 +52,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.error("usage: ctox-pi-sidecar <unix-socket-path>");
     process.exit(2);
   }
-  startSocketServer(socketPath);
-  console.error(`[ctox-pi-sidecar] LocalTransport listening on ${socketPath}`);
+  // CTOX_PI_SIDECAR_FAUX runs a deterministic no-model stream for offline
+  // owner-integration tests; otherwise the CTOX gateway provider is used.
+  const streamFn = process.env.CTOX_PI_SIDECAR_FAUX ? fauxStreamFn() : undefined;
+  startSocketServer(socketPath, streamFn);
+  console.error(
+    `[ctox-pi-sidecar] LocalTransport listening on ${socketPath}` +
+      (streamFn ? " (faux mode)" : ""),
+  );
 }
