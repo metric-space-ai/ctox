@@ -191,6 +191,7 @@ function documentTemplate() {
               <h2 class="ctox-pane-title" data-selected-title>${escapeHtml(copy.noSelection)}</h2>
             </div>
             <div class="ctox-pane-actions">
+              <button class="ctox-pane-icon knowledge-head-edit" type="button" data-action="edit-active" aria-label="Bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
               <div class="ctox-pane-tabs" role="tablist" aria-label="Knowledge Ansicht">
                 <button type="button" class="ctox-pane-tab" role="tab" data-tab="skill" aria-selected="true">Skill</button>
                 <button type="button" class="ctox-pane-tab" role="tab" data-tab="runbooks" aria-selected="false">Runbooks</button>
@@ -284,6 +285,12 @@ function wireEvents() {
   state.ctx.host.querySelector('[data-action="import-knowledge-book"]')?.addEventListener('click', () => openImportKnowledgeBookDrawer());
   state.ctx.host.querySelector('[data-action="export-knowledge-book"]')?.addEventListener('click', () => openExportKnowledgeBookDrawer());
   state.ctx.host.querySelector('[data-action="configure-knowledge"]').addEventListener('click', () => openKnowledgeConfig());
+  // Fractal header edit: the pencil in the pane header edits whatever the
+  // active tab shows — it just triggers that panel's own edit control.
+  state.ctx.host.querySelector('[data-action="edit-active"]')?.addEventListener('click', () => {
+    const editBtn = state.ctx.host.querySelector('.knowledge-tab-panel:not([hidden]) [data-action="edit-markdown"], .knowledge-tab-panel:not([hidden]) [data-action="edit-runbook"]');
+    if (editBtn) editBtn.click();
+  });
   state.ctx.host.querySelector('[data-action="edit-markdown"]')?.addEventListener('click', toggleMarkdownEditor);
   state.ctx.host.querySelector('[data-action="save-markdown"]')?.addEventListener('click', queueMarkdownSave);
   state.ctx.host.querySelector('[data-action="cancel-markdown"]')?.addEventListener('click', cancelMarkdownEdit);

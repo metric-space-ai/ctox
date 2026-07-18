@@ -850,3 +850,16 @@
     min-width: 0;
   }
 }
+
+/* Fractal header edit: the pane-header pencil (data-action="edit-active")
+   replaces the in-content "Bearbeiten" text button. The skill edit-bar only
+   appears while actually editing (its save control is visible), so there is
+   no empty toolbar strip in the reading view. */
+.knowledge-module .knowledge-edit-bar [data-action="edit-markdown"],
+.knowledge-module .knowledge-edit-bar [data-action="edit-runbook"] {
+  display: none;
+}
+.knowledge-module [data-skill-toolbar] { display: none; }
+.knowledge-module [data-skill-toolbar]:has([data-action="save-markdown"]:not([hidden])) {
+  display: flex;
+}
