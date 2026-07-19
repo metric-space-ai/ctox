@@ -315,6 +315,10 @@ continuing.
 
 Discovery results are candidates. Promote a candidate to evidence only after
 the evidence manifest passes the deterministic guard and all checks below pass:
+Before creating or repairing that manifest, read
+`references/evidence_integrity.md` and use its exact
+`ctox.research.evidence.v2` schema. Do not infer a schema name or invent a
+reduced manifest shape from table rows.
 
 1. **Transport/freshness**: the canonical non-metadata URL returned 2xx and
    the snapshot is current, downloaded bytes, and SHA-256 verified.
