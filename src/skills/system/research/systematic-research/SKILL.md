@@ -55,7 +55,10 @@ For prose, use the server-written `workspace_evidence` / deep-research
 snapshot receipt and its full extracted-text artifact. Every claim must carry
 a verbatim `evidence_quote` (at least six words and 40 characters) that occurs
 in that extracted text; a title, abstract, snippet, model paraphrase, or a
-quote copied from another URL is not evidence.
+quote copied from another URL is not evidence. Claims over original data have
+the same quote minimum and must use a hash-bound `data_excerpt`; for nested
+archives, list and hash every ZIP member in order so the guard can read the
+final source bytes itself. Do not cite model-generated CSV/XLSX extracts.
 404, login/cookie walls, JavaScript shells, snippets, aggregators, mirrors,
 DOI resolver/landing URLs, and metadata are permanent rejection states. Never
 fill them from memory or a second-hand summary.

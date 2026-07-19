@@ -10,15 +10,19 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import re
 import sys
+import zipfile
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 
 SCHEMA_VERSION = "ctox.research.evidence.v2"
+MAX_DATA_EXCERPT_BYTES = 64 * 1024 * 1024
+MAX_NESTED_ARCHIVE_BYTES = 512 * 1024 * 1024
 FORBIDDEN_HOSTS = (
     "doi.org",
     "dx.doi.org",
@@ -73,6 +77,8 @@ def lineage_hash(claim: dict[str, Any]) -> str:
         "source_id": claim.get("source_id"),
         "canonical_url": claim.get("canonical_url"),
     }
+    if claim.get("data_excerpt") is not None:
+        payload["data_excerpt"] = claim.get("data_excerpt")
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
 
@@ -146,6 +152,94 @@ def validate_content(path: Path, scope: str) -> None:
     short_interstitial = len(text.strip()) < 1_500 and LOGIN_INTERSTITIAL.search(text) is not None
     if BLOCKED_CONTENT.search(text) or short_interstitial:
         raise GuardError("login_cookie_shell_or_snippet_not_evidence")
+
+
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def read_zip_member(
+    archive: zipfile.ZipFile,
+    member_path: str,
+    max_bytes: int,
+) -> bytes:
+    try:
+        info = archive.getinfo(member_path)
+    except KeyError as exc:
+        raise GuardError("claim_data_excerpt_member_unreadable") from exc
+    if info.flag_bits & 0x1:
+        raise GuardError("claim_data_excerpt_member_encrypted")
+    if info.file_size > max_bytes:
+        raise GuardError("claim_data_excerpt_member_too_large")
+    try:
+        with archive.open(info) as handle:
+            content = handle.read(max_bytes + 1)
+    except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
+        raise GuardError("claim_data_excerpt_member_unreadable") from exc
+    if len(content) > max_bytes:
+        raise GuardError("claim_data_excerpt_member_too_large")
+    return content
+
+
+def data_claim_text(
+    claim: dict[str, Any],
+    item: dict[str, Any],
+    snapshot_path: Path,
+) -> str:
+    excerpt = require_dict(claim.get("data_excerpt"), "claim_data_excerpt")
+    if excerpt.get("source_snapshot_sha256") != item.get("snapshot_sha256"):
+        raise GuardError("claim_data_excerpt_snapshot_binding_mismatch")
+    encoding = require_string(excerpt, "encoding", "claim_data_excerpt").lower()
+    if encoding not in {"ascii", "utf-8"}:
+        raise GuardError("claim_data_excerpt_encoding_unsupported")
+    extraction = require_string(excerpt, "extraction", "claim_data_excerpt")
+    if extraction == "snapshot_text":
+        if excerpt.get("member_chain") not in (None, []):
+            raise GuardError("claim_data_excerpt_member_chain_unexpected")
+        if snapshot_path.stat().st_size > MAX_DATA_EXCERPT_BYTES:
+            raise GuardError("claim_data_excerpt_snapshot_too_large")
+        content = snapshot_path.read_bytes()
+    elif extraction == "zip_member_chain":
+        chain = excerpt.get("member_chain")
+        if not isinstance(chain, list) or not 1 <= len(chain) <= 4:
+            raise GuardError("claim_data_excerpt_member_chain_invalid")
+        archive_input: Path | io.BytesIO = snapshot_path
+        for index, raw_member in enumerate(chain):
+            member = require_dict(raw_member, "claim_data_excerpt_member")
+            member_path = require_string(
+                member, "path", "claim_data_excerpt_member"
+            )
+            if (
+                member_path.startswith(("/", "\\"))
+                or ".." in Path(member_path).parts
+            ):
+                raise GuardError("claim_data_excerpt_member_path_unsafe")
+            max_bytes = (
+                MAX_NESTED_ARCHIVE_BYTES
+                if index < len(chain) - 1
+                else MAX_DATA_EXCERPT_BYTES
+            )
+            try:
+                with zipfile.ZipFile(archive_input) as archive:
+                    content = read_zip_member(archive, member_path, max_bytes)
+            except (OSError, zipfile.BadZipFile) as exc:
+                raise GuardError("claim_data_excerpt_member_unreadable") from exc
+            member_hash = require_string(
+                member, "sha256", "claim_data_excerpt_member"
+            )
+            if sha256_bytes(content) != member_hash:
+                raise GuardError("claim_data_excerpt_member_sha256_mismatch")
+            if index < len(chain) - 1:
+                archive_input = io.BytesIO(content)
+                if not zipfile.is_zipfile(archive_input):
+                    raise GuardError("claim_data_excerpt_intermediate_not_zip")
+                archive_input.seek(0)
+    else:
+        raise GuardError("claim_data_excerpt_extraction_unsupported")
+    try:
+        return normalize_evidence_text(content.decode(encoding, errors="strict"))
+    except UnicodeDecodeError as exc:
+        raise GuardError("claim_data_excerpt_decode_failed") from exc
 
 
 def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
@@ -324,13 +418,20 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
             raise GuardError("claim_lineage_broken")
         if claim.get("canonical_url") != item.get("canonical_url"):
             raise GuardError("claim_source_url_mismatch")
-        if item.get("content_kind") != "data_file":
-            quote = require_string(claim, "evidence_quote", "claim")
-            normalized_quote = normalize_evidence_text(quote)
-            if len(normalized_quote) < 40 or len(normalized_quote.split()) < 6:
-                raise GuardError("claim_evidence_quote_too_short")
-            if normalized_quote not in evidence_text_by_id.get(evidence_id, ""):
-                raise GuardError("claim_evidence_quote_not_in_extracted_text")
+        quote = require_string(claim, "evidence_quote", "claim")
+        normalized_quote = normalize_evidence_text(quote)
+        if len(normalized_quote) < 40 or len(normalized_quote.split()) < 6:
+            raise GuardError("claim_evidence_quote_too_short")
+        if item.get("content_kind") == "data_file":
+            evidence_text = data_claim_text(
+                claim,
+                item,
+                resolve_path(base_dir, item["snapshot"]["path"]),
+            )
+            if normalized_quote not in evidence_text:
+                raise GuardError("claim_evidence_quote_not_in_data_excerpt")
+        elif normalized_quote not in evidence_text_by_id.get(evidence_id, ""):
+            raise GuardError("claim_evidence_quote_not_in_extracted_text")
         if claim.get("lineage_sha256") != lineage_hash(claim):
             raise GuardError("claim_lineage_hash_mismatch")
 

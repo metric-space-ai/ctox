@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import copy
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -228,7 +230,10 @@ class EvidenceGuardTests(unittest.TestCase):
 
     def test_deterministic_data_check_requires_all_proofs(self) -> None:
         data_path = self.base / "data.csv"
-        data_path.write_text("value,unit\n1,kg\n2,kg\n", encoding="utf-8")
+        data_path.write_text(
+            "value,unit\n1,kg\n2,kg\n3,kg\n4,kg\n5,kg\n6,kg\n",
+            encoding="utf-8",
+        )
         digest = hashlib.sha256(data_path.read_bytes()).hexdigest()
         url = "https://example.edu/data/original.csv"
         manifest = copy.deepcopy(self.manifest)
@@ -243,13 +248,21 @@ class EvidenceGuardTests(unittest.TestCase):
             "byte_count": data_path.stat().st_size,
             "content_kind": "data_csv",
         })
-        manifest["claims"][0]["canonical_url"] = url
+        manifest["claims"][0].update({
+            "canonical_url": url,
+            "evidence_quote": data_path.read_text(encoding="utf-8").strip(),
+            "data_excerpt": {
+                "extraction": "snapshot_text",
+                "encoding": "utf-8",
+                "source_snapshot_sha256": digest,
+            },
+        })
         manifest["claims"][0]["lineage_sha256"] = lineage_hash(manifest["claims"][0])
         manifest["data_files"] = [{
             "data_file_id": "data-1", "evidence_id": "ev-1", "path": "data.csv",
             "downloaded": True, "original_data": True, "generated": False, "quarantine_status": "accepted",
             "deterministic_check": {
-                "status": "pass", "sha256": digest, "columns": ["value", "unit"], "row_count": 2,
+                "status": "pass", "sha256": digest, "columns": ["value", "unit"], "row_count": 6,
                 "encoding": "utf-8", "delimiter": ",", "units": {"value": "kg"},
                 "null_handling": "reject nulls", "tabular": True, "parser": "csv", "parser_version": "1",
             },
@@ -262,6 +275,155 @@ class EvidenceGuardTests(unittest.TestCase):
             with self.subTest(field=field):
                 with self.assertRaisesRegex(ValueError, "deterministic_data"):
                     validate_manifest(broken, self.base)
+
+    def test_data_claim_requires_hash_bound_excerpt(self) -> None:
+        data_path = self.base / "data.csv"
+        data_path.write_text(
+            "value,unit\n1,kg\n2,kg\n3,kg\n4,kg\n5,kg\n6,kg\n",
+            encoding="utf-8",
+        )
+        digest = hashlib.sha256(data_path.read_bytes()).hexdigest()
+        url = "https://example.edu/data/original.csv"
+        manifest = copy.deepcopy(self.manifest)
+        manifest["sources"][0]["canonical_url"] = url
+        item = manifest["evidence"][0]
+        item.update({
+            "canonical_url": url,
+            "content_scope": "data_file",
+            "content_kind": "data_file",
+            "snapshot_sha256": digest,
+        })
+        item["snapshot"].update({
+            "path": "data.csv",
+            "sha256": digest,
+            "canonical_url": url,
+        })
+        item["retrieval_receipt"].update({
+            "request_url": url,
+            "final_url": url,
+            "body_sha256": digest,
+            "byte_count": data_path.stat().st_size,
+            "content_kind": "data_csv",
+        })
+        claim = manifest["claims"][0]
+        claim.update({
+            "canonical_url": url,
+            "evidence_quote": data_path.read_text(encoding="utf-8").strip(),
+        })
+        claim["lineage_sha256"] = lineage_hash(claim)
+        manifest["data_files"] = [{
+            "data_file_id": "data-1",
+            "evidence_id": "ev-1",
+            "path": "data.csv",
+            "downloaded": True,
+            "original_data": True,
+            "generated": False,
+            "quarantine_status": "accepted",
+            "deterministic_check": {
+                "status": "pass",
+                "sha256": digest,
+                "columns": ["value", "unit"],
+                "row_count": 6,
+                "encoding": "utf-8",
+                "delimiter": ",",
+                "units": {"value": "kg"},
+                "null_handling": "reject nulls",
+                "tabular": True,
+                "parser": "csv",
+                "parser_version": "1",
+            },
+        }]
+        self._sync_receipt_artifact(manifest)
+        with self.assertRaisesRegex(ValueError, "claim_data_excerpt_must_be_object"):
+            validate_manifest(manifest, self.base)
+
+    def test_nested_zip_member_claim_is_verified_from_original_bytes(self) -> None:
+        member_text = (
+            "RPM,V,J,THRUST,TORQUE,CT,CQ,CP\n"
+            "2700,0,0,0.5580,NaN,0.0123,0.0824,NaN\n"
+            "2800,0,0,0.6010,NaN,0.0131,0.0830,NaN\n"
+            "2900,0,0,0.6430,NaN,0.0138,0.0835,NaN\n"
+            "3000,0,0,0.6900,NaN,0.0144,0.0840,NaN\n"
+            "3100,0,0,0.7350,NaN,0.0150,0.0844,NaN\n"
+        )
+        inner_buffer = io.BytesIO()
+        with zipfile.ZipFile(inner_buffer, "w") as inner:
+            inner.writestr("data/results.csv", member_text)
+        inner_bytes = inner_buffer.getvalue()
+        outer_path = self.base / "outer.zip"
+        with zipfile.ZipFile(outer_path, "w") as outer:
+            outer.writestr("dataset.zip", inner_bytes)
+        digest = hashlib.sha256(outer_path.read_bytes()).hexdigest()
+        url = "https://example.edu/data/archive.zip"
+        manifest = copy.deepcopy(self.manifest)
+        manifest["sources"][0]["canonical_url"] = url
+        item = manifest["evidence"][0]
+        item.update({
+            "canonical_url": url,
+            "content_scope": "data_file",
+            "content_kind": "data_file",
+            "snapshot_sha256": digest,
+        })
+        item["snapshot"].update({
+            "path": "outer.zip",
+            "sha256": digest,
+            "canonical_url": url,
+        })
+        item["retrieval_receipt"].update({
+            "request_url": url,
+            "final_url": url,
+            "body_sha256": digest,
+            "byte_count": outer_path.stat().st_size,
+            "content_kind": "data_zip",
+        })
+        claim = manifest["claims"][0]
+        claim.update({
+            "canonical_url": url,
+            "evidence_quote": member_text.strip(),
+            "data_excerpt": {
+                "extraction": "zip_member_chain",
+                "encoding": "utf-8",
+                "source_snapshot_sha256": digest,
+                "member_chain": [
+                    {
+                        "path": "dataset.zip",
+                        "sha256": hashlib.sha256(inner_bytes).hexdigest(),
+                    },
+                    {
+                        "path": "data/results.csv",
+                        "sha256": hashlib.sha256(member_text.encode()).hexdigest(),
+                    },
+                ],
+            },
+        })
+        claim["lineage_sha256"] = lineage_hash(claim)
+        manifest["data_files"] = [{
+            "data_file_id": "data-1",
+            "evidence_id": "ev-1",
+            "path": "outer.zip",
+            "downloaded": True,
+            "original_data": True,
+            "generated": False,
+            "quarantine_status": "accepted",
+            "deterministic_check": {
+                "status": "pass",
+                "sha256": digest,
+                "columns": ["archive"],
+                "row_count": 1,
+                "units": {},
+                "null_handling": "preserve source values",
+                "tabular": False,
+                "parser": "zip",
+                "parser_version": "1",
+            },
+        }]
+        self._sync_receipt_artifact(manifest)
+        validate_manifest(manifest, self.base)
+        broken = copy.deepcopy(manifest)
+        broken["claims"][0]["data_excerpt"]["member_chain"][1]["sha256"] = "bad"
+        broken["claims"][0]["lineage_sha256"] = lineage_hash(broken["claims"][0])
+        with self.assertRaisesRegex(ValueError, "member_sha256_mismatch"):
+            validate_manifest(broken, self.base)
 
     def test_claim_lineage_hash_is_bound(self) -> None:
         claim = {"claim_id": "c-2", "claim_text": "Measured value is 42.", "evidence_id": "ev-1",

@@ -32,7 +32,10 @@ An evidence entry is eligible only when all of these are true:
   is verified and whose receipt is bound to the original snapshot SHA-256.
   Every claim includes a verbatim `evidence_quote` of at least six words and
   40 characters; the guard requires that normalized quote to occur in that
-  extracted text. A plausible paraphrase or model-written quote is rejected.
+  extracted text. Data-file claims have the same quote requirement and must
+  bind `data_excerpt` to either the original text snapshot or a hash-verified
+  ZIP member chain. The guard reads those bytes itself. A plausible
+  paraphrase, model-written extract, or unbound transformed table is rejected.
 - `relevance_score` is numeric and at least 8/10, with a short reason tied to
   the research facet. A shared keyword is not a relevance decision.
 
@@ -78,7 +81,7 @@ manifest directory):
 
 Claims repeat the linked IDs and URL and carry `lineage_sha256`, computed over
 `claim_id`, `claim_text`, `evidence_quote`, `evidence_id`, `snapshot_id`,
-`source_id`, and `canonical_url`. Never update a snapshot, source URL,
+`source_id`, `canonical_url`, and `data_excerpt`. Never update a snapshot, source URL,
 evidence row, quote, or claim in place; create a new version and invalidate
 dependants.
 
@@ -92,6 +95,40 @@ checksums. Only `downloaded=true`, `original_data=true`, `generated=false`,
 `quarantine_status=accepted`, and `deterministic_check.status=pass` may enter a
 table or claim. Missing, corrupt, ambiguous, transformed, or invented rows go
 to a quarantine record with a reason; do not impute or fabricate replacements.
+
+Every claim over original data also supplies one of these inspectable bindings:
+
+```json
+{
+  "evidence_quote": "<at least 40 characters and six words>",
+  "data_excerpt": {
+    "extraction": "snapshot_text",
+    "encoding": "utf-8",
+    "source_snapshot_sha256": "<original-data-sha256>"
+  }
+}
+```
+
+For an archive member, use `extraction=zip_member_chain` and include every
+nested member from the downloaded outer archive to the final text file:
+
+```json
+{
+  "data_excerpt": {
+    "extraction": "zip_member_chain",
+    "encoding": "utf-8",
+    "source_snapshot_sha256": "<outer-archive-sha256>",
+    "member_chain": [
+      {"path": "dataset.zip", "sha256": "<inner-archive-sha256>"},
+      {"path": "data/results.csv", "sha256": "<csv-sha256>"}
+    ]
+  }
+}
+```
+
+The final member must be ASCII or UTF-8 text. Binary XLSX, Parquet, or other
+formats require a separately specified deterministic parser contract before
+their values can support claims; an agent-authored text export is not enough.
 
 ## Review gate and living outputs
 
