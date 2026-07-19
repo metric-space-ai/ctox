@@ -1030,10 +1030,11 @@ fn persist_direct_read_workspace(workspace: &Path, doc: &EvidenceDoc) -> Result<
         .map(|text| snapshot_hash(&text));
     let receipt_path = workspace.join("receipt.json");
     let persisted_receipt = json!({
-        "schema_version": "ctox.web-read.workspace-evidence.v1",
+        "schema_version": "ctox.web-read.workspace-evidence.v2",
         "requested_url": receipt.requested_url.clone(),
         "final_url": receipt.final_url.clone(),
         "status": receipt.status,
+        "checked_at_epoch": doc.checked_at,
         "content_type": receipt.content_type.clone(),
         "content_kind": receipt.content_kind.clone(),
         "byte_count": receipt.byte_count,
@@ -8482,6 +8483,17 @@ mod tests {
         assert!(evidence_workspace.join("source.html").is_file());
         assert!(evidence_workspace.join("extracted-text.txt").is_file());
         assert!(evidence_workspace.join("receipt.json").is_file());
+        let persisted_receipt: Value = serde_json::from_slice(
+            &fs::read(evidence_workspace.join("receipt.json")).expect("workspace receipt"),
+        )
+        .expect("valid workspace receipt");
+        assert_eq!(
+            persisted_receipt["schema_version"],
+            "ctox.web-read.workspace-evidence.v2"
+        );
+        assert!(persisted_receipt["checked_at_epoch"]
+            .as_u64()
+            .is_some_and(|value| value > 0));
         assert_eq!(
             payload["workspace_evidence"]["snapshot_sha256"],
             payload["snapshot_hash"]

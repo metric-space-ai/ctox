@@ -286,8 +286,11 @@ the evidence manifest passes the deterministic guard and all checks below pass:
    the snapshot is current, downloaded bytes, and SHA-256 verified.
    HTTP 204 is not content evidence. Every admitted item must include the
    immutable `ctox_web_read` or `ctox_deep_research` retrieval receipt with
-   request/final URL, status, timestamp, byte count, body hash, and a hashed
-   receipt artifact inside the current workspace.
+   request/final URL, status, `checked_at_epoch`, byte count, content kind,
+   body hash, and a hashed v2 receipt artifact inside the current workspace.
+   Copy those fields exactly from the artifact: never rewrite redirects,
+   interstitial URLs, timestamps, or response metadata. The evidence
+   `canonical_url` must equal the persisted final URL.
 2. **Content**: the snapshot contains actual full text or original data. A
    title, abstract, metadata card, cookie/login wall, empty shell, snippet,
    DOI landing page, mirror, or aggregator is never evidence.

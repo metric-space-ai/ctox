@@ -38,7 +38,21 @@ class SourceReviewManifestBindingTests(unittest.TestCase):
         digest = hashlib.sha256(self.snapshot.read_bytes()).hexdigest()
         retrieval = self._artifact(
             f"{evidence_id}-retrieval.json",
-            json.dumps({"tool": "ctox_web_read", "url": url}),
+            json.dumps({
+                "schema_version": "ctox.web-read.workspace-evidence.v2",
+                "requested_url": url,
+                "final_url": url,
+                "status": 200,
+                "checked_at_epoch": 1_768_640_000,
+                "content_type": "text/plain",
+                "content_kind": "html",
+                "byte_count": self.snapshot.stat().st_size,
+                "snapshot_sha256": digest,
+                "snapshot_path": "original.txt",
+                "extracted_text_path": "original.txt",
+                "extracted_text_sha256": digest,
+                "lineage": "web_search.evidence_fetch",
+            }),
         )
         claim = {
             "claim_id": f"claim-{evidence_id}",
@@ -90,8 +104,10 @@ class SourceReviewManifestBindingTests(unittest.TestCase):
                     "final_url": url,
                     "http_status": 200,
                     "checked_at": "2026-07-17T08:00:00Z",
+                    "checked_at_epoch": 1_768_640_000,
                     "body_sha256": digest,
                     "byte_count": self.snapshot.stat().st_size,
+                    "content_kind": "html",
                     "receipt_artifact": retrieval,
                 },
             }],

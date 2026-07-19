@@ -25,9 +25,23 @@ class EvidenceGuardTests(unittest.TestCase):
             encoding="utf-8",
         )
         digest = hashlib.sha256(self.content.read_bytes()).hexdigest()
+        persisted_receipt = {
+            "schema_version": "ctox.web-read.workspace-evidence.v2",
+            "requested_url": "https://example.edu/paper/full-text",
+            "final_url": "https://example.edu/paper/full-text",
+            "status": 200,
+            "checked_at_epoch": 1_768_640_000,
+            "content_type": "text/plain",
+            "content_kind": "html",
+            "byte_count": self.content.stat().st_size,
+            "snapshot_sha256": digest,
+            "snapshot_path": "original.txt",
+            "extracted_text_path": "original.txt",
+            "extracted_text_sha256": digest,
+            "lineage": "web_search.evidence_fetch",
+        }
         retrieval_receipt = self._artifact(
-            "retrieval.json",
-            json.dumps({"tool": "ctox_web_read", "source_id": "src-1"}),
+            "retrieval.json", json.dumps(persisted_receipt)
         )
         self.manifest = {
             "schema_version": SCHEMA_VERSION,
@@ -58,8 +72,10 @@ class EvidenceGuardTests(unittest.TestCase):
                     "final_url": "https://example.edu/paper/full-text",
                     "http_status": 200,
                     "checked_at": "2026-07-17T10:00:00Z",
+                    "checked_at_epoch": 1_768_640_000,
                     "body_sha256": digest,
                     "byte_count": self.content.stat().st_size,
+                    "content_kind": "html",
                     "receipt_artifact": retrieval_receipt,
                 },
             }],
@@ -85,6 +101,30 @@ class EvidenceGuardTests(unittest.TestCase):
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         }
 
+    def _sync_receipt_artifact(self, manifest: dict | None = None) -> None:
+        manifest = manifest or self.manifest
+        item = manifest["evidence"][0]
+        retrieval = item["retrieval_receipt"]
+        artifact = retrieval["receipt_artifact"]
+        persisted = {
+            "schema_version": "ctox.web-read.workspace-evidence.v2",
+            "requested_url": retrieval["request_url"],
+            "final_url": retrieval["final_url"],
+            "status": retrieval["http_status"],
+            "checked_at_epoch": retrieval["checked_at_epoch"],
+            "content_type": "text/plain",
+            "content_kind": retrieval["content_kind"],
+            "byte_count": retrieval["byte_count"],
+            "snapshot_sha256": retrieval["body_sha256"],
+            "snapshot_path": item["snapshot"]["path"],
+            "extracted_text_path": item.get("extracted_text", {}).get("path"),
+            "extracted_text_sha256": item.get("extracted_text", {}).get("sha256"),
+            "lineage": "web_search.evidence_fetch",
+        }
+        path = self.base / artifact["path"]
+        path.write_text(json.dumps(persisted), encoding="utf-8")
+        artifact["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
@@ -100,7 +140,26 @@ class EvidenceGuardTests(unittest.TestCase):
         self.manifest["evidence"][0]["retrieval_receipt"]["final_url"] = url
         self.manifest["claims"][0]["canonical_url"] = url
         self.manifest["claims"][0]["lineage_sha256"] = lineage_hash(self.manifest["claims"][0])
+        self._sync_receipt_artifact()
         validate_manifest(self.manifest, self.base)
+
+    def test_cookie_interstitial_url_cannot_be_canonical_evidence(self) -> None:
+        url = (
+            "https://www.nature.com/articles/example"
+            "?error=cookies_not_supported&code=example"
+        )
+        self.manifest["sources"][0]["canonical_url"] = url
+        self.manifest["evidence"][0]["canonical_url"] = url
+        self.manifest["evidence"][0]["snapshot"]["canonical_url"] = url
+        self.manifest["evidence"][0]["retrieval_receipt"]["request_url"] = url
+        self.manifest["evidence"][0]["retrieval_receipt"]["final_url"] = url
+        self.manifest["claims"][0]["canonical_url"] = url
+        self.manifest["claims"][0]["lineage_sha256"] = lineage_hash(
+            self.manifest["claims"][0]
+        )
+        self._sync_receipt_artifact()
+        with self.assertRaisesRegex(ValueError, "canonical_url_is_cookie_interstitial"):
+            validate_manifest(self.manifest, self.base)
 
     def test_discovery_candidate_cannot_be_evidence(self) -> None:
         self.manifest["evidence"][0]["evidence_status"] = "candidate"
@@ -164,6 +223,7 @@ class EvidenceGuardTests(unittest.TestCase):
             "Sign in is discussed as a study limitation."
         )
         self.manifest["claims"][0]["lineage_sha256"] = lineage_hash(self.manifest["claims"][0])
+        self._sync_receipt_artifact()
         validate_manifest(self.manifest, self.base)
 
     def test_deterministic_data_check_requires_all_proofs(self) -> None:
@@ -181,6 +241,7 @@ class EvidenceGuardTests(unittest.TestCase):
             "final_url": url,
             "body_sha256": digest,
             "byte_count": data_path.stat().st_size,
+            "content_kind": "data_csv",
         })
         manifest["claims"][0]["canonical_url"] = url
         manifest["claims"][0]["lineage_sha256"] = lineage_hash(manifest["claims"][0])
@@ -193,6 +254,7 @@ class EvidenceGuardTests(unittest.TestCase):
                 "null_handling": "reject nulls", "tabular": True, "parser": "csv", "parser_version": "1",
             },
         }]
+        self._sync_receipt_artifact(manifest)
         validate_manifest(manifest, self.base)
         for field in ("sha256", "columns", "row_count", "encoding", "delimiter", "units", "null_handling"):
             broken = copy.deepcopy(manifest)
@@ -246,6 +308,21 @@ class EvidenceGuardTests(unittest.TestCase):
         self.manifest["evidence"][0]["retrieval_receipt"]["body_sha256"] = "bad"
         with self.assertRaisesRegex(ValueError, "retrieval_receipt_body_hash"):
             validate_manifest(self.manifest, self.base)
+
+    def test_retrieval_receipt_manifest_fields_cannot_rewrite_artifact(self) -> None:
+        receipt = self.manifest["evidence"][0]["retrieval_receipt"]
+        for field, value in (
+            ("request_url", "https://example.edu/rewritten"),
+            ("final_url", "https://example.edu/rewritten"),
+            ("checked_at_epoch", 1_768_640_001),
+            ("content_kind", "pdf"),
+        ):
+            with self.subTest(field=field):
+                original = receipt[field]
+                receipt[field] = value
+                with self.assertRaises(ValueError):
+                    validate_manifest(self.manifest, self.base)
+                receipt[field] = original
 
 
 if __name__ == "__main__":

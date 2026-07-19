@@ -11161,6 +11161,52 @@ fn validate_systematic_research_web_receipts(
             .get("relevance_score")
             .and_then(Value::as_i64)
             .with_context(|| format!("evidence {evidence_id} has no relevance_score"))?;
+        let manifest_receipt = item
+            .get("retrieval_receipt")
+            .and_then(Value::as_object)
+            .with_context(|| format!("evidence {evidence_id} has no retrieval_receipt"))?;
+        let manifest_request_url = manifest_receipt
+            .get("request_url")
+            .and_then(Value::as_str)
+            .with_context(|| {
+                format!("evidence {evidence_id} has no retrieval_receipt.request_url")
+            })?;
+        let manifest_final_url = manifest_receipt
+            .get("final_url")
+            .and_then(Value::as_str)
+            .with_context(|| {
+                format!("evidence {evidence_id} has no retrieval_receipt.final_url")
+            })?;
+        let manifest_checked_at = manifest_receipt
+            .get("checked_at_epoch")
+            .and_then(Value::as_u64)
+            .with_context(|| {
+                format!("evidence {evidence_id} has no retrieval_receipt.checked_at_epoch")
+            })?;
+        let manifest_byte_count = manifest_receipt
+            .get("byte_count")
+            .and_then(Value::as_u64)
+            .with_context(|| {
+                format!("evidence {evidence_id} has no retrieval_receipt.byte_count")
+            })?;
+        let manifest_content_kind = manifest_receipt
+            .get("content_kind")
+            .and_then(Value::as_str)
+            .with_context(|| {
+                format!("evidence {evidence_id} has no retrieval_receipt.content_kind")
+            })?;
+        let manifest_body_hash = manifest_receipt
+            .get("body_sha256")
+            .and_then(Value::as_str)
+            .and_then(normalized_sha256)
+            .with_context(|| {
+                format!("evidence {evidence_id} has an invalid retrieval_receipt.body_sha256")
+            })?;
+        if manifest_final_url != canonical_url {
+            anyhow::bail!(
+                "evidence {evidence_id} canonical_url does not equal the immutable retrieval final_url"
+            );
+        }
         let extracted_text_sha256 = if content_kind == "data_file" {
             None
         } else {
@@ -11186,15 +11232,10 @@ fn validate_systematic_research_web_receipts(
             } else {
                 content_kind != "data_file" && content_scope == "full_text"
             };
-            let url_matches = ["original_url", "final_url", "canonical_url"]
-                .into_iter()
-                .any(|field| entry.get(field).and_then(Value::as_str) == Some(canonical_url))
-                || ["url", "canonical_url"]
-                    .into_iter()
-                    .any(|field| doc.get(field).and_then(Value::as_str) == Some(canonical_url))
-                || ["requested_url", "final_url"]
-                    .into_iter()
-                    .any(|field| receipt.get(field).and_then(Value::as_str) == Some(canonical_url));
+            let url_matches = receipt.get("requested_url").and_then(Value::as_str)
+                == Some(manifest_request_url)
+                && receipt.get("final_url").and_then(Value::as_str) == Some(manifest_final_url)
+                && entry.get("final_url").and_then(Value::as_str) == Some(canonical_url);
             let created_at = entry
                 .get("created_at_epoch")
                 .and_then(Value::as_u64)
@@ -11208,6 +11249,7 @@ fn validate_systematic_research_web_receipts(
                 && checked_at > 0
                 && created_at >= attempt_started_at
                 && now.saturating_sub(created_at) <= MAX_WEB_RECEIPT_AGE_SECS
+                && checked_at == manifest_checked_at
                 && entry.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
                 && doc.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
                 && manifest_kind_matches
@@ -11222,9 +11264,16 @@ fn validate_systematic_research_web_receipts(
                     normalized_snapshot_hash,
                 )
                 && receipt.get("status").and_then(Value::as_u64) == Some(http_status)
+                && receipt.get("byte_count").and_then(Value::as_u64) == Some(manifest_byte_count)
+                && receipt.get("content_kind").and_then(Value::as_str)
+                    == Some(manifest_content_kind)
                 && sha256_matches(
                     receipt.get("sha256").and_then(Value::as_str),
                     normalized_snapshot_hash,
+                )
+                && sha256_matches(
+                    receipt.get("sha256").and_then(Value::as_str),
+                    manifest_body_hash,
                 )
                 && data_artifact_matches(root, doc, receipt, normalized_snapshot_hash)
                 && extracted_text_matches(doc, extracted_text_sha256)
@@ -24594,13 +24643,14 @@ mod tests {
         std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
         let page_text = "Verified full source text with measured propeller thrust and torque.";
         let page_text_sha256 = format!("{:x}", sha2::Sha256::digest(page_text.as_bytes()));
+        let checked_at = current_epoch_secs();
         std::fs::write(
             &cache_path,
             serde_json::to_vec(&serde_json::json!({
                 "entries": {
                     "https://example.edu/paper": {
                         "created_at_epoch": current_epoch_secs(),
-                        "checked_at": current_epoch_secs(),
+                        "checked_at": checked_at,
                         "original_url": "https://example.edu/paper",
                         "final_url": "https://example.edu/paper",
                         "canonical_url": "https://example.edu/paper",
@@ -24617,6 +24667,7 @@ mod tests {
                                 "requested_url": "https://example.edu/paper",
                                 "final_url": "https://example.edu/paper",
                                 "status": 200,
+                                "byte_count": 64,
                                 "sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                                 "content_kind": "html"
                             }
@@ -24636,6 +24687,15 @@ mod tests {
                 "content_kind": "article",
                 "content_scope": "full_text",
                 "relevance_score": 16,
+                "retrieval_receipt": {
+                    "request_url": "https://example.edu/paper",
+                    "final_url": "https://example.edu/paper",
+                    "http_status": 200,
+                    "checked_at_epoch": checked_at,
+                    "byte_count": 64,
+                    "body_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "content_kind": "html"
+                },
                 "extracted_text": {
                     "sha256": page_text_sha256
                 }
@@ -24652,6 +24712,17 @@ mod tests {
             .to_string()
             .contains("not bound to a matching admitted"));
 
+        manifest["evidence"][0]["extracted_text"]["sha256"] = Value::String(page_text_sha256);
+        manifest["evidence"][0]["retrieval_receipt"]["final_url"] =
+            Value::String("https://example.edu/rewritten".to_string());
+        let error = validate_systematic_research_web_receipts(&root, &manifest, attempt_started_at)
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("canonical_url does not equal the immutable retrieval final_url"));
+
+        manifest["evidence"][0]["retrieval_receipt"]["final_url"] =
+            Value::String("https://example.edu/paper".to_string());
         manifest["evidence"][0]["snapshot_sha256"] = Value::String(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
         );
@@ -24684,6 +24755,7 @@ mod tests {
         let digest = format!("{:x}", sha2::Sha256::digest(body));
         let artifact = artifact_dir.join(format!("{digest}.zip"));
         std::fs::write(&artifact, body).unwrap();
+        let checked_at = current_epoch_secs();
         let cache_path = root.join("runtime/web_search_page_cache.json");
         std::fs::write(
             &cache_path,
@@ -24691,7 +24763,7 @@ mod tests {
                 "entries": {
                     "https://example.edu/data.zip": {
                         "created_at_epoch": current_epoch_secs(),
-                        "checked_at": current_epoch_secs(),
+                        "checked_at": checked_at,
                         "original_url": "https://example.edu/data.zip",
                         "final_url": "https://example.edu/data.zip",
                         "canonical_url": "https://example.edu/data.zip",
@@ -24727,7 +24799,16 @@ mod tests {
                 "snapshot_sha256": digest,
                 "content_kind": "data_file",
                 "content_scope": "full_text",
-                "relevance_score": 16
+                "relevance_score": 16,
+                "retrieval_receipt": {
+                    "request_url": "https://example.edu/data.zip",
+                    "final_url": "https://example.edu/data.zip",
+                    "http_status": 200,
+                    "checked_at_epoch": checked_at,
+                    "byte_count": body.len(),
+                    "body_sha256": digest,
+                    "content_kind": "data_zip"
+                }
             }]
         });
         let attempt_started_at = current_epoch_secs().saturating_sub(1);

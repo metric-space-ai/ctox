@@ -131,6 +131,9 @@ def validate_url(url: Any, role: Any) -> None:
         raise GuardError("doi_landing_not_evidence")
     if role in FORBIDDEN_ROLES or any(host == item or host.endswith("." + item) for item in FORBIDDEN_HOSTS):
         raise GuardError("canonical_url_is_metadata_or_aggregator")
+    query = parsed.query.lower()
+    if "cookies_not_supported" in query or "cookie_not_supported" in query:
+        raise GuardError("canonical_url_is_cookie_interstitial")
 
 
 def validate_content(path: Path, scope: str) -> None:
@@ -223,9 +226,37 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
         if retrieval.get("byte_count") != snapshot_path.stat().st_size:
             raise GuardError("retrieval_receipt_byte_count_mismatch")
         require_string(retrieval, "checked_at", "retrieval_receipt")
-        validate_artifact_receipt(
+        checked_at_epoch = retrieval.get("checked_at_epoch")
+        if not isinstance(checked_at_epoch, int) or checked_at_epoch <= 0:
+            raise GuardError("retrieval_receipt_missing_checked_at_epoch")
+        receipt_path = validate_artifact_receipt(
             retrieval.get("receipt_artifact"), base_dir, "retrieval"
         )
+        try:
+            persisted_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise GuardError("retrieval_receipt_artifact_invalid_json") from exc
+        persisted_receipt = require_dict(
+            persisted_receipt, "retrieval_receipt_artifact"
+        )
+        if persisted_receipt.get("schema_version") != "ctox.web-read.workspace-evidence.v2":
+            raise GuardError("retrieval_receipt_artifact_schema_mismatch")
+        immutable_fields = {
+            "requested_url": request_url,
+            "final_url": url,
+            "status": item.get("http_status"),
+            "checked_at_epoch": checked_at_epoch,
+            "byte_count": item.get("retrieval_receipt", {}).get("byte_count"),
+            "snapshot_sha256": item.get("retrieval_receipt", {}).get("body_sha256"),
+            "content_kind": item.get("retrieval_receipt", {}).get("content_kind"),
+        }
+        for field, expected in immutable_fields.items():
+            actual = persisted_receipt.get(field)
+            if field == "snapshot_sha256":
+                actual = str(actual or "").removeprefix("sha256:")
+                expected = str(expected or "").removeprefix("sha256:")
+            if actual != expected:
+                raise GuardError(f"retrieval_receipt_artifact_{field}_mismatch")
         if item.get("content_kind") != "data_file":
             extracted_text = require_dict(item.get("extracted_text"), "extracted_text")
             text_path = validate_artifact_receipt(

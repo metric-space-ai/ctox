@@ -18,6 +18,13 @@ An evidence entry is eligible only when all of these are true:
   the bytes actually downloaded from that URL. A failed, stale, redirected,
   login, cookie, JavaScript shell, metadata, abstract-only, or snippet read is
   rejected, never repaired from model memory.
+- Every admitted Web Stack read has a
+  `ctox.web-read.workspace-evidence.v2` receipt artifact. The manifest must
+  repeat its requested URL, final URL, status, `checked_at_epoch`, byte count,
+  content kind, and response hash exactly. The guard verifies the artifact
+  hash and every repeated field; a worker cannot rewrite a redirect,
+  interstitial URL, timestamp, content type, or response identity after the
+  read. The evidence `canonical_url` must equal the persisted final URL.
 - `content_scope=full_text` for prose or `content_kind=data_file` for data.
   The snapshot is non-empty, its SHA-256 is recorded in both the snapshot and
   evidence row, and the hash verifies before every downstream use.
@@ -44,6 +51,19 @@ manifest directory):
   "schema_version": "ctox.research.evidence.v2",
   "evidence": [{
     "snapshot_sha256": "<original-response-sha256>",
+    "retrieval_receipt": {
+      "request_url": "<persisted-requested-url>",
+      "final_url": "<persisted-final-url-and-canonical-url>",
+      "http_status": 200,
+      "checked_at_epoch": 1768640000,
+      "byte_count": 12345,
+      "body_sha256": "<original-response-sha256>",
+      "content_kind": "html",
+      "receipt_artifact": {
+        "path": ".ctox/web-read/<call-id>/receipt.json",
+        "sha256": "<receipt-artifact-sha256>"
+      }
+    },
     "extracted_text": {
       "path": "snapshots/source-0001.extracted.txt",
       "sha256": "<extracted-text-sha256>",
