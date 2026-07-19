@@ -782,10 +782,13 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
         .query
         .as_deref()
         .and_then(normalize_text)
-        .or_else(|| request.find.first().and_then(|pattern| normalize_text(pattern)));
-    let read_query = relevance_query
-        .clone()
-        .unwrap_or_else(|| display_url(&url));
+        .or_else(|| {
+            request
+                .find
+                .first()
+                .and_then(|pattern| normalize_text(pattern))
+        });
+    let read_query = relevance_query.clone().unwrap_or_else(|| display_url(&url));
     let hit = SearchHit {
         title: display_url(&url),
         url: url.clone(),
@@ -1130,6 +1133,20 @@ fn score_evidence_doc_relevance(doc: &EvidenceDoc, query: &str) -> Option<i64> {
     let body = evidence_text.to_ascii_lowercase();
     let terms = query_terms(query);
     if terms.is_empty() {
+        return None;
+    }
+    let body_tokens = body
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect::<BTreeSet<_>>();
+    let required_identifiers = terms
+        .iter()
+        .filter(|term| term.chars().any(|ch| ch.is_ascii_digit()))
+        .collect::<Vec<_>>();
+    if required_identifiers
+        .iter()
+        .any(|identifier| !body_tokens.contains(identifier.as_str()))
+    {
         return None;
     }
     let matched_terms = terms
@@ -6985,8 +7002,7 @@ fn query_terms(query: &str) -> Vec<String> {
         .split(|ch: char| !ch.is_alphanumeric())
         .map(str::trim)
         .filter(|term| {
-            !term.is_empty()
-                && (term.len() >= 3 || term.chars().all(|ch| ch.is_ascii_digit()))
+            !term.is_empty() && (term.len() >= 3 || term.chars().all(|ch| ch.is_ascii_digit()))
         })
     {
         let lowered = term.to_ascii_lowercase();
@@ -8573,6 +8589,60 @@ mod tests {
             .get(&normalize_url_cache_key("https://example.com/mock-result"))
             .expect("direct read cache entry");
         assert_eq!(entry.evidence_relevance_score, None);
+    }
+
+    #[test]
+    fn evidence_relevance_requires_exact_numeric_query_identifiers() {
+        let body =
+            b"ISO 21940-11:2016 establishes procedures and unbalance tolerances for rigid rotors."
+                .to_vec();
+        let doc = EvidenceDoc {
+            url: "https://www.iso.org/standard/54074.html".to_string(),
+            canonical_url: "https://www.iso.org/standard/54074.html".to_string(),
+            title: "ISO 21940-11:2016 - Mechanical vibration - Rotor balancing".to_string(),
+            summary: String::new(),
+            verification_status: "verified".to_string(),
+            checked_at: 1,
+            http_status: Some(200),
+            snapshot_hash: Some(snapshot_hash(&body)),
+            source_tier: Some("primary".to_string()),
+            evidence_eligible: true,
+            is_pdf: false,
+            pdf_total_pages: None,
+            page_sections: Vec::new(),
+            excerpts: Vec::new(),
+            page_text: String::from_utf8(body.clone()).expect("fixture text"),
+            find_results: Vec::new(),
+            raw_html: None,
+            response_body: Some(body.clone()),
+            response_artifact_path: None,
+            response_receipt: Some(ResponseReceipt {
+                requested_url: "https://www.iso.org/standard/54074.html".to_string(),
+                final_url: "https://www.iso.org/standard/54074.html".to_string(),
+                status: 200,
+                content_type: Some("text/html".to_string()),
+                byte_count: body.len(),
+                sha256: Some(snapshot_hash(&body)),
+                content_kind: "html".to_string(),
+                redirected: false,
+                redirect_chain: Vec::new(),
+                lineage: "test".to_string(),
+                admission_rejection_reason: None,
+            }),
+        };
+
+        assert_eq!(
+            score_evidence_doc_relevance(
+                &doc,
+                "ISO 492 tolerance classes Normal P6 P5 P4 for radial rolling bearings",
+            ),
+            None
+        );
+        assert!(score_evidence_doc_relevance(
+            &doc,
+            "ISO 21940-11:2016 rotor balancing procedures and tolerances",
+        )
+        .is_some());
     }
 
     #[test]
