@@ -1231,9 +1231,22 @@ fn evidence_content_kind(doc: &EvidenceDoc) -> &'static str {
 
 fn is_zenodo_record_api_url(raw_url: &str) -> bool {
     Url::parse(raw_url).ok().is_some_and(|url| {
-        url.host_str()
+        if !url
+            .host_str()
             .is_some_and(|host| host.trim_start_matches("www.") == "zenodo.org")
-            && url.path().starts_with("/api/records/")
+        {
+            return false;
+        }
+        let segments = url
+            .path_segments()
+            .map(|segments| segments.collect::<Vec<_>>())
+            .unwrap_or_default();
+        matches!(
+            segments.as_slice(),
+            ["api", "records", record_id]
+                if !record_id.is_empty()
+                    && record_id.chars().all(|character| character.is_ascii_digit())
+        )
     })
 }
 
@@ -3002,12 +3015,7 @@ fn build_evidence_doc(
     let canonical_url = canonical_page_url(hit, &fetched);
     let is_pdf = is_pdf_content(hit, &fetched);
     let response_kind = response_content_kind(hit, &fetched);
-    let opened_page = if is_zenodo_record_api_url(&hit.url) {
-        extract_zenodo_record_opened_page(query, hit, &String::from_utf8_lossy(&fetched.body))
-            .unwrap_or_else(|| {
-                extract_text_opened_page(query, hit, &String::from_utf8_lossy(&fetched.body))
-            })
-    } else if response_kind.starts_with("data_") {
+    let opened_page = if response_kind.starts_with("data_") {
         OpenedPage {
             title: hit.title.clone(),
             summary: "Immutable original data file retrieved.".to_string(),
@@ -3017,6 +3025,11 @@ fn build_evidence_doc(
             excerpts: Vec::new(),
             page_text: String::new(),
         }
+    } else if is_zenodo_record_api_url(&hit.url) {
+        extract_zenodo_record_opened_page(query, hit, &String::from_utf8_lossy(&fetched.body))
+            .unwrap_or_else(|| {
+                extract_text_opened_page(query, hit, &String::from_utf8_lossy(&fetched.body))
+            })
     } else if is_pdf {
         extract_pdf_opened_page(config, query, hit, &fetched)?
     } else {
@@ -9167,6 +9180,10 @@ mod tests {
     fn repository_content_routes_are_classified_by_filename_segment() {
         let url = "https://zenodo.org/api/records/20111572/files/Propeller_Database.zip/content";
         assert!(is_data_url_suffix(url));
+        assert!(!is_zenodo_record_api_url(url));
+        assert!(is_zenodo_record_api_url(
+            "https://zenodo.org/api/records/20111572"
+        ));
         assert!(!content_type_is_disallowed(
             Some("application/octet-stream"),
             url
