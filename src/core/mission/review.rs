@@ -1006,6 +1006,22 @@ Internal artifact review gate:\n\
 - do not inspect CTOX source code or infer private table schemas for ordinary file-artifact review unless the artifact itself points there as the necessary evidence\n\
 "
     };
+    let systematic_research_review_work = if bound_skill == "systematic-research" {
+        "\
+Systematic-research completion gate:\n\
+- inspect the evidence manifest, every admitted source receipt, extracted-text artifact, claim, Knowledge artifact, data file, and report required by the task\n\
+- compare every material claim semantically against its verbatim evidence_quote and surrounding source text; quote presence proves provenance, not entailment\n\
+- FAIL when a claim extends beyond what its quote and source actually establish, including causal, bearing-load, applicability, completeness, or numerical conclusions not stated or derived from verified data\n\
+- evaluate task coverage explicitly: list the requested research facets and map each facet to independent admitted sources or verified original data; missing material facets require FAIL, not an honest-limitation PASS\n\
+- treat one admitted source as insufficient for a systematic or exhaustive research task unless the original task explicitly requested analysis of that one source only\n\
+- verify source diversity and authority appropriate to the task, including primary measurements/original data for quantitative engineering conclusions; multiple pages from one publisher do not automatically count as independent corroboration\n\
+- do not treat a passing deterministic evidence guard as semantic quality proof; it proves integrity and lineage only\n\
+- require Knowledge and reports to stay within the admitted claims and verified derivations, and reject language synthesized from discovery candidates, rejected sources, snippets, metadata, or model memory\n\
+- record the facet-to-evidence mapping and at least one claim-to-quote entailment check in EVIDENCE before PASS\n\
+"
+    } else {
+        ""
+    };
 
     format!(
         "== REVIEW ASSIGNMENT ==\n\
@@ -1063,6 +1079,7 @@ Use the runtime DB path and workspace root above as the primary grounding points
 {founder_specific_work}\
 {external_chat_specific_work}\
 {artifact_review_work}\
+{systematic_research_review_work}\
 \n\
 If active vision or active mission is missing for strategic or owner-visible work, that is a review failure unless the current task is explicitly establishing them.\n\
 \n\
@@ -1108,6 +1125,7 @@ DISPOSITION is the structural terminal flag: emit `NO_SEND` only when the curren
         artifact_commitments = artifact_commitments,
         commitment_backing = commitment_backing,
         deterministic_evidence = deterministic_evidence,
+        systematic_research_review_work = systematic_research_review_work,
         external_chat_specific_work = external_chat_specific_work,
     )
 }
@@ -2187,6 +2205,21 @@ mod tests {
             rendered.contains("Executor bound skill: (none recorded)"),
             "{rendered}"
         );
+    }
+
+    #[test]
+    fn systematic_research_review_requires_semantic_entailment_and_coverage() {
+        let request = CompletionReviewRequest {
+            source_label: "queue".to_string(),
+            workspace_root: "/srv/research".to_string(),
+            bound_skill: Some("systematic-research".to_string()),
+            ..CompletionReviewRequest::default()
+        };
+        let rendered = build_review_prompt(&request, &[]);
+        assert!(rendered.contains("Systematic-research completion gate:"));
+        assert!(rendered.contains("quote presence proves provenance, not entailment"));
+        assert!(rendered.contains("one admitted source as insufficient"));
+        assert!(rendered.contains("facet-to-evidence mapping"));
     }
 
     #[test]

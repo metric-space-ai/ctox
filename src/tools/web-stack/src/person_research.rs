@@ -314,6 +314,8 @@ pub fn run_ctox_person_research_tool(
                     url: url.to_string(),
                     query: Some(company.clone()),
                     find: find_terms_for_fields(&plan.target_fields),
+                    workspace: None,
+                    include_full_text: false,
                     country: Some(request.country.as_iso().to_string()),
                 },
             );

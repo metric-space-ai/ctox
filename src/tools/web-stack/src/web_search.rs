@@ -176,6 +176,13 @@ pub struct DirectWebReadRequest {
     pub url: String,
     pub query: Option<String>,
     pub find: Vec<String>,
+    /// Optional immutable evidence workspace. Managed harness calls set this
+    /// to a call-scoped directory under the task workspace.
+    pub workspace: Option<PathBuf>,
+    /// Internal deep-research persistence needs the complete extracted text.
+    /// Direct tool output keeps it out of the response and returns only the
+    /// server-written workspace artifact path.
+    pub include_full_text: bool,
     /// Optional country hint (e.g. `"DE"`) used when invoking a matched
     /// source-module's `extract_fields`. Some source modules gate behaviour
     /// on country (LinkedIn, Zefix); without this hint they fall back to
@@ -840,12 +847,18 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
     let mut session = WebSearchSession::new(root, &config)?;
     session.store_page_doc(&url, final_url, content_type, &doc, &read_query);
     session.persist_page_cache()?;
+    let workspace_evidence = request
+        .workspace
+        .as_deref()
+        .map(|workspace| persist_direct_read_workspace(workspace, &doc))
+        .transpose()?;
 
     Ok(render_direct_web_read_payload(
         &url,
         &read_query,
         request,
         doc,
+        workspace_evidence,
     ))
 }
 
@@ -854,6 +867,7 @@ fn render_direct_web_read_payload(
     read_query: &str,
     request: &DirectWebReadRequest,
     doc: EvidenceDoc,
+    workspace_evidence: Option<Value>,
 ) -> Value {
     let mut find_results = request
         .find
@@ -908,6 +922,9 @@ fn render_direct_web_read_payload(
         "excerpts": doc.excerpts,
         "find_results": find_results,
         "page_sections": doc.page_sections,
+        "page_text": request
+            .include_full_text
+            .then(|| doc.page_text.clone()),
         "page_text_excerpt": trim_text(&doc.page_text, 4000),
         "canonical_url": doc.canonical_url,
         "final_url": doc
@@ -950,6 +967,7 @@ fn render_direct_web_read_payload(
             .and_then(|receipt| receipt.admission_rejection_reason.clone()),
         "response_body": doc.response_body,
         "response_artifact_path": doc.response_artifact_path,
+        "workspace_evidence": workspace_evidence,
         "source_tier": doc.source_tier,
         "evidence_eligible": evidence_doc_is_admitted_for_read(&doc),
         "evidence_relevance_score": score_evidence_doc_relevance(&doc, read_query),
@@ -963,6 +981,116 @@ fn render_direct_web_read_payload(
         // cache-loaded pages from older CTOX versions return null.
         "raw_html": doc.raw_html,
     })
+}
+
+fn persist_direct_read_workspace(workspace: &Path, doc: &EvidenceDoc) -> Result<Value> {
+    if !evidence_doc_is_admitted_for_read(doc) {
+        return Ok(json!({
+            "persisted": false,
+            "reason": "response_not_admitted_as_evidence",
+        }));
+    }
+    let bytes = if let Some(body) = doc.response_body.as_deref() {
+        body.to_vec()
+    } else if let Some(path) = doc.response_artifact_path.as_deref() {
+        fs::read(path).with_context(|| format!("read server-owned response artifact {path}"))?
+    } else {
+        bail!("admitted web response has no immutable response body");
+    };
+    if !evidence_doc_has_immutable_response_bytes(doc, &bytes) {
+        bail!("admitted web response bytes do not match the server receipt");
+    }
+
+    fs::create_dir_all(workspace)
+        .with_context(|| format!("create web-read evidence workspace {}", workspace.display()))?;
+    let receipt = doc
+        .response_receipt
+        .as_ref()
+        .context("admitted web response is missing its server receipt")?;
+    let extension = response_snapshot_extension(
+        receipt.content_kind.as_str(),
+        receipt.content_type.as_deref(),
+    );
+    let snapshot_path = workspace.join(format!("source.{extension}"));
+    fs::write(&snapshot_path, &bytes)
+        .with_context(|| format!("write web-read snapshot {}", snapshot_path.display()))?;
+
+    let extracted_text_path = if doc.page_text.trim().is_empty() {
+        None
+    } else {
+        let path = workspace.join("extracted-text.txt");
+        fs::write(&path, doc.page_text.as_bytes())
+            .with_context(|| format!("write extracted source text {}", path.display()))?;
+        Some(path)
+    };
+    let extracted_text_sha256 = extracted_text_path
+        .as_deref()
+        .map(fs::read)
+        .transpose()?
+        .map(|text| snapshot_hash(&text));
+    let receipt_path = workspace.join("receipt.json");
+    let persisted_receipt = json!({
+        "schema_version": "ctox.web-read.workspace-evidence.v1",
+        "requested_url": receipt.requested_url.clone(),
+        "final_url": receipt.final_url.clone(),
+        "status": receipt.status,
+        "content_type": receipt.content_type.clone(),
+        "content_kind": receipt.content_kind.clone(),
+        "byte_count": receipt.byte_count,
+        "snapshot_sha256": receipt.sha256.clone(),
+        "snapshot_path": snapshot_path.clone(),
+        "extracted_text_path": extracted_text_path.clone(),
+        "extracted_text_sha256": extracted_text_sha256.clone(),
+        "lineage": receipt.lineage.clone(),
+    });
+    fs::write(
+        &receipt_path,
+        serde_json::to_vec_pretty(&persisted_receipt)?,
+    )
+    .with_context(|| format!("write web-read receipt {}", receipt_path.display()))?;
+
+    Ok(json!({
+        "persisted": true,
+        "workspace": workspace,
+        "snapshot_path": snapshot_path,
+        "snapshot_sha256": receipt.sha256.clone(),
+        "extracted_text_path": extracted_text_path,
+        "extracted_text_sha256": extracted_text_sha256,
+        "receipt_path": receipt_path,
+        "receipt_sha256": snapshot_hash(&fs::read(&receipt_path)?),
+    }))
+}
+
+fn evidence_doc_has_immutable_response_bytes(doc: &EvidenceDoc, bytes: &[u8]) -> bool {
+    let Some(receipt) = doc.response_receipt.as_ref() else {
+        return false;
+    };
+    let hash = snapshot_hash(bytes);
+    receipt.byte_count == bytes.len()
+        && receipt.sha256.as_deref() == Some(hash.as_str())
+        && doc.snapshot_hash.as_deref() == Some(hash.as_str())
+}
+
+fn response_snapshot_extension(content_kind: &str, content_type: Option<&str>) -> &'static str {
+    if content_kind == "pdf" || content_type.is_some_and(|value| value.contains("pdf")) {
+        "pdf"
+    } else if content_kind == "html" || content_type.is_some_and(|value| value.contains("html")) {
+        "html"
+    } else if content_kind == "data_json" {
+        "json"
+    } else if content_kind == "data_delimited" {
+        "csv"
+    } else if content_kind == "data_zip" {
+        "zip"
+    } else if content_kind == "data_gzip" {
+        "gz"
+    } else if content_kind == "data_parquet" {
+        "parquet"
+    } else if content_kind == "data_xlsx" {
+        "xlsx"
+    } else {
+        "bin"
+    }
 }
 
 fn evidence_doc_has_meaningful_content(doc: &EvidenceDoc) -> bool {
@@ -2822,10 +2950,8 @@ fn persist_original_data_artifact(config: &SearchConfig, doc: &mut EvidenceDoc) 
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let temporary = cache_dir.join(format!(
-            ".{bare_digest}.tmp-{}-{nonce}",
-            std::process::id()
-        ));
+        let temporary =
+            cache_dir.join(format!(".{bare_digest}.tmp-{}-{nonce}", std::process::id()));
         fs::write(&temporary, &body)
             .with_context(|| format!("write original-data cache {}", temporary.display()))?;
         if target.exists() {
@@ -8328,6 +8454,11 @@ mod tests {
     #[test]
     fn ctox_web_read_tool_returns_find_results() {
         let root = unique_test_root("ctox_web_read_tool");
+        let evidence_workspace = root
+            .join("task")
+            .join(".ctox")
+            .join("web-read")
+            .join("call-1");
         set_runtime_config(&root, "CTOX_WEB_SEARCH_PROVIDER", "mock");
 
         let payload = run_ctox_web_read_tool(
@@ -8336,6 +8467,8 @@ mod tests {
                 url: "https://example.com/mock-result".to_string(),
                 query: Some("ctox web search evidence".to_string()),
                 find: vec!["CTOX_REMOTE_WEB_OK".to_string()],
+                workspace: Some(evidence_workspace.clone()),
+                include_full_text: false,
                 country: None,
             },
         )
@@ -8345,6 +8478,14 @@ mod tests {
         assert_eq!(payload["ok"], json!(true));
         assert_eq!(payload["url"], "https://example.com/mock-result");
         assert_eq!(payload["find_results"][0]["pattern"], "ctox remote web ok");
+        assert_eq!(payload["workspace_evidence"]["persisted"], true);
+        assert!(evidence_workspace.join("source.html").is_file());
+        assert!(evidence_workspace.join("extracted-text.txt").is_file());
+        assert!(evidence_workspace.join("receipt.json").is_file());
+        assert_eq!(
+            payload["workspace_evidence"]["snapshot_sha256"],
+            payload["snapshot_hash"]
+        );
 
         let cache: PageCacheFile = serde_json::from_str(
             &fs::read_to_string(page_cache_path(&root)).expect("direct read page cache"),
@@ -8359,7 +8500,9 @@ mod tests {
             entry.evidence_relevance_score,
             payload["evidence_relevance_score"].as_i64()
         );
-        assert!(entry.evidence_relevance_score.is_some_and(|score| score >= 8));
+        assert!(entry
+            .evidence_relevance_score
+            .is_some_and(|score| score >= 8));
         assert_eq!(entry.http_status, Some(200));
         assert_eq!(
             entry.snapshot_hash,
@@ -8387,6 +8530,8 @@ mod tests {
                 url: url.to_string(),
                 query: Some("original dataset".to_string()),
                 find: Vec::new(),
+                workspace: None,
+                include_full_text: false,
                 country: None,
             },
         )
@@ -9049,6 +9194,8 @@ mod tests {
                     url: "https://example.com/mock-result.pdf".to_string(),
                     query: Some("Attention Is All You Need".to_string()),
                     find: vec!["Attention Is All You Need".to_string()],
+                    workspace: None,
+                    include_full_text: false,
                     country: None,
                 },
             )
@@ -10003,9 +10150,12 @@ mod tests {
                 url: doc.url.clone(),
                 query: Some("example".to_string()),
                 find: Vec::new(),
+                workspace: None,
+                include_full_text: false,
                 country: None,
             },
             doc,
+            None,
         );
         assert!(payload["extracted_fields"].is_null());
         assert_eq!(payload["evidence_content_kind"], "none");

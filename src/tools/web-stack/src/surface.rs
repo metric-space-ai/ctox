@@ -152,7 +152,7 @@ pub fn handle_web_command(
             }
             let url = required_flag_value(args, "--url")
                 .or_else(|| args.get(1).map(String::as_str))
-                .context("usage: ctox web read --url <url> [--query <text>] [--find <text>]... [--country <DE|AT|CH>]")?;
+                .context("usage: ctox web read --url <url> [--query <text>] [--find <text>]... [--workspace <path>] [--country <DE|AT|CH>]")?;
             let payload = run_ctox_web_read_tool(
                 root,
                 &DirectWebReadRequest {
@@ -162,6 +162,8 @@ pub fn handle_web_command(
                         .into_iter()
                         .map(ToOwned::to_owned)
                         .collect(),
+                    workspace: find_flag_value(args, "--workspace").map(PathBuf::from),
+                    include_full_text: false,
                     country: find_flag_value(args, "--country").map(|s| s.trim().to_string()),
                 },
             )?;
@@ -477,7 +479,7 @@ fn handle_scholarly_command(root: &Path, args: &[String]) -> Result<()> {
 }
 
 fn web_usage() -> &'static str {
-    "usage:\n  ctox web search --query <text> [--domain <host>]... [--source <id>]... [--country <DE|AT|CH>] [--context-size <low|medium|high>] [--cached] [--include-sources]\n  ctox web read --url <url> [--query <text>] [--find <text>]... [--country <DE|AT|CH>]\n  ctox web sources list [--country <DE|AT|CH>] [--tier <P|S|C>]... [--field <field-key>]\n  ctox web sources info --id <source-id>\n  ctox web person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--workspace <path>] [--no-workspace]\n  ctox web scholarly search --query <text> [--provider <annas_archive>] [--content-type <type>]... [--language <code>]... [--ext <pdf|epub|...>]... [--sort <newest|oldest|largest|smallest|newest_added|oldest_added|random>] [--max-results <n>] [--page <n>] [--with-oa-pdf] [--only-doi]\n  ctox web deep-research --query <text> [--focus <text>] [--depth <quick|standard|exhaustive>] [--max-sources <n>] [--workspace <path>] [--include-annas-archive] [--no-papers] [--no-workspace]\n  ctox web scrape --target-key <key> --mode <latest|semantic> [--query <text>] [--limit <n>]\n  ctox web browser-prepare [--dir <path>] [--install-reference] [--install-browser] [--skip-npm-install]\n  ctox web browser-automation [--dir <path>] [--timeout-ms <n>] [--script-file <path>] < script.js\n  ctox web browser-capture --url <url> [--dir <path>] [--out-dir <path>] [--timeout-ms <n>]\n  ctox web unlock <list-probes|list-vectors|baseline|history|add-vector|set-vector-status> [...]"
+    "usage:\n  ctox web search --query <text> [--domain <host>]... [--source <id>]... [--country <DE|AT|CH>] [--context-size <low|medium|high>] [--cached] [--include-sources]\n  ctox web read --url <url> [--query <text>] [--find <text>]... [--workspace <path>] [--country <DE|AT|CH>]\n  ctox web sources list [--country <DE|AT|CH>] [--tier <P|S|C>]... [--field <field-key>]\n  ctox web sources info --id <source-id>\n  ctox web person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--workspace <path>] [--no-workspace]\n  ctox web scholarly search --query <text> [--provider <annas_archive>] [--content-type <type>]... [--language <code>]... [--ext <pdf|epub|...>]... [--sort <newest|oldest|largest|smallest|newest_added|oldest_added|random>] [--max-results <n>] [--page <n>] [--with-oa-pdf] [--only-doi]\n  ctox web deep-research --query <text> [--focus <text>] [--depth <quick|standard|exhaustive>] [--max-sources <n>] [--workspace <path>] [--include-annas-archive] [--no-papers] [--no-workspace]\n  ctox web scrape --target-key <key> --mode <latest|semantic> [--query <text>] [--limit <n>]\n  ctox web browser-prepare [--dir <path>] [--install-reference] [--install-browser] [--skip-npm-install]\n  ctox web browser-automation [--dir <path>] [--timeout-ms <n>] [--script-file <path>] < script.js\n  ctox web browser-capture --url <url> [--dir <path>] [--out-dir <path>] [--timeout-ms <n>]\n  ctox web unlock <list-probes|list-vectors|baseline|history|add-vector|set-vector-status> [...]"
 }
 
 fn scholarly_usage() -> &'static str {

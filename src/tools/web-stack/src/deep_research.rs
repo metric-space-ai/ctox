@@ -233,6 +233,8 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                         url: url.clone(),
                         query: Some(search_query.clone()),
                         find: build_find_terms(&search_query),
+                        workspace: None,
+                        include_full_text: true,
                         country: None,
                     },
                 ) {
@@ -2217,12 +2219,29 @@ fn persist_source_snapshots(snapshot_dir: &Path, sources: &[Value], limit: usize
         let content_kind = read
             .pointer("/response_metadata/content_kind")
             .and_then(Value::as_str);
-        if content_kind.is_some_and(|kind| kind == "malformed_data" || kind == "html") {
+        if content_kind == Some("malformed_data") {
             continue;
         }
         let extension = snapshot_extension(content_kind, content_type, &bytes);
         let target = snapshot_dir.join(format!("source-{index:04}.{extension}"));
         if fs::write(&target, &bytes).is_ok() {
+            let extracted_text = read
+                .get("page_text")
+                .and_then(Value::as_str)
+                .filter(|text| !text.trim().is_empty());
+            let extracted_text_target =
+                snapshot_dir.join(format!("source-{index:04}.extracted.txt"));
+            let extracted_text_receipt = extracted_text.and_then(|text| {
+                fs::write(&extracted_text_target, text.as_bytes())
+                    .ok()
+                    .map(|_| {
+                        json!({
+                            "file": extracted_text_target.file_name().and_then(|name| name.to_str()).unwrap_or_default(),
+                            "sha256": crate::web_search::snapshot_hash(text.as_bytes()),
+                            "bytes": text.len(),
+                        })
+                    })
+            });
             let receipt = read
                 .get("response_metadata")
                 .cloned()
@@ -2241,6 +2260,7 @@ fn persist_source_snapshots(snapshot_dir: &Path, sources: &[Value], limit: usize
                 "bytes": bytes.len(),
                 "lineage": receipt.get("lineage").cloned().unwrap_or(Value::Null),
                 "file": target.file_name().and_then(|name| name.to_str()).unwrap_or_default(),
+                "extracted_text": extracted_text_receipt,
             });
             let _ = write_json_pretty(
                 &snapshot_dir.join(format!("source-{index:04}.metadata.json")),
@@ -2285,6 +2305,10 @@ fn snapshot_extension(
 ) -> &'static str {
     if content_kind == Some("pdf") || content_type.is_some_and(|value| value.contains("pdf")) {
         "pdf"
+    } else if content_kind == Some("html")
+        || content_type.is_some_and(|value| value.contains("html"))
+    {
+        "html"
     } else if content_kind == Some("data_json")
         || content_type.is_some_and(|value| value.contains("json"))
     {
@@ -3596,6 +3620,62 @@ mod tests {
         assert_eq!(metadata["content_kind"], "data_delimited");
         assert_eq!(metadata["bytes"], 20);
         assert_eq!(metadata["lineage"], "web_search.evidence_fetch");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn persists_admitted_html_and_its_extracted_full_text() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox_html_snapshot_test_{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let snapshot_dir = root.join("snapshots");
+        fs::create_dir_all(&snapshot_dir).expect("snapshot directory");
+        let body = b"<html><body>Measured propeller thrust is 42 N.</body></html>".to_vec();
+        let hash = crate::web_search::snapshot_hash(&body);
+        let source = json!({
+            "evidence_eligible": true,
+            "read": {
+                "url": "https://example.edu/full-text",
+                "page_text": "Measured propeller thrust is 42 N.",
+                "snapshot_hash": hash,
+                "response_body": body.iter().map(|byte| Value::Number((*byte).into())).collect::<Vec<_>>(),
+                "response_metadata": {
+                    "requested_url": "https://example.edu/full-text",
+                    "final_url": "https://example.edu/full-text",
+                    "status": 200,
+                    "content_type": "text/html",
+                    "content_kind": "html",
+                    "byte_count": body.len(),
+                    "sha256": hash,
+                    "lineage": "web_search.evidence_fetch",
+                    "redirected": false,
+                    "redirect_chain": ["https://example.edu/full-text"]
+                }
+            }
+        });
+        assert_eq!(persist_source_snapshots(&snapshot_dir, &[source], 1), 1);
+        assert_eq!(
+            fs::read(snapshot_dir.join("source-0000.html")).expect("HTML snapshot"),
+            body
+        );
+        assert_eq!(
+            fs::read_to_string(snapshot_dir.join("source-0000.extracted.txt"))
+                .expect("extracted text"),
+            "Measured propeller thrust is 42 N."
+        );
+        let metadata: Value = serde_json::from_slice(
+            &fs::read(snapshot_dir.join("source-0000.metadata.json")).expect("metadata"),
+        )
+        .expect("metadata JSON");
+        assert_eq!(metadata["content_kind"], "html");
+        assert_eq!(
+            metadata["extracted_text"]["sha256"],
+            crate::web_search::snapshot_hash(b"Measured propeller thrust is 42 N.")
+        );
         let _ = fs::remove_dir_all(root);
     }
 

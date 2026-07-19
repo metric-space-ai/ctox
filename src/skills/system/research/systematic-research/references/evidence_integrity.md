@@ -21,6 +21,11 @@ An evidence entry is eligible only when all of these are true:
 - `content_scope=full_text` for prose or `content_kind=data_file` for data.
   The snapshot is non-empty, its SHA-256 is recorded in both the snapshot and
   evidence row, and the hash verifies before every downstream use.
+- Prose evidence carries a server-extracted full-text artifact whose SHA-256
+  is verified and whose receipt is bound to the original snapshot SHA-256.
+  Every claim includes a verbatim `evidence_quote` of at least six words and
+  40 characters; the guard requires that normalized quote to occur in that
+  extracted text. A plausible paraphrase or model-written quote is rejected.
 - `relevance_score` is numeric and at least 8/10, with a short reason tied to
   the research facet. A shared keyword is not a relevance decision.
 
@@ -30,10 +35,32 @@ Required lineage is immutable and exact:
 claim_id -> evidence_id -> snapshot_id -> source_id -> canonical_url
 ```
 
+For prose evidence, copy the paths and hashes from the Web Stack workspace
+receipt into the manifest using this shape (paths must be relative to the
+manifest directory):
+
+```json
+{
+  "schema_version": "ctox.research.evidence.v2",
+  "evidence": [{
+    "snapshot_sha256": "<original-response-sha256>",
+    "extracted_text": {
+      "path": "snapshots/source-0001.extracted.txt",
+      "sha256": "<extracted-text-sha256>",
+      "source_snapshot_sha256": "<original-response-sha256>"
+    }
+  }],
+  "claims": [{
+    "evidence_quote": "<verbatim passage present in extracted text>"
+  }]
+}
+```
+
 Claims repeat the linked IDs and URL and carry `lineage_sha256`, computed over
-`claim_id`, `claim_text`, `evidence_id`, `snapshot_id`, `source_id`, and
-`canonical_url`. Never update a snapshot, source URL, evidence row, or claim
-in place; create a new version and invalidate dependants.
+`claim_id`, `claim_text`, `evidence_quote`, `evidence_id`, `snapshot_id`,
+`source_id`, and `canonical_url`. Never update a snapshot, source URL,
+evidence row, quote, or claim in place; create a new version and invalidate
+dependants.
 
 ## Original data files
 

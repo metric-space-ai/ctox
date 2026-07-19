@@ -18,7 +18,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 
-SCHEMA_VERSION = "ctox.research.evidence.v1"
+SCHEMA_VERSION = "ctox.research.evidence.v2"
 FORBIDDEN_HOSTS = (
     "doi.org",
     "dx.doi.org",
@@ -67,12 +67,18 @@ def lineage_hash(claim: dict[str, Any]) -> str:
     payload = {
         "claim_id": claim.get("claim_id"),
         "claim_text": claim.get("claim_text"),
+        "evidence_quote": claim.get("evidence_quote"),
         "evidence_id": claim.get("evidence_id"),
         "snapshot_id": claim.get("snapshot_id"),
         "source_id": claim.get("source_id"),
         "canonical_url": claim.get("canonical_url"),
     }
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def normalize_evidence_text(value: str) -> str:
+    value = re.sub(r"<[^>]+>", " ", value)
+    return re.sub(r"\s+", " ", value).strip().casefold()
 
 
 def resolve_path(base_dir: Path, raw: Any) -> Path:
@@ -164,6 +170,7 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
         source_by_id[source_id] = source
 
     evidence_by_id: dict[str, dict[str, Any]] = {}
+    evidence_text_by_id: dict[str, str] = {}
     for item in evidence:
         item = require_dict(item, "evidence")
         evidence_id = require_string(item, "evidence_id", "evidence")
@@ -219,6 +226,18 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
         validate_artifact_receipt(
             retrieval.get("receipt_artifact"), base_dir, "retrieval"
         )
+        if item.get("content_kind") != "data_file":
+            extracted_text = require_dict(item.get("extracted_text"), "extracted_text")
+            text_path = validate_artifact_receipt(
+                extracted_text, base_dir, "extracted_text"
+            )
+            if extracted_text.get("source_snapshot_sha256") != actual_hash:
+                raise GuardError("extracted_text_snapshot_binding_mismatch")
+            text = text_path.read_text(encoding="utf-8", errors="strict")
+            normalized_text = normalize_evidence_text(text)
+            if len(normalized_text) < 100:
+                raise GuardError("extracted_full_text_missing")
+            evidence_text_by_id[evidence_id] = normalized_text
 
     data_files = manifest.get("data_files", [])
     if not isinstance(data_files, list):
@@ -274,6 +293,13 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
             raise GuardError("claim_lineage_broken")
         if claim.get("canonical_url") != item.get("canonical_url"):
             raise GuardError("claim_source_url_mismatch")
+        if item.get("content_kind") != "data_file":
+            quote = require_string(claim, "evidence_quote", "claim")
+            normalized_quote = normalize_evidence_text(quote)
+            if len(normalized_quote) < 40 or len(normalized_quote.split()) < 6:
+                raise GuardError("claim_evidence_quote_too_short")
+            if normalized_quote not in evidence_text_by_id.get(evidence_id, ""):
+                raise GuardError("claim_evidence_quote_not_in_extracted_text")
         if claim.get("lineage_sha256") != lineage_hash(claim):
             raise GuardError("claim_lineage_hash_mismatch")
 

@@ -43,6 +43,7 @@ class SourceReviewManifestBindingTests(unittest.TestCase):
         claim = {
             "claim_id": f"claim-{evidence_id}",
             "claim_text": "The source reports a measured thrust.",
+            "evidence_quote": "Original full text with a measured thrust of 42 N and test methods.",
             "evidence_id": evidence_id,
             "snapshot_id": snapshot_id,
             "source_id": source_id,
@@ -77,6 +78,11 @@ class SourceReviewManifestBindingTests(unittest.TestCase):
                     "sha256": digest,
                     "source_id": source_id,
                     "canonical_url": url,
+                },
+                "extracted_text": {
+                    "path": "original.txt",
+                    "sha256": digest,
+                    "source_snapshot_sha256": digest,
                 },
                 "retrieval_receipt": {
                     "tool": "ctox_web_read",

@@ -209,7 +209,13 @@ impl ToolHandler for CtoxWebHandler {
             }
             "ctox_web_read" => {
                 let args: CtoxWebReadArgs = parse_arguments(&arguments)?;
-                command.arg("web").arg("read").arg("--url").arg(args.url);
+                command
+                    .arg("web")
+                    .arg("read")
+                    .arg("--url")
+                    .arg(args.url)
+                    .arg("--workspace")
+                    .arg(default_web_read_workspace(&turn.cwd, &call_id));
                 if let Some(query) = args.query {
                     command.arg("--query").arg(query);
                 }
@@ -417,6 +423,12 @@ fn safe_path_component(value: &str) -> String {
 fn default_deep_research_workspace(cwd: &std::path::Path, call_id: &str) -> std::path::PathBuf {
     cwd.join("research")
         .join("deep-research")
+        .join(safe_path_component(call_id))
+}
+
+fn default_web_read_workspace(cwd: &std::path::Path, call_id: &str) -> std::path::PathBuf {
+    cwd.join(".ctox")
+        .join("web-read")
         .join(safe_path_component(call_id))
 }
 

@@ -11097,6 +11097,18 @@ fn validate_systematic_research_web_receipts(
         let actual = format!("{:x}", sha2::Sha256::digest(&bytes));
         actual.eq_ignore_ascii_case(expected)
     }
+    fn extracted_text_matches(doc: &Value, expected: Option<&str>) -> bool {
+        use sha2::Digest;
+
+        let Some(expected) = expected else {
+            return true;
+        };
+        let Some(page_text) = doc.get("page_text").and_then(Value::as_str) else {
+            return false;
+        };
+        let actual = format!("{:x}", sha2::Sha256::digest(page_text.as_bytes()));
+        actual.eq_ignore_ascii_case(expected)
+    }
 
     const MAX_WEB_RECEIPT_AGE_SECS: u64 = 7 * 24 * 60 * 60;
     let now = current_epoch_secs();
@@ -11149,6 +11161,17 @@ fn validate_systematic_research_web_receipts(
             .get("relevance_score")
             .and_then(Value::as_i64)
             .with_context(|| format!("evidence {evidence_id} has no relevance_score"))?;
+        let extracted_text_sha256 = if content_kind == "data_file" {
+            None
+        } else {
+            let raw = item
+                .pointer("/extracted_text/sha256")
+                .and_then(Value::as_str)
+                .with_context(|| format!("evidence {evidence_id} has no extracted_text.sha256"))?;
+            Some(normalized_sha256(raw).with_context(|| {
+                format!("evidence {evidence_id} has an invalid extracted_text.sha256")
+            })?)
+        };
 
         let matching_entry = entries.values().find(|entry| {
             let doc = entry.get("doc").unwrap_or(&Value::Null);
@@ -11204,6 +11227,7 @@ fn validate_systematic_research_web_receipts(
                     normalized_snapshot_hash,
                 )
                 && data_artifact_matches(root, doc, receipt, normalized_snapshot_hash)
+                && extracted_text_matches(doc, extracted_text_sha256)
         });
         if matching_entry.is_none() {
             anyhow::bail!(
@@ -24563,16 +24587,44 @@ mod tests {
 
     #[test]
     fn systematic_research_web_receipts_require_server_cache_binding() {
+        use sha2::Digest;
+
         let root = temp_root("research-web-receipt");
         let cache_path = root.join("runtime/web_search_page_cache.json");
         std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        let page_text = "Verified full source text with measured propeller thrust and torque.";
+        let page_text_sha256 = format!("{:x}", sha2::Sha256::digest(page_text.as_bytes()));
         std::fs::write(
             &cache_path,
-            format!(
-                r#"{{"entries":{{"https://example.edu/paper":{{"created_at_epoch":{},"checked_at":{},"original_url":"https://example.edu/paper","final_url":"https://example.edu/paper","canonical_url":"https://example.edu/paper","evidence_eligible":true,"evidence_relevance_score":16,"http_status":200,"snapshot_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","doc":{{"url":"https://example.edu/paper","canonical_url":"https://example.edu/paper","evidence_eligible":true,"response_receipt":{{"requested_url":"https://example.edu/paper","final_url":"https://example.edu/paper","status":200,"sha256":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","content_kind":"html"}}}}}}}}}}"#,
-                current_epoch_secs(),
-                current_epoch_secs()
-            ),
+            serde_json::to_vec(&serde_json::json!({
+                "entries": {
+                    "https://example.edu/paper": {
+                        "created_at_epoch": current_epoch_secs(),
+                        "checked_at": current_epoch_secs(),
+                        "original_url": "https://example.edu/paper",
+                        "final_url": "https://example.edu/paper",
+                        "canonical_url": "https://example.edu/paper",
+                        "evidence_eligible": true,
+                        "evidence_relevance_score": 16,
+                        "http_status": 200,
+                        "snapshot_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        "doc": {
+                            "url": "https://example.edu/paper",
+                            "canonical_url": "https://example.edu/paper",
+                            "evidence_eligible": true,
+                            "page_text": page_text,
+                            "response_receipt": {
+                                "requested_url": "https://example.edu/paper",
+                                "final_url": "https://example.edu/paper",
+                                "status": 200,
+                                "sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                                "content_kind": "html"
+                            }
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
         )
         .unwrap();
         let mut manifest = serde_json::json!({
@@ -24583,7 +24635,10 @@ mod tests {
                 "snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "content_kind": "article",
                 "content_scope": "full_text",
-                "relevance_score": 16
+                "relevance_score": 16,
+                "extracted_text": {
+                    "sha256": page_text_sha256
+                }
             }]
         });
         let attempt_started_at = current_epoch_secs().saturating_sub(1);
@@ -24601,6 +24656,16 @@ mod tests {
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
         );
         manifest["evidence"][0]["relevance_score"] = Value::from(99);
+        let error = validate_systematic_research_web_receipts(&root, &manifest, attempt_started_at)
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("not bound to a matching admitted"));
+
+        manifest["evidence"][0]["relevance_score"] = Value::from(16);
+        manifest["evidence"][0]["extracted_text"]["sha256"] = Value::String(
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_string(),
+        );
         let error = validate_systematic_research_web_receipts(&root, &manifest, attempt_started_at)
             .unwrap_err();
         assert!(error

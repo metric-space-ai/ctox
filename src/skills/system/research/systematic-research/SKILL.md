@@ -51,6 +51,11 @@ current 2xx response and the downloaded original content/data is present in a
 SHA-256-verified snapshot. Require actual full text or original data content,
 `relevance_score >= 8`, and the immutable
 `claim_id -> evidence_id -> snapshot_id -> source_id -> canonical_url` chain.
+For prose, use the server-written `workspace_evidence` / deep-research
+snapshot receipt and its full extracted-text artifact. Every claim must carry
+a verbatim `evidence_quote` (at least six words and 40 characters) that occurs
+in that extracted text; a title, abstract, snippet, model paraphrase, or a
+quote copied from another URL is not evidence.
 404, login/cookie walls, JavaScript shells, snippets, aggregators, mirrors,
 DOI resolver/landing URLs, and metadata are permanent rejection states. Never
 fill them from memory or a second-hand summary.

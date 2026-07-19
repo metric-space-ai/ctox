@@ -47,6 +47,11 @@ class EvidenceGuardTests(unittest.TestCase):
                 "snapshot_sha256": digest,
                 "snapshot": {"snapshot_id": "snap-1", "path": "original.txt", "sha256": digest,
                               "source_id": "src-1", "canonical_url": "https://example.edu/paper/full-text"},
+                "extracted_text": {
+                    "path": "original.txt",
+                    "sha256": digest,
+                    "source_snapshot_sha256": digest,
+                },
                 "retrieval_receipt": {
                     "tool": "ctox_web_read",
                     "request_url": "https://example.edu/paper/full-text",
@@ -61,6 +66,7 @@ class EvidenceGuardTests(unittest.TestCase):
             "claims": [{
                 "claim_id": "c-1",
                 "claim_text": "The source contains methods, results, tables, units, and conclusions.",
+                "evidence_quote": "Full original source text with methods, results, tables, units, and conclusions.",
                 "evidence_id": "ev-1",
                 "snapshot_id": "snap-1",
                 "source_id": "src-1",
@@ -151,6 +157,13 @@ class EvidenceGuardTests(unittest.TestCase):
         self.manifest["evidence"][0]["snapshot"]["sha256"] = digest
         self.manifest["evidence"][0]["retrieval_receipt"]["body_sha256"] = digest
         self.manifest["evidence"][0]["retrieval_receipt"]["byte_count"] = self.content.stat().st_size
+        self.manifest["evidence"][0]["extracted_text"]["sha256"] = digest
+        self.manifest["evidence"][0]["extracted_text"]["source_snapshot_sha256"] = digest
+        self.manifest["claims"][0]["evidence_quote"] = (
+            "Sign in is discussed as a study limitation. "
+            "Sign in is discussed as a study limitation."
+        )
+        self.manifest["claims"][0]["lineage_sha256"] = lineage_hash(self.manifest["claims"][0])
         validate_manifest(self.manifest, self.base)
 
     def test_deterministic_data_check_requires_all_proofs(self) -> None:
@@ -190,11 +203,28 @@ class EvidenceGuardTests(unittest.TestCase):
 
     def test_claim_lineage_hash_is_bound(self) -> None:
         claim = {"claim_id": "c-2", "claim_text": "Measured value is 42.", "evidence_id": "ev-1",
+                 "evidence_quote": "Full original source text with methods, results, tables, units, and conclusions.",
                  "snapshot_id": "snap-1", "source_id": "src-1", "canonical_url": "https://example.edu/paper/full-text"}
         claim["lineage_sha256"] = lineage_hash(claim)
         self.manifest["claims"].append(claim)
         validate_manifest(self.manifest, self.base)
         claim["claim_text"] = "Changed without a new lineage hash."
+        with self.assertRaisesRegex(ValueError, "lineage_hash"):
+            validate_manifest(self.manifest, self.base)
+
+    def test_claim_quote_must_exist_in_server_extracted_text(self) -> None:
+        self.manifest["claims"][0]["evidence_quote"] = (
+            "This plausible sentence was never present in the retrieved source document."
+        )
+        self.manifest["claims"][0]["lineage_sha256"] = lineage_hash(self.manifest["claims"][0])
+        with self.assertRaisesRegex(ValueError, "quote_not_in_extracted_text"):
+            validate_manifest(self.manifest, self.base)
+
+    def test_claim_quote_is_bound_into_lineage_hash(self) -> None:
+        self.manifest["claims"][0]["evidence_quote"] = (
+            "Full original source text with methods, results, tables, units, and conclusions. "
+            "Full original source text"
+        )
         with self.assertRaisesRegex(ValueError, "lineage_hash"):
             validate_manifest(self.manifest, self.base)
 
