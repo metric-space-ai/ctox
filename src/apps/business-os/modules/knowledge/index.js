@@ -1261,10 +1261,10 @@ function groupSize(group) {
 // Scannable count badges (Research-style numbers) — only non-zero kinds show,
 // so you can tell whether a shard has content before clicking it.
 function bundleCountsHtml(skillbooks, runbooks, tables) {
-  // Parenthesized counts for every kind — zeros included, so the composition
-  // of a shard is readable at a glance without clicking into it.
-  const pill = (n, label) => `<span class="kb-count${n > 0 ? '' : ' kb-zero'}">${label} (${n})</span>`;
-  return [pill(skillbooks, 'Skillbooks'), pill(runbooks, 'Runbooks'), pill(tables, 'Tabellen')].join('');
+  // Parenthesized counts for every kind — zeros included — as ONE inline text
+  // line, not pill badges: three numbers must not cost two rows of chrome.
+  const part = (n, label) => `<span class="kb-count${n > 0 ? '' : ' kb-zero'}">${label} (${n})</span>`;
+  return [part(skillbooks, 'Skillbooks'), part(runbooks, 'Runbooks'), part(tables, 'Tabellen')].join(' · ');
 }
 
 function renderKnowledgeBundle(group) {
@@ -1286,9 +1286,8 @@ function renderKnowledgeBundle(group) {
     <div class="knowledge-bundle-head">
       <button class="bundle-caret" type="button" aria-label="Auf- oder zuklappen" aria-expanded="${isOpen}"></button>
       <button class="bundle-select" type="button">
-        <span class="bundle-domain">${escapeHtml(group.domainLabel || 'Knowledge')}</span>
         <strong>${escapeHtml(group.title)}</strong>
-        <span class="bundle-counts">${bundleCountsHtml(skillbookCount, runbookCount, tableCount)}</span>
+        <small class="bundle-meta" title="${escapeHtml(`${group.domainLabel || 'Knowledge'} · Skillbooks (${skillbookCount}) · Runbooks (${runbookCount}) · Tabellen (${tableCount})`)}"><span class="bundle-domain">${escapeHtml(group.domainLabel || 'Knowledge')}</span><span class="bundle-counts"> · ${bundleCountsHtml(skillbookCount, runbookCount, tableCount)}</span></small>
       </button>
     </div>
     <div class="knowledge-bundle-items"></div>
@@ -1408,11 +1407,9 @@ function renderSkillbookItem(item, group) {
   wrap.dataset.contextLabel = item.title || item.id;
   wrap.dataset.knowledgeColumn = 'sources';
   wrap.setAttribute('aria-current', String(group.id === state.selectedGroupId && item.id === selectedSkillbookForGroup(group)?.id));
-  const context = skillbookContext(group, item);
   wrap.innerHTML = `
     <button class="item-select" type="button">
       <strong>${escapeHtml(item.title || item.id)}</strong>
-      <small>${escapeHtml(`${context.runbooks.length} Runbooks · ${context.tables.length} Tabellen`)}</small>
     </button>
     <button class="ctox-pane-icon item-edit" type="button" aria-label="${escapeHtml(item.title || 'Eintrag')} bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
     <button class="ctox-pane-icon item-trash" type="button" aria-label="${escapeHtml(item.title || 'Eintrag')} löschen" title="Löschen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M10 11v6M14 11v6"/></svg></button>

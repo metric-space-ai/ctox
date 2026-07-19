@@ -1043,23 +1043,29 @@
 /* the card carries the selection now — drop the inner row highlight */
 .knowledge-module .knowledge-bundle[aria-current="true"] .bundle-select { background: transparent; }
 
-.knowledge-module .bundle-counts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  margin-top: 5px;
-}
-.knowledge-module .kb-count {
-  font-size: var(--fs-micro);
-  color: var(--knowledge-muted);
-  background: var(--kit-fill);
-  border-radius: 999px;
-  padding: 1px 8px;
-  line-height: 1.7;
+/* Dense head: ONE muted meta line (kicker · counts) under the title — no pill
+   badges, no extra rows. While the shard is expanded the counts disappear:
+   the sublists below ARE that information, expansion extends, never repeats. */
+.knowledge-module .bundle-meta {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+  margin-top: 1px;
+  color: var(--knowledge-muted);
+  font-size: var(--fs-micro);
 }
-.knowledge-module .kb-count b { color: var(--knowledge-text); font-weight: 600; }
-.knowledge-module .kb-count.kb-empty { background: transparent; padding-left: 0; opacity: 0.5; }
+.knowledge-module .bundle-meta .bundle-domain {
+  display: inline;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+.knowledge-module .bundle-counts { display: inline; }
+.knowledge-module .knowledge-bundle[data-open="true"] .bundle-counts { display: none; }
+.knowledge-module .kb-count { white-space: nowrap; }
 
 /* ============================================================================
    Second-level switchers = the first level's language, one size smaller
@@ -1225,8 +1231,8 @@
    ========================================================================== */
 .knowledge-module .knowledge-left { background: var(--knowledge-surface); }
 .knowledge-module .knowledge-bundle {
-  margin-bottom: 6px;
-  padding: 9px 11px;
+  margin-bottom: 4px;
+  padding: 6px 9px;
   border: 0;
   border-radius: var(--knowledge-control-radius);
   background: var(--knowledge-surface);
