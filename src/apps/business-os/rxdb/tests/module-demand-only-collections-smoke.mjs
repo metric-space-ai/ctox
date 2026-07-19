@@ -6,7 +6,39 @@ const {
   isDemandOnlyPullCollection,
   isModuleDemandOnlyCollection,
   moduleSyncCollections,
+  createFollowerBridge,
+  COMMAND_FOLLOWER_DIRECT_OPEN_TIMEOUT_MS,
+  COMMAND_FOLLOWER_DIRECT_FLUSH_TIMEOUT_MS,
+  COMMAND_FOLLOWER_BRIDGE_TIMEOUT_MS,
 } = __ctoxSyncTestHooks;
+
+assert(
+  COMMAND_FOLLOWER_DIRECT_OPEN_TIMEOUT_MS < COMMAND_FOLLOWER_DIRECT_FLUSH_TIMEOUT_MS,
+  'direct failover leaves time to push after the native peer opens',
+);
+assert(
+  COMMAND_FOLLOWER_DIRECT_FLUSH_TIMEOUT_MS < COMMAND_FOLLOWER_BRIDGE_TIMEOUT_MS,
+  'follower bridge deadline contains the complete direct failover budget',
+);
+
+{
+  let directFallbackCalls = 0;
+  const follower = createFollowerBridge(
+    'business_commands',
+    { role: 'follower' },
+    {
+      async notifyDirtyAndWait() {
+        throw new Error('leader is frozen');
+      },
+    },
+    async () => {
+      directFallbackCalls += 1;
+    },
+  );
+  assert.equal(follower.flushTimeoutMs, COMMAND_FOLLOWER_BRIDGE_TIMEOUT_MS);
+  assert.deepEqual(await follower.flush(), { ok: true, mode: 'direct-fallback' });
+  assert.equal(directFallbackCalls, 1, 'frozen leader falls back to a direct WebRTC bridge exactly once');
+}
 
 assert.equal(isDemandOnlyPullCollection('desktop_file_chunks'), true, 'desktop chunks are pull-demand-only');
 assert.equal(isDemandOnlyPullCollection('document_blob_chunks'), true, 'document blob chunks are pull-demand-only');

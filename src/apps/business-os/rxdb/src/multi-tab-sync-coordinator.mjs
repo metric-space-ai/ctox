@@ -220,10 +220,22 @@ export function createMultiTabSyncCoordinator({
         return handleDirty({ type: 'dirty', collection, ids, tabId, atMs: clock() });
       }
       if (!channel || !leaderTabId) return Promise.reject(new Error('No multi-tab sync leader is available.'));
+      const requestedLeaderTabId = leaderTabId;
       const requestId = globalThis.crypto?.randomUUID?.() || `dirty-${tabId}-${clock()}-${Math.random().toString(36).slice(2)}`;
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           pendingDirtyAcks.delete(requestId);
+          // A tab can retain the Web Lock while its JS event loop is blocked
+          // by a native browser dialog. Stop advertising that unresponsive
+          // tab as healthy so the caller can open the bounded direct WebRTC
+          // fallback. If the old leader resumes, its next heartbeat changes
+          // leaderTabId again and the sync runtime demotes the direct bridge.
+          if (leaderTabId === requestedLeaderTabId) {
+            leaderSeenAtMs = 0;
+            leaderTabId = '';
+            emitRole();
+            attemptElection().catch(() => {});
+          }
           reject(new Error(`Multi-tab leader did not acknowledge ${collection} within ${timeoutMs}ms.`));
         }, Math.max(100, Number(timeoutMs) || DIRTY_ACK_TIMEOUT_MS));
         pendingDirtyAcks.set(requestId, { resolve, reject, timer });

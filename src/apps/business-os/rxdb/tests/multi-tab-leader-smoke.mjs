@@ -27,6 +27,22 @@ assert(dirty?.collection === 'business_commands', 'acknowledged dirty collection
 assert(pushFinished, 'leader acknowledgement must wait until async push listeners finish');
 
 unsubscribe();
+const unsubscribeFrozen = first.onDirty(() => new Promise(() => {}));
+let frozenLeaderError = null;
+try {
+  await second.notifyDirtyAndWait('business_commands', ['command-frozen'], { timeoutMs: 100 });
+} catch (error) {
+  frozenLeaderError = error;
+}
+assert(
+  String(frozenLeaderError?.message || '').includes('did not acknowledge'),
+  'frozen leader acknowledgement must end at the bounded deadline',
+);
+assert(
+  second.snapshot().leaderTabId === '',
+  'follower must stop advertising a leader that missed the acknowledgement deadline',
+);
+unsubscribeFrozen();
 await second.close();
 await first.close();
 assert(first.isClosed() && second.isClosed(), 'coordinator close must release reusable registry entries');
