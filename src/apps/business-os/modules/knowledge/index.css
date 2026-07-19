@@ -902,25 +902,60 @@
   background: var(--knowledge-surface);
 }
 .knowledge-module .knowledge-filter-toggle[aria-expanded="true"] { color: var(--knowledge-accent); }
-/* Advanced filter tray: a single recessed fill that drops down under the search
-   row. One surface (a fill, not a border box) holding clearly labelled groups —
-   scope, sort, content type — each a full-width segmented control or chip row. */
+/* Advanced filter tray: a single recessed fill under the search row, holding a
+   compact toolbar — scope + sort dropdowns with a direction toggle on one line,
+   content-type chips on the next. Dropdowns instead of full-width button banks
+   keep it dense. */
 .knowledge-module .knowledge-filter-advanced {
   display: grid;
-  gap: var(--space-3);
+  gap: 6px;
   margin: 6px 10px 8px;
-  padding: 10px;
+  padding: 8px;
   border-radius: var(--knowledge-control-radius);
   background: var(--kit-fill);
 }
-.knowledge-module .knowledge-filter-advanced .knowledge-subtabs {
+.knowledge-module .knowledge-filter-row {
   display: flex;
-  width: 100%;
-  min-width: 0;
+  gap: 6px;
+  align-items: center;
 }
-.knowledge-module .knowledge-filter-advanced .knowledge-subtabs .ctox-pane-tab {
+.knowledge-module .knowledge-select {
   flex: 1 1 0;
   min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  font-size: var(--fs-meta);
+}
+.knowledge-module .knowledge-sort {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex: 1.35 1 0;
+  min-width: 0;
+}
+.knowledge-module .knowledge-sort-dir {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--knowledge-control-radius);
+  background: var(--kit-fill-strong);
+  color: var(--knowledge-text);
+  cursor: pointer;
+}
+.knowledge-module .knowledge-sort-dir svg {
+  width: 15px;
+  height: 15px;
+  transition: transform 0.12s ease;
+}
+.knowledge-module .knowledge-sort-dir[data-dir="asc"] svg { transform: rotate(180deg); }
+.knowledge-module .knowledge-sort-dir:hover {
+  background: var(--knowledge-accent);
+  color: var(--knowledge-surface);
 }
 .knowledge-module .knowledge-filter-hint {
   margin: 0;

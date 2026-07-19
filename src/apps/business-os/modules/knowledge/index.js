@@ -72,6 +72,7 @@ const state = {
   editing: false,
   sourceScope: 'all',
   sortMode: 'recent',
+  sortDir: 'desc',
   flagFilters: new Set(),
   messages: null,
   openGroups: new Set(['research/drone-design/drone-bearing-loads']),
@@ -178,29 +179,26 @@ function documentTemplate() {
           <button class="ctox-pane-icon knowledge-filter-toggle" type="button" data-action="toggle-filters" aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--knowledge-surface-muted)"/><circle cx="15" cy="12" r="2.4" fill="var(--knowledge-surface-muted)"/><circle cx="8" cy="17" r="2.4" fill="var(--knowledge-surface-muted)"/></svg></button>
         </div>
         <div class="knowledge-filter-advanced" data-filter-advanced hidden>
-          <div class="knowledge-filter-group">
-            <span class="knowledge-filter-label">Bereich</span>
-            <div class="ctox-pane-tabs knowledge-subtabs" role="tablist" aria-label="Knowledge Quelle">
-              <button type="button" class="ctox-pane-tab" role="tab" data-scope="user" aria-selected="false">User</button>
-              <button type="button" class="ctox-pane-tab" role="tab" data-scope="system" aria-selected="false">System</button>
-              <button type="button" class="ctox-pane-tab" role="tab" data-scope="all" aria-selected="true">Alle</button>
+          <div class="knowledge-filter-row">
+            <select class="ctox-select knowledge-select" data-scope aria-label="Bereich">
+              <option value="all">Alle Bereiche</option>
+              <option value="user">Nur User</option>
+              <option value="system">Nur System</option>
+            </select>
+            <div class="knowledge-sort">
+              <select class="ctox-select knowledge-select" data-sort aria-label="Sortieren nach">
+                <option value="recent">Bearbeitet</option>
+                <option value="created">Erstellt</option>
+                <option value="name">Name</option>
+                <option value="entries">Einträge</option>
+              </select>
+              <button type="button" class="knowledge-sort-dir" data-action="toggle-sort-dir" data-dir="desc" aria-label="Sortierrichtung umkehren" title="Absteigend"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="6 13 12 19 18 13"/></svg></button>
             </div>
           </div>
-          <div class="knowledge-filter-group">
-            <span class="knowledge-filter-label">Sortierung</span>
-            <div class="ctox-pane-tabs knowledge-subtabs" role="tablist" aria-label="Sortierung">
-              <button type="button" class="ctox-pane-tab" data-sort="recent" aria-selected="true">Zuletzt</button>
-              <button type="button" class="ctox-pane-tab" data-sort="edited" aria-selected="false">Bearbeitet</button>
-              <button type="button" class="ctox-pane-tab" data-sort="name" aria-selected="false">Name</button>
-            </div>
-          </div>
-          <div class="knowledge-filter-group">
-            <span class="knowledge-filter-label">Enthält</span>
-            <div class="knowledge-filter-chips">
-              <button type="button" class="ctox-chip" data-flag="skillbooks" aria-pressed="false">Skillbooks</button>
-              <button type="button" class="ctox-chip" data-flag="runbooks" aria-pressed="false">Runbooks</button>
-              <button type="button" class="ctox-chip" data-flag="tables" aria-pressed="false">Tabellen</button>
-            </div>
+          <div class="knowledge-filter-chips" role="group" aria-label="Enthält">
+            <button type="button" class="ctox-chip" data-flag="skillbooks" aria-pressed="false">Skillbooks</button>
+            <button type="button" class="ctox-chip" data-flag="runbooks" aria-pressed="false">Runbooks</button>
+            <button type="button" class="ctox-chip" data-flag="tables" aria-pressed="false">Tabellen</button>
           </div>
         </div>
         <div class="knowledge-scroll" data-knowledge-list>
@@ -305,9 +303,9 @@ function bindElements(root) {
 function wireEvents() {
   els.search.addEventListener('input', renderKnowledgeList);
   els.kindFilter?.addEventListener('change', renderKnowledgeList);
-  for (const button of state.ctx.host.querySelectorAll('[data-scope]')) {
-    button.addEventListener('click', () => setSourceScope(button.dataset.scope || 'user'));
-  }
+  state.ctx.host.querySelector('select[data-scope]')?.addEventListener('change', (event) => {
+    setSourceScope(event.target.value || 'all');
+  });
   for (const button of state.ctx.host.querySelectorAll('[data-tab]')) {
     button.addEventListener('click', () => setTab(button.dataset.tab || 'book'));
   }
@@ -327,13 +325,18 @@ function wireEvents() {
     if (open) panel.removeAttribute('hidden'); else panel.setAttribute('hidden', '');
     btn.setAttribute('aria-expanded', String(open));
   });
-  // Advanced-filter controls: sort mode + kind flags, both re-render the list.
-  state.ctx.host.querySelectorAll('[data-filter-advanced] [data-sort]').forEach((tab) => {
-    tab.addEventListener('click', () => {
-      state.sortMode = tab.dataset.sort;
-      state.ctx.host.querySelectorAll('[data-filter-advanced] [data-sort]').forEach((t) => t.setAttribute('aria-selected', String(t === tab)));
-      renderKnowledgeList();
-    });
+  // Advanced-filter controls: sort field (dropdown) + direction toggle + kind
+  // flags, all re-render the list.
+  state.ctx.host.querySelector('select[data-sort]')?.addEventListener('change', (event) => {
+    state.sortMode = event.target.value || 'recent';
+    renderKnowledgeList();
+  });
+  state.ctx.host.querySelector('[data-action="toggle-sort-dir"]')?.addEventListener('click', (event) => {
+    state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+    const btn = event.currentTarget;
+    btn.dataset.dir = state.sortDir;
+    btn.title = state.sortDir === 'asc' ? 'Aufsteigend' : 'Absteigend';
+    renderKnowledgeList();
   });
   state.ctx.host.querySelectorAll('[data-filter-advanced] [data-flag]').forEach((chip) => {
     chip.addEventListener('click', () => {
@@ -1136,12 +1139,16 @@ function renderKnowledgeList() {
       return [...state.flagFilters].every((flag) => has[flag]);
     });
   }
-  // Advanced sort.
-  if (state.sortMode === 'name') {
-    visibleGroups.sort((a, b) => (a.title || '').localeCompare(b.title || '', 'de'));
-  } else if (state.sortMode === 'edited') {
-    visibleGroups.sort((a, b) => groupRecency(b) - groupRecency(a));
-  }
+  // Advanced sort: pick the field comparator (ascending sense), then apply the
+  // chosen direction. More fields than the old three, each reversible.
+  const ascending = {
+    recent: (a, b) => groupRecency(a) - groupRecency(b),
+    created: (a, b) => groupCreated(a) - groupCreated(b),
+    name: (a, b) => (a.title || '').localeCompare(b.title || '', 'de'),
+    entries: (a, b) => groupSize(a) - groupSize(b),
+  }[state.sortMode] || ((a, b) => groupRecency(a) - groupRecency(b));
+  const dir = state.sortDir === 'asc' ? 1 : -1;
+  visibleGroups.sort((a, b) => ascending(a, b) * dir);
   if (!visibleGroups.length) {
     els.list.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(knowledgeEmptyStateMessage(copy, term))}</strong></div>`;
     return;
@@ -1168,7 +1175,7 @@ function sourceScopeFor(entry) {
   return 'user';
 }
 
-// Newest entry timestamp in a group, for the "Bearbeitet" sort.
+// Newest entry timestamp in a group, for the "Zuletzt bearbeitet" sort.
 function groupRecency(group) {
   let max = 0;
   for (const entry of group.entries || []) {
@@ -1176,6 +1183,22 @@ function groupRecency(group) {
     if (t > max) max = t;
   }
   return max;
+}
+
+// Earliest creation timestamp in a group, for the "Erstellt" sort.
+function groupCreated(group) {
+  let min = Infinity;
+  for (const entry of group.entries || []) {
+    const t = Number(entry.created_at_ms || entry.created_at || entry.payload?.created_at_ms || 0) || 0;
+    if (t && t < min) min = t;
+  }
+  return min === Infinity ? 0 : min;
+}
+
+// Total content count of a group (skillbooks + runbooks + tables), for the
+// "Anzahl Einträge" sort.
+function groupSize(group) {
+  return skillbooksForGroup(group).length + (group.runbookIds?.length || 0) + (group.tableIds?.length || 0);
 }
 
 // Scannable count badges (Research-style numbers) — only non-zero kinds show,
@@ -1464,9 +1487,8 @@ async function selectKnowledge(id) {
 
 function setSourceScope(scope) {
   state.sourceScope = ['system', 'user', 'all'].includes(scope) ? scope : 'user';
-  for (const button of state.ctx.host.querySelectorAll('[data-scope]')) {
-    button.setAttribute('aria-selected', String(button.dataset.scope === state.sourceScope));
-  }
+  const scopeSelect = state.ctx.host.querySelector('select[data-scope]');
+  if (scopeSelect) scopeSelect.value = state.sourceScope;
   const firstVisibleGroup = state.groups.find((group) => group.entries.some((entry) => state.sourceScope === 'all' || sourceScopeFor(entry) === state.sourceScope));
   if (firstVisibleGroup) {
     state.selectedGroupId = firstVisibleGroup.id;
