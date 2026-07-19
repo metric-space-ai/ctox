@@ -894,10 +894,12 @@
 /* Row 2 — filter section: search input + a gear that expands advanced filters. */
 .knowledge-module .knowledge-filterbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  /* One dense row: [search][view-toggle][filter] — never wrap controls into
+     extra rows, that wastes a full band of vertical space. */
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 6px;
-  padding: 8px 12px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--knowledge-line);
   background: var(--knowledge-surface);
 }
@@ -986,23 +988,26 @@
 .knowledge-module .knowledge-left .knowledge-scope-switch { background: transparent; }
 .knowledge-module .knowledge-left .ctox-pane-kicker { color: var(--knowledge-accent); }
 
-/* Content element = an element too → its own edit pencil, top-right of the
-   content panel (not up in the pane header). Hidden while actually editing. */
+/* Content element = an element too → its actions sit top-right of the content
+   panel as icons (pencil; check/x while editing; play for runbooks). The status
+   text docks left of the icons, small and muted. */
 .knowledge-module .knowledge-tab-panel { position: relative; }
-.knowledge-module .knowledge-content-edit {
+.knowledge-module .knowledge-content-actions {
   position: absolute;
   top: 8px;
   right: 12px;
   z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.knowledge-module .knowledge-content-actions .ctox-pane-icon {
   opacity: 0.55;
   transition: opacity 0.12s ease;
 }
-.knowledge-module .knowledge-content-edit:hover,
-.knowledge-module .knowledge-content-edit:focus-visible { opacity: 1; }
-.knowledge-module .knowledge-tab-panel:has([data-markdown-editor]:not([hidden])) .knowledge-content-edit,
-.knowledge-module .knowledge-tab-panel:has([data-runbook-form]:not([hidden])) .knowledge-content-edit {
-  display: none;
-}
+.knowledge-module .knowledge-content-actions .ctox-pane-icon:hover,
+.knowledge-module .knowledge-content-actions .ctox-pane-icon:focus-visible { opacity: 1; }
+.knowledge-module .knowledge-content-actions .is-confirm { color: var(--knowledge-accent); opacity: 0.85; }
 
 /* ============================================================================
    Shards, learned from the Matching app: calm card (surface + hairline), a
@@ -1110,7 +1115,8 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
-.knowledge-module .knowledge-filter-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.knowledge-module .knowledge-filter-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.knowledge-module .knowledge-filter-chips .ctox-chip { padding: 2px 9px; }
 .knowledge-module .knowledge-filter-chips .ctox-chip { cursor: pointer; font-size: var(--fs-meta); }
 .knowledge-module .knowledge-filter-chips .ctox-chip[aria-pressed="true"] {
   background: var(--knowledge-accent);
@@ -1274,4 +1280,84 @@
   .knowledge-module .bundle-select { padding: 8px 6px; }
   .knowledge-module .knowledge-item { min-height: 44px; }
   .knowledge-module .ctox-pane-header { padding: 12px 14px 10px; }
+}
+
+/* ============================================================================
+   Filter clarity + view modes (list vs. shard) + consistent second-level
+   switchers.
+   ========================================================================== */
+/* Active filter chips carry an explicit checkmark — color alone is ambiguous. */
+.knowledge-module .knowledge-filter-chips .ctox-chip[aria-pressed="true"]::before {
+  content: "✓ ";
+  font-weight: 700;
+}
+/* Accent dot on the filter toggle whenever any filter is active, so the
+   collapsed tray never hides state. */
+.knowledge-module .knowledge-filter-toggle { position: relative; }
+.knowledge-module .knowledge-filter-toggle.has-active-filters::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--knowledge-accent);
+}
+/* Reset shares the small square-icon grammar of the direction toggle; it sits
+   at the end of the dropdown row instead of floating in its own band. */
+.knowledge-module .knowledge-filter-reset { color: var(--knowledge-muted); }
+.knowledge-module .knowledge-filter-reset:hover { color: var(--knowledge-surface); }
+/* View toggle (shard cards vs. compact list) in the filterbar. */
+.knowledge-module .knowledge-view-toggle { display: inline-flex; gap: 2px; }
+.knowledge-module .knowledge-view-toggle .ctox-pane-icon[aria-pressed="true"] {
+  color: var(--knowledge-accent);
+  background: var(--kit-fill-strong);
+}
+/* Compact list mode: flat one-line rows, no card fills, hairline separators. */
+.knowledge-module.is-list-view .knowledge-bundle {
+  margin-bottom: 0;
+  padding: 6px 8px;
+  border-radius: 0;
+  background: transparent;
+  border-bottom: 1px solid color-mix(in srgb, var(--knowledge-line) 55%, transparent);
+}
+.knowledge-module.is-list-view .knowledge-bundle:hover { background: var(--kit-hover); }
+.knowledge-module.is-list-view .knowledge-bundle[aria-current="true"] {
+  background: color-mix(in srgb, var(--knowledge-accent) 10%, transparent);
+}
+.knowledge-module.is-list-view .bundle-counts { display: none; }
+/* Zero counts stay readable but recede. */
+.knowledge-module .kb-count.kb-zero { opacity: 0.45; }
+/* Second-level switchers (tables / runbooks): one consistent grammar — equal
+   segments on a fill track, smaller type, ellipsis, accent fill when current.
+   Never a raised lone button. */
+.knowledge-module .table-switcher,
+.knowledge-module .knowledge-secondary-switcher {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--knowledge-control-radius);
+  background: var(--kit-fill);
+}
+.knowledge-module .table-switcher .ctox-chip,
+.knowledge-module .knowledge-secondary-switcher .ctox-chip {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  border: 0;
+  border-radius: calc(var(--knowledge-control-radius) - 2px);
+  background: transparent;
+  font-size: var(--fs-meta);
+}
+.knowledge-module .table-switcher .ctox-chip:hover,
+.knowledge-module .knowledge-secondary-switcher .ctox-chip:hover { background: var(--kit-hover); }
+.knowledge-module .table-switcher .ctox-chip.is-active,
+.knowledge-module .knowledge-secondary-switcher .ctox-chip.is-active {
+  background: color-mix(in srgb, var(--knowledge-accent) 14%, transparent);
+  color: var(--knowledge-accent);
+  font-weight: 700;
 }
