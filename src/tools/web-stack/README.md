@@ -39,6 +39,14 @@ scholarly, open-access, DOI/metadata, patent/industry, and failure-mode search
 profiles, deduplicates sources, reads top pages, and returns an evidence bundle
 plus a report scaffold for the agent to synthesize.
 
+`max_sources` limits the final admitted evidence set, not the discovery pool.
+The reader keeps a depth-bounded ranked candidate queue and refills from the
+next candidate after an inaccessible, metadata-only, off-topic, or otherwise
+rejected read. Repository metadata reads may enqueue directly linked original
+data files for immediate verification. Search queries are bounded at word
+boundaries, while each page read receives a source-specific relevance query so
+an identifier from one repository cannot disqualify independent evidence.
+
 Successful retrieval and evidence promotion are separate gates. An HTTP 2xx
 response with a persisted snapshot proves transport and provenance only.
 Deep research promotes a source into the evidence bundle only when it also has
@@ -53,6 +61,19 @@ the filename. Evidence receipts bind the final URL, response status, byte count,
 content kind, and digest to that server-owned artifact. Large binary files are
 not serialized into the JSON tool response. Systematic-research completion
 recomputes the artifact digest before accepting data-backed evidence.
+Repository download routes such as `.../files/archive.zip/content` are treated
+as data hints, but promotion still requires matching ZIP/file magic bytes.
+Large data downloads use one bounded long-running request instead of short
+page-read retries. ZIP evidence additionally produces a persisted manifest with
+the archive digest and each safe member's path, sizes, CRC32, and SHA-256.
+Unsafe paths, excessive member counts, and excessive expanded sizes fail
+closed; a transport receipt alone never proves the archive's dataset contents.
+
+Search and page caches keep bounded JSON indexes over content-addressed response
+artifacts. URL aliases do not duplicate response bodies. Oversized legacy JSON
+caches are disposable acceleration state and are discarded rather than loaded
+into the daemon; durable research receipts and workspace artifacts are
+unaffected.
 
 Deep research also creates a persistent research workspace by default under
 `runtime/research/deep-research/<timestamp>-<slug>`. The folder contains the

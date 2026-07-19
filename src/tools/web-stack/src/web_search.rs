@@ -9,9 +9,10 @@ use roxmltree::Document;
 use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 #[cfg(test)]
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -368,6 +369,8 @@ struct EvidenceDoc {
     #[serde(default)]
     response_artifact_path: Option<String>,
     #[serde(default)]
+    response_archive_manifest: Option<Value>,
+    #[serde(default)]
     response_receipt: Option<ResponseReceipt>,
 }
 
@@ -487,6 +490,8 @@ struct GithubUrlParts {
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const GITHUB_API_VERSION: &str = "2022-11-28";
 const GITHUB_API_CONTENT_TYPE: &str = "application/x-ctox-github+json";
+const MAX_LEGACY_SEARCH_CACHE_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_LEGACY_PAGE_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 struct PdfExtraction {
@@ -622,6 +627,8 @@ struct SearchCacheEntry {
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct PageCacheFile {
     entries: BTreeMap<String, PageCacheEntry>,
+    #[serde(default)]
+    aliases: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -992,6 +999,7 @@ fn render_direct_web_read_payload(
         "admission_rejection_reason": evidence_rejection_reason,
         "response_body": doc.response_body,
         "response_artifact_path": doc.response_artifact_path,
+        "response_archive_manifest": doc.response_archive_manifest,
         "workspace_evidence": workspace_evidence,
         "source_tier": doc.source_tier,
         "transport_evidence_eligible": transport_evidence_eligible,
@@ -1182,7 +1190,15 @@ fn evidence_doc_is_data_file(doc: &EvidenceDoc) -> bool {
 }
 
 fn evidence_doc_has_immutable_response(doc: &EvidenceDoc) -> bool {
-    let Some(body) = doc.response_body.as_deref() else {
+    let artifact_bytes = doc
+        .response_artifact_path
+        .as_deref()
+        .and_then(|path| fs::read(path).ok());
+    let Some(body) = doc
+        .response_body
+        .as_deref()
+        .or_else(|| artifact_bytes.as_deref())
+    else {
         return false;
     };
     let Some(receipt) = doc.response_receipt.as_ref() else {
@@ -1613,7 +1629,7 @@ fn execute_search(
     // result for the full TTL and suppress retries after a transient block or
     // CAPTCHA, instead of letting the next call re-run the provider cascade.
     if !response.hits.is_empty() {
-        write_cached_search(root, &cache_key, &response)?;
+        write_cached_search(root, config, &cache_key, &response)?;
     }
     Ok(response)
 }
@@ -1847,7 +1863,21 @@ fn search_with_query_plan(
         hits: merged_hits,
         evidence: Vec::new(),
         executed_queries,
-        source_failures: Vec::new(),
+        source_failures: failures
+            .into_iter()
+            .map(|error| SourceFailure {
+                requested_source: "web_search_provider".to_string(),
+                source_id: None,
+                kind: if is_rate_limit_text(&error) {
+                    "rate_limited".to_string()
+                } else {
+                    "provider_attempt_failed".to_string()
+                },
+                error,
+                secret_name: None,
+                browser_assist: None,
+            })
+            .collect(),
     })
 }
 
@@ -1875,7 +1905,11 @@ fn auto_provider_budget(root: &Path, provider: ProviderKind) -> usize {
 }
 
 fn is_rate_limit_error(err: &anyhow::Error) -> bool {
-    let text = format!("{err:#}").to_ascii_lowercase();
+    is_rate_limit_text(&format!("{err:#}"))
+}
+
+fn is_rate_limit_text(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
     text.contains("429") || text.contains("too many requests") || text.contains("rate limit")
 }
 
@@ -2052,13 +2086,47 @@ impl<'a> WebSearchSession<'a> {
 
     fn load_cached_page_doc(&mut self, url: &str) -> Option<EvidenceDoc> {
         let key = normalize_url_cache_key(url);
-        let entry = self.page_cache.entries.get(&key)?.clone();
+        let storage_key = self.page_cache.aliases.get(&key).cloned().unwrap_or(key);
+        let entry = self.page_cache.entries.get(&storage_key)?.clone();
         if unix_ts().saturating_sub(entry.created_at_epoch) > self.config.page_cache_ttl_secs {
-            self.page_cache.entries.remove(&key);
+            self.page_cache.entries.remove(&storage_key);
+            self.page_cache
+                .aliases
+                .retain(|_, target| target != &storage_key);
             self.page_cache_dirty = true;
             return None;
         }
         let mut doc = entry.doc;
+        if doc.raw_html.is_none()
+            && entry
+                .content_type
+                .as_deref()
+                .is_some_and(|value| value.to_ascii_lowercase().contains("html"))
+        {
+            doc.raw_html = doc
+                .response_artifact_path
+                .as_deref()
+                .and_then(|path| fs::read_to_string(path).ok());
+        }
+        if doc.response_archive_manifest.is_none()
+            && doc
+                .response_receipt
+                .as_ref()
+                .is_some_and(|receipt| receipt.content_kind == "data_zip")
+        {
+            let manifest = doc
+                .response_artifact_path
+                .as_deref()
+                .zip(doc.snapshot_hash.as_deref())
+                .and_then(|(path, sha256)| {
+                    persist_zip_archive_manifest(Path::new(path), sha256).ok()
+                });
+            if let Some(manifest) = manifest {
+                doc.response_archive_manifest = Some(manifest);
+            } else {
+                doc.evidence_eligible = false;
+            }
+        }
         if doc.canonical_url.trim().is_empty() {
             doc.canonical_url = if entry.canonical_url.trim().is_empty() {
                 doc.url.clone()
@@ -2110,6 +2178,11 @@ impl<'a> WebSearchSession<'a> {
         doc: &EvidenceDoc,
         query: &str,
     ) {
+        let mut cached_doc = doc.clone();
+        // Immutable response bytes are content-addressed on disk. Avoid
+        // duplicating multi-megabyte bodies and HTML in every JSON cache alias.
+        cached_doc.response_body = None;
+        cached_doc.raw_html = None;
         let entry = PageCacheEntry {
             created_at_epoch: unix_ts(),
             original_url: original_url.to_string(),
@@ -2123,7 +2196,7 @@ impl<'a> WebSearchSession<'a> {
             source_tier: doc.source_tier.clone(),
             evidence_eligible: doc.evidence_eligible,
             evidence_relevance_score: score_evidence_doc_relevance(doc, query),
-            doc: doc.clone(),
+            doc: cached_doc,
         };
 
         let mut aliases = vec![
@@ -2136,10 +2209,21 @@ impl<'a> WebSearchSession<'a> {
             aliases.push(receipt.requested_url.as_str());
             aliases.push(receipt.final_url.as_str());
         }
+        let storage_key = normalize_url_cache_key(if doc.canonical_url.trim().is_empty() {
+            final_url
+        } else {
+            &doc.canonical_url
+        });
+        if storage_key.is_empty() {
+            return;
+        }
+        self.page_cache.entries.insert(storage_key.clone(), entry);
         for url in aliases {
             let key = normalize_url_cache_key(url);
             if !key.is_empty() {
-                self.page_cache.entries.insert(key, entry.clone());
+                if key != storage_key {
+                    self.page_cache.aliases.insert(key, storage_key.clone());
+                }
             }
         }
         self.page_cache_dirty = true;
@@ -2918,7 +3002,12 @@ fn build_evidence_doc(
     let canonical_url = canonical_page_url(hit, &fetched);
     let is_pdf = is_pdf_content(hit, &fetched);
     let response_kind = response_content_kind(hit, &fetched);
-    let opened_page = if response_kind.starts_with("data_") {
+    let opened_page = if is_zenodo_record_api_url(&hit.url) {
+        extract_zenodo_record_opened_page(query, hit, &String::from_utf8_lossy(&fetched.body))
+            .unwrap_or_else(|| {
+                extract_text_opened_page(query, hit, &String::from_utf8_lossy(&fetched.body))
+            })
+    } else if response_kind.starts_with("data_") {
         OpenedPage {
             title: hit.title.clone(),
             summary: "Immutable original data file retrieved.".to_string(),
@@ -2945,21 +3034,26 @@ fn build_evidence_doc(
     if doc.evidence_eligible {
         doc.response_body = Some(fetched.body.clone());
     }
-    persist_original_data_artifact(config, &mut doc)?;
+    persist_response_artifact(config, &mut doc)?;
     Ok((doc, fetched.content_type))
 }
 
-fn persist_original_data_artifact(config: &SearchConfig, doc: &mut EvidenceDoc) -> Result<()> {
-    if !evidence_doc_is_data_file(doc) || !doc.evidence_eligible {
+fn persist_response_artifact(config: &SearchConfig, doc: &mut EvidenceDoc) -> Result<()> {
+    if !doc.evidence_eligible {
         return Ok(());
     }
     if !evidence_doc_has_immutable_response(doc) {
-        bail!("admitted original data response is not hash-bound");
+        bail!("admitted web response is not hash-bound");
     }
-    let body = doc
-        .response_body
-        .take()
-        .context("admitted original data response has no body")?;
+    let body = if evidence_doc_is_data_file(doc) {
+        doc.response_body
+            .take()
+            .context("admitted web response has no body")?
+    } else {
+        doc.response_body
+            .clone()
+            .context("admitted web response has no body")?
+    };
     let digest = snapshot_hash(&body);
     let bare_digest = digest.strip_prefix("sha256:").unwrap_or(&digest);
     let extension = doc
@@ -2973,6 +3067,9 @@ fn persist_original_data_artifact(config: &SearchConfig, doc: &mut EvidenceDoc) 
             "data_hdf5" => "h5",
             "data_json" => "json",
             "data_delimited" => "csv",
+            "pdf" => "pdf",
+            "html" => "html",
+            "page_content" => "txt",
             _ => "bin",
         })
         .unwrap_or("bin");
@@ -2991,17 +3088,162 @@ fn persist_original_data_artifact(config: &SearchConfig, doc: &mut EvidenceDoc) 
         let temporary =
             cache_dir.join(format!(".{bare_digest}.tmp-{}-{nonce}", std::process::id()));
         fs::write(&temporary, &body)
-            .with_context(|| format!("write original-data cache {}", temporary.display()))?;
+            .with_context(|| format!("write response cache {}", temporary.display()))?;
         if target.exists() {
-            fs::remove_file(&target).with_context(|| {
-                format!("replace corrupt original-data cache {}", target.display())
-            })?;
+            fs::remove_file(&target)
+                .with_context(|| format!("replace corrupt response cache {}", target.display()))?;
         }
         fs::rename(&temporary, &target)
-            .with_context(|| format!("publish original-data cache {}", target.display()))?;
+            .with_context(|| format!("publish response cache {}", target.display()))?;
     }
     doc.response_artifact_path = Some(target.to_string_lossy().into_owned());
+    if extension == "zip" {
+        doc.response_archive_manifest =
+            Some(persist_zip_archive_manifest(&target, digest.as_str())?);
+    }
     Ok(())
+}
+
+fn persist_zip_archive_manifest(archive_path: &Path, archive_sha256: &str) -> Result<Value> {
+    const MAX_ARCHIVE_MEMBERS: usize = 50_000;
+    const MAX_TOTAL_UNCOMPRESSED_BYTES: u64 = 4_000_000_000;
+
+    let manifest_path = archive_path.with_extension("zip.manifest.json");
+    if let Ok(bytes) = fs::read(&manifest_path) {
+        if let Ok(existing) = serde_json::from_slice::<Value>(&bytes) {
+            if existing.get("archive_sha256").and_then(Value::as_str) == Some(archive_sha256) {
+                return Ok(zip_manifest_receipt(
+                    archive_sha256,
+                    &manifest_path,
+                    &bytes,
+                    &existing,
+                ));
+            }
+        }
+    }
+
+    let file = fs::File::open(archive_path)
+        .with_context(|| format!("open ZIP artifact {}", archive_path.display()))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .with_context(|| format!("parse ZIP artifact {}", archive_path.display()))?;
+    if archive.len() > MAX_ARCHIVE_MEMBERS {
+        bail!(
+            "ZIP artifact {} contains {} members, above the safety limit {}",
+            archive_path.display(),
+            archive.len(),
+            MAX_ARCHIVE_MEMBERS
+        );
+    }
+
+    let mut members = Vec::with_capacity(archive.len());
+    let mut total_uncompressed_bytes = 0_u64;
+    let mut data_member_count = 0_usize;
+    let mut sample_data_members = Vec::new();
+    for index in 0..archive.len() {
+        let mut member = archive
+            .by_index(index)
+            .with_context(|| format!("read ZIP member index {index}"))?;
+        let name = member.name().to_string();
+        if member.enclosed_name().is_none() {
+            bail!("ZIP artifact contains unsafe member path `{name}`");
+        }
+        total_uncompressed_bytes = total_uncompressed_bytes.saturating_add(member.size());
+        if total_uncompressed_bytes > MAX_TOTAL_UNCOMPRESSED_BYTES {
+            bail!(
+                "ZIP artifact uncompressed size exceeds {} bytes",
+                MAX_TOTAL_UNCOMPRESSED_BYTES
+            );
+        }
+        let is_dir = member.is_dir();
+        let member_sha256 = if is_dir {
+            None
+        } else {
+            let mut hasher = Sha256::new();
+            let mut buffer = [0_u8; 64 * 1024];
+            loop {
+                let count = member
+                    .read(&mut buffer)
+                    .with_context(|| format!("hash ZIP member `{name}`"))?;
+                if count == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..count]);
+            }
+            Some(format!("sha256:{:x}", hasher.finalize()))
+        };
+        let lower_name = name.to_ascii_lowercase();
+        let is_data_member = [
+            ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".xlsx", ".xls", ".parquet", ".h5",
+            ".hdf5",
+        ]
+        .iter()
+        .any(|suffix| lower_name.ends_with(suffix));
+        if is_data_member {
+            data_member_count += 1;
+            if sample_data_members.len() < 24 {
+                sample_data_members.push(name.clone());
+            }
+        }
+        members.push(json!({
+            "path": name,
+            "is_dir": is_dir,
+            "compressed_size": member.compressed_size(),
+            "uncompressed_size": member.size(),
+            "crc32": format!("{:08x}", member.crc32()),
+            "sha256": member_sha256,
+        }));
+    }
+
+    let full_manifest = json!({
+        "schema_version": "ctox.web.zip-manifest.v1",
+        "archive_path": archive_path,
+        "archive_sha256": archive_sha256,
+        "member_count": members.len(),
+        "data_member_count": data_member_count,
+        "total_uncompressed_bytes": total_uncompressed_bytes,
+        "sample_data_members": sample_data_members,
+        "members": members,
+    });
+    let encoded = serde_json::to_vec_pretty(&full_manifest)?;
+    write_atomic(&manifest_path, &encoded)?;
+    Ok(zip_manifest_receipt(
+        archive_sha256,
+        &manifest_path,
+        &encoded,
+        &full_manifest,
+    ))
+}
+
+fn zip_manifest_receipt(
+    archive_sha256: &str,
+    manifest_path: &Path,
+    encoded: &[u8],
+    manifest: &Value,
+) -> Value {
+    json!({
+        "schema_version": "ctox.web.zip-manifest-receipt.v1",
+        "archive_sha256": archive_sha256,
+        "manifest_path": manifest_path,
+        "manifest_sha256": snapshot_hash(encoded),
+        "member_count": manifest.get("member_count").cloned().unwrap_or(Value::Null),
+        "data_member_count": manifest.get("data_member_count").cloned().unwrap_or(Value::Null),
+        "total_uncompressed_bytes": manifest.get("total_uncompressed_bytes").cloned().unwrap_or(Value::Null),
+        "sample_data_members": manifest.get("sample_data_members").cloned().unwrap_or_else(|| json!([])),
+    })
+}
+
+fn mock_zip_bytes() -> Vec<u8> {
+    let cursor = Cursor::new(Vec::new());
+    let mut writer = zip::ZipWriter::new(cursor);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    writer
+        .start_file("dataset.csv", options)
+        .expect("start mock ZIP member");
+    writer
+        .write_all(b"rpm,thrust_N,torque_Nm\n1000,1.2,0.03\n")
+        .expect("write mock ZIP member");
+    writer.finish().expect("finish mock ZIP").into_inner()
 }
 
 fn apply_evidence_gate(doc: &mut EvidenceDoc, hit: &SearchHit, fetched: &FetchedPageContent) {
@@ -3198,7 +3440,9 @@ fn url_path_has_suffix(raw: &str, suffixes: &[&str]) -> bool {
         .ok()
         .map(|url| url.path().to_ascii_lowercase())
         .unwrap_or_default();
-    suffixes.iter().any(|suffix| path.ends_with(suffix))
+    suffixes.iter().any(|suffix| {
+        path.ends_with(suffix) || path.split('/').any(|segment| segment.ends_with(suffix))
+    })
 }
 
 fn looks_like_delimited_data(body: &[u8]) -> bool {
@@ -3322,6 +3566,7 @@ fn failed_evidence_doc(hit: &SearchHit, status: u16) -> (EvidenceDoc, Option<Str
             raw_html: None,
             response_body: None,
             response_artifact_path: None,
+            response_archive_manifest: None,
             response_receipt: Some(ResponseReceipt {
                 requested_url: hit.url.clone(),
                 final_url: hit.url.clone(),
@@ -3382,6 +3627,7 @@ fn build_query_evidence_doc(
             raw_html: None,
             response_body: None,
             response_artifact_path: None,
+            response_archive_manifest: None,
             response_receipt: None,
         },
     )
@@ -3393,8 +3639,15 @@ fn rebuild_cached_evidence_doc(
     hit: &SearchHit,
     cached: &EvidenceDoc,
 ) -> EvidenceDoc {
-    let page_text = trim_text(&cached.page_text, config.max_page_chars);
-    let excerpts = if cached.is_pdf {
+    let is_data_file = evidence_doc_is_data_file(cached);
+    let page_text = if is_data_file {
+        String::new()
+    } else {
+        trim_text(&cached.page_text, config.max_page_chars)
+    };
+    let excerpts = if is_data_file {
+        Vec::new()
+    } else if cached.is_pdf {
         best_pdf_paragraphs_for_query(query, &cached.page_sections, 3, &page_text)
     } else {
         let paragraphs = clean_candidate_paragraphs(split_plaintext_paragraphs(&page_text));
@@ -3405,7 +3658,9 @@ fn rebuild_cached_evidence_doc(
             best
         }
     };
-    let summary = if excerpts.is_empty() {
+    let summary = if is_data_file {
+        "Immutable original data file retrieved.".to_string()
+    } else if excerpts.is_empty() {
         if !meaningful_extracted_page_text(&page_text) {
             String::new()
         } else if cached.summary.trim().is_empty() {
@@ -3418,13 +3673,16 @@ fn rebuild_cached_evidence_doc(
     };
     let find_results =
         build_find_in_page_results(query, &page_text, &cached.page_sections, &excerpts);
+    let rebuilt_content = EvidenceDoc {
+        page_text: page_text.clone(),
+        ..cached.clone()
+    };
     let evidence_eligible = cached.evidence_eligible
         && evidence_doc_has_immutable_response(cached)
-        && evidence_doc_has_meaningful_content(&EvidenceDoc {
-            page_text: page_text.clone(),
-            ..cached.clone()
-        })
-        && normalize_ws(&page_text) != normalize_ws(&hit.snippet)
+        && (evidence_doc_has_meaningful_content(&rebuilt_content)
+            || evidence_doc_is_data_file(&rebuilt_content))
+        && (evidence_doc_is_data_file(&rebuilt_content)
+            || normalize_ws(&page_text) != normalize_ws(&hit.snippet))
         && (!is_metadata_source(cached.source_tier.as_deref().unwrap_or_default())
             || is_zenodo_record_api_url(&cached.url));
     let verification_status = if evidence_eligible {
@@ -3459,6 +3717,7 @@ fn rebuild_cached_evidence_doc(
         raw_html: cached.raw_html.clone(),
         response_body: cached.response_body.clone(),
         response_artifact_path: cached.response_artifact_path.clone(),
+        response_archive_manifest: cached.response_archive_manifest.clone(),
         response_receipt: cached.response_receipt.clone(),
     }
 }
@@ -3612,7 +3871,7 @@ fn fetch_page_content(
                 config,
                 hit,
                 FetchedPageContent {
-                    body: b"PK\x03\x04ctox-mock-data-archive".to_vec(),
+                    body: mock_zip_bytes(),
                     content_type: Some("application/zip".to_string()),
                     final_url: hit.url.clone(),
                     http_status: 200,
@@ -3663,10 +3922,10 @@ fn enforce_response_limits(
 }
 
 fn fetch_http_page_content(config: &SearchConfig, hit: &SearchHit) -> Result<FetchedPageContent> {
-    const MAX_ATTEMPTS: usize = 3;
+    let max_attempts = if is_data_url_suffix(&hit.url) { 1 } else { 3 };
     let mut last_error: Option<anyhow::Error> = None;
-    for attempt in 0..MAX_ATTEMPTS {
-        let mut request = build_agent(config)?
+    for attempt in 0..max_attempts {
+        let mut request = build_agent_with_timeout(config, response_timeout(config, &hit.url))?
             .get(&hit.url)
             .set("accept", evidence_accept_header(&hit.url));
         if is_json_api_url(&hit.url) {
@@ -3713,7 +3972,7 @@ fn fetch_http_page_content(config: &SearchConfig, hit: &SearchHit) -> Result<Fet
             Ok(Err(error)) => {
                 let retryable = is_transient_fetch_error(&error);
                 last_error = Some(anyhow::Error::new(error));
-                if !retryable || attempt + 1 == MAX_ATTEMPTS {
+                if !retryable || attempt + 1 == max_attempts {
                     break;
                 }
                 std::thread::sleep(Duration::from_millis(20 * (attempt as u64 + 1)));
@@ -3723,7 +3982,7 @@ fn fetch_http_page_content(config: &SearchConfig, hit: &SearchHit) -> Result<Fet
                     "HTTP client panicked while reading the response from {}",
                     hit.url
                 ));
-                if attempt + 1 == MAX_ATTEMPTS {
+                if attempt + 1 == max_attempts {
                     break;
                 }
                 std::thread::sleep(Duration::from_millis(20 * (attempt as u64 + 1)));
@@ -7203,6 +7462,10 @@ fn load_cached_search(
     if !path.exists() {
         return Ok(None);
     }
+    if cache_file_is_oversized(&path, MAX_LEGACY_SEARCH_CACHE_BYTES) {
+        let _ = fs::remove_file(&path);
+        return Ok(None);
+    }
     let raw = fs::read_to_string(&path)
         .with_context(|| format!("failed to read web-search cache {}", path.display()))?;
     let file: SearchCacheFile =
@@ -7214,7 +7477,12 @@ fn load_cached_search(
         .filter(|entry| unix_ts().saturating_sub(entry.created_at_epoch) <= config.cache_ttl_secs))
 }
 
-fn write_cached_search(root: &Path, cache_key: &str, response: &SearchResponse) -> Result<()> {
+fn write_cached_search(
+    root: &Path,
+    config: &SearchConfig,
+    cache_key: &str,
+    response: &SearchResponse,
+) -> Result<()> {
     let path = cache_path(root);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| {
@@ -7222,26 +7490,54 @@ fn write_cached_search(root: &Path, cache_key: &str, response: &SearchResponse) 
         })?;
     }
 
-    let mut file = if path.exists() {
-        let raw = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read web-search cache {}", path.display()))?;
-        serde_json::from_str::<SearchCacheFile>(&raw).unwrap_or_default()
-    } else {
-        SearchCacheFile::default()
-    };
+    let mut file =
+        if path.exists() && !cache_file_is_oversized(&path, MAX_LEGACY_SEARCH_CACHE_BYTES) {
+            let raw = fs::read_to_string(&path)
+                .with_context(|| format!("failed to read web-search cache {}", path.display()))?;
+            serde_json::from_str::<SearchCacheFile>(&raw).unwrap_or_default()
+        } else {
+            SearchCacheFile::default()
+        };
 
+    let mut cached_evidence = response.evidence.clone();
+    for doc in &mut cached_evidence {
+        doc.response_body = None;
+        doc.raw_html = None;
+    }
     file.entries.insert(
         cache_key.to_string(),
         SearchCacheEntry {
             created_at_epoch: unix_ts(),
             provider: response.provider.clone(),
             hits: response.hits.clone(),
-            evidence: response.evidence.clone(),
+            evidence: cached_evidence,
         },
     );
-    let encoded =
-        serde_json::to_string_pretty(&file).context("failed to encode web-search cache")?;
-    fs::write(&path, encoded)
+    let now = unix_ts();
+    file.entries
+        .retain(|_, entry| now.saturating_sub(entry.created_at_epoch) <= config.cache_ttl_secs);
+    if file.entries.len() > 128 {
+        let mut newest = file
+            .entries
+            .iter()
+            .map(|(key, entry)| (entry.created_at_epoch, key.clone()))
+            .collect::<Vec<_>>();
+        newest.sort_by(|a, b| b.cmp(a));
+        let keep = newest
+            .into_iter()
+            .take(128)
+            .map(|(_, key)| key)
+            .collect::<BTreeSet<_>>();
+        file.entries.retain(|key, _| keep.contains(key));
+    }
+    for entry in file.entries.values_mut() {
+        for doc in &mut entry.evidence {
+            doc.response_body = None;
+            doc.raw_html = None;
+        }
+    }
+    let encoded = serde_json::to_vec(&file).context("failed to encode web-search cache")?;
+    write_atomic(&path, &encoded)
         .with_context(|| format!("failed to write web-search cache {}", path.display()))
 }
 
@@ -7319,6 +7615,10 @@ fn load_page_cache(root: &Path) -> Result<PageCacheFile> {
     if !path.exists() {
         return Ok(PageCacheFile::default());
     }
+    if cache_file_is_oversized(&path, MAX_LEGACY_PAGE_CACHE_BYTES) {
+        let _ = fs::remove_file(&path);
+        return Ok(PageCacheFile::default());
+    }
     let raw = fs::read_to_string(&path)
         .with_context(|| format!("failed to read web-search page cache {}", path.display()))?;
     serde_json::from_str(&raw).context("failed to parse web-search page cache")
@@ -7334,16 +7634,83 @@ fn write_page_cache(root: &Path, file: &PageCacheFile) -> Result<()> {
             )
         })?;
     }
-    let encoded =
-        serde_json::to_string_pretty(file).context("failed to encode web-search page cache")?;
-    fs::write(&path, encoded)
+    let encoded = serde_json::to_vec(file).context("failed to encode web-search page cache")?;
+    write_atomic(&path, &encoded)
         .with_context(|| format!("failed to write web-search page cache {}", path.display()))
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+    fs::write(&temporary, bytes)
+        .with_context(|| format!("write temporary cache {}", temporary.display()))?;
+    if fs::rename(&temporary, path).is_ok() {
+        return Ok(());
+    }
+    if path.exists() {
+        fs::remove_file(path).with_context(|| format!("replace cache {}", path.display()))?;
+    }
+    fs::rename(&temporary, path).with_context(|| format!("publish cache {}", path.display()))
+}
+
+fn cache_file_is_oversized(path: &Path, max_bytes: u64) -> bool {
+    fs::metadata(path)
+        .ok()
+        .is_some_and(|metadata| metadata.len() > max_bytes)
 }
 
 fn prune_expired_page_cache(file: &mut PageCacheFile, ttl_secs: u64) {
     let now = unix_ts();
     file.entries
         .retain(|_, entry| now.saturating_sub(entry.created_at_epoch) <= ttl_secs);
+    let mut compacted = BTreeMap::<String, PageCacheEntry>::new();
+    let mut aliases = BTreeMap::<String, String>::new();
+    for (old_key, mut entry) in std::mem::take(&mut file.entries) {
+        entry.doc.response_body = None;
+        entry.doc.raw_html = None;
+        let canonical = [
+            entry.canonical_url.as_str(),
+            entry.final_url.as_str(),
+            entry.original_url.as_str(),
+        ]
+        .into_iter()
+        .map(normalize_url_cache_key)
+        .find(|key| !key.is_empty())
+        .unwrap_or_else(|| old_key.clone());
+        let replace = compacted.get(&canonical).map_or(true, |current| {
+            current.created_at_epoch <= entry.created_at_epoch
+        });
+        if replace {
+            compacted.insert(canonical.clone(), entry.clone());
+        }
+        for alias in [
+            old_key,
+            normalize_url_cache_key(&entry.original_url),
+            normalize_url_cache_key(&entry.final_url),
+            normalize_url_cache_key(&entry.canonical_url),
+        ] {
+            if !alias.is_empty() && alias != canonical {
+                aliases.insert(alias, canonical.clone());
+            }
+        }
+    }
+    aliases.extend(std::mem::take(&mut file.aliases));
+    aliases.retain(|alias, target| alias != target && compacted.contains_key(target));
+    if compacted.len() > 2_048 {
+        let mut newest = compacted
+            .iter()
+            .map(|(key, entry)| (entry.created_at_epoch, key.clone()))
+            .collect::<Vec<_>>();
+        newest.sort_by(|a, b| b.cmp(a));
+        let keep = newest
+            .into_iter()
+            .take(2_048)
+            .map(|(_, key)| key)
+            .collect::<BTreeSet<_>>();
+        compacted.retain(|key, _| keep.contains(key));
+        aliases.retain(|_, target| keep.contains(target));
+    }
+    file.entries = compacted;
+    file.aliases = aliases;
 }
 
 fn normalize_url_cache_key(raw: &str) -> String {
@@ -7360,9 +7727,13 @@ fn page_cache_path(root: &Path) -> PathBuf {
 }
 
 fn build_agent(config: &SearchConfig) -> Result<ureq::Agent> {
+    build_agent_with_timeout(config, Duration::from_millis(config.timeout_ms))
+}
+
+fn build_agent_with_timeout(config: &SearchConfig, timeout: Duration) -> Result<ureq::Agent> {
     Ok(ureq::AgentBuilder::new()
         .user_agent(&config.user_agent)
-        .timeout(Duration::from_millis(config.timeout_ms))
+        .timeout(timeout)
         // SSRF guard: every fetch (evidence pages from a SERP, the model-chosen
         // `ctox_web_read` URL, redirect hops) only connects to public addresses,
         // unless the operator allow-listed the host.
@@ -7370,6 +7741,15 @@ fn build_agent(config: &SearchConfig) -> Result<ureq::Agent> {
             config.egress_allow_hosts.clone(),
         ))
         .build())
+}
+
+fn response_timeout(config: &SearchConfig, url: &str) -> Duration {
+    let configured = Duration::from_millis(config.timeout_ms);
+    if is_data_url_suffix(url) {
+        configured.max(Duration::from_secs(600))
+    } else {
+        configured
+    }
 }
 
 fn percent_decode_lossy(input: &str) -> String {
@@ -8680,6 +9060,7 @@ mod tests {
             raw_html: None,
             response_body: Some(body.clone()),
             response_artifact_path: None,
+            response_archive_manifest: None,
             response_receipt: Some(ResponseReceipt {
                 requested_url: "https://www.iso.org/standard/54074.html".to_string(),
                 final_url: "https://www.iso.org/standard/54074.html".to_string(),
@@ -8750,14 +9131,66 @@ mod tests {
             .response_artifact_path
             .as_deref()
             .expect("hash-addressed original data artifact");
+        assert!(fs::read(artifact)
+            .expect("original data artifact")
+            .starts_with(b"PK\x03\x04"));
         assert_eq!(
-            fs::read(artifact).expect("original data artifact"),
-            b"PK\x03\x04ctox-mock-data-archive"
+            entry.doc.response_archive_manifest.as_ref().unwrap()["member_count"],
+            json!(1)
+        );
+        assert_eq!(
+            entry.doc.response_archive_manifest.as_ref().unwrap()["data_member_count"],
+            json!(1)
         );
         assert_eq!(
             entry.doc.response_receipt.as_ref().unwrap().sha256,
             entry.snapshot_hash
         );
+
+        let cache_config = test_config(ProviderKind::Mock);
+        let mut session = WebSearchSession::new(&root, &cache_config).unwrap();
+        let cached = session
+            .load_cached_page_doc(url)
+            .expect("persisted data cache entry");
+        let rebuilt = rebuild_cached_evidence_doc(
+            &cache_config,
+            "different but relevant original dataset query",
+            &fixture_hit(url),
+            &cached,
+        );
+        assert!(evidence_doc_is_admitted_for_read(&rebuilt));
+        assert!(rebuilt.page_text.is_empty());
+        assert_eq!(rebuilt.summary, "Immutable original data file retrieved.");
+    }
+
+    #[test]
+    fn repository_content_routes_are_classified_by_filename_segment() {
+        let url = "https://zenodo.org/api/records/20111572/files/Propeller_Database.zip/content";
+        assert!(is_data_url_suffix(url));
+        assert!(!content_type_is_disallowed(
+            Some("application/octet-stream"),
+            url
+        ));
+        let hit = SearchHit {
+            title: "Propeller_Database.zip".to_string(),
+            url: url.to_string(),
+            snippet: String::new(),
+            source: "direct".to_string(),
+            rank: 1,
+        };
+        let fetched = FetchedPageContent {
+            body: b"PK\x03\x04archive".to_vec(),
+            content_type: Some("application/octet-stream".to_string()),
+            final_url: url.to_string(),
+            http_status: 200,
+        };
+        assert_eq!(response_content_kind(&hit, &fetched), "data_zip");
+
+        let invalid = FetchedPageContent {
+            body: b"not a zip".to_vec(),
+            ..fetched
+        };
+        assert_eq!(response_content_kind(&hit, &invalid), "malformed_data");
     }
 
     #[test]
@@ -8937,6 +9370,17 @@ mod tests {
     }
 
     #[test]
+    fn oversized_cache_detection_uses_file_size_without_parsing() {
+        let root = unique_test_root("oversized-cache");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("cache.json");
+        fs::write(&path, b"0123456789").unwrap();
+        assert!(cache_file_is_oversized(&path, 9));
+        assert!(!cache_file_is_oversized(&path, 10));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn provider_cooldown_persists_across_calls_and_expires() {
         let root = unique_test_root("provider-cooldown");
         assert!(
@@ -8982,6 +9426,7 @@ mod tests {
             raw_html: None,
             response_body: None,
             response_artifact_path: None,
+            response_archive_manifest: None,
             response_receipt: None,
         };
 
@@ -9059,6 +9504,7 @@ mod tests {
                 raw_html: None,
                 response_body: None,
                 response_artifact_path: None,
+                response_archive_manifest: None,
                 response_receipt: None,
             }],
             executed_queries: vec!["propeller torque thrust".to_string()],
@@ -9114,6 +9560,7 @@ mod tests {
                 raw_html: None,
                 response_body: None,
                 response_artifact_path: None,
+                response_archive_manifest: None,
                 response_receipt: None,
             }],
             executed_queries: vec!["shell source".to_string()],
@@ -9172,6 +9619,7 @@ mod tests {
                 raw_html: None,
                 response_body: None,
                 response_artifact_path: None,
+                response_archive_manifest: None,
                 response_receipt: None,
             }],
             executed_queries: vec!["find CTOX_REMOTE_WEB_OK".to_string()],
@@ -10123,6 +10571,7 @@ mod tests {
             raw_html: None,
             response_body: None,
             response_artifact_path: None,
+            response_archive_manifest: None,
             response_receipt: None,
         };
 
@@ -10331,6 +10780,7 @@ mod tests {
             ),
             response_body: None,
             response_artifact_path: None,
+            response_archive_manifest: None,
             response_receipt: None,
         };
         let url = doc.url.clone();
@@ -10488,6 +10938,7 @@ mod tests {
             raw_html: None,
             response_body: Some(body.clone()),
             response_artifact_path: None,
+            response_archive_manifest: None,
             response_receipt: Some(receipt.clone()),
         };
         let cases = [
@@ -11577,6 +12028,22 @@ mod tests {
         assert_eq!(
             response_byte_limit(&config, "https://example.org/page", Some("text/html")),
             config.max_page_bytes
+        );
+    }
+
+    #[test]
+    fn repository_data_downloads_receive_a_streaming_timeout_budget() {
+        let config = test_config(ProviderKind::Mock);
+        assert_eq!(
+            response_timeout(
+                &config,
+                "https://zenodo.org/api/records/20111572/files/Propeller_Database.zip/content"
+            ),
+            Duration::from_secs(600)
+        );
+        assert_eq!(
+            response_timeout(&config, "https://example.org/article"),
+            Duration::from_millis(config.timeout_ms)
         );
     }
 

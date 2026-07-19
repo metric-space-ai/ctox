@@ -5,6 +5,7 @@ use serde_json::json;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::VecDeque;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -212,6 +213,8 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
             "metadata_only": plan.metadata_only,
             "ok": payload.get("ok").and_then(Value::as_bool).unwrap_or(false),
             "provider": payload.get("provider").cloned().unwrap_or(Value::Null),
+            "executed_queries": payload.get("executed_queries").cloned().unwrap_or_else(|| json!([])),
+            "source_failures": payload.get("source_failures").cloned().unwrap_or_else(|| json!([])),
             "result_count": payload.get("results").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
         }));
         collect_search_sources(&payload, plan, &mut seen_urls, &mut sources);
@@ -219,20 +222,38 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
     let database_runs =
         collect_scholarly_database_sources(root, &plans, request, &mut seen_urls, &mut sources);
 
-    let read_budget = request.depth.read_budget().min(max_sources);
-    let selected_sources = select_balanced_sources(sources, max_sources);
-    let mut enriched = Vec::with_capacity(selected_sources.len());
-    for mut source in selected_sources {
+    let discovered_candidate_count = sources.len();
+    // `max_sources` is the final evidence target, not a pre-read candidate
+    // cap. A failed first page must cause the next ranked candidate to be
+    // tried rather than ending discovery prematurely.
+    let read_budget = research_read_budget(request.depth, max_sources);
+    let candidate_pool_limit = research_candidate_pool_limit(request.depth, max_sources);
+    let selected_sources = select_balanced_sources(sources, candidate_pool_limit);
+    let mut read_queue = VecDeque::from(selected_sources);
+    let mut queued_urls = read_queue
+        .iter()
+        .filter_map(|source| source.get("url").and_then(Value::as_str))
+        .map(normalize_url_key)
+        .collect::<BTreeSet<_>>();
+    let mut enriched = Vec::with_capacity(read_queue.len());
+    let mut read_attempts = 0usize;
+    let mut admitted_sources = 0usize;
+    let mut followed_data_links = 0usize;
+    while let Some(mut source) = read_queue.pop_front() {
         let read_url = source_read_url(&source);
-        let should_read = enriched.len() < read_budget && should_attempt_source_read(&source);
+        let should_read = read_attempts < read_budget
+            && admitted_sources < max_sources
+            && should_attempt_source_read(&source);
         if should_read {
+            read_attempts += 1;
             if let Some(url) = read_url {
+                let relevance_query = source_relevance_query(&source, &search_query);
                 match run_ctox_web_read_tool(
                     root,
                     &DirectWebReadRequest {
                         url: url.clone(),
-                        query: Some(search_query.clone()),
-                        find: build_find_terms(&search_query),
+                        query: Some(relevance_query.clone()),
+                        find: build_find_terms(&relevance_query),
                         workspace: None,
                         include_full_text: true,
                         country: None,
@@ -245,7 +266,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             .get("evidence_relevance_score")
                             .and_then(Value::as_i64)
                             .or_else(|| {
-                                score_read_evidence_relevance(&read_payload, &search_query)
+                                score_read_evidence_relevance(&read_payload, &relevance_query)
                             });
                         let actual_full_text_or_data =
                             read_has_actual_full_text_or_data(&source, &read_payload);
@@ -271,6 +292,9 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             transport_verified,
                             content_extracted,
                         );
+                        if evidence_eligible {
+                            admitted_sources += 1;
+                        }
                         source["evidence_eligible"] = Value::Bool(evidence_eligible);
                         if let Some(reason) = rejection_reason {
                             source["evidence_rejection_reason"] = Value::String(reason.to_string());
@@ -293,6 +317,14 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             .unwrap_or(Value::Null);
                         source["response_content_kind"] = read_payload
                             .get("response_content_kind")
+                            .cloned()
+                            .unwrap_or(Value::Null);
+                        source["response_artifact_path"] = read_payload
+                            .get("response_artifact_path")
+                            .cloned()
+                            .unwrap_or(Value::Null);
+                        source["response_archive_manifest"] = read_payload
+                            .get("response_archive_manifest")
                             .cloned()
                             .unwrap_or(Value::Null);
                         if read_payload
@@ -327,11 +359,26 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             "snapshot_hash": read_payload.get("snapshot_hash").cloned().unwrap_or(Value::Null),
                             "response_metadata": read_payload.get("response_metadata").cloned().unwrap_or(Value::Null),
                             "response_content_kind": read_payload.get("response_content_kind").cloned().unwrap_or(Value::Null),
-                            "response_body": read_payload.get("response_body").cloned().unwrap_or(Value::Null),
+                            "response_artifact_path": read_payload.get("response_artifact_path").cloned().unwrap_or(Value::Null),
+                            "response_archive_manifest": read_payload.get("response_archive_manifest").cloned().unwrap_or(Value::Null),
                             "source_tier": read_payload.get("source_tier").cloned().unwrap_or(Value::Null),
                             "transport_evidence_eligible": read_payload.get("transport_evidence_eligible").cloned().unwrap_or(Value::Bool(false)),
                             "evidence_eligible": read_payload.get("evidence_eligible").cloned().unwrap_or(Value::Bool(false)),
                         });
+                        for followup in followup_data_sources(&source, &read_payload) {
+                            let normalized = followup
+                                .get("url")
+                                .and_then(Value::as_str)
+                                .map(normalize_url_key)
+                                .unwrap_or_default();
+                            if !normalized.is_empty()
+                                && queued_urls.insert(normalized)
+                                && read_queue.len() + enriched.len() < candidate_pool_limit
+                            {
+                                read_queue.push_front(followup);
+                                followed_data_links += 1;
+                            }
+                        }
                     }
                     Err(err) => {
                         mark_source_read_failure(&mut source, "transport_not_verified");
@@ -416,9 +463,14 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
             "planned_search_queries": plans.len(),
             "executed_search_queries": search_runs.len(),
             "database_queries": database_runs.len(),
+            "discovered_source_candidates": discovered_candidate_count,
+            "candidate_pool_limit": candidate_pool_limit,
             "deduplicated_sources": enriched.len(),
             "verified_sources": verified_sources.len(),
             "rejected_source_candidates": rejected_source_count,
+            "read_budget": read_budget,
+            "read_attempts": read_attempts,
+            "followed_data_links": followed_data_links,
             "sources_with_page_read_attempts": sources_with_read,
             "successful_page_reads": successful_page_reads,
             "failed_page_reads": failed_page_reads,
@@ -448,6 +500,16 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
     }
 
     Ok(payload)
+}
+
+fn research_read_budget(depth: DeepResearchDepth, max_sources: usize) -> usize {
+    depth.read_budget().max(max_sources).min(300)
+}
+
+fn research_candidate_pool_limit(depth: DeepResearchDepth, max_sources: usize) -> usize {
+    research_read_budget(depth, max_sources)
+        .max(max_sources.saturating_mul(4))
+        .min(300)
 }
 
 fn select_balanced_sources(sources: Vec<Value>, max_sources: usize) -> Vec<Value> {
@@ -690,12 +752,16 @@ fn append_focus(mut query: String, focus: Option<&str>) -> String {
         query.push(' ');
         query.push_str(focus);
     }
-    query.chars().take(260).collect()
+    truncate_query_at_word_boundary(&query, 180)
 }
 
 fn derive_measurement_data_query(raw: &str) -> String {
     let lowered = raw.to_ascii_lowercase();
-    let mut terms = important_query_terms(raw);
+    let mut terms = topical_query_terms(raw)
+        .into_iter()
+        .filter(|term| !term.chars().any(|ch| ch.is_ascii_digit()))
+        .take(10)
+        .collect::<Vec<_>>();
     if lowered.contains("load") || lowered.contains("last") {
         terms.extend([
             "load".to_string(),
@@ -721,7 +787,30 @@ fn derive_measurement_data_query(raw: &str) -> String {
             unique.push(term);
         }
     }
-    unique.join(" ").chars().take(220).collect()
+    truncate_query_at_word_boundary(&unique.join(" "), 150)
+}
+
+fn truncate_query_at_word_boundary(query: &str, max_chars: usize) -> String {
+    let compact = query.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() <= max_chars {
+        return compact;
+    }
+    let mut out = String::new();
+    for term in compact.split_whitespace() {
+        let next_len = out.chars().count() + usize::from(!out.is_empty()) + term.chars().count();
+        if next_len > max_chars {
+            break;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(term);
+    }
+    out
+}
+
+fn compose_search_query(core: &str, suffix: &str) -> String {
+    truncate_query_at_word_boundary(&format!("{core} {suffix}"), 180)
 }
 
 fn build_research_search_plan(
@@ -739,14 +828,14 @@ fn build_research_search_plan(
         },
         ResearchSearchPlan {
             label: "scholarly_general",
-            query: format!("{query} review state of the art feasibility limitations"),
+            query: compose_search_query(query, "review feasibility limitations"),
             domains: Vec::new(),
             scholarly: true,
             metadata_only: false,
         },
         ResearchSearchPlan {
             label: "open_access",
-            query: format!("{query} PDF open access preprint DOI"),
+            query: compose_search_query(query, "PDF open access DOI"),
             domains: vec![
                 "arxiv.org".to_string(),
                 "pmc.ncbi.nlm.nih.gov".to_string(),
@@ -759,14 +848,14 @@ fn build_research_search_plan(
         },
         ResearchSearchPlan {
             label: "semantic_scholar",
-            query: format!("{query} site:semanticscholar.org"),
+            query: compose_search_query(query, "site:semanticscholar.org"),
             domains: vec!["semanticscholar.org".to_string()],
             scholarly: true,
             metadata_only: true,
         },
         ResearchSearchPlan {
             label: "crossref_doi",
-            query: format!("{query} DOI Crossref"),
+            query: compose_search_query(query, "DOI Crossref"),
             domains: vec!["crossref.org".to_string(), "doi.org".to_string()],
             scholarly: true,
             metadata_only: true,
@@ -777,23 +866,24 @@ fn build_research_search_plan(
         plans.extend([
             ResearchSearchPlan {
                 label: "measured_data_sources",
-                query: format!("{query} measured experimental dataset benchmark data tables"),
-                domains: Vec::new(),
-                scholarly: true,
-                metadata_only: false,
-            },
-            ResearchSearchPlan {
-                label: "load_and_operating_fields",
-                query: format!(
-                    "{query} force moment load thrust torque RPM current voltage power vibration IMU"
+                query: compose_search_query(
+                    query,
+                    "measured experimental dataset benchmark tables",
                 ),
                 domains: Vec::new(),
                 scholarly: true,
                 metadata_only: false,
             },
             ResearchSearchPlan {
+                label: "load_and_operating_fields",
+                query: compose_search_query(query, "force moment thrust torque RPM vibration"),
+                domains: Vec::new(),
+                scholarly: true,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
                 label: "data_repositories",
-                query: format!("{query} dataset csv xlsx github zenodo figshare mendeley dataverse"),
+                query: compose_search_query(query, "dataset csv github zenodo figshare dataverse"),
                 domains: vec![
                     "github.com".to_string(),
                     "zenodo.org".to_string(),
@@ -806,7 +896,7 @@ fn build_research_search_plan(
             },
             ResearchSearchPlan {
                 label: "technical_reports_data",
-                query: format!("{query} technical report data report test bed raw data"),
+                query: compose_search_query(query, "technical report test bed raw data"),
                 domains: vec![
                     "nasa.gov".to_string(),
                     "osti.gov".to_string(),
@@ -826,7 +916,7 @@ fn build_research_search_plan(
     {
         plans.push(ResearchSearchPlan {
             label: "user_focus",
-            query: format!("{query} {}", focus.trim()),
+            query: compose_search_query(query, focus.trim()),
             domains: Vec::new(),
             scholarly: false,
             metadata_only: false,
@@ -893,8 +983,9 @@ fn build_research_search_plan(
             },
             ResearchSearchPlan {
                 label: "aircraft_composites_ndt",
-                query: format!(
-                    "{query} aircraft composite non destructive testing terahertz eddy current thermography"
+                query: compose_search_query(
+                    query,
+                    "aircraft composite non destructive testing terahertz eddy current thermography",
                 ),
                 domains: vec![
                     "sciencedirect.com".to_string(),
@@ -908,7 +999,7 @@ fn build_research_search_plan(
             },
             ResearchSearchPlan {
                 label: "patents_and_industry",
-                query: format!("{query} patent industrial inspection system"),
+                query: compose_search_query(query, "patent industrial inspection system"),
                 domains: vec![
                     "patents.google.com".to_string(),
                     "comsol.com".to_string(),
@@ -919,7 +1010,10 @@ fn build_research_search_plan(
             },
             ResearchSearchPlan {
                 label: "failure_modes",
-                query: format!("{query} anomaly defect delamination corrosion broken mesh hidden metal"),
+                query: compose_search_query(
+                    query,
+                    "anomaly defect delamination corrosion broken mesh hidden metal",
+                ),
                 domains: Vec::new(),
                 scholarly: false,
                 metadata_only: false,
@@ -929,21 +1023,21 @@ fn build_research_search_plan(
         plans.extend([
             ResearchSearchPlan {
                 label: "topic_literature",
-                query: format!("{query} literature review technical report dataset"),
+                query: compose_search_query(query, "literature review technical report dataset"),
                 domains: Vec::new(),
                 scholarly: true,
                 metadata_only: false,
             },
             ResearchSearchPlan {
                 label: "topic_measurement_data",
-                query: format!("{query} measured data experimental dataset benchmark"),
+                query: compose_search_query(query, "measured data experimental dataset benchmark"),
                 domains: Vec::new(),
                 scholarly: true,
                 metadata_only: false,
             },
             ResearchSearchPlan {
                 label: "topic_open_access",
-                query: format!("{query} open access PDF data repository"),
+                query: compose_search_query(query, "open access PDF data repository"),
                 domains: vec![
                     "arxiv.org".to_string(),
                     "zenodo.org".to_string(),
@@ -957,14 +1051,17 @@ fn build_research_search_plan(
             },
             ResearchSearchPlan {
                 label: "topic_patents_industry",
-                query: format!("{query} patent manufacturer datasheet manual specification"),
+                query: compose_search_query(
+                    query,
+                    "patent manufacturer datasheet manual specification",
+                ),
                 domains: vec!["patents.google.com".to_string(), "github.com".to_string()],
                 scholarly: false,
                 metadata_only: false,
             },
             ResearchSearchPlan {
                 label: "topic_reports_standards",
-                query: format!("{query} government technical report standard guidance"),
+                query: compose_search_query(query, "government technical report standard guidance"),
                 domains: Vec::new(),
                 scholarly: false,
                 metadata_only: false,
@@ -1433,7 +1530,9 @@ fn is_data_file_url(raw: &str) -> bool {
         ".gz", ".tgz", ".h5", ".hdf5",
     ]
     .iter()
-    .any(|suffix| path.ends_with(suffix))
+    .any(|suffix| {
+        path.ends_with(suffix) || path.split('/').any(|segment| segment.ends_with(suffix))
+    })
 }
 
 fn read_has_meaningful_evidence(read: &Value) -> bool {
@@ -1851,6 +1950,124 @@ fn source_read_url(source: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn source_relevance_query(source: &Value, research_query: &str) -> String {
+    let mut source_text = String::new();
+    append_json_text(&mut source_text, source.get("title"));
+    append_json_text(&mut source_text, source.get("snippet"));
+    append_json_text(&mut source_text, source.get("parent_title"));
+    let mut terms = important_query_terms(&source_text);
+    if source.get("source_type").and_then(Value::as_str) == Some("data_file") {
+        terms.retain(|term| !term.chars().any(|ch| ch.is_ascii_digit()));
+    }
+    let source_has_numeric_identifier = source_text.chars().any(|ch| ch.is_ascii_digit());
+    for term in topical_query_terms(research_query) {
+        if terms.len() >= 12 {
+            break;
+        }
+        if (source.get("source_type").and_then(Value::as_str) == Some("data_file")
+            || !source_has_numeric_identifier)
+            && term.chars().any(|ch| ch.is_ascii_digit())
+        {
+            continue;
+        }
+        if !terms
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(&term))
+        {
+            terms.push(term);
+        }
+    }
+    if terms.is_empty() {
+        return truncate_query_at_word_boundary(research_query, 140);
+    }
+    truncate_query_at_word_boundary(&terms.join(" "), 140)
+}
+
+fn followup_data_sources(parent: &Value, read: &Value) -> Vec<Value> {
+    let mut text = String::new();
+    append_json_text(&mut text, read.get("page_text"));
+    append_json_text(&mut text, read.get("page_text_excerpt"));
+    append_json_text(&mut text, read.get("page_sections"));
+    append_json_text(&mut text, read.get("excerpts"));
+    append_json_text(&mut text, read.get("find_results"));
+    let parent_title = parent
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("repository source");
+    let parent_url = parent
+        .get("canonical_url")
+        .and_then(Value::as_str)
+        .or_else(|| parent.get("url").and_then(Value::as_str))
+        .unwrap_or_default();
+    let mut seen = BTreeSet::new();
+    let mut candidates = extract_urls(&text);
+    if let Some(raw_html) = read.get("raw_html").and_then(Value::as_str) {
+        candidates.extend(extract_html_data_links(raw_html, parent_url));
+    }
+    candidates
+        .into_iter()
+        .filter(|url| {
+            is_data_file_url(url)
+                || Url::parse(url).ok().is_some_and(|parsed| {
+                    let path = parsed.path().to_ascii_lowercase();
+                    path.contains("/files/") && path.ends_with("/content")
+                })
+        })
+        .filter(|url| seen.insert(normalize_url_key(url)))
+        .map(|url| {
+            let title = Url::parse(&url)
+                .ok()
+                .and_then(|parsed| {
+                    parsed.path_segments().and_then(|segments| {
+                        segments
+                            .filter(|segment| !segment.eq_ignore_ascii_case("content"))
+                            .next_back()
+                            .map(ToOwned::to_owned)
+                    })
+                })
+                .unwrap_or_else(|| "original data file".to_string());
+            json!({
+                "title": title,
+                "url": url,
+                "canonical_url": url,
+                "domain": domain_for_url(&url),
+                "snippet": format!("Original data file linked by {parent_title}"),
+                "source": "repository_followup",
+                "source_type": "data_file",
+                "source_tier": "primary",
+                "verification_status": "unverified",
+                "discovery_status": "linked_from_verified_repository_metadata",
+                "evidence_eligible": false,
+                "search_label": "repository_file_followup",
+                "scholarly": false,
+                "metadata_only": false,
+                "discovery_score": 100,
+                "parent_title": parent_title,
+                "parent_url": parent_url,
+            })
+        })
+        .collect()
+}
+
+fn extract_html_data_links(raw_html: &str, base_url: &str) -> Vec<String> {
+    let document = Html::parse_document(raw_html);
+    let Ok(selector) = Selector::parse("a[href]") else {
+        return Vec::new();
+    };
+    let base = Url::parse(base_url).ok();
+    document
+        .select(&selector)
+        .filter_map(|anchor| anchor.value().attr("href"))
+        .filter_map(|href| {
+            Url::parse(href)
+                .ok()
+                .or_else(|| base.as_ref().and_then(|base| base.join(href).ok()))
+        })
+        .map(|url| url.to_string())
+        .filter(|url| is_data_file_url(url))
+        .collect()
+}
+
 fn collect_scholarly_database_sources(
     root: &Path,
     plans: &[ResearchSearchPlan],
@@ -1882,8 +2099,19 @@ fn collect_scholarly_database_sources(
             12usize,
         ),
     ];
+    let mut rate_limited = BTreeSet::new();
     for query in queries {
         for (label, provider, limit) in databases {
+            if rate_limited.contains(label) {
+                runs.push(json!({
+                    "database": label,
+                    "query": query,
+                    "ok": false,
+                    "skipped": true,
+                    "error": "provider skipped after rate limit in this research run",
+                }));
+                continue;
+            }
             runs.push(match scholarly_db_query(root, &query, provider, limit) {
                 Ok(items) => {
                     let count = push_database_sources(label, &query, items, seen_urls, sources);
@@ -1894,12 +2122,19 @@ fn collect_scholarly_database_sources(
                         "result_count": count,
                     })
                 }
-                Err(err) => json!({
-                    "database": label,
-                    "query": query,
-                    "ok": false,
-                    "error": err.to_string(),
-                }),
+                Err(err) => {
+                    let rate_limit = is_rate_limit_error(&err);
+                    if rate_limit {
+                        rate_limited.insert(label);
+                    }
+                    json!({
+                        "database": label,
+                        "query": query,
+                        "ok": false,
+                        "rate_limited": rate_limit,
+                        "error": err.to_string(),
+                    })
+                }
             });
         }
     }
@@ -1926,6 +2161,11 @@ fn scholarly_db_query(
         .into_iter()
         .map(scholarly_result_to_db_value)
         .collect())
+}
+
+fn is_rate_limit_error(err: &anyhow::Error) -> bool {
+    let text = format!("{err:#}").to_ascii_lowercase();
+    text.contains("429") || text.contains("too many requests") || text.contains("rate limit")
 }
 
 /// Map a typed `ScholarlyResult` into the loose `Value` shape that
@@ -3419,6 +3659,116 @@ mod tests {
         assert!(query.contains("force"));
         assert!(query.contains("torque"));
         assert!(query.contains("dataset"));
+    }
+
+    #[test]
+    fn long_measurement_prompt_produces_complete_bounded_search_queries() {
+        let prompt = "ENOLA Zenodo record 20111572 Propeller_Database.zip original downloadable artifact, propeller diameter pitch RPM thrust torque vibration measurements, SKF drone bearing recovery, bearing radial axial load from propeller drivetrain inputs";
+        let query = derive_research_search_query(prompt, None, ResearchProfile::Generic);
+        assert!(query.chars().count() <= 180);
+        assert!(!query.ends_with("re"));
+        assert!(query.contains("propeller"));
+        assert!(query.contains("torque"));
+        assert!(!query.contains("20111572"));
+
+        let request = DeepResearchRequest {
+            query: prompt.to_string(),
+            focus: None,
+            depth: DeepResearchDepth::Standard,
+            max_sources: 8,
+            include_annas_archive: false,
+            include_papers: true,
+            workspace: None,
+            persist_workspace: false,
+        };
+        assert!(
+            build_research_search_plan(&query, &request, ResearchProfile::Generic)
+                .iter()
+                .all(|plan| plan.query.chars().count() <= 180)
+        );
+    }
+
+    #[test]
+    fn source_relevance_does_not_leak_unrelated_numeric_identifier() {
+        let independent = json!({
+            "title": "UIUC Propeller Data Site",
+            "snippet": "Experimental propeller thrust and torque measurements",
+        });
+        let query = source_relevance_query(
+            &independent,
+            "enola zenodo 20111572 propeller thrust torque bearing",
+        );
+        assert!(!query.contains("20111572"));
+        assert!(query.contains("propeller"));
+        assert!(query.contains("torque"));
+
+        let exact_record = json!({
+            "title": "ENOLA Zenodo record 20111572",
+            "snippet": "Official Propeller Database archive",
+        });
+        assert!(source_relevance_query(&exact_record, "propeller data").contains("20111572"));
+
+        let linked_file = json!({
+            "title": "Propeller_Database.zip",
+            "snippet": "Original data file linked by Explicit DOI 10.5281/zenodo.20111572",
+            "parent_title": "Explicit DOI 10.5281/zenodo.20111572",
+            "source_type": "data_file",
+        });
+        let query = source_relevance_query(&linked_file, "propeller thrust torque dataset");
+        assert!(!query.chars().any(|ch| ch.is_ascii_digit()));
+        assert!(query.contains("propeller"));
+        assert!(query.contains("data"));
+    }
+
+    #[test]
+    fn repository_read_enqueues_linked_content_route_as_data_file() {
+        let parent = json!({
+            "title": "ENOLA",
+            "url": "https://zenodo.org/records/20111572",
+            "canonical_url": "https://zenodo.org/api/records/20111572",
+        });
+        let read = json!({
+            "page_text": "File: Propeller_Database.zip; content_url: https://zenodo.org/api/records/20111572/files/Propeller_Database.zip/content"
+        });
+        let followups = followup_data_sources(&parent, &read);
+        assert_eq!(followups.len(), 1);
+        assert_eq!(followups[0]["source_type"], "data_file");
+        assert_eq!(
+            followups[0]["url"],
+            "https://zenodo.org/api/records/20111572/files/Propeller_Database.zip/content"
+        );
+        assert!(is_data_file_url(followups[0]["url"].as_str().unwrap()));
+    }
+
+    #[test]
+    fn repository_read_resolves_relative_html_data_links() {
+        let parent = json!({
+            "title": "UIUC Propeller Data Site",
+            "url": "https://m-selig.ae.illinois.edu/props/propDB.html",
+            "canonical_url": "https://m-selig.ae.illinois.edu/props/propDB.html",
+        });
+        let read = json!({
+            "raw_html": r#"<a href="volume-1/data/prop_10x5_static.txt">Static data</a>"#
+        });
+        let followups = followup_data_sources(&parent, &read);
+        assert_eq!(followups.len(), 1);
+        assert_eq!(
+            followups[0]["url"],
+            "https://m-selig.ae.illinois.edu/props/volume-1/data/prop_10x5_static.txt"
+        );
+    }
+
+    #[test]
+    fn final_source_target_keeps_a_larger_refill_pool() {
+        assert_eq!(
+            research_candidate_pool_limit(DeepResearchDepth::Quick, 3),
+            12
+        );
+        assert_eq!(
+            research_candidate_pool_limit(DeepResearchDepth::Standard, 8),
+            80
+        );
+        assert_eq!(research_read_budget(DeepResearchDepth::Standard, 8), 80);
     }
 
     #[test]
