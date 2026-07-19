@@ -25,6 +25,7 @@ pub fn deep_research(
         focus: focus.map(|s| s.to_string()),
         depth: depth_enum,
         max_sources: max_sources.clamp(8, 200),
+        exclude_urls: Vec::new(),
         include_annas_archive: false,
         include_papers: true,
         workspace: None,

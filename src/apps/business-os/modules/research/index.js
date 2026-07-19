@@ -3631,6 +3631,13 @@ async function runSelectedResearch() {
   const tableContract = task.payload?.table_contract || RESEARCH_TABLE_CONTRACT;
   const existingTables = new Set((base?.tables || []).map((table) => table.table_key));
   const missingTables = Object.keys(tableContract).filter((key) => !existingTables.has(key));
+  const excludedSourceUrls = [...new Set((state.sourceModels || [])
+    .map((source) => source?.canonicalUrl || firstString(source?.row || {}, ['canonical_url']))
+    .map((url) => String(url || '').trim())
+    .filter((url) => /^https?:\/\//i.test(url)))];
+  const exclusionFlags = excludedSourceUrls
+    .map((url) => ` --exclude-url ${JSON.stringify(url)}`)
+    .join('');
   const instruction = [
     `Führe systematic-research für das Business-OS Web Research Dashboard "${task.title}" fort.`,
     `Research Task ID: ${task.id}`,
@@ -3651,7 +3658,8 @@ async function runSelectedResearch() {
     `Scoring-Modell:\n${scoringDimensions.map((axis) => `- ${axis.id}: ${axis.label}; weight=${axis.weight || scoringWeights(scoringDimensions)[axis.id] || 1}`).join('\n')}`,
     `Portfolio axes: x=${normalizedAxisPair(task).x}, y=${normalizedAxisPair(task).y}`,
     '',
-    'Nutze den systematic-research Skill. Starte mit ctox knowledge search, dann ctox web deep-research. Schreibe jede Discovery-Runde vollständig nach source_candidates; diese Tabelle ist nur Audit/Discovery und niemals Evidence. Promoviere ausschließlich Quellen, die evidence_guard.py bestanden haben, nach source_catalog. Lies/prüfe jede kanonische Quelle, extrahiere Fakten nach evidence_points und schreibe nur belegte Optionen mit gewichteten Scores nach evaluation_matrix. Aktualisiere bestehende Zeilen, wenn sich Fokus oder Kriterien ändern, statt parallele Tabellen zu erzeugen. Die UI-Evidence-Gate-Felder verification_status=verified, transport_verified=true, content_extracted=true, actual_full_text_or_data=true, evidence_relevance_score>=8, http_status 2xx (nicht 204), snapshot_hash als SHA-256, canonical_url auf die Originalquelle, evidence_eligible=true und ein nicht-aggregierter source_tier sind zwingend; Metadaten-URLs, alte, fehlende, metadata_only, fachfremde oder rejected Zeilen bleiben ausschließlich in source_candidates.',
+    'Nutze systematic-research als Eigentümer des gesamten iterativen Workflows. Inventarisiere zuerst Knowledge und plane orthogonale Suchfacetten. Wähle danach pro Runde selbstständig das passende Werkzeug aus ctox_scholarly_search, ctox_web_search, ctox_deep_research, ctox_web_read und Browser/Scrape. Ein ctox_deep_research-Aufruf ist nur eine mögliche Discovery-Runde und niemals die fertige Recherche. Für wissenschaftliche Themen sind Paper-Suche, DOI/OA-Auflösung sowie das Verfolgen relevanter Referenzen, Zitationen, Datensätze und Supplemente Pflicht. Schreibe jede Discovery-Runde vollständig nach source_candidates; diese Tabelle ist nur Audit/Discovery und niemals Evidence. Promoviere ausschließlich Quellen, die evidence_guard.py bestanden haben, nach source_catalog. Lies/prüfe jede kanonische Quelle, extrahiere Fakten nach evidence_points und schreibe nur belegte Optionen mit gewichteten Scores nach evaluation_matrix. Aktualisiere bestehende Zeilen, wenn sich Fokus oder Kriterien ändern, statt parallele Tabellen zu erzeugen. Die UI-Evidence-Gate-Felder verification_status=verified, transport_verified=true, content_extracted=true, actual_full_text_or_data=true, evidence_relevance_score>=8, http_status 2xx (nicht 204), snapshot_hash als SHA-256, canonical_url auf die Originalquelle, evidence_eligible=true und ein nicht-aggregierter source_tier sind zwingend; Metadaten-URLs, alte, fehlende, metadata_only, fachfremde oder rejected Zeilen bleiben ausschließlich in source_candidates.',
+    `${excludedSourceUrls.length} bereits verifizierte kanonische URLs sind als exclude_urls vorgegeben. Übergib sie vollständig an ctox_deep_research; sie dürfen weder erneut als neue Quelle promoviert werden noch das Lesebudget verbrauchen.`,
     `Schreibe auf jede in diesem Lauf erzeugte oder aktualisierte Knowledge-Zeile research_run_id=${researchRunId} und research_command_id=${commandId}. Ohne beide exakten IDs gilt die Zeile nicht als Ergebnis dieses Laufs.`,
     'Vor Abschluss sind drei voneinander getrennte Audits auszuführen: Source-Audit (URL, Autorität, Inhalt, Snapshot), Data-Audit (Originaldatei, Zeile/Spalte, Einheit, Parsing, Umrechnung, Row-Count) und Claim-Audit (jede Knowledge- und Report-Aussage gegen freigegebene Evidence). Nicht bestandene Aussagen oder Quellen dürfen nicht in Knowledge, Scores oder Reports gelangen.',
     'Pflege parallel semantic_graph_nodes und semantic_graph_edges: kanonische fachliche Themen und Konzepte ausschließlich aus verifizierten Titeln, Zusammenfassungen und Evidenz; klare Definitionen, Aliase und Themenfeld-Bezeichnungen; typisierte belegte Relationen; Source-IDs, Konfidenz und Provenienz an jedem Datensatz. Technische Schlüssel, IDs, Hashes, URLs und generische Metadaten sind keine Konzepte. Schreibe inkrementell, damit die laufende Research-App über RxDB/WebRTC live aktualisiert wird.',
@@ -3674,12 +3682,17 @@ async function runSelectedResearch() {
     curated_table_key: task.curated_table_key,
     measurements_table_key: task.measurements_table_key,
     web_stack_plan: {
-      first_command: `ctox web deep-research --query ${JSON.stringify(task.prompt || task.title)} --depth standard --max-sources 24`,
-      followups: [
-        'ctox web scholarly search --query <refined topic> --with-oa-pdf --only-doi',
-        'ctox web read --url <candidate-url> --query <research focus>',
-        'ctox web search only as fallback for non-technical/vendor lookup gaps',
+      strategy: 'agentic_iterative_systematic_research',
+      seed_query: task.prompt || task.title,
+      exclude_urls: excludedSourceUrls,
+      available_rounds: [
+        'ctox web scholarly search --query <paper facet> --with-oa-pdf --only-doi',
+        `ctox web deep-research --query <broad or gap facet> --depth standard --max-sources 24${exclusionFlags}`,
+        'ctox web search --query <focused source or official-domain facet>',
+        'ctox web read --url <canonical-candidate-url> --query <precise evidence intent>',
+        'browser/scrape for interactive or structured source extraction',
       ],
+      saturation_rule: 'stop only after two consecutive orthogonal facet or citation rounds add no new eligible source',
     },
     knowledge_contract: {
       domain: task.knowledge_domain,

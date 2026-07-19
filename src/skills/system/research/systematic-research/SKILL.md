@@ -199,12 +199,25 @@ qualification-test reports.
 - a reachable aggregator does not inherit the authority of the source it
   links to
 
-### Discovery tools — strict ordering
+### Discovery tools — adaptive iterative loop
 
-For technical/engineering/scientific topics, use the CTOX web stack in
-this **exact order**. The first move is always `ctox web deep-research`;
-the lower-level surfaces are only for follow-up extraction once the
-catalog has its first entries.
+Systematic Research owns the research strategy. No individual Web Stack tool
+owns the workflow and no tool has a mandatory fixed position. Select the next
+tool from the current evidence gap, exactly as in an agentic benchmark run:
+
+- use `ctox_scholarly_search` for papers, DOI resolution, open-access copies,
+  authors and bibliographic seed records
+- use `ctox_web_search` for a focused query, Google-style discovery, official
+  portals and source-specific lookup
+- use `ctox_deep_research` for one broad, multi-provider candidate sweep; its
+  result is one discovery round, never the completed research
+- use `ctox_web_read` for the canonical original page, paper, PDF or data file
+- use browser/scrape tools when a source requires interaction or structured
+  extraction
+
+Plan, execute, inspect, persist and then reformulate. Repeat with different
+facets and the complete canonical exclusion list until the source space
+saturates. A single static envelope is not Systematic Research.
 
 In a managed Harness run, invoke the directly exposed typed tools
 `ctox_deep_research`, `ctox_scholarly_search`, and `ctox_web_read`. Do not run
@@ -222,8 +235,8 @@ discovery-only. If a typed read is rejected, record that rejection; never
 download the same URL with `curl`, Python, shell, browser automation, or another
 unbound fallback for evidence.
 
-1. **`ctox web deep-research`** — mandatory first move for any technical
-   library construction:
+1. **Broad candidate sweep (`ctox web deep-research`)** — optional when a
+   multi-provider orientation round is useful:
 
    ```
    ctox web deep-research --query "<topic>" --depth standard --max-sources 24 --workspace "$PWD/research/deep-research-$(date +%s)"
@@ -247,9 +260,8 @@ unbound fallback for evidence.
    shell invocations. The typed `ctox_deep_research` tool supplies such a
    call-specific workspace automatically when `workspace` is omitted.
 
-2. **`ctox web scholarly search`** — for second-pass DOI / open-access
-   PDF enrichment of specific entries that `deep-research` flagged but
-   did not resolve:
+2. **Scientific discovery (`ctox web scholarly search`)** — use directly
+   whenever papers are expected; do not wait for another tool to flag them:
 
    ```
    ctox web scholarly search --query "<refined topic>" [--with-oa-pdf] [--only-doi]
@@ -259,9 +271,24 @@ unbound fallback for evidence.
    page when you need to extract the actual dataset / file URLs hosted
    on it (e.g. an agency programme page that lists XLSX downloads).
 
-4. **`ctox web search` and `ctox web sources info`** — only as fallback
-   for obviously non-technical lookups (CRM entity, vendor matrix,
-   regulatory page lookup) where the upper layers returned nothing.
+4. **`ctox web search` and `ctox web sources info`** — for focused discovery,
+   Google/provider diagnostics, official domains and queries that need a
+   smaller result envelope than the broad sweep.
+
+For scientific topics, follow the literature graph rather than stopping at
+keyword search:
+
+1. Find relevant seed papers through Scholar/OpenAlex/Crossref/Semantic
+   Scholar and resolve DOI records to lawful original or open-access full text.
+2. Read the seed paper and collect its cited references, datasets and
+   supplementary files.
+3. Resolve relevant backward references and forward citations, then read their
+   original full text.
+4. Persist parent-paper, cited-paper and relation provenance. Metadata records
+   remain candidates; only read, hash-bound original content can become
+   evidence.
+5. Continue breadth-first across relevant references until two consecutive
+   citation/facet rounds add no new eligible source.
 
 **Forbidden during source discovery:**
 
@@ -280,12 +307,9 @@ unbound fallback for evidence.
   exists. For incremental procedural-knowledge writes, use
   `ctox knowledge skill new / add-skillbook / add-runbook / add-item`.
 
-Skipping the deep-research/scholarly surfaces and going straight to
-`ctox web search`, the OpenAI native `web_search` tool, or a plain
-`cat > workspace_file.md` is a discovery failure: the source ranking
-will skew toward Tier 3, the catalog will miss the Tier 1 measurement
-data the deliverable actually needs, and the result will not be
-durable.
+Using only one search surface is a discovery failure. The parent must combine
+the adapters required by the evidence space and persist every round before
+continuing.
 
 ### Evidence promotion - mandatory fail-closed gate
 
@@ -351,11 +375,10 @@ a controlled facet sweep, not a single call:
    calls; re-issuing the same query just returns the same top hits.
 
 2. **Exclude what you already hold.** The source-catalog table you are
-   appending to *is* your exclusion list. Before each new facet, steer the
-   wording away from the source-classes and specific sources already
-   captured, so ranking is pushed off the canonical hits and into
-   unexplored niches. A query that does not steer away from what you
-   already have will re-return the same top entries.
+   appending to *is* your exclusion list. Pass every canonical URL already
+   present through `exclude_urls` on each later `ctox_deep_research` call,
+   in addition to reformulating the facet. Existing sources must not consume
+   discovery or read budget.
 
 3. **Stop on saturation, not on first results.** Discovery is done when
    consecutive new facets return only sources already in the catalog — not

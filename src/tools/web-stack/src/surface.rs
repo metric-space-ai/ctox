@@ -214,7 +214,7 @@ pub fn handle_web_command(
             let query = required_flag_value(args, "--query")
                 .or_else(|| args.get(1).map(String::as_str))
                 .context(
-                    "usage: ctox web deep-research --query <text> [--focus <text>] [--depth <quick|standard|exhaustive>] [--max-sources <n>] [--workspace <path>] [--include-annas-archive] [--no-papers] [--no-workspace]",
+                    "usage: ctox web deep-research --query <text> [--focus <text>] [--depth <quick|standard|exhaustive>] [--max-sources <n>] [--exclude-url <url> ...] [--workspace <path>] [--include-annas-archive] [--no-papers] [--no-workspace]",
                 )?;
             let depth = find_flag_value(args, "--depth")
                 .map(parse_deep_research_depth)
@@ -232,6 +232,10 @@ pub fn handle_web_command(
                     focus: find_flag_value(args, "--focus").map(ToOwned::to_owned),
                     depth,
                     max_sources,
+                    exclude_urls: find_flag_values(args, "--exclude-url")
+                        .into_iter()
+                        .map(ToOwned::to_owned)
+                        .collect(),
                     include_annas_archive: args.iter().any(|arg| arg == "--include-annas-archive"),
                     include_papers: !args.iter().any(|arg| arg == "--no-papers"),
                     workspace: find_flag_value(args, "--workspace").map(PathBuf::from),

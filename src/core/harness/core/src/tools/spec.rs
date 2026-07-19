@@ -1326,6 +1326,18 @@ fn create_ctox_deep_research_tool() -> ToolSpec {
             },
         ),
         (
+            "exclude_urls".to_string(),
+            JsonSchema::Array {
+                description: Some(
+                    "Canonical URLs already present in the research domain. Matching sources are excluded before ranking and do not consume the read budget."
+                        .to_string(),
+                ),
+                items: Box::new(JsonSchema::String {
+                    description: Some("Canonical source URL to exclude.".to_string()),
+                }),
+            },
+        ),
+        (
             "workspace".to_string(),
             JsonSchema::String {
                 description: Some(

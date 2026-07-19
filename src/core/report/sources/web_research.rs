@@ -94,6 +94,7 @@ impl WebResearchAdapter {
             focus: query.focus.clone(),
             depth: query.depth.into_engine(),
             max_sources: query.max_sources,
+            exclude_urls: Vec::new(),
             include_annas_archive: false,
             include_papers: true,
             workspace: Some(workspace_path.clone()),

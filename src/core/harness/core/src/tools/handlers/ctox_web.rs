@@ -75,6 +75,8 @@ struct CtoxDeepResearchArgs {
     #[serde(default)]
     max_sources: Option<u64>,
     #[serde(default)]
+    exclude_urls: Vec<String>,
+    #[serde(default)]
     workspace: Option<String>,
     #[serde(default)]
     include_annas_archive: bool,
@@ -274,6 +276,9 @@ impl ToolHandler for CtoxWebHandler {
                 }
                 if let Some(max_sources) = args.max_sources {
                     command.arg("--max-sources").arg(max_sources.to_string());
+                }
+                for exclude_url in args.exclude_urls {
+                    command.arg("--exclude-url").arg(exclude_url);
                 }
                 if let Some(workspace) = args.workspace {
                     command.arg("--workspace").arg(workspace);

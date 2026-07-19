@@ -354,18 +354,14 @@ to rework. A passing guard writes a content-hash-bound validation receipt under
 
 The service also verifies the parent worker's durable rollout before accepting
 systematic research. It requires a successful typed `ctox_deep_research` call
-as the first external action of the current attempt, at the depth declared by
-the server-bound task, and a persisted research workspace inside the task
-workspace. Shallower calls, `no_workspace` discovery runs, or attempts that run
-another external tool first cannot satisfy completion. Agent prose, externally
-imported SQLite rows, and files written after the fact are not substitutes for
-this tool receipt or for independently persisted reviewer provenance.
-The first model request is constrained server-side to that one typed tool.
-After its call enters turn history, the full standard tool surface returns.
-MiniMax-M3 supports automatic or disabled tool selection through the managed
-Responses proxy, so a text-only refusal remains possible; it fails closed at
-the completion gate. A different external action is impossible because no
-other tool is model-visible during the initial request.
+from the current attempt, at the depth declared by the server-bound task, and a
+persisted research workspace inside the task workspace. Shallower calls and
+`no_workspace` discovery runs cannot satisfy completion. The complete Web Stack
+remains visible from the first model turn so Systematic Research can iterate
+scholarly search, focused web search, direct reads, browser work, and broad
+deep-research rounds. Agent prose, externally imported SQLite rows, and files
+written after the fact are not substitutes for tool receipts or independently
+persisted reviewer provenance.
 
 Rejected or incomplete work is fed back into the same durable queue item or
 internal work item where possible. The review path has finite retry budgets and eventually

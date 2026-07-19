@@ -149,6 +149,11 @@ pub struct ScholarlyResult {
     pub snippet: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Stable DOI or provider work identifiers cited by this result. These
+    /// remain discovery metadata until the referenced work is resolved and
+    /// its original full text is read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reference_ids: Vec<String>,
     pub rank: usize,
 }
 
@@ -435,6 +440,7 @@ fn parse_annas_archive_results(body: &str, base_url: &str, top_k: usize) -> Vec<
             thumbnail_url: thumbnail,
             snippet,
             tags,
+            reference_ids: Vec::new(),
             rank: results.len() + 1,
         });
     }
@@ -1021,6 +1027,7 @@ fn crossref_search(root: &Path, request: &ScholarlySearchRequest) -> Result<Vec<
             thumbnail_url: None,
             snippet: crossref_snippet_text(&item),
             tags: Vec::new(),
+            reference_ids: crossref_reference_ids(&item),
             rank,
         });
     }
@@ -1065,41 +1072,7 @@ fn openalex_search(root: &Path, request: &ScholarlySearchRequest) -> Result<Vec<
             continue;
         };
         let rank = out.len() + 1;
-        out.push(ScholarlyResult {
-            provider: "openalex".to_string(),
-            source_id: item
-                .get("id")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| url.clone()),
-            detail_url: url,
-            title,
-            authors: None,
-            publisher: None,
-            year: item
-                .get("publication_year")
-                .and_then(Value::as_i64)
-                .and_then(|year| i32::try_from(year).ok()),
-            language: None,
-            file_format: None,
-            file_size_label: None,
-            isbn: None,
-            doi,
-            // Resolve the OpenAlex OA PDF into the canonical `open_access_pdf`
-            // field so the read pipeline finds it. We prefer best_oa_location
-            // (the curated free full-text copy, OpenAlex's recommended read
-            // target) over primary_location (often the paywalled version of
-            // record). This deliberately differs from the pre-consolidation
-            // path, which consulted only primary_location.pdf_url.
-            open_access_pdf: openalex_pdf_url(&item),
-            open_access_license: None,
-            thumbnail_url: None,
-            snippet: item
-                .get("abstract_inverted_index")
-                .map(|_| "OpenAlex abstract metadata available".to_string()),
-            tags: Vec::new(),
-            rank,
-        });
+        out.push(openalex_item_to_result(&item, url, title, doi, rank));
     }
     Ok(out)
 }
@@ -1127,7 +1100,7 @@ fn semantic_scholar_search(
     let base = runtime_config::get(root, "CTOX_SEMANTIC_SCHOLAR_BASE_URL")
         .unwrap_or_else(|| "https://api.semanticscholar.org/graph/v1".to_string());
     let url = format!(
-        "{}/paper/search?limit={}&fields=title,authors,year,url,abstract,venue,externalIds,openAccessPdf,isOpenAccess&query={}",
+        "{}/paper/search?limit={}&fields=title,authors,year,url,abstract,venue,externalIds,openAccessPdf,isOpenAccess,references.paperId,references.externalIds&query={}",
         base.trim_end_matches('/'),
         limit,
         encode_query(request.query.trim())
@@ -1196,10 +1169,138 @@ fn semantic_scholar_search(
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned),
             tags: Vec::new(),
+            reference_ids: semantic_scholar_reference_ids(&item),
             rank,
         });
     }
     Ok(out)
+}
+
+pub(crate) fn openalex_work_by_id(root: &Path, work_id: &str) -> Result<ScholarlyResult> {
+    let base = runtime_config::get(root, "CTOX_OPENALEX_BASE_URL")
+        .unwrap_or_else(|| "https://api.openalex.org".to_string());
+    let normalized = work_id
+        .trim()
+        .trim_start_matches("https://openalex.org/")
+        .trim_start_matches("http://openalex.org/");
+    if normalized.is_empty() || !normalized.starts_with('W') {
+        bail!("invalid OpenAlex work id");
+    }
+    let mut url = format!("{}/works/{}", base.trim_end_matches('/'), normalized);
+    if let Some(email) = scholarly_contact_email(root) {
+        url.push_str(&format!("?mailto={}", encode_query(&email)));
+    }
+    let item = fetch_json(&url)?;
+    let title = item
+        .get("display_name")
+        .and_then(Value::as_str)
+        .unwrap_or("Untitled")
+        .to_string();
+    let doi = item
+        .get("doi")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let detail_url = doi.clone().unwrap_or_else(|| {
+        item.get("id")
+            .and_then(Value::as_str)
+            .unwrap_or(work_id)
+            .to_string()
+    });
+    Ok(openalex_item_to_result(&item, detail_url, title, doi, 1))
+}
+
+fn openalex_item_to_result(
+    item: &Value,
+    detail_url: String,
+    title: String,
+    doi: Option<String>,
+    rank: usize,
+) -> ScholarlyResult {
+    ScholarlyResult {
+        provider: "openalex".to_string(),
+        source_id: item
+            .get("id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| detail_url.clone()),
+        detail_url,
+        title,
+        authors: None,
+        publisher: item
+            .get("primary_location")
+            .and_then(|location| location.get("source"))
+            .and_then(|source| source.get("display_name"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        year: item
+            .get("publication_year")
+            .and_then(Value::as_i64)
+            .and_then(|year| i32::try_from(year).ok()),
+        language: item
+            .get("language")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        file_format: None,
+        file_size_label: None,
+        isbn: None,
+        doi,
+        // Prefer the curated free full-text location over the often paywalled
+        // primary location.
+        open_access_pdf: openalex_pdf_url(item),
+        open_access_license: None,
+        thumbnail_url: None,
+        snippet: item
+            .get("abstract_inverted_index")
+            .map(|_| "OpenAlex abstract metadata available".to_string()),
+        tags: Vec::new(),
+        reference_ids: openalex_reference_ids(item),
+        rank,
+    }
+}
+
+fn crossref_reference_ids(item: &Value) -> Vec<String> {
+    item.get("reference")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|reference| reference.get("DOI").and_then(Value::as_str))
+        .map(|doi| doi.trim().to_ascii_lowercase())
+        .filter(|doi| !doi.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn openalex_reference_ids(item: &Value) -> Vec<String> {
+    item.get("referenced_works")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn semantic_scholar_reference_ids(item: &Value) -> Vec<String> {
+    item.get("references")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|reference| {
+            reference
+                .get("externalIds")
+                .and_then(|ids| ids.get("DOI"))
+                .and_then(Value::as_str)
+                .map(|doi| doi.trim().to_ascii_lowercase())
+                .or_else(|| {
+                    reference
+                        .get("paperId")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                })
+        })
+        .filter(|id| !id.is_empty())
+        .collect()
 }
 
 fn semantic_scholar_authors(item: &Value) -> Option<String> {

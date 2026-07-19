@@ -10070,7 +10070,7 @@ fn chat_turn_session_options_for_queue_job(
             base_instructions: None,
             plain_prompt: false,
             turn_timeout_secs_override: None,
-            required_initial_tool: Some("ctox_deep_research".to_string()),
+            required_initial_tool: None,
         };
     }
     if business_os_app_module_target_from_prompt(&job.prompt).is_some() {
@@ -10920,7 +10920,6 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
         let mut calls = BTreeMap::<String, (SystematicResearchDepth, u64)>::new();
         let mut attempt_bound = false;
         let mut workspace_bound = false;
-        let mut first_external_call_name: Option<String> = None;
         for line in BufReader::new(file).lines() {
             let line = line?;
             let Ok(value) = serde_json::from_str::<Value>(&line) else {
@@ -10941,7 +10940,6 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
             if payload.get("type").and_then(Value::as_str) == Some("task_started") {
                 attempt_bound = false;
                 workspace_bound = false;
-                first_external_call_name = None;
                 calls.clear();
             }
             if line.contains(expected_attempt_id) {
@@ -10953,19 +10951,6 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
                     .and_then(Value::as_str)
                     .and_then(|cwd| Path::new(cwd).canonicalize().ok())
                     .is_some_and(|cwd| cwd == workspace);
-            }
-            if attempt_bound
-                && workspace_bound
-                && matches!(
-                    payload.get("type").and_then(Value::as_str),
-                    Some("function_call" | "custom_tool_call")
-                )
-                && first_external_call_name.is_none()
-            {
-                first_external_call_name = payload
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
             }
             match payload.get("type").and_then(Value::as_str) {
                 Some("function_call")
@@ -11042,16 +11027,6 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
                         continue;
                     }
                     if *depth >= required_depth {
-                        if first_external_call_name.as_deref() != Some("ctox_deep_research") {
-                            observed_depths.push(format!(
-                                "{} (first external action was {})",
-                                depth.as_str(),
-                                first_external_call_name
-                                    .as_deref()
-                                    .unwrap_or("an unnamed tool")
-                            ));
-                            continue;
-                        }
                         observed_depths.push(depth.as_str().to_string());
                         return Ok(serde_json::json!({
                             "tool": "ctox_deep_research",
@@ -11060,7 +11035,6 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
                             "thread_id": thread_id,
                             "call_id": call_id,
                             "called_at_epoch": called_at,
-                            "first_external_action": "ctox_deep_research",
                             "research_workspace": research_workspace.cloned(),
                             "rollout_path": rollout_path,
                         }));
@@ -24650,7 +24624,7 @@ mod tests {
             &workspace,
             Some("exec_command"),
         );
-        let wrong_first_action = validate_systematic_research_deep_research_receipt_from_conn(
+        let receipt_after_inventory = validate_systematic_research_deep_research_receipt_from_conn(
             &conn,
             &codex_home,
             &workspace,
@@ -24658,10 +24632,8 @@ mod tests {
             attempt_started_at,
             SystematicResearchDepth::Exhaustive,
         )
-        .unwrap_err();
-        assert!(wrong_first_action
-            .to_string()
-            .contains("exhaustive (first external action was exec_command)"));
+        .unwrap();
+        assert_eq!(receipt_after_inventory["depth"], "exhaustive");
 
         write_rollout("exhaustive", false, expected_attempt_id, &workspace, None);
         let receipt = validate_systematic_research_deep_research_receipt_from_conn(
@@ -30352,10 +30324,7 @@ Business OS command:
         assert!(!options.plain_prompt);
         assert!(options.base_instructions.is_none());
         assert_eq!(options.turn_timeout_secs_override, None);
-        assert_eq!(
-            options.required_initial_tool.as_deref(),
-            Some("ctox_deep_research")
-        );
+        assert!(options.required_initial_tool.is_none());
         assert!(!queue_job_reuses_persistent_session(&options));
     }
 

@@ -16,6 +16,7 @@ use std::time::UNIX_EPOCH;
 use url::Url;
 
 use crate::scholarly_search::execute_scholarly_search;
+use crate::scholarly_search::openalex_work_by_id;
 use crate::scholarly_search::run_ctox_scholarly_search_tool;
 use crate::scholarly_search::ScholarlyResult;
 use crate::scholarly_search::ScholarlySearchProvider;
@@ -63,6 +64,7 @@ pub struct DeepResearchRequest {
     pub focus: Option<String>,
     pub depth: DeepResearchDepth,
     pub max_sources: usize,
+    pub exclude_urls: Vec<String>,
     pub include_annas_archive: bool,
     pub include_papers: bool,
     pub workspace: Option<PathBuf>,
@@ -161,7 +163,8 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
         .collect::<Vec<_>>();
 
     let mut sources = Vec::new();
-    let mut seen_urls = BTreeSet::new();
+    let excluded_urls = normalized_excluded_urls(&request.exclude_urls);
+    let mut seen_urls = excluded_urls.clone();
     let mut search_runs = Vec::new();
     seed_explicit_identifier_sources(&query_text, &mut seen_urls, &mut sources);
 
@@ -219,15 +222,23 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
         }));
         collect_search_sources(&payload, plan, &mut seen_urls, &mut sources);
     }
-    let database_runs =
-        collect_scholarly_database_sources(root, &plans, request, &mut seen_urls, &mut sources);
+    let database_runs = collect_scholarly_database_sources(
+        root,
+        &search_query,
+        &plans,
+        request,
+        &mut seen_urls,
+        &mut sources,
+    );
 
     let discovered_candidate_count = sources.len();
     // `max_sources` is the final evidence target, not a pre-read candidate
     // cap. A failed first page must cause the next ranked candidate to be
     // tried rather than ending discovery prematurely.
     let read_budget = research_read_budget(request.depth, max_sources);
+    let followup_read_budget = max_sources.min(16);
     let candidate_pool_limit = research_candidate_pool_limit(request.depth, max_sources);
+    let expanded_candidate_pool_limit = candidate_pool_limit.saturating_add(followup_read_budget);
     let selected_sources = select_balanced_sources(sources, candidate_pool_limit);
     let mut read_queue = VecDeque::from(selected_sources);
     let mut queued_urls = read_queue
@@ -241,7 +252,12 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
     let mut followed_data_links = 0usize;
     while let Some(mut source) = read_queue.pop_front() {
         let read_url = source_read_url(&source);
-        let should_read = read_attempts < read_budget
+        let is_original_file_followup =
+            source.get("search_label").and_then(Value::as_str) == Some("repository_file_followup");
+        let within_read_budget = read_attempts < read_budget
+            || (is_original_file_followup
+                && read_attempts < read_budget.saturating_add(followup_read_budget));
+        let should_read = within_read_budget
             && admitted_sources < max_sources
             && should_attempt_source_read(&source);
         if should_read {
@@ -365,7 +381,10 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             "transport_evidence_eligible": read_payload.get("transport_evidence_eligible").cloned().unwrap_or(Value::Bool(false)),
                             "evidence_eligible": read_payload.get("evidence_eligible").cloned().unwrap_or(Value::Bool(false)),
                         });
-                        for followup in followup_data_sources(&source, &read_payload) {
+                        for followup in followup_data_sources(&source, &read_payload)
+                            .into_iter()
+                            .take(followup_read_budget)
+                        {
                             let normalized = followup
                                 .get("url")
                                 .and_then(Value::as_str)
@@ -373,7 +392,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                                 .unwrap_or_default();
                             if !normalized.is_empty()
                                 && queued_urls.insert(normalized)
-                                && read_queue.len() + enriched.len() < candidate_pool_limit
+                                && read_queue.len() + enriched.len() < expanded_candidate_pool_limit
                             {
                                 read_queue.push_front(followup);
                                 followed_data_links += 1;
@@ -432,6 +451,8 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
     } else {
         "verified_sources_available"
     };
+    let systematic_coverage =
+        build_systematic_coverage(&plans, &search_runs, &verified_sources, excluded_urls.len());
     let mut payload = json!({
         "ok": true,
         "tool": "ctox_deep_research",
@@ -440,6 +461,8 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
         "focus": request.focus,
         "depth": request.depth.as_str(),
         "max_sources": max_sources,
+        "excluded_urls": excluded_urls,
+        "excluded_url_count": excluded_urls.len(),
         "source_policy": {
             "annas_archive": if request.include_annas_archive {
                 "metadata-only discovery. Do not download or reproduce copyrighted full text from unauthorized mirrors; use DOI, publisher, author metadata, abstracts, and lawful open-access copies."
@@ -449,6 +472,16 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
             "paper_full_text": "Prefer publisher abstracts, DOI landing pages, PubMed/PMC, arXiv, institutional repositories, and other lawful open-access sources.",
             "synthesis": "Treat this payload as an evidence bundle; the agent must still weigh credibility, conflict, recency, feasibility, and uncertainty before writing a report."
         },
+        "research_protocol": [
+            "scope_and_exclusions",
+            "primary_data_discovery",
+            "measurement_field_coverage",
+            "scholarly_and_technical_corroboration",
+            "original_artifact_and_hash_validation",
+            "candidate_rejection_audit",
+            "remaining_gap_declaration"
+        ],
+        "systematic_coverage": systematic_coverage,
         "search_plan": plans.iter().map(|plan| json!({
             "label": plan.label,
             "query": plan.query,
@@ -469,6 +502,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
             "verified_sources": verified_sources.len(),
             "rejected_source_candidates": rejected_source_count,
             "read_budget": read_budget,
+            "followup_read_budget": followup_read_budget,
             "read_attempts": read_attempts,
             "followed_data_links": followed_data_links,
             "sources_with_page_read_attempts": sources_with_read,
@@ -500,6 +534,104 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
     }
 
     Ok(payload)
+}
+
+fn normalized_excluded_urls(urls: &[String]) -> BTreeSet<String> {
+    urls.iter()
+        .filter_map(|url| {
+            let normalized = normalize_url_key(url);
+            (!normalized.is_empty()).then_some(normalized)
+        })
+        .collect()
+}
+
+fn build_systematic_coverage(
+    plans: &[ResearchSearchPlan],
+    search_runs: &[Value],
+    verified_sources: &[Value],
+    excluded_url_count: usize,
+) -> Value {
+    let successful_plan_labels = search_runs
+        .iter()
+        .filter(|run| {
+            run.get("ok").and_then(Value::as_bool) == Some(true)
+                && run
+                    .get("result_count")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|count| count > 0)
+        })
+        .filter_map(|run| run.get("label").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>();
+    let planned_labels = plans
+        .iter()
+        .map(|plan| plan.label.to_string())
+        .collect::<BTreeSet<_>>();
+    let uncovered_plan_labels = planned_labels
+        .difference(&successful_plan_labels)
+        .cloned()
+        .collect::<Vec<_>>();
+    let primary_data_sources = verified_sources
+        .iter()
+        .filter(|source| {
+            source
+                .get("response_content_kind")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind.starts_with("data_"))
+        })
+        .count();
+    let scholarly_full_text_sources = verified_sources
+        .iter()
+        .filter(|source| {
+            matches!(
+                source.get("source_type").and_then(Value::as_str),
+                Some("scholarly" | "open_access_paper")
+            ) && source
+                .get("actual_full_text_or_data")
+                .and_then(Value::as_bool)
+                == Some(true)
+        })
+        .count();
+    let hash_bound_sources = verified_sources
+        .iter()
+        .filter(|source| {
+            source
+                .get("snapshot_hash")
+                .and_then(Value::as_str)
+                .is_some_and(|hash| hash.starts_with("sha256:") && hash.len() == 71)
+        })
+        .count();
+    let distinct_domains = verified_sources
+        .iter()
+        .filter_map(|source| source.get("domain").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>();
+    let mut gaps = Vec::new();
+    if primary_data_sources == 0 {
+        gaps.push("no_verified_primary_data");
+    }
+    if scholarly_full_text_sources == 0 {
+        gaps.push("no_verified_scholarly_full_text");
+    }
+    if distinct_domains.len() < 2 {
+        gaps.push("insufficient_independent_domains");
+    }
+    if !uncovered_plan_labels.is_empty() {
+        gaps.push("search_facets_without_results");
+    }
+    let complete = gaps.is_empty();
+    json!({
+        "planned_facets": planned_labels,
+        "successful_facets": successful_plan_labels,
+        "uncovered_facets": uncovered_plan_labels,
+        "excluded_existing_url_count": excluded_url_count,
+        "verified_primary_data_sources": primary_data_sources,
+        "verified_scholarly_full_text_sources": scholarly_full_text_sources,
+        "hash_bound_verified_sources": hash_bound_sources,
+        "independent_verified_domains": distinct_domains,
+        "remaining_gaps": gaps,
+        "complete": complete,
+    })
 }
 
 fn research_read_budget(depth: DeepResearchDepth, max_sources: usize) -> usize {
@@ -906,6 +1038,46 @@ fn build_research_search_plan(
                 scholarly: false,
                 metadata_only: false,
             },
+            ResearchSearchPlan {
+                label: "named_benchmark_databases",
+                query: compose_search_query(
+                    query,
+                    "UIUC Tyto APC propeller database original measured data",
+                ),
+                domains: Vec::new(),
+                scholarly: false,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "original_data_files",
+                query: compose_search_query(
+                    query,
+                    "original file CSV TXT XLSX ZIP supplementary data download",
+                ),
+                domains: Vec::new(),
+                scholarly: false,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "measurement_validation",
+                query: compose_search_query(
+                    query,
+                    "load cell calibration uncertainty validation repeatability",
+                ),
+                domains: Vec::new(),
+                scholarly: true,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "bearing_load_transfer",
+                query: compose_search_query(
+                    query,
+                    "motor shaft bearing radial axial load thrust torque measured",
+                ),
+                domains: Vec::new(),
+                scholarly: true,
+                metadata_only: false,
+            },
         ]);
     }
 
@@ -1079,7 +1251,37 @@ fn build_research_search_plan(
         });
     }
 
+    if is_measurement_or_source_review_query(query) {
+        plans.sort_by_key(|plan| measurement_plan_priority(plan.label));
+    }
+
     plans
+}
+
+fn measurement_plan_priority(label: &str) -> usize {
+    match label {
+        "broad_web" => 0,
+        "scholarly_general" => 1,
+        "measured_data_sources" => 2,
+        "open_access" => 3,
+        "data_repositories" => 4,
+        "named_benchmark_databases" => 5,
+        "measurement_validation" => 6,
+        "original_data_files" => 7,
+        "load_and_operating_fields" => 8,
+        "bearing_load_transfer" => 9,
+        "technical_reports_data" => 10,
+        "topic_measurement_data" => 11,
+        "topic_open_access" => 12,
+        "topic_literature" => 13,
+        "crossref_doi" => 14,
+        "semantic_scholar" => 15,
+        "topic_reports_standards" => 16,
+        "topic_patents_industry" => 17,
+        "user_focus" => 18,
+        "annas_archive_metadata" => 19,
+        _ => 20,
+    }
 }
 
 fn is_lsp_composite_topic(query: &str) -> bool {
@@ -1503,6 +1705,28 @@ fn is_metadata_landing_source(source: &Value, read_url: &str, canonical_url: &st
         || is_doi_resolver_url(canonical_url)
         || is_zenodo_record_metadata_url(read_url)
         || is_zenodo_record_metadata_url(canonical_url)
+        || is_github_repository_root_url(read_url)
+        || is_github_repository_root_url(canonical_url)
+}
+
+fn is_github_repository_root_url(raw: &str) -> bool {
+    let Ok(url) = Url::parse(raw) else {
+        return false;
+    };
+    if !url
+        .host_str()
+        .is_some_and(|host| host.eq_ignore_ascii_case("github.com"))
+    {
+        return false;
+    }
+    url.path_segments()
+        .map(|segments| {
+            segments
+                .filter(|segment| !segment.trim().is_empty())
+                .count()
+                == 2
+        })
+        .unwrap_or(false)
 }
 
 fn is_metadata_source_kind(source: &Value) -> bool {
@@ -1761,7 +1985,10 @@ fn important_query_terms(query: &str) -> Vec<String> {
     query
         .split(|ch: char| !ch.is_ascii_alphanumeric())
         .map(|part| part.trim().to_ascii_lowercase())
-        .filter(|part| part.len() >= 4 && !stopwords.contains(part.as_str()))
+        // Three-letter engineering acronyms such as UAV, UAS and RPM carry
+        // more scope than many longer generic words. Dropping them here
+        // silently broadens scientific searches into unrelated domains.
+        .filter(|part| part.len() >= 3 && !stopwords.contains(part.as_str()))
         .take(24)
         .collect()
 }
@@ -2041,6 +2268,16 @@ fn followup_data_sources(parent: &Value, read: &Value) -> Vec<Value> {
     let mut candidates = extract_urls(&text);
     if let Some(raw_html) = read.get("raw_html").and_then(Value::as_str) {
         candidates.extend(extract_html_data_links(raw_html, parent_url));
+    } else if read.get("response_content_kind").and_then(Value::as_str) == Some("html") {
+        if let Some(snapshot_path) = read
+            .get("response_artifact_path")
+            .and_then(Value::as_str)
+            .filter(|path| !path.trim().is_empty())
+        {
+            if let Ok(raw_html) = fs::read_to_string(snapshot_path) {
+                candidates.extend(extract_html_data_links(&raw_html, parent_url));
+            }
+        }
     }
     candidates
         .into_iter()
@@ -2108,6 +2345,7 @@ fn extract_html_data_links(raw_html: &str, base_url: &str) -> Vec<String> {
 
 fn collect_scholarly_database_sources(
     root: &Path,
+    research_query: &str,
     plans: &[ResearchSearchPlan],
     request: &DeepResearchRequest,
     seen_urls: &mut BTreeSet<String>,
@@ -2118,6 +2356,8 @@ fn collect_scholarly_database_sources(
     }
 
     let mut runs = Vec::new();
+    let mut citation_queue = VecDeque::<(String, usize, String)>::new();
+    let mut queued_references = BTreeSet::new();
     let queries = plans
         .iter()
         .filter(|plan| plan.scholarly)
@@ -2152,7 +2392,20 @@ fn collect_scholarly_database_sources(
             }
             runs.push(match scholarly_db_query(root, &query, provider, limit) {
                 Ok(items) => {
-                    let count = push_database_sources(label, &query, items, seen_urls, sources);
+                    if provider == ScholarlySearchProvider::OpenAlex {
+                        queue_scholarly_references(
+                            &items,
+                            research_query,
+                            1,
+                            &mut citation_queue,
+                            &mut queued_references,
+                        );
+                    }
+                    let values = items
+                        .into_iter()
+                        .map(scholarly_result_to_db_value)
+                        .collect();
+                    let count = push_database_sources(label, &query, values, seen_urls, sources);
                     json!({
                         "database": label,
                         "query": query,
@@ -2176,6 +2429,17 @@ fn collect_scholarly_database_sources(
             });
         }
     }
+    if request.include_papers {
+        runs.push(follow_openalex_reference_chain(
+            root,
+            research_query,
+            request.depth,
+            &mut citation_queue,
+            &mut queued_references,
+            seen_urls,
+            sources,
+        ));
+    }
     runs
 }
 
@@ -2184,7 +2448,7 @@ fn scholarly_db_query(
     query: &str,
     provider: ScholarlySearchProvider,
     limit: usize,
-) -> Result<Vec<Value>> {
+) -> Result<Vec<ScholarlyResult>> {
     let response = execute_scholarly_search(
         root,
         &ScholarlySearchRequest {
@@ -2194,11 +2458,151 @@ fn scholarly_db_query(
             ..Default::default()
         },
     )?;
-    Ok(response
-        .results
-        .into_iter()
-        .map(scholarly_result_to_db_value)
-        .collect())
+    Ok(response.results)
+}
+
+fn citation_chain_depth(depth: DeepResearchDepth) -> usize {
+    match depth {
+        DeepResearchDepth::Quick => 1,
+        DeepResearchDepth::Standard => 2,
+        DeepResearchDepth::Exhaustive => 3,
+    }
+}
+
+fn citation_lookup_budget(depth: DeepResearchDepth) -> usize {
+    match depth {
+        DeepResearchDepth::Quick => 12,
+        DeepResearchDepth::Standard => 48,
+        DeepResearchDepth::Exhaustive => 120,
+    }
+}
+
+fn queue_scholarly_references(
+    results: &[ScholarlyResult],
+    research_query: &str,
+    depth: usize,
+    queue: &mut VecDeque<(String, usize, String)>,
+    seen: &mut BTreeSet<String>,
+) {
+    for result in results {
+        if !scholarly_result_is_relevant(result, research_query) {
+            continue;
+        }
+        for reference_id in &result.reference_ids {
+            let key = reference_id.trim().to_ascii_lowercase();
+            if !key.is_empty() && seen.insert(key) {
+                queue.push_back((reference_id.clone(), depth, result.source_id.clone()));
+            }
+        }
+    }
+}
+
+fn scholarly_result_is_relevant(result: &ScholarlyResult, research_query: &str) -> bool {
+    let query_terms = topical_query_terms(research_query);
+    if query_terms.is_empty() {
+        return true;
+    }
+    let mut corpus = result.title.to_ascii_lowercase();
+    if let Some(snippet) = &result.snippet {
+        corpus.push(' ');
+        corpus.push_str(&snippet.to_ascii_lowercase());
+    }
+    let mut matched = BTreeSet::new();
+    for term in query_terms {
+        let aliases: &[&str] = match term.as_str() {
+            "uav" | "uas" => &[
+                "uav",
+                "uas",
+                "unmanned aerial",
+                "unmanned aircraft",
+                "drone",
+            ],
+            "propeller" => &["propeller", "propulsion", "rotor"],
+            "bearing" => &["bearing", "shaft support"],
+            _ => &[],
+        };
+        if corpus.contains(&term) || aliases.iter().any(|alias| corpus.contains(alias)) {
+            matched.insert(term);
+        }
+    }
+    matched.len() >= 2
+}
+
+fn follow_openalex_reference_chain(
+    root: &Path,
+    research_query: &str,
+    research_depth: DeepResearchDepth,
+    queue: &mut VecDeque<(String, usize, String)>,
+    queued_references: &mut BTreeSet<String>,
+    seen_urls: &mut BTreeSet<String>,
+    sources: &mut Vec<Value>,
+) -> Value {
+    let max_depth = citation_chain_depth(research_depth);
+    let budget = citation_lookup_budget(research_depth);
+    let mut lookups = 0usize;
+    let mut resolved = 0usize;
+    let mut relevant = 0usize;
+    let mut added = 0usize;
+    let mut failures = Vec::new();
+    while lookups < budget {
+        let Some((reference_id, depth, parent_id)) = queue.pop_front() else {
+            break;
+        };
+        if depth > max_depth || !reference_id.contains("openalex.org/W") {
+            continue;
+        }
+        lookups += 1;
+        match openalex_work_by_id(root, &reference_id) {
+            Ok(result) => {
+                resolved += 1;
+                if !scholarly_result_is_relevant(&result, research_query) {
+                    continue;
+                }
+                relevant += 1;
+                if depth < max_depth {
+                    queue_scholarly_references(
+                        std::slice::from_ref(&result),
+                        research_query,
+                        depth + 1,
+                        queue,
+                        queued_references,
+                    );
+                }
+                let mut value = scholarly_result_to_db_value(result);
+                value["citation_parent_id"] = Value::String(parent_id);
+                value["citation_depth"] = Value::Number((depth as u64).into());
+                value["discovery_method"] = Value::String("openalex_reference_chain".to_string());
+                added += push_database_sources(
+                    "openalex_reference",
+                    research_query,
+                    vec![value],
+                    seen_urls,
+                    sources,
+                );
+            }
+            Err(error) => {
+                if failures.len() < 12 {
+                    failures.push(json!({
+                        "reference_id": reference_id,
+                        "depth": depth,
+                        "error": error.to_string(),
+                    }));
+                }
+            }
+        }
+    }
+    json!({
+        "database": "openalex_reference_chain",
+        "ok": failures.is_empty() || resolved > 0,
+        "max_depth": max_depth,
+        "lookup_budget": budget,
+        "lookups": lookups,
+        "resolved_works": resolved,
+        "relevant_works": relevant,
+        "added_candidates": added,
+        "remaining_queue": queue.len(),
+        "failures": failures,
+    })
 }
 
 fn is_rate_limit_error(err: &anyhow::Error) -> bool {
@@ -2226,6 +2630,7 @@ fn scholarly_result_to_db_value(result: ScholarlyResult) -> Value {
         // reads stays as rich as before the consolidation.
         "authors": result.authors,
         "venue": result.publisher,
+        "reference_ids": result.reference_ids,
     });
     if let Some(pdf) = result.open_access_pdf {
         value["open_access_pdf"] = Value::String(pdf);
@@ -2242,25 +2647,55 @@ fn push_database_sources(
 ) -> usize {
     let mut pushed = 0;
     for mut item in items {
-        let Some(url) = item
+        let Some(detail_url) = item
             .get("url")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
         else {
             continue;
         };
+        let open_access_pdf = item
+            .get("open_access_pdf")
+            .and_then(Value::as_str)
+            .filter(|url| !url.trim().is_empty())
+            .map(ToOwned::to_owned);
+        let url = open_access_pdf
+            .clone()
+            .unwrap_or_else(|| detail_url.clone());
         let normalized = normalize_url_key(&url);
         if normalized.is_empty() || !seen_urls.insert(normalized) {
             continue;
         }
         item["source"] = Value::String(database.to_string());
-        item["source_type"] = Value::String("paper_metadata".to_string());
+        item["source_type"] = Value::String(
+            if open_access_pdf.is_some() {
+                "open_access_paper"
+            } else {
+                "paper_metadata"
+            }
+            .to_string(),
+        );
+        item["url"] = Value::String(url.clone());
         item["canonical_url"] = Value::String(url.clone());
         item["search_label"] = Value::String(database.to_string());
         item["scholarly"] = Value::Bool(true);
-        item["metadata_only"] = Value::Bool(true);
+        item["metadata_only"] = Value::Bool(open_access_pdf.is_none());
         item["domain"] = Value::String(domain_for_url(&url));
-        item["source_tier"] = Value::String("metadata".to_string());
+        item["source_tier"] = Value::String(
+            if open_access_pdf.is_some() {
+                "scholarly"
+            } else {
+                "metadata"
+            }
+            .to_string(),
+        );
+        item["scholarly_metadata"] = json!({
+            "detail_url": detail_url,
+            "doi": item.get("doi").cloned().unwrap_or(Value::Null),
+            "authors": item.get("authors").cloned().unwrap_or(Value::Null),
+            "venue": item.get("venue").cloned().unwrap_or(Value::Null),
+            "reference_ids": item.get("reference_ids").cloned().unwrap_or_else(|| json!([])),
+        });
         item["verification_status"] = Value::String("unverified".to_string());
         item["discovery_status"] = Value::String("discovered".to_string());
         item["evidence_eligible"] = Value::Bool(false);
@@ -2604,6 +3039,8 @@ fn snapshot_extension(
         || content_type.is_some_and(|value| value.contains("csv") || value.contains("tab"))
     {
         "csv"
+    } else if content_kind == Some("data_table_text") {
+        "txt"
     } else if content_kind == Some("data_zip") {
         "zip"
     } else if content_kind == Some("data_gzip") {
@@ -3084,6 +3521,18 @@ mod tests {
     }
 
     #[test]
+    fn exclude_urls_are_canonicalized_and_deduplicated_before_discovery() {
+        let excluded = normalized_excluded_urls(&[
+            "https://Example.com/data.csv#section".to_string(),
+            "https://example.com/data.csv".to_string(),
+            "https://example.com/other.csv".to_string(),
+        ]);
+        assert_eq!(excluded.len(), 2);
+        assert!(excluded.contains("https://example.com/data.csv"));
+        assert!(excluded.contains("https://example.com/other.csv"));
+    }
+
+    #[test]
     fn exact_zenodo_doi_seeds_the_canonical_record() {
         let mut seen = BTreeSet::new();
         let mut sources = Vec::new();
@@ -3157,6 +3606,7 @@ mod tests {
             focus: None,
             depth: DeepResearchDepth::Exhaustive,
             max_sources: 20,
+            exclude_urls: Vec::new(),
             include_annas_archive: true,
             include_papers: true,
             workspace: None,
@@ -3178,6 +3628,7 @@ mod tests {
             focus: Some("scope_terms".to_string()),
             depth: DeepResearchDepth::Standard,
             max_sources: 20,
+            exclude_urls: Vec::new(),
             include_annas_archive: false,
             include_papers: true,
             workspace: None,
@@ -3197,6 +3648,7 @@ mod tests {
             focus: None,
             depth: DeepResearchDepth::Standard,
             max_sources: 20,
+            exclude_urls: Vec::new(),
             include_annas_archive: false,
             include_papers: true,
             workspace: None,
@@ -3208,6 +3660,23 @@ mod tests {
         assert!(labels.contains(&"load_and_operating_fields"));
         assert!(labels.contains(&"data_repositories"));
         assert!(labels.contains(&"technical_reports_data"));
+        assert!(labels.contains(&"named_benchmark_databases"));
+        assert!(labels.contains(&"original_data_files"));
+        assert!(labels.contains(&"measurement_validation"));
+        assert!(labels.contains(&"bearing_load_transfer"));
+        assert_eq!(
+            &labels[..8],
+            &[
+                "broad_web",
+                "scholarly_general",
+                "measured_data_sources",
+                "open_access",
+                "data_repositories",
+                "named_benchmark_databases",
+                "measurement_validation",
+                "original_data_files",
+            ]
+        );
     }
 
     #[test]
@@ -3217,6 +3686,7 @@ mod tests {
             focus: None,
             depth: DeepResearchDepth::Exhaustive,
             max_sources: 20,
+            exclude_urls: Vec::new(),
             include_annas_archive: false,
             include_papers: true,
             workspace: None,
@@ -3259,6 +3729,7 @@ mod tests {
             thumbnail_url: None,
             snippet: None,
             tags: Vec::new(),
+            reference_ids: Vec::new(),
             rank: 1,
         };
         let value = scholarly_result_to_db_value(base.clone());
@@ -3739,6 +4210,7 @@ mod tests {
             focus: None,
             depth: DeepResearchDepth::Standard,
             max_sources: 8,
+            exclude_urls: Vec::new(),
             include_annas_archive: false,
             include_papers: true,
             workspace: None,
@@ -4167,6 +4639,7 @@ mod tests {
             focus: None,
             depth: DeepResearchDepth::Quick,
             max_sources: 3,
+            exclude_urls: Vec::new(),
             include_annas_archive: false,
             include_papers: true,
             workspace: Some(workspace.clone()),

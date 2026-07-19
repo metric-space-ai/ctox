@@ -1119,6 +1119,8 @@ fn response_snapshot_extension(content_kind: &str, content_type: Option<&str>) -
         "json"
     } else if content_kind == "data_delimited" {
         "csv"
+    } else if content_kind == "data_table_text" {
+        "txt"
     } else if content_kind == "data_zip" {
         "zip"
     } else if content_kind == "data_gzip" {
@@ -3080,6 +3082,7 @@ fn persist_response_artifact(config: &SearchConfig, doc: &mut EvidenceDoc) -> Re
             "data_hdf5" => "h5",
             "data_json" => "json",
             "data_delimited" => "csv",
+            "data_table_text" => "txt",
             "pdf" => "pdf",
             "html" => "html",
             "page_content" => "txt",
@@ -3345,6 +3348,11 @@ fn response_content_kind(hit: &SearchHit, fetched: &FetchedPageContent) -> Strin
     if body.starts_with(b"%PDF-") || content_type == "application/pdf" {
         return "pdf".to_string();
     }
+    if content_type == GITHUB_API_CONTENT_TYPE {
+        // CTOX wraps repository metadata, README text and tree entries in
+        // JSON. The wrapper is not an original JSON dataset.
+        return "repository_metadata".to_string();
+    }
     if starts_with(b"<!doctype html") || starts_with(b"<html") || content_type.contains("html") {
         return "html".to_string();
     }
@@ -3373,6 +3381,9 @@ fn response_content_kind(hit: &SearchHit, fetched: &FetchedPageContent) -> Strin
         } else {
             "malformed_data".to_string()
         };
+    }
+    if data_hint && looks_like_whitespace_table_data(body) {
+        return "data_table_text".to_string();
     }
     if content_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         || url_path_has_suffix(&hit.url, &[".xlsx"])
@@ -3443,7 +3454,7 @@ fn is_data_url_suffix(raw: &str) -> bool {
         raw,
         &[
             ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".xlsx", ".xls", ".parquet", ".zip",
-            ".gz", ".tgz", ".h5", ".hdf5",
+            ".txt", ".gz", ".tgz", ".h5", ".hdf5",
         ],
     )
 }
@@ -3479,6 +3490,48 @@ fn looks_like_delimited_data(body: &[u8]) -> bool {
         && lines
             .iter()
             .all(|line| line.matches(delimiter).count() == width)
+}
+
+fn looks_like_whitespace_table_data(body: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(body) else {
+        return false;
+    };
+    let rows = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with('#')
+                && !line.chars().all(|ch| matches!(ch, '-' | '=' | '_' | ' '))
+        })
+        .map(|line| line.split_whitespace().collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let Some(header) = rows.first() else {
+        return false;
+    };
+    if rows.len() < 3 || !(2..=64).contains(&header.len()) {
+        return false;
+    }
+    if !header
+        .iter()
+        .any(|cell| cell.chars().any(|ch| ch.is_ascii_alphabetic()) && cell.parse::<f64>().is_err())
+    {
+        return false;
+    }
+    rows.iter()
+        .skip(1)
+        .take(64)
+        .filter(|row| {
+            row.len() == header.len()
+                && row
+                    .iter()
+                    .filter(|cell| cell.parse::<f64>().is_ok())
+                    .count()
+                    * 4
+                    >= row.len() * 3
+        })
+        .count()
+        >= 2
 }
 
 fn response_admission_rejection(
@@ -9208,6 +9261,34 @@ mod tests {
             ..fetched
         };
         assert_eq!(response_content_kind(&hit, &invalid), "malformed_data");
+    }
+
+    #[test]
+    fn whitespace_numeric_text_tables_are_validated_as_original_data() {
+        let url =
+            "https://m-selig.ae.illinois.edu/props/volume-2/data/apcff_4.2x4_static_0615rd.txt";
+        let hit = fixture_hit(url);
+        let fetched = FetchedPageContent {
+            body: b"RPM CT CP\n1490.000 0.125114 0.135440\n2033.333 0.121907 0.126335\n2556.667 0.121578 0.118066\n".to_vec(),
+            content_type: Some("text/plain".to_string()),
+            final_url: url.to_string(),
+            http_status: 200,
+        };
+        assert!(looks_like_whitespace_table_data(&fetched.body));
+        assert_eq!(response_content_kind(&hit, &fetched), "data_table_text");
+    }
+
+    #[test]
+    fn github_repository_wrapper_is_not_classified_as_json_data() {
+        let url = "https://github.com/example/propeller-data";
+        let hit = fixture_hit(url);
+        let fetched = FetchedPageContent {
+            body: br#"{"kind":"repo_root","readme":"measured propeller data"}"#.to_vec(),
+            content_type: Some(GITHUB_API_CONTENT_TYPE.to_string()),
+            final_url: url.to_string(),
+            http_status: 200,
+        };
+        assert_eq!(response_content_kind(&hit, &fetched), "repository_metadata");
     }
 
     #[test]
