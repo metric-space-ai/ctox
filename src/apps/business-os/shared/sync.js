@@ -39,7 +39,9 @@ const NATIVE_PEER_OPEN_WATCHDOG_MS = 30000;
 // user-visible command failure.
 const NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS = 60000;
 const NATIVE_PEER_RESTART_STABLE_MS = 1000;
-const COMMAND_FOLLOWER_DIRECT_TIMEOUT_MS = 12_000;
+const COMMAND_FOLLOWER_DIRECT_OPEN_TIMEOUT_MS = 25_000;
+const COMMAND_FOLLOWER_DIRECT_FLUSH_TIMEOUT_MS = 35_000;
+const COMMAND_FOLLOWER_BRIDGE_TIMEOUT_MS = 40_000;
 const SYNC_DIAGNOSTIC_EMIT_MIN_INTERVAL_MS = 250;
 const DEMAND_ONLY_COLLECTION_START_ERROR = 'DEMAND_ONLY_COLLECTION_REQUIRES_LEASE';
 const ROOM_CIRCUIT_FAILURE_THRESHOLD = 5;
@@ -146,14 +148,18 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
     });
   };
   const flushFollowerDirectly = async (collection) => {
-    const current = await Promise.resolve(bridges.get(collection)).catch(() => null);
-    if (current?.mode === 'follower') bridges.delete(collection);
-    const direct = await syncRuntime.startCollection(collection, { pin: false, forceDirect: true });
-    const state = direct?.state;
-    if (!state) throw new Error(`Direct sync bridge for ${collection} is unavailable.`);
-    await waitForNativePeerOpenState(state, collection, COMMAND_FOLLOWER_DIRECT_TIMEOUT_MS);
-    if (typeof state.pushToRemotePeers === 'function') await state.pushToRemotePeers();
-    else await state.scheduleLocalWritePush?.();
+    await withRejectingTimeout(async () => {
+      const current = await Promise.resolve(bridges.get(collection)).catch(() => null);
+      if (current?.mode === 'follower') bridges.delete(collection);
+      const direct = await syncRuntime.startCollection(collection, { pin: false, forceDirect: true });
+      const state = direct?.state;
+      if (!state) throw new Error(`Direct sync bridge for ${collection} is unavailable.`);
+      await waitForNativePeerOpenState(state, collection, COMMAND_FOLLOWER_DIRECT_OPEN_TIMEOUT_MS);
+      if (typeof state.pushToRemotePeers === 'function') await state.pushToRemotePeers();
+      else await state.scheduleLocalWritePush?.();
+    }, COMMAND_FOLLOWER_DIRECT_FLUSH_TIMEOUT_MS, (
+      `Direct multi-tab failover for ${collection} did not reach the native WebRTC peer before the deadline.`
+    ));
   };
   const resetRoomCircuit = () => {
     roomCircuit.state = 'closed';
@@ -326,7 +332,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
   emitDiagnostic({ phase: 'ready' });
   const ensureMultiTabCoordinator = async () => {
     if (multiTabCoordinator) return multiTabCoordinator;
-    const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260719-source-commits-merge-v74');
+    const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260720-source-commits-failover-v75');
     if (typeof rxdb?.getMultiTabSyncCoordinator !== 'function') return null;
     multiTabCoordinator = rxdb.getMultiTabSyncCoordinator({
       databaseName: db?.name || db?.raw?.name || 'ctox_business_os_js_v1',
@@ -833,6 +839,7 @@ function createFollowerBridge(collection, status, coordinator = null, directFall
     collection,
     state: null,
     multiTab: status,
+    flushTimeoutMs: COMMAND_FOLLOWER_BRIDGE_TIMEOUT_MS,
     async flush() {
       try {
         return await coordinator?.notifyDirtyAndWait?.(collection, [], { timeoutMs: 1_000 });
@@ -894,6 +901,25 @@ function withTimeout(value, ms) {
     Promise.resolve(value),
     delay(ms),
   ]);
+}
+
+async function withRejectingTimeout(operation, ms, message) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(operation),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error(message);
+          error.code = 'native_unavailable';
+          error.retryable = true;
+          reject(error);
+        }, ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function waitForNativePeerOpenState(state, collection, timeoutMs) {
@@ -1025,7 +1051,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260719-source-commits-merge-v74');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260720-source-commits-failover-v75');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }
@@ -2308,6 +2334,10 @@ export const __ctoxSyncTestHooks = {
   isModuleDemandOnlyCollection,
   moduleSyncCollections,
   DEMAND_ONLY_COLLECTION_START_ERROR,
+  createFollowerBridge,
+  COMMAND_FOLLOWER_DIRECT_OPEN_TIMEOUT_MS,
+  COMMAND_FOLLOWER_DIRECT_FLUSH_TIMEOUT_MS,
+  COMMAND_FOLLOWER_BRIDGE_TIMEOUT_MS,
   checkpointDiagnosticFields,
   maxCheckpointLwt,
   snapshotDiagnostics,

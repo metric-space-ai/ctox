@@ -236,5 +236,82 @@ const assert = (condition, message) => {
   );
 }
 
+// --- 7. follower bridges own a bounded multi-tab failover deadline ----------
+{
+  const events = [];
+  const db = makeDb({
+    events,
+    commandAck: {
+      status: 'completed',
+      task_id: '',
+      task_status: 'completed',
+      result: { outcome: { ok: true } },
+    },
+  });
+  const sync = {
+    async startCollection(name) {
+      events.push(`start:${name}`);
+      return {
+        mode: 'follower',
+        collection: name,
+        flushTimeoutMs: 40,
+        async flush() {
+          events.push(`follower-flush:${name}`);
+        },
+      };
+    },
+  };
+  const bus = createCommandBus({ db, sync });
+  const result = await bus.dispatch({
+    type: 'ctox.app_store.install',
+    module: 'app-store',
+    payload: { module_id: 'multi-tab-test' },
+  });
+  assert(result.ok === true, 'multi-tab follower: bounded bridge flush succeeds');
+  assert(events.includes('follower-flush:business_commands'),
+    'multi-tab follower: command collection uses follower-owned flush');
+}
+
+{
+  const db = makeDb({
+    commandAck: {
+      status: 'completed',
+      task_id: '',
+      task_status: 'completed',
+      result: { outcome: { ok: true } },
+    },
+  });
+  const sync = {
+    async startCollection(name) {
+      return {
+        mode: 'follower',
+        collection: name,
+        flushTimeoutMs: 40,
+        flush() {
+          return new Promise(() => {});
+        },
+      };
+    },
+  };
+  const bus = createCommandBus({ db, sync });
+  const startedAt = Date.now();
+  let thrown = null;
+  try {
+    await bus.dispatch({
+      type: 'ctox.app_store.install',
+      module: 'app-store',
+      payload: { module_id: 'multi-tab-timeout' },
+    });
+  } catch (error) {
+    thrown = error;
+  }
+  assert(thrown?.code === 'sync_unavailable', 'multi-tab follower: timeout remains typed and retryable');
+  assert(Date.now() - startedAt < 1_000, 'multi-tab follower: bridge-owned test deadline is honored');
+  assert(
+    String(thrown.message).includes('multi-tab command failover'),
+    'multi-tab follower: failure describes the complete failover rather than only the stale leader',
+  );
+}
+
 console.log('ctox-rxdb command-bus projection smoke OK');
 process.exit(0);

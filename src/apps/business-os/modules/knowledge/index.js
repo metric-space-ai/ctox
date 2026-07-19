@@ -74,6 +74,7 @@ const state = {
   sortMode: 'recent',
   sortDir: 'desc',
   flagFilters: new Set(),
+  listView: false,
   messages: null,
   openGroups: new Set(['research/drone-design/drone-bearing-loads']),
   contextMenu: null,
@@ -126,7 +127,11 @@ export async function mount(ctx) {
 }
 
 async function ensureStyles() {
-  const href = new URL('./index.css', import.meta.url).pathname;
+  // Carry the module's own cache-buster over to the stylesheet: index.js is
+  // imported as index.js?v=<build>, but a bare index.css URL would revalidate
+  // against the browser cache and can serve a STALE sheet next to fresh JS.
+  const version = String(import.meta.url).split('?v=')[1] || '';
+  const href = new URL('./index.css', import.meta.url).pathname + (version ? `?v=${version}` : '');
   if (document.querySelector(`link[href="${href}"]`)) return;
   const link = document.createElement('link');
   link.rel = 'stylesheet';
@@ -161,7 +166,7 @@ function documentTemplate() {
         <header class="ctox-pane-header ctox-pane-band">
           <div class="ctox-pane-title-row">
             <div class="ctox-pane-titles">
-              <span class="ctox-pane-kicker">Research</span>
+              <span class="ctox-pane-kicker">Bibliothek</span>
               <h2 class="ctox-pane-title">Knowledge</h2>
             </div>
             <div class="ctox-pane-actions">
@@ -176,6 +181,10 @@ function documentTemplate() {
              collapsed until the toggle is pressed. -->
         <div class="knowledge-filterbar">
           <input class="ctox-pane-search" data-search placeholder="Suchen…" />
+          <div class="knowledge-view-toggle" role="group" aria-label="Darstellung">
+            <button class="ctox-pane-icon" type="button" data-view-mode="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+            <button class="ctox-pane-icon" type="button" data-view-mode="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+          </div>
           <button class="ctox-pane-icon knowledge-filter-toggle" type="button" data-action="toggle-filters" aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--knowledge-surface-muted)"/><circle cx="15" cy="12" r="2.4" fill="var(--knowledge-surface-muted)"/><circle cx="8" cy="17" r="2.4" fill="var(--knowledge-surface-muted)"/></svg></button>
         </div>
         <div class="knowledge-filter-advanced" data-filter-advanced hidden>
@@ -194,6 +203,7 @@ function documentTemplate() {
               </select>
               <button type="button" class="knowledge-sort-dir" data-action="toggle-sort-dir" data-dir="desc" aria-label="Sortierrichtung umkehren" title="Absteigend"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="6 13 12 19 18 13"/></svg></button>
             </div>
+            <button type="button" class="knowledge-sort-dir knowledge-filter-reset" data-action="reset-filters" aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
           </div>
           <div class="knowledge-filter-chips" role="group" aria-label="Enthält">
             <button type="button" class="ctox-chip" data-flag="skillbooks" aria-pressed="false">Skillbooks</button>
@@ -227,30 +237,26 @@ function documentTemplate() {
           </div>
         </div>
         <div class="knowledge-tab-panel" data-panel="skill">
-          <button class="ctox-pane-icon knowledge-content-edit" type="button" data-action="edit-active" aria-label="Bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
-          <div class="ctox-toolbar knowledge-edit-bar" data-skill-toolbar>
-            <div class="knowledge-edit-actions">
-              <button class="ctox-button" type="button" data-action="edit-markdown">Bearbeiten</button>
-              <button class="ctox-button is-primary" type="button" data-action="save-markdown" hidden>An CTOX geben</button>
-              <button class="ctox-button" type="button" data-action="cancel-markdown" hidden>Abbrechen</button>
-            </div>
+          <!-- Element actions live top-right as icons — never as text buttons in
+               the content flow. Save/cancel replace the pencil while editing. -->
+          <div class="knowledge-content-actions">
             <span class="knowledge-edit-status" data-skill-status></span>
+            <button class="ctox-pane-icon is-confirm" type="button" data-action="save-markdown" hidden aria-label="An CTOX geben" title="An CTOX geben"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l5 5L19 7"/></svg></button>
+            <button class="ctox-pane-icon" type="button" data-action="cancel-markdown" hidden aria-label="Abbrechen" title="Abbrechen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+            <button class="ctox-pane-icon" type="button" data-action="edit-markdown" aria-label="Bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
           </div>
           <article class="markdown-document" data-markdown-view></article>
           <textarea class="markdown-editor" data-markdown-editor hidden></textarea>
         </div>
         <div class="knowledge-tab-panel" data-panel="runbooks" hidden>
-          <button class="ctox-pane-icon knowledge-content-edit" type="button" data-action="edit-active" aria-label="Bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
-          <div class="knowledge-secondary-switcher" data-runbook-switcher></div>
-          <div class="ctox-toolbar knowledge-edit-bar" data-runbook-toolbar>
-            <div class="knowledge-edit-actions">
-              <button class="ctox-button" type="button" data-action="edit-runbook">Bearbeiten</button>
-              <button class="ctox-button is-primary" type="button" data-action="save-runbook" hidden>An CTOX geben</button>
-              <button class="ctox-button" type="button" data-action="cancel-runbook" hidden>Abbrechen</button>
-              <button class="ctox-button" type="button" data-action="execute-runbook">Ausführen</button>
-            </div>
+          <div class="knowledge-content-actions">
             <span class="knowledge-edit-status" data-runbook-status></span>
+            <button class="ctox-pane-icon is-confirm" type="button" data-action="save-runbook" hidden aria-label="An CTOX geben" title="An CTOX geben"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l5 5L19 7"/></svg></button>
+            <button class="ctox-pane-icon" type="button" data-action="cancel-runbook" hidden aria-label="Abbrechen" title="Abbrechen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+            <button class="ctox-pane-icon" type="button" data-action="execute-runbook" aria-label="Ausführen" title="Ausführen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5.5v13l10-6.5-10-6.5Z"/></svg></button>
+            <button class="ctox-pane-icon" type="button" data-action="edit-runbook" aria-label="Bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
           </div>
+          <div class="knowledge-secondary-switcher" data-runbook-switcher></div>
           <article class="runbook-document" data-runbook-view></article>
           <form class="runbook-editor" data-runbook-form hidden>
             <input class="ctox-input" data-runbook-title placeholder="Runbook-Titel" />
@@ -345,6 +351,30 @@ function wireEvents() {
       else state.flagFilters.add(flag);
       chip.setAttribute('aria-pressed', String(state.flagFilters.has(flag)));
       renderKnowledgeList();
+    });
+  });
+  // One-click reset for every filter: scope, sort, direction, flags, search.
+  state.ctx.host.querySelector('[data-action="reset-filters"]')?.addEventListener('click', () => {
+    state.sourceScope = 'all';
+    state.sortMode = 'recent';
+    state.sortDir = 'desc';
+    state.flagFilters.clear();
+    const scopeSelect = state.ctx.host.querySelector('select[data-scope]');
+    if (scopeSelect) scopeSelect.value = 'all';
+    const sortSelect = state.ctx.host.querySelector('select[data-sort]');
+    if (sortSelect) sortSelect.value = 'recent';
+    const dirBtn = state.ctx.host.querySelector('[data-action="toggle-sort-dir"]');
+    if (dirBtn) { dirBtn.dataset.dir = 'desc'; dirBtn.title = 'Absteigend'; }
+    state.ctx.host.querySelectorAll('[data-filter-advanced] [data-flag]').forEach((chip) => chip.setAttribute('aria-pressed', 'false'));
+    if (els.search) els.search.value = '';
+    renderKnowledgeList();
+  });
+  // Shard vs. compact list rendering of the element well.
+  state.ctx.host.querySelectorAll('[data-view-mode]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.listView = button.dataset.viewMode === 'list';
+      state.ctx.host.querySelectorAll('[data-view-mode]').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.viewMode === 'list') === state.listView)));
+      state.ctx.host.querySelector('[data-knowledge-root]')?.classList.toggle('is-list-view', state.listView);
     });
   });
   // Mobile master-detail: back to the list.
@@ -731,7 +761,23 @@ function buildKnowledgeBundles(items, runbooks, tables) {
     }));
   }
 
-  return groups.filter((group) => group.entries.length).sort((a, b) => {
+  // Same-titled groups (e.g. a user and a system copy of the same skillbook)
+  // must render as ONE shard — merge entries and id-lists instead of showing
+  // duplicate cards.
+  const byTitle = new Map();
+  for (const group of groups.filter((entry) => entry.entries.length)) {
+    const key = (group.title || group.id).trim().toLowerCase();
+    const existing = byTitle.get(key);
+    if (!existing) {
+      byTitle.set(key, group);
+      continue;
+    }
+    existing.entries = uniqueById([...existing.entries, ...group.entries]);
+    existing.tableIds = uniqueStrings([...existing.tableIds, ...group.tableIds]);
+    existing.runbookIds = uniqueStrings([...existing.runbookIds, ...group.runbookIds]);
+    existing.summary = existing.summary || group.summary;
+  }
+  return [...byTitle.values()].sort((a, b) => {
     if (a.id.startsWith('research/drone-design')) return -1;
     if (b.id.startsWith('research/drone-design')) return 1;
     return a.title.localeCompare(b.title);
@@ -1154,12 +1200,23 @@ function renderKnowledgeList() {
     return;
   }
   els.list.replaceChildren(...visibleGroups.map((group) => renderKnowledgeBundle(group)));
+  updateFilterIndicator();
   const footer = state.ctx.host.querySelector('[data-knowledge-footer-count]');
   if (footer) {
     const n = visibleGroups.length;
     const scopeLabel = state.sourceScope === 'all' ? 'Alle' : state.sourceScope === 'system' ? 'System' : 'User';
     footer.textContent = `${n} ${n === 1 ? 'Eintrag' : 'Einträge'} · ${scopeLabel}`;
   }
+}
+
+// Accent dot on the filter toggle whenever any filter deviates from the
+// defaults — so a collapsed tray can never silently hide active filters.
+function updateFilterIndicator() {
+  const active = state.sourceScope !== 'all'
+    || state.sortMode !== 'recent'
+    || state.sortDir !== 'desc'
+    || (state.flagFilters && state.flagFilters.size > 0);
+  state.ctx.host.querySelector('[data-action="toggle-filters"]')?.classList.toggle('has-active-filters', active);
 }
 
 function knowledgeEmptyStateMessage(copy, term = '') {
@@ -1204,9 +1261,10 @@ function groupSize(group) {
 // Scannable count badges (Research-style numbers) — only non-zero kinds show,
 // so you can tell whether a shard has content before clicking it.
 function bundleCountsHtml(skillbooks, runbooks, tables) {
-  const pill = (n, label) => (n > 0 ? `<span class="kb-count"><b>${n}</b> ${label}</span>` : '');
-  const pills = [pill(skillbooks, 'Skillbooks'), pill(runbooks, 'Runbooks'), pill(tables, 'Tabellen')].filter(Boolean).join('');
-  return pills || '<span class="kb-count kb-empty">leer</span>';
+  // Parenthesized counts for every kind — zeros included — as ONE inline text
+  // line, not pill badges: three numbers must not cost two rows of chrome.
+  const part = (n, label) => `<span class="kb-count${n > 0 ? '' : ' kb-zero'}">${label} (${n})</span>`;
+  return [part(skillbooks, 'Skillbooks'), part(runbooks, 'Runbooks'), part(tables, 'Tabellen')].join(' · ');
 }
 
 function renderKnowledgeBundle(group) {
@@ -1228,9 +1286,8 @@ function renderKnowledgeBundle(group) {
     <div class="knowledge-bundle-head">
       <button class="bundle-caret" type="button" aria-label="Auf- oder zuklappen" aria-expanded="${isOpen}"></button>
       <button class="bundle-select" type="button">
-        <span class="bundle-domain">${escapeHtml(group.domainLabel || 'Knowledge')}</span>
         <strong>${escapeHtml(group.title)}</strong>
-        <span class="bundle-counts">${bundleCountsHtml(skillbookCount, runbookCount, tableCount)}</span>
+        <small class="bundle-meta" title="${escapeHtml(`${group.domainLabel || 'Knowledge'} · Skillbooks (${skillbookCount}) · Runbooks (${runbookCount}) · Tabellen (${tableCount})`)}"><span class="bundle-domain">${escapeHtml(group.domainLabel || 'Knowledge')}</span><span class="bundle-counts"> · ${bundleCountsHtml(skillbookCount, runbookCount, tableCount)}</span></small>
       </button>
     </div>
     <div class="knowledge-bundle-items"></div>
@@ -1300,8 +1357,9 @@ function renderSkillbookList(group) {
   const tables = context.tables || [];
   if (tables.length) {
     block.append(kindTitle('Tabellen'));
-    for (const tbl of tables) {
-      block.append(renderSubEntry(tbl.title || tbl.name || tbl.id, () => {
+    const tableLabels = distinguishingLabels(tables.map((tbl) => tbl.title || tbl.name || tbl.id));
+    for (const [tableIndex, tbl] of tables.entries()) {
+      block.append(renderSubEntry(tableLabels[tableIndex] || tbl.title || tbl.name || tbl.id, () => {
         state.selectedGroupId = group.id;
         state.openGroups.add(group.id);
         state.selectedTableId = tbl.id;
@@ -1349,11 +1407,9 @@ function renderSkillbookItem(item, group) {
   wrap.dataset.contextLabel = item.title || item.id;
   wrap.dataset.knowledgeColumn = 'sources';
   wrap.setAttribute('aria-current', String(group.id === state.selectedGroupId && item.id === selectedSkillbookForGroup(group)?.id));
-  const context = skillbookContext(group, item);
   wrap.innerHTML = `
     <button class="item-select" type="button">
       <strong>${escapeHtml(item.title || item.id)}</strong>
-      <small>${escapeHtml(`${context.runbooks.length} Runbooks · ${context.tables.length} Tabellen`)}</small>
     </button>
     <button class="ctox-pane-icon item-edit" type="button" aria-label="${escapeHtml(item.title || 'Eintrag')} bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
     <button class="ctox-pane-icon item-trash" type="button" aria-label="${escapeHtml(item.title || 'Eintrag')} löschen" title="Löschen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M10 11v6M14 11v6"/></svg></button>
@@ -1575,7 +1631,7 @@ function updateViewCounts() {
   const context = skillbookContext();
   const set = (sel, n) => {
     const el = host.querySelector(sel);
-    if (el) el.textContent = n ? ` ${n}` : '';
+    if (el) el.textContent = ` (${n})`;
   };
   set('[data-count-skill]', context.skill ? 1 : 0);
   set('[data-count-runbooks]', context.runbooks.length);
@@ -1703,11 +1759,24 @@ function runbookDetailsHtml(runbook) {
   `;
 }
 
+// Sibling titles often share a long common prefix ("Outbound Firmenqualifizierung
+// · Unternehmen / · Ansprechpartner / …"). Truncation would render them
+// identical, so the shared " · "-prefix is dropped and only the distinguishing
+// part is shown (full title stays in the tooltip).
+function distinguishingLabels(titles) {
+  const split = titles.map((title) => String(title || '').split(' · '));
+  if (split.length < 2) return split.map((parts) => parts.join(' · '));
+  let prefix = 0;
+  while (split.every((parts) => parts.length > prefix + 1 && parts[prefix] === split[0][prefix])) prefix += 1;
+  return split.map((parts) => parts.slice(prefix).join(' · ') || parts.join(' · '));
+}
+
 function renderTableSwitcher() {
   const context = skillbookContext();
   const tables = context.tables;
+  const labels = distinguishingLabels(tables.map((table) => table.title || table.id));
   els.tableSwitcher.hidden = tables.length <= 1;
-  els.tableSwitcher.replaceChildren(...tables.map((table) => {
+  els.tableSwitcher.replaceChildren(...tables.map((table, index) => {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `ctox-chip${table.id === activeTableId() ? ' is-active' : ''}`;
@@ -1717,7 +1786,8 @@ function renderTableSwitcher() {
     button.dataset.contextLabel = table.title || table.id;
     button.dataset.knowledgeColumn = 'workspace';
     button.setAttribute('aria-current', String(table.id === activeTableId()));
-    button.textContent = table.title || table.id;
+    button.textContent = labels[index];
+    button.title = table.title || table.id;
     button.addEventListener('click', () => {
       state.selectedTableId = table.id;
       state.selectedId = table.id;
@@ -2584,7 +2654,7 @@ function validateKnowledgeTableChunks(chunks, table = {}) {
 
   const normalized = records.map((record, position) => {
     const rows = rawDataFrameRows(record);
-    if (['chunk_index', 'row_offset', 'rows_offset', 'row_start', 'start_row', 'start_offset', 'offset', 'chunk_row_count', 'rows_count', 'row_count_in_chunk', 'row_count']
+    if (['chunk_index', 'row_offset', 'rows_offset', 'chunk_row_offset', 'row_start', 'start_row', 'start_offset', 'offset', 'chunk_row_count', 'rows_count', 'row_count_in_chunk', 'row_count']
       .some((key) => numericFieldValues(record, [key]).length > 1 && new Set(numericFieldValues(record, [key])).size > 1)) {
       return { record, position, invalidMetadata: true, rows };
     }
@@ -2592,7 +2662,7 @@ function validateKnowledgeTableChunks(chunks, table = {}) {
       record,
       position,
       index: numericField(record, ['chunk_index']),
-      offset: numericField(record, ['row_offset', 'rows_offset', 'row_start', 'start_row', 'start_offset', 'offset']),
+      offset: numericField(record, ['row_offset', 'rows_offset', 'chunk_row_offset', 'row_start', 'start_row', 'start_offset', 'offset']),
       rowCount: numericField(record, ['chunk_row_count', 'rows_count', 'row_count_in_chunk']),
       rows,
       rowsComplete: explicitRowsComplete(record),
@@ -2612,6 +2682,16 @@ function validateKnowledgeTableChunks(chunks, table = {}) {
   const sorted = [...normalized].sort((left, right) => left.index - right.index);
   if (sorted.some((chunk, index) => chunk.index !== index)) {
     return incompleteDataFrame('non-contiguous chunk_index');
+  }
+  // Offsets are derivable when absent everywhere: chunk_index is already proven
+  // contiguous, so cumulative row lengths ARE the offsets. Only a mix of
+  // explicit and missing offsets stays fail-closed.
+  if (sorted.every((chunk) => chunk.offset == null)) {
+    let derived = 0;
+    for (const chunk of sorted) {
+      chunk.offset = derived;
+      derived += chunk.rows.length;
+    }
   }
   if (sorted.some((chunk) => !Number.isInteger(chunk.offset) || chunk.offset < 0)) {
     return incompleteDataFrame('missing or invalid row offset');
