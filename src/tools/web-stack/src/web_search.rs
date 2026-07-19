@@ -3015,7 +3015,12 @@ fn build_evidence_doc(
     let canonical_url = canonical_page_url(hit, &fetched);
     let is_pdf = is_pdf_content(hit, &fetched);
     let response_kind = response_content_kind(hit, &fetched);
-    let opened_page = if response_kind.starts_with("data_") {
+    let opened_page = if is_zenodo_record_api_url(&hit.url) {
+        extract_zenodo_record_opened_page(query, hit, &String::from_utf8_lossy(&fetched.body))
+            .unwrap_or_else(|| {
+                extract_text_opened_page(query, hit, &String::from_utf8_lossy(&fetched.body))
+            })
+    } else if response_kind.starts_with("data_") {
         OpenedPage {
             title: hit.title.clone(),
             summary: "Immutable original data file retrieved.".to_string(),
@@ -3025,11 +3030,6 @@ fn build_evidence_doc(
             excerpts: Vec::new(),
             page_text: String::new(),
         }
-    } else if is_zenodo_record_api_url(&hit.url) {
-        extract_zenodo_record_opened_page(query, hit, &String::from_utf8_lossy(&fetched.body))
-            .unwrap_or_else(|| {
-                extract_text_opened_page(query, hit, &String::from_utf8_lossy(&fetched.body))
-            })
     } else if is_pdf {
         extract_pdf_opened_page(config, query, hit, &fetched)?
     } else {
