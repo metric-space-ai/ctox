@@ -139,6 +139,10 @@ is resumed after a service restart. Jobs with a replacement base prompt or a
 narrow no-MCP profile remain deliberately isolated sessions because they have a
 different capability/instruction contract. A queue job's workspace is applied
 as the typed per-turn cwd rather than encoded only in prompt prose.
+Systematic-research jobs are also isolated: each attempt starts a fresh
+non-persistent, MCP-free session while retaining the built-in typed CTOX Web
+tools. This prevents prior research history from influencing a new evidence
+run.
 Before reuse, the worker compares the current composed base instructions and
 model with the live session contract. A mismatch rebuilds the process-local
 client and resumes the durable thread with the new contract.
@@ -350,12 +354,12 @@ to rework. A passing guard writes a content-hash-bound validation receipt under
 
 The service also verifies the parent worker's durable rollout before accepting
 systematic research. It requires a successful typed `ctox_deep_research` call
-from the current attempt at the depth declared by the server-bound task and a
-persisted research workspace inside the task workspace. Shallower calls and
-`no_workspace` discovery runs cannot satisfy completion. Agent prose,
-externally imported SQLite rows, and files written after the fact are not
-substitutes for this tool receipt or for independently persisted reviewer
-provenance.
+as the first external action of the current attempt, at the depth declared by
+the server-bound task, and a persisted research workspace inside the task
+workspace. Shallower calls, `no_workspace` discovery runs, or attempts that run
+another external tool first cannot satisfy completion. Agent prose, externally
+imported SQLite rows, and files written after the fact are not substitutes for
+this tool receipt or for independently persisted reviewer provenance.
 
 Rejected or incomplete work is fed back into the same durable queue item or
 internal work item where possible. The review path has finite retry budgets and eventually

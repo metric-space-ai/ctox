@@ -33,6 +33,14 @@ CTOX-specific response-item type. Resume and compaction continue to use the
 fork's existing thread, rollout, `TurnContextItem`, and `ContextManager`
 contracts.
 
+Systematic-research attempts are a deliberate service-owned exception to normal
+worker continuity. Each attempt uses a fresh non-persistent session with MCP
+servers disabled, while the built-in typed CTOX Web tools remain available.
+Completion validation reads the durable rollout and requires
+`ctox_deep_research` to be the first external action. This prevents stale
+research context or an untracked preliminary tool call from contaminating a new
+evidence run.
+
 The structured compaction controller treats provider formatting failures as a
 recoverable model-surface limitation. If a provider returns prose or an empty
 payload instead of the requested JSON schema, the fork does not fail or replay

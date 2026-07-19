@@ -10063,6 +10063,14 @@ fn cv_print_clean_detail_line(value: &str) -> String {
 fn chat_turn_session_options_for_queue_job(
     job: &QueuedPrompt,
 ) -> turn_loop::ChatTurnSessionOptions {
+    if is_systematic_research_job(job) {
+        return turn_loop::ChatTurnSessionOptions {
+            disable_mcp_servers: true,
+            base_instructions: None,
+            plain_prompt: false,
+            turn_timeout_secs_override: None,
+        };
+    }
     if business_os_app_module_target_from_prompt(&job.prompt).is_some() {
         return turn_loop::ChatTurnSessionOptions {
             disable_mcp_servers: true,
@@ -10905,6 +10913,7 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
         let mut calls = BTreeMap::<String, (SystematicResearchDepth, u64)>::new();
         let mut attempt_bound = false;
         let mut workspace_bound = false;
+        let mut first_external_call_name: Option<String> = None;
         for line in BufReader::new(file).lines() {
             let line = line?;
             let Ok(value) = serde_json::from_str::<Value>(&line) else {
@@ -10925,6 +10934,7 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
             if payload.get("type").and_then(Value::as_str) == Some("task_started") {
                 attempt_bound = false;
                 workspace_bound = false;
+                first_external_call_name = None;
                 calls.clear();
             }
             if line.contains(expected_attempt_id) {
@@ -10936,6 +10946,19 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
                     .and_then(Value::as_str)
                     .and_then(|cwd| Path::new(cwd).canonicalize().ok())
                     .is_some_and(|cwd| cwd == workspace);
+            }
+            if attempt_bound
+                && workspace_bound
+                && matches!(
+                    payload.get("type").and_then(Value::as_str),
+                    Some("function_call" | "custom_tool_call")
+                )
+                && first_external_call_name.is_none()
+            {
+                first_external_call_name = payload
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
             }
             match payload.get("type").and_then(Value::as_str) {
                 Some("function_call")
@@ -11011,8 +11034,18 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
                         observed_depths.push(format!("{} (not persisted)", depth.as_str()));
                         continue;
                     }
-                    observed_depths.push(depth.as_str().to_string());
                     if *depth >= required_depth {
+                        if first_external_call_name.as_deref() != Some("ctox_deep_research") {
+                            observed_depths.push(format!(
+                                "{} (first external action was {})",
+                                depth.as_str(),
+                                first_external_call_name
+                                    .as_deref()
+                                    .unwrap_or("an unnamed tool")
+                            ));
+                            continue;
+                        }
+                        observed_depths.push(depth.as_str().to_string());
                         return Ok(serde_json::json!({
                             "tool": "ctox_deep_research",
                             "depth": depth.as_str(),
@@ -11020,10 +11053,12 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
                             "thread_id": thread_id,
                             "call_id": call_id,
                             "called_at_epoch": called_at,
+                            "first_external_action": "ctox_deep_research",
                             "research_workspace": research_workspace.cloned(),
                             "rollout_path": rollout_path,
                         }));
                     }
+                    observed_depths.push(depth.as_str().to_string());
                 }
                 _ => {}
             }
@@ -24446,88 +24481,105 @@ mod tests {
         let timestamp = now_iso_string();
         let expected_attempt_id = "business-command-turn:current-attempt";
         let attempt_started_at = current_epoch_secs().saturating_sub(1);
-        let write_rollout =
-            |depth: &str, no_workspace: bool, attempt_id: &str, turn_workspace: &Path| {
-                let arguments = serde_json::json!({
-                    "query": "verified bearing research",
-                    "depth": depth,
-                    "no_workspace": no_workspace,
-                });
-                let output = serde_json::json!({
-                    "ok": true,
-                    "depth": depth,
-                    "research_workspace": {
-                        "path": research_workspace,
-                        "manifest": research_workspace.join("manifest.json"),
-                        "evidence_bundle": research_workspace.join("evidence_bundle.json"),
-                    },
-                });
-                std::fs::write(
-                    &rollout,
-                    [
-                        serde_json::json!({
-                            "timestamp": timestamp,
-                            "type": "event_msg",
-                            "payload": {
-                                "type": "task_started",
-                                "turn_id": "turn-1",
-                            }
-                        })
-                        .to_string(),
-                        serde_json::json!({
-                            "timestamp": timestamp,
-                            "type": "response_item",
-                            "payload": {
-                                "type": "message",
-                                "role": "user",
-                                "content": [{
-                                    "type": "input_text",
-                                    "text": format!("Research Attempt ID: {attempt_id}"),
-                                }],
-                            }
-                        })
-                        .to_string(),
-                        serde_json::json!({
-                            "timestamp": timestamp,
-                            "type": "turn_context",
-                            "payload": {
-                                "turn_id": "turn-1",
-                                "cwd": turn_workspace,
-                            }
-                        })
-                        .to_string(),
-                        serde_json::json!({
-                            "timestamp": timestamp,
-                            "type": "response_item",
-                            "payload": {
-                                "type": "function_call",
-                                "name": "ctox_deep_research",
-                                "call_id": "call-1",
-                                "arguments": arguments.to_string(),
-                            }
-                        })
-                        .to_string(),
-                        serde_json::json!({
-                            "timestamp": timestamp,
-                            "type": "response_item",
-                            "payload": {
-                                "type": "function_call_output",
-                                "call_id": "call-1",
-                                "output": output.to_string(),
-                            }
-                        })
-                        .to_string(),
-                    ]
-                    .join("\n"),
-                )
-                .unwrap();
-            };
+        let write_rollout = |depth: &str,
+                             no_workspace: bool,
+                             attempt_id: &str,
+                             turn_workspace: &Path,
+                             preceding_tool: Option<&str>| {
+            let arguments = serde_json::json!({
+                "query": "verified bearing research",
+                "depth": depth,
+                "no_workspace": no_workspace,
+            });
+            let output = serde_json::json!({
+                "ok": true,
+                "depth": depth,
+                "research_workspace": {
+                    "path": research_workspace,
+                    "manifest": research_workspace.join("manifest.json"),
+                    "evidence_bundle": research_workspace.join("evidence_bundle.json"),
+                },
+            });
+            let mut items = vec![
+                serde_json::json!({
+                    "timestamp": timestamp,
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "task_started",
+                        "turn_id": "turn-1",
+                    }
+                })
+                .to_string(),
+                serde_json::json!({
+                    "timestamp": timestamp,
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{
+                            "type": "input_text",
+                            "text": format!("Research Attempt ID: {attempt_id}"),
+                        }],
+                    }
+                })
+                .to_string(),
+                serde_json::json!({
+                    "timestamp": timestamp,
+                    "type": "turn_context",
+                    "payload": {
+                        "turn_id": "turn-1",
+                        "cwd": turn_workspace,
+                    }
+                })
+                .to_string(),
+            ];
+            if let Some(name) = preceding_tool {
+                items.push(
+                    serde_json::json!({
+                        "timestamp": timestamp,
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "name": name,
+                            "call_id": "call-before-research",
+                            "arguments": "{}",
+                        }
+                    })
+                    .to_string(),
+                );
+            }
+            items.extend([
+                serde_json::json!({
+                    "timestamp": timestamp,
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "ctox_deep_research",
+                        "call_id": "call-1",
+                        "arguments": arguments.to_string(),
+                    }
+                })
+                .to_string(),
+                serde_json::json!({
+                    "timestamp": timestamp,
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "call-1",
+                        "output": output.to_string(),
+                    }
+                })
+                .to_string(),
+            ]);
+            std::fs::write(&rollout, items.join("\n")).unwrap();
+        };
 
         write_rollout(
             "exhaustive",
             false,
             "business-command-turn:foreign-attempt",
             &workspace,
+            None,
         );
         let foreign_attempt = validate_systematic_research_deep_research_receipt_from_conn(
             &conn,
@@ -24542,7 +24594,7 @@ mod tests {
             .to_string()
             .contains("observed current-attempt calls: none"));
 
-        write_rollout("exhaustive", false, expected_attempt_id, &codex_home);
+        write_rollout("exhaustive", false, expected_attempt_id, &codex_home, None);
         let foreign_workspace = validate_systematic_research_deep_research_receipt_from_conn(
             &conn,
             &codex_home,
@@ -24556,7 +24608,7 @@ mod tests {
             .to_string()
             .contains("observed current-attempt calls: none"));
 
-        write_rollout("standard", false, expected_attempt_id, &workspace);
+        write_rollout("standard", false, expected_attempt_id, &workspace, None);
         let shallow = validate_systematic_research_deep_research_receipt_from_conn(
             &conn,
             &codex_home,
@@ -24570,7 +24622,7 @@ mod tests {
             .to_string()
             .contains("observed current-attempt calls: standard"));
 
-        write_rollout("exhaustive", true, expected_attempt_id, &workspace);
+        write_rollout("exhaustive", true, expected_attempt_id, &workspace, None);
         let unpersisted = validate_systematic_research_deep_research_receipt_from_conn(
             &conn,
             &codex_home,
@@ -24584,7 +24636,27 @@ mod tests {
             .to_string()
             .contains("exhaustive (no_workspace)"));
 
-        write_rollout("exhaustive", false, expected_attempt_id, &workspace);
+        write_rollout(
+            "exhaustive",
+            false,
+            expected_attempt_id,
+            &workspace,
+            Some("exec_command"),
+        );
+        let wrong_first_action = validate_systematic_research_deep_research_receipt_from_conn(
+            &conn,
+            &codex_home,
+            &workspace,
+            expected_attempt_id,
+            attempt_started_at,
+            SystematicResearchDepth::Exhaustive,
+        )
+        .unwrap_err();
+        assert!(wrong_first_action
+            .to_string()
+            .contains("exhaustive (first external action was exec_command)"));
+
+        write_rollout("exhaustive", false, expected_attempt_id, &workspace, None);
         let receipt = validate_systematic_research_deep_research_receipt_from_conn(
             &conn,
             &codex_home,
@@ -30259,6 +30331,20 @@ Business OS command:
         ));
         assert!(prompt.contains("validation: ctox business-os app validate contracts --installed"));
         assert!(prompt.contains("tool_boundary: do not run ctox stop/start/upgrade"));
+    }
+
+    #[test]
+    fn systematic_research_queue_jobs_use_isolated_mcp_free_session() {
+        let workspace = temp_root("systematic-research-session-options");
+        let job = systematic_research_test_job(&workspace);
+
+        let options = chat_turn_session_options_for_queue_job(&job);
+
+        assert!(options.disable_mcp_servers);
+        assert!(!options.plain_prompt);
+        assert!(options.base_instructions.is_none());
+        assert_eq!(options.turn_timeout_secs_override, None);
+        assert!(!queue_job_reuses_persistent_session(&options));
     }
 
     #[test]
