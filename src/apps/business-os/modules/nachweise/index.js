@@ -5,7 +5,7 @@ import {
   isDeploymentBlocking,
 } from './core/credential.js';
 
-const MOD_BUILD = '20260706-kit1';
+const MOD_BUILD = '20260718-reduce';
 const MODULE_ID = 'nachweise';
 const PRIMARY = 'business_credentials';
 const DEPLOY_COMMAND = 'ats.deployment.check';
@@ -20,7 +20,7 @@ const TYPE_LABEL_EN = new Map([
 ]);
 const COPY = {
   de: {
-    title: 'Nachweise', subtitle: 'Ablaufende, verifizierte Nachweise je Subjekt mit Einsatz-Gate und Leistungsnachweis-Freigabe.',
+    title: 'Nachweise', kicker: 'ATS', actionsLabel: 'Prüfung & Sign-off',
     subjectLabel: 'Subjekt', credentialTypeLabel: 'Nachweistyp', validUntilLabel: 'Gültig bis', deploymentSubjectLabel: 'Einsatz-Subjekt', requiredTypesLabel: 'Pflicht-Typen', recordLabel: 'Leistungsnachweis', rateLabel: 'Verrechnungssatz', clientLabel: 'Entleiher', signatureLabel: 'Signatur-Anfrage', collectionLabel: 'Collection',
     subjectPlaceholder: 'Subjekt-ID (Kandidat/Mitarbeiter)', issuerPlaceholder: 'Aussteller', addCredential: 'Nachweis hinzufügen',
     deploymentSubjectPlaceholder: 'Subjekt-ID für Einsatz-Prüfung', requiredTypesPlaceholder: 'Pflicht-Typen (kommagetrennt)',
@@ -39,7 +39,7 @@ const COPY = {
     statusValid: 'gültig', statusExpiring: 'läuft ab', statusExpired: 'abgelaufen', statusNotYetValid: 'noch nicht gültig', statusUnverified: 'nicht verifiziert',
   },
   en: {
-    title: 'Credentials', subtitle: 'Expiring, verified credentials per subject with deployment gate and performance-record billing release.',
+    title: 'Credentials', kicker: 'ATS', actionsLabel: 'Checks & sign-off',
     subjectLabel: 'Subject', credentialTypeLabel: 'Credential type', validUntilLabel: 'Valid until', deploymentSubjectLabel: 'Deployment subject', requiredTypesLabel: 'Required types', recordLabel: 'Performance record', rateLabel: 'Charge rate', clientLabel: 'Client', signatureLabel: 'Signature request', collectionLabel: 'Collection',
     subjectPlaceholder: 'Subject ID (candidate/employee)', issuerPlaceholder: 'Issuer', addCredential: 'Add credential',
     deploymentSubjectPlaceholder: 'Subject ID for deployment check', requiredTypesPlaceholder: 'Required types (comma-separated)',
@@ -74,6 +74,7 @@ export async function mount(ctx) {
   root?.setAttribute('lang', locale);
   root?.querySelectorAll('[data-i18n]').forEach((node) => { node.textContent = t(node.dataset.i18n); });
   root?.querySelectorAll('[data-i18n-placeholder]').forEach((node) => { node.placeholder = t(node.dataset.i18nPlaceholder); });
+  root?.querySelectorAll('[data-i18n-title]').forEach((node) => { node.title = node.ariaLabel = t(node.dataset.i18nTitle); });
   const listEl = root?.querySelector('[data-ats-list]');
   const countEl = root?.querySelector('[data-ats-count]');
   const formEl = root?.querySelector('[data-ats-form]');
@@ -81,10 +82,9 @@ export async function mount(ctx) {
   const signoffFormEl = root?.querySelector('[data-ats-signoff-form]');
   const gateEl = root?.querySelector('[data-ats-gate]');
   const titleEl = root?.querySelector('[data-ats-title]');
-  const subEl = root?.querySelector('[data-ats-sub]');
+  const toggleActionsEl = root?.querySelector('[data-toggle-actions]');
   const typeSelect = root?.querySelector('[data-credential-type]');
   if (titleEl) titleEl.textContent = locale === 'en' ? t('title') : (ctx.manifest?.title || t('title'));
-  if (subEl && ctx.manifest?.description && locale !== 'en') subEl.textContent = ctx.manifest.description;
   if (typeSelect) {
     typeSelect.innerHTML = CREDENTIAL_TYPES
       .map((type) => '<option value="' + esc(type.key) + '">' + esc(typeLabel(type.key, locale)) + '</option>')
@@ -95,10 +95,13 @@ export async function mount(ctx) {
     try { return ctx.db?.collection?.(PRIMARY) || null; } catch { return null; }
   };
 
+  // Gate result → kit callout state (base.css .ctox-callout modifiers).
+  const GATE_KINDS = { ok: 'is-success', block: 'is-danger', offline: 'is-warning' };
   function setGate(html, kind) {
     if (!gateEl) return;
-    gateEl.className = 'ats-gate' + (kind ? ' ats-gate--' + kind : '');
+    gateEl.className = 'ctox-callout' + (GATE_KINDS[kind] ? ' ' + GATE_KINDS[kind] : '');
     gateEl.innerHTML = html || '';
+    gateEl.hidden = !html;
   }
 
   async function render() {
@@ -285,6 +288,15 @@ export async function mount(ctx) {
   }
   signoffFormEl?.addEventListener('submit', onSignoff);
 
+  // Einsatz-Gate and Sign-off forms are hidden by default (is-actions-hidden
+  // on root); the header toggle reveals them on demand — threads' /
+  // consent's data-toggle-actions idiom.
+  function onToggleActions() {
+    const hidden = root?.classList.toggle('is-actions-hidden');
+    toggleActionsEl?.setAttribute('aria-pressed', hidden ? 'false' : 'true');
+  }
+  toggleActionsEl?.addEventListener('click', onToggleActions);
+
   let subscription = null;
   const col = collection();
   if (col?.find) {
@@ -298,6 +310,7 @@ export async function mount(ctx) {
     formEl?.removeEventListener('submit', onSubmit);
     gateFormEl?.removeEventListener('submit', onGateCheck);
     signoffFormEl?.removeEventListener('submit', onSignoff);
+    toggleActionsEl?.removeEventListener('click', onToggleActions);
     listEl?.removeEventListener('click', onListClick);
     ctx.host.replaceChildren();
     delete ctx.host.dataset.atsModule;

@@ -1,32 +1,36 @@
-<section class="ats-module ats-interviews ctox-record-workbench" data-ats-root>
-  <header class="ctox-pane-header ctox-pane-band ats-head ctox-record-workbench__header">
+<section class="ats-interviews ctox-record-workbench is-form-hidden" data-ats-root>
+  <header class="ctox-pane-header ctox-pane-band ctox-record-workbench__header">
     <div class="ctox-pane-title-row">
       <div class="ctox-pane-titles">
-        <span class="ctox-pane-kicker" data-i18n="kicker">Interviews</span>
+        <span class="ctox-pane-kicker" data-ats-sub></span>
         <h1 class="ctox-pane-title" data-ats-title></h1>
       </div>
+      <div class="ctox-pane-actions">
+        <button type="button" class="ctox-pane-icon" data-toggle-form data-i18n-title="toggleForm" title="Neuer Termin" aria-label="Neuer Termin" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
+        </button>
+      </div>
     </div>
-    <p class="ats-sub ctox-record-workbench__subtitle" data-ats-sub></p>
   </header>
-  <div class="ats-body ctox-record-workbench__body">
-    <form class="ats-form ctox-compact-form" data-ats-form>
+  <div class="ctox-record-workbench__body">
+    <form class="ctox-compact-form" data-ats-form>
       <div class="ctox-compact-form__fields">
-        <label class="ctox-compact-field"><span data-i18n="candidatePlaceholder">Kandidat-ID</span><input class="ctox-input" type="text" name="candidate_id" placeholder="Kandidat-ID" data-i18n-placeholder="candidatePlaceholder" required data-f /></label>
-        <label class="ctox-compact-field"><span data-i18n="vacancyPlaceholder">Vakanz-ID</span><input class="ctox-input" type="text" name="vacancy_id" placeholder="Vakanz-ID" data-i18n-placeholder="vacancyPlaceholder" data-f /></label>
-        <label class="ctox-compact-field"><span data-i18n="partiesPlaceholder">Parteien</span><input class="ctox-input" type="text" name="parties" placeholder="Parteien (Komma-getrennt)" data-i18n-placeholder="partiesPlaceholder" data-f /></label>
+        <label class="ctox-compact-field"><span data-i18n="candidatePlaceholder">Kandidat-ID</span><input class="ctox-input" type="text" name="candidate_id" required data-f /></label>
+        <label class="ctox-compact-field"><span data-i18n="vacancyPlaceholder">Vakanz-ID</span><input class="ctox-input" type="text" name="vacancy_id" data-f /></label>
+        <label class="ctox-compact-field"><span data-i18n="partiesLabel">Parteien</span><input class="ctox-input" type="text" name="parties" placeholder="Komma-getrennt" data-i18n-placeholder="partiesPlaceholder" data-f /></label>
         <label class="ctox-compact-field"><span data-i18n="startLabel">Start</span><input class="ctox-input" type="datetime-local" name="start" data-f /></label>
-        <label class="ctox-compact-field"><span data-i18n="durationPlaceholder">Dauer</span><input class="ctox-input" type="number" name="duration_min" placeholder="Dauer (Min)" data-i18n-placeholder="durationPlaceholder" data-f /></label>
+        <label class="ctox-compact-field"><span data-i18n="durationPlaceholder">Dauer (Min)</span><input class="ctox-input" type="number" name="duration_min" data-f /></label>
         <label class="ctox-compact-field"><span data-i18n="locationLabel">Ort</span><select class="ctox-select" name="location_mode" data-f>
           <option value="video" data-i18n="modeVideo">Video</option>
           <option value="onsite" data-i18n="modeOnsite">Vor Ort</option>
           <option value="phone" data-i18n="modePhone">Telefon</option>
         </select></label>
-        <label class="ctox-compact-field"><span data-i18n="videoLinkPlaceholder">Video-Link</span><input class="ctox-input" type="text" name="video_link" placeholder="Video-Link" data-i18n-placeholder="videoLinkPlaceholder" data-f /></label>
+        <label class="ctox-compact-field"><span data-i18n="videoLinkPlaceholder">Video-Link</span><input class="ctox-input" type="text" name="video_link" data-f /></label>
       </div>
       <div class="ctox-compact-form__actions"><button class="ctox-button is-primary" type="submit" data-i18n="createMeeting">Termin anlegen</button></div>
     </form>
-    <div class="ats-gate" data-ats-gate></div>
-    <div class="ats-count ctox-record-workbench__status" data-ats-count></div>
-    <div class="ats-list ctox-record-list" data-ats-list></div>
+    <div class="ctox-callout" data-ats-gate hidden></div>
+    <div class="ctox-record-workbench__status" data-ats-count></div>
+    <div class="ctox-record-list" data-ats-list></div>
   </div>
 </section>

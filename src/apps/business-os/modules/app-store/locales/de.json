@@ -1,6 +1,8 @@
 {
   "kicker": "Katalog",
   "title": "App Store",
+  "sidebarExtrasTitle": "Installations- und Quelloptionen",
+  "sidebarExtrasAria": "Installations- und Quelloptionen anzeigen",
   "searchPlaceholder": "Module, Templates, Apps suchen...",
   "searchAria": "App Store durchsuchen",
   "createScratch": "App von Scratch erstellen",

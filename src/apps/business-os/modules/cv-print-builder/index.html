@@ -9,7 +9,12 @@
           <span class="ctox-pane-kicker">Kandidaten</span>
           <h2 class="ctox-pane-title">CV Print Builder</h2>
         </div>
-        <span class="ctox-badge" data-cv-count>0 CVs</span>
+        <div class="ctox-pane-actions">
+          <span class="ctox-badge" data-cv-count>0 CVs</span>
+          <button type="button" class="ctox-pane-icon" data-toggle-bulk title="Weitere Aktionen" aria-label="Weitere Aktionen" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="6" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="18" r="1.4"/></svg>
+          </button>
+        </div>
       </div>
       <div class="ctox-pane-tools cv-tools">
         <input type="search" class="ctox-pane-search" data-cv-search placeholder="Suchen" autocomplete="off" aria-label="Kandidaten suchen" />
@@ -19,7 +24,12 @@
           <option value="phase_asc">Status</option>
           <option value="template_asc">Template</option>
         </select>
-        <button class="ctox-button" type="button" data-cv-reparse-all>Alle reparsen</button>
+        <!-- Bulk actions are hidden by default (the data-toggle-bulk kebab
+             reveals them on demand) — only the primary search/sort live in
+             the always-visible tool row. -->
+        <div class="cv-tools-extra" data-cv-bulk-actions hidden>
+          <button class="ctox-button" type="button" data-cv-reparse-all>Alle reparsen</button>
+        </div>
       </div>
     </header>
     <div class="ctox-pane-body">

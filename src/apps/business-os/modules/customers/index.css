@@ -33,6 +33,19 @@
   min-height: 0;
 }
 
+/* The inspector (right) pane is the primary detail view but can dominate
+   the layout when a user is scanning lists. A header toggle re-claims the
+   width for the center pane; default is open so the most common flow
+   (click a row, see details) stays one click. Persists per browser. */
+.customers-module.is-inspector-hidden {
+  grid-template-columns: var(--customers-left-width, 292px) 12px minmax(0, 1fr);
+}
+
+.customers-module.is-inspector-hidden .customers-right,
+.customers-module.is-inspector-hidden > [data-resizer="right"] {
+  display: none;
+}
+
 /* Standard focus ring for the module's custom interactive rows. */
 .customers-module .customers-scope:focus-visible,
 .customers-module .customers-mini-row:focus-visible,
@@ -298,24 +311,28 @@
 
 /* Scroll wrapper around the kit .ctox-pane-tabs in the inspector. */
 .customers-detail-tabs {
-  margin: 12px 14px 0;
+  margin: 8px 14px 0;
   overflow-x: auto;
 }
 
-/* custom: record hero inside the inspector (title larger than the pane
-   header, plus a wrap-anywhere subtitle line). */
-.customers-detail-title {
-  margin: 0;
-  color: var(--text);
-  font-size: 16px;
-  line-height: 1.25;
-}
-
+/* custom: subtitle line under the pane-title inside .ctox-pane-titles. The
+   pane header band carries the kicker + title + this subtitle + (optional)
+   chip row; the old hero block in the scroll body was redundant. */
 .customers-detail-subtitle {
-  margin: 4px 0 0;
+  margin: 2px 0 0;
   color: var(--muted);
   font-size: 12px;
+  line-height: 1.3;
   overflow-wrap: anywhere;
+}
+
+/* Chip row sitting inside the inspector pane header band (under the title
+   row). The inner .customers-chip-row keeps the flex+gap layout; this class
+   only adds the band spacing and wrap behaviour. */
+.customers-module .customers-pane-chips {
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
 }
 
 /* Permission notice: kit .ctox-callout.is-warning; the module only adds the

@@ -51,6 +51,14 @@ Use this before claiming a Business OS app is done.
   queue / AI / command-bus button unless that automation was requested or is a
   real workflow with a trackable result.
 - The UI has no decorative panes or dead controls.
+- Optional/secondary controls, filters, forms, and reference panels are hidden by
+  default and revealed on demand (collapsible pane, `<details>`, `[hidden]`, or
+  `⋯` menu); the default view is the minimal common case.
+- Any detail/inspector pane that is hidden by default auto-reveals when a record
+  is selected (`visible = hasSelection && !userCollapsed`); it never leaves a
+  selection showing nothing.
+- Sections/cards render only when they have data; there are no empty "not set"
+  placeholder cards.
 - Any left/right column inside the app contains real workflow content and is not
   an empty copy of shell context/topics.
 - `index.css` uses Business OS theme tokens for surfaces, borders, and text,

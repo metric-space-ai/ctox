@@ -27,6 +27,9 @@ const {
   isKnowledgeTabDisabled,
   knowledgeItemsFromTables,
   knowledgeGroupMatchesDomain,
+  runCoalescedRefresh,
+  validateKnowledgeTableChunks,
+  dataFrameCompleteness,
   localDataFrameRows,
   localDataFrameSchema,
   mergeKnowledgeTableData,
@@ -108,6 +111,97 @@ test('normalizes RxDB payload records without dropping table rows or schema', ()
   assert.equal(record.has_table, true);
   assert.equal(localDataFrameRows(record).length, 1);
   assert.equal(localDataFrameSchema(record).columns[0].key, 'source_id');
+});
+
+test('assembles only complete contiguous knowledge table chunks', () => {
+  const result = validateKnowledgeTableChunks([
+    { chunk_index: 1, chunk_count: 2, row_offset: 2, rows_total: 3, rows_complete: true, rows: [{ id: 'b' }] },
+    { chunk_index: 0, chunk_count: 2, row_offset: 0, rows_total: 3, rows_complete: true, rows: [{ id: 'a' }, { id: 'a2' }] },
+  ]);
+
+  assert.equal(result.complete, true);
+  assert.equal(result.expectedRows, 3);
+  assert.deepEqual(result.rows.map((row) => row.id), ['a', 'a2', 'b']);
+});
+
+test('fails closed for duplicate or non-contiguous chunk indexes', () => {
+  const duplicate = validateKnowledgeTableChunks([
+    { chunk_index: 0, chunk_count: 2, row_offset: 0, rows_total: 2, rows: [{ id: 'a' }] },
+    { chunk_index: 0, chunk_count: 2, row_offset: 1, rows_total: 2, rows: [{ id: 'b' }] },
+  ]);
+  const gap = validateKnowledgeTableChunks([
+    { chunk_index: 0, chunk_count: 2, row_offset: 0, rows_total: 2, rows: [{ id: 'a' }] },
+    { chunk_index: 2, chunk_count: 2, row_offset: 1, rows_total: 2, rows: [{ id: 'b' }] },
+  ]);
+
+  assert.equal(duplicate.complete, false);
+  assert.deepEqual(duplicate.rows, []);
+  assert.match(duplicate.reason, /duplicate/);
+  assert.equal(gap.complete, false);
+  assert.match(gap.reason, /contiguous/);
+});
+
+test('fails closed for conflicting chunk count, offsets, totals, and rows_complete', () => {
+  const conflictingCount = validateKnowledgeTableChunks([
+    { chunk_index: 0, chunk_count: 2, row_offset: 0, rows_total: 2, rows: [{ id: 'a' }] },
+    { chunk_index: 1, chunk_count: 3, row_offset: 1, rows_total: 2, rows: [{ id: 'b' }] },
+  ]);
+  const invalidOffset = validateKnowledgeTableChunks([
+    { chunk_index: 0, chunk_count: 2, row_offset: 0, rows_total: 2, rows: [{ id: 'a' }] },
+    { chunk_index: 1, chunk_count: 2, row_offset: 2, rows_total: 2, rows: [{ id: 'b' }] },
+  ]);
+  const invalidTotal = validateKnowledgeTableChunks([
+    { chunk_index: 0, chunk_count: 2, row_offset: 0, rows_total: 3, rows: [{ id: 'a' }] },
+    { chunk_index: 1, chunk_count: 2, row_offset: 1, rows_total: 3, rows: [{ id: 'b' }] },
+  ]);
+  const incompleteFlag = validateKnowledgeTableChunks([
+    { chunk_index: 0, chunk_count: 2, row_offset: 0, rows_total: 2, rows_complete: false, rows: [{ id: 'a' }] },
+    { chunk_index: 1, chunk_count: 2, row_offset: 1, rows_total: 2, rows_complete: true, rows: [{ id: 'b' }] },
+  ]);
+
+  for (const result of [conflictingCount, invalidOffset, invalidTotal, incompleteFlag]) {
+    assert.equal(result.complete, false);
+    assert.deepEqual(result.rows, []);
+  }
+  assert.match(conflictingCount.reason, /chunk_count/);
+  assert.match(invalidOffset.reason, /gap|overlap/);
+  assert.match(invalidTotal.reason, /row total/);
+  assert.match(incompleteFlag.reason, /rows_complete/);
+});
+
+test('marks chunked dataframe completeness in the browser data model', () => {
+  const incomplete = dataFrameCompleteness({
+    chunks: [{ chunk_index: 0, chunk_count: 2, row_offset: 0, rows_total: 2, rows: [{ id: 'only' }] }],
+  });
+
+  assert.equal(incomplete.complete, false);
+  assert.deepEqual(incomplete.rows, []);
+});
+
+test('coalesces refresh requests into one trailing refresh', async () => {
+  const status = { refreshInFlight: false, refreshPending: false };
+  let runs = 0;
+  let releaseFirst;
+  const firstRefresh = new Promise((resolve) => { releaseFirst = resolve; });
+  const refresh = async () => {
+    runs += 1;
+    if (runs === 1) await firstRefresh;
+  };
+
+  const first = runCoalescedRefresh(status, refresh);
+  await Promise.resolve();
+  await Promise.all([
+    runCoalescedRefresh(status, refresh),
+    runCoalescedRefresh(status, refresh),
+    runCoalescedRefresh(status, refresh),
+  ]);
+  assert.equal(status.refreshPending, true);
+  releaseFirst();
+  await first;
+
+  assert.equal(runs, 2);
+  assert.equal(status.refreshInFlight, false);
+  assert.equal(status.refreshPending, false);
 });
 
 test('merges item metadata with table payload data for dataframe rendering', () => {

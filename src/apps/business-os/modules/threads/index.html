@@ -1,5 +1,5 @@
-<main class="threads-module" data-threads-root>
-  <section class="threads-pane threads-left" aria-label="Threads Navigation">
+<main class="ctox-workspace threads-module is-actions-hidden" data-threads-root data-resize-frame>
+  <aside class="ctox-pane threads-left" aria-label="Threads Navigation">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
@@ -31,10 +31,14 @@
       <button type="button" class="ctox-chip" data-filter="archived">Archiv</button>
     </nav>
     <section class="threads-briefing" data-personal-briefing aria-label="Persönliches Briefing"></section>
-    <div class="threads-list" data-thread-list></div>
-  </section>
+    <div class="ctox-pane-body">
+      <div class="ctox-list threads-list" data-thread-list></div>
+    </div>
+  </aside>
 
-  <section class="threads-pane threads-center" aria-label="Thread Timeline">
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="240" data-resizer-max="480" aria-label="Linke Spaltenbreite anpassen"></button>
+
+  <section class="ctox-pane threads-center" aria-label="Thread Timeline">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <button type="button" class="ctox-pane-icon threads-mobile-back" data-mobile-back aria-label="Zur Inbox">
@@ -46,7 +50,7 @@
         </div>
         <div class="ctox-pane-actions">
           <span class="ctox-badge" data-thread-status>bereit</span>
-          <span class="ctox-badge threads-sync-state" data-sync-state>lokal</span>
+          <span class="ctox-badge" data-sync-state>lokal</span>
           <button type="button" class="ctox-pane-icon" data-thread-watch title="Watch" aria-label="Watch">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6ZM12 9.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z"/></svg>
           </button>
@@ -55,6 +59,9 @@
           </button>
           <button type="button" class="ctox-pane-icon" data-thread-archive title="Archivieren" aria-label="Archivieren">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v4H4zM6 9v10h12V9M10 13h4"/></svg>
+          </button>
+          <button type="button" class="ctox-pane-icon threads-toggle-actions" data-toggle-actions title="Aktionen & Aufmerksamkeit" aria-label="Aktionen & Aufmerksamkeit einblenden" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
           </button>
         </div>
       </div>
@@ -72,72 +79,88 @@
     </nav>
   </section>
 
-  <aside class="threads-pane threads-right" aria-label="Thread Actions">
-    <section class="threads-panel">
-      <h3>Aufmerksamkeit</h3>
-      <form data-notification-preferences-form class="threads-form">
-        <label><span class="ctox-field-label">Mindestpriorität</span><input class="ctox-input" type="number" min="0" max="100" step="10" value="20" data-notification-threshold></label>
-        <label><span class="ctox-field-label">Ruhezeit von</span><input class="ctox-input" type="time" data-quiet-start></label>
-        <label><span class="ctox-field-label">Ruhezeit bis</span><input class="ctox-input" type="time" data-quiet-end></label>
-        <label class="threads-check"><input type="checkbox" checked data-notification-approvals> Freigaben</label>
-        <label class="threads-check"><input type="checkbox" checked data-notification-mentions> Erwähnungen</label>
-        <label class="threads-check"><input type="checkbox" checked data-notification-escalations> Eskalationen und Fehler</label>
-        <button type="submit" class="ctox-button">Speichern</button>
-      </form>
-    </section>
+  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="280" data-resizer-max="520" aria-label="Rechte Spaltenbreite anpassen"></button>
 
-    <section class="threads-panel">
-      <h3>Übergabe</h3>
-      <form data-handoff-form class="threads-form">
-        <label><span class="ctox-field-label">An User</span><input class="ctox-input" data-handoff-target required></label>
-        <label><span class="ctox-field-label">Erwartung</span><textarea class="ctox-textarea" data-handoff-body rows="3" required></textarea></label>
-        <label><span class="ctox-field-label">Frist</span><input class="ctox-input" type="datetime-local" data-handoff-due></label>
-        <label><span class="ctox-field-label">Rückgabe wenn</span><input class="ctox-input" data-handoff-return-reason placeholder="z. B. Evidenz fehlt"></label>
-        <button type="submit" class="ctox-button">Übergeben</button>
-      </form>
-    </section>
+  <aside class="ctox-pane threads-right" aria-label="Thread Actions">
+    <div class="ctox-pane-scroll threads-right-scroll">
+      <section class="ctox-card threads-panel">
+        <header><h3>Aufmerksamkeit</h3></header>
+        <div class="ctox-card-body">
+          <form data-notification-preferences-form class="threads-form">
+            <label><span class="ctox-field-label">Mindestpriorität</span><input class="ctox-input" type="number" min="0" max="100" step="10" value="20" data-notification-threshold></label>
+            <label><span class="ctox-field-label">Ruhezeit von</span><input class="ctox-input" type="time" data-quiet-start></label>
+            <label><span class="ctox-field-label">Ruhezeit bis</span><input class="ctox-input" type="time" data-quiet-end></label>
+            <label class="ctox-choice"><input type="checkbox" checked data-notification-approvals> Freigaben</label>
+            <label class="ctox-choice"><input type="checkbox" checked data-notification-mentions> Erwähnungen</label>
+            <label class="ctox-choice"><input type="checkbox" checked data-notification-escalations> Eskalationen und Fehler</label>
+            <button type="submit" class="ctox-button">Speichern</button>
+          </form>
+        </div>
+      </section>
 
-    <section class="threads-panel">
-      <h3>AI beauftragen</h3>
-      <form data-ai-form class="threads-form">
-        <label><span class="ctox-field-label">Ziel</span><textarea class="ctox-textarea" data-ai-goal rows="3" required></textarea></label>
-        <button type="submit" class="ctox-button is-primary">AI starten</button>
-      </form>
-    </section>
+      <section class="ctox-card threads-panel">
+        <header><h3>Übergabe</h3></header>
+        <div class="ctox-card-body">
+          <form data-handoff-form class="threads-form">
+            <label><span class="ctox-field-label">An User</span><input class="ctox-input" data-handoff-target required></label>
+            <label><span class="ctox-field-label">Erwartung</span><textarea class="ctox-textarea" data-handoff-body rows="3" required></textarea></label>
+            <label><span class="ctox-field-label">Frist</span><input class="ctox-input" type="datetime-local" data-handoff-due></label>
+            <label><span class="ctox-field-label">Rückgabe wenn</span><input class="ctox-input" data-handoff-return-reason placeholder="z. B. Evidenz fehlt"></label>
+            <button type="submit" class="ctox-button">Übergeben</button>
+          </form>
+        </div>
+      </section>
 
-    <section class="threads-panel">
-      <h3>Neue Notiz</h3>
-      <form data-note-form class="threads-form">
-        <label>
-          <span class="ctox-field-label">An User</span>
-          <input class="ctox-input" type="text" data-note-target placeholder="user-id oder mehrere mit Komma">
-        </label>
-        <label>
-          <span class="ctox-field-label">Notiz</span>
-          <textarea class="ctox-textarea" data-note-body rows="4" placeholder="Kontext, Hinweis oder Bitte"></textarea>
-        </label>
-        <button type="submit" class="ctox-button is-primary">Notiz hinterlassen</button>
-      </form>
-    </section>
+      <section class="ctox-card threads-panel">
+        <header><h3>AI beauftragen</h3></header>
+        <div class="ctox-card-body">
+          <form data-ai-form class="threads-form">
+            <label><span class="ctox-field-label">Ziel</span><textarea class="ctox-textarea" data-ai-goal rows="3" required></textarea></label>
+            <button type="submit" class="ctox-button is-primary">AI starten</button>
+          </form>
+        </div>
+      </section>
 
-    <section class="threads-panel">
-      <h3>CTOX Freigabe</h3>
-      <form data-approval-form class="threads-form">
-        <label>
-          <span class="ctox-field-label">Reviewer</span>
-          <input class="ctox-input" type="text" data-approval-reviewer placeholder="erfahrener-user-id">
-        </label>
-        <label>
-          <span class="ctox-field-label">Prompt</span>
-          <textarea class="ctox-textarea" data-approval-prompt rows="5" placeholder="Was CTOX nach Freigabe tun soll"></textarea>
-        </label>
-        <button type="submit" class="ctox-button is-primary">Freigabe anfragen</button>
-      </form>
-    </section>
+      <section class="ctox-card threads-panel">
+        <header><h3>Neue Notiz</h3></header>
+        <div class="ctox-card-body">
+          <form data-note-form class="threads-form">
+            <label>
+              <span class="ctox-field-label">An User</span>
+              <input class="ctox-input" type="text" data-note-target placeholder="user-id oder mehrere mit Komma">
+            </label>
+            <label>
+              <span class="ctox-field-label">Notiz</span>
+              <textarea class="ctox-textarea" data-note-body rows="4" placeholder="Kontext, Hinweis oder Bitte"></textarea>
+            </label>
+            <button type="submit" class="ctox-button is-primary">Notiz hinterlassen</button>
+          </form>
+        </div>
+      </section>
 
-    <section class="threads-panel" data-context-panel>
-      <h3>Kontext</h3>
-      <div class="threads-context" data-thread-context></div>
-    </section>
+      <section class="ctox-card threads-panel">
+        <header><h3>CTOX Freigabe</h3></header>
+        <div class="ctox-card-body">
+          <form data-approval-form class="threads-form">
+            <label>
+              <span class="ctox-field-label">Reviewer</span>
+              <input class="ctox-input" type="text" data-approval-reviewer placeholder="erfahrener-user-id">
+            </label>
+            <label>
+              <span class="ctox-field-label">Prompt</span>
+              <textarea class="ctox-textarea" data-approval-prompt rows="5" placeholder="Was CTOX nach Freigabe tun soll"></textarea>
+            </label>
+            <button type="submit" class="ctox-button is-primary">Freigabe anfragen</button>
+          </form>
+        </div>
+      </section>
+
+      <section class="ctox-card threads-panel" data-context-panel>
+        <header><h3>Kontext</h3></header>
+        <div class="ctox-card-body">
+          <div class="threads-context" data-thread-context></div>
+        </div>
+      </section>
+    </div>
   </aside>
 </main>

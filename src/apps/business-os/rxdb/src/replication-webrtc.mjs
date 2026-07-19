@@ -1333,11 +1333,36 @@ class CtoxWebRtcReplicationState {
   async resolveWholeDocumentLwwConflicts(rows, peerId) {
     const retryRows = [];
     const acceptedMaster = [];
+    const finalDelete = this.collection.storageCollection?.deleteStrategy === 'final';
     for (const row of rows) {
       const local = row?.newDocumentState;
       const master = row?.assumedMasterState;
       const nativeAuthoritative = ['business_commands', 'ctox_queue_tasks']
         .includes(this.collection.name);
+      // SYNC-41 finalDelete (whole-doc LWW push half): a tombstone on EITHER
+      // side beats a concurrent non-tombstone regardless of HLC. Runs before
+      // the HLC ordering so the delete cannot be resurrected by a higher-HLC
+      // update. (field-merge collections skip this path entirely — line ~1294 —
+      // and get tombstone-wins from threeWayMergeDocuments instead.)
+      if (finalDelete && !nativeAuthoritative) {
+        const localDeleted = Boolean(local?._deleted);
+        const masterDeleted = Boolean(master?._deleted);
+        if (localDeleted && !masterDeleted) {
+          // Our delete wins the master's concurrent update: retry the push so
+          // the tombstone overwrites master on every peer.
+          retryRows.push(row);
+          continue;
+        }
+        if (masterDeleted && !localDeleted) {
+          // Master delete wins our concurrent update: accept the tombstone. The
+          // bulkWrite below journals the losing local update as
+          // delete_vs_update via persistDeleteUpdateConflicts (master tombstone
+          // over an unsynced local update) — recoverable, not dropped.
+          if (master) acceptedMaster.push(master);
+          continue;
+        }
+        // two deletes or two updates → fall through to normal HLC ordering.
+      }
       if (isFutureHybridLogicalClock(local?._meta?.ctoxHlc)) {
         await this.collection.storageCollection?.recoveryJournal?.recordConflict?.({
           code: 'clock_skew_detected',

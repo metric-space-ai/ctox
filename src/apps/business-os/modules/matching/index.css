@@ -1,4 +1,12 @@
-/* Root frame */
+/* Matching module — module-local CSS.
+   Standard elements (workspace frame, panes, pane headers/tools/search/filters,
+   tabs, buttons, icon buttons, badges, inputs, modals, empty states, context
+   menu) come from shared/base.css + app.css and are NOT restyled here.
+   What remains are the genuinely matching-specific views, each marked
+   /* custom: <grund> */. Everything resolves through shell tokens, so both
+   themes work. */
+
+/* Root frame glue */
 .module-root[data-module-root="matching"] {
   height: 100%;
   min-height: 0;
@@ -9,2998 +17,1209 @@
   height: 100%;
   min-height: 0;
   min-width: 0;
-  padding: 12px;
 }
 
-/* Panel layout */
-/* =========================================================
-   Dark · Elegant · Compact — 3D nur im Chat
-   Drop-in für deine vorhandenen Klassen/Struktur
-   ========================================================= */
-
-/* ---- Design Tokens ---- */
-.module-root[data-module-root="matching"]{
-  color-scheme: dark;
-
-  /* neutral darks */
-  --bg-app:#0e1216;                 /* root backdrop */
-  --surf-0:#11161b;                 /* shells */
-  --surf-1:#141a20;                 /* cards (flat) */
-  --surf-2:#0f1419;                 /* chat inset base */
-
-  /* text */
-  --txt-1:#e7ecf2;
-  --txt-2:#a3afbd;
-  --txt-dim:#7c8997;
-
-  /* borders & shadows */
-  --bd-hair:rgba(255,255,255,.06);
-  --bd-soft:rgba(255,255,255,.08);
-  --sh-flat:0 8px 24px rgba(0,0,0,.35);
-  --sh-subtle:0 6px 16px rgba(0,0,0,.28);
-
-  /* chat inset */
-  --inset-strong:inset 10px 16px 28px rgba(0,0,0,.65),
-                  inset -6px -8px 18px rgba(255,255,255,.02);
-
-  /* radius & rhythm (compact) */
-  --r-10:12px;
-  --r-14:14px;
-  --r-16:16px;
-  --pill:999px;
-
-  --space-1:6px;
-  --space-2:8px;
-  --space-3:12px;
-  --space-4:16px;
-
-  /* layout */
-  --header-h:56px;
-  --chat-log-h:300px;
-
-  --z-header:1000; --z-quickbar:980; --z-overlay:1400; --z-busy:2147483647;
-
-  /* type */
-  --text-size-xs:12px;
-  --text-size-sm:13px;
-  --text-size-md:14px;
-  --text-size-lg:15px;
-  --lh-tight:1.25;
-  --lh-normal:1.5;
-  --lh-relaxed:1.65;
-
-  /* motion */
-  --snappy: cubic-bezier(.2,.8,.2,1);
-  --snap-ms: 200ms;
-}
-
-.module-root[data-module-root="matching"] *,
-.module-root[data-module-root="matching"] *::before,
-.module-root[data-module-root="matching"] *::after{ box-sizing:border-box; }
-
-.module-root[data-module-root="matching"]{
-  margin:0; height:100%;
-  background:radial-gradient(1200px 1200px at 20% -10%, #131920 0%, var(--bg-app) 60%);
-  color:var(--txt-1);
-  font:var(--text-size-md)/var(--lh-normal) system-ui,-apple-system,"Inter","SF Pro Text","Segoe UI",Roboto,Arial,sans-serif;
-  -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
-}
-
-.module-root[data-module-root="matching"] img{ max-width:100%; display:block; }
-
-/* Broad element resets stay away from the shared kit classes (ctox-*):
-   base.css owns their look; the module must not re-style them. */
-.module-root[data-module-root="matching"] button:not([class*="ctox-"]), .module-root[data-module-root="matching"] input:not([class*="ctox-"]), .module-root[data-module-root="matching"] select:not([class*="ctox-"]), .module-root[data-module-root="matching"] textarea:not([class*="ctox-"]){ font:inherit; color:inherit; line-height:inherit; }
-.module-root[data-module-root="matching"] button:not([class*="ctox-"]){ cursor:pointer; background:none; border:0; padding:0; }
-
-/* ---- Inputs (flat) ---- */
-.module-root[data-module-root="matching"] select:not([class*="ctox-"]), .module-root[data-module-root="matching"] input:not([class*="ctox-"]), .module-root[data-module-root="matching"] textarea:not([class*="ctox-"]),
-.module-root[data-module-root="matching"] .input-text, .module-root[data-module-root="matching"] .input-select, .module-root[data-module-root="matching"] .input-textarea{
-  background:linear-gradient(180deg,#161c22 0%, #12171d 100%);
-  color:var(--txt-1);
-  border:1px solid var(--bd-hair);
-  border-radius:var(--r-10);
-  padding:8px 10px;
-  box-shadow:inset 0 0 0 1px rgba(255,255,255,.01);
-  min-width:0;
-  appearance:auto;
-}
-.module-root[data-module-root="matching"] .input-textarea{ resize:vertical; min-height:60px; }
-.module-root[data-module-root="matching"] .input-select-xs{ font-size:var(--text-size-xs); padding:4px 6px; }
-
-.module-root[data-module-root="matching"] :where(select, input, textarea, .input-text, .input-select, .input-textarea):not([class*="ctox-"]):focus-visible{
-  outline:none;
-  box-shadow:0 0 0 3px color-mix(in oklab, var(--accent) 24%, transparent) inset;
-  border-color:color-mix(in oklab, var(--accent) 38%, transparent);
-  transition: box-shadow var(--snap-ms) var(--snappy), border-color var(--snap-ms) var(--snappy);
-}
-
-/* ---- Panel Layout ---- */
-.module-root[data-module-root="matching"] .panel-root{ display:flex; flex-direction:column; min-height:100%; max-height:100%; width:100%; }
-.module-root[data-module-root="matching"] .panel-header{
-  position:sticky; top:0; z-index:var(--z-header);
-  display:flex; align-items:center; justify-content:space-between; gap:var(--space-2);
-  height:var(--header-h); padding:0 var(--space-3);
-  background:linear-gradient(180deg,#12181e 0%, #0f1419 100%);
-  border-bottom:1px solid var(--bd-hair);
-  box-shadow:var(--sh-subtle);
-}
-.module-root[data-module-root="matching"] .panel-header-left{ display:flex; align-items:center; gap:var(--space-2); min-width:0; }
-.module-root[data-module-root="matching"] .app-icon{ width:18px; height:18px; border-radius:6px; flex-shrink:0; background:#0f172a; }
-.module-root[data-module-root="matching"] .app-meta{ display:flex; flex-direction:column; min-width:0; }
-.module-root[data-module-root="matching"] .app-title{ font-size:var(--text-size-lg); font-weight:800; line-height:var(--lh-tight); }
-.module-root[data-module-root="matching"] .app-subtitle{ font-size:var(--text-size-xs); color:var(--txt-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.module-root[data-module-root="matching"] .project-name-fallback{ font-weight:700; }
-
-.module-root[data-module-root="matching"] .panel-header-right{ display:flex; align-items:center; gap:8px; min-width:0; }
-.module-root[data-module-root="matching"] .project-select{ max-width:220px; min-width:120px; font-size:var(--text-size-sm); }
-
-.module-root[data-module-root="matching"] .panel-main{
-  flex:1; min-height:0; display:flex; flex-direction:column; gap:var(--space-3);
-  padding:var(--space-3); overflow:auto; scrollbar-width:thin;
-}
-.module-root[data-module-root="matching"] .panel-main::-webkit-scrollbar{ width:8px; }
-.module-root[data-module-root="matching"] .panel-main::-webkit-scrollbar-thumb{ background:#1b2430; border-radius:4px; }
-
-.module-root[data-module-root="matching"] .panel-footer{
-  padding:10px var(--space-3); color:var(--txt-dim);
-  background:linear-gradient(180deg,#11161c 0%, #0f1318 100%);
-  border-top:1px solid var(--bd-hair);
-  font-size:var(--text-size-xs); line-height:var(--lh-tight);
-  display:flex; align-items:center; gap:8px;
-}
-
-.module-root[data-module-root="matching"] .footer-update-btn{
-  border:1px solid color-mix(in oklab, var(--accent) 55%, transparent);
-  border-radius:999px;
-  padding:4px 9px;
-  color:#06131a;
-  background:var(--accent);
-  font-size:var(--text-size-xs);
-  font-weight:800;
-  line-height:1.2;
-  white-space:nowrap;
-  cursor:pointer;
-  box-shadow:0 0 0 1px rgba(255,255,255,.16) inset, 0 0 0 3px rgba(103,232,249,.12);
-}
-.module-root[data-module-root="matching"] .footer-update-btn:hover{
-  background:color-mix(in oklab, var(--accent) 86%, white);
-  border-color:color-mix(in oklab, var(--accent) 68%, transparent);
-}
-.module-root[data-module-root="matching"] .footer-update-btn.is-idle{
-  color:var(--txt-2);
-  background:rgba(255,255,255,.04);
-  border-color:var(--bd-soft);
-  box-shadow:none;
-}
-.module-root[data-module-root="matching"] .footer-update-btn.is-error{
-  color:#fecaca;
-  background:rgba(127,29,29,.22);
-  border-color:rgba(248,113,113,.35);
-  box-shadow:none;
-}
-.module-root[data-module-root="matching"] .footer-update-btn[hidden]{ display:none; }
-
-/* ---- Header Settings Dropdown ---- */
-.module-root[data-module-root="matching"] .gear-btn{
-  font-size:var(--text-size-sm); line-height:1;
-  padding:6px 8px; border:1px solid var(--bd-hair);
-  border-radius:var(--r-10); color:var(--txt-2);
-  background:linear-gradient(180deg,#161c22 0%, #12171d 100%);
-}
-.module-root[data-module-root="matching"] .gear-btn:hover{ background:#151b21; color:var(--txt-1); }
-
-.module-root[data-module-root="matching"] .settings-dropdown{
-  position:absolute; top:calc(100% + 8px); right:8px;
-  width:min(560px,92vw); max-height:min(70vh,640px); overflow:auto;
-  background:var(--surf-1); border:1px solid var(--bd-hair);
-  border-radius:var(--r-16); box-shadow:var(--sh-flat);
-  padding:12px; z-index:var(--z-overlay);
-}
-.module-root[data-module-root="matching"] .settings-dropdown[hidden]{ display:none; }
-
-.module-root[data-module-root="matching"] .settings-dropdown-header{
-  display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px;
-}
-.module-root[data-module-root="matching"] .settings-dropdown-title{ font-size:var(--text-size-sm); font-weight:800; color:var(--txt-1); }
-.module-root[data-module-root="matching"] .settings-dropdown-hint{ font-size:var(--text-size-xs); color:var(--txt-2); }
-.module-root[data-module-root="matching"] .settings-dropdown-body .form-group{ margin-bottom:10px; }
-
-/* ---- Execution Quickbar (inline Variante) ---- */
-.module-root[data-module-root="matching"] #execution-quickbar{
-  position:static !important; inset:auto !important; transform:none !important;
-  width:100% !important; max-width:none !important; max-height:none !important; overflow:visible !important;
-  margin:8px 0 12px !important; padding:0 !important;
-  border-radius:var(--r-16); border:1px solid var(--bd-hair);
-  background:var(--surf-1); box-shadow:none !important; z-index:auto !important;
-}
-.module-root[data-module-root="matching"] #execution-quickbar .settings-dropdown-header{
-  display:flex; align-items:center; justify-content:space-between; gap:8px;
-  padding:8px 12px; border-bottom:1px solid var(--bd-hair); margin:0;
-}
-.module-root[data-module-root="matching"] #execution-quickbar .settings-dropdown-body{
-  padding:10px 12px 12px; display:grid; gap:10px;
-}
-
-/* ---- Cards / Sections ---- */
-.module-root[data-module-root="matching"] .settings-card, .module-root[data-module-root="matching"] .chat-card, .module-root[data-module-root="matching"] .docs-card{
-  background:var(--surf-1);
-  border:1px solid var(--bd-hair);
-  border-radius:var(--r-16);
-  box-shadow:var(--sh-subtle);
-  display:flex; flex-direction:column; min-width:0;
-}
-
-/* Chat Header / Quickbar */
-.module-root[data-module-root="matching"] .chat-card-header{
-  display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px;
-  padding:8px 12px; border-bottom:1px solid var(--bd-hair);
-  border-radius:var(--r-16) var(--r-16) 0 0; background:var(--surf-1);
-}
-.module-root[data-module-root="matching"] .chat-qb{ box-shadow:var(--sh-subtle); }
-
-.module-root[data-module-root="matching"] .qb-left{ display:flex; align-items:center; gap:8px; min-width:0; }
-.module-root[data-module-root="matching"] .qb-actions{ display:flex; align-items:center; gap:8px; }
-.module-root[data-module-root="matching"] .qb-actions-right{ display:inline-flex; align-items:center; gap:10px; }
-.module-root[data-module-root="matching"] .qb-select{ max-width:220px; min-width:130px; height:36px; }
-.module-root[data-module-root="matching"] .qb-divider{ width:1px; height:22px; background:var(--bd-hair); border-radius:1px; opacity:.9; }
-
-/* ---- Chat Log (einziger 3D-Bereich) ---- */
-.module-root[data-module-root="matching"] .chat-log{
-  height:var(--chat-log-h); min-height:180px; max-height:none;
-  overflow:auto; scrollbar-width:thin;
-  font-size:var(--text-size-sm); line-height:var(--lh-relaxed);
-  border:1px solid var(--bd-soft); border-radius:16px; padding:10px;
-  background:linear-gradient(180deg,#141a20 0%, var(--surf-2) 100%);
-  box-shadow:var(--inset-strong);
-}
-.module-root[data-module-root="matching"] .chat-log::-webkit-scrollbar{ width:8px; }
-.module-root[data-module-root="matching"] .chat-log::-webkit-scrollbar-thumb{ background:#1b2430; border-radius:4px; }
-
-/* Resizer */
-.module-root[data-module-root="matching"] .chat-resizer{ height:8px; cursor:ns-resize; margin:8px 0 10px; position:relative; }
-.module-root[data-module-root="matching"] .chat-resizer::before{
-  content:""; position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
-  width:56px; height:3px; border-radius:999px;
-  background:linear-gradient(180deg,#1c232b 0%, #0e1216 100%);
-  box-shadow: inset 0 1px 2px rgba(0,0,0,.6);
-}
-body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .module-root[data-module-root="matching"] *{ cursor:ns-resize !important; user-select:none !important; }
-
-/* ---- Chat Bubbles ---- */
-.module-root[data-module-root="matching"] .bubble{
-  max-width:100%; display:flex; flex-direction:column;
-  border-radius:var(--r-14);
-  padding:10px 12px; margin:8px 0;
-  border:1px solid var(--bd-hair);
-  background:linear-gradient(180deg,#161c22 0%, #12171d 100%);
-  box-shadow:0 6px 14px rgba(0,0,0,.28);
-  word-break:break-word; white-space:pre-wrap;
-}
-.module-root[data-module-root="matching"] .bubble-user{
-  align-self:flex-end;
-  border-color: color-mix(in oklab, var(--accent) 22%, transparent);
-  background:
-    radial-gradient(90% 90% at 20% -20%, color-mix(in oklab, var(--accent) 12%, transparent) 0%, transparent 60%),
-    linear-gradient(180deg,#152a2f 0%, #101e22 100%);
-  color:#e8fbff;
-  transition: border-color var(--snap-ms) var(--snappy), background var(--snap-ms) var(--snappy);
-}
-.module-root[data-module-root="matching"] .bubble-assistant{ align-self:flex-start; }
-.module-root[data-module-root="matching"] .bubble-role{ font-size:var(--text-size-xs); font-weight:700; color:var(--txt-dim); margin-bottom:4px; letter-spacing:.2px; }
-.module-root[data-module-root="matching"] .bubble-user .bubble-role{ color:color-mix(in oklab, var(--accent) 70%, #bdf6ff); }
-.module-root[data-module-root="matching"] .bubble-body{ font-size:var(--text-size-sm); line-height:var(--lh-relaxed); }
-.module-root[data-module-root="matching"] .bubble-meta{ font-size:var(--text-size-xs); color:var(--txt-dim); margin-top:6px; text-align:right; }
-
-/* ---- Assist Blocks im Chat ---- */
-.module-root[data-module-root="matching"] .assist-block{
-  border-radius:14px; padding:8px 10px; margin:8px 0;
-  border:1px solid var(--bd-hair);
-  background:linear-gradient(180deg,#151b21 0%, #12171d 100%);
-  box-shadow:0 6px 16px rgba(0,0,0,.3);
-}
-.module-root[data-module-root="matching"] .assist-head{
-  display:flex; justify-content:space-between; align-items:center; gap:8px;
-  border:1px solid var(--bd-hair); border-radius:12px; padding:6px 8px;
-  background:linear-gradient(180deg,#102226 0%, #0d171a 100%);
-  color:#d6fff2; font-weight:700; font-size:13px;
-}
-.module-root[data-module-root="matching"] .assist-items{ display:flex; flex-direction:column; gap:6px; padding:8px 4px 4px; }
-.module-root[data-module-root="matching"] .assist-item{
-  border-radius:10px; padding:8px 10px; font-size:13px; line-height:1.5;
-  border:1px solid var(--bd-hair);
-  background:linear-gradient(180deg,#171d23 0%, #13171d 100%);
-  white-space:pre-wrap;
-}
-.module-root[data-module-root="matching"] .assist-item-progress{
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size:12px;
-  line-height:1.35;
-  letter-spacing:.2px;
-  color:#c9f7ea;
-  margin-bottom:6px;
-  padding:4px 6px;
-  border-radius:8px;
-  border:1px solid color-mix(in oklab, var(--accent) 20%, var(--bd-hair));
-  background:linear-gradient(180deg,#123037 0%, #10262d 100%);
-}
-.module-root[data-module-root="matching"] .assist-item-body{
-  white-space:pre-wrap;
-  color:var(--txt-1);
-}
-
-/* ---- Chat Toolbar / Composer ---- */
-.module-root[data-module-root="matching"] .chat-input-row{ display:none; position:sticky; bottom:0; background:linear-gradient(180deg, rgba(14,18,22,0), var(--bg-app) 40%); padding-top:8px; margin-top:8px; }
-.module-root[data-module-root="matching"] .has-session .chat-input-row{ display:flex; gap:8px; align-items:center; }
-.module-root[data-module-root="matching"] .chat-input{ width:100%; resize:none; font-size:var(--text-size-sm); line-height:var(--lh-normal);
-  padding:10px 12px; min-height:52px; max-height:110px; }
-.module-root[data-module-root="matching"] .chat-input:focus{
-  border-color: color-mix(in oklab, var(--accent) 35%, transparent);
-  box-shadow:
-    0 0 0 4px color-mix(in oklab, var(--accent) 14%, transparent),
-    0 8px 24px rgba(0,0,0,.22);
-  transition: box-shadow var(--snap-ms) var(--snappy), border-color var(--snap-ms) var(--snappy);
-}
-.module-root[data-module-root="matching"] .btn-send{ align-self:flex-end; min-width:92px; }
-
-.module-root[data-module-root="matching"] .slash-picker{
-  position:absolute;
-  left:0;
-  right:108px;
-  bottom:calc(100% + 8px);
-  max-height:320px;
-  overflow:auto;
-  background:linear-gradient(180deg,#171f27 0%, #121a22 100%);
-  border:1px solid var(--bd-soft);
-  border-radius:12px;
-  box-shadow:0 16px 40px rgba(0,0,0,.42);
-  padding:8px;
-  z-index:1200;
-}
-.module-root[data-module-root="matching"] .slash-picker[hidden]{ display:none; }
-.module-root[data-module-root="matching"] .slash-picker-head{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:8px;
-  padding:4px 6px 8px;
-  border-bottom:1px solid var(--bd-hair);
-}
-.module-root[data-module-root="matching"] #slash-picker-title{
-  font-size:var(--text-size-xs);
-  color:var(--txt-1);
-  font-weight:700;
-}
-.module-root[data-module-root="matching"] .slash-picker-hint{
-  font-size:11px;
-  color:var(--txt-dim);
-}
-.module-root[data-module-root="matching"] .slash-picker-list{
-  list-style:none;
-  margin:0;
-  padding:6px 2px 2px;
-  display:flex;
-  flex-direction:column;
-  gap:6px;
-}
-.module-root[data-module-root="matching"] .slash-item{
-  border:1px solid transparent;
-  border-radius:10px;
-  padding:8px;
-  background:rgba(255,255,255,.01);
-  cursor:pointer;
-}
-.module-root[data-module-root="matching"] .slash-item:hover,
-.module-root[data-module-root="matching"] .slash-item.is-active{
-  border-color:color-mix(in oklab, var(--accent) 35%, transparent);
-  background:linear-gradient(180deg, color-mix(in oklab, var(--accent) 10%, #1a222b) 0%, #141c24 100%);
-}
-.module-root[data-module-root="matching"] .slash-item-main{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:8px;
-}
-.module-root[data-module-root="matching"] .slash-item-label{
-  font-size:var(--text-size-sm);
-  font-weight:700;
-  color:var(--txt-1);
-}
-.module-root[data-module-root="matching"] .slash-item-preview{
-  font-size:12px;
-  color:var(--txt-2);
-  margin-top:4px;
-  white-space:nowrap;
-  overflow:hidden;
-  text-overflow:ellipsis;
-}
-.module-root[data-module-root="matching"] .slash-item-desc{
-  font-size:11px;
-  color:var(--txt-dim);
-  margin-top:4px;
-}
-.module-root[data-module-root="matching"] .slash-empty{
-  padding:8px;
-  border-radius:10px;
-  border:1px dashed var(--bd-hair);
-  color:var(--txt-2);
-  font-size:12px;
-}
-
-/* ---- Statuszeile ---- */
-.module-root[data-module-root="matching"] .chat-status-row{ display:none; flex-wrap:wrap; gap:6px; padding:0 12px 12px; font-size:var(--text-size-xs); line-height:var(--lh-tight); color:var(--txt-dim); }
-.module-root[data-module-root="matching"] .chat-status-row.has-warnings,
-.module-root[data-module-root="matching"] .chat-status-row.has-inline{ display:flex; }
-.module-root[data-module-root="matching"] .status-pill{
-  display:inline-flex; align-items:center; gap:6px;
-  border-radius:var(--pill); font-size:var(--text-size-xs); font-weight:600; line-height:var(--lh-tight);
-  padding:4px 10px; background:transparent; color:var(--txt-dim); border:1px solid var(--bd-hair);
-}
-.module-root[data-module-root="matching"] .status-progress-inline{
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-  letter-spacing: 0.01em;
-}
-
-/* ---- Session Indicator ---- */
-.module-root[data-module-root="matching"] .session-indicator{
-  display:inline-flex; align-items:center; gap:8px; height:26px; padding:0 10px;
-  border-radius:var(--pill); border:1px solid var(--bd-hair);
-  background:linear-gradient(180deg,#161c22 0%, #12171d 100%);
-  color:var(--txt-2); font-size:var(--text-size-xs);
-}
-.module-root[data-module-root="matching"] .session-indicator .dot{ width:8px; height:8px; border-radius:50%; background:#6b7785; }
-.module-root[data-module-root="matching"] .session-indicator.is-active .dot{
-  background: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 18%, transparent);
-  transition: background var(--snap-ms) var(--snappy), box-shadow var(--snap-ms) var(--snappy);
-}
-
-/* ---- Buttons ---- */
-.module-root[data-module-root="matching"] .btn{
-  --btn-bg:#171e26; --bd:var(--bd-hair); --fg:var(--txt-1);
-  display:inline-flex; align-items:center; justify-content:center; gap:8px;
-  height:36px; padding:0 12px; border-radius:var(--r-10); border:1px solid var(--bd);
-  background:linear-gradient(180deg,var(--btn-bg) 0%, #12171d 100%); color:var(--fg); font-weight:700;
-  box-shadow:0 4px 14px rgba(0,0,0,.28);
-  transition:transform .06s ease, box-shadow .2s ease, border-color .2s ease, background .2s ease;
-  font-size:var(--text-size-sm);
-}
-.module-root[data-module-root="matching"] .btn:hover{ transform:translateY(-1px); }
-.module-root[data-module-root="matching"] .btn:active{ transform:none; box-shadow:0 2px 8px rgba(0,0,0,.34) inset; }
-.module-root[data-module-root="matching"] .btn:focus-visible{
-  outline:2px solid color-mix(in oklab, var(--accent) 70%, transparent);
-  outline-offset:2px;
-  box-shadow:0 0 0 4px color-mix(in oklab, var(--accent) 20%, transparent);
-}
-
-.module-root[data-module-root="matching"] .btn-primary{
-  border-color: color-mix(in oklab, var(--accent) 28%, transparent);
-  background:
-    radial-gradient(90% 90% at 50% -30%, color-mix(in oklab, var(--accent) 14%, transparent) 0%, transparent 55%),
-    linear-gradient(180deg, color-mix(in oklab, var(--accent) 30%, #0f2327) 0%, #0f2327 100%);
-  color:#eafcff;
-  box-shadow:
-    0 10px 26px color-mix(in oklab, var(--accent) 20%, transparent),
-    0 4px 14px rgba(0,0,0,.28);
-  transition: background var(--snap-ms) var(--snappy), box-shadow var(--snap-ms) var(--snappy), border-color var(--snap-ms) var(--snappy);
-}
-.module-root[data-module-root="matching"] .btn-primary:hover{
-  box-shadow:
-    0 16px 40px color-mix(in oklab, var(--accent) 28%, transparent),
-    0 6px 16px rgba(0,0,0,.3);
-}
-.module-root[data-module-root="matching"] .btn-secondary{ --btn-bg:#1a2129; }
-.module-root[data-module-root="matching"] .btn-ghost{ color:var(--txt-2); border:1px solid var(--bd-hair); background:linear-gradient(180deg,#161c22 0%, #12171d 100%); }
-.module-root[data-module-root="matching"] .btn-sm{ height:30px; padding:0 10px; }
-.module-root[data-module-root="matching"] .btn-xs{ height:24px; padding:0 8px; font-size:var(--text-size-xs); border-radius:var(--r-10); }
-.module-root[data-module-root="matching"] .btn-xxs{ height:20px; padding:0 6px; font-size:var(--text-size-xs); border-radius:var(--r-10); }
-.module-root[data-module-root="matching"] .btn-send:disabled{ opacity:.5; cursor:not-allowed; pointer-events:none; }
-.module-root[data-module-root="matching"] .inline-spinner{ width:14px; height:14px; border:2px solid rgba(255,255,255,.12); border-top-color:currentColor; border-radius:50%; display:inline-block; vertical-align:-2px; margin-left:6px; animation:busy-spin .8s linear infinite; }
-
-/* ---- Docs ---- */
-.module-root[data-module-root="matching"] .docs-card-header{
-  display:flex; justify-content:space-between; align-items:center; gap:var(--space-2);
-  padding:6px var(--space-2) 8px; margin:0 4px 6px; border-bottom:1px solid var(--bd-hair);
-}
-.module-root[data-module-root="matching"] .docs-card-title{ font-size:var(--text-size-md); font-weight:800; }
-.module-root[data-module-root="matching"] .docs-card-subtitle{ font-size:var(--text-size-xs); color:var(--txt-2); }
-
-.module-root[data-module-root="matching"] .docs-list{
-  list-style:none; margin:0; padding:8px 12px 12px; max-height:240px; overflow:auto; scrollbar-width:thin;
-  font-size:var(--text-size-sm); line-height:var(--lh-normal);
-  background:linear-gradient(180deg,#151b21 0%, #12171d 100%);
-  border-top:1px solid var(--bd-hair);
-}
-.module-root[data-module-root="matching"] .docs-list::-webkit-scrollbar{ width:6px; }
-.module-root[data-module-root="matching"] .docs-list::-webkit-scrollbar-thumb{ background:#1b2430; border-radius:3px; }
-.module-root[data-module-root="matching"] .doc-item{
-  display:flex; align-items:flex-start; justify-content:space-between; gap:8px; padding:8px 0;
-  border-bottom:1px solid var(--bd-hair);
-}
-.module-root[data-module-root="matching"] .doc-item:last-child{ border-bottom:0; }
-.module-root[data-module-root="matching"] .doc-item-title{ font-size:var(--text-size-sm); font-weight:700; }
-.module-root[data-module-root="matching"] .doc-item-meta{ display:flex; flex-wrap:wrap; gap:6px; font-size:var(--text-size-xs); color:var(--txt-2); }
-.module-root[data-module-root="matching"] .doc-type-pill{
-  background:linear-gradient(180deg,#161c22 0%, #12171d 100%);
-  border-radius:var(--pill); padding:2px 6px; line-height:var(--lh-tight);
-  border:1px solid var(--bd-hair); font-weight:700; color:var(--txt-2);
-}
-
-/* ---- History ---- */
-.module-root[data-module-root="matching"] #history-list{ padding:8px 12px 12px; background:var(--surf-1); border:1px solid var(--bd-hair);
-  border-radius:var(--r-16); box-shadow:var(--sh-subtle); }
-.module-root[data-module-root="matching"] #history-list[hidden]{ display:none; }
-
-.module-root[data-module-root="matching"] .history-header{
-  display:flex; align-items:baseline; justify-content:space-between; gap:8px;
-  padding:6px 0 8px; border-bottom:1px solid var(--bd-hair);
-}
-.module-root[data-module-root="matching"] .history-title{ font-size:var(--text-size-md); font-weight:800; }
-.module-root[data-module-root="matching"] .history-subtitle{ font-size:var(--text-size-xs); color:var(--txt-2); }
-
-.module-root[data-module-root="matching"] .history-items, .module-root[data-module-root="matching"] #history-items{
-  list-style:none; margin:0; padding:8px 0 0; max-height:300px; overflow:auto; scrollbar-width:thin; background:transparent;
-}
-.module-root[data-module-root="matching"] #history-items::-webkit-scrollbar{ width:6px; }
-.module-root[data-module-root="matching"] #history-items::-webkit-scrollbar-thumb{ background:#1b2430; border-radius:3px; }
-
-.module-root[data-module-root="matching"] #history-items > li{
-  display:flex; align-items:flex-start; justify-content:space-between; gap:10px;
-  padding:10px 0; border-bottom:1px solid var(--bd-hair);
-  transition:background-color .12s ease, border-color .12s ease, box-shadow .12s ease;
-}
-.module-root[data-module-root="matching"] #history-items > li:hover{
-  background:#131920; border-color:color-mix(in oklab, var(--accent) 18%, transparent);
-  box-shadow: inset 0 6px 18px rgba(0,0,0,.18);
-}
-
-/* ---- Busy Overlay ---- */
-.module-root[data-module-root="matching"] .busy-overlay{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; z-index:var(--z-busy); }
-.module-root[data-module-root="matching"] .busy-overlay[aria-hidden="false"]{ display:flex; }
-.module-root[data-module-root="matching"] .busy-backdrop{ position:absolute; inset:0; background:rgba(2,8,12,.6); backdrop-filter: blur(1.5px); }
-.module-root[data-module-root="matching"] .busy-content{
-  position:relative; min-width:220px; padding:14px 16px; border-radius:16px;
-  border:1px solid var(--bd-hair); background:var(--surf-1); box-shadow:var(--sh-flat);
-  display:flex; flex-direction:column; gap:12px; align-items:center; justify-content:center;
-}
-.module-root[data-module-root="matching"] .busy-spinner{
-  width:24px;height:24px;border:3px solid rgba(255,255,255,.15);
-  border-top-color:var(--accent);
-  border-radius:50%;animation:busy-spin 1s linear infinite;margin:auto;
-}
-.module-root[data-module-root="matching"] .busy-text{ font-size:.95rem; color:#dffaff; }
-@keyframes busy-spin{ to{ transform:rotate(360deg) } }
-
-/* ---- Settings Overlay (modal) ---- */
-.module-root[data-module-root="matching"] .settings-overlay[hidden]{ display:none; }
-.module-root[data-module-root="matching"] .settings-overlay{ position:fixed; inset:0; z-index:var(--z-overlay); display:flex; align-items:flex-start; justify-content:center; padding:24px; }
-.module-root[data-module-root="matching"] .settings-overlay::before{ content:""; position:absolute; inset:0; background:rgba(0,0,0,.55); }
-.module-root[data-module-root="matching"] .settings-body{
-  position:relative; width:min(680px,92vw);
-  border-radius:16px; border:1px solid var(--bd-hair);
-  padding:14px; background:var(--surf-1); box-shadow:var(--sh-flat);
-}
-.module-root[data-module-root="matching"] .settings-body .form-group{ display:flex; flex-direction:column; gap:6px; margin:8px 0; }
-.module-root[data-module-root="matching"] .form-label{ color:var(--txt-2); font-size:var(--text-size-xs); font-weight:700; letter-spacing:.2px; }
-.module-root[data-module-root="matching"] .settings-actions{ margin-top:6px; display:flex; gap:8px; }
-.module-root[data-module-root="matching"] .close-x{ position:absolute; top:8px; right:8px; }
-
-/* ---- Icon-Pills / Toggles ---- */
-.module-root[data-module-root="matching"] #history-toggle-btn,
-.module-root[data-module-root="matching"] .icon-pill{
-  display:inline-flex; align-items:center; justify-content:center;
-  width:32px; height:32px; border-radius:var(--r-10);
-  border:1px solid var(--bd-hair);
-  background:linear-gradient(180deg,#161c22 0%, #12171d 100%);
-  box-shadow:0 2px 8px rgba(0,0,0,.18);
-  font-weight:700; line-height:1;
-  transition:transform .06s ease, background-color .12s ease, border-color .12s ease;
-  color:var(--txt-2);
-}
-.module-root[data-module-root="matching"] .icon-pill:hover{
-  background: color-mix(in oklab, var(--accent) 6%, #151b21);
-  border-color: color-mix(in oklab, var(--accent) 22%, transparent);
-}
-.module-root[data-module-root="matching"] .icon-pill:active{ transform:translateY(1px); }
-.module-root[data-module-root="matching"] .icon-pill:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
-
-/* ---- Quickbar sichtbar & positioniert, wenn geöffnet ---- */
-.module-root[data-module-root="matching"] #execution-quickbar-body[aria-hidden="false"]{
-  display:block !important;
-  position:fixed;
-  top:var(--header-h,56px);
-  right:16px;
-  width:min(720px,92vw);
-  max-height:80vh;
-  overflow:auto;
-  padding:12px;
-  background:var(--surf-1);
-  border:1px solid var(--bd-hair);
-  border-radius:16px;
-  box-shadow:var(--sh-flat);
-  opacity:1; visibility:visible; transform:none; pointer-events:auto;
-  z-index:2147483637;
-}
-.module-root[data-module-root="matching"] #execution-quickbar-body.dropdown[aria-hidden="false"]{ display:block !important; }
-
-/* ---- A11y & helpers ---- */
-.module-root[data-module-root="matching"] .sr-only{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
-.module-root[data-module-root="matching"] .muted{ color:var(--txt-dim); font-weight:400; }
-.module-root[data-module-root="matching"] :where(.btn, .icon-pill, .pill, .assist-item, .dropdown, .chat-log):focus-visible{
-  outline:2px solid color-mix(in oklab, var(--accent) 70%, transparent);
-  outline-offset:2px;
-}
-
-/* ---- Responsive tweaks ---- */
-@container business-app-window (min-width:480px){
-  .module-root[data-module-root="matching"] .chat-log{ min-height:220px; }
-  .module-root[data-module-root="matching"] .docs-list{ max-height:240px; }
-  .module-root[data-module-root="matching"] .panel-header-right .project-select{ max-width:260px; }
-}
-
-/* ---- Keep behavior flags ---- */
-.module-root[data-module-root="matching"] #docs-card{ display:block; }
-
-/* ---- Animations ---- */
-@media (prefers-reduced-motion: reduce){
-  .module-root[data-module-root="matching"] *{ animation:none !important; transition:none !important; }
-  .module-root[data-module-root="matching"] .busy-spinner{ animation:none !important; }
-  .module-root[data-module-root="matching"]{ transition:none !important; }
-}
-
-/* Requirement matching view */
-.module-root[data-module-root="matching"]{
-  --panel:var(--surf-1);
-  --primary:var(--accent);
-  --primary-2:#9fdfff;
-  --badge:#1b2430;
-  --chip:#111923;
-  --overlay: rgba(2,8,12,.65);
-  --good:#34d399;
-  --none:#7c8997;
-  --overlay-col-width: clamp(260px, 33.333vw, 520px);
-}
-
-.module-root[data-module-root="matching"] *{box-sizing:border-box}
-.module-root[data-module-root="matching"],.module-root[data-module-root="matching"]{height:100%}
-.module-root[data-module-root="matching"]{
-  margin:0;
-  font-family:var(--font-sans);
-  background:radial-gradient(1200px 1200px at 20% -10%, #131920 0%, var(--bg) 60%);
-  color:var(--text);
-  overflow:hidden;
-}
-
-
-.module-root[data-module-root="matching"] .app{
-  --matching-side-min:260px;
-  --matching-center-min:320px;
-  --matching-gutter:12px;
-  display:grid;
-  /* Spalten: [linke Liste] [12px Resizer] [Mitte] [12px Resizer] [rechte Detail].
-   * CtoxResizer setzt --matching-left-width / --matching-right-width per drag
-   * (siehe modules/matching/ui/index.js Zeilen ~2730-2756).
-   */
-  grid-template-columns:
-    minmax(var(--matching-side-min), var(--matching-left-width, 300px))
-    var(--matching-gutter)
-    minmax(var(--matching-center-min), 1fr)
-    var(--matching-gutter)
-    minmax(var(--matching-side-min), var(--matching-right-width, 300px));
-  gap:0;
-  height:100%;
-  padding:12px;
-  position:relative;
-  min-width:calc((var(--matching-side-min) * 2) + var(--matching-center-min) + (var(--matching-gutter) * 2) + 24px);
-}
-
-.module-root[data-module-root="matching"] #left {
-  grid-column: 1;
-}
-
-.module-root[data-module-root="matching"] #center {
-  grid-column: 3;
-}
-
-.module-root[data-module-root="matching"] #right {
-  grid-column: 5;
-}
-
-.module-root[data-module-root="matching"] .col-resizer{
-  position:relative;
-  top:auto;
-  bottom:auto;
-  width:12px;
-  min-width:12px;
-  transform:none;
-  cursor:col-resize;
-  z-index:30;
-  display:none;
-  align-items:center;
-  justify-content:center;
-  align-self:stretch;
-  touch-action:none;
-}
-.module-root[data-module-root="matching"] .col-resizer-left{ grid-column:2; grid-row:1; }
-.module-root[data-module-root="matching"] .col-resizer-right{ grid-column:4; grid-row:1; }
-.module-root[data-module-root="matching"] .col-resizer::before{
-  content:"";
-  width:4px;
-  height:48px;
-  border-radius:999px;
-  background:var(--line);
-  border:0;
-  opacity:.5;
-  transition:opacity .12s ease, background .12s ease, box-shadow .12s ease;
-}
-.module-root[data-module-root="matching"] .col-resizer:hover::before,
-.module-root[data-module-root="matching"] .col-resizer.is-active::before{
-  opacity:1;
-  background:var(--accent);
-  box-shadow:0 0 0 2px rgba(255,255,255,.05);
-}
-body.is-col-resizing .module-root[data-module-root="matching"],
-body.is-col-resizing .module-root[data-module-root="matching"] *,
-body.is-resizing .module-root[data-module-root="matching"],
-body.is-resizing .module-root[data-module-root="matching"] *{
-  cursor:col-resize !important;
-  user-select:none !important;
-}
-
-.module-root[data-module-root="matching"] .panel{
-  background:var(--panel);
-  border:1px solid var(--line);
-  border-radius:14px;
-  overflow:hidden;
-  display:flex;
-  flex-direction:column;
-  min-width:0;
-  min-height:0
-}
-
-/* Pane header building blocks (.ctox-pane-header/-band/-actions/-icon/-tools/
-   -search/-filter/-tabs/-tab/-kicker) come from shared/base.css + app.css. */
-
-.module-root[data-module-root="matching"] .collection-empty-state{
-  padding:10px 12px;
-  line-height:1.45;
-}
-
-/* Legacy direct-child panel headings only — the standard pane header h2
-   (.ctox-pane-title) is owned by app.css/base.css. */
-.module-root[data-module-root="matching"] .panel > h2{
-  margin:0;
-  padding:14px 16px;
-  font-size:14px;
-  letter-spacing:.4px;
-  text-transform:uppercase;
-  color:var(--muted);
-  border-bottom:1px solid var(--line);
-  display:flex;
-  align-items:center;
-  gap:10px
-}
-
-.module-root[data-module-root="matching"] .muted{color:var(--muted)}
-.module-root[data-module-root="matching"] .space{flex:1}
-
-/* Toggle-Styling (ohne Input) */
-.module-root[data-module-root="matching"] .toggle-row{
-  display:flex;
-  align-items:center;
-  gap:6px;
-  margin-top:4px;
-  font-size:11px;
-  color:var(--muted);
-}
-.module-root[data-module-root="matching"] .toggle-row.small{
-  justify-content:center;
-}
-.module-root[data-module-root="matching"] .toggle-label{
-  font-size:11px;
-}
-
-.module-root[data-module-root="matching"] .switch{
-  position:relative;
-  display:inline-flex;
-  align-items:center;
-  width:32px;
-  height:16px;
-  border-radius:999px;
-  background:#161c22;
-  border:1px solid var(--line);
-  padding:1px;
-  cursor:pointer;
-  flex-shrink:0;
-}
-.module-root[data-module-root="matching"] .switch-knob{
-  width:12px;
-  height:12px;
-  border-radius:50%;
-  background:var(--muted);
-  transition:transform .2s, background .2s;
-}
-.module-root[data-module-root="matching"] .switch.is-on{
-  background:var(--primary);
-}
-.module-root[data-module-root="matching"] .switch.is-on .switch-knob{
-  transform:translateX(14px);
-  background:#fff;
-}
-
-/* Inaktiv-Status – wirklich „ausblassen“ */
-.module-root[data-module-root="matching"] .inactive-entity{
-  opacity:.35;
-  filter:grayscale(.4);
-}
-
-/* Kontakt-Status (nur leichte Sättigungsänderung, keine Opazität mehr) */
-.module-root[data-module-root="matching"] .needs-contact{
-  filter:saturate(.85);
-}
-.module-root[data-module-root="matching"] .rel-dot{position:relative;}
-.module-root[data-module-root="matching"] .rel-dot:after{
-  content:"";
-  position:absolute;
-  right:-2px;
-  bottom:-2px;
-  width:10px;
-  height:10px;
-  border-radius:50%;
-  border:1px solid var(--line);
-  background:var(--none);
-  box-shadow:0 0 0 2px var(--panel)
-}
-.module-root[data-module-root="matching"] .has-rel .rel-dot:after{background:var(--good)}
-
-/* LEFT */
-.module-root[data-module-root="matching"] .source-tools{
-  display:flex;
-  gap:8px;
-  padding:10px 12px;
-  border-bottom:1px solid var(--line);
-}
-.module-root[data-module-root="matching"] .source-tools input{
-  width:100%;
-  min-width:0;
-  height:38px;
-  background:#121a24;
-  border:1px solid var(--line);
-  color:var(--text);
-  border-radius:8px;
-  padding:0 12px;
-  font-size:13px;
-}
-.module-root[data-module-root="matching"] .sources{padding:12px; overflow:auto}
-.module-root[data-module-root="matching"] .source-grid{display:grid; grid-template-columns: 1fr; gap:10px}
-.module-root[data-module-root="matching"] .source-card{
-  border:1px solid var(--line);
-  background:linear-gradient(180deg, #12171d 0%, #161c22 100%);
-  border-radius:12px;
-  padding:12px;
-  cursor:pointer;
-  transition:transform .08s ease, box-shadow .2s ease
-}
-.module-root[data-module-root="matching"] .source-card:hover{
-  transform:translateY(-1px);
-  box-shadow:0 6px 14px rgba(0,0,0,.35)
-}
-.module-root[data-module-root="matching"] .source-area-card{
-  cursor:pointer;
-}
-.module-root[data-module-root="matching"] .source-area-card .area-logo{
-  display:grid;
-  place-items:center;
-}
-.module-root[data-module-root="matching"] .source-area-card .area-logo svg{
-  width:16px;
-  height:16px;
-  fill:currentColor;
-  color:var(--accent);
-}
-.module-root[data-module-root="matching"] .area-source-summary{
-  color:var(--muted);
-  font-size:11px;
-  line-height:1.3;
-  white-space:nowrap;
-  overflow:hidden;
-  text-overflow:ellipsis;
-}
-.module-root[data-module-root="matching"] .area-requirement-preview{
-  display:grid;
-  gap:6px;
-  margin-top:10px;
-}
-.module-root[data-module-root="matching"] .area-requirement-row{
-  display:grid;
-  gap:2px;
-  min-width:0;
-  padding:7px 8px;
-  border:1px solid var(--line);
-  border-radius:var(--radius-control, 8px);
-  background:var(--surface-2);
-}
-.module-root[data-module-root="matching"] .area-requirement-row span,
-.module-root[data-module-root="matching"] .area-requirement-row small{
-  min-width:0;
-  overflow:hidden;
-  text-overflow:ellipsis;
-  white-space:nowrap;
-}
-.module-root[data-module-root="matching"] .area-requirement-row span{
-  color:var(--text);
-  font-size:12px;
-  font-weight:700;
-}
-.module-root[data-module-root="matching"] .area-requirement-row small{
-  color:var(--muted);
-  font-size:11px;
-}
-.module-root[data-module-root="matching"] .source-head{display:flex; align-items:flex-start; gap:10px}
-.module-root[data-module-root="matching"] .source-main{
-  display:flex;
-  flex-direction:column;
-  gap:2px;
-}
-.module-root[data-module-root="matching"] .logo{
-  width:34px;
-  height:34px;
-  border-radius:8px;
-  display:grid;
-  place-items:center;
-  overflow:hidden;
-  background:var(--chip);
-  border:1px solid var(--line)
-}
-.module-root[data-module-root="matching"] .logo img{width:100%; height:100%; object-fit:cover}
-.module-root[data-module-root="matching"] .cname{font-weight:600; font-size:14px}
-.module-root[data-module-root="matching"] .total{
-  margin-left:auto;
-  font-size:12px;
-  padding:3px 8px;
-  border-radius:999px;
-  background:var(--badge);
-  border:1px solid var(--line);
-  color:var(--primary-2)
-}
-.module-root[data-module-root="matching"] .locations{margin-top:10px; display:flex; flex-wrap:wrap; gap:6px}
-.module-root[data-module-root="matching"] .loc{
-  font-size:12px;
-  padding:5px 8px;
-  border-radius:999px;
-  background:var(--chip);
-  border:1px solid var(--line);
-  color:var(--muted)
-}
-.module-root[data-module-root="matching"] .loc b{color:var(--text); font-weight:700}
-.module-root[data-module-root="matching"] .more{
-  font-size:12px;
-  color:var(--primary-2);
-  cursor:pointer;
-  user-select:none
-}
-.module-root[data-module-root="matching"] .card-footer{
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  margin-top:8px
-}
-.module-root[data-module-root="matching"] .meta{font-size:11px; color:var(--muted)}
-
-/* MIDDLE */
-.module-root[data-module-root="matching"] .requirements-wrap{display:flex; flex-direction:column; min-height:0}
-.module-root[data-module-root="matching"] .toolbar{
-  display:flex;
-  gap:10px;
-  padding:10px 12px;
-  align-items:center;
-  border-bottom:1px solid var(--line)
-}
-.module-root[data-module-root="matching"] .toolbar input,
-.module-root[data-module-root="matching"] .toolbar select{
-  height:38px;
-  background:#121a24;
-  border:1px solid var(--line);
-  color:var(--text);
-  border-radius:8px;
-  padding:0 12px;
-  font-size:13px;
-  min-width:0;
-}
-.module-root[data-module-root="matching"] .requirement-list{padding:10px; overflow:auto}
-.module-root[data-module-root="matching"] .requirement{
-  border:1px solid var(--line);
-  border-radius:12px;
-  padding:12px;
-  background:linear-gradient(180deg,#161c22 0%,#12171d 100%);
-  margin-bottom:10px;
-  overflow:hidden;
-}
-.module-root[data-module-root="matching"] .requirement-top{display:flex; align-items:flex-start; gap:10px}
-.module-root[data-module-root="matching"] .requirement-title{font-weight:800; font-size:16px}
-.module-root[data-module-root="matching"] .requirement-meta{font-size:12px; color:var(--muted)}
-
-/* Icon zum Öffnen der Anforderung: links */
-.module-root[data-module-root="matching"] .requirement-link{
-  opacity:.9;
-  cursor:pointer;
-  border:none;
-  background:transparent;
-  display:flex;
-  align-items:flex-start;
-  padding:0;
-  margin-top:2px;
-  margin-right:6px;
-}
-.module-root[data-module-root="matching"] .requirement-link svg{width:18px; height:18px; color:var(--primary-2)}
-
-.module-root[data-module-root="matching"] .tag-row{margin-top:6px; display:flex; flex-wrap:wrap; gap:6px}
-.module-root[data-module-root="matching"] .tag{
-  font-size:11px;
-  padding:4px 8px;
-  border-radius:999px;
-  background:var(--chip);
-  border:1px solid var(--line);
-  color:var(--primary-2)
-}
-
-/* Objekte-Badges */
-.module-root[data-module-root="matching"] .badge-grid{
-  display:grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
-  gap:12px;
-  margin-top:10px;
-  width:100%;
-  min-width:0;
-  align-items:start;
-}
-.module-root[data-module-root="matching"] .object-badge{
-  display:grid;
-  grid-template-columns: 70px 1fr auto;
-  align-items:center;
-  gap:10px;
-  padding:10px;
-  border-radius:12px;
-  border:1px solid var(--line);
-  background:var(--chip);
-  min-width:0;
-  overflow:hidden;
-}
-.module-root[data-module-root="matching"] .object-photo-wrap{
-  display:flex;
-  flex-direction:column;
-  align-items:center;
-  gap:4px;
-}
-.module-root[data-module-root="matching"] .object-photo{
-  width:44px;
-  height:44px;
-  border-radius:10px;
-  overflow:hidden;
-  border:1px solid var(--line)
-}
-.module-root[data-module-root="matching"] .object-photo img{width:100%; height:100%; object-fit:cover; object-position:center}
-.module-root[data-module-root="matching"] .object-info{min-width:0}
-.module-root[data-module-root="matching"] .object-name{font-weight:800; font-size:13px; line-height:1.1}
-.module-root[data-module-root="matching"] .object-mini{font-size:11px; color:var(--muted); line-height:1.3}
-.module-root[data-module-root="matching"] .object-main,
-.module-root[data-module-root="matching"] .object-header-row,
-.module-root[data-module-root="matching"] .object-mini-lines,
-.module-root[data-module-root="matching"] .object-mini-line{
-  min-width:0;
-}
-.module-root[data-module-root="matching"] .object-mini-line{
-  display:block;
-  max-width:100%;
-}
-.module-root[data-module-root="matching"] .score{
-  min-width:54px;
-  height:28px;
-  border-radius:999px;
-  display:grid;
-  place-items:center;
-  font-weight:900;
-  font-size:14px;
-  background:#111923;
-  border:1px solid var(--line);
-  padding:0 10px;
-  margin:0 8px
-}
-.module-root[data-module-root="matching"] .score[data-pct="high"]{color:var(--success)}
-.module-root[data-module-root="matching"] .score[data-pct="mid"]{color:var(--warning)}
-.module-root[data-module-root="matching"] .score[data-pct="low"]{color:var(--danger)}
-.module-root[data-module-root="matching"] .badge-actions{
-  display:flex;
-  align-items:center;
-  gap:6px;
-  flex-wrap:wrap;
-}
-.module-root[data-module-root="matching"] .icon-btn{
-  width:28px;
-  height:28px;
-  display:grid;
-  place-items:center;
-  border-radius:8px;
-  border:1px solid var(--line);
-  background:var(--panel);
-  color:var(--primary-2);
-  cursor:pointer
-}
-.module-root[data-module-root="matching"] .icon-btn.active{outline:2px solid var(--primary)}
-.module-root[data-module-root="matching"] .icon-btn.danger{color:var(--danger)}
-.module-root[data-module-root="matching"] .icon-btn svg{width:16px; height:16px}
-.module-root[data-module-root="matching"] .match-action-btn{
-  width:auto;
-  min-width:96px;
-  height:30px;
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  gap:6px;
-  padding:0 10px;
-  border-color:color-mix(in oklab, var(--primary) 70%, var(--line));
-  background:color-mix(in oklab, var(--primary) 16%, var(--panel));
-  color:var(--primary-2);
-  font-weight:850;
-}
-.module-root[data-module-root="matching"] .match-action-btn svg{
-  width:15px;
-  height:15px;
-  flex:0 0 auto;
-}
-.module-root[data-module-root="matching"] .match-action-btn span{
-  font-size:12px;
-  line-height:1;
-}
-.module-root[data-module-root="matching"] .match-action-btn:hover{
-  background:color-mix(in oklab, var(--primary) 24%, var(--panel));
-  border-color:var(--primary);
-}
-.module-root[data-module-root="matching"] .notes-action-btn{
-  color:var(--muted);
-}
-.module-root[data-module-root="matching"] .match-open-btn{
-  width:34px;
-  height:34px;
-  border-width:2px;
-  border-color:rgba(121, 211, 199, .85);
-  background:rgba(121, 211, 199, .14);
-  color:var(--primary);
-  box-shadow:0 0 0 1px rgba(121, 211, 199, .18), 0 8px 20px rgba(0,0,0,.28);
-}
-.module-root[data-module-root="matching"] .match-open-btn:hover{
-  background:rgba(121, 211, 199, .22);
-  transform:translateY(-1px);
-}
-.module-root[data-module-root="matching"] .match-open-btn svg{
-  width:18px;
-  height:18px;
-}
-.module-root[data-module-root="matching"] .progress-line{
-  grid-column: 2 / span 2;
-  height:8px;
-  background:#111923;
-  border:1px solid var(--line);
-  border-radius:999px;
-  overflow:hidden;
-  cursor:pointer;
-  display:none
-}
-.module-root[data-module-root="matching"] .progress-line.show{display:block}
-.module-root[data-module-root="matching"] .progress-line > i{
-  display:block;
-  height:100%;
-  background:linear-gradient(90deg,var(--primary), var(--success));
-  width:0%
-}
-
-.module-root[data-module-root="matching"] .status-tags{
-  grid-column: 2 / span 2;
-  display:flex;
-  flex-wrap:wrap;
-  gap:4px;
-  margin-top:4px;
-}
-
-.module-root[data-module-root="matching"] .status-tag{
-  font-size:10px;
-  padding:2px 6px;
-  border-radius:999px;
-  border:1px solid var(--line);
-  background:#111923;
-  color:var(--muted);
-  text-transform:uppercase;
-  letter-spacing:.06em;
-}
-
-.module-root[data-module-root="matching"] .status-tag.is-active{
-  background:linear-gradient(90deg, rgba(108,140,255,.25), rgba(61,220,151,.25));
-  color:var(--text);
-  border-color:var(--primary-2);
-}
-
-
-/* Tabs */
-.module-root[data-module-root="matching"] .tabs{display:flex; gap:6px; margin-left:6px}
-.module-root[data-module-root="matching"] .tab{
-  height:28px;
-  padding:0 10px;
-  border-radius:8px;
-  border:1px solid var(--line);
-  background:#121a24;
-  color:var(--muted);
-  cursor:pointer;
-  font-size:12px
-}
-.module-root[data-module-root="matching"] .tab.active{color:var(--text); background:var(--surface-2)}
-.module-root[data-module-root="matching"] .hdr-link.is-active{
-  background:var(--surface-2);
-  color:var(--text);
-}
-/* map-wrap muss in der Panel-Spalte den verfügbaren Platz einnehmen */
-.module-root[data-module-root="matching"] .map-wrap{
-  display:none;
-  flex: 1;         /* wichtig wenn parent ein flex-column ist */
-  min-height: 0;   /* extrem wichtig: erlaubt scroll in flex/grid */
-  overflow: auto;  /* statt hidden -> jetzt kann man nach unten scrollen */
-}
-/* optional: falls mapEl ein eigener Container ist, auch dort scrollen */
-.module-root[data-module-root="matching"] #mapEl{
+.module-root[data-module-root="matching"] img { max-width: 100%; }
+
+/* Small helpers used inside JS templates. */
+.module-root[data-module-root="matching"] .muted { color: var(--muted); }
+.module-root[data-module-root="matching"] .space { flex: 1; }
+.module-root[data-module-root="matching"] .more:empty { display: none; }
+
+/* custom: per-pane overflow menu — collapses the configure/import/export/
+   search-sort secondary actions into one kebab trigger per pane header.
+   The existing column-drawer delegation (`document.addEventListener('click', …)`
+   that matches `[data-column-action]`) still fires from the menu items, so no
+   JS re-wire was needed. The menu is moved to <body> on first open and
+   position:fixed so it escapes the .ctox-pane { overflow: hidden } clip. */
+.module-root[data-module-root="matching"] .matching-overflow {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.module-root[data-module-root="matching"] .matching-overflow-menu {
+  position: fixed;
+  z-index: 80;
+  display: grid;
+  gap: 2px;
+  min-width: 220px;
+  padding: 4px;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--control-radius);
+  background: var(--surface);
+  box-shadow: var(--panel-shadow);
+}
+
+.matching-overflow-menu[hidden] {
+  display: none;
+}
+
+.module-root[data-module-root="matching"] .matching-overflow-item {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: max(2px, calc(var(--control-radius) - 2px));
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: left;
+  cursor: pointer;
+}
+
+.module-root[data-module-root="matching"] .matching-overflow-item:hover {
+  background: var(--kit-hover);
+}
+
+.module-root[data-module-root="matching"] .matching-overflow-item svg {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+
+/* custom: pull the active-source label (matches pane) to the right edge of
+   the tools row when something is selected. */
+.module-root[data-module-root="matching"] .matching-pane-tools-source {
+  margin-left: auto;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* custom: die mittlere/rechte Spalte stapelt Header + wechselnde Ansichten
+   (Liste <-> Matrix) vertikal; .ctox-pane ist ein 2-Zeilen-Grid und kann den
+   View-Swap nicht ausdrücken. */
+.module-root[data-module-root="matching"] .requirements-wrap,
+.module-root[data-module-root="matching"] .object-panel {
+  display: flex;
+  flex-direction: column;
   min-height: 0;
 }
 
-.module-root[data-module-root="matching"] .map-wrap.active{display:block}
-.module-root[data-module-root="matching"] .map-toolbar{
-  display:flex;
-  gap:8px;
-  align-items:center;
-  padding:8px 12px;
-  border-bottom:1px solid var(--line)
-}
-.module-root[data-module-root="matching"] .map{
-  position:relative;
-  height: calc(100vh - 210px);
-  min-height:300px;
-}
-.module-root[data-module-root="matching"] .map svg{
-  width:100%;
-  height:100%;
-  display:block;
-  background:linear-gradient(180deg,#151b21,#111923)
-}
-.module-root[data-module-root="matching"] .legend{
-  position:absolute;
-  right:10px;
-  top:10px;
-  background:var(--panel);
-  border:1px solid var(--line);
-  border-radius:10px;
-  padding:8px;
-  font-size:12px
-}
-.module-root[data-module-root="matching"] .lg-row{display:flex; align-items:center; gap:6px; margin:4px 0}
-.module-root[data-module-root="matching"] .lg-dot{
-  width:10px;
-  height:10px;
-  border-radius:50%;
-  background:var(--primary-2);
-  display:inline-block
-}
-.module-root[data-module-root="matching"] .lg-dot.requirement{background:var(--success)}
-.module-root[data-module-root="matching"] .lg-dot.object{background:var(--primary)}
-
-
-/* RIGHT */
-.module-root[data-module-root="matching"] .object-panel{display:flex; flex-direction:column; min-height:0}
-.module-root[data-module-root="matching"] .object-tools{
-  display:flex;
-  flex-wrap:wrap;
-  gap:8px;
-  padding:10px;
-  align-items:center;
-  border-bottom:1px solid var(--line)
-}
-.module-root[data-module-root="matching"] .object-tools input,
-.module-root[data-module-root="matching"] .object-tools select{
-  height:38px;
-  background:#121a24;
-  border:1px solid var(--line);
-  color:var(--text);
-  border-radius:8px;
-  padding:0 12px;
-  font-size:13px;
-  min-width:0;
-  flex:1
-}
-.module-root[data-module-root="matching"] .object-tools input{flex:1 1 100%; min-width:100%}
-.module-root[data-module-root="matching"] .object-tools select{flex:1 1 180px}
-.module-root[data-module-root="matching"] .object-list{padding:10px; overflow:auto}
-.module-root[data-module-root="matching"] .object-card{
-  border:1px solid var(--line);
-  background:linear-gradient(180deg,#161c22 0%,#12171d 100%);
-  border-radius:12px;
-  padding:10px;
-  margin-bottom:10px
-}
-.module-root[data-module-root="matching"] .object-head{display:flex; align-items:center; gap:10px}
-.module-root[data-module-root="matching"] .object-avatar-wrap{
-  display:flex;
-  flex-direction:column;
-  align-items:center;
-  gap:4px;
-}
-.module-root[data-module-root="matching"] .avatar{
-  width:36px;
-  height:36px;
-  border-radius:10px;
-  overflow:hidden;
-  border:1px solid var(--line)
-}
-.module-root[data-module-root="matching"] .avatar img{width:100%; height:100%; object-fit:cover}
-.module-root[data-module-root="matching"] .c-tax{font-size:12px; color:var(--muted)}
-.module-root[data-module-root="matching"] .c-skill{font-size:12px; color:var(--muted); margin-top:6px}
-.module-root[data-module-root="matching"] .view-object{
-  margin-left:auto;
-  height:28px;
-  background:transparent;
-  border:1px solid var(--line);
-  color:var(--primary-2);
-  border-radius:8px;
-  padding:0 10px;
-  cursor:pointer
-}
-.module-root[data-module-root="matching"] .selected{outline:2px solid var(--primary)}
-
-/* Modals use the shared .ctox-modal building blocks (base.css §15); only
-   matching-specific card layouts stay local. */
-.module-root[data-module-root="matching"] .ctox-modal-body textarea{
-  width:100%;
-  min-height:140px;
-  background:var(--surface);
-  border:1px solid var(--line);
-  color:var(--text);
-  border-radius:10px;
-  padding:10px
-}
-.module-root[data-module-root="matching"] .modal-row{
-  display:flex;
-  align-items:center;
-  gap:10px;
-  margin:8px 0
-}
-.module-root[data-module-root="matching"] .range{flex:1}
-
-.module-root[data-module-root="matching"] .match-filter-modal{
-  width:min(520px, calc(100vw - 32px));
-}
-
-.module-root[data-module-root="matching"] .match-filter-toggle{
-  display:flex;
-  align-items:center;
-  gap:8px;
-  margin:10px 0;
-  font-size:13px;
-  color:var(--text);
-}
-
-.module-root[data-module-root="matching"] .match-filter-range{
-  display:grid;
-  gap:8px;
-  margin:12px 0;
-  font-size:13px;
-  color:var(--text);
-}
-
-.module-root[data-module-root="matching"] .match-filter-range input[type="range"]{
-  width:100%;
-}
-
-.module-root[data-module-root="matching"] .match-filter-statuses{
-  display:flex;
-  flex-wrap:wrap;
-  gap:6px;
-  margin-top:10px;
-}
-
-.module-root[data-module-root="matching"] .match-filter-status{
-  display:inline-flex;
-  align-items:center;
-  gap:6px;
-  border:1px solid var(--line);
-  border-radius:999px;
-  padding:4px 8px;
-  font-size:12px;
-  background:var(--chip);
-}
-
-.module-root[data-module-root="matching"] .match-filter-result{
-  margin-top:10px;
-  font-size:12px;
-}
-
-/* Spezielles Layout für Notizen/Progress als mittlere Spalte.
-   z-index:auto hält die alte Stapelreihenfolge: die Match-Bar (z:70) bleibt
-   über dem transparenten Overlay klickbar, die Karte selbst liegt auf z:60. */
-.module-root[data-module-root="matching"] #noteModal{
-  background:transparent;
-  backdrop-filter:none;
-  -webkit-backdrop-filter:none;
-  padding:0;
-  z-index:auto;
-}
-.module-root[data-module-root="matching"] #noteModal .ctox-modal-card{
-  position:fixed;
-  top:0;
-  left:50%;
-  transform:translateX(-50%);
-  width:var(--overlay-col-width);
-  max-width:none;
-  height:100vh;
-  max-height:none;
-  border-radius:0;
-  box-shadow:0 0 24px rgba(0,0,0,.45);
-  display:flex;
-  flex-direction:column;
-  z-index:60;
-}
-.module-root[data-module-root="matching"] #noteModal .ctox-modal-body{
-  flex:1;
-  display:flex;
-  flex-direction:column;
-}
-.module-root[data-module-root="matching"] #noteModal .ctox-modal-body textarea{
-  flex:1;
-}
-
-/* Kontaktstatus-Modal klein und kompakt */
-.module-root[data-module-root="matching"] #relModal .ctox-modal-card{
-  width:min(360px, calc(100vw - 28px));
-  max-width:none;
-}
-
-.module-root[data-module-root="matching"] #relModal .ctox-modal-title{
-  font-size:16px;
-  line-height:1.25;
-  white-space:normal;
-  overflow-wrap:anywhere;
-}
-
-.module-root[data-module-root="matching"] #relModal .ctox-modal-body{
-  display:grid;
-  gap:12px;
-}
-
-.module-root[data-module-root="matching"] #relModal .ctox-modal-body > p{
-  margin:0;
-  font-size:13px;
-  line-height:1.45;
-}
-
-.module-root[data-module-root="matching"] #relModal .ctox-choice > span{
-  display:inline-flex;
-  align-items:center;
-  gap:8px;
-  min-width:0;
-}
-
-.module-root[data-module-root="matching"] #relModal .lg-dot{
-  width:24px;
-  height:24px;
-  flex:0 0 24px;
-}
-
-.module-root[data-module-root="matching"] .image-lightbox{
-  position:fixed;
-  inset:0;
-  display:none;
-  place-items:center;
-  padding:24px;
-  background:rgba(2,6,23,.88);
-  /* über .ctox-modal (240), unter Shell-Notifications (260) */
-  z-index:250;
-}
-.module-root[data-module-root="matching"] .image-lightbox.open{
-  display:grid;
-}
-.module-root[data-module-root="matching"] .image-lightbox img{
-  width:min(1024px, calc(100vw - 48px));
-  height:min(1024px, calc(100vh - 48px));
-  max-width:100%;
-  max-height:100%;
-  object-fit:contain;
-  border:1px solid var(--line);
-  border-radius:12px;
-  background:#111923;
-  box-shadow:0 18px 36px rgba(0,0,0,.55);
-}
-.module-root[data-module-root="matching"] .image-lightbox-close{
-  position:absolute;
-  top:12px;
-  right:12px;
-  border-radius:999px;
-  background:rgba(15,18,32,.8);
-}
-
-/* Optionen im Kontakt-Modal: .ctox-choice-group/.ctox-choice (base.css §17) */
-
-/* rel-dot als klickbarer Hotspot */
-.module-root[data-module-root="matching"] .rel-dot{
-  position:relative;
-  cursor:pointer;
-}
-.module-root[data-module-root="matching"] .rel-dot:after{
-  content:"";
-  position:absolute;
-  right:-2px;
-  bottom:-2px;
-  width:10px;
-  height:10px;
-  border-radius:50%;
-  border:1px solid var(--line);
-  background:var(--none);
-  box-shadow:0 0 0 2px var(--panel)
-}
-.module-root[data-module-root="matching"] .has-rel .rel-dot:after{background:var(--good)}
-
-
-/* Object Slide-over (rechts) */
-.module-root[data-module-root="matching"] .object{
-  position:fixed;
-  top:0;
-  right:0;
-  height:100vh;
-  width:var(--overlay-col-width);
-  max-width:100vw;
-  min-width:260px;
-  background:var(--panel);
-  border-left:1px solid var(--line);
-  box-shadow:-8px 0 24px rgba(0,0,0,.4);
-  transform:translateX(100%);
-  transition:transform .25s ease;
-  display:flex;
-  flex-direction:column;
-  z-index:50
-}
-.module-root[data-module-root="matching"] .object.open{transform:translateX(0)}
-.module-root[data-module-root="matching"] .object-header{
-  display:flex;
-  align-items:center;
-  gap:10px;
-  padding:12px;
-  border-bottom:1px solid var(--line)
-}
-.module-root[data-module-root="matching"] .object-body{padding:12px; overflow:auto}
-
-/* Anforderungs-Slide-over (links) */
-.module-root[data-module-root="matching"] .jp{
-  position:fixed;
-  top:0;
-  left:0;
-  height:100vh;
-  width:var(--overlay-col-width);
-  max-width:100vw;
-  min-width:260px;
-  background:var(--panel);
-  border-right:1px solid var(--line);
-  box-shadow:8px 0 24px rgba(0,0,0,.4);
-  transform:translateX(-100%);
-  transition:transform .25s ease;
-  display:flex;
-  flex-direction:column;
-  z-index:50
-}
-.module-root[data-module-root="matching"] .jp.open{transform:translateX(0)}
-.module-root[data-module-root="matching"] .jp-header{
-  display:flex;
-  align-items:center;
-  gap:10px;
-  padding:12px;
-  border-bottom:1px solid var(--line)
-}
-.module-root[data-module-root="matching"] .jp-body{padding:12px; overflow:auto}
-
-.module-root[data-module-root="matching"] .object-body,
-.module-root[data-module-root="matching"] .jp-body{
-  line-height:1.46;
-}
-
-.module-root[data-module-root="matching"] .object-body section,
-.module-root[data-module-root="matching"] .jp-body section{
-  margin-bottom:16px;
-}
-
-.module-root[data-module-root="matching"] .drawer-copy{
-  color:var(--text);
-  font-size:13px;
-  line-height:1.48;
-}
-
-.module-root[data-module-root="matching"] .drawer-prose{
-  display:grid;
-  gap:8px;
-}
-
-.module-root[data-module-root="matching"] .drawer-prose p{
-  margin:0;
-}
-
-.module-root[data-module-root="matching"] .drawer-text-stack{
-  display:grid;
-  gap:6px;
-  color:var(--text);
-  font-size:13px;
-  line-height:1.44;
-}
-
-.module-root[data-module-root="matching"] .drawer-timeline{
-  display:grid;
-  gap:8px;
-}
-
-.module-root[data-module-root="matching"] .drawer-timeline-item{
-  border:1px solid color-mix(in oklab, var(--line) 82%, transparent);
-  border-radius:8px;
-  background:color-mix(in oklab, var(--surface-2) 78%, transparent);
-  padding:8px 9px;
-}
-
-.module-root[data-module-root="matching"] .drawer-timeline-title{
-  color:var(--text);
-  font-size:13px;
-  font-weight:750;
-  line-height:1.35;
-}
-
-.module-root[data-module-root="matching"] .drawer-timeline-meta,
-.module-root[data-module-root="matching"] .drawer-timeline-date{
-  color:var(--muted);
-  font-size:11px;
-  line-height:1.35;
-  margin-top:2px;
-}
-
-.module-root[data-module-root="matching"] .drawer-compact-list{
-  margin:6px 0 0 18px;
-  padding:0;
-  color:var(--text);
-  font-size:12px;
-  line-height:1.45;
-}
-
-.module-root[data-module-root="matching"] .drawer-compact-list li + li{
-  margin-top:3px;
-}
-
-.module-root[data-module-root="matching"] .drawer-chip-row{
-  display:flex;
-  flex-wrap:wrap;
-  gap:6px;
-}
-
-.module-root[data-module-root="matching"] .drawer-chip{
-  display:inline-flex;
-  align-items:center;
-  min-height:24px;
-  border:1px solid var(--line);
-  border-radius:999px;
-  background:var(--chip);
-  color:var(--text);
-  padding:3px 8px;
-  font-size:12px;
-  line-height:1.25;
-}
-
-/* Small badges in headers: .ctox-badge (base.css §10) */
-
-/* etwas freundlichere Overlays auf sehr kleinen Screens */
-@container business-app-window (max-width: 820px){
-  .module-root[data-module-root="matching"]{
-    --overlay-col-width: min(100vw, 520px);
-  }
-  .module-root[data-module-root="matching"] .jp, .module-root[data-module-root="matching"] .object{
-    box-shadow:none;
-  }
-}
-
-.module-root[data-module-root="matching"] .score.is-loading{
-  font-size:0;
-  position:relative;
-}
-
-.module-root[data-module-root="matching"] .score-spinner{
-  display:inline-block;
-  width:14px;
-  height:14px;
-  border-radius:50%;
-  border:2px solid rgba(230,232,242,.25);
-  border-top-color:var(--primary-2);
-  animation:score-spin .8s linear infinite;
-}
-
-@keyframes score-spin{
-  to{transform:rotate(360deg);}
-}
-/* Match-Details Bottom Drawer */
-.module-root[data-module-root="matching"] .match-bar{
-  position:fixed;
-  left:12px;
-  right:12px;
-  bottom:0;
-  z-index:70;
-  transform:translateY(100%);
-  transition:transform .22s ease;
-  pointer-events:none;
-}
-.module-root[data-module-root="matching"] .match-bar.open{
-  transform:translateY(0);
-  pointer-events:auto;
-}
-.module-root[data-module-root="matching"] .match-bar-inner{
-  margin:0 auto;
-  max-width:min(1540px, calc(100vw - 24px));
-  max-height:min(380px, 46vh);
-  overflow:auto;
-  border-radius:10px 10px 0 0;
-  border:1px solid var(--line);
-  border-bottom:none;
-  background:linear-gradient(180deg,#151b21 0%, #12171d 100%);
-  box-shadow:0 -14px 34px rgba(0,0,0,.58);
-  padding:12px 16px 16px;
-}
-
-.module-root[data-module-root="matching"] .match-bar-header{
-  display:flex;
-  align-items:center;
-  gap:12px;
-  margin-bottom:12px;
-}
-.module-root[data-module-root="matching"] .match-bar-titles{
-  display:flex;
-  flex-direction:column;
-  gap:1px;
-}
-.module-root[data-module-root="matching"] .match-bar-label{
-  font-size:12px;
-  letter-spacing:.12em;
-  text-transform:uppercase;
-  color:var(--muted);
-}
-.module-root[data-module-root="matching"] .match-bar-main{
-  font-size:15px;
-  font-weight:600;
-  display:flex;
-  align-items:center;
-  gap:6px;
-  min-width:0;
-  flex-wrap:wrap;
-}
-.module-root[data-module-root="matching"] .dot-sep{
-  color:var(--muted);
-  font-size:10px;
-}
-.module-root[data-module-root="matching"] .match-bar-score{
-  margin-left:auto;
-  min-width:64px;
-  height:34px;
-  border-radius:999px;
-  border:1px solid var(--line);
-  display:grid;
-  place-items:center;
-  font-size:17px;
-  font-weight:800;
-  background:#111923;
-  color:var(--primary-2);
-}
-
-.module-root[data-module-root="matching"] .match-bar-tags{
-  display:block;
-  overflow:visible;
-  padding:0;
-}
-
-.module-root[data-module-root="matching"] .match-columns{
-  display:grid;
-  grid-template-columns:repeat(3,minmax(0,1fr));
-  gap:12px;
-  align-items:start;
-  width:100%;
-}
-
-.module-root[data-module-root="matching"] .match-col{
-  min-width:0;
-}
-
-.module-root[data-module-root="matching"] .match-col header{
-  margin:0 0 8px;
-  color:var(--text);
-  font-size:12px;
-  font-weight:700;
-  letter-spacing:.12em;
-  text-transform:uppercase;
-}
-
-.module-root[data-module-root="matching"] .match-col-list{
-  display:grid;
-  gap:8px;
-}
-
-.module-root[data-module-root="matching"] .match-bar-content{
-  display:none;
-}
-
-.module-root[data-module-root="matching"] .match-pill{
-  flex:0 0 auto;
-  display:inline-flex;
-  align-items:center;
-  gap:6px;
-  padding:3px 9px;
-  border-radius:999px;
-  border:1px solid var(--line);
-  background:#111923;
-  color:var(--muted);
-  font-size:11px;
-  cursor:pointer;
-  white-space:nowrap;
-  transition:background .15s, color .15s, border-color .15s;
-}
-
-.module-root[data-module-root="matching"] .match-pill.match-pill-row{
-  width:100%;
-  min-height:44px;
-  margin:0;
-  padding:8px 12px;
-  justify-content:space-between;
-  gap:10px;
-  border-radius:999px;
-  background:#111923;
-  white-space:normal;
-  text-align:left;
-}
-
-.module-root[data-module-root="matching"] .match-pill.match-pill-row .match-pill-title{
-  display:-webkit-box;
-  -webkit-line-clamp:2;
-  -webkit-box-orient:vertical;
-  overflow:hidden;
-  color:var(--muted);
-  line-height:1.25;
-}
-
-.module-root[data-module-root="matching"] .match-pill.match-pill-row .match-pill-score{
-  color:var(--text);
-  font-weight:700;
-}
-.module-root[data-module-root="matching"] .match-pill-dot{
-  width:10px;
-  height:10px;
-  border-radius:50%;
-  background:var(--muted);
-}
-.module-root[data-module-root="matching"] .match-pill{
-  --matchColor:#67e8f9;
-}
-.module-root[data-module-root="matching"] .match-pill .match-pill-dot{
-  background:var(--matchColor);
-}
-.module-root[data-module-root="matching"] .match-pill.is-active{
-  background:color-mix(in srgb, var(--matchColor) 18%, #111923);
-  color:var(--text);
-  border-color:color-mix(in srgb, var(--matchColor) 60%, var(--line));
-}
-
-@container business-app-window (max-width:900px){
-  .module-root[data-module-root="matching"] .match-bar{
-    left:8px;
-    right:8px;
-  }
-
-  .module-root[data-module-root="matching"] .match-bar-inner{
-    max-width:calc(100vw - 16px);
-    max-height:58vh;
-    padding:10px 12px 14px;
-  }
-
-  .module-root[data-module-root="matching"] .match-columns{
-    grid-template-columns:1fr;
-  }
-}
-
-/* Detail-Panel in der Mitte (Notiz-Modal) */
-.module-root[data-module-root="matching"] #noteModal .note-match-detail{
-  margin-top:8px;
-  padding-top:6px;
-  border-top:1px solid var(--line);
-  max-height:40vh;
-  overflow:auto;
-  font-size:12px;
-}
-
-/* Pro Badge nur eine Karte sichtbar → Anzeige über .is-active */
-.module-root[data-module-root="matching"] #noteModal .note-match-detail .match-item-card{
-  display:none;
-}
-.module-root[data-module-root="matching"] #noteModal .note-match-detail .match-item-card.is-active{
-  display:block;
-}
-
-/* Karten-Styling bleibt, wird aber nur in der Mittelsäule benutzt */
-.module-root[data-module-root="matching"] .match-item-card{
-  border-radius:10px;
-  border:1px solid var(--line);
-  background:#121a24;
-  padding:8px 9px;
-  font-size:12px;
-}
-.module-root[data-module-root="matching"] .match-item-header{
-  display:flex;
-  align-items:flex-start;
-  gap:6px;
-  margin-bottom:4px;
-}
-.module-root[data-module-root="matching"] .match-item-badge{
-  width:16px;
-  height:16px;
-  border-radius:5px;
-  background:var(--matchColor);
-  flex-shrink:0;
-}
-.module-root[data-module-root="matching"] .match-item-title{
-  font-weight:600;
-  font-size:12px;
-}
-.module-root[data-module-root="matching"] .match-item-meta{
-  font-size:10px;
-  color:var(--muted);
-  margin-top:2px;
-}
-.module-root[data-module-root="matching"] .match-item-expl{
-  margin-top:4px;
-  font-size:11px;
-}
-.module-root[data-module-root="matching"] .match-item-snips{
-  margin-top:6px;
-  display:grid;
-  grid-template-columns: 1fr 1fr;
-  gap:6px;
-}
-.module-root[data-module-root="matching"] .match-snippet-block{
-  border-radius:8px;
-  border:1px solid var(--line);
-  background:#0f1419;
-  padding:4px 6px;
-  font-size:11px;
-}
-.module-root[data-module-root="matching"] .match-snippet-label{
-  font-size:10px;
-  text-transform:uppercase;
-  letter-spacing:.06em;
-  color:var(--muted);
-  margin-bottom:2px;
-}
-
-/* Text-Highlighting in Requirement & Object (dezent, bei Aktivierung stärker) */
-.module-root[data-module-root="matching"] .match-highlight{
-  background:color-mix(in srgb, var(--matchColor, #67e8f9) 14%, transparent);
-  box-shadow:0 0 0 1px color-mix(in srgb, var(--matchColor, #67e8f9) 26%, transparent);
-  border-radius:3px;
-  padding:0 1px;
-}
-.module-root[data-module-root="matching"] .match-highlight.is-active{
-  background:color-mix(in srgb, var(--matchColor, #67e8f9) 45%, transparent);
-  box-shadow:0 0 0 1px color-mix(in srgb, var(--matchColor, #67e8f9) 70%, transparent);
-}
-/* Nur für diese Scraping-Ansicht: Panels sollen nicht fix 320px sein */
-.module-root[data-module-root="matching"] .app-scrape .scrape-main .panel {
-  width: auto;
-  max-width: none;
-}
-
-/* rechter Bereich soll die ganze restliche Spalte ausnutzen */
-.module-root[data-module-root="matching"] .app-scrape #rightPane {
-  width: 100%;
-}
-
-
-/* Scraping-Ansicht: äußeres Layout nur EIN-spaltig,
-   damit .scrape-root über die ganze Breite geht */
-.module-root[data-module-root="matching"] .app.app-scrape {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-/* Breakpoints für diese Ansicht neutralisieren */
-@container business-app-window (max-width: 1200px){
-  .module-root[data-module-root="matching"] .app.app-scrape{
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr);
-    height: auto;
-  }
-}
-
-@container business-app-window (max-width: 900px){
-  .module-root[data-module-root="matching"] .app.app-scrape{
-    grid-template-columns: minmax(0, 1fr);
-    grid-auto-rows: minmax(0, 1fr);
-    height: auto;
-  }
-}
-
-.module-root[data-module-root="matching"] .hdr-link{
-  font-size:11px;
-  text-transform:none;
-  padding:3px 8px;
-  border-radius:999px;
-  border:1px solid var(--line);
-  background:transparent;
-  color:var(--primary-2);
-  text-decoration:none;
-  display:inline-flex;
-  align-items:center;
-  gap:4px;
-  cursor:pointer;
-}
-
-.module-root[data-module-root="matching"] .hdr-link:hover{
-  background:var(--chip);
-}
-
-/* Toolbar-Group mit Back-Button + Tabs */
-.module-root[data-module-root="matching"] .toolbar-left{
-  display:flex;
-  align-items:center;
-  gap:8px;
-}
-
-/* Back-Variante des Header-Links */
-.module-root[data-module-root="matching"] .hdr-link-back::before{
-  content:"←";
-  font-size:13px;
-  margin-right:4px;
-  position:relative;
-  top:-1px;
+.module-root[data-module-root="matching"] .requirement-list,
+.module-root[data-module-root="matching"] .object-list,
+.module-root[data-module-root="matching"] .sources {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
+}
+
+/* custom: Kartenraster der Quellen-Gruppierung (Bereiche/Quellen-Karten). */
+.module-root[data-module-root="matching"] .source-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+/* ---------------------------------------------------------------------------
+   custom: Record-Karten (Quelle / Anforderung / Objekt / Match-Badge).
+   Das sind composite Karten mit Foto/Logo, Aktiv-Schalter, Kontakt-Dot,
+   Score-Pille und Aktionszeile — kein Kit-Listenitem. Flach, tokenbasiert.
+   -------------------------------------------------------------------------- */
+.module-root[data-module-root="matching"] .source-card,
+.module-root[data-module-root="matching"] .requirement,
+.module-root[data-module-root="matching"] .object-card,
+.module-root[data-module-root="matching"] .match-item-card,
+.module-root[data-module-root="matching"] .import-status-card {
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--panel-radius);
+  background: var(--surface-2);
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.module-root[data-module-root="matching"] .source-card,
+.module-root[data-module-root="matching"] .object-card {
+  padding: 10px;
+}
+
+.module-root[data-module-root="matching"] .requirement {
+  padding: 12px;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+
+.module-root[data-module-root="matching"] .source-card {
+  cursor: pointer;
+}
+
+.module-root[data-module-root="matching"] .source-card:hover,
+.module-root[data-module-root="matching"] .object-card:hover,
+.module-root[data-module-root="matching"] .match-item-card:hover,
+.module-root[data-module-root="matching"] .import-status-card:hover {
+  border-color: var(--line-strong);
+}
+
+.module-root[data-module-root="matching"] .source-card.selected,
+.module-root[data-module-root="matching"] .requirement.selected,
+.module-root[data-module-root="matching"] .object-card.selected,
+.module-root[data-module-root="matching"] .match-item-card.is-active,
+.module-root[data-module-root="matching"] .object-card.is-active {
+  border-color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .module-root[data-module-root="matching"] .object-card.pending {
   opacity: 0.7;
 }
 
-.module-root[data-module-root="matching"] .spinner {
-  display: inline-block;
+.module-root[data-module-root="matching"] .source-head,
+.module-root[data-module-root="matching"] .requirement-top,
+.module-root[data-module-root="matching"] .object-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.module-root[data-module-root="matching"] .source-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* custom: Logo/Avatar-Kacheln mit Kontakt-Dot. */
+.module-root[data-module-root="matching"] .logo {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--control-radius);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--hairline, var(--line));
+  flex: 0 0 auto;
+}
+
+.module-root[data-module-root="matching"] .logo img { width: 100%; height: 100%; object-fit: cover; }
+
+.module-root[data-module-root="matching"] .avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--control-radius);
+  overflow: hidden;
+  border: 1px solid var(--hairline, var(--line));
+  flex: 0 0 auto;
+}
+
+.module-root[data-module-root="matching"] .avatar img { width: 100%; height: 100%; object-fit: cover; }
+
+.module-root[data-module-root="matching"] .object-avatar-wrap,
+.module-root[data-module-root="matching"] .object-photo-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.module-root[data-module-root="matching"] .cname { font-weight: 600; font-size: 14px; }
+.module-root[data-module-root="matching"] .requirement-title { font-weight: 800; font-size: 16px; }
+.module-root[data-module-root="matching"] .requirement-meta,
+.module-root[data-module-root="matching"] .c-tax,
+.module-root[data-module-root="matching"] .c-skill { font-size: 12px; color: var(--muted); }
+.module-root[data-module-root="matching"] .c-skill { margin-top: 6px; }
+.module-root[data-module-root="matching"] .object-name { font-weight: 800; font-size: 13px; line-height: 1.1; }
+.module-root[data-module-root="matching"] .object-mini { font-size: 11px; color: var(--muted); line-height: 1.3; }
+.module-root[data-module-root="matching"] .object-main,
+.module-root[data-module-root="matching"] .object-header-row,
+.module-root[data-module-root="matching"] .object-mini-lines,
+.module-root[data-module-root="matching"] .object-mini-line { min-width: 0; }
+.module-root[data-module-root="matching"] .object-mini-line { display: block; max-width: 100%; }
+.module-root[data-module-root="matching"] .meta { font-size: 11px; color: var(--muted); }
+
+.module-root[data-module-root="matching"] .card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.module-root[data-module-root="matching"] .locations,
+.module-root[data-module-root="matching"] .tag-row {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.module-root[data-module-root="matching"] .tag-row { margin-top: 6px; }
+
+/* custom: Bereichs-Gruppenkarten (Quellen nach Gebiet gruppiert). */
+.module-root[data-module-root="matching"] .source-area-card { cursor: pointer; }
+.module-root[data-module-root="matching"] .source-area-card .area-logo { display: grid; place-items: center; }
+.module-root[data-module-root="matching"] .source-area-card .area-logo svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+  color: var(--accent);
+}
+
+.module-root[data-module-root="matching"] .area-source-summary {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.module-root[data-module-root="matching"] .area-requirement-preview {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.module-root[data-module-root="matching"] .area-requirement-row {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--control-radius);
+  background: var(--surface);
+}
+
+.module-root[data-module-root="matching"] .area-requirement-row span,
+.module-root[data-module-root="matching"] .area-requirement-row small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.module-root[data-module-root="matching"] .area-requirement-row span {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.module-root[data-module-root="matching"] .area-requirement-row small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* custom: kompaktes Aktiv/Inaktiv-Schaltelement auf den Karten — das Kit hat
+   keinen Toggle-Switch (nur Choice-Rows, die hier zu groß wären). */
+.module-root[data-module-root="matching"] .toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.module-root[data-module-root="matching"] .toggle-row.small { justify-content: center; }
+.module-root[data-module-root="matching"] .toggle-label { font-size: 11px; }
+
+.module-root[data-module-root="matching"] .switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 32px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--hairline, var(--line));
+  padding: 1px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.module-root[data-module-root="matching"] .switch-knob {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  border: 2px solid rgba(0,0,0,0.16);
-  border-top-color: rgba(0,0,0,0.6);
-  animation: spin .8s linear infinite;
+  background: var(--muted);
+  transition: transform 0.2s, background 0.2s;
 }
 
-@keyframes spin {
+.module-root[data-module-root="matching"] .switch.is-on { background: var(--accent); }
+.module-root[data-module-root="matching"] .switch.is-on .switch-knob {
+  transform: translateX(14px);
+  background: var(--surface);
+}
+
+/* custom: Kontakt-/Aktivitätszustände der Records (Beziehungs-Dot auf
+   Logo/Foto, Abblendung inaktiver Entitäten). */
+.module-root[data-module-root="matching"] .inactive-entity {
+  opacity: 0.35;
+  filter: grayscale(0.4);
+}
+
+.module-root[data-module-root="matching"] .needs-contact { filter: saturate(0.85); }
+
+.module-root[data-module-root="matching"] .rel-dot {
+  position: relative;
+  cursor: pointer;
+}
+
+.module-root[data-module-root="matching"] .rel-dot::after {
+  content: "";
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid var(--hairline, var(--line));
+  background: var(--muted);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+.module-root[data-module-root="matching"] .has-rel .rel-dot::after { background: var(--success); }
+
+/* custom: Match-Badges innerhalb einer Anforderung (Foto + Score + Aktionen
+   pro Objekt) und ihr Raster. */
+.module-root[data-module-root="matching"] .badge-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 12px;
+  margin-top: 10px;
+  width: 100%;
+  min-width: 0;
+  align-items: start;
+}
+
+.module-root[data-module-root="matching"] .object-badge {
+  display: grid;
+  grid-template-columns: 70px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: var(--panel-radius);
+  border: 1px solid var(--hairline, var(--line));
+  background: var(--surface-2);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.module-root[data-module-root="matching"] .object-photo {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--control-radius);
+  overflow: hidden;
+  border: 1px solid var(--hairline, var(--line));
+}
+
+.module-root[data-module-root="matching"] .object-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+
+.module-root[data-module-root="matching"] .object-info { min-width: 0; }
+
+.module-root[data-module-root="matching"] .badge-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Aktiver Prozess-Schalter (aria-pressed) auf Icon-Buttons — ergänzt das Kit
+   um den Toggle-Zustand, den .ctox-icon-button nicht mitbringt. */
+.module-root[data-module-root="matching"] .ctox-icon-button.is-active,
+.module-root[data-module-root="matching"] .ctox-icon-button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: color-mix(in srgb, var(--accent) 78%, var(--text));
+}
+
+.module-root[data-module-root="matching"] .notes-action-btn { color: var(--muted); }
+
+/* custom: der "Match anzeigen"-Button ist die Signatur-Aktion jeder
+   Match-Karte und darf akzentbetont sein. */
+.module-root[data-module-root="matching"] .match-open-btn {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.module-root[data-module-root="matching"] .match-open-btn:hover {
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+}
+
+/* custom: Score-Pille mit Ampel-Färbung und Ladezustand — zentrales
+   Wiedererkennungs-Element des Matchings, kein reines Status-Badge. */
+.module-root[data-module-root="matching"] .score {
+  min-width: 54px;
+  height: 28px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-weight: 900;
+  font-size: 14px;
+  background: var(--surface);
+  border: 1px solid var(--hairline, var(--line));
+  padding: 0 10px;
+  margin: 0 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.module-root[data-module-root="matching"] .score[data-pct="high"] { color: var(--success); }
+.module-root[data-module-root="matching"] .score[data-pct="mid"] { color: var(--warning); }
+.module-root[data-module-root="matching"] .score[data-pct="low"] { color: var(--danger); }
+
+.module-root[data-module-root="matching"] .score.is-loading {
+  font-size: 0;
+  position: relative;
+}
+
+.module-root[data-module-root="matching"] .score-spinner,
+.module-root[data-module-root="matching"] .spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--text) 25%, transparent);
+  border-top-color: var(--accent);
+  animation: score-spin 0.8s linear infinite;
+}
+
+.module-root[data-module-root="matching"] .spinner {
+  width: 12px;
+  height: 12px;
+}
+
+@keyframes score-spin {
   to { transform: rotate(360deg); }
 }
 
-/* 1) Scrape-Ansicht: eine Zeile, die wirklich in 100vh "eingesperrt" ist */
-.module-root[data-module-root="matching"] .app.app-scrape{
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr); /* WICHTIG */
-  height: 100vh;
+/* custom: Fortschrittsleiste und Prozess-Statuszeile im Match-Badge. */
+.module-root[data-module-root="matching"] .progress-line {
+  grid-column: 2 / span 2;
+  height: 8px;
+  background: var(--surface);
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: 999px;
+  overflow: hidden;
+  cursor: pointer;
+  display: none;
 }
 
-/* 2) Scrape-Root soll die volle Höhe nutzen */
-.module-root[data-module-root="matching"] .scrape-root{
+.module-root[data-module-root="matching"] .progress-line.show { display: block; }
+
+.module-root[data-module-root="matching"] .progress-line > i {
+  display: block;
   height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--success));
+  width: 0%;
+}
+
+.module-root[data-module-root="matching"] .status-tags {
+  grid-column: 2 / span 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.module-root[data-module-root="matching"] .status-tag {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+}
+
+.module-root[data-module-root="matching"] .status-tag.is-active {
+  background: var(--accent-soft);
+  color: color-mix(in srgb, var(--accent) 78%, var(--text));
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+/* ---------------------------------------------------------------------------
+   custom: Matrix-/Karten-Ansicht (SVG-Match-Graph mit Legende). Keine
+   Kit-Tabelle — ein frei gerenderter Graph.
+   -------------------------------------------------------------------------- */
+.module-root[data-module-root="matching"] .map-wrap {
+  display: none;
+  flex: 1;
   min-height: 0;
+  overflow: auto;
+}
+
+.module-root[data-module-root="matching"] .map-wrap.active { display: block; }
+
+.module-root[data-module-root="matching"] .map {
+  position: relative;
+  min-height: 300px;
+}
+
+.module-root[data-module-root="matching"] .map svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: var(--surface-2);
+}
+
+.module-root[data-module-root="matching"] .legend {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  background: var(--surface);
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--control-radius);
+  padding: 8px;
+  font-size: 12px;
+}
+
+.module-root[data-module-root="matching"] .lg-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+}
+
+.module-root[data-module-root="matching"] .lg-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: inline-block;
+}
+
+.module-root[data-module-root="matching"] .lg-dot.requirement { background: var(--success); }
+.module-root[data-module-root="matching"] .lg-dot.object { background: var(--accent); }
+
+/* ---------------------------------------------------------------------------
+   Modals: Kit-Klassen (.ctox-modal*) kommen aus base.css. Hier nur die
+   matching-spezifischen Innen-Layouts.
+   -------------------------------------------------------------------------- */
+.module-root[data-module-root="matching"] .modal-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+}
+
+/* custom: Range-Slider für den Fortschritt — das Kit hat kein Range-Control. */
+.module-root[data-module-root="matching"] .range { flex: 1; accent-color: var(--accent); }
+
+.module-root[data-module-root="matching"] .match-filter-modal {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.module-root[data-module-root="matching"] .match-filter-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.module-root[data-module-root="matching"] .match-filter-toggle input,
+.module-root[data-module-root="matching"] .match-filter-status input {
+  accent-color: var(--accent);
+}
+
+.module-root[data-module-root="matching"] .match-filter-range {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.module-root[data-module-root="matching"] .match-filter-range input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.module-root[data-module-root="matching"] .match-filter-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.module-root[data-module-root="matching"] .match-filter-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 12px;
+  background: var(--surface-2);
+}
+
+.module-root[data-module-root="matching"] .match-filter-result {
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+/* custom: das Notiz-Modal ist bewusst eine mittlere Vollbild-Spalte statt
+   einer zentrierten Karte (parallel zu den Slide-overn links/rechts).
+   z-index:auto hält die Stapelreihenfolge: die Match-Bar (z:70) bleibt über
+   dem transparenten Overlay klickbar, die Karte selbst liegt auf z:60. */
+.module-root[data-module-root="matching"] #noteModal {
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  padding: 0;
+  z-index: auto;
+}
+
+.module-root[data-module-root="matching"] #noteModal .ctox-modal-card {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: var(--matching-overlay-col-width, clamp(260px, 33.333vw, 520px));
+  max-width: none;
+  height: 100vh;
+  max-height: none;
+  border-radius: 0;
+  box-shadow: var(--panel-shadow);
+  display: flex;
+  flex-direction: column;
+  z-index: 60;
+}
+
+.module-root[data-module-root="matching"] #noteModal .ctox-modal-body {
+  flex: 1;
   display: flex;
   flex-direction: column;
 }
 
-/* 3) Hauptbereich (2-Spalten-Grid) füllt den Rest und darf schrumpfen */
-.module-root[data-module-root="matching"] .scrape-main{
+.module-root[data-module-root="matching"] #noteModal .ctox-modal-body textarea {
   flex: 1;
-  min-height: 0;
 }
 
-/* 4) Beide Panels bekommen die Scrollbars */
-.module-root[data-module-root="matching"] #leftPane,
-.module-root[data-module-root="matching"] #rightPane{
-  overflow: auto;   /* du hast das schon inline, hier notfalls noch mal global */
-  min-height: 0;
+/* custom: Match-Detail-Karten im Notiz-Modal (ein Nachweis pro Badge). */
+.module-root[data-module-root="matching"] #noteModal .note-match-detail {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--hairline, var(--line));
+  max-height: 40vh;
+  overflow: auto;
+  font-size: 12px;
 }
 
+.module-root[data-module-root="matching"] #noteModal .note-match-detail .match-item-card {
+  display: none;
+}
+
+.module-root[data-module-root="matching"] #noteModal .note-match-detail .match-item-card.is-active {
+  display: block;
+}
+
+/* custom: Kontaktstatus-Modal klein und kompakt. */
+.module-root[data-module-root="matching"] #relModal .ctox-modal-card {
+  width: min(360px, calc(100vw - 28px));
+  max-width: none;
+}
+
+.module-root[data-module-root="matching"] #relModal .ctox-modal-title {
+  font-size: 16px;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.module-root[data-module-root="matching"] #relModal .ctox-modal-body {
+  display: grid;
+  gap: 12px;
+}
+
+.module-root[data-module-root="matching"] #relModal .ctox-modal-body > p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.module-root[data-module-root="matching"] #relModal .ctox-choice > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.module-root[data-module-root="matching"] #relModal .lg-dot {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+}
+
+/* custom: Portrait-Platzhalter im Kontaktstatus-Modal. */
 .module-root[data-module-root="matching"] .rel-photo {
-  display:flex;
+  display: flex;
   justify-content: center;
-  width:96px;
-  height:96px;
-  margin:0 auto 2px;
+  width: 96px;
+  height: 96px;
+  margin: 0 auto 2px;
 }
 
 .module-root[data-module-root="matching"] .rel-photo img {
-  width:96px !important;
-  height:96px !important;
-  border-radius:18px !important;
+  width: 96px !important;
+  height: 96px !important;
+  border-radius: var(--panel-radius) !important;
   object-fit: cover;
-  box-shadow: 0 0 0 2px var(--line);
+  box-shadow: 0 0 0 2px var(--hairline, var(--line));
   cursor: zoom-in;
 }
 
-
-/* Pill Button */
-.module-root[data-module-root="matching"] .btn-pill{
-  height:28px;
-  padding:0 10px;
-  border-radius:10px;
-  border:1px solid var(--line);
-  background:linear-gradient(180deg, #121a24 0%, #111923 100%);
-  color:var(--primary-2);
-  font-weight:800;
-  font-size:12px;
-  letter-spacing:.02em;
-  cursor:pointer;
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  gap:6px;
-  transition:transform .08s ease, box-shadow .2s ease, background .2s ease;
+/* custom: Vollbild-Bildvorschau (Lightbox) für Fotos/Lebensläufe.
+   Über .ctox-modal (240), unter Shell-Notifications (260). */
+.module-root[data-module-root="matching"] .image-lightbox {
+  position: fixed;
+  inset: 0;
+  display: none;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--text) 62%, transparent);
+  z-index: 250;
 }
 
-.module-root[data-module-root="matching"] .btn-pill:hover{
-  transform:translateY(-1px);
-  box-shadow:0 6px 14px rgba(0,0,0,.35);
+.module-root[data-module-root="matching"] .image-lightbox.open { display: grid; }
+
+.module-root[data-module-root="matching"] .image-lightbox img {
+  width: min(1024px, calc(100vw - 48px));
+  height: min(1024px, calc(100vh - 48px));
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--panel-radius);
+  background: var(--surface);
+  box-shadow: var(--panel-shadow);
 }
 
-.module-root[data-module-root="matching"] .btn-pill:active{ transform:translateY(0); }
-
-.module-root[data-module-root="matching"] .btn-pill:disabled{
-  opacity:.45;
-  cursor:not-allowed;
-  transform:none;
-  box-shadow:none;
+.module-root[data-module-root="matching"] .image-lightbox-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  border-radius: 999px;
+  background: var(--surface);
 }
 
-/* Loading state */
-.module-root[data-module-root="matching"] .btn-pill.is-loading{
-  color:var(--muted);
+/* ---------------------------------------------------------------------------
+   custom: Slide-over-Panels (Objekt rechts, Anforderung links) — die
+   Record-Detailansicht des Moduls, bewusst Overlay statt eigener Pane.
+   -------------------------------------------------------------------------- */
+.module-root[data-module-root="matching"] .object,
+.module-root[data-module-root="matching"] .jp {
+  position: fixed;
+  top: 0;
+  height: 100vh;
+  width: var(--matching-overlay-col-width, clamp(260px, 33.333vw, 520px));
+  max-width: 100vw;
+  min-width: 260px;
+  background: var(--surface);
+  transition: transform 0.25s ease;
+  display: flex;
+  flex-direction: column;
+  z-index: 50;
 }
 
-.module-root[data-module-root="matching"] .requirement-bulk-add-btn,
-.module-root[data-module-root="matching"] [data-role="auto-requirements-10"],
-.module-root[data-module-root="matching"] [data-auto-add],
-.module-root[data-module-root="matching"] .requirement-bulk-add-group{
-  display:none !important;
+.module-root[data-module-root="matching"] .object {
+  right: 0;
+  border-left: 1px solid var(--hairline, var(--line));
+  box-shadow: var(--panel-shadow);
+  transform: translateX(100%);
 }
 
-.module-root[data-module-root="matching"] .btn-pill.danger{
-  border-color:rgba(255,107,107,.45);
-  color:var(--danger);
+.module-root[data-module-root="matching"] .jp {
+  left: 0;
+  border-right: 1px solid var(--hairline, var(--line));
+  box-shadow: var(--panel-shadow);
+  transform: translateX(-100%);
 }
 
-.module-root[data-module-root="matching"] .app-scrape #sourceSortBar,
-.module-root[data-module-root="matching"] .app-scrape #objectSortBar{
-  flex-wrap:wrap;
-  align-items:center;
-  padding:10px 12px !important;
-  gap:8px !important;
+.module-root[data-module-root="matching"] .object.open,
+.module-root[data-module-root="matching"] .jp.open { transform: translateX(0); }
+
+.module-root[data-module-root="matching"] .object-header,
+.module-root[data-module-root="matching"] .jp-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid var(--hairline, var(--line));
 }
 
-.module-root[data-module-root="matching"] .app-scrape #sourceSearchInput,
-.module-root[data-module-root="matching"] .app-scrape #objectSearchInput{
-  flex:1 1 100% !important;
-  min-width:100% !important;
-  height:38px !important;
-  font-size:13px !important;
-  padding:0 12px !important;
+.module-root[data-module-root="matching"] .object-body,
+.module-root[data-module-root="matching"] .jp-body {
+  padding: 12px;
+  overflow: auto;
+  line-height: 1.46;
 }
 
-.module-root[data-module-root="matching"] .app-scrape #sourceSortSelect,
-.module-root[data-module-root="matching"] .app-scrape #objectSortSelect{
-  flex:1 1 190px !important;
-  height:36px !important;
-  font-size:13px !important;
-  padding:0 12px !important;
+.module-root[data-module-root="matching"] .object-body section,
+.module-root[data-module-root="matching"] .jp-body section {
+  margin-bottom: 16px;
 }
 
-/* Panel color alignment: remove legacy blue tint */
-.module-root[data-module-root="matching"]{
-  --chip:#111923;
-  --badge:#1b2430;
+/* custom: Prosa-/Timeline-Inhalte in den Slide-overn. */
+.module-root[data-module-root="matching"] .drawer-copy {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.48;
 }
 
-.module-root[data-module-root="matching"] .switch,
-.module-root[data-module-root="matching"] .score,
-.module-root[data-module-root="matching"] .progress-line,
-.module-root[data-module-root="matching"] .status-tag,
-.module-root[data-module-root="matching"] .tab,
-.module-root[data-module-root="matching"] .toolbar input,
-.module-root[data-module-root="matching"] .toolbar select,
-.module-root[data-module-root="matching"] .object-tools input,
-.module-root[data-module-root="matching"] .object-tools select,
-.module-root[data-module-root="matching"] .ctox-modal-body textarea,
-.module-root[data-module-root="matching"] .match-item-card,
-.module-root[data-module-root="matching"] .match-snippet-block,
-.module-root[data-module-root="matching"] .match-bar-score,
-.module-root[data-module-root="matching"] .btn-pill{
-  background:#121a24;
+.module-root[data-module-root="matching"] .drawer-prose {
+  display: grid;
+  gap: 8px;
 }
 
-.module-root[data-module-root="matching"] .source-card,
-.module-root[data-module-root="matching"] .requirement,
-.module-root[data-module-root="matching"] .object-card{
-  background:linear-gradient(180deg,#161c22 0%,#12171d 100%);
+.module-root[data-module-root="matching"] .drawer-prose p { margin: 0; }
+
+.module-root[data-module-root="matching"] .drawer-text-stack {
+  display: grid;
+  gap: 6px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.44;
 }
 
-.module-root[data-module-root="matching"] .map svg{
-  background:linear-gradient(180deg,#151b21 0%, #111923 100%);
+.module-root[data-module-root="matching"] .drawer-timeline {
+  display: grid;
+  gap: 8px;
 }
 
-.module-root[data-module-root="matching"] .match-bar-inner{
-  background:linear-gradient(180deg,#151b21 0%, #12171d 100%);
+.module-root[data-module-root="matching"] .drawer-timeline-item {
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--control-radius);
+  background: var(--surface-2);
+  padding: 8px 9px;
 }
 
-.module-root[data-module-root="matching"] .image-lightbox{
-  background:rgba(2,8,12,.88);
+.module-root[data-module-root="matching"] .drawer-timeline-title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.35;
 }
 
-.module-root[data-module-root="matching"] .image-lightbox img{
-  background:#111923;
+.module-root[data-module-root="matching"] .drawer-timeline-meta,
+.module-root[data-module-root="matching"] .drawer-timeline-date {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  margin-top: 2px;
 }
 
-.module-root[data-module-root="matching"] .image-lightbox-close{
-  background:rgba(16,22,29,.86);
+.module-root[data-module-root="matching"] .drawer-compact-list {
+  margin: 6px 0 0 18px;
+  padding: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
-.module-root[data-module-root="matching"] .status-tag.is-active{
-  background:
-    linear-gradient(
-      90deg,
-      color-mix(in oklab, var(--accent) 28%, #131920),
-      color-mix(in oklab, var(--success) 22%, #131920)
-    );
-  border-color:color-mix(in oklab, var(--accent) 34%, transparent);
+.module-root[data-module-root="matching"] .drawer-compact-list li + li { margin-top: 3px; }
+
+.module-root[data-module-root="matching"] .drawer-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
-.module-root[data-module-root="matching"] .match-pill{
-  --matchColor:var(--accent);
-  background:#121a24;
+.module-root[data-module-root="matching"] .drawer-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 3px 8px;
+  font-size: 12px;
+  line-height: 1.25;
 }
 
-.module-root[data-module-root="matching"] .match-pill.is-active{
-  background:color-mix(in oklab, var(--matchColor) 18%, #111923);
-  border-color:color-mix(in oklab, var(--matchColor) 60%, var(--line));
-}
+/* Etwas freundlichere Overlays auf kleinen Screens. */
+@container business-app-window (max-width: 820px) {
+  .module-root[data-module-root="matching"] {
+    --matching-overlay-col-width: min(100vw, 520px);
+  }
 
-.module-root[data-module-root="matching"] .match-highlight{
-  background:color-mix(in oklab, var(--matchColor, var(--accent)) 14%, transparent);
-  box-shadow:0 0 0 1px color-mix(in oklab, var(--matchColor, var(--accent)) 26%, transparent);
-}
-
-.module-root[data-module-root="matching"] .match-highlight.is-active{
-  background:color-mix(in oklab, var(--matchColor, var(--accent)) 45%, transparent);
-  box-shadow:0 0 0 1px color-mix(in oklab, var(--matchColor, var(--accent)) 70%, transparent);
-}
-
-.module-root[data-module-root="matching"] .sync-feedback-host,
-body > #sync-feedback-host-matching-view.sync-feedback-host{
-  position:fixed;
-  right:14px;
-  bottom:14px;
-  /* App feedback must never sit above OS chrome. The shell window layer starts
-     at z-index 50; keeping this below it preserves resize handles and headers. */
-  z-index:45;
-  display:flex;
-  flex-direction:column;
-  gap:8px;
-  pointer-events:none;
-  max-width:min(380px, 92vw);
-}
-
-.module-root[data-module-root="matching"] .sync-feedback,
-body > #sync-feedback-host-matching-view .sync-feedback{
-  border-radius:10px;
-  border:1px solid var(--line);
-  background:rgba(18,26,36,.92);
-  color:var(--text);
-  padding:10px 12px;
-  font-size:12px;
-  line-height:1.35;
-  box-shadow:0 10px 24px rgba(0,0,0,.34);
-  opacity:0;
-  transform:translateY(8px);
-  transition:opacity .2s ease, transform .2s ease;
-  backdrop-filter:blur(6px);
-}
-
-.module-root[data-module-root="matching"] .sync-feedback.is-visible,
-body > #sync-feedback-host-matching-view .sync-feedback.is-visible{
-  opacity:1;
-  transform:translateY(0);
-}
-
-.module-root[data-module-root="matching"] .sync-feedback-success,
-body > #sync-feedback-host-matching-view .sync-feedback-success{
-  border-color:color-mix(in srgb, var(--success) 60%, var(--line));
-}
-
-.module-root[data-module-root="matching"] .sync-feedback-info,
-body > #sync-feedback-host-matching-view .sync-feedback-info{
-  border-color:color-mix(in srgb, var(--primary) 55%, var(--line));
-}
-
-.module-root[data-module-root="matching"] .sync-feedback-warn,
-body > #sync-feedback-host-matching-view .sync-feedback-warn{
-  border-color:color-mix(in srgb, var(--warning) 60%, var(--line));
-}
-
-.module-root[data-module-root="matching"] .sync-feedback-error,
-body > #sync-feedback-host-matching-view .sync-feedback-error{
-  border-color:color-mix(in srgb, var(--danger) 65%, var(--line));
-}
-
-.module-root[data-module-root="matching"] .sync-feedback-progress,
-body > #sync-feedback-host-matching-view .sync-feedback-progress{
-  min-width:min(360px, 92vw);
-  pointer-events:auto;
-}
-
-.module-root[data-module-root="matching"] .sync-feedback-progress-head,
-body > #sync-feedback-host-matching-view .sync-feedback-progress-head{
-  display:flex;
-  align-items:center;
-  gap:10px;
-}
-
-.module-root[data-module-root="matching"] .sync-feedback-progress-title,
-body > #sync-feedback-host-matching-view .sync-feedback-progress-title{
-  font-size:12px;
-  font-weight:700;
-  letter-spacing:.01em;
-}
-
-.module-root[data-module-root="matching"] .sync-feedback-progress-meta,
-body > #sync-feedback-host-matching-view .sync-feedback-progress-meta{
-  margin-left:auto;
-  font-size:11px;
-  color:var(--muted);
-}
-
-.module-root[data-module-root="matching"] .sync-feedback-progress-close,
-body > #sync-feedback-host-matching-view .sync-feedback-progress-close{
-  appearance:none;
-  border:0;
-  background:transparent;
-  color:var(--muted);
-  cursor:pointer;
-  font-size:16px;
-  line-height:1;
-  padding:0;
-  margin-left:6px;
-}
-
-.module-root[data-module-root="matching"] .sync-feedback-progress-close:hover,
-body > #sync-feedback-host-matching-view .sync-feedback-progress-close:hover{
-  color:var(--text);
-}
-
-.module-root[data-module-root="matching"] .sync-feedback-progress-detail,
-body > #sync-feedback-host-matching-view .sync-feedback-progress-detail{
-  margin-top:6px;
-  font-size:11px;
-  color:var(--muted);
-}
-
-.module-root[data-module-root="matching"] .sync-feedback-progress-bar,
-body > #sync-feedback-host-matching-view .sync-feedback-progress-bar{
-  position:relative;
-  margin-top:8px;
-  height:7px;
-  border-radius:999px;
-  overflow:hidden;
-  background:rgba(255,255,255,.08);
-  border:1px solid rgba(255,255,255,.06);
-}
-
-.module-root[data-module-root="matching"] .sync-feedback-progress-bar > i,
-body > #sync-feedback-host-matching-view .sync-feedback-progress-bar > i{
-  display:block;
-  height:100%;
-  width:0;
-  border-radius:inherit;
-  background:linear-gradient(90deg, color-mix(in srgb, var(--primary) 78%, #fff) 0%, color-mix(in srgb, var(--success) 60%, var(--primary)) 100%);
-  transition:width .2s ease;
-}
-
-.module-root[data-module-root="matching"] .sync-feedback-progress-bar.is-indeterminate > i,
-body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterminate > i{
-  width:38%;
-  animation:sync-feedback-progress-indeterminate 1.1s ease-in-out infinite;
-}
-
-@keyframes sync-feedback-progress-indeterminate{
-  0%{transform:translateX(-120%)}
-  100%{transform:translateX(320%)}
-}
-
-.module-root[data-module-root="matching"] #objectCvEditor{
-  background:rgba(8,13,20,.38);
-}
-
-.module-root[data-module-root="matching"] #objectCvEditor section{
-  min-width:0;
-}
-
-.module-root[data-module-root="matching"] #objectCvEditor [data-object-entry-kind]{
-  color:var(--text);
-}
-
-.module-root[data-module-root="matching"] #objectCvEditor label{
-  display:block;
-  min-width:0;
-}
-
-.module-root[data-module-root="matching"] #objectCvEditor label > .muted{
-  display:block;
-  margin-bottom:4px;
-  color:color-mix(in srgb, var(--muted) 82%, var(--text));
-  font-size:11px;
-  font-weight:650;
-  line-height:1.25;
-}
-
-.module-root[data-module-root="matching"] #objectCvEditor input[data-object-field],
-.module-root[data-module-root="matching"] #objectCvEditor textarea[data-object-field]{
-  width:100%;
-  min-width:0;
-  border-radius:8px;
-  background:#0f172a;
-  border-color:#263244;
-  color:var(--text);
-  box-shadow:none;
-}
-
-.module-root[data-module-root="matching"] #objectCvEditor input[data-object-field]{
-  height:36px;
-  padding:7px 10px;
-  font-size:13px;
-  line-height:1.2;
-}
-
-.module-root[data-module-root="matching"] #objectCvEditor textarea[data-object-field]{
-  min-height:126px;
-  max-height:280px;
-  overflow:auto;
-  resize:vertical;
-  padding:9px 10px;
-  font-size:13px;
-  line-height:1.4;
-}
-
-.module-root[data-module-root="matching"] #objectCvEditor textarea[data-object-field]::-webkit-scrollbar{
-  width:8px;
-}
-
-.module-root[data-module-root="matching"] #objectCvEditor textarea[data-object-field]::-webkit-scrollbar-thumb{
-  background:#2a3544;
-  border-radius:999px;
-}
-
-.module-root[data-module-root="matching"] #objectCvEditor .tag{
-  border-radius:8px;
-}
-
-@container business-app-window (max-width: 760px){
-  .module-root[data-module-root="matching"] #objectCvEditor textarea[data-object-field]{
-    min-height:148px;
+  .module-root[data-module-root="matching"] .jp,
+  .module-root[data-module-root="matching"] .object {
+    box-shadow: none;
   }
 }
 
-/* Business OS theme — the module palette derives from the shell tokens
-   (app.css/base.css own light/dark). Only matching-specific specials keep
-   literal values, with a dark override block below. Shell token names are
-   never redefined here (module conformance guard). */
-.module-root[data-module-root="matching"] {
-  --background: var(--bg);
-  --surface-muted: var(--surface-2);
-  --border: var(--line);
-  --radius-control: 6px;
-  --radius-card: 8px;
-  --module-accent: var(--accent);
-  --module-surface: var(--surface);
-  --km-ink: var(--text);
-  --km-muted: var(--muted);
-  --km-faint: #8a999f;
-  --km-line: var(--line);
-  --km-line-strong: #c8d4d9;
-  --km-green: #0f6e49;
-  --km-red: #a33b31;
-  --bg-app: var(--bg);
-  --surf-0: var(--surface-2);
-  --surf-1: var(--surface);
-  --surf-2: var(--surface-2);
-  --txt-1: var(--km-ink);
-  --txt-2: var(--km-muted);
-  --txt-dim: var(--km-faint);
-  --bd-hair: rgba(23, 33, 38, 0.12);
-  --bd-soft: rgba(23, 33, 38, 0.16);
-  --panel: var(--surface);
-  --primary: var(--accent);
-  --primary-2: #2e766e;
-  --badge: var(--surface-2);
-  --chip: var(--surface-2);
-  --overlay: rgba(23, 33, 38, 0.28);
-  --good: var(--km-green);
-  --none: var(--km-faint);
-  --sh-flat: 0 18px 50px rgba(23, 33, 38, 0.12);
-  --sh-subtle: 0 8px 22px rgba(23, 33, 38, 0.08);
+/* ---------------------------------------------------------------------------
+   custom: Match-Details Bottom-Bar — die Signatur-Detailansicht des Moduls
+   (Nachweise je Match in bis zu drei Spalten). Kein Kit-Muster.
+   -------------------------------------------------------------------------- */
+.module-root[data-module-root="matching"] .match-bar {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: 0;
+  z-index: 70;
+  transform: translateY(100%);
+  transition: transform 0.22s ease;
+  pointer-events: none;
 }
 
-:root[data-theme="dark"] .module-root[data-module-root="matching"] {
-  /* Dark-only specials; the shell tokens flip with the shell theme. */
-  --km-faint: #74848b;
-  --km-line-strong: #3b484e;
-  --km-green: #65c796;
-  --km-red: #e06b60;
-  --bd-hair: rgba(238, 244, 246, 0.08);
-  --bd-soft: rgba(238, 244, 246, 0.12);
-  --overlay: rgba(16, 20, 22, 0.68);
-  --sh-flat: 0 18px 50px rgba(0, 0, 0, 0.34);
-  --sh-subtle: 0 8px 24px rgba(0, 0, 0, 0.26);
+.module-root[data-module-root="matching"] .match-bar.open {
+  transform: translateY(0);
+  pointer-events: auto;
 }
 
-/* The shell always sets [data-theme]; no prefers-color-scheme fallback needed. */
-
-
-.module-root[data-module-root="matching"],
-.module-root[data-module-root="matching"] {
-  min-width: 0;
-  background: var(--bg-app);
-}
-
-.module-root[data-module-root="matching"] {
-  overflow: hidden;
-}
-
-.module-root[data-module-root="matching"] .business-os-view-controls {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  height: 52px;
-  align-items: center;
-  padding: 10px 12px 8px;
-  background: var(--bg-app);
-}
-
-.module-root[data-module-root="matching"] .control-group {
-  display: inline-flex;
-  overflow: hidden;
-  border: 1px solid var(--km-line-strong);
-  border-radius: var(--radius-control);
-  background: var(--surf-1);
-}
-
-.module-root[data-module-root="matching"] .control-group button {
-  min-width: 62px;
-  min-height: 34px;
-  border: 0;
-  border-right: 1px solid var(--km-line);
-  background: transparent !important;
-  color: var(--km-muted) !important;
-  padding: 0 10px;
-  font-size: 12px;
-  font-weight: 760;
-}
-
-.module-root[data-module-root="matching"] .control-group button:last-child {
-  border-right: 0;
-}
-
-.module-root[data-module-root="matching"] .control-group button[aria-pressed="true"] {
-  background: var(--surface-2) !important;
-  color: var(--text) !important;
-}
-
-.module-root[data-module-root="matching"] .app {
-  height: 100%;
-  min-width: min(900px, 100%);
-  background: var(--bg-app);
-}
-
-.module-root[data-module-root="matching"] .page {
-  min-height: 100%;
-}
-
-.module-root[data-module-root="matching"] .panel,
-.module-root[data-module-root="matching"] .ctox-modal-card,
-.module-root[data-module-root="matching"] .object,
-.module-root[data-module-root="matching"] .jp,
 .module-root[data-module-root="matching"] .match-bar-inner {
-  border-color: var(--km-line);
-  box-shadow: var(--sh-subtle);
-}
-
-.module-root[data-module-root="matching"] .panel,
-.module-root[data-module-root="matching"] .ctox-modal-card,
-.module-root[data-module-root="matching"] .object,
-.module-root[data-module-root="matching"] .jp,
-.module-root[data-module-root="matching"] .match-bar-inner,
-.module-root[data-module-root="matching"] .source,
-.module-root[data-module-root="matching"] .requirement,
-.module-root[data-module-root="matching"] .object,
-.module-root[data-module-root="matching"] .object,
-.module-root[data-module-root="matching"] .card,
-.module-root[data-module-root="matching"] .match-card {
+  margin: 0 auto;
+  max-width: min(1540px, calc(100vw - 24px));
+  max-height: min(380px, 46vh);
+  overflow: auto;
+  border-radius: var(--panel-radius) var(--panel-radius) 0 0;
+  border: 1px solid var(--hairline, var(--line));
+  border-bottom: none;
   background: var(--surface);
-  color: var(--text);
+  box-shadow: var(--panel-shadow);
+  padding: 12px 16px 16px;
 }
 
-.module-root[data-module-root="matching"] select:not([class*="ctox-"]),
-.module-root[data-module-root="matching"] input:not([class*="ctox-"]),
-.module-root[data-module-root="matching"] textarea:not([class*="ctox-"]),
-.module-root[data-module-root="matching"] .input-text,
-.module-root[data-module-root="matching"] .input-select,
-.module-root[data-module-root="matching"] .input-textarea {
-  background: var(--surface);
-  color: var(--text);
-  border-color: var(--border);
-  border-radius: var(--radius-control);
-  box-shadow: none;
+.module-root[data-module-root="matching"] .match-bar-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
 }
 
-.module-root[data-module-root="matching"] .source-tools input,
-.module-root[data-module-root="matching"] .toolbar input,
-.module-root[data-module-root="matching"] .toolbar select,
-.module-root[data-module-root="matching"] .object-tools input,
-.module-root[data-module-root="matching"] .object-tools select,
-.module-root[data-module-root="matching"] .object-import input,
-.module-root[data-module-root="matching"] .ctox-modal-card input,
-.module-root[data-module-root="matching"] .ctox-modal-card select,
-.module-root[data-module-root="matching"] .ctox-modal-card textarea,
-.module-root[data-module-root="matching"] .object input,
-.module-root[data-module-root="matching"] .object select,
-.module-root[data-module-root="matching"] .object textarea,
-.module-root[data-module-root="matching"] .jp input,
-.module-root[data-module-root="matching"] .jp select,
-.module-root[data-module-root="matching"] .jp textarea {
-  background: var(--surface) !important;
-  color: var(--text) !important;
-  border-color: var(--border) !important;
-  box-shadow: none !important;
+.module-root[data-module-root="matching"] .match-bar-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
-.module-root[data-module-root="matching"] .source-tools input::placeholder,
-.module-root[data-module-root="matching"] .toolbar input::placeholder,
-.module-root[data-module-root="matching"] .object-tools input::placeholder,
-.module-root[data-module-root="matching"] .ctox-modal-card textarea::placeholder {
-  color: var(--muted) !important;
-}
-
-.module-root[data-module-root="matching"] .tab,
-.module-root[data-module-root="matching"] .hdr-link,
-.module-root[data-module-root="matching"] .icon-btn,
-.module-root[data-module-root="matching"] button:not([class*="ctox-"]) {
-  border-radius: var(--radius-control);
-}
-
-.module-root[data-module-root="matching"] a,
-.module-root[data-module-root="matching"] .hdr-link,
-.module-root[data-module-root="matching"] .tab.active,
-.module-root[data-module-root="matching"] .score,
-.module-root[data-module-root="matching"] .score-badge {
-  color: var(--accent);
-}
-
-.module-root[data-module-root="matching"] button:not([class*="ctox-"]),
-.module-root[data-module-root="matching"] .icon-btn,
-.module-root[data-module-root="matching"] .tab,
-.module-root[data-module-root="matching"] .hdr-link {
-  border-color: var(--km-line-strong);
-}
-
-.module-root[data-module-root="matching"],
-.module-root[data-module-root="matching"] .muted,
-.module-root[data-module-root="matching"] .meta,
-.module-root[data-module-root="matching"] .sub,
-.module-root[data-module-root="matching"] .hint {
+.module-root[data-module-root="matching"] .match-bar-label {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
   color: var(--muted);
 }
 
-.module-root[data-module-root="matching"] h1,
-.module-root[data-module-root="matching"] h2,
-.module-root[data-module-root="matching"] h3,
-.module-root[data-module-root="matching"] strong,
-.module-root[data-module-root="matching"] .title {
-  color: var(--text);
-}
-
-.module-root[data-module-root="matching"] .column-head {
+.module-root[data-module-root="matching"] .match-bar-main {
+  font-size: 15px;
+  font-weight: 600;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 46px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
-}
-
-.module-root[data-module-root="matching"] .column-title {
+  gap: 6px;
   min-width: 0;
-  overflow: hidden;
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 820;
-  letter-spacing: 0.055em;
-  line-height: 1;
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
+  flex-wrap: wrap;
 }
 
-.module-root[data-module-root="matching"] .column-actions {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  flex-shrink: 0;
+.module-root[data-module-root="matching"] .dot-sep {
+  color: var(--muted);
+  font-size: 10px;
 }
 
-.module-root[data-module-root="matching"] .column-icon,
-.module-root[data-module-root="matching"] .column-action {
-  display: inline-grid;
+.module-root[data-module-root="matching"] .match-bar-score {
+  margin-left: auto;
+  min-width: 64px;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline, var(--line));
+  display: grid;
   place-items: center;
-  min-height: 28px;
-  border: 1px solid var(--line) !important;
-  border-radius: var(--radius-control);
-  background: var(--surface-2) !important;
-  color: var(--muted) !important;
-  box-shadow: none !important;
-  font-size: 11px;
-  font-weight: 760;
-  line-height: 1;
+  font-size: 17px;
+  font-weight: 800;
+  background: var(--surface-2);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
 }
 
-.module-root[data-module-root="matching"] .column-icon {
-  width: 28px;
+.module-root[data-module-root="matching"] .match-bar-tags {
+  display: block;
+  overflow: visible;
   padding: 0;
 }
 
-.module-root[data-module-root="matching"] .column-icon svg {
-  width: 14px;
-  height: 14px;
-}
-
-.module-root[data-module-root="matching"] .column-action {
-  padding: 0 8px;
-  white-space: nowrap;
-}
-
-.module-root[data-module-root="matching"] .column-icon:hover,
-.module-root[data-module-root="matching"] .column-action:hover {
-  color: var(--accent) !important;
-  border-color: var(--accent) !important;
-}
-
-.module-root[data-module-root="matching"] .column-tools,
-.module-root[data-module-root="matching"] .source-tools,
-.module-root[data-module-root="matching"] .toolbar,
-.module-root[data-module-root="matching"] .object-tools {
-  display: grid !important;
-  grid-template-columns: minmax(0, 1fr) minmax(132px, 0.64fr);
-  gap: 8px;
-  align-items: center;
-  min-height: 48px;
-  padding: 8px 12px !important;
-  border-bottom: 1px solid var(--line) !important;
-  background: var(--surface);
-}
-
-.module-root[data-module-root="matching"] .column-tools input,
-.module-root[data-module-root="matching"] .column-tools select,
-.module-root[data-module-root="matching"] .source-tools input,
-.module-root[data-module-root="matching"] .source-tools select,
-.module-root[data-module-root="matching"] .toolbar input,
-.module-root[data-module-root="matching"] .toolbar select,
-.module-root[data-module-root="matching"] .object-tools input,
-.module-root[data-module-root="matching"] .object-tools select {
+.module-root[data-module-root="matching"] .match-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
   width: 100%;
-  height: 32px !important;
-  min-width: 0;
-  border: 1px solid var(--line) !important;
-  border-radius: var(--radius-control) !important;
-  background: var(--surface) !important;
-  color: var(--text) !important;
-  padding: 0 9px !important;
-  font-size: 12px !important;
-  box-shadow: none !important;
 }
 
-.module-root[data-module-root="matching"] .column-sort {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 28px;
-  gap: 6px;
-  align-items: center;
-  min-width: 0;
-}
+.module-root[data-module-root="matching"] .match-col { min-width: 0; }
 
-.module-root[data-module-root="matching"] .column-sort .column-icon {
-  width: 28px;
-  height: 32px;
-  min-height: 32px;
-}
-
-.module-root[data-module-root="matching"] .column-tools input::placeholder,
-.module-root[data-module-root="matching"] .source-tools input::placeholder,
-.module-root[data-module-root="matching"] .toolbar input::placeholder,
-.module-root[data-module-root="matching"] .object-tools input::placeholder {
-  color: var(--muted) !important;
-  opacity: 1;
-}
-
-.module-root[data-module-root="matching"] .toolbar .space,
-.module-root[data-module-root="matching"] .toolbar #sourceName {
-  display: none;
-}
-
-.module-root[data-module-root="matching"] .tabs {
-  gap: 5px !important;
-  margin-left: 0 !important;
-}
-
-.module-root[data-module-root="matching"] .tab,
-.module-root[data-module-root="matching"] .tabs .tab {
-  height: 28px !important;
-  min-height: 28px !important;
-  padding: 0 8px !important;
-  border-radius: var(--radius-control) !important;
-  font-size: 11px !important;
-  font-weight: 760 !important;
-}
-
-.module-root[data-module-root="matching"] .sources,
-.module-root[data-module-root="matching"] .requirement-list,
-.module-root[data-module-root="matching"] .object-list {
-  padding: 10px !important;
-}
-
-.module-root[data-module-root="matching"] .import-status-host {
-  display: grid;
-  gap: 8px;
-  padding: 10px 12px 0;
-}
-
-.module-root[data-module-root="matching"] .import-status-host[hidden] {
-  display: none;
-}
-
-.module-root[data-module-root="matching"] .import-status-card {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-  background: var(--surface-2);
+.module-root[data-module-root="matching"] .match-col header {
+  margin: 0 0 8px;
   color: var(--text);
-  cursor: pointer;
-  padding: 9px 10px;
-}
-
-.module-root[data-module-root="matching"] .import-status-card:hover,
-.module-root[data-module-root="matching"] .import-status-card:focus-visible {
-  border-color: var(--accent);
-  outline: none;
-}
-
-.module-root[data-module-root="matching"] .import-status-topline,
-.module-root[data-module-root="matching"] .import-status-meta {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.module-root[data-module-root="matching"] .import-status-topline {
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.module-root[data-module-root="matching"] .import-status-topline strong {
-  min-width: 0;
-  overflow: hidden;
   font-size: 12px;
-  font-weight: 820;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.module-root[data-module-root="matching"] .import-status-pill {
-  flex: 0 0 auto;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 820;
-  line-height: 1;
-  padding: 4px 7px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
-.module-root[data-module-root="matching"] .import-status-queued {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.module-root[data-module-root="matching"] .import-status-running {
-  border-color: #d5a93a;
-  color: #d5a93a;
-}
-
-.module-root[data-module-root="matching"] .import-status-completed {
-  border-color: #56a978;
-  color: #56a978;
-}
-
-.module-root[data-module-root="matching"] .import-status-failed {
-  border-color: #b94b4b;
-  color: #d15b5b;
-}
-
-.module-root[data-module-root="matching"] .import-status-source,
-.module-root[data-module-root="matching"] .import-status-summary,
-.module-root[data-module-root="matching"] .import-status-meta,
-.module-root[data-module-root="matching"] .import-status-error {
-  min-width: 0;
-  overflow: hidden;
-  font-size: 11px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-}
-
-.module-root[data-module-root="matching"] .import-status-source {
-  color: var(--text);
-  white-space: nowrap;
-}
-
-.module-root[data-module-root="matching"] .import-status-summary {
-  color: var(--muted);
-}
-
-.module-root[data-module-root="matching"] .import-status-meta {
+.module-root[data-module-root="matching"] .match-col-list {
+  display: grid;
   gap: 8px;
+}
+
+.module-root[data-module-root="matching"] .match-bar-content { display: none; }
+
+/* custom: klickbare Kriterien-Pills in der Match-Bar — farbcodiert pro
+   Match-Kriterium (--matchColor wird per JS gesetzt). */
+.module-root[data-module-root="matching"] .match-pill {
+  --matchColor: var(--accent);
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline, var(--line));
+  background: var(--surface-2);
   color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
   white-space: nowrap;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
-.module-root[data-module-root="matching"] .import-status-meta span {
-  min-width: 0;
+.module-root[data-module-root="matching"] .match-pill.match-pill-row {
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 8px 12px;
+  justify-content: space-between;
+  gap: 10px;
+  white-space: normal;
+  text-align: left;
+}
+
+.module-root[data-module-root="matching"] .match-pill.match-pill-row .match-pill-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
+  color: var(--muted);
+  line-height: 1.25;
 }
 
-.module-root[data-module-root="matching"] .import-status-error {
-  color: #d15b5b;
+.module-root[data-module-root="matching"] .match-pill.match-pill-row .match-pill-score {
+  color: var(--text);
+  font-weight: 700;
 }
 
-:root[data-theme="dark"] .module-root[data-module-root="matching"] .column-head,
-:root[data-theme="dark"] .module-root[data-module-root="matching"] .column-tools,
-:root[data-theme="dark"] .module-root[data-module-root="matching"] .source-tools,
-:root[data-theme="dark"] .module-root[data-module-root="matching"] .toolbar,
-:root[data-theme="dark"] .module-root[data-module-root="matching"] .object-tools {
+.module-root[data-module-root="matching"] .match-pill-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--matchColor);
+}
+
+.module-root[data-module-root="matching"] .match-pill.is-active {
+  background: color-mix(in srgb, var(--matchColor) 18%, var(--surface-2));
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--matchColor) 60%, var(--hairline, var(--line)));
+}
+
+@container business-app-window (max-width: 900px) {
+  .module-root[data-module-root="matching"] .match-bar {
+    left: 8px;
+    right: 8px;
+  }
+
+  .module-root[data-module-root="matching"] .match-bar-inner {
+    max-width: calc(100vw - 16px);
+    max-height: 58vh;
+    padding: 10px 12px 14px;
+  }
+
+  .module-root[data-module-root="matching"] .match-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* custom: Nachweis-Karten (Match-Items mit Snippets aus Anforderung/Objekt). */
+.module-root[data-module-root="matching"] .match-item-card {
+  padding: 8px 9px;
+  font-size: 12px;
+}
+
+.module-root[data-module-root="matching"] .match-item-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.module-root[data-module-root="matching"] .match-item-badge {
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  background: var(--matchColor, var(--accent));
+  flex-shrink: 0;
+}
+
+.module-root[data-module-root="matching"] .match-item-title {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.module-root[data-module-root="matching"] .match-item-meta {
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.module-root[data-module-root="matching"] .match-item-expl {
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+.module-root[data-module-root="matching"] .match-item-snips {
+  margin-top: 6px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.module-root[data-module-root="matching"] .match-snippet-block {
+  border-radius: var(--control-radius);
+  border: 1px solid var(--hairline, var(--line));
   background: var(--surface);
-  border-color: var(--line) !important;
+  padding: 4px 6px;
+  font-size: 11px;
 }
 
-:root[data-theme="dark"] .module-root[data-module-root="matching"] .column-icon,
-:root[data-theme="dark"] .module-root[data-module-root="matching"] .column-action {
-  background: var(--surface-2) !important;
-  color: var(--muted) !important;
-  border-color: var(--line) !important;
+.module-root[data-module-root="matching"] .match-snippet-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 2px;
 }
 
+/* custom: Text-Highlighting der Match-Begriffe in Anforderung & Objekt. */
+.module-root[data-module-root="matching"] .match-highlight {
+  background: color-mix(in srgb, var(--matchColor, var(--accent)) 14%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--matchColor, var(--accent)) 26%, transparent);
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+.module-root[data-module-root="matching"] .match-highlight.is-active {
+  background: color-mix(in srgb, var(--matchColor, var(--accent)) 45%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--matchColor, var(--accent)) 70%, transparent);
+}
+
+/* ---------------------------------------------------------------------------
+   custom: Spalten-Konfigurations-Drawer (Konfigurieren/Import/Export/Suche)
+   — eine matching-eigene Einstellungs-Ansicht, kein Kit-Panel.
+   -------------------------------------------------------------------------- */
 .module-root[data-module-root="matching"] .column-drawer-backdrop {
   position: fixed;
   inset: 0;
   z-index: 1150;
-  background: rgba(16, 20, 22, 0.22);
-}
-
-:root[data-theme="dark"] .module-root[data-module-root="matching"] .column-drawer-backdrop {
-  background: rgba(0, 0, 0, 0.52);
+  background: color-mix(in srgb, var(--text) 22%, transparent);
 }
 
 .module-root[data-module-root="matching"] .column-drawer {
@@ -3009,10 +1228,10 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   display: flex;
   flex-direction: column;
   min-width: 0;
-  border: 1px solid var(--line);
+  border: 1px solid var(--hairline, var(--line));
   background: var(--surface);
   color: var(--text);
-  box-shadow: var(--sh-flat);
+  box-shadow: var(--panel-shadow);
   transition: transform 180ms ease, opacity 180ms ease;
 }
 
@@ -3033,7 +1252,7 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 .module-root[data-module-root="matching"] .column-drawer-bottom {
   inset: auto 12px 12px 12px;
   max-height: min(360px, 74vh);
-  border-radius: var(--radius-card);
+  border-radius: var(--panel-radius);
   transform: translateY(calc(100% + 18px));
 }
 
@@ -3048,7 +1267,7 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   gap: 10px;
   min-height: 48px;
   padding: 10px 12px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--hairline, var(--line));
 }
 
 .module-root[data-module-root="matching"] .column-drawer-header strong {
@@ -3082,65 +1301,9 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   gap: 10px;
 }
 
-.module-root[data-module-root="matching"] .drawer-field input,
-.module-root[data-module-root="matching"] .drawer-field select,
-.module-root[data-module-root="matching"] .drawer-field textarea {
-  width: 100%;
-  min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-  background: var(--surface-2);
-  color: var(--text);
-  padding: 8px 9px;
-  font-size: 12px;
-  font-weight: 500;
-  box-shadow: none;
-}
-
-.module-root[data-module-root="matching"] .drawer-field textarea {
-  resize: vertical;
-  line-height: 1.45;
-}
-
-.module-root[data-module-root="matching"] .import-source-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.module-root[data-module-root="matching"] .import-source-button {
-  min-width: 0;
-  min-height: 32px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-  background: var(--surface-2);
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 780;
-  line-height: 1;
-  padding: 0 8px;
-  text-align: center;
-}
-
-.module-root[data-module-root="matching"] .import-source-button.is-active {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
-.module-root[data-module-root="matching"] .import-panel {
-  display: grid;
-  gap: 12px;
-  min-width: 0;
-}
-
-.module-root[data-module-root="matching"] .import-panel[hidden] {
-  display: none;
-}
-
 .module-root[data-module-root="matching"] .drawer-field .drawer-code {
   min-height: 180px;
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.5;
   white-space: pre;
@@ -3150,443 +1313,301 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   min-height: 120px;
 }
 
-.module-root[data-module-root="matching"] .drawer-primary {
-  min-height: 32px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-  background: var(--surface-2);
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 780;
-  padding: 0 10px;
-}
-
-.module-root[data-module-root="matching"] .ctox-context-menu {
-  position: fixed;
-  z-index: 2000;
-  min-width: 440px;
-  max-width: min(620px, calc(100vw - 16px));
-  border: 1px solid var(--line);
-  border-radius: var(--panel-radius);
-  background: var(--surface);
-  box-shadow: var(--panel-shadow);
-  padding: 6px;
-}
-
-.module-root[data-module-root="matching"] .matching-context-chat {
+.module-root[data-module-root="matching"] .import-panel {
   display: grid;
   gap: 12px;
-  padding: 12px;
-}
-
-.module-root[data-module-root="matching"] .matching-context-chat header,
-.module-root[data-module-root="matching"] .matching-context-chat footer {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.module-root[data-module-root="matching"] .matching-context-chat header div {
-  display: grid;
-  gap: 2px;
   min-width: 0;
 }
 
-.module-root[data-module-root="matching"] .matching-context-chat strong {
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 820;
-}
+.module-root[data-module-root="matching"] .import-panel[hidden] { display: none; }
 
-.module-root[data-module-root="matching"] .matching-context-chat span {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.module-root[data-module-root="matching"] .matching-context-mode {
+/* custom: Importtyp-Auswahl im Universal-Importer (shared/universal-importer.js
+   liefert nur das Markup, die Optik war schon immer modul-seitig). */
+.module-root[data-module-root="matching"] .import-source-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
 }
 
-.module-root[data-module-root="matching"] .matching-context-mode label,
-.module-root[data-module-root="matching"] .matching-context-chat button {
-  min-height: 34px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
+.module-root[data-module-root="matching"] .import-source-button {
+  min-width: 0;
+  min-height: 32px;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--control-radius);
   background: var(--surface-2);
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 760;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 780;
+  line-height: 1;
+  padding: 0 8px;
+  text-align: center;
+  cursor: pointer;
 }
 
-.module-root[data-module-root="matching"] .matching-context-mode label {
+.module-root[data-module-root="matching"] .import-source-button.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* custom: Import-Fortschrittskarten (CTOX-Task-Status pro Import). */
+.module-root[data-module-root="matching"] .import-status-host {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px 0;
+}
+
+.module-root[data-module-root="matching"] .import-status-host[hidden] { display: none; }
+
+.module-root[data-module-root="matching"] .import-status-card {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text);
+  cursor: pointer;
+  padding: 9px 10px;
+}
+
+.module-root[data-module-root="matching"] .import-status-card:hover,
+.module-root[data-module-root="matching"] .import-status-card:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.module-root[data-module-root="matching"] .import-status-topline,
+.module-root[data-module-root="matching"] .import-status-meta {
   display: flex;
   align-items: center;
+  min-width: 0;
+}
+
+.module-root[data-module-root="matching"] .import-status-topline {
+  justify-content: space-between;
   gap: 8px;
-  padding: 0 10px;
 }
 
-.module-root[data-module-root="matching"] .matching-context-chat textarea {
-  min-height: 120px;
-  resize: vertical;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-  background: var(--surface-2);
-  color: var(--text);
-  font: inherit;
-  padding: 10px;
-}
-
-.module-root[data-module-root="matching"] .matching-context-chat footer > span {
-  flex: 1;
-}
-
-.module-root[data-module-root="matching"] .matching-context-chat button {
-  padding: 0 12px;
-}
-
-.module-root[data-module-root="matching"] .matching-context-chat button[type="submit"] {
-  width: 100%;
-  background: color-mix(in srgb, var(--accent) 18%, var(--surface-2));
-  color: var(--text);
-}
-
-.module-root[data-module-root="matching"] .ctox-context-menu > button {
-  display: block;
-  width: 100%;
-  min-height: 30px;
-  border: 0;
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: var(--text);
+.module-root[data-module-root="matching"] .import-status-topline strong {
+  min-width: 0;
+  overflow: hidden;
   font-size: 12px;
-  font-weight: 650;
-  padding: 0 8px;
-  text-align: left;
-}
-
-.module-root[data-module-root="matching"] .ctox-context-menu > button:first-child {
-  color: var(--accent);
   font-weight: 820;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.module-root[data-module-root="matching"] .ctox-context-menu button:hover {
-  background: var(--surface-2);
+.module-root[data-module-root="matching"] .import-status-source,
+.module-root[data-module-root="matching"] .import-status-summary,
+.module-root[data-module-root="matching"] .import-status-meta,
+.module-root[data-module-root="matching"] .import-status-error {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
 }
 
-/* ==========================================================================
-   CTOX Business OS Modernization overrides for Matching module
-   ========================================================================== */
-
-/* Cohesive scrollbars on panel-main and overflow panels */
-.module-root[data-module-root="matching"] .panel-main,
-.module-root[data-module-root="matching"] .chat-log,
-.module-root[data-module-root="matching"] .detail-scroll,
-.module-root[data-module-root="matching"] .scroller-x,
-.module-root[data-module-root="matching"] .scroller-y {
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--line) 40%, transparent) transparent;
+.module-root[data-module-root="matching"] .import-status-source {
+  color: var(--text);
+  white-space: nowrap;
 }
 
-.module-root[data-module-root="matching"] .panel-main::-webkit-scrollbar,
-.module-root[data-module-root="matching"] .chat-log::-webkit-scrollbar,
-.module-root[data-module-root="matching"] .detail-scroll::-webkit-scrollbar,
-.module-root[data-module-root="matching"] .scroller-x::-webkit-scrollbar,
-.module-root[data-module-root="matching"] .scroller-y::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+.module-root[data-module-root="matching"] .import-status-summary { color: var(--muted); }
+
+.module-root[data-module-root="matching"] .import-status-meta {
+  gap: 8px;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
-.module-root[data-module-root="matching"] .panel-main::-webkit-scrollbar-thumb,
-.module-root[data-module-root="matching"] .chat-log::-webkit-scrollbar-thumb,
-.module-root[data-module-root="matching"] .detail-scroll::-webkit-scrollbar-thumb,
-.module-root[data-module-root="matching"] .scroller-x::-webkit-scrollbar-thumb,
-.module-root[data-module-root="matching"] .scroller-y::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--line) 40%, transparent);
-  border-radius: 99px;
-  transition: background-color 0.25s ease;
+.module-root[data-module-root="matching"] .import-status-meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.module-root[data-module-root="matching"] .panel-main::-webkit-scrollbar-thumb:hover,
-.module-root[data-module-root="matching"] .chat-log::-webkit-scrollbar-thumb:hover,
-.module-root[data-module-root="matching"] .detail-scroll::-webkit-scrollbar-thumb:hover,
-.module-root[data-module-root="matching"] .scroller-x::-webkit-scrollbar-thumb:hover,
-.module-root[data-module-root="matching"] .scroller-y::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--line) 75%, transparent);
+.module-root[data-module-root="matching"] .import-status-error { color: var(--danger); }
+
+/* ---------------------------------------------------------------------------
+   custom: Sync-Feedback-Toasts des Moduls (unten rechts, unter der
+   Shell-Fensterebene z:50 gehalten, damit Resize-Handles erreichbar bleiben).
+   -------------------------------------------------------------------------- */
+.module-root[data-module-root="matching"] .sync-feedback-host,
+body > #sync-feedback-host-matching-view.sync-feedback-host {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+  max-width: min(380px, 92vw);
 }
 
-/* Operational Instrument contract: no spring lifts or card shadows. */
-.module-root[data-module-root="matching"] .btn,
-.module-root[data-module-root="matching"] .btn-pill {
-  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease !important;
-  transform: none !important;
-  box-shadow: none !important;
-}
-
-.module-root[data-module-root="matching"] .btn:hover,
-.module-root[data-module-root="matching"] .btn-pill:hover {
-  transform: none !important;
-  border-color: color-mix(in srgb, var(--bd-soft) 80%, var(--accent)) !important;
-}
-
-.module-root[data-module-root="matching"] .btn-primary:hover {
-  box-shadow: none !important;
-}
-
-.module-root[data-module-root="matching"] .btn:active,
-.module-root[data-module-root="matching"] .btn-pill:active {
-  transform: none !important;
-}
-
-/* Modern inputs focus behaviors (kit inputs keep base.css focus styling) */
-.module-root[data-module-root="matching"] select:not([class*="ctox-"]),
-.module-root[data-module-root="matching"] input:not([class*="ctox-"]),
-.module-root[data-module-root="matching"] textarea:not([class*="ctox-"]),
-.module-root[data-module-root="matching"] .input-text,
-.module-root[data-module-root="matching"] .input-select,
-.module-root[data-module-root="matching"] .input-textarea {
-  transition: border-color 0.2s var(--spring-ease),
-              background-color 0.2s var(--spring-ease) !important;
-}
-
-.module-root[data-module-root="matching"] :where(select, input, textarea, .input-text, .input-select, .input-textarea):not([class*="ctox-"]):focus-visible {
-  border-color: var(--accent) !important;
-  box-shadow: none !important;
-  transform: none;
-}
-
-/* Flat workbench cards. */
-.module-root[data-module-root="matching"] .match-item-card,
-.module-root[data-module-root="matching"] .source-card,
-.module-root[data-module-root="matching"] .object-card,
-.module-root[data-module-root="matching"] .import-status-card {
-  transition: background-color 0.12s ease, border-color 0.12s ease;
-  box-shadow: none !important;
-}
-
-.module-root[data-module-root="matching"] .match-item-card:hover,
-.module-root[data-module-root="matching"] .source-card:hover,
-.module-root[data-module-root="matching"] .object-card:hover,
-.module-root[data-module-root="matching"] .import-status-card:hover {
-  transform: none !important;
-  border-color: color-mix(in srgb, var(--bd-soft) 80%, var(--accent)) !important;
-  box-shadow: none !important;
-}
-
-.module-root[data-module-root="matching"] .match-item-card:active,
-.module-root[data-module-root="matching"] .source-card:active,
-.module-root[data-module-root="matching"] .object-card:active,
-.module-root[data-module-root="matching"] .import-status-card:active {
-  transform: none !important;
-}
-
-.module-root[data-module-root="matching"] .match-item-card.is-active,
-.module-root[data-module-root="matching"] .object-card.is-active {
-  border-color: var(--accent) !important;
-  box-shadow: none !important;
-}
-
-/* PIPELINE-1 candidate Kanban board (candidateBoard.js) */
-.candidate-board { display: flex; gap: 10px; overflow-x: auto; padding: 8px 0; align-items: flex-start; }
-.candidate-board .cb-col { min-width: 150px; flex: 0 0 150px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: 10px; background: color-mix(in srgb, currentColor 3%, transparent); }
-.candidate-board .cb-col.cb-terminal { opacity: 0.85; }
-.candidate-board .cb-col-head { font-size: 12px; font-weight: 600; padding: 8px 10px; border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent); display: flex; justify-content: space-between; }
-.candidate-board .cb-count { opacity: 0.6; }
-.candidate-board .cb-col-body { min-height: 40px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
-.candidate-board .cb-card { padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, currentColor 8%, transparent); font-size: 13px; cursor: grab; }
-.candidate-board .cb-card:active { cursor: grabbing; }
-
-/* ==========================================================================
-   Revision 30 compact OS layer
-
-   Matching still owns a complex domain UI, but its visual primitives now map
-   back to the Business OS shell: flat panes, compact controls, no decorative
-   gradients, and no hover motion. Signature matching/CTOX execution controls
-   may use accent, routine filters and cards stay quiet.
-   ========================================================================== */
-.module-root[data-module-root="matching"] {
-  color-scheme: light dark;
-  --bg-app: var(--surface);
-  --surf-0: var(--surface);
-  --surf-1: var(--surface-2);
-  --surf-2: var(--surface);
-  --txt-1: var(--text);
-  --txt-2: var(--muted);
-  --txt-dim: color-mix(in srgb, var(--muted) 72%, transparent);
-  --bd-hair: var(--line);
-  --bd-soft: var(--line);
-  --sh-flat: none;
-  --sh-subtle: none;
-  --inset-strong: none;
-  --r-10: var(--control-radius);
-  --r-14: var(--surface-radius);
-  --r-16: var(--surface-radius);
-  --pill: var(--control-radius);
-  --space-3: 8px;
-  --space-4: 12px;
-  --header-h: 44px;
+.module-root[data-module-root="matching"] .sync-feedback,
+body > #sync-feedback-host-matching-view .sync-feedback {
+  border-radius: var(--control-radius);
+  border: 1px solid var(--hairline, var(--line));
   background: var(--surface);
+  color: var(--text);
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.35;
+  box-shadow: var(--panel-shadow);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.module-root[data-module-root="matching"] .sync-feedback.is-visible,
+body > #sync-feedback-host-matching-view .sync-feedback.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.module-root[data-module-root="matching"] .sync-feedback-success,
+body > #sync-feedback-host-matching-view .sync-feedback-success {
+  border-color: color-mix(in srgb, var(--success) 60%, var(--hairline, var(--line)));
+}
+
+.module-root[data-module-root="matching"] .sync-feedback-info,
+body > #sync-feedback-host-matching-view .sync-feedback-info {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--hairline, var(--line)));
+}
+
+.module-root[data-module-root="matching"] .sync-feedback-warn,
+body > #sync-feedback-host-matching-view .sync-feedback-warn {
+  border-color: color-mix(in srgb, var(--warning) 60%, var(--hairline, var(--line)));
+}
+
+.module-root[data-module-root="matching"] .sync-feedback-error,
+body > #sync-feedback-host-matching-view .sync-feedback-error {
+  border-color: color-mix(in srgb, var(--danger) 65%, var(--hairline, var(--line)));
+}
+
+.module-root[data-module-root="matching"] .sync-feedback-progress,
+body > #sync-feedback-host-matching-view .sync-feedback-progress {
+  min-width: min(360px, 92vw);
+  pointer-events: auto;
+}
+
+.module-root[data-module-root="matching"] .sync-feedback-progress-head,
+body > #sync-feedback-host-matching-view .sync-feedback-progress-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.module-root[data-module-root="matching"] .sync-feedback-progress-title,
+body > #sync-feedback-host-matching-view .sync-feedback-progress-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.module-root[data-module-root="matching"] .sync-feedback-progress-meta,
+body > #sync-feedback-host-matching-view .sync-feedback-progress-meta {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.module-root[data-module-root="matching"] .sync-feedback-progress-close,
+body > #sync-feedback-host-matching-view .sync-feedback-progress-close {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0;
+  margin-left: 6px;
+}
+
+.module-root[data-module-root="matching"] .sync-feedback-progress-close:hover,
+body > #sync-feedback-host-matching-view .sync-feedback-progress-close:hover {
   color: var(--text);
 }
 
-.module-root[data-module-root="matching"] > .app {
-  padding: 8px;
-  background: var(--surface);
+.module-root[data-module-root="matching"] .sync-feedback-progress-detail,
+body > #sync-feedback-host-matching-view .sync-feedback-progress-detail {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
 }
 
-.module-root[data-module-root="matching"] .panel-header,
-.module-root[data-module-root="matching"] .panel-footer,
-.module-root[data-module-root="matching"] .gear-btn,
-.module-root[data-module-root="matching"] .settings-dropdown,
-.module-root[data-module-root="matching"] #execution-quickbar,
-.module-root[data-module-root="matching"] .settings-card,
-.module-root[data-module-root="matching"] .chat-card,
-.module-root[data-module-root="matching"] .docs-card,
-.module-root[data-module-root="matching"] .chat-card-header,
-.module-root[data-module-root="matching"] .chat-log,
-.module-root[data-module-root="matching"] select:not([class*="ctox-"]),
-.module-root[data-module-root="matching"] input:not([class*="ctox-"]),
-.module-root[data-module-root="matching"] textarea:not([class*="ctox-"]),
-.module-root[data-module-root="matching"] .input-text,
-.module-root[data-module-root="matching"] .input-select,
-.module-root[data-module-root="matching"] .input-textarea {
-  background: var(--surface) !important;
-  box-shadow: none !important;
+.module-root[data-module-root="matching"] .sync-feedback-progress-bar,
+body > #sync-feedback-host-matching-view .sync-feedback-progress-bar {
+  position: relative;
+  margin-top: 8px;
+  height: 7px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--kit-fill);
 }
 
-.module-root[data-module-root="matching"] .settings-card,
-.module-root[data-module-root="matching"] .chat-card,
-.module-root[data-module-root="matching"] .docs-card,
-.module-root[data-module-root="matching"] #execution-quickbar,
-.module-root[data-module-root="matching"] .settings-dropdown,
-.module-root[data-module-root="matching"] .chat-log {
-  border: 1px solid var(--line);
-  border-radius: var(--surface-radius);
+.module-root[data-module-root="matching"] .sync-feedback-progress-bar > i,
+body > #sync-feedback-host-matching-view .sync-feedback-progress-bar > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--success));
+  transition: width 0.2s ease;
 }
 
-.module-root[data-module-root="matching"] .panel-main {
-  gap: 8px;
-  padding: 8px;
+.module-root[data-module-root="matching"] .sync-feedback-progress-bar.is-indeterminate > i,
+body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterminate > i {
+  width: 38%;
+  animation: sync-feedback-progress-indeterminate 1.1s ease-in-out infinite;
 }
 
-.module-root[data-module-root="matching"] .panel-header,
-.module-root[data-module-root="matching"] .panel-footer,
-.module-root[data-module-root="matching"] .chat-card-header {
-  min-height: 36px;
+@keyframes sync-feedback-progress-indeterminate {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
 }
 
-.module-root[data-module-root="matching"] .footer-update-btn,
-.module-root[data-module-root="matching"] .gear-btn,
-.module-root[data-module-root="matching"] .btn,
-.module-root[data-module-root="matching"] .btn-pill,
-.candidate-board .cb-card {
-  border-radius: var(--control-radius) !important;
-  transform: none !important;
-  box-shadow: none !important;
+/* Deaktivierte Bulk-Auto-Matching-Einstiege (bewusst ausgeblendet). */
+.module-root[data-module-root="matching"] .requirement-bulk-add-btn,
+.module-root[data-module-root="matching"] [data-role="auto-requirements-10"],
+.module-root[data-module-root="matching"] [data-auto-add],
+.module-root[data-module-root="matching"] .requirement-bulk-add-group {
+  display: none !important;
 }
 
-.module-root[data-module-root="matching"] .footer-update-btn {
-  color: var(--accent);
-  background: var(--surface);
-  border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
+/* custom: klickbare Score-Zellen der Matrix-Tabelle (.score liefert die
+   Pillen-Optik; der Button selbst braucht noch Cursor/Vererbung). */
+.module-root[data-module-root="matching"] .matrix-score {
+  cursor: pointer;
+  font-family: inherit;
 }
 
-.module-root[data-module-root="matching"] .footer-update-btn:hover {
-  color: var(--accent);
-  background: var(--accent-soft);
+/* custom: Auf-/Zuklappen der Executive-Zeilen auf Objektkarten (unauffälliger
+   Text-Button unter der Karte). */
+.module-root[data-module-root="matching"] .exec-toggle {
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 0;
 }
 
-.module-root[data-module-root="matching"] .btn-primary,
-.module-root[data-module-root="matching"] .btn.ctox-run,
-.module-root[data-module-root="matching"] [data-run-matching],
-.module-root[data-module-root="matching"] [data-ctox-run] {
-  border-color: color-mix(in srgb, var(--accent) 70%, var(--line)) !important;
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface)) !important;
-  color: var(--accent) !important;
-  font-weight: 800;
-}
+.module-root[data-module-root="matching"] .exec-toggle:hover { color: var(--text); }
 
-.module-root[data-module-root="matching"] .match-item-card,
-.module-root[data-module-root="matching"] .source-card,
-.module-root[data-module-root="matching"] .object-card,
-.module-root[data-module-root="matching"] .import-status-card,
-.candidate-board .cb-col,
-.candidate-board .cb-card {
-  background: var(--surface) !important;
-  border-color: var(--line) !important;
-  box-shadow: none !important;
-}
+/* Kompaktes Einspalten-Layout übernimmt base.css (@container ≤760px blendet
+   die Resizer aus und stapelt die Panes). */
 
-@container business-app-window (max-width: 760px) {
-  .module-root[data-module-root="matching"] > .app {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) !important;
-    min-width: 0 !important;
-    overflow: auto;
-    padding: 4px;
-  }
-
-  .module-root[data-module-root="matching"] #left,
-  .module-root[data-module-root="matching"] #center,
-  .module-root[data-module-root="matching"] #right {
-    grid-column: 1 !important;
-    min-width: 0;
-    width: 100%;
-  }
-
-  .module-root[data-module-root="matching"] #left {
-    grid-row: 1;
-  }
-
-  .module-root[data-module-root="matching"] #center {
-    grid-row: 2;
-  }
-
-  .module-root[data-module-root="matching"] #right {
-    grid-row: 3;
-  }
-
-  .module-root[data-module-root="matching"] .col-resizer {
-    display: none !important;
-  }
-
-  .module-root[data-module-root="matching"] .panel-main {
-    padding: 6px;
-  }
-
-  .module-root[data-module-root="matching"] .panel-header {
-    align-items: stretch;
-    height: auto;
-    min-height: 44px;
-    flex-wrap: wrap;
-    padding: 6px;
-  }
-
-  .module-root[data-module-root="matching"] .panel-header-left,
-  .module-root[data-module-root="matching"] .panel-header-right {
-    width: 100%;
-  }
-
-  .module-root[data-module-root="matching"] .project-select {
-    max-width: none;
-    width: 100%;
-  }
-
-  .module-root[data-module-root="matching"] .column-tools,
-  .module-root[data-module-root="matching"] .source-tools,
-  .module-root[data-module-root="matching"] .toolbar,
-  .module-root[data-module-root="matching"] .object-tools {
-    grid-template-columns: minmax(0, 1fr) !important;
-  }
-
-  .module-root[data-module-root="matching"] .column-sort {
-    grid-template-columns: minmax(0, 1fr) 28px;
-  }
-
-  .module-root[data-module-root="matching"] .chat-log {
-    height: auto;
-    min-height: 180px;
+@media (prefers-reduced-motion: reduce) {
+  .module-root[data-module-root="matching"] .object,
+  .module-root[data-module-root="matching"] .jp,
+  .module-root[data-module-root="matching"] .match-bar,
+  .module-root[data-module-root="matching"] .column-drawer {
+    transition: none;
   }
 }

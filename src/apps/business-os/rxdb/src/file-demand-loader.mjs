@@ -37,7 +37,15 @@ export function createFileDemandLoader({
   );
 
   return {
-    async fetchFile(fileId, { range = null } = {}) {
+    // `materialize` (default true) keeps the legacy contract: the returned array
+    // carries every chunk's base64 inline, which inline consumers (the Business
+    // OS importer, which assembles a Blob) require. Callers that persist and then
+    // read back from storage can pass `materialize: false` (M6): chunks are
+    // written to storage and released as they arrive instead of accumulating the
+    // whole file in RAM; the returned array then carries only `{ sequence, hash }`
+    // metadata. `readPersistedChunk` lets such a caller pull bytes back per row.
+    async fetchFile(fileId, { range = null, materialize = true } = {}) {
+      const inlineReturn = materialize !== false;
       const inflightKey = fileInflightKey(fileId, range);
       if (inflight.has(inflightKey)) {
         bump(status, 'fileStreamDedupHits');
@@ -49,6 +57,14 @@ export function createFileDemandLoader({
         bump(status, 'activeFileStreams', 1);
         try {
           const presence = persistChunks ? await getPresence(sidecarBackend, collectionName, fileId) : null;
+          // M5: a listed presence sequence is only trustworthy if its chunk row
+          // is still on disk. Eviction can delete chunk rows (see below) while
+          // the presence blob still names them; reconcile so `knownSequences`
+          // never tells the peer to skip a sequence we no longer hold — otherwise
+          // the returned window would be missing chunks and the file read fails.
+          const knownSequences = persistChunks
+            ? await reconcilePresentSequences(sidecarBackend, collectionName, fileId, presence?.presentSequences || [])
+            : [];
           const validChunks = [];
           const consumedSequences = new Set();
           let returnedBytes = 0;
@@ -57,21 +73,8 @@ export function createFileDemandLoader({
             const sequence = Number(chunk.sequence);
             if (!Number.isFinite(sequence) || consumedSequences.has(sequence)) return;
             const bytesBase64 = String(chunk.bytesBase64 || '');
-            const decodedBytes = Math.floor(bytesBase64.length * 3 / 4);
-            returnedBytes += decodedBytes;
-            if (returnedBytes > returnBudgetBytes) {
-              const error = new Error(`FILE_RETURN_BUDGET_EXCEEDED: ${returnedBytes} > ${returnBudgetBytes}; request a byte range`);
-              error.code = 'FILE_RETURN_BUDGET_EXCEEDED';
-              error.retryable = false;
-              throw error;
-            }
+            const hash = chunk.hash || null;
             consumedSequences.add(sequence);
-            const normalized = {
-              sequence,
-              bytesBase64,
-              hash: chunk.hash || null,
-            };
-            validChunks.push(normalized);
             bump(status, 'fileBytesReceived', bytesBase64.length);
             if (persistChunks) {
               await storageCollection.bulkWrite([{
@@ -79,8 +82,38 @@ export function createFileDemandLoader({
                 file_id: fileId,
                 sequence,
                 bytes_base64: bytesBase64,
-                hash: normalized.hash,
+                hash,
               }], { replicationOrigin: resolveReplicationOrigin() });
+              // M5: register the persisted chunk row in the sidecar with its real
+              // base64 weight so the demand LRU budget both counts these bytes and
+              // can evict the row (evictDocuments/runEvictionIfOverBudget delete the
+              // primary row via primaryDelete, then this access entry). Without it
+              // the budget saw 0 bytes/file and rotated chunks lived forever.
+              await sidecarBackend.putDocumentAccess({
+                collection: collectionName,
+                id: `${fileId}-${sequence}`,
+                lastAccessedAt: clock(),
+                pinReason: 'file-chunk',
+                dirty: false,
+                estimatedBytes: bytesBase64.length,
+              });
+            }
+            if (inlineReturn) {
+              // Inline path: accumulate the whole window for the caller. Guard the
+              // aggregate RAM with the return budget (request a byte range instead).
+              const decodedBytes = Math.floor(bytesBase64.length * 3 / 4);
+              returnedBytes += decodedBytes;
+              if (returnedBytes > returnBudgetBytes) {
+                const error = new Error(`FILE_RETURN_BUDGET_EXCEEDED: ${returnedBytes} > ${returnBudgetBytes}; request a byte range`);
+                error.code = 'FILE_RETURN_BUDGET_EXCEEDED';
+                error.retryable = false;
+                throw error;
+              }
+              validChunks.push({ sequence, bytesBase64, hash });
+            } else {
+              // M6 release-after-persist: keep only lightweight metadata; the
+              // base64 is durable in storage and is dropped from RAM here.
+              validChunks.push({ sequence, hash });
             }
           };
           const chunks = await requestFileFetch({
@@ -88,7 +121,7 @@ export function createFileDemandLoader({
             collectionName,
             fileId,
             range,
-            knownSequences: presence?.presentSequences || [],
+            knownSequences,
             onChunk: consumeChunk,
           });
           if (!Array.isArray(chunks)) {
@@ -116,8 +149,11 @@ export function createFileDemandLoader({
               collection: collectionName,
               fileId,
               expectedChunkCount: expectedTotal,
+              // Union the RECONCILED prior set (evicted sequences already dropped)
+              // with the freshly-persisted ones, so the blob names exactly the
+              // rows actually on disk and never re-accretes phantom sequences.
               presentSequences: dedupeSorted([
-                ...(presence?.presentSequences || []),
+                ...knownSequences,
                 ...sequences,
               ]),
               lastVerifiedAt: clock(),
@@ -163,7 +199,44 @@ export function createFileDemandLoader({
       }
       return slots.length;
     },
+    // M6 companion: read a persisted chunk's base64 back from storage. Callers
+    // that fetched with `materialize: false` use this to stream bytes without the
+    // loader ever holding the whole file in RAM. Returns null if the row is gone
+    // (e.g. evicted) — the caller can re-fetch that sequence.
+    async readPersistedChunk(fileId, sequence) {
+      if (typeof storageCollection.getStoredRecord !== 'function') return null;
+      const row = await storageCollection.getStoredRecord(`${fileId}-${sequence}`);
+      if (!row) return null;
+      return {
+        sequence: Number(row.sequence),
+        bytesBase64: String(row.bytes_base64 || ''),
+        hash: row.hash || null,
+      };
+    },
   };
+}
+
+// M5: keep the resume hint honest against the LRU. A presence sequence is only
+// trustworthy if its chunk row's sidecar access entry still exists; eviction
+// deletes both the primary row and that entry, so a surviving entry is a sound
+// proxy for "the chunk is still on disk". Bounded by the file's chunk count
+// (large files hit the return budget first). Falls back to trusting the blob if
+// the backend cannot answer, so this never regresses a working resume.
+async function reconcilePresentSequences(backend, collection, fileId, presentSequences) {
+  const sequences = Array.isArray(presentSequences) ? presentSequences : [];
+  if (!sequences.length || typeof backend.getDocumentAccess !== 'function') return sequences;
+  const surviving = [];
+  for (const sequence of sequences) {
+    try {
+      const access = await backend.getDocumentAccess(collection, `${fileId}-${sequence}`);
+      if (access) surviving.push(sequence);
+    } catch {
+      // Backend hiccup: keep the sequence rather than force an unnecessary
+      // re-fetch of a chunk that is probably still present.
+      surviving.push(sequence);
+    }
+  }
+  return surviving;
 }
 
 async function getPresence(backend, collection, fileId) {

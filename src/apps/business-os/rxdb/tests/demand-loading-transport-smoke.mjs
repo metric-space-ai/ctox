@@ -389,6 +389,47 @@ assert(fileAdmissionOverflow?.code === 'FILE_COLLECTOR_LIMIT', 'file collector c
 admissionTransport.abortPeerRequests('peer-admission', 'test-cleanup');
 await Promise.all(activeFiles);
 
+// M7: per-query-stream byte cap. A hostile/buggy peer that keeps pushing chunks
+// must be cut off instead of growing slot.chunks unbounded until the collector
+// timeout. Mirrors the file collector budget path: reject + cancel upstream.
+const queryBudgetTransport = createDemandLoadingTransport({
+  getPeerId: () => 'peer-qbudget',
+  queryCollectorBudgetBytes: 262144,
+});
+const queryBudgetRequests = [];
+queryBudgetTransport.attach({
+  connections: new Map([
+    ['peer-qbudget', { channel: { readyState: 'open' }, peer: { connectionState: 'connected' } }],
+  ]),
+  async request(peerId, method, params) {
+    queryBudgetRequests.push({ peerId, method, params });
+    return { ack: true };
+  },
+});
+const overBudgetQuery = queryBudgetTransport.requestQueryFetch({
+  ...envelope,
+  requestId: 'q-over-budget',
+}).catch((error) => error);
+await new Promise((r) => setImmediate(r));
+// A single legit-sized chunk (<= maxBytesPerChunk) is accepted...
+await queryBudgetTransport.requestHandlers['rxdb.query.chunk']({
+  params: [{ requestId: 'q-over-budget', sequence: 0, documents: [], complete: false,
+    compressed: 'deflate', compressedBase64: 'A'.repeat(200000) }],
+});
+assert(queryBudgetTransport.pendingQueryCount() === 1, 'legit query chunk stays under budget');
+// ...but the second chunk pushes the stream over the accepted budget.
+await queryBudgetTransport.requestHandlers['rxdb.query.chunk']({
+  params: [{ requestId: 'q-over-budget', sequence: 1, documents: [], complete: false,
+    compressed: 'deflate', compressedBase64: 'B'.repeat(200000) }],
+});
+const queryCollectorBudgetError = await overBudgetQuery;
+assert(queryCollectorBudgetError?.code === 'QUERY_COLLECTOR_BUDGET_EXCEEDED',
+  `query collector rejects stream beyond byte budget (got ${queryCollectorBudgetError?.code})`);
+assert(queryBudgetTransport.pendingQueryCount() === 0, 'query byte-budget rejection releases collector');
+assert(queryBudgetTransport.diagnostics().queryCollectorBudgetExceeded === 1, 'query byte-budget rejection is observable');
+assert(queryBudgetTransport.diagnostics().maxBufferedQueryChunkBytes >= 200000, 'query chunk byte peak recorded');
+assert(queryBudgetRequests.some((request) => request.method === 'rxdb.query.cancel'), 'query byte-budget rejection cancels native stream');
+
 console.log('ctox-rxdb-js demand-loading transport smoke OK', {
   docs: result.documents.length,
   sentRequests: sent.length,

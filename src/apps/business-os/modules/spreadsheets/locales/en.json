@@ -75,5 +75,7 @@
   "untagged": "Untagged",
   "documentLoadFailed": "Spreadsheet failed to load:",
   "addRowLabel": "Add row",
-  "addColumnLabel": "Add column"
+  "addColumnLabel": "Add column",
+  "toggleRunbooks": "Show runbooks & prompt",
+  "toggleRunbooksHide": "Hide runbooks & prompt"
 }

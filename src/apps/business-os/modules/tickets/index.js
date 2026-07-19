@@ -1,9 +1,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
-import { CtoxResizer } from '../../shared/resizer.js';
 import { showBusinessPrompt } from '../../shared/dialogs.js';
 
 const REFRESH_DEBOUNCE_MS = 80;
-const LAYOUT_KEY = 'ctox.tickets.layout';
 const TICKET_PRIMARY_COLLECTION = 'ctox_ticket_items';
 const TICKET_SYNC_START_TIMEOUT_MS = 8000;
 const TICKET_HYDRATION_TIMEOUT_MS = 12000;
@@ -18,6 +16,8 @@ const labels = {
     pending: 'Pending',
     blocked: 'Blockiert',
     closed: 'Geschlossen',
+    showControls: 'Kontrollen einblenden',
+    hideControls: 'Kontrollen ausblenden',
     loadingTickets: 'Tickets werden geladen...',
     loadingTicketsDetail: 'Die Ticket-Projektionen werden vorbereitet.',
     syncingTickets: 'Tickets werden synchronisiert.',
@@ -73,6 +73,8 @@ const labels = {
     pending: 'Pending',
     blocked: 'Blocked',
     closed: 'Closed',
+    showControls: 'Show controls',
+    hideControls: 'Hide controls',
     loadingTickets: 'Loading tickets...',
     loadingTicketsDetail: 'Ticket projections are being prepared.',
     syncingTickets: 'Syncing tickets.',
@@ -146,7 +148,6 @@ const state = {
   status: 'all',
   renderTimer: null,
   cleanup: null,
-  resizeCleanup: null,
   loading: false,
   data: Object.fromEntries(collectionNames.map((name) => [name, []])),
 };
@@ -164,7 +165,6 @@ export async function mount(ctx) {
   state.loading = true;
   applyStaticLabels();
   wireUi();
-  state.resizeCleanup = setupResizers();
   render();
   // The shell-owned module lease already starts every declared ticket
   // collection. Scheduling a second wave here races fast window close and can
@@ -174,7 +174,6 @@ export async function mount(ctx) {
   state.cleanup = wireRealtime();
   return () => {
     state.cleanup?.();
-    state.resizeCleanup?.();
     if (state.renderTimer) window.clearTimeout(state.renderTimer);
   };
 }
@@ -194,6 +193,12 @@ function applyStaticLabels() {
   const createLabel = state.t('createTicket', 'Ticket anlegen');
   createButton.setAttribute('aria-label', createLabel);
   createButton.setAttribute('title', createLabel);
+  const toggleActions = root.querySelector('[data-toggle-actions]');
+  if (toggleActions) {
+    toggleActions.dataset.showLabel = state.t('showControls', 'Kontrollen einblenden');
+    toggleActions.dataset.hideLabel = state.t('hideControls', 'Kontrollen ausblenden');
+    updateToggleActionsAria(root);
+  }
   root.querySelector('[data-ticket-search]').placeholder = state.t('search', 'Suchen...');
   root.querySelector('[data-ticket-state]').innerHTML = `
     <option value="all">${escapeHtml(state.t('allStatus', 'Alle Status'))}</option>
@@ -202,6 +207,18 @@ function applyStaticLabels() {
     <option value="blocked">${escapeHtml(state.t('blocked', 'Blockiert'))}</option>
     <option value="closed">${escapeHtml(state.t('closed', 'Geschlossen'))}</option>
   `;
+}
+
+function updateToggleActionsAria(root) {
+  const toggle = root.querySelector('[data-toggle-actions]');
+  if (!toggle) return;
+  const hidden = root.classList.contains('is-actions-hidden');
+  toggle.setAttribute('aria-pressed', hidden ? 'false' : 'true');
+  const label = hidden ? toggle.dataset.showLabel : toggle.dataset.hideLabel;
+  if (label) {
+    toggle.setAttribute('aria-label', label);
+    toggle.setAttribute('title', label);
+  }
 }
 
 function wireUi() {
@@ -224,6 +241,13 @@ function wireUi() {
   root.querySelector('[data-ticket-create-local]')?.addEventListener('click', () => {
     createLocalTicket().catch((error) => setCommandStatus(error?.message || String(error), true));
   });
+  const toggleActions = root.querySelector('[data-toggle-actions]');
+  if (toggleActions) {
+    toggleActions.addEventListener('click', () => {
+      root.classList.toggle('is-actions-hidden');
+      updateToggleActionsAria(root);
+    });
+  }
   root.querySelector('[data-ticket-context]')?.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target : null;
     const clarificationAction = target?.closest('[data-clarification-action]');
@@ -236,59 +260,6 @@ function wireUi() {
     if (!action) return;
     runCaseAction(action).catch((error) => setCommandStatus(error?.message || String(error), true));
   });
-}
-
-function setupResizers() {
-  // Column resizing is now owned by the shell-global resizer (setupModuleResizers
-  // in app.js), wired declaratively from the `.ctox-column-resizer[data-resizer-var]`
-  // handles inside the `[data-resize-frame]` root. This DIY wiring is neutralised to
-  // avoid double-binding the handles; call sites keep their no-op teardown ref.
-  return () => {};
-  // eslint-disable-next-line no-unreachable
-  const root = state.ctx.host.querySelector('[data-tickets-root]');
-  const left = root.querySelector('[data-resizer="left"]');
-  const right = root.querySelector('[data-resizer="right"]');
-  const saved = readLayout();
-  if (saved.left) root.style.setProperty('--tickets-left-width', `${saved.left}px`);
-  if (saved.right) root.style.setProperty('--tickets-right-width', `${saved.right}px`);
-  const cleanups = [];
-  if (left) {
-    const resizer = new CtoxResizer({
-      resizerEl: left,
-      containerEl: root,
-      cssVar: '--tickets-left-width',
-      side: 'left',
-      minWidth: 260,
-      maxWidth: 520,
-      onResize: (width) => writeLayout({ ...readLayout(), left: width }),
-    });
-    cleanups.push(() => resizer.destroy());
-  }
-  if (right) {
-    const resizer = new CtoxResizer({
-      resizerEl: right,
-      containerEl: root,
-      cssVar: '--tickets-right-width',
-      side: 'right',
-      minWidth: 260,
-      maxWidth: 560,
-      onResize: (width) => writeLayout({ ...readLayout(), right: width }),
-    });
-    cleanups.push(() => resizer.destroy());
-  }
-  return () => cleanups.forEach((cleanup) => cleanup());
-}
-
-function readLayout() {
-  try {
-    return JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}');
-  } catch {
-    return {};
-  }
-}
-
-function writeLayout(next) {
-  localStorage.setItem(LAYOUT_KEY, JSON.stringify(next));
 }
 
 function ticketCollection(name) {
@@ -447,7 +418,7 @@ function renderList() {
     const label = labelForTicket(ticket.ticket_key);
     const selected = ticket.id === state.selectedId ? 'is-selected' : '';
     return `
-      <button type="button" class="ticket-row ${selected}" data-ticket-id="${escapeAttr(ticket.id)}"
+      <button type="button" class="ctox-list-item ticket-row ${selected}" data-ticket-id="${escapeAttr(ticket.id)}"
         ${ticketContextAttrs(ticket, 'inbox')}>
         <span class="ticket-row-meta">
           <span>${escapeHtml(ticket.source_system || 'ctox')}</span>
@@ -466,13 +437,12 @@ function renderDetail() {
   if (!ticket) {
     clearRecordContext(detail);
     if (state.loading || shouldShowTicketSyncState()) {
-      detail.innerHTML = renderTicketLoadingState('is-centered');
+      detail.innerHTML = renderTicketLoadingState();
       return;
     }
     detail.innerHTML = renderEmptyState(
       state.t('selectTicket', 'Wähle links ein Ticket aus.'),
       state.t('selectTicketDetail', 'Details, Verlauf und Kontrollen werden danach hier angezeigt.'),
-      'is-centered',
     );
     return;
   }
@@ -490,20 +460,23 @@ function renderDetail() {
         </div>
       </div>
     </header>
-    <div class="tickets-detail-scroll os-scrollbar">
-      <section class="tickets-section">
-        <h3>Ticket</h3>
-        <dl class="ctox-fields">
-          ${fact(state.t('source', 'Quelle'), ticket.source_system)}
-          ${fact(state.t('requester', 'Requester'), ticket.requester)}
-          ${fact(state.t('priority', 'Priorität'), ticket.priority)}
-          ${fact(state.t('updated', 'Aktualisiert'), formatDate(ticket.updated_at || ticket.last_synced_at))}
-        </dl>
-        <p class="tickets-body">${escapeHtml(ticket.body_text || '')}</p>
+    <div class="ctox-pane-scroll tickets-detail-scroll os-scrollbar">
+      <section class="ctox-card">
+        <div class="ctox-card-body">
+          <dl class="ctox-fields">
+            ${fact(state.t('source', 'Quelle'), ticket.source_system)}
+            ${fact(state.t('requester', 'Requester'), ticket.requester)}
+            ${fact(state.t('priority', 'Priorität'), ticket.priority)}
+            ${fact(state.t('updated', 'Aktualisiert'), formatDate(ticket.updated_at || ticket.last_synced_at))}
+          </dl>
+          <p class="tickets-body">${escapeHtml(ticket.body_text || '')}</p>
+        </div>
       </section>
-      <section class="tickets-section">
-        <h3>${escapeHtml(state.t('timeline', 'Timeline'))}</h3>
-        ${events.length ? `<ol class="ticket-timeline">${events.map(renderEvent).join('')}</ol>` : `<p class="tickets-empty">${escapeHtml(state.t('noEvents', 'Keine Events vorhanden.'))}</p>`}
+      <section class="ctox-card">
+        <header>${escapeHtml(state.t('timeline', 'Timeline'))}</header>
+        <div class="ctox-card-body">
+          ${events.length ? `<ol class="ticket-timeline">${events.map(renderEvent).join('')}</ol>` : `<p class="tickets-inline-empty">${escapeHtml(state.t('noEvents', 'Keine Events vorhanden.'))}</p>`}
+        </div>
       </section>
     </div>
   `;
@@ -515,13 +488,12 @@ function renderContext() {
   if (!ticket) {
     clearRecordContext(context);
     if (state.loading || shouldShowTicketSyncState()) {
-      context.innerHTML = renderTicketLoadingState('is-context');
+      context.innerHTML = renderTicketLoadingState();
       return;
     }
     context.innerHTML = renderEmptyState(
       state.t('controls', 'Kontrollen'),
       state.t('selectTicketDetail', 'Details, Verlauf und Kontrollen werden danach hier angezeigt.'),
-      'is-context',
     );
     return;
   }
@@ -539,22 +511,22 @@ function renderContext() {
         </div>
       </div>
     </header>
-    <div class="tickets-context-scroll os-scrollbar">
+    <div class="ctox-pane-scroll tickets-context-scroll os-scrollbar">
       <section class="tickets-section">
-        <h3>${escapeHtml(state.t('cases', 'Cases'))}</h3>
-        ${cases.length ? cases.map(renderCase).join('') : `<p class="tickets-empty">${escapeHtml(state.t('noCase', 'Kein Case für dieses Ticket.'))}</p>`}
+        <h3 class="ctox-field-label">${escapeHtml(state.t('cases', 'Cases'))}</h3>
+        ${cases.length ? cases.map(renderCase).join('') : `<p class="tickets-inline-empty">${escapeHtml(state.t('noCase', 'Kein Case für dieses Ticket.'))}</p>`}
       </section>
       <section class="tickets-section">
-        <h3>${escapeHtml(state.t('selfWork', 'Self-work'))}</h3>
-        ${selfWork.length ? selfWork.map(renderSelfWork).join('') : `<p class="tickets-empty">${escapeHtml(state.t('noSelfWork', 'Kein Self-work verknüpft.'))}</p>`}
+        <h3 class="ctox-field-label">${escapeHtml(state.t('selfWork', 'Self-work'))}</h3>
+        ${selfWork.length ? selfWork.map(renderSelfWork).join('') : `<p class="tickets-inline-empty">${escapeHtml(state.t('noSelfWork', 'Kein Self-work verknüpft.'))}</p>`}
       </section>
       <section class="tickets-section">
-        <h3>${escapeHtml(state.t('clarifications', 'Rückfragen'))}</h3>
-        ${clarifications.length ? clarifications.map(renderClarification).join('') : `<p class="tickets-empty">${escapeHtml(state.t('noClarifications', 'Keine offenen Rückfragen.'))}</p>`}
+        <h3 class="ctox-field-label">${escapeHtml(state.t('clarifications', 'Rückfragen'))}</h3>
+        ${clarifications.length ? clarifications.map(renderClarification).join('') : `<p class="tickets-inline-empty">${escapeHtml(state.t('noClarifications', 'Keine offenen Rückfragen.'))}</p>`}
       </section>
       <section class="tickets-section">
-        <h3>Runbooks</h3>
-        ${bundles.length ? bundles.slice(0, 8).map(renderBundle).join('') : `<p class="tickets-empty">Keine Control Bundles.</p>`}
+        <h3 class="ctox-field-label">Runbooks</h3>
+        ${bundles.length ? bundles.slice(0, 8).map(renderBundle).join('') : `<p class="tickets-inline-empty">Keine Control Bundles.</p>`}
       </section>
     </div>
   `;
@@ -583,22 +555,24 @@ function renderCase(item) {
   const writebacks = state.data.ctox_ticket_writebacks.filter((writeback) => writeback.case_id === item.case_id);
   const clarifications = state.data.ctox_ticket_clarification_requests.filter((clarification) => clarification.case_id === item.case_id);
   return `
-    <article class="tickets-context-item" ${recordContextAttrs({
+    <article class="ctox-card" ${recordContextAttrs({
       type: 'ticket_case',
       id: item.case_id || item.id,
       label: item.label || item.case_id,
       submodule: 'cases',
     })}>
-      <span>${escapeHtml(item.state || 'case')} · ${escapeHtml(item.risk_level || '')}</span>
-      <strong>${escapeHtml(item.label || item.case_id)}</strong>
-      <small>${escapeHtml(item.approval_mode || '')} · A${escapeHtml(String(item.autonomy_level || '').replace(/^A/i, ''))}</small>
-      <dl class="ctox-fields">
-        ${fact(state.t('approvals', 'Approvals'), String(approvals.length))}
-        ${fact(state.t('verification', 'Verification'), verifications[0]?.status || '')}
-        ${fact(state.t('writebacks', 'Writebacks'), String(writebacks.length))}
-        ${fact(state.t('clarifications', 'Rückfragen'), String(clarifications.length))}
-      </dl>
-      ${renderCaseActions(item)}
+      <header>${escapeHtml([item.state || 'case', item.risk_level].filter(Boolean).join(' · '))}</header>
+      <div class="ctox-card-body">
+        <strong class="tickets-context-item-title">${escapeHtml(item.label || item.case_id)}</strong>
+        <p class="tickets-context-item-meta">${escapeHtml(item.approval_mode || '')} · A${escapeHtml(String(item.autonomy_level || '').replace(/^A/i, ''))}</p>
+        <dl class="ctox-fields">
+          ${fact(state.t('approvals', 'Approvals'), String(approvals.length))}
+          ${fact(state.t('verification', 'Verification'), verifications[0]?.status || '')}
+          ${fact(state.t('writebacks', 'Writebacks'), String(writebacks.length))}
+          ${fact(state.t('clarifications', 'Rückfragen'), String(clarifications.length))}
+        </dl>
+        ${renderCaseActions(item)}
+      </div>
     </article>
   `;
 }
@@ -796,15 +770,17 @@ function withTimeout(promise, timeoutMs, message) {
 function renderSelfWork(item) {
   const notes = state.data.ctox_ticket_self_work_notes.filter((note) => note.work_id === item.work_id);
   return `
-    <article class="tickets-context-item" ${recordContextAttrs({
+    <article class="ctox-card" ${recordContextAttrs({
       type: 'ticket_self_work',
       id: item.work_id || item.id,
       label: item.title || item.work_id,
       submodule: 'self-work',
     })}>
-      <span>${escapeHtml(item.kind || 'self-work')} · ${escapeHtml(item.state || '')}</span>
-      <strong>${escapeHtml(item.title || item.work_id)}</strong>
-      <small>${escapeHtml([item.assigned_to, `${notes.length} notes`].filter(Boolean).join(' · '))}</small>
+      <header>${escapeHtml([item.kind || 'self-work', item.state].filter(Boolean).join(' · '))}</header>
+      <div class="ctox-card-body">
+        <strong class="tickets-context-item-title">${escapeHtml(item.title || item.work_id)}</strong>
+        <p class="tickets-context-item-meta">${escapeHtml([item.assigned_to, `${notes.length} notes`].filter(Boolean).join(' · '))}</p>
+      </div>
     </article>
   `;
 }
@@ -817,34 +793,36 @@ function renderClarification(item) {
   const canResolve = !['resolved', 'cancelled'].includes(status);
   const missing = Array.isArray(item.missing_inputs) ? item.missing_inputs.join(', ') : '';
   return `
-    <article class="tickets-context-item" ${recordContextAttrs({
+    <article class="ctox-card" ${recordContextAttrs({
       type: 'ticket_clarification',
       id: item.clarification_id || item.id,
       label: item.question || item.clarification_id,
       submodule: 'clarifications',
     })}>
-      <span>${escapeHtml([item.status, item.target_type, item.target_channel].filter(Boolean).join(' · '))}</span>
-      <strong>${escapeHtml(item.question || item.clarification_id)}</strong>
-      <small>${escapeHtml(missing || item.unblock_criteria || item.outbound_message_key || '')}</small>
-      ${item.inbound_response_body ? `<p class="tickets-note">${escapeHtml(item.inbound_response_body)}</p>` : ''}
-      ${canPublish || canResolve ? `
-        <div class="tickets-action-row">
-          ${canPublish ? `
+      <header>${escapeHtml([item.status, item.target_type, item.target_channel].filter(Boolean).join(' · '))}</header>
+      <div class="ctox-card-body">
+        <strong class="tickets-context-item-title">${escapeHtml(item.question || item.clarification_id)}</strong>
+        <p class="tickets-context-item-meta">${escapeHtml(missing || item.unblock_criteria || item.outbound_message_key || '')}</p>
+        ${item.inbound_response_body ? `<p class="tickets-note">${escapeHtml(item.inbound_response_body)}</p>` : ''}
+        ${canPublish || canResolve ? `
+          <div class="tickets-action-row">
+            ${canPublish ? `
+              <button type="button" class="ctox-button"
+                data-clarification-action="publish"
+                data-clarification-id="${escapeAttr(item.clarification_id)}">
+                ${escapeHtml(state.t('publishClarification', 'Geprüft senden'))}
+              </button>
+            ` : ''}
+            ${canResolve ? `
             <button type="button" class="ctox-button"
-              data-clarification-action="publish"
+              data-clarification-action="resolve"
               data-clarification-id="${escapeAttr(item.clarification_id)}">
-              ${escapeHtml(state.t('publishClarification', 'Geprüft senden'))}
+              ${escapeHtml(state.t('resolveClarification', 'Antwort erfassen'))}
             </button>
-          ` : ''}
-          ${canResolve ? `
-          <button type="button" class="ctox-button"
-            data-clarification-action="resolve"
-            data-clarification-id="${escapeAttr(item.clarification_id)}">
-            ${escapeHtml(state.t('resolveClarification', 'Antwort erfassen'))}
-          </button>
-          ` : ''}
-        </div>
-      ` : ''}
+            ` : ''}
+          </div>
+        ` : ''}
+      </div>
     </article>
   `;
 }
@@ -880,15 +858,17 @@ async function runClarificationAction(actionEl) {
 
 function renderBundle(item) {
   return `
-    <article class="tickets-context-item is-compact" ${recordContextAttrs({
+    <article class="ctox-card" ${recordContextAttrs({
       type: 'ticket_control_bundle',
       id: item.runbook_id || item.id,
       label: item.label || item.runbook_id,
       submodule: 'runbooks',
     })}>
-      <span>${escapeHtml(item.support_mode || 'support')}</span>
-      <strong>${escapeHtml(item.label || item.runbook_id)}</strong>
-      <small>${escapeHtml(item.approval_mode || '')} · ${escapeHtml(item.verification_profile_id || '')}</small>
+      <header>${escapeHtml(item.support_mode || 'support')}</header>
+      <div class="ctox-card-body">
+        <strong class="tickets-context-item-title">${escapeHtml(item.label || item.runbook_id)}</strong>
+        <p class="tickets-context-item-meta">${escapeHtml(item.approval_mode || '')} · ${escapeHtml(item.verification_profile_id || '')}</p>
+      </div>
     </article>
   `;
 }
@@ -932,27 +912,25 @@ function fact(label, value) {
   return `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd>`;
 }
 
-function renderEmptyState(title, body = '', modifier = '') {
+function renderEmptyState(title, body = '') {
   return `
-    <div class="tickets-empty ${escapeAttr(modifier)}">
+    <div class="ctox-empty">
       <strong>${escapeHtml(title)}</strong>
       ${body ? `<span>${escapeHtml(body)}</span>` : ''}
     </div>
   `;
 }
 
-function renderTicketLoadingState(modifier = '') {
+function renderTicketLoadingState() {
   if (state.loading) {
     return renderEmptyState(
       state.t('loadingTickets', 'Tickets werden geladen...'),
       state.t('loadingTicketsDetail', 'Die Ticket-Projektionen werden vorbereitet.'),
-      `${modifier} is-loading`.trim(),
     );
   }
   return renderEmptyState(
     state.t('syncingTickets', 'Tickets werden synchronisiert.'),
     state.t('syncingTicketsDetail', 'Die Ticketdaten werden gerade aus dem CTOX-Datenstrom geladen.'),
-    `${modifier} is-loading`.trim(),
   );
 }
 

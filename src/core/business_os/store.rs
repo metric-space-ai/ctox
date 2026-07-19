@@ -7483,6 +7483,12 @@ pub fn update_module_to_catalog(
         staged["template_id"] = template_id.clone();
     }
     staged["source_module_id"] = Value::String(source_module.clone());
+    staged["app_source"] = serde_json::json!({
+        "kind": "catalog",
+        "module_id": source_module.clone(),
+        "verified": true,
+        "trust_model": "ctox-first-party-source"
+    });
     ensure_local_icon_manifest_value(&mut staged, &staging);
     fs::write(&staged_manifest_path, serde_json::to_vec_pretty(&staged)?)?;
     validate_staged_installed_module(root, &module_id, &staging)?;
@@ -10370,6 +10376,12 @@ fn install_template_module(
     // so the catalog/update diff can detect a newer upstream bundle later.
     if starter_archetype.is_empty() {
         manifest_value["source_module_id"] = Value::String(source_module.clone());
+        manifest_value["app_source"] = serde_json::json!({
+            "kind": "catalog",
+            "module_id": source_module.clone(),
+            "verified": true,
+            "trust_model": "ctox-first-party-source"
+        });
     } else {
         manifest_value["archetype"] = Value::String(starter_archetype.clone());
         manifest_value["source_module_id"] = Value::String(String::new());
@@ -13560,28 +13572,81 @@ fn validate_staged_installed_module(
     module_id: &str,
     staged_module_dir: &Path,
 ) -> anyhow::Result<()> {
+    let staged_manifest: Value = serde_json::from_str(
+        &fs::read_to_string(staged_module_dir.join("module.json"))
+            .context("failed to read staged module manifest")?,
+    )
+    .context("failed to parse staged module manifest")?;
+    let source = staged_manifest.get("app_source");
+    let is_verified_catalog = source
+        .and_then(|value| value.get("verified"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && matches!(
+            source
+                .and_then(|value| value.get("kind"))
+                .and_then(Value::as_str),
+            Some("catalog") | Some("github")
+        )
+        && source
+            .and_then(|value| value.get("repo"))
+            .and_then(Value::as_str)
+            .is_none_or(|repo| repo == "metric-space-ai/ctox");
     let validation_root = std::env::temp_dir().join(format!(
         "ctox-app-validation-{module_id}-{}",
         Uuid::new_v4()
     ));
-    let validation_module = validation_root
-        .join("runtime/business-os/installed-modules")
-        .join(module_id);
+    let validation_module = if is_verified_catalog {
+        validation_root
+            .join("src/apps/business-os/modules")
+            .join(module_id)
+    } else {
+        validation_root
+            .join("runtime/business-os/installed-modules")
+            .join(module_id)
+    };
     let result = (|| -> anyhow::Result<()> {
         copy_dir_recursive(staged_module_dir, &validation_module)?;
+        if is_verified_catalog {
+            // Installation rewrites these routing fields for the runtime
+            // destination before validation. First-party catalog artifacts
+            // must still be checked against their canonical source contract;
+            // normalize only the disposable validation copy.
+            let validation_manifest_path = validation_module.join("module.json");
+            let mut validation_manifest: Value = serde_json::from_slice(
+                &fs::read(&validation_manifest_path)
+                    .context("failed to read copied catalog module manifest")?,
+            )
+            .context("failed to parse copied catalog module manifest")?;
+            validation_manifest["entry"] = Value::String(format!("modules/{module_id}/index.html"));
+            validation_manifest["install_scope"] = Value::String("store".to_owned());
+            fs::write(
+                &validation_manifest_path,
+                serde_json::to_vec_pretty(&validation_manifest)?,
+            )
+            .context("failed to normalize copied catalog module manifest")?;
+            let shared_source = root.join("src/apps/business-os/shared");
+            if shared_source.is_dir() {
+                copy_dir_recursive(
+                    &shared_source,
+                    &validation_root.join("src/apps/business-os/shared"),
+                )?;
+            }
+        }
         let script = business_os_app_validator_script(root);
         anyhow::ensure!(script.is_file(), "Business OS app validator is unavailable");
-        let output = std::process::Command::new(
+        let mut command = std::process::Command::new(
             crate::service::business_os::resolve_business_os_validator_node(root),
-        )
-        .current_dir(root)
-        .arg(&script)
-        .arg(module_id)
-        .arg("--installed")
-        .arg("--workspace")
-        .arg(&validation_root)
-        .output()
-        .context("failed to run staged Business OS app validation")?;
+        );
+        command.current_dir(root).arg(&script).arg(module_id);
+        if !is_verified_catalog {
+            command.arg("--installed");
+        }
+        let output = command
+            .arg("--workspace")
+            .arg(&validation_root)
+            .output()
+            .context("failed to run staged Business OS app validation")?;
         if output.status.success() {
             return Ok(());
         }
@@ -41183,6 +41248,29 @@ fn room_secret_id(value: &str) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn verified_catalog_module_uses_the_catalog_validation_contract() -> anyhow::Result<()> {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source = repo_root.join("src/apps/business-os/modules/buchhaltung");
+        let temp = tempdir()?;
+        let staging = temp.path().join("buchhaltung");
+        copy_dir_recursive(&source, &staging)?;
+
+        let manifest_path = staging.join("module.json");
+        let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path)?)?;
+        manifest["entry"] = Value::String("installed-modules/buchhaltung/index.html".to_string());
+        manifest["install_scope"] = Value::String("installed".to_string());
+        manifest["app_source"] = serde_json::json!({
+            "kind": "github",
+            "repo": "metric-space-ai/ctox",
+            "verified": true,
+            "trust_model": "ctox-first-party-source"
+        });
+        fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
+
+        validate_staged_installed_module(repo_root, "buchhaltung", &staging)
+    }
 
     #[test]
     fn control_command_outcome_updates_outbox_intake_projection() -> anyhow::Result<()> {

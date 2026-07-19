@@ -1,167 +1,78 @@
-/* intake/index.css — module-specific styling on top of shared/base.css.
-   Header, inputs, buttons, badges and empty state come from the kit
-   (.ctox-pane-*, .ctox-input/.ctox-select, .ctox-button, .ctox-badge,
-   .ctox-empty); only the intake frame, rich list rows and gate/result rows
-   live here. */
+/* intake/index.css — module-specific layer on top of shared/base.css.
+   Frame, header, compact form, inputs, buttons, badges, callout, status
+   line, record-list container and empty state all come from the kit
+   (.ctox-record-workbench, .ctox-compact-form, .ctox-input/.ctox-select,
+   .ctox-button, .ctox-badge, .ctox-callout, .ctox-empty); this file only
+   keeps the gate result rows and the rich application rows. */
 
-.ats-intake {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-  box-sizing: border-box;
-  color: var(--text);
-}
+/* The kit callout has no :empty collapse; the gate starts empty and is
+   cleared between runs, so hide it until JS fills it. */
+.ats-intake .ctox-callout:empty { display: none; }
 
-.ats-intake .ats-sub {
-  margin: 6px 0 0;
-  font-size: 12px;
-  color: var(--muted);
-}
+/* custom: Ergebnis-Zeilen und Blocker-Liste im Gate-Callout — das Kit hat
+   keine Listen-in-Callout-Komponente. */
+.ats-intake .ats-result-row { margin-top: 4px; color: var(--muted); }
+.ats-intake .ats-blockers { margin: 6px 0 0; padding-left: 18px; }
+.ats-intake .ats-blockers li { margin: 2px 0; }
 
-.ats-intake .ats-sub:empty {
-  display: none;
-}
-
-.ats-intake .ats-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  padding: 14px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.ats-intake .ats-form {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.ats-intake .ats-form .ctox-input {
-  width: auto;
-  flex: 1 1 160px;
-}
-
-.ats-intake .ats-form .ctox-select {
-  width: auto;
-  flex: 0 1 auto;
-}
-
-.ats-intake .ats-count {
-  font-size: 13px;
-  color: var(--muted);
-}
-
-/* Gate (capture result / blockers) — shared class names with placements. */
-.ats-intake .ats-gate {
-  padding: 8px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  font-size: 13px;
-}
-
-.ats-intake .ats-gate:empty {
-  display: none;
-}
-
-.ats-intake .ats-gate--ok {
-  border-color: color-mix(in srgb, var(--success) 45%, var(--line));
-  background: var(--success-soft);
-}
-
-.ats-intake .ats-gate--block {
-  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
-  background: var(--danger-soft);
-}
-
-.ats-intake .ats-gate--offline {
-  border-color: color-mix(in srgb, var(--warning) 45%, var(--line));
-  background: var(--warning-soft);
-}
-
-.ats-intake .ats-gate .ats-result-row {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.ats-intake .ats-gate .ats-blockers {
-  margin: 6px 0 0;
-  padding-left: 18px;
-}
-
-.ats-intake .ats-gate .ats-blockers li {
-  font-size: 12px;
-  margin: 2px 0;
-}
-
-/* Rich list rows (variable content — module-owned card list on kit tokens). */
-.ats-intake .ats-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
+/* custom: Bewerbungs-Zeile mit Status-Badge, Kanal, Kontakt- und Metadaten —
+   nicht klick-/selektierbar, daher kein .ctox-list-item; das Kit hat kein
+   mehrzeiliges Record-Row-Muster. Nur Tokens und Kit-Radien; Typografie
+   erbt vom Kit. */
 .ats-intake .ats-item {
-  padding: 8px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--panel-radius);
   background: var(--surface);
-  font-size: 13px;
 }
 
 .ats-intake .ats-item--rich {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
   align-items: center;
 }
 
-.ats-intake .ats-item-body {
-  min-width: 0;
-}
+.ats-intake .ats-item-body { min-width: 0; }
 
 .ats-intake .ats-item-main {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
-.ats-intake .ats-item-main .ats-name {
-  font-weight: 600;
-}
+.ats-intake .ats-item-main .ats-name { font-weight: 600; }
+.ats-intake .ats-item-main .ats-channel { color: var(--muted); }
 
-.ats-intake .ats-item-main .ats-channel {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.ats-intake .ats-item-sub {
-  margin-top: 3px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
+.ats-intake .ats-item-sub,
 .ats-intake .ats-item-meta {
   margin-top: 3px;
-  font-size: 12px;
   color: var(--muted);
 }
 
-.ats-intake .ats-tag {
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+/* Empfangsdatum in der rechten Spalte der Zeile. */
+.ats-intake .ats-item-date {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* Optionale Erfassungs-Felder (Telefon, Vakanz, Kanal) und interne
+   Record-Metadaten (ID, Dedupe, Vakanz, Dokumente) sind nur bei Bedarf
+   relevant — native Disclosures, standardmäßig eingeklappt. */
+.ats-intake .ats-more { grid-column: 1 / -1; }
+
+.ats-intake .ats-more > summary,
+.ats-intake .ats-item-details > summary {
+  cursor: pointer;
+  color: var(--muted);
   font-size: 11px;
 }
 
-/* Canonical compact workbench owns frame, body and form geometry. */
-.ats-intake.ctox-record-workbench { display: grid; }
-.ats-intake .ctox-record-workbench__subtitle { margin: 4px 0 0; }
-.ats-intake .ctox-record-workbench__body { display: flex; padding: 8px; gap: 8px; }
-.ats-intake .ctox-compact-form { display: grid; }
-.ats-intake .ctox-compact-form .ctox-input,
-.ats-intake .ctox-compact-form .ctox-select { width: 100%; }
+.ats-intake .ats-more[open] > summary { margin-bottom: 5px; }
+.ats-intake .ats-item-details { margin-top: 3px; }
+
+/* Record-IDs rendern als Code. */
+.ats-intake .ats-tag { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); }

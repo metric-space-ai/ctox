@@ -136,7 +136,18 @@ test('notes presentation follows compact Business OS editor contract', async () 
   assert.doesNotMatch(css, /border-radius:\s*(?:10|12|14|16|18|20|24)px/);
   assert.match(css, /--nn-shadow:\s*none;/);
   assert.match(css, /--nn-paper-shadow:\s*none;/);
-  assert.match(css, /\.notes-card\.active\s*\{[\s\S]*?border-color:/);
+  // Frame and columns are the shared kit: workspace grid + declarative,
+  // shell-owned column resizers (no module-built resizer).
+  assert.match(html, /ctox-workspace[^"]*notes-module/);
+  assert.match(html, /data-resize-frame/);
+  assert.match(html, /ctox-column-resizer[^>]*data-resizer-var="--ctox-left-width"/);
+  assert.match(html, /ctox-column-resizer[^>]*data-resizer-var="--ctox-right-width"/);
+  assert.doesNotMatch(css, /\.notes-resizer/);
+  assert.doesNotMatch(css, /--notes-left-width|--notes-right-width/);
+  // List rows and status pills use the kit; the module keeps only content
+  // layout for cards.
+  assert.match(css, /\.notes-card\s*\{[\s\S]*?display:\s*flex/);
+  assert.doesNotMatch(css, /notebook-badge|tag-badge|presence-badge/);
   assert.match(css, /\.nn-paper-sheet\s*\{[\s\S]*?border-radius:\s*var\(--control-radius\)/);
   assert.match(css, /\.nn-pin-container\s*\{[\s\S]*?border-radius:\s*var\(--control-radius\)/);
 });

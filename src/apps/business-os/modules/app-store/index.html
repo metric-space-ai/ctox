@@ -6,6 +6,11 @@
           <span class="ctox-pane-kicker" data-t="kicker">Katalog</span>
           <h2 class="ctox-pane-title" data-t="title">App Store</h2>
         </div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon" data-toggle-sidebar-extras aria-label="Installations- und Quelloptionen anzeigen" title="Installations- und Quelloptionen" data-t-title="sidebarExtrasTitle" data-t-aria="sidebarExtrasAria" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="6" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="18" r="1"/></svg>
+          </button>
+        </div>
       </div>
       <div class="ctox-pane-tools">
         <input class="ctox-pane-search" data-search type="search" placeholder="Module, Templates, Apps suchen..." data-t-placeholder="searchPlaceholder" aria-label="App Store durchsuchen" data-t-aria="searchAria" />
@@ -14,22 +19,7 @@
 
     <div class="ctox-pane-body">
       <div class="store-sidebar">
-        <div class="store-create-scratch-wrapper">
-          <button type="button" class="ctox-button is-primary store-action-btn" id="btn-create-scratch" title="Zum App Creator wechseln, Rueckweg: App Store" data-t-title="createScratchTitle">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-            <span data-t="createScratch">App von Scratch erstellen</span>
-          </button>
-          <button type="button" class="ctox-button store-action-btn" id="btn-install-github" title="App aus einem eigenen GitHub-Repository installieren (externe Quelle)" data-t-title="installGithubTitle">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.2 19.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.3 1.1 2.9.8.1-.6.3-1.1.6-1.4-2.2-.300-4.6-1.1-4.6-5a3.9 3.9 0 0 1 1-2.7c-.1-.3-.4-1.3.1-2.6 0 0 .8-.3 2.7 1a9.3 9.3 0 0 1 5 0c1.9-1.3 2.7-1 2.7-1 .5 1.3.2 2.3.1 2.6.6.7 1 1.6 1 2.7 0 3.9-2.4 4.7-4.6 5 .3.3.6.9.6 1.9v2.8c0 .3.2.6.7.5A10 10 0 0 0 12 2z"/></svg>
-            <span data-t="installGithub">Aus GitHub installieren</span>
-          </button>
-          <button type="button" class="ctox-button store-action-btn" id="btn-install-zip" title="App aus einer hochgeladenen .zip-Datei installieren (externe Quelle)" data-t-title="installZipTitle">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg>
-            <span data-t="installZip">Zip-Datei installieren</span>
-          </button>
-        </div>
-
-        <nav class="ctox-list store-category-list os-scrollbar" data-scope-list>
+        <nav class="ctox-list store-category-list" data-scope-list>
           <button class="ctox-list-item category-btn active is-selected" data-scope="marketplace">
             <span class="cat-icon">GH</span>
             <span class="cat-label" data-t="scopeMarketplace">Marketplace</span>
@@ -62,11 +52,28 @@
           </button>
         </nav>
 
-        <div class="ctox-callout store-info-box">
-          <h4 data-t="infoTitle">GitHub Discovery</h4>
-          <p data-t="infoBody">Marketplace apps are loaded from <code>metric-space-ai/ctox</code>. Each app uses its own <code>modules/*/module.json</code> contract.</p>
-          <button type="button" class="ctox-button store-refresh-btn" data-refresh-marketplace aria-label="GitHub Discovery aktualisieren" data-t="refreshMarketplace" data-t-aria="refreshMarketplace">GitHub aktualisieren</button>
-          <p class="store-sync-state" data-marketplace-state data-t="marketplaceState">GitHub modules are loaded from the CTOX repository.</p>
+        <div class="store-sidebar-extras" data-sidebar-extras hidden>
+          <div class="store-create-scratch-wrapper">
+            <button type="button" class="ctox-button is-primary store-action-btn" id="btn-create-scratch" title="Zum App Creator wechseln, Rueckweg: App Store" data-t-title="createScratchTitle">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+              <span data-t="createScratch">App von Scratch erstellen</span>
+            </button>
+            <button type="button" class="ctox-button store-action-btn" id="btn-install-github" title="App aus einem eigenen GitHub-Repository installieren (externe Quelle)" data-t-title="installGithubTitle">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.2 19.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.3 1.1 2.9.8.1-.6.3-1.1.6-1.4-2.2-.300-4.6-1.1-4.6-5a3.9 3.9 0 0 1 1-2.7c-.1-.3-.4-1.3.1-2.6 0 0 .8-.3 2.7 1a9.3 9.3 0 0 1 5 0c1.9-1.3 2.7-1 2.7-1 .5 1.3.2 2.3.1 2.6.6.7 1 1.6 1 2.7 0 3.9-2.4 4.7-4.6 5 .3.3.6.9.6 1.9v2.8c0 .3.2.6.7.5A10 10 0 0 0 12 2z"/></svg>
+              <span data-t="installGithub">Aus GitHub installieren</span>
+            </button>
+            <button type="button" class="ctox-button store-action-btn" id="btn-install-zip" title="App aus einer hochgeladenen .zip-Datei installieren (externe Quelle)" data-t-title="installZipTitle">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg>
+              <span data-t="installZip">Zip-Datei installieren</span>
+            </button>
+          </div>
+
+          <div class="ctox-callout store-info-box">
+            <h4 data-t="infoTitle">GitHub Discovery</h4>
+            <p data-t="infoBody">Marketplace apps are loaded from <code>metric-space-ai/ctox</code>. Each app uses its own <code>modules/*/module.json</code> contract.</p>
+            <button type="button" class="ctox-button store-refresh-btn" data-refresh-marketplace aria-label="GitHub Discovery aktualisieren" data-t="refreshMarketplace" data-t-aria="refreshMarketplace">GitHub aktualisieren</button>
+            <p class="store-sync-state" data-marketplace-state data-t="marketplaceState">GitHub modules are loaded from the CTOX repository.</p>
+          </div>
         </div>
       </div>
     </div>
@@ -99,7 +106,7 @@
       <div class="store-center-body">
         <div class="ctox-callout store-message" data-store-message hidden></div>
 
-        <div class="store-grid-workspace os-scrollbar">
+        <div class="store-grid-workspace">
           <div class="store-card-grid" data-apps-grid></div>
           <div class="store-loading-overlay" data-loading-spinner hidden>
             <span class="store-loading-dot"></span>

@@ -101,6 +101,7 @@ const { __outboundTestHooks: hooks } = await import(
 test('presentation layer stays compact and shell-native', async () => {
   const css = await fs.readFile(new URL('./index.css', import.meta.url), 'utf8');
   const js = await fs.readFile(new URL('./index.js', import.meta.url), 'utf8');
+  const html = await fs.readFile(new URL('./index.html', import.meta.url), 'utf8');
   const source = `${css}\n${js}`;
   const surfacePattern = new RegExp(['ctox-pane--gla' + 'ss', 'gla' + 'ss', 'Prem' + 'ium'].join('|'), 'i');
   const sidePattern = new RegExp('border-' + '(?:left|right)\\s*:\\s*(?:[2-9]|[0-9]{2,})px');
@@ -113,7 +114,10 @@ test('presentation layer stays compact and shell-native', async () => {
   assert.doesNotMatch(source, radiusPattern);
   assert.doesNotMatch(source, shadowPattern);
   assert.doesNotMatch(source, gradientPattern);
-  assert.match(css, /grid-template-columns: var\(--outbound-left-width\) 6px minmax\(0, 1fr\)/);
+  // The module frame is the standard kit scaffold: workspace + panes + the
+  // declarative column resizer driving --ctox-left-width.
+  assert.match(html, /ctox-workspace ctox-workspace--two-pane outbound-module/);
+  assert.match(html, /data-resizer-var="--ctox-left-width"/);
   assert.match(css, /\.outbound-mailserver-domain-card/);
 });
 

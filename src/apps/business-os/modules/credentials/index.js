@@ -12,13 +12,11 @@ const labels = {
     title: 'Zugangsdaten',
     subtitle: 'Write-only: Werte werden verschlüsselt im CTOX-Secret-Store abgelegt und nie an den Browser zurückgegeben.',
     refresh: 'Aktualisieren',
-    known_title: 'Bekannte Zugangsdaten',
     extra_title: 'Weitere Zugangsdaten',
     add_title: 'Eigene Zugangsdaten hinzufügen',
     key_label: 'Schlüssel',
     value_label: 'Wert',
     add_btn: 'Hinzufügen',
-    add_hint: 'Schlüssel im Format UPPER_SNAKE_CASE (A–Z, 0–9, _).',
     status_set: 'Gesetzt',
     status_unset: 'Nicht gesetzt',
     updated: 'aktualisiert {date}',
@@ -41,13 +39,11 @@ const labels = {
     title: 'Credentials',
     subtitle: 'Write-only: values are stored encrypted in the CTOX secret store and never returned to the browser.',
     refresh: 'Refresh',
-    known_title: 'Known credentials',
     extra_title: 'Other credentials',
     add_title: 'Add a custom credential',
     key_label: 'Key',
     value_label: 'Value',
     add_btn: 'Add',
-    add_hint: 'Key must be UPPER_SNAKE_CASE (A–Z, 0–9, _).',
     status_set: 'Set',
     status_unset: 'Not set',
     updated: 'updated {date}',
@@ -136,6 +132,7 @@ async function loadModuleMarkup() {
 
 function bindElements(host) {
   els.host = host;
+  els.root = host.querySelector('[data-credentials-root]');
   els.notice = host.querySelector('[data-cred-notice]');
   els.list = host.querySelector('[data-cred-list]');
   els.extraSection = host.querySelector('[data-cred-extra-section]');
@@ -144,6 +141,7 @@ function bindElements(host) {
   els.addForm = host.querySelector('[data-cred-add]');
   els.addKey = host.querySelector('[data-add-key]');
   els.addValue = host.querySelector('[data-add-value]');
+  els.toggleAdd = host.querySelector('[data-toggle-add]');
 }
 
 function applyStaticLabels() {
@@ -160,17 +158,25 @@ function applyStaticLabels() {
     refreshButton.setAttribute('aria-label', state.t('refresh'));
     refreshButton.setAttribute('title', state.t('refresh'));
   }
-  set('[data-cred-known-title]', 'known_title');
   set('[data-cred-extra-title]', 'extra_title');
   set('[data-cred-add-title]', 'add_title');
   set('[data-cred-key-label]', 'key_label');
   set('[data-cred-value-label]', 'value_label');
   set('[data-cred-add-btn]', 'add_btn');
-  set('[data-cred-add-hint]', 'add_hint');
+  if (els.toggleAdd) {
+    els.toggleAdd.setAttribute('aria-label', state.t('add_title'));
+    els.toggleAdd.setAttribute('title', state.t('add_title'));
+  }
   if (els.addKey) els.addKey.placeholder = 'CUSTOM_KEY';
 }
 
 function wireEvents() {
+  // The add-custom-credential form is a rare action: collapsed by default and
+  // revealed on demand via the header toggle (threads-style disclosure).
+  els.toggleAdd?.addEventListener('click', () => {
+    const hidden = els.root?.classList.toggle('is-add-hidden');
+    els.toggleAdd.setAttribute('aria-pressed', hidden ? 'false' : 'true');
+  });
   els.host.addEventListener('click', async (event) => {
     const button = event.target.closest('[data-action]');
     if (!button) return;

@@ -1,9 +1,8 @@
 /* src/apps/business-os/modules/shiftflow/index.js */
 import { loadModuleMessages } from '../../shared/i18n.js';
-import { CtoxResizer } from '../../shared/resizer.js';
 import { accumulateUeberlassung, checkDailyHours, checkRestPeriods } from './core/arbzg.js';
 
-const MOD_BUILD = '20260605-rxdb-cancel1';
+const MOD_BUILD = '20260718-ux-reduce-v1';
 const PLANNING_COLLECTIONS = Object.freeze([
   'planning_employees',
   'planning_projects',
@@ -138,7 +137,10 @@ export async function mount(ctx) {
     // Center tabs
     viewSchedulerTabBtn: ctx.host.querySelector('#viewSchedulerTabBtn'),
     viewTimesheetsTabBtn: ctx.host.querySelector('#viewTimesheetsTabBtn'),
-    viewBillingTabBtn: ctx.host.querySelector('#viewBillingTabBtn')
+    viewBillingTabBtn: ctx.host.querySelector('#viewBillingTabBtn'),
+
+    // Right-pane visibility toggle (UX reduction: hidden by default)
+    toggleActions: ctx.host.querySelector('[data-toggle-actions]')
   };
 
   // Seed default dates in Billing selector (current month)
@@ -154,8 +156,9 @@ export async function mount(ctx) {
   // Bind Event Listeners
   bindEventListeners(ctx, els);
 
-  // Set up column resizing
-  const resizeCleanup = setupShiftflowColumnResizing(els.app);
+  // Column resizing is owned by the shell: the `.ctox-column-resizer
+  // [data-resizer-var]` handles in index.html inside the `[data-resize-frame]`
+  // root get drag/keyboard/persistence from the shell resizer for free.
 
   // Initial UI updates
   updateWeekRangeDisplay(els);
@@ -180,7 +183,6 @@ export async function mount(ctx) {
     disposed = true;
     activeSubscriptions.forEach(sub => sub.unsubscribe?.());
     activeSubscriptions = [];
-    resizeCleanup?.();
     contextMenuCleanup?.();
     contextMenu?.remove();
     contextMenu = null;
@@ -253,7 +255,7 @@ function renderGridHeader(els) {
     els.schedulerCornerCell.textContent = t('projects', 'Projekte');
   }
 
-  const baseHeader = `<div class="grid-corner-cell">${escapeHtml(els.schedulerCornerCell.textContent)}</div>`;
+  const baseHeader = `<div class="shiftflow-grid-corner-cell">${escapeHtml(els.schedulerCornerCell.textContent)}</div>`;
   const monday = new Date(currentWeekStart);
   const todayStr = new Date().toDateString();
 
@@ -342,6 +344,10 @@ function applyTimelineState(els) {
 }
 
 function showInspectorSection(els) {
+  // Reveal the collapsible right pane too, otherwise the inspector would open
+  // inside a hidden pane and the user would have to discover the toggle.
+  els.app?.classList.remove('is-actions-hidden');
+  els.toggleActions?.setAttribute('aria-pressed', 'true');
   els.aiPlannerSection.classList.add('hidden');
   els.detailInspectorSection.classList.remove('hidden');
   els.detailInspectorSection.classList.add('is-open');
@@ -776,13 +782,12 @@ function renderEmployeesList(employees, timeRecords, els, ctx) {
     const isActive = activeEmpIds.has(emp.id);
 
     const cardHtml = `
-      <div class="employee-card ${isActive ? 'active' : ''} ${selectedEmployeeId === emp.id ? 'selected' : ''}" data-emp-id="${escapeHtml(emp.id)}" data-context-record-id="${escapeHtml(emp.id)}" data-context-record-type="planning_employee" data-context-label="${escapeHtml(emp.name || emp.id)}" draggable="true">
-        <div class="emp-avatar" style="background: ${emp.avatar_color || 'var(--shiftflow-accent)'}">${initials}</div>
+      <div class="ctox-list-item employee-card ${isActive ? 'active' : ''}" data-emp-id="${escapeHtml(emp.id)}" data-context-record-id="${escapeHtml(emp.id)}" data-context-record-type="planning_employee" data-context-label="${escapeHtml(emp.name || emp.id)}" draggable="true">
+        <div class="ctox-avatar emp-avatar" style="background: ${emp.avatar_color || 'var(--accent)'}">${initials}</div>
         <div class="emp-info">
           <div class="emp-name">${escapeHtml(emp.name)}</div>
           <div class="emp-meta">${escapeHtml(emp.role)}</div>
         </div>
-        ${isActive ? '<span class="status-indicator active"></span>' : ''}
       </div>
     `;
 
@@ -793,8 +798,8 @@ function renderEmployeesList(employees, timeRecords, els, ctx) {
     }
   });
 
-  els.activeEmployeeList.innerHTML = activeSection.length ? activeSection.join('') : '<div class="pane-subtitle" style="padding: 4px 8px;">Niemand im Dienst</div>';
-  els.inactiveEmployeeList.innerHTML = inactiveSection.length ? inactiveSection.join('') : '<div class="pane-subtitle" style="padding: 4px 8px;">Keine weiteren Mitarbeiter</div>';
+  els.activeEmployeeList.innerHTML = activeSection.length ? activeSection.join('') : '<div class="ctox-empty">Niemand im Dienst</div>';
+  els.inactiveEmployeeList.innerHTML = inactiveSection.length ? inactiveSection.join('') : '<div class="ctox-empty">Keine weiteren Mitarbeiter</div>';
 
   els.activeEmployeesCount.textContent = activeSection.length;
   els.inactiveEmployeesCount.textContent = inactiveSection.length;
@@ -827,23 +832,23 @@ function renderEmployeesList(employees, timeRecords, els, ctx) {
 
 function renderProjectsList(projects, els, ctx) {
   const projectCards = projects.map(proj => {
-    const activeBadge = proj.status === 'active' ? `<span class="project-card-badge" style="background:${proj.color || 'var(--shiftflow-accent)'};"></span>` : '';
+    const activeBadge = proj.status === 'active' ? `<span class="project-card-badge" style="background:${proj.color || 'var(--accent)'};"></span>` : '';
 
     return `
-      <div class="project-card" data-proj-id="${escapeHtml(proj.id)}" data-context-record-id="${escapeHtml(proj.id)}" data-context-record-type="planning_project" data-context-label="${escapeHtml(proj.name || proj.title || proj.id)}">
+      <div class="ctox-list-item project-card" data-proj-id="${escapeHtml(proj.id)}" data-context-record-id="${escapeHtml(proj.id)}" data-context-record-type="planning_project" data-context-label="${escapeHtml(proj.name || proj.title || proj.id)}">
         <div class="project-card-info">
           <div class="project-card-name">${escapeHtml(proj.name)}</div>
           <div class="project-card-client">${escapeHtml(proj.client)} · ${escapeHtml(proj.location || '')}</div>
         </div>
         <div class="project-card-meta">
           ${activeBadge}
-          <span class="project-card-rate">${proj.hourly_rate.toFixed(2)} €/h</span>
+          <span class="ctox-badge">${proj.hourly_rate.toFixed(2)} €/h</span>
         </div>
       </div>
     `;
   }).join('');
 
-  els.projectList.innerHTML = projectCards || '<div class="pane-subtitle" style="padding: 4px 8px;">Keine Projekte angelegt</div>';
+  els.projectList.innerHTML = projectCards || '<div class="ctox-empty">Keine Projekte angelegt</div>';
 
   // Bind edit dialog click listeners
   els.projectList.querySelectorAll('.project-card').forEach(card => {
@@ -875,7 +880,7 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
 
       const rowHeader = `
         <div class="row-employee-cell">
-          <div class="emp-avatar" style="background: ${emp.avatar_color || 'var(--shiftflow-accent)'}">${initials}</div>
+          <div class="ctox-avatar emp-avatar" style="background: ${emp.avatar_color || 'var(--accent)'}">${initials}</div>
           <div class="emp-info">
             <div class="emp-name">${escapeHtml(emp.name)}</div>
             <div class="emp-meta">${escapeHtml(emp.role)}</div>
@@ -907,7 +912,7 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
           // Resolve project details
           const proj = projects.find(p => p.id === shift.project_id);
           const projName = proj ? proj.name : (shift.location || 'Sonstiges');
-          const projColor = proj ? proj.color : 'var(--shiftflow-accent)';
+          const projColor = proj ? proj.color : 'var(--accent)';
 
           return `
             <button type="button" class="shift-card dept-${shift.department?.toLowerCase() || 'service'} ${shift.status || 'published'}" data-shift-id="${escapeHtml(shift.id)}" data-context-record-id="${escapeHtml(shift.id)}" data-context-record-type="planning_shift" data-context-label="${escapeHtml(shift.title || 'Schicht')}" aria-label="${escapeHtml(shift.title || 'Schicht')} ${startStr} - ${endStr}">
@@ -915,8 +920,8 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
                 <span>${startStr} - ${endStr}</span>
                 <span class="shift-tag">${shift.department}</span>
               </div>
-              <div style="font-weight:700; margin-top:2px;">${escapeHtml(shift.title || 'Schicht')}</div>
-              <div class="pane-subtitle" style="margin-top:2px; font-size:9px; color:inherit;">${duration} Std · ${escapeHtml(projName)}</div>
+              <div class="shift-title">${escapeHtml(shift.title || 'Schicht')}</div>
+              <div class="shift-meta">${duration} Std · ${escapeHtml(projName)}</div>
               <div class="project-strip" style="background:${projColor};"></div>
             </button>
           `;
@@ -952,7 +957,7 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
 
     const rows = filteredProjects.map(proj => {
       const rowHeader = `
-        <div class="row-employee-cell" style="border-color: color-mix(in srgb, ${proj.color || 'var(--shiftflow-accent)'} 45%, var(--shiftflow-line)); background: color-mix(in srgb, ${proj.color || 'var(--shiftflow-accent)'} 8%, transparent);">
+        <div class="row-employee-cell" style="border-color: color-mix(in srgb, ${proj.color || 'var(--accent)'} 45%, var(--line)); background: color-mix(in srgb, ${proj.color || 'var(--accent)'} 8%, transparent);">
           <div class="emp-info">
             <div class="emp-name" style="font-weight:800;">${escapeHtml(proj.name)}</div>
             <div class="emp-meta">${escapeHtml(proj.client)}</div>
@@ -988,19 +993,19 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
           // Resolve employee details
           const emp = employees.find(e => e.id === shift.employee_id);
           const empName = emp ? emp.name : 'Unbesetzt';
-          const avatarColor = emp ? emp.avatar_color : 'var(--shiftflow-muted)';
+          const avatarColor = emp ? emp.avatar_color : 'var(--muted)';
           const initials = emp ? emp.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : '?';
 
           return `
             <button type="button" class="shift-card dept-${shift.department?.toLowerCase() || 'service'} ${shift.status || 'published'}" data-shift-id="${escapeHtml(shift.id)}" data-context-record-id="${escapeHtml(shift.id)}" data-context-record-type="planning_shift" data-context-label="${escapeHtml(shift.title || 'Schicht')}" aria-label="${escapeHtml(shift.title || 'Schicht')} ${startStr} - ${endStr}" style="display:flex; flex-direction:column;">
               <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
-                <div class="emp-avatar" style="width:16px; height:16px; font-size:7px; background:${avatarColor};">${initials}</div>
+                <div class="ctox-avatar emp-avatar" style="width:16px; height:16px; font-size:7px; background:${avatarColor};">${initials}</div>
                 <span style="font-weight:700; font-size:11px;">${escapeHtml(empName)}</span>
               </div>
               <div class="shift-time" style="font-size:10px;">
                 <span>${startStr} - ${endStr} (${duration}h)</span>
               </div>
-              <div class="pane-subtitle" style="font-size:9.5px; color:inherit; margin-top:2px;">${escapeHtml(shift.title || 'Schicht')}</div>
+              <div class="shift-meta">${escapeHtml(shift.title || 'Schicht')}</div>
             </button>
           `;
         }).join('');
@@ -1176,7 +1181,7 @@ function renderTimesheets(employees, projects, shifts, records, els, ctx) {
       s.start_time <= dayEnd
     );
 
-    let sollHtml = `<span style="color:var(--shiftflow-muted); font-size:11px;">${t('noShiftPlanned', 'Keine Schicht eingeplant (Überstunden)')}</span>`;
+    let sollHtml = `<span class="timesheet-secondary">${t('noShiftPlanned', 'Keine Schicht eingeplant (Überstunden)')}</span>`;
     let warningBadge = '';
 
     if (dayShifts.length > 0) {
@@ -1191,39 +1196,39 @@ function renderTimesheets(employees, projects, shifts, records, els, ctx) {
       if (Math.abs(diff) >= 0.25) {
         const sign = diff > 0 ? '+' : '';
         const badgeClass = diff > 0 ? 'is-success' : 'is-danger';
-        warningBadge = `<span class="ctox-badge ${badgeClass}" style="font-weight:700; margin-left:8px;">${t('hoursDeviationText', '{0}{1} Std Abweichung', sign, diff.toFixed(1))}</span>`;
+        warningBadge = `<span class="ctox-badge ${badgeClass}">${t('hoursDeviationText', '{0}{1} Std Abweichung', sign, diff.toFixed(1))}</span>`;
       }
     }
 
     // 2. Resolve Project context
     const proj = projects.find(p => p.id === rec.project_id);
     const projName = proj ? proj.name : t('noProject', 'Ohne Projekt');
-    const projColor = proj ? proj.color : 'var(--shiftflow-line)';
+    const projColor = proj ? proj.color : 'var(--line)';
 
     return `
       <div class="timesheet-card" data-rec-id="${rec.id}">
         <div class="timesheet-card-main">
-          <div class="emp-avatar" style="background: ${emp ? emp.avatar_color : 'var(--shiftflow-muted)'}">${initials}</div>
+          <div class="ctox-avatar emp-avatar" style="background: ${emp ? emp.avatar_color : 'var(--muted)'}">${initials}</div>
           <div class="timesheet-details">
-            <div style="font-weight:800; font-size:14px; color:var(--shiftflow-text);">${escapeHtml(emp ? emp.name : t('employee', 'Mitarbeiter'))} <span style="font-weight:400; font-size:12px; color:var(--shiftflow-muted);">(${escapeHtml(emp ? emp.role : '')})</span></div>
-            <div style="margin-top:4px; font-size:12px; display:flex; align-items:center; gap:8px;">
+            <div class="timesheet-primary">${escapeHtml(emp ? emp.name : t('employee', 'Mitarbeiter'))} <span class="timesheet-secondary">(${escapeHtml(emp ? emp.role : '')})</span></div>
+            <div class="timesheet-meta-row">
               <span>${t('dateText', 'Datum: <strong>{0}</strong>', dateStr)}</span>
-              <span class="ctox-badge" style="background:color-mix(in srgb, ${projColor} 15%, transparent); color:var(--shiftflow-text);">${t('projects', 'Projekt')}: ${escapeHtml(projName)}</span>
+              <span class="ctox-badge" style="background:color-mix(in srgb, ${projColor} 15%, transparent); color:var(--text);">${t('projects', 'Projekt')}: ${escapeHtml(projName)}</span>
             </div>
-            <div style="margin-top:4px; font-size:12px; color:var(--shiftflow-muted);">
+            <div class="timesheet-secondary">
               ${sollHtml}
             </div>
-            ${rec.notes ? `<div class="timesheet-notes" style="margin-top:6px; font-style:italic;">"${escapeHtml(rec.notes)}"</div>` : ''}
+            ${rec.notes ? `<div class="timesheet-notes">"${escapeHtml(rec.notes)}"</div>` : ''}
           </div>
-          <div class="timesheet-hours-block" style="text-align:right;">
+          <div class="timesheet-hours-block">
             <div class="timesheet-hours">${workedHoursStr} ${lang === 'en' ? 'hrs.' : 'Std.'}</div>
             <div class="timesheet-time-range">${startStr} - ${endStr} ${breakMin ? `(${t('pauseText', 'Pause: {0}m', breakMin)})` : ''}</div>
-            <div style="margin-top:4px;">${warningBadge}</div>
+            <div class="timesheet-warning-row">${warningBadge}</div>
           </div>
         </div>
         <div class="timesheet-card-actions">
-          <button class="os-btn os-btn-danger btn-reject" data-rec-id="${rec.id}">${t('reject', 'Ablehnen')}</button>
-          <button class="os-btn os-btn-primary btn-approve" data-rec-id="${rec.id}">${t('approveAndBook', 'Genehmigen & Buchen')}</button>
+          <button class="ctox-button ctox-button--sm is-danger btn-reject" data-rec-id="${rec.id}">${t('reject', 'Ablehnen')}</button>
+          <button class="ctox-button ctox-button--sm is-primary btn-approve" data-rec-id="${rec.id}">${t('approveAndBook', 'Genehmigen & Buchen')}</button>
         </div>
       </div>
     `;
@@ -1346,9 +1351,9 @@ function renderBillingAggregation(employees, projects, records, els) {
 
       return `
         <tr>
-          <td style="font-weight:700; display:flex; align-items:center; gap:8px; height:48px;">
-            <span style="width:8px; height:8px; border-radius:50%; background:${p.color || 'var(--shiftflow-muted)'}"></span>
-            ${escapeHtml(p.name)}
+          <td class="billing-project-cell">
+            <span class="project-card-badge" style="background:${p.color || 'var(--muted)'}"></span>
+            <strong>${escapeHtml(p.name)}</strong>
           </td>
           <td>${escapeHtml(p.client || '')}</td>
           <td class="is-num" style="font-weight:600;">${data.hours.toFixed(1)} Std</td>
@@ -1359,7 +1364,7 @@ function renderBillingAggregation(employees, projects, records, els) {
             <span class="ctox-badge ${badgeClass}">${marginPercent.toFixed(1)}% (${grossMargin.toLocaleString('de-DE', { maximumFractionDigits: 0 })} €)</span>
           </td>
           <td class="is-num">
-            <button class="os-btn btn-billing-inspect" data-proj-id="${p.id}" style="padding:4px 8px; font-size:11px;">Details</button>
+            <button class="ctox-button ctox-button--sm btn-billing-inspect" data-proj-id="${p.id}">Details</button>
           </td>
         </tr>
       `;
@@ -1367,8 +1372,8 @@ function renderBillingAggregation(employees, projects, records, els) {
 
   els.billingAggregationBody.innerHTML = rowsHtml || `
     <tr>
-      <td colspan="8" style="text-align:center; padding:32px; color:var(--shiftflow-muted);">
-        Keine freigegebenen Zeiterfassungen im gewählten Zeitraum vorhanden.
+      <td colspan="8">
+        <div class="ctox-empty">Keine freigegebenen Zeiterfassungen im gewählten Zeitraum vorhanden.</div>
       </td>
     </tr>
   `;
@@ -1402,12 +1407,12 @@ function openBillingDetailsInspector(projId, projectData, els, ctx) {
 
   const itemsHtml = projectData.details.map(item => {
     return `
-      <div style="display:flex; justify-content:space-between; padding:12px 0; border-bottom:1px solid var(--shiftflow-line);">
+      <div class="shiftflow-billing-detail-row">
         <div>
-          <div style="font-weight:700; color:var(--shiftflow-text);">${escapeHtml(item.employee_name)}</div>
-          <div style="font-size:11px; color:var(--shiftflow-muted); margin-top:2px;">${t('billingDetailsCostLabel', 'Umsatz: {0} € · Lohnkosten: {1} €', item.revenue.toFixed(2), item.cost.toFixed(2))}</div>
+          <div class="shiftflow-billing-detail-name">${escapeHtml(item.employee_name)}</div>
+          <div class="shiftflow-billing-detail-meta">${t('billingDetailsCostLabel', 'Umsatz: {0} € · Lohnkosten: {1} €', item.revenue.toFixed(2), item.cost.toFixed(2))}</div>
         </div>
-        <div style="font-weight:700; align-self:center; color:var(--shiftflow-text);">${item.hours.toFixed(1)} ${t('hoursShort', 'Std.')}</div>
+        <div class="shiftflow-billing-detail-hours">${item.hours.toFixed(1)} ${t('hoursShort', 'Std.')}</div>
       </div>
     `;
   }).join('');
@@ -1420,24 +1425,20 @@ function openBillingDetailsInspector(projId, projectData, els, ctx) {
       </div>
       <button class="ctox-pane-icon" type="button" data-drawer-close aria-label="${t('close', 'Schließen')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
     </header>
-    <div style="padding:16px; display:flex; flex-direction:column; gap:16px;">
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-        <div style="background:var(--shiftflow-surface-2); padding:10px; border-radius:8px; border:1px solid var(--shiftflow-line);">
-          <span class="ctox-field-label">${t('colCustomer', 'Kunde')}</span>
-          <div style="font-weight:700; font-size:13px; margin-top:2px; color:var(--shiftflow-text);">${escapeHtml(projectData.project.client)}</div>
-        </div>
-        <div style="background:var(--shiftflow-surface-2); padding:10px; border-radius:8px; border:1px solid var(--shiftflow-line);">
-          <span class="ctox-field-label">${t('location', 'Einsatzort')}</span>
-          <div style="font-weight:700; font-size:13px; margin-top:2px; color:var(--shiftflow-text);">${escapeHtml(projectData.project.location || t('noInfo', 'Keine Angabe'))}</div>
-        </div>
-      </div>
+    <div class="shiftflow-drawer-form">
+      <dl class="ctox-fields">
+        <dt>${t('colCustomer', 'Kunde')}</dt>
+        <dd>${escapeHtml(projectData.project.client)}</dd>
+        <dt>${t('location', 'Einsatzort')}</dt>
+        <dd>${escapeHtml(projectData.project.location || t('noInfo', 'Keine Angabe'))}</dd>
+      </dl>
 
-      <hr style="border:0; height:1px; background:var(--shiftflow-line); margin:4px 0;" />
+      <hr class="shiftflow-separator" />
 
-      <div style="display:flex; flex-direction:column; gap:4px;">
+      <div>
         <span class="ctox-field-label">${t('employeeDistribution', 'Mitarbeiter Aufteilung')}</span>
-        <div style="display:flex; flex-direction:column; max-height:400px; overflow-y:auto;" class="os-scrollbar">
-          ${itemsHtml || `<div style="color:var(--shiftflow-muted); padding:12px; text-align:center; font-style:italic;">${t('noEntries', 'Keine Einträge')}</div>`}
+        <div class="shiftflow-billing-detail-list os-scrollbar">
+          ${itemsHtml || `<div class="ctox-empty">${t('noEntries', 'Keine Einträge')}</div>`}
         </div>
       </div>
     </div>
@@ -1575,46 +1576,40 @@ async function openShiftDetails(shiftId, shifts, employees, els, ctx) {
   const options = { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' };
 
   els.inspectorContent.innerHTML = `
-    <div style="padding: 12px; display:flex; flex-direction:column; gap:12px;">
-      <div style="display:flex; align-items:center; gap:10px;">
-        <div class="emp-avatar" style="background: ${emp ? emp.avatar_color : 'var(--shiftflow-muted)'}; width:36px; height:36px; font-size:12px;">
+    <div class="shiftflow-inspector">
+      <div class="shiftflow-inspector-person">
+        <div class="ctox-avatar ctox-avatar--lg emp-avatar" style="background: ${emp ? emp.avatar_color : 'var(--muted)'};">
           ${emp ? emp.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : '?'}
         </div>
         <div>
-          <h4 style="margin:0; font-size:14px;">${escapeHtml(emp ? emp.name : t('employee', 'Mitarbeiter'))}</h4>
-          <span style="font-size:11px; color:var(--shiftflow-muted);">${escapeHtml(emp ? emp.role : '')}</span>
+          <h4 class="shiftflow-inspector-name">${escapeHtml(emp ? emp.name : t('employee', 'Mitarbeiter'))}</h4>
+          <span class="shiftflow-inspector-sub">${escapeHtml(emp ? emp.role : '')}</span>
         </div>
       </div>
 
-      <hr style="border:0; height:1px; background:var(--shiftflow-line); margin:4px 0;" />
+      <hr class="shiftflow-separator" />
 
-      <div>
-        <span class="ctox-field-label">${t('dateTime', 'Datum & Zeit')}</span>
-        <div style="font-weight:700; font-size:13px; margin-top:2px;">${start.toLocaleDateString(lang === 'en' ? 'en-US' : 'de-DE', options)}</div>
-        <div style="font-size:13px; color:var(--shiftflow-accent); font-weight:700; margin-top:2px;">
-          ${formatTime(start)} - ${formatTime(end)} (${((shift.end_time - shift.start_time)/3600000).toFixed(1)} ${t('hoursShort', 'Std')})
-        </div>
-      </div>
-
-      <div>
-        <span class="ctox-field-label">${t('colProject', 'Projekt / Einsatzort')}</span>
-        <div style="font-weight:700; font-size:12.5px; margin-top:2px;">${escapeHtml(projName)}</div>
-      </div>
-
-      <div>
-        <span class="ctox-field-label">${t('department', 'Abteilung')}</span>
-        <div style="font-weight:700; font-size:12.5px; margin-top:2px;">${t('dept' + (shift.department === 'Küche' ? 'Kitchen' : shift.department === 'Verwaltung' ? 'Admin' : shift.department), shift.department)}</div>
-      </div>
+      <dl class="ctox-fields">
+        <dt>${t('dateTime', 'Datum & Zeit')}</dt>
+        <dd>
+          ${start.toLocaleDateString(lang === 'en' ? 'en-US' : 'de-DE', options)}<br>
+          <span class="shiftflow-accent-text">${formatTime(start)} - ${formatTime(end)} (${((shift.end_time - shift.start_time)/3600000).toFixed(1)} ${t('hoursShort', 'Std')})</span>
+        </dd>
+        <dt>${t('colProject', 'Projekt / Einsatzort')}</dt>
+        <dd>${escapeHtml(projName)}</dd>
+        <dt>${t('department', 'Abteilung')}</dt>
+        <dd>${t('dept' + (shift.department === 'Küche' ? 'Kitchen' : shift.department === 'Verwaltung' ? 'Admin' : shift.department), shift.department)}</dd>
+      </dl>
 
       ${shift.notes ? `
         <div>
           <span class="ctox-field-label">${t('notes', 'Notizen')}</span>
-          <div style="font-size:12px; font-style:italic; margin-top:2px; background:var(--shiftflow-surface-2); padding:6px; border-radius:6px;">"${escapeHtml(shift.notes)}"</div>
+          <div class="ctox-callout">"${escapeHtml(shift.notes)}"</div>
         </div>
       ` : ''}
 
-      <div style="display:flex; gap:8px; margin-top:12px;">
-        <button class="os-btn" id="btnEditShiftInspector" style="flex:1;">${t('edit', 'Bearbeiten')}</button>
+      <div class="shiftflow-inspector-actions">
+        <button class="ctox-button" id="btnEditShiftInspector">${t('edit', 'Bearbeiten')}</button>
       </div>
     </div>
   `;
@@ -1668,58 +1663,54 @@ async function openEmployeeDetailsInspector(empId, employees, els, ctx) {
   els.inspectorTitle.textContent = t('employeeDetails', 'Mitarbeiter-Details');
 
   els.inspectorContent.innerHTML = `
-    <div style="padding: 12px; display:flex; flex-direction:column; gap:14px;">
+    <div class="shiftflow-inspector">
       <!-- Header Info -->
-      <div style="display:flex; align-items:center; gap:10px;">
-        <div class="emp-avatar" style="background: ${emp.avatar_color || 'var(--shiftflow-accent)'}; width:40px; height:40px; font-size:13px; font-weight:700; display:flex; align-items:center; justify-content:center; border-radius:50%; color:#fff;">
+      <div class="shiftflow-inspector-person">
+        <div class="ctox-avatar ctox-avatar--lg emp-avatar" style="background: ${emp.avatar_color || 'var(--accent)'};">
           ${emp.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
         </div>
-        <div style="flex: 1;">
-          <h4 style="margin:0; font-size:15px; font-weight:700; color:var(--shiftflow-text);">${escapeHtml(emp.name)}</h4>
-          <span style="font-size:11.5px; color:var(--shiftflow-muted);">${escapeHtml(emp.role || t('employee', 'Mitarbeiter'))}</span>
+        <div>
+          <h4 class="shiftflow-inspector-name">${escapeHtml(emp.name)}</h4>
+          <span class="shiftflow-inspector-sub">${escapeHtml(emp.role || t('employee', 'Mitarbeiter'))}</span>
         </div>
       </div>
 
-      <hr style="border:0; height:1px; background:var(--shiftflow-line); margin:2px 0;" />
+      <hr class="shiftflow-separator" />
 
-      <!-- Stammdaten & Stats -->
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; background:var(--shiftflow-surface-2); padding:10px; border-radius:8px;">
-        <div>
-          <span class="ctox-field-label">${t('billingWagesLabel', 'Lohnkosten')}</span>
-          <div style="font-weight:700; font-size:13px; margin-top:2px; color:var(--shiftflow-text);">${emp.internal_hourly_rate ? emp.internal_hourly_rate.toFixed(2) : '25.00'} €/${t('hoursShort', 'Std')}</div>
-        </div>
-        <div>
-          <span class="ctox-field-label">${t('weeklyTarget', 'Wochen-Soll')}</span>
-          <div style="font-weight:700; font-size:13px; margin-top:2px; color:var(--shiftflow-text);">${emp.weekly_target_hours || '40'} ${t('hoursShort', 'Std')}</div>
-        </div>
-      </div>
+      <!-- Stammdaten -->
+      <dl class="ctox-fields">
+        <dt>${t('billingWagesLabel', 'Lohnkosten')}</dt>
+        <dd>${emp.internal_hourly_rate ? emp.internal_hourly_rate.toFixed(2) : '25.00'} €/${t('hoursShort', 'Std')}</dd>
+        <dt>${t('weeklyTarget', 'Wochen-Soll')}</dt>
+        <dd>${emp.weekly_target_hours || '40'} ${t('hoursShort', 'Std')}</dd>
+      </dl>
 
       <!-- Weekly Planned Progress -->
       <div>
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+        <div class="shiftflow-progress-head">
           <span class="ctox-field-label">${t('plannedThisWeek', 'Eingeplant (diese Woche)')}</span>
-          <span style="font-size:12px; font-weight:700; color:${totalHours > (emp.weekly_target_hours || 40) ? 'var(--shiftflow-danger)' : 'var(--shiftflow-accent)'};">
+          <span class="shiftflow-progress-value" style="color:${totalHours > (emp.weekly_target_hours || 40) ? 'var(--danger)' : 'var(--accent)'};">
             ${totalHours.toFixed(1)} / ${emp.weekly_target_hours || '40'} ${t('hoursShort', 'Std')}
           </span>
         </div>
-        <div style="width:100%; height:6px; background:var(--shiftflow-surface-3); border-radius:3px; overflow:hidden;">
-          <div style="width:${Math.min(100, (totalHours / (emp.weekly_target_hours || 40)) * 100)}%; height:100%; background:${totalHours > (emp.weekly_target_hours || 40) ? 'var(--shiftflow-danger)' : 'var(--shiftflow-accent)'}; border-radius:3px;"></div>
+        <div class="shiftflow-progress">
+          <div class="shiftflow-progress-bar" style="width:${Math.min(100, (totalHours / (emp.weekly_target_hours || 40)) * 100)}%; background:${totalHours > (emp.weekly_target_hours || 40) ? 'var(--danger)' : 'var(--accent)'};"></div>
         </div>
       </div>
 
       <div>
         <span class="ctox-field-label">${t('departments', 'Abteilungen')}</span>
-        <div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:4px;">
+        <div class="shiftflow-badge-row">
           ${(emp.departments || ['Service']).map(dept => {
             const dMap = { 'Service': t('deptService', 'Service'), 'Küche': t('deptKitchen', 'Küche'), 'Bar': t('deptBar', 'Bar'), 'Verwaltung': t('deptAdmin', 'Verwaltung') };
-            return `<span style="background:var(--shiftflow-surface-3); font-size:11px; padding:3px 8px; border-radius:var(--control-radius); font-weight:600; color:var(--shiftflow-text);">${escapeHtml(dMap[dept] || dept)}</span>`;
+            return `<span class="ctox-badge">${escapeHtml(dMap[dept] || dept)}</span>`;
           }).join('')}
         </div>
       </div>
 
-        <p style="font-size:11px; color:var(--shiftflow-muted); margin:0 0 8px 0; line-height:1.3;">${t('quickAssignInstructions', 'Klicke auf einen Tag, um den Mitarbeiter direkt für das Projekt einzuteilen (8:00 - 16:00 Uhr):')}</p>
-        <div style="display:flex; flex-direction:column; gap:6px;">
-          ${activeProjects.length === 0 ? `<div style="color:var(--shiftflow-muted); font-size:11px; font-style:italic;">${t('noActiveProjects', 'Keine aktiven Projekte vorhanden.')}</div>` : activeProjects.map(proj => {
+        <p class="shiftflow-inspector-hint">${t('quickAssignInstructions', 'Klicke auf einen Tag, um den Mitarbeiter direkt für das Projekt einzuteilen (8:00 - 16:00 Uhr):')}</p>
+        <div class="shiftflow-quick-assign">
+          ${activeProjects.length === 0 ? `<div class="ctox-empty">${t('noActiveProjects', 'Keine aktiven Projekte vorhanden.')}</div>` : activeProjects.map(proj => {
             const weekdays = lang === 'en'
               ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
               : ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
@@ -1734,7 +1725,6 @@ async function openEmployeeDetailsInspector(empId, employees, els, ctx) {
                   data-proj-id="${proj.id}"
                   data-emp-id="${emp.id}"
                   data-date="${dateStr}"
-                  style="padding:3px 5px; min-width:26px; font-size:10px; font-weight:700; border-radius:4px; border:1px solid var(--shiftflow-line); background:var(--shiftflow-surface-2); color:var(--shiftflow-text); cursor:pointer;"
                   title="${dayName}, ${targetDate.toLocaleDateString(lang === 'en' ? 'en-US' : 'de-DE', {day:'2-digit', month:'2-digit'})}"
                 >
                   ${dayName}
@@ -1743,26 +1733,25 @@ async function openEmployeeDetailsInspector(empId, employees, els, ctx) {
             }).join('');
 
             return `
-              <div style="display:flex; flex-direction:column; gap:4px; padding:6px; border-radius:6px; background:var(--shiftflow-surface-2); border:1px solid var(--shiftflow-line);">
-                <div style="display:flex; align-items:center; gap:6px; font-size:11.5px; font-weight:700; color:var(--shiftflow-text);">
-                  <span style="background:${proj.color || 'var(--shiftflow-accent)'}; width:8px; height:8px; border-radius:50%; display:inline-block;"></span>
-                  <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:180px;">${escapeHtml(proj.name)}</span>
+              <div class="shiftflow-quick-assign-card">
+                <div class="shiftflow-quick-assign-title">
+                  <span class="project-card-badge" style="background:${proj.color || 'var(--accent)'};"></span>
+                  <span>${escapeHtml(proj.name)}</span>
                 </div>
-                <div style="display:flex; gap:2.5px; margin-top:2px;">
+                <div class="shiftflow-quick-assign-days">
                   ${weekdayButtons}
                 </div>
               </div>
             `;
           }).join('')}
         </div>
-      </div>
 
-      <hr style="border:0; height:1px; background:var(--shiftflow-line); margin:2px 0;" />
+      <hr class="shiftflow-separator" />
 
       <!-- Inspector Profile Actions -->
-      <div style="display:flex; gap:8px; margin-top:4px;">
-        <button class="os-btn" id="btnEditEmployeeInspector" style="flex:1;">${t('editProfile', 'Profil bearbeiten')}</button>
-        <button class="os-btn os-btn-danger" id="btnDeleteEmployeeInspector" style="flex:1;">${t('deleteEmployee', 'Mitarbeiter löschen')}</button>
+      <div class="shiftflow-inspector-actions">
+        <button class="ctox-button" id="btnEditEmployeeInspector">${t('editProfile', 'Profil bearbeiten')}</button>
+        <button class="ctox-button is-danger" id="btnDeleteEmployeeInspector">${t('deleteEmployee', 'Mitarbeiter löschen')}</button>
       </div>
     </div>
   `;
@@ -1863,40 +1852,40 @@ function openEmployeeDrawer(emp, els, ctx) {
     </header>
     <form class="shiftflow-drawer-form">
       <label>
-        <span>${t('name', 'Name')}</span>
-        <input type="text" name="name" class="os-input" value="${nameVal}" required placeholder="z.B. Max Mustermann" />
+        <span class="ctox-field-label">${t('name', 'Name')}</span>
+        <input type="text" name="name" class="ctox-input" value="${nameVal}" required placeholder="z.B. Max Mustermann" />
       </label>
       <label>
-        <span>${t('email', 'E-Mail')}</span>
-        <input type="email" name="email" class="os-input" value="${emailVal}" placeholder="z.B. max@ctox.dev" />
+        <span class="ctox-field-label">${t('email', 'E-Mail')}</span>
+        <input type="email" name="email" class="ctox-input" value="${emailVal}" placeholder="z.B. max@ctox.dev" />
       </label>
       <div class="form-row">
         <label>
-          <span>${t('wagesPerHr', 'Lohnkosten (€/h)')}</span>
-          <input type="number" step="0.01" name="internal_hourly_rate" class="os-input" value="${rateVal}" required />
+          <span class="ctox-field-label">${t('wagesPerHr', 'Lohnkosten (€/h)')}</span>
+          <input type="number" step="0.01" name="internal_hourly_rate" class="ctox-input" value="${rateVal}" required />
         </label>
         <label>
-          <span>${t('weeklyTargetHrs', 'Wochen-Soll (Std)')}</span>
-          <input type="number" name="weekly_target_hours" class="os-input" value="${hoursVal}" required />
+          <span class="ctox-field-label">${t('weeklyTargetHrs', 'Wochen-Soll (Std)')}</span>
+          <input type="number" name="weekly_target_hours" class="ctox-input" value="${hoursVal}" required />
         </label>
       </div>
       <label>
-        <span>${t('rolePosition', 'Rolle / Position')}</span>
-        <input type="text" name="role" class="os-input" value="${roleVal}" placeholder="${t('rolePlaceholder', 'z.B. Serviceleitung')}" required />
+        <span class="ctox-field-label">${t('rolePosition', 'Rolle / Position')}</span>
+        <input type="text" name="role" class="ctox-input" value="${roleVal}" placeholder="${t('rolePlaceholder', 'z.B. Serviceleitung')}" required />
       </label>
       <label>
-        <span>${t('departments', 'Abteilungen')}</span>
-        <div class="shiftflow-checkbox-group">
-          <label><input type="checkbox" name="departments" value="Service" ${depts.includes('Service') ? 'checked' : ''} /> ${t('deptService', 'Service')}</label>
-          <label><input type="checkbox" name="departments" value="Küche" ${depts.includes('Küche') ? 'checked' : ''} /> ${t('deptKitchen', 'Küche')}</label>
-          <label><input type="checkbox" name="departments" value="Bar" ${depts.includes('Bar') ? 'checked' : ''} /> ${t('deptBar', 'Bar')}</label>
-          <label><input type="checkbox" name="departments" value="Verwaltung" ${depts.includes('Verwaltung') ? 'checked' : ''} /> ${t('deptAdmin', 'Verwaltung')}</label>
+        <span class="ctox-field-label">${t('departments', 'Abteilungen')}</span>
+        <div class="ctox-choice-group">
+          <label class="ctox-choice"><input type="checkbox" name="departments" value="Service" ${depts.includes('Service') ? 'checked' : ''} /><span>${t('deptService', 'Service')}</span></label>
+          <label class="ctox-choice"><input type="checkbox" name="departments" value="Küche" ${depts.includes('Küche') ? 'checked' : ''} /><span>${t('deptKitchen', 'Küche')}</span></label>
+          <label class="ctox-choice"><input type="checkbox" name="departments" value="Bar" ${depts.includes('Bar') ? 'checked' : ''} /><span>${t('deptBar', 'Bar')}</span></label>
+          <label class="ctox-choice"><input type="checkbox" name="departments" value="Verwaltung" ${depts.includes('Verwaltung') ? 'checked' : ''} /><span>${t('deptAdmin', 'Verwaltung')}</span></label>
         </div>
       </label>
       <div class="shiftflow-drawer-actions ${isEdit ? 'has-danger' : ''}">
-        <button type="button" class="os-btn" data-drawer-cancel>${t('cancel', 'Abbrechen')}</button>
-        ${isEdit ? `<button type="button" class="os-btn os-btn-danger" data-drawer-delete>${t('delete', 'Löschen')}</button>` : ''}
-        <button type="submit" class="os-btn os-btn-primary">${submitText}</button>
+        <button type="button" class="ctox-button" data-drawer-cancel>${t('cancel', 'Abbrechen')}</button>
+        ${isEdit ? `<button type="button" class="ctox-button is-danger" data-drawer-delete>${t('delete', 'Löschen')}</button>` : ''}
+        <button type="submit" class="ctox-button is-primary">${submitText}</button>
       </div>
     </form>
   `;
@@ -2011,31 +2000,31 @@ function openProjectDrawer(proj, els, ctx) {
     </header>
     <form class="shiftflow-drawer-form">
       <label>
-        <span>${t('projectName', 'Projektname')}</span>
-        <input type="text" name="name" class="os-input" value="${nameVal}" required placeholder="${t('projectNamePlaceholder', 'z.B. Intersolar Standbau')}" />
+        <span class="ctox-field-label">${t('projectName', 'Projektname')}</span>
+        <input type="text" name="name" class="ctox-input" value="${nameVal}" required placeholder="${t('projectNamePlaceholder', 'z.B. Intersolar Standbau')}" />
       </label>
       <label>
-        <span>${t('customer', 'Kunde')}</span>
-        <input type="text" name="client" class="os-input" value="${clientVal}" required placeholder="${t('customerPlaceholder', 'z.B. Messe München GmbH')}" />
+        <span class="ctox-field-label">${t('customer', 'Kunde')}</span>
+        <input type="text" name="client" class="ctox-input" value="${clientVal}" required placeholder="${t('customerPlaceholder', 'z.B. Messe München GmbH')}" />
       </label>
       <label>
-        <span>${t('location', 'Einsatzort')}</span>
-        <input type="text" name="location" class="os-input" value="${locationVal}" placeholder="${t('locationPlaceholder', 'z.B. Halle A5, Stand 120')}" />
+        <span class="ctox-field-label">${t('location', 'Einsatzort')}</span>
+        <input type="text" name="location" class="ctox-input" value="${locationVal}" placeholder="${t('locationPlaceholder', 'z.B. Halle A5, Stand 120')}" />
       </label>
       <label>
-        <span>${t('hourlyRateExt', 'Stundensatz (externer Umsatz)')}</span>
-        <input type="number" step="0.01" name="hourly_rate" class="os-input" value="${rateVal}" required />
+        <span class="ctox-field-label">${t('hourlyRateExt', 'Stundensatz (externer Umsatz)')}</span>
+        <input type="number" step="0.01" name="hourly_rate" class="ctox-input" value="${rateVal}" required />
       </label>
       <label>
-        <span>${t('color', 'Farbe')}</span>
+        <span class="ctox-field-label">${t('color', 'Farbe')}</span>
         <div class="shiftflow-color-picker">
           ${colorPickerHtml}
         </div>
       </label>
       <div class="shiftflow-drawer-actions ${isEdit ? 'has-danger' : ''}">
-        <button type="button" class="os-btn" data-drawer-cancel>${t('cancel', 'Abbrechen')}</button>
-        ${isEdit ? `<button type="button" class="os-btn os-btn-danger" data-drawer-delete>${t('delete', 'Löschen')}</button>` : ''}
-        <button type="submit" class="os-btn os-btn-primary">${submitText}</button>
+        <button type="button" class="ctox-button" data-drawer-cancel>${t('cancel', 'Abbrechen')}</button>
+        ${isEdit ? `<button type="button" class="ctox-button is-danger" data-drawer-delete>${t('delete', 'Löschen')}</button>` : ''}
+        <button type="submit" class="ctox-button is-primary">${submitText}</button>
       </div>
     </form>
   `;
@@ -2156,25 +2145,25 @@ async function openShiftDrawer(shift, dateStr, empId, projId, els, ctx) {
     </header>
     <form class="shiftflow-drawer-form">
       <label>
-        <span>${t('employee', 'Mitarbeiter')}</span>
-        <select name="employee_id" class="os-select" required>
+        <span class="ctox-field-label">${t('employee', 'Mitarbeiter')}</span>
+        <select name="employee_id" class="ctox-select" required>
           ${empOptions}
         </select>
       </label>
       <label>
-        <span>${t('colProject', 'Projekt / Einsatzort')}</span>
-        <select name="project_id" class="os-select" required>
+        <span class="ctox-field-label">${t('colProject', 'Projekt / Einsatzort')}</span>
+        <select name="project_id" class="ctox-select" required>
           ${projOptions}
         </select>
       </label>
       <div class="form-row">
         <label>
-          <span>${t('date', 'Datum')}</span>
-          <input type="date" name="date" class="os-input" value="${shiftDateStr}" required />
+          <span class="ctox-field-label">${t('date', 'Datum')}</span>
+          <input type="date" name="date" class="ctox-input" value="${shiftDateStr}" required />
         </label>
         <label>
-          <span>${t('department', 'Abteilung')}</span>
-          <select name="department" class="os-select" required>
+          <span class="ctox-field-label">${t('department', 'Abteilung')}</span>
+          <select name="department" class="ctox-select" required>
             <option value="Service" ${deptVal === 'Service' ? 'selected' : ''}>${t('deptService', 'Service')}</option>
             <option value="Küche" ${deptVal === 'Küche' ? 'selected' : ''}>${t('deptKitchen', 'Küche')}</option>
             <option value="Bar" ${deptVal === 'Bar' ? 'selected' : ''}>${t('deptBar', 'Bar')}</option>
@@ -2184,22 +2173,22 @@ async function openShiftDrawer(shift, dateStr, empId, projId, els, ctx) {
       </div>
       <div class="form-row">
         <label>
-          <span>${t('begin', 'Beginn')}</span>
-          <input type="time" name="start_time" class="os-input" value="${startVal}" required />
+          <span class="ctox-field-label">${t('begin', 'Beginn')}</span>
+          <input type="time" name="start_time" class="ctox-input" value="${startVal}" required />
         </label>
         <label>
-          <span>${t('end', 'Ende')}</span>
-          <input type="time" name="end_time" class="os-input" value="${endVal}" required />
+          <span class="ctox-field-label">${t('end', 'Ende')}</span>
+          <input type="time" name="end_time" class="ctox-input" value="${endVal}" required />
         </label>
       </div>
       <label>
-        <span>${t('specialNotes', 'Besondere Notizen')}</span>
-        <textarea name="notes" class="os-input" placeholder="${t('notesPlaceholder', 'z.B. Schichtleitung übernehmen, Barista Service...')}" style="min-height: 60px;">${notesVal}</textarea>
+        <span class="ctox-field-label">${t('specialNotes', 'Besondere Notizen')}</span>
+        <textarea name="notes" class="ctox-textarea" placeholder="${t('notesPlaceholder', 'z.B. Schichtleitung übernehmen, Barista Service...')}">${notesVal}</textarea>
       </label>
       <div class="shiftflow-drawer-actions ${isEdit ? 'has-danger' : ''}">
-        <button type="button" class="os-btn" data-drawer-cancel>${t('cancel', 'Abbrechen')}</button>
-        ${isEdit ? `<button type="button" class="os-btn os-btn-danger" data-drawer-delete>${t('delete', 'Löschen')}</button>` : ''}
-        <button type="submit" class="os-btn os-btn-primary">${submitText}</button>
+        <button type="button" class="ctox-button" data-drawer-cancel>${t('cancel', 'Abbrechen')}</button>
+        ${isEdit ? `<button type="button" class="ctox-button is-danger" data-drawer-delete>${t('delete', 'Löschen')}</button>` : ''}
+        <button type="submit" class="ctox-button is-primary">${submitText}</button>
       </div>
     </form>
   `;
@@ -2393,6 +2382,14 @@ function bindEventListeners(ctx, els) {
   els.btnFindReplacements.addEventListener('click', () => {
     alert(t('aiReplacementAlert', 'Planungs-Assistent: Suche qualifizierten Ersatz für gemeldete Abwesenheiten...'));
   });
+
+  // Right-pane (AI planner + inspector) collapse toggle. Mirrors the threads /
+  // tickets pattern: hidden by default, header icon re-reveals on demand.
+  els.toggleActions?.addEventListener('click', () => {
+    if (!els.app) return;
+    const nowHidden = els.app.classList.toggle('is-actions-hidden');
+    els.toggleActions.setAttribute('aria-pressed', nowHidden ? 'false' : 'true');
+  });
 }
 
 function triggerScheduleGridRefresh(ctx, els) {
@@ -2495,7 +2492,7 @@ async function autoGenerateSchedule(ctx, els) {
   // Display a nice chat success message
   const msgHtml = `
     <div class="shiftflow-ai-msg bot">
-      <div class="shiftflow-ai-avatar">AI</div>
+      <div class="ctox-avatar ctox-avatar--sm">AI</div>
       <div class="shiftflow-ai-text">${t('aiGenerateSuccess', 'Ich habe erfolgreich einen optimierten Dienstplanentwurf (Mo-Fr) für alle aktiven Mitarbeiter generiert! Die Schichten wurden im Modus <strong>Entwurf</strong> angelegt, sodass du sie vor dem Veröffentlichen noch anpassen kannst.')}</div>
     </div>
   `;
@@ -2586,14 +2583,14 @@ async function runConflictsAnalysis(ctx, els) {
   // Render Conflicts list
   if (conflicts.length === 0) {
     els.conflictsList.innerHTML = `
-      <div class="shiftflow-conflict-empty-state">
+      <div class="ctox-empty">
         ${t('noConflictsDetected', 'Keine aktiven Konflikte erkannt. Der Dienstplan erfüllt alle Vorgaben.')}
       </div>
     `;
 
     const botMsg = `
       <div class="shiftflow-ai-msg bot">
-        <div class="shiftflow-ai-avatar">AI</div>
+        <div class="ctox-avatar ctox-avatar--sm">AI</div>
         <div class="shiftflow-ai-text">${t('aiCheckSuccess', 'Ich habe die Konfliktanalyse durchgeführt: Keine Regelverletzungen (Ruhezeiten, Höchstarbeitszeiten, Doppelbelegungen) gefunden! Perfekte Dienstplanung.')}</div>
       </div>
     `;
@@ -2602,7 +2599,7 @@ async function runConflictsAnalysis(ctx, els) {
     els.conflictsList.innerHTML = conflicts.map(c => {
       const icon = c.type === 'overtime' ? '🕒' : '⚠️';
       return `
-        <div class="shiftflow-conflict-item" style="display:flex; gap:8px; padding:8px 12px; background:color-mix(in srgb, #ef4444 8%, transparent); border:1px solid color-mix(in srgb, #ef4444 20%, transparent); border-radius:8px; margin-bottom:6px; font-size:12px;">
+        <div class="ctox-callout is-danger shiftflow-conflict-item">
           <span>${icon}</span>
           <div>${c.message}</div>
         </div>
@@ -2611,7 +2608,7 @@ async function runConflictsAnalysis(ctx, els) {
 
     const botMsg = `
       <div class="shiftflow-ai-msg bot">
-        <div class="shiftflow-ai-avatar">AI</div>
+        <div class="ctox-avatar ctox-avatar--sm">AI</div>
         <div class="shiftflow-ai-text">${t('aiCheckWarning', 'Vorsicht! Ich habe {0} Dienstplankonflikte bzw. Arbeitszeitüberschreitungen gefunden. Bitte prüfe das Konflikte-Panel unten rechts.', conflicts.length)}</div>
       </div>
     `;
@@ -2682,66 +2679,6 @@ function exportInvoiceDraftPayload() {
   URL.revokeObjectURL(url);
 
   alert(t('invoiceDraftDownloadSuccess', 'Rechnungsentwurf erfolgreich erstellt und heruntergeladen.\n\nDu kannst diese Datei direkt im CTOX Rechnungs-Modul einlesen.'));
-}
-
-// -------------------------------------------------------------
-// Column Resizing Logic
-// -------------------------------------------------------------
-
-function setupShiftflowColumnResizing(app) {
-  // Column resizing is now owned by the shell-global resizer (app.js
-  // `setupModuleResizers`): the `.ctox-column-resizer[data-resizer-var]`
-  // handles in index.html, inside the `[data-resize-frame]` root, get
-  // drag/keyboard/persistence for free. This DIY (CtoxResizer + localStorage)
-  // is retired; we no-op so call sites keep working without dangling refs.
-  return () => {};
-
-  // eslint-disable-next-line no-unreachable
-  if (!app) return;
-  const leftResizer = app.querySelector('[data-shiftflow-col-resizer="left"]');
-  const rightResizer = app.querySelector('[data-shiftflow-col-resizer="right"]');
-
-  if (!leftResizer || !rightResizer) return;
-
-  const leftWidth = localStorage.getItem('ctox.shiftflow.layout.leftWidth') || localStorage.getItem('shiftflow_left_w') || '300';
-  const rightWidth = localStorage.getItem('ctox.shiftflow.layout.rightWidth') || localStorage.getItem('shiftflow_right_w') || '360';
-
-  app.style.setProperty('--shiftflow-left-width', `${leftWidth}px`);
-  app.style.setProperty('--shiftflow-right-width', `${rightWidth}px`);
-
-  const cleanups = [];
-
-  const resizerL = new CtoxResizer({
-    resizerEl: leftResizer,
-    containerEl: app,
-    cssVar: '--shiftflow-left-width',
-    side: 'left',
-    minWidth: 220,
-    maxWidth: 480,
-    onResize: (width) => {
-      localStorage.setItem('ctox.shiftflow.layout.leftWidth', width);
-      localStorage.setItem('shiftflow_left_w', width);
-    }
-  });
-  cleanups.push(() => resizerL.destroy());
-
-  const resizerR = new CtoxResizer({
-    resizerEl: rightResizer,
-    containerEl: app,
-    cssVar: '--shiftflow-right-width',
-    side: 'right',
-    minWidth: 280,
-    maxWidth: 520,
-    onResize: (width) => {
-      localStorage.setItem('ctox.shiftflow.layout.rightWidth', width);
-      localStorage.setItem('shiftflow_right_w', width);
-    }
-  });
-  cleanups.push(() => resizerR.destroy());
-
-  return () => {
-    cleanups.forEach(fn => fn());
-  };
 }
 
 // -------------------------------------------------------------
@@ -2834,7 +2771,7 @@ function shiftflowCommandContextFromElement(els, target) {
 
   if (shiftCard) {
     shift_id = shiftCard.dataset.shiftId || '';
-    const titleEl = shiftCard.querySelector('div[style*="font-weight:700"]');
+    const titleEl = shiftCard.querySelector('.shift-title') || shiftCard.querySelector('div[style*="font-weight:700"]');
     if (titleEl) shift_title = titleEl.textContent;
   }
   if (gridCell) {

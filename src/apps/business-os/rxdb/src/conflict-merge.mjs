@@ -132,3 +132,18 @@ function isStructuredValue(value) {
 export function normalizeConflictStrategy(value) {
   return value === 'field-merge' ? 'field-merge' : 'lww';
 }
+
+// SYNC-41: delete strategy is an INDEPENDENT sibling of `conflictStrategy`
+// (a collection may want field-merge updates AND final deletes), declared like
+// `schema`/`conflictStrategy` outside the schema object so schema hashes are
+// unaffected. `deleteStrategy: 'final'` makes a tombstone ALWAYS win over a
+// concurrent non-tombstone update regardless of HLC/lwt, on every path that
+// decides a delete-vs-update: the pull gate, the push-conflict path and the
+// field-merge path. Once deleted, a concurrent update can never resurrect the
+// row; a delete and an update racing → delete wins deterministically on all
+// peers. `default` keeps exactly today's whole-doc LWW delete semantics (a
+// master tombstone is accepted by lwt/HLC ordering, but a higher-HLC local
+// update can win over — and resurrect — a tombstone).
+export function normalizeDeleteStrategy(value) {
+  return value === 'final' ? 'final' : 'default';
+}

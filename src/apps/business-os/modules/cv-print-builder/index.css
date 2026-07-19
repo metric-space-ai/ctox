@@ -18,14 +18,26 @@
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
-/* Tools row: search + sort side by side, bulk action on its own line. */
+/* Tools row: search + sort side by side. The bulk-action row lives in a
+   child wrapper that the data-toggle-bulk kebab reveals (hidden by default
+   via the [hidden] attribute) — it's an advanced bulk action, not part of
+   the primary search/sort surface. */
 .cv-tools {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(86px, 0.62fr);
 }
 
-.cv-tools > .ctox-button {
+.cv-tools > .cv-tools-extra {
   grid-column: 1 / -1;
+}
+
+/* Highlight the sidebar bulk-action kebab while the bulk row is revealed.
+   Mirrors the threads / conversations / invoices is-actions-hidden idiom —
+   the kit's .ctox-pane-icon[aria-pressed="true"] rule already styles the
+   accent fill, so we only need the explicit data-toggle-* selector when a
+   module wants its own colour override. */
+.cv-print-builder [data-toggle-bulk][aria-pressed="true"] {
+  color: color-mix(in srgb, var(--accent) 78%, var(--text));
 }
 
 /* custom: candidate record card — avatar, multi-line identity, status badge
@@ -85,8 +97,7 @@
   white-space: nowrap;
 }
 
-.cv-card-line,
-.cv-card-file {
+.cv-card-line {
   margin-top: 2px;
   overflow: hidden;
   color: var(--muted);
@@ -122,8 +133,26 @@
 
 .cv-template-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) repeat(2, auto);
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 5px;
+}
+
+/* Per-record print toggles (anonymize + logo) — collapsed behind the
+   data-toggle-card-options kebab in the template row. The kit's hidden
+   attribute rule hides the wrapper when collapsed. */
+.cv-card-options {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.cv-card-options[hidden] {
+  display: none !important;
+}
+
+/* Mirror the primary kebab highlight while the options are revealed. */
+.cv-print-builder [data-toggle-card-options][aria-pressed="true"] {
+  color: color-mix(in srgb, var(--accent) 78%, var(--text));
 }
 
 .cv-card-foot {
@@ -275,14 +304,6 @@
 .cv-view-grid.is-split .cv-pane-head {
   min-height: 34px;
   padding: 0 10px;
-}
-
-.cv-pane-sub {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .cv-pane-body {

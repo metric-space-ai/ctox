@@ -8,6 +8,10 @@ const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.s
 const CHUNK_SIZE = 256000;
 const SPREADSHEET_RENDER_DEBOUNCE_MS = 80;
 const SUPPORTED_IMPORT_EXTENSIONS = ['.csv', '.tsv', '.xlsx'];
+// Layout preference for the right (runbook/AI) pane. The right pane is
+// situational — the spreadsheet workbench gets the full width until the
+// operator explicitly opens the AI planner from the center header toggle.
+const RIGHT_PANE_LAYOUT_KEY = 'ctox.spreadsheets.layout.actionsHidden';
 
 const DEFAULT_GRID_DATA = [
   ['Produkt', 'Q1 Sales', 'Q2 Sales', 'Q3 Sales', 'Q4 Sales', 'Gesamt'],
@@ -100,9 +104,14 @@ export async function mount(ctx) {
     openFilePromise: Promise.resolve(),
     contextMenu: null,
     contextMenuCleanup: null,
+    rightPaneEl: stateRightPane(ctx),
+    rightPaneHidden: initialRightPaneHidden(ctx),
+    toggleActions: null,
     t,
     lang: ctx.locale === 'en' ? 'en' : 'de',
   };
+
+  applyRightPaneState(state);
 
   // Wire event handlers and load libs
   wireModule(state);
@@ -149,7 +158,28 @@ export async function mount(ctx) {
       state.editorHandle.destroy?.();
     }
     state.editorHandle = null;
+    // Restore the right pane to the default visible state so the next module
+    // mounts into a clean shell. We only flip what we owned (the hidden attr).
+    if (state.rightPaneEl) state.rightPaneEl.hidden = false;
   };
+}
+
+// Right pane (runbook/AI planner) lives in the shell's [data-right-pane] slot.
+// The module only owns the visibility flag — toggling its `hidden` attribute
+// collapses the shell's 3-column workspace grid automatically.
+function stateRightPane(ctx) {
+  return ctx?.right?.closest?.('[data-right-pane]') || null;
+}
+
+function initialRightPaneHidden(ctx) {
+  const saved = ctx?.storageScope?.get?.(RIGHT_PANE_LAYOUT_KEY);
+  // Default = hidden (situation panel); explicit "false" restores it.
+  return saved !== 'false';
+}
+
+function applyRightPaneState(state) {
+  if (!state.rightPaneEl) return;
+  state.rightPaneEl.hidden = state.rightPaneHidden;
 }
 
 function enqueueSpreadsheetOpenFile(state, input) {
@@ -193,7 +223,7 @@ function spreadsheetBySourceSha(records = [], sourceSha = '') {
 
 function renderSpreadsheetOpenError(state, error) {
   const host = state.ctx.host.querySelector('[data-spreadsheets-editor]') || state.ctx.host;
-  host.innerHTML = `<div class="spreadsheets-empty"><strong>Datei konnte nicht geöffnet werden</strong><span>${escapeHtml(error?.message || error)}</span></div>`;
+  host.innerHTML = `<div class="ctox-empty"><strong>Datei konnte nicht geöffnet werden</strong><span>${escapeHtml(error?.message || error)}</span></div>`;
 }
 
 async function ensureSpreadsheetRuntimeReady(ctx) {
@@ -570,22 +600,24 @@ function renderLeft(state) {
           <button class="ctox-pane-icon" type="button" aria-label="${escapeHtml(state.t('exportSelected', 'Ausgewählte Tabelle exportieren'))}" title="${escapeHtml(state.t('exportSelected', 'Ausgewählte Tabelle exportieren'))}" data-spreadsheets-export ${selected ? '' : 'disabled'}>${actionIcon(state, 'export')}</button>
         </div>
       </div>
-      <div class="ctox-pane-tools spreadsheets-filter-bar">
+      <div class="ctox-pane-tools">
         <input class="ctox-pane-search" type="search" placeholder="${escapeHtml(state.t('searchPlaceholder', 'Tabelle suchen...'))}" aria-label="${escapeHtml(state.t('searchLabel', 'Tabellen suchen'))}" data-spreadsheets-search value="${escapeHtml(state.searchQuery)}">
-        <select class="ctox-pane-filter spreadsheets-filter-control" aria-label="${escapeHtml(state.t('sortLabel', 'Tabellen sortieren'))}" data-spreadsheets-sort>
+      </div>
+      <div class="ctox-pane-tools spreadsheets-filter-bar">
+        <select class="ctox-pane-filter" aria-label="${escapeHtml(state.t('sortLabel', 'Tabellen sortieren'))}" data-spreadsheets-sort>
           <option value="updated_desc" ${state.sortBy === 'updated_desc' ? 'selected' : ''}>${escapeHtml(state.t('sortByNewest', 'Neueste zuerst'))}</option>
           <option value="updated_asc" ${state.sortBy === 'updated_asc' ? 'selected' : ''}>${escapeHtml(state.t('sortByOldest', 'Älteste zuerst'))}</option>
           <option value="title_asc" ${state.sortBy === 'title_asc' ? 'selected' : ''}>${escapeHtml(state.t('sortByTitle', 'Titel A-Z'))}</option>
           <option value="status" ${state.sortBy === 'status' ? 'selected' : ''}>${escapeHtml(state.t('sortByStatus', 'Status'))}</option>
         </select>
-        <select class="ctox-pane-filter spreadsheets-filter-control" aria-label="${escapeHtml(state.t('statusFilterLabel', 'Tabellenstatus filtern'))}" data-spreadsheets-status>
+        <select class="ctox-pane-filter" aria-label="${escapeHtml(state.t('statusFilterLabel', 'Tabellenstatus filtern'))}" data-spreadsheets-status>
           <option value="all" ${state.statusFilter === 'all' ? 'selected' : ''}>${escapeHtml(state.t('filterAll', 'Alle'))}</option>
           <option value="Imported" ${state.statusFilter === 'Imported' ? 'selected' : ''}>Imported</option>
           <option value="Draft" ${state.statusFilter === 'Draft' ? 'selected' : ''}>Draft</option>
           <option value="Review" ${state.statusFilter === 'Review' ? 'selected' : ''}>Review</option>
           <option value="Final" ${state.statusFilter === 'Final' ? 'selected' : ''}>Final</option>
         </select>
-        <select class="ctox-pane-filter spreadsheets-filter-control" aria-label="${escapeHtml(state.t('tagFilterLabel', 'Tabellen-Tags filtern'))}" data-spreadsheets-tag>
+        <select class="ctox-pane-filter" aria-label="${escapeHtml(state.t('tagFilterLabel', 'Tabellen-Tags filtern'))}" data-spreadsheets-tag>
           ${tagFilterOptions(state)}
         </select>
       </div>
@@ -593,7 +625,7 @@ function renderLeft(state) {
   `;
 
   const list = document.createElement('div');
-  list.className = 'spreadsheets-list';
+  list.className = 'ctox-list spreadsheets-list';
   list.dataset.spreadsheetsList = 'true';
   populateSpreadsheetList(state, list, visible);
   wrap.append(list);
@@ -606,8 +638,7 @@ function populateSpreadsheetList(state, list, records = visibleSpreadsheets(stat
   if (records.length === 0) {
     const hasRecords = state.spreadsheets.length > 0;
     const empty = document.createElement('div');
-    empty.className = 'spreadsheets-empty';
-    empty.style.padding = '30px 10px';
+    empty.className = 'ctox-empty';
     empty.innerHTML = `
       <strong>${escapeHtml(hasRecords ? state.t('noMatches', 'Keine Treffer') : state.t('noDocuments', 'Keine Tabellen'))}</strong>
       <span>${escapeHtml(hasRecords ? state.t('adjustSearchFilter', 'Suche oder Filter anpassen.') : state.t('importPrompt', 'Über das Import-Icon XLSX, CSV oder TSV hinzufügen.'))}</span>
@@ -627,10 +658,10 @@ function populateSpreadsheetList(state, list, records = visibleSpreadsheets(stat
 
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'spreadsheets-card-main';
+    button.className = `ctox-list-item spreadsheets-card-main${record.id === state.selectedId ? ' is-selected' : ''}`;
     button.dataset.sheetId = record.id;
 
-    const tagsHtml = (record.tags || []).map(t => `<span class="spreadsheets-card-tag">${escapeHtml(t)}</span>`).join('');
+    const tagsHtml = (record.tags || []).map(t => `<span class="ctox-badge is-info">${escapeHtml(t)}</span>`).join('');
 
     button.innerHTML = `
       <strong>${escapeHtml(record.title)}</strong>
@@ -645,7 +676,7 @@ function populateSpreadsheetList(state, list, records = visibleSpreadsheets(stat
 
     const manageBtn = document.createElement('button');
     manageBtn.type = 'button';
-    manageBtn.className = 'spreadsheets-card-manage';
+    manageBtn.className = 'ctox-pane-icon spreadsheets-card-manage';
     manageBtn.dataset.sheetId = record.id;
     manageBtn.innerHTML = actionIcon(state, 'settings');
     manageBtn.title = state.t('manageDocument', 'Tabelle verwalten');
@@ -851,7 +882,7 @@ async function renderCenter(state) {
   if (!record) {
     const hasFilters = hasActiveListFilters(state);
     shell.innerHTML = `
-      <div class="spreadsheets-empty">
+      <div class="ctox-empty">
         <strong>${escapeHtml(hasFilters ? state.t('noMatches', 'Keine Treffer') : state.t('noDocumentSelected', 'Keine Tabelle ausgewählt.'))}</strong>
         <span>${escapeHtml(hasFilters ? state.t('adjustSearchFilter', 'Suche oder Filter anpassen.') : state.t('noDocumentSelectedPrompt', 'Links eine Tabelle importieren oder auswählen.'))}</span>
       </div>
@@ -879,11 +910,14 @@ async function renderCenter(state) {
           </span>
           <button class="ctox-pane-icon" type="button" data-spreadsheets-add-row aria-label="${escapeHtml(addRowLabel)}" title="${escapeHtml(addRowLabel)}">${actionIcon(state, 'addRow')}</button>
           <button class="ctox-pane-icon" type="button" data-spreadsheets-add-col aria-label="${escapeHtml(addColumnLabel)}" title="${escapeHtml(addColumnLabel)}">${actionIcon(state, 'addColumn')}</button>
+          <button class="ctox-pane-icon" type="button" data-spreadsheets-toggle-actions aria-pressed="${state.rightPaneHidden ? 'false' : 'true'}" aria-label="${escapeHtml(state.t('toggleRunbooks', 'Runbooks & Prompt einblenden'))}" title="${escapeHtml(state.t('toggleRunbooks', 'Runbooks & Prompt einblenden'))}">
+            ${rightPaneToggleIconSvg()}
+          </button>
         </div>
       </div>
     </header>
     <div class="spreadsheets-editor-canvas" data-spreadsheets-canvas>
-      <div class="spreadsheets-loading">
+      <div class="ctox-empty">
         <strong>${escapeHtml(state.t('loadingEditor', 'Editor wird geladen...'))}</strong>
       </div>
     </div>
@@ -896,22 +930,28 @@ async function renderCenter(state) {
   shell.querySelector('[data-spreadsheets-add-col]').addEventListener('click', () => {
     state.editorHandle?.insertColumn();
   });
+  const toggle = shell.querySelector('[data-spreadsheets-toggle-actions]');
+  if (toggle) {
+    state.toggleActions = toggle;
+    syncRightPaneToggleUi(state);
+    toggle.addEventListener('click', () => toggleRightPane(state));
+  }
 
   const canvas = shell.querySelector('[data-spreadsheets-canvas]');
   shell.querySelector('[data-spreadsheets-add-row]').hidden = true;
   shell.querySelector('[data-spreadsheets-add-col]').hidden = true;
   if (!isOfficeSpreadsheetRecord(record)) {
-    canvas.innerHTML = `<div class="spreadsheets-error"><strong>${escapeHtml(state.t('unsupportedSpreadsheetFormat', 'Nicht unterstütztes Tabellenformat.'))}</strong><span>${escapeHtml(state.t('supportedSpreadsheetFormats', 'Bitte XLSX, CSV oder TSV verwenden.'))}</span></div>`;
+    canvas.innerHTML = `<div class="ctox-empty spreadsheets-error"><strong>${escapeHtml(state.t('unsupportedSpreadsheetFormat', 'Nicht unterstütztes Tabellenformat.'))}</strong><span>${escapeHtml(state.t('supportedSpreadsheetFormats', 'Bitte XLSX, CSV oder TSV verwenden.'))}</span></div>`;
     return;
   }
   if (!state.selectedVersion) {
-    canvas.innerHTML = `<div class="spreadsheets-error"><strong>${escapeHtml(state.t('noSavedVersionFound', 'Zu dieser Tabelle wurde keine gespeicherte Version gefunden.'))}</strong></div>`;
+    canvas.innerHTML = `<div class="ctox-empty spreadsheets-error"><strong>${escapeHtml(state.t('noSavedVersionFound', 'Zu dieser Tabelle wurde keine gespeicherte Version gefunden.'))}</strong></div>`;
     return;
   }
   try {
     await mountCtoxSpreadsheets(state, canvas, record, state.selectedVersion);
   } catch (error) {
-    canvas.innerHTML = `<div class="spreadsheets-error"><strong>${escapeHtml(state.t('editorLoadFailed', 'Editor konnte nicht geladen werden:'))}</strong><span>${escapeHtml(error?.message || error)}</span></div>`;
+    canvas.innerHTML = `<div class="ctox-empty spreadsheets-error"><strong>${escapeHtml(state.t('editorLoadFailed', 'Editor konnte nicht geladen werden:'))}</strong><span>${escapeHtml(error?.message || error)}</span></div>`;
   }
 }
 
@@ -1013,7 +1053,7 @@ function renderRight(state) {
   let listHtml = '';
   for (const runbook of state.runbooks) {
     listHtml += `
-      <div class="spreadsheets-runbook-card" data-runbook-id="${escapeHtml(runbook.id)}">
+      <div class="ctox-list-item spreadsheets-runbook-card" data-runbook-id="${escapeHtml(runbook.id)}">
         <strong>${escapeHtml(runbook.title)}</strong>
         <span>${escapeHtml(runbook.description || runbook.prompt_template)}</span>
       </div>
@@ -1029,12 +1069,12 @@ function renderRight(state) {
         </div>
       </div>
     </header>
-    <div class="spreadsheets-runbook-list" data-spreadsheets-runbooks-list>
+    <div class="ctox-list spreadsheets-runbook-list" data-spreadsheets-runbooks-list>
       ${listHtml}
     </div>
     <div class="spreadsheets-runbook-workbench">
-      <textarea placeholder="${escapeHtml(state.t('prompt', 'Prompt an CTOX senden...'))}" data-spreadsheets-prompt></textarea>
-      <button type="button" data-spreadsheets-send ${record ? '' : 'disabled'}>
+      <textarea class="ctox-textarea" placeholder="${escapeHtml(state.t('prompt', 'Prompt an CTOX senden...'))}" data-spreadsheets-prompt></textarea>
+      <button type="button" class="ctox-run-control" data-spreadsheets-send ${record ? '' : 'disabled'}>
         ${actionIcon(state, 'play')} ${escapeHtml(state.t('send', 'Prompt senden'))}
       </button>
     </div>
@@ -1057,11 +1097,11 @@ function renderRight(state) {
 
   runbookCards.forEach(card => {
     if (card.dataset.runbookId === selectedRunbookId) {
-      card.classList.add('is-active');
+      card.classList.add('is-selected');
     }
     card.addEventListener('click', () => {
-      runbookCards.forEach(c => c.classList.remove('is-active'));
-      card.classList.add('is-active');
+      runbookCards.forEach(c => c.classList.remove('is-selected'));
+      card.classList.add('is-selected');
       selectedRunbookId = card.dataset.runbookId;
 
       // Auto-populate textarea prompt with template
@@ -1121,6 +1161,31 @@ function relinquishSpreadsheetGridFocus(state) {
   if (active && state.ctx.host.contains(active) && active.closest?.('[data-spreadsheets-canvas]')) {
     active.blur?.();
   }
+}
+
+function toggleRightPane(state) {
+  state.rightPaneHidden = !state.rightPaneHidden;
+  applyRightPaneState(state);
+  syncRightPaneToggleUi(state);
+  try { state.ctx?.storageScope?.set?.(RIGHT_PANE_LAYOUT_KEY, String(state.rightPaneHidden)); } catch {}
+}
+
+function syncRightPaneToggleUi(state) {
+  const toggle = state.toggleActions;
+  if (!toggle) return;
+  const visible = !state.rightPaneHidden;
+  toggle.setAttribute('aria-pressed', String(visible));
+  const label = visible
+    ? state.t('toggleRunbooksHide', 'Runbooks & Prompt ausblenden')
+    : state.t('toggleRunbooks', 'Runbooks & Prompt einblenden');
+  toggle.setAttribute('aria-label', label);
+  toggle.title = label;
+}
+
+function rightPaneToggleIconSvg() {
+  // Mirrors the threads/invoices sidebar-toggle glyph: rectangle + divider,
+  // matching the kit's 1.8-stroke action-icon stroke style.
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M15 4v16"></path></svg>';
 }
 
 async function dispatchSpreadsheetRunbook(state, input) {
@@ -1235,17 +1300,17 @@ function openNewSpreadsheetDrawer(state) {
     <p class="spreadsheets-drawer-copy">${escapeHtml(state.t('newSpreadsheetDescription', 'Erstellt einen gespeicherten Tabellenentwurf mit Beispielstruktur.'))}</p>
     <form data-spreadsheets-new-form novalidate>
       <label>
-        <span>${escapeHtml(state.t('title', 'Titel'))}</span>
-        <input name="title" type="text" value="${escapeHtml(`${state.t('newDocumentTitle', 'Neue Tabelle')} - ${new Date().toISOString().slice(0, 10)}`)}" required data-new-title>
+        <span class="ctox-field-label">${escapeHtml(state.t('title', 'Titel'))}</span>
+        <input class="ctox-input" name="title" type="text" value="${escapeHtml(`${state.t('newDocumentTitle', 'Neue Tabelle')} - ${new Date().toISOString().slice(0, 10)}`)}" required data-new-title>
       </label>
-      <label style="margin-top: 8px;">
-        <span>${escapeHtml(state.t('tags', 'Tags (kommagetrennt)'))}</span>
-        <input name="tags" type="text" placeholder="Budget, Forecast" data-new-tags>
+      <label>
+        <span class="ctox-field-label">${escapeHtml(state.t('tags', 'Tags (kommagetrennt)'))}</span>
+        <input class="ctox-input" name="tags" type="text" placeholder="Budget, Forecast" data-new-tags>
       </label>
       <p class="spreadsheets-form-status" role="status" data-spreadsheets-form-status></p>
       <div class="spreadsheets-drawer-actions">
-        <button type="button" data-drawer-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
-        <button type="submit">${escapeHtml(state.t('createDraft', 'Entwurf erstellen'))}</button>
+        <button type="button" class="ctox-button" data-drawer-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
+        <button type="submit" class="ctox-button is-primary">${escapeHtml(state.t('createDraft', 'Entwurf erstellen'))}</button>
       </div>
     </form>
   `;
@@ -1287,17 +1352,17 @@ function openImportModal(state) {
   wrapper.innerHTML = `
     <form data-spreadsheets-import-form novalidate>
       <label>
-        <span>${escapeHtml(state.t('file', 'Datei auswählen (XLSX, CSV oder TSV)'))}</span>
-        <input type="file" accept=".xlsx,.csv,.tsv" required data-import-file>
+        <span class="ctox-field-label">${escapeHtml(state.t('file', 'Datei auswählen (XLSX, CSV oder TSV)'))}</span>
+        <input class="ctox-input" type="file" accept=".xlsx,.csv,.tsv" required data-import-file>
       </label>
-      <label style="margin-top: 8px;">
-        <span>${escapeHtml(state.t('tags', 'Tags (kommagetrennt)'))}</span>
-        <input type="text" placeholder="Sales, Q2, Forecast" data-import-tags>
+      <label>
+        <span class="ctox-field-label">${escapeHtml(state.t('tags', 'Tags (kommagetrennt)'))}</span>
+        <input class="ctox-input" type="text" placeholder="Sales, Q2, Forecast" data-import-tags>
       </label>
       <p class="spreadsheets-form-status" role="status" data-spreadsheets-form-status></p>
       <div class="spreadsheets-drawer-actions">
-        <button type="button" data-drawer-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
-        <button type="submit" disabled aria-disabled="true">${escapeHtml(state.t('import', 'Importieren'))}</button>
+        <button type="button" class="ctox-button" data-drawer-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
+        <button type="submit" class="ctox-button is-primary" disabled aria-disabled="true">${escapeHtml(state.t('import', 'Importieren'))}</button>
       </div>
     </form>
   `;
@@ -1344,14 +1409,14 @@ function openExportModal(state) {
     <h3>Tabelle Exportieren</h3>
     <form data-spreadsheets-export-form>
       <label>
-        <span>${escapeHtml(state.t('documentType', 'Exportformat'))}</span>
-        <select data-export-format>
+        <span class="ctox-field-label">${escapeHtml(state.t('documentType', 'Exportformat'))}</span>
+        <select class="ctox-select" data-export-format>
           <option value="xlsx">XLSX (Office Open XML)</option>
         </select>
       </label>
-      <div class="spreadsheets-drawer-actions" style="margin-top: 12px;">
-        <button type="button" data-drawer-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
-        <button type="submit">${escapeHtml(state.t('export', 'Exportieren'))}</button>
+      <div class="spreadsheets-drawer-actions">
+        <button type="button" class="ctox-button" data-drawer-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
+        <button type="submit" class="ctox-button is-primary">${escapeHtml(state.t('export', 'Exportieren'))}</button>
       </div>
     </form>
   `;
@@ -1406,25 +1471,25 @@ async function openManageDrawer(state, id) {
     <h3>${escapeHtml(state.t('manageDocumentTitle', 'Tabelle verwalten'))}</h3>
     <form>
       <label>
-        <span>${escapeHtml(state.t('title', 'Titel'))}</span>
-        <input type="text" data-field="title" value="${escapeHtml(data.title)}" required>
+        <span class="ctox-field-label">${escapeHtml(state.t('title', 'Titel'))}</span>
+        <input class="ctox-input" type="text" data-field="title" value="${escapeHtml(data.title)}" required>
       </label>
-      <label style="margin-top: 8px;">
-        <span>${escapeHtml(state.t('status', 'Status'))}</span>
-        <select data-field="status">
+      <label>
+        <span class="ctox-field-label">${escapeHtml(state.t('status', 'Status'))}</span>
+        <select class="ctox-select" data-field="status">
           <option value="Draft" ${data.status === 'Draft' ? 'selected' : ''}>Draft</option>
           <option value="Imported" ${data.status === 'Imported' ? 'selected' : ''}>Imported</option>
           <option value="Review" ${data.status === 'Review' ? 'selected' : ''}>Review</option>
           <option value="Final" ${data.status === 'Final' ? 'selected' : ''}>Final</option>
         </select>
       </label>
-      <label style="margin-top: 8px;">
-        <span>${escapeHtml(state.t('tags', 'Tags (kommagetrennt)'))}</span>
-        <input type="text" data-field="tags" value="${escapeHtml((data.tags || []).join(', '))}">
+      <label>
+        <span class="ctox-field-label">${escapeHtml(state.t('tags', 'Tags (kommagetrennt)'))}</span>
+        <input class="ctox-input" type="text" data-field="tags" value="${escapeHtml((data.tags || []).join(', '))}">
       </label>
-      <div class="spreadsheets-drawer-actions" style="margin-top: 16px;">
-        <button type="button" class="danger-button" data-action="delete">${escapeHtml(state.t('delete', 'Tabelle löschen'))}</button>
-        <button type="submit" style="grid-column: 2;">${escapeHtml(state.t('save', 'Speichern'))}</button>
+      <div class="spreadsheets-drawer-actions">
+        <button type="button" class="ctox-button is-danger" data-action="delete">${escapeHtml(state.t('delete', 'Tabelle löschen'))}</button>
+        <button type="submit" class="ctox-button is-primary">${escapeHtml(state.t('save', 'Speichern'))}</button>
       </div>
     </form>
   `;

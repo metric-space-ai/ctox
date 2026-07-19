@@ -1,5 +1,5 @@
-<main class="support-module" data-support-root>
-  <section class="support-pane support-left" aria-label="Support queues">
+<main class="ctox-workspace support-module" data-support-root data-resize-frame>
+  <aside class="ctox-pane support-left" aria-label="Support queues">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
@@ -11,10 +11,14 @@
         <input class="ctox-pane-search" type="search" data-support-search data-i18n-placeholder="searchPlaceholder" placeholder="Suche nach Kunde, Ticket oder Nachricht">
       </div>
     </header>
-    <div class="support-filter-list" data-support-filters></div>
-  </section>
+    <div class="ctox-pane-body">
+      <div class="ctox-pane-scroll support-filter-list" data-support-filters></div>
+    </div>
+  </aside>
 
-  <section class="support-pane support-center" aria-label="Support conversation">
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="240" data-resizer-max="420" aria-label="Linke Spaltenbreite anpassen"></button>
+
+  <section class="ctox-pane support-center" aria-label="Support conversation">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
@@ -31,15 +35,19 @@
         </div>
       </div>
     </header>
-    <div class="support-timeline" data-support-timeline></div>
+    <div class="ctox-pane-body">
+      <div class="ctox-pane-scroll support-timeline" data-support-timeline></div>
+    </div>
     <footer class="support-composer" data-support-composer>
       <textarea class="ctox-textarea" data-support-note rows="3" data-i18n-placeholder="notePlaceholder" placeholder="Internal note"></textarea>
       <button class="ctox-button is-primary" type="button" data-support-note-submit disabled data-i18n="noteAction">Add note</button>
     </footer>
   </section>
 
+  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="260" data-resizer-max="440" aria-label="Rechte Spaltenbreite anpassen"></button>
+
   <!-- third_pane_justification: Support operators need customer identity, linked tickets, SLA state, and CTOX suggestions visible while reading and replying. -->
-  <aside class="support-pane support-right" aria-label="Support context">
+  <aside class="ctox-pane support-right" aria-label="Support context">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
@@ -53,6 +61,8 @@
         </div>
       </div>
     </header>
-    <div class="support-context-list" data-support-context></div>
+    <div class="ctox-pane-body">
+      <div class="ctox-pane-scroll support-context-list" data-support-context></div>
+    </div>
   </aside>
 </main>

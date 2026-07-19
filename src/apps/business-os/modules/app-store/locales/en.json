@@ -1,6 +1,8 @@
 {
   "kicker": "Catalog",
   "title": "App Store",
+  "sidebarExtrasTitle": "Install and source options",
+  "sidebarExtrasAria": "Show install and source options",
   "searchPlaceholder": "Search modules, templates, apps...",
   "searchAria": "Search the App Store",
   "createScratch": "Create app from scratch",

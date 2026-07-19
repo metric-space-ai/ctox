@@ -6,6 +6,8 @@
   "pending": "Pending",
   "blocked": "Blocked",
   "closed": "Closed",
+  "showControls": "Show controls",
+  "hideControls": "Hide controls",
   "loadingTickets": "Loading tickets...",
   "loadingTicketsDetail": "Ticket projections are being prepared.",
   "syncingTickets": "Syncing tickets.",

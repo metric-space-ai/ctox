@@ -1,14 +1,14 @@
-const MOD_BUILD = '20260706-kit1';
+const MOD_BUILD = '20260718-reduce1';
 const MODULE_ID = 'submissions';
 const PRIMARY = 'submissions';
 const TITLE = 'submissions';
 const PRESENT_COMMAND = 'ats.submission.present';
 const COPY = {
   de: {
-    candidate: 'Kandidat-ID', client: 'Kunden-Account-ID', vacancy: 'Vakanz-ID (optional)', contact: 'Kontakt-ID (optional)', present: 'Vorstellen', entries: 'Einträge', empty: 'Noch keine Einträge.', idCopied: 'ID kopiert', offlineService: 'Offline: Befehlsdienst nicht verfügbar.', blocked: 'Blockiert.', idsRequired: 'Kandidat-ID und Kunden-Account-ID sind erforderlich.', offlineSend: 'Offline: Befehl konnte nicht gesendet werden.', presented: 'Vorgestellt.', submission: 'Submission', vacancyLabel: 'Vakanz', contactLabel: 'Kontakt', consent: 'Consent', feedback: 'Feedback', sent: 'Gesendet', copyId: 'ID kopieren', unknown: 'unbekannt', conflict: 'Konflikt'
+    candidate: 'Kandidat-ID', client: 'Kunden-Account-ID', more: 'Weitere Angaben', present: 'Vorstellen', entries: 'Einträge', empty: 'Noch keine Einträge.', idCopied: 'ID kopiert', offlineService: 'Offline: Befehlsdienst nicht verfügbar.', blocked: 'Blockiert.', idsRequired: 'Kandidat-ID und Kunden-Account-ID sind erforderlich.', offlineSend: 'Offline: Befehl konnte nicht gesendet werden.', presented: 'Vorgestellt.', submission: 'Submission', vacancyLabel: 'Vakanz', contactLabel: 'Kontakt', consent: 'Consent', feedback: 'Feedback', sent: 'Gesendet', copyId: 'ID kopieren', unknown: 'unbekannt', conflict: 'Konflikt', details: 'Details'
   },
   en: {
-    candidate: 'Candidate ID', client: 'Client account ID', vacancy: 'Vacancy ID (optional)', contact: 'Contact ID (optional)', present: 'Present candidate', entries: 'records', empty: 'No submissions yet.', idCopied: 'ID copied', offlineService: 'Offline: command service unavailable.', blocked: 'Blocked.', idsRequired: 'Candidate ID and client account ID are required.', offlineSend: 'Offline: command could not be sent.', presented: 'Candidate presented.', submission: 'Submission', vacancyLabel: 'Vacancy', contactLabel: 'Contact', consent: 'Consent', feedback: 'Feedback', sent: 'Sent', copyId: 'Copy ID', unknown: 'unknown', conflict: 'Conflict'
+    candidate: 'Candidate ID', client: 'Client account ID', more: 'More details', present: 'Present candidate', entries: 'records', empty: 'No submissions yet.', idCopied: 'ID copied', offlineService: 'Offline: command service unavailable.', blocked: 'Blocked.', idsRequired: 'Candidate ID and client account ID are required.', offlineSend: 'Offline: command could not be sent.', presented: 'Candidate presented.', submission: 'Submission', vacancyLabel: 'Vacancy', contactLabel: 'Contact', consent: 'Consent', feedback: 'Feedback', sent: 'Sent', copyId: 'Copy ID', unknown: 'unknown', conflict: 'Conflict', details: 'Details'
   }
 };
 let text = COPY.de;
@@ -28,17 +28,17 @@ export async function mount(ctx) {
   const formEl = root?.querySelector('[data-ats-form]');
   const gateEl = root?.querySelector('[data-ats-gate]');
   const titleEl = root?.querySelector('[data-ats-title]');
-  const subEl = root?.querySelector('[data-ats-sub]');
   if (titleEl) titleEl.textContent = ctx.manifest?.title || TITLE;
-  if (subEl) subEl.textContent = ctx.manifest?.description || '';
   applyStaticCopy(root);
 
   let rowsCache = [];
   const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || null; } catch { return null; } };
 
+  // Gate callout → kit .ctox-callout variants (base.css).
+  const GATE_VARIANTS = { ok: ' is-success', block: ' is-danger', offline: ' is-warning' };
   function setGate(html, kind) {
     if (!gateEl) return;
-    gateEl.className = 'ats-gate' + (kind ? ' ats-gate--' + kind : '');
+    gateEl.className = 'ctox-callout' + (GATE_VARIANTS[kind] || '');
     gateEl.innerHTML = html || '';
   }
 
@@ -185,16 +185,21 @@ function submissionRow(r) {
   const status = String(r?.status || 'sent');
   const sentAt = fmtTime(r?.sent_at_ms || r?.created_at_ms);
   const feedbackOutcome = r?.feedback && typeof r.feedback === 'object' ? r.feedback.outcome : '';
+  // State the user scans for (feedback, sent time) stays visible; internal
+  // record IDs (submission, vacancy, contact, consent) collapse behind a
+  // per-row disclosure — only needed on demand.
   const meta = [];
-  meta.push(`${esc(text.submission)}: ` + esc(r?.id || '—'));
-  if (r?.vacancy_id) meta.push(`${esc(text.vacancyLabel)}: ` + esc(r.vacancy_id));
-  if (r?.client_contact_id) meta.push(`${esc(text.contactLabel)}: ` + esc(r.client_contact_id));
-  if (r?.consent_id) meta.push(`${esc(text.consent)}: ` + esc(r.consent_id));
   if (feedbackOutcome) meta.push(`${esc(text.feedback)}: ` + esc(feedbackOutcome));
   if (sentAt) meta.push(`${esc(text.sent)}: ` + esc(sentAt));
+  const idParts = [];
+  idParts.push(`${esc(text.submission)}: ` + esc(r?.id || '—'));
+  if (r?.vacancy_id) idParts.push(`${esc(text.vacancyLabel)}: ` + esc(r.vacancy_id));
+  if (r?.client_contact_id) idParts.push(`${esc(text.contactLabel)}: ` + esc(r.client_contact_id));
+  if (r?.consent_id) idParts.push(`${esc(text.consent)}: ` + esc(r.consent_id));
   const main = esc(r?.candidate_id || '—') + ' &rarr; ' + esc(r?.client_account_id || '—');
+  const badgeClass = ('ctox-badge' + badgeStateClass(status)).trim();
   const action = r?.id
-    ? '<div class="ats-actions"><button type="button" class="ctox-button" data-copy-id="' + esc(r.id) + '">' + esc(text.copyId) + '</button></div>'
+    ? '<button type="button" class="ctox-button ats-action" data-copy-id="' + esc(r.id) + '">' + esc(text.copyId) + '</button>'
     : '';
   const ctxLabel = r?.candidate_id || r?.id || '';
   return ''
@@ -202,18 +207,15 @@ function submissionRow(r) {
     + ' data-context-record-id="' + esc(r?.id || '') + '"'
     + ' data-context-record-type="submission"'
     + ' data-context-label="' + esc(ctxLabel) + '">'
-    + '<div class="ats-item-main">'
-    + '<span class="ctox-badge' + badgeStateClass(status) + '">' + esc(status) + '</span>'
-    + '<span class="ats-item-title">' + main + '</span>'
-    + '<div class="ats-item-meta">' + meta.join(' · ') + '</div>'
-    + '</div>'
+    + '<div class="ats-item-main"><span class="' + badgeClass + '">' + esc(status) + '</span> <strong>' + main + '</strong></div>'
+    + (meta.length ? '<div class="ats-item-meta">' + meta.join(' · ') + '</div>' : '')
+    + '<details class="ats-item-details"><summary>' + esc(text.details) + '</summary><div class="ats-item-meta">' + idParts.join(' · ') + '</div></details>'
     + action
     + '</div>';
 }
 
 function applyStaticCopy(root) {
   root.querySelectorAll('[data-copy]').forEach((node) => { node.textContent = text[node.dataset.copy] || node.textContent; });
-  root.querySelectorAll('[data-copy-placeholder]').forEach((node) => { node.placeholder = text[node.dataset.copyPlaceholder] || node.placeholder; });
 }
 
 function esc(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }

@@ -1,14 +1,14 @@
-const MOD_BUILD = '20260706-kit1';
+const MOD_BUILD = '20260718-reduce1';
 const MODULE_ID = 'intake';
 const PRIMARY = 'applications';
 const TITLE = 'intake';
 const CAPTURE_COMMAND = 'ats.intake.capture';
 const COPY = {
   de: {
-    kicker: 'Bewerbungseingang', name: 'Name', email: 'E-Mail', phone: 'Telefon', vacancy: 'Vakanz-ID', channel: 'Kanal', capture: 'Erfassen', entries: 'Einträge', empty: 'Noch keine Einträge.', offlineService: 'Offline: Befehlsdienst nicht verfügbar.', nameRequired: 'Name ist erforderlich.', offlineSend: 'Offline: Befehl konnte nicht gesendet werden.', blocked: 'Eingang blockiert.', captured: 'Bewerbung erfasst.', application: 'Application', dedupeKey: 'Dedupe-Key', unnamed: '(ohne Namen)', dedupe: 'Dedupe', vacancyLabel: 'Vakanz', documents: 'Dok.', received: 'Empfangen'
+    kicker: 'Bewerbungseingang', name: 'Name', email: 'E-Mail', phone: 'Telefon', vacancy: 'Vakanz-ID', channel: 'Kanal', capture: 'Erfassen', more: 'Weitere Angaben', entries: 'Einträge', empty: 'Noch keine Einträge.', offlineService: 'Offline: Befehlsdienst nicht verfügbar.', nameRequired: 'Name ist erforderlich.', offlineSend: 'Offline: Befehl konnte nicht gesendet werden.', blocked: 'Eingang blockiert.', captured: 'Bewerbung erfasst.', application: 'Application', dedupeKey: 'Dedupe-Key', unnamed: '(ohne Namen)', dedupe: 'Dedupe', vacancyLabel: 'Vakanz', documents: 'Dok.', details: 'Details'
   },
   en: {
-    kicker: 'Application intake', name: 'Name', email: 'Email', phone: 'Phone', vacancy: 'Vacancy ID', channel: 'Channel', capture: 'Capture', entries: 'records', empty: 'No applications yet.', offlineService: 'Offline: command service unavailable.', nameRequired: 'Name is required.', offlineSend: 'Offline: command could not be sent.', blocked: 'Intake blocked.', captured: 'Application captured.', application: 'Application', dedupeKey: 'Dedupe key', unnamed: '(unnamed)', dedupe: 'Dedupe', vacancyLabel: 'Vacancy', documents: 'docs', received: 'Received'
+    kicker: 'Application intake', name: 'Name', email: 'Email', phone: 'Phone', vacancy: 'Vacancy ID', channel: 'Channel', capture: 'Capture', more: 'More details', entries: 'records', empty: 'No applications yet.', offlineService: 'Offline: command service unavailable.', nameRequired: 'Name is required.', offlineSend: 'Offline: command could not be sent.', blocked: 'Intake blocked.', captured: 'Application captured.', application: 'Application', dedupeKey: 'Dedupe key', unnamed: '(unnamed)', dedupe: 'Dedupe', vacancyLabel: 'Vacancy', documents: 'docs', details: 'Details'
   }
 };
 let text = COPY.de;
@@ -36,9 +36,11 @@ export async function mount(ctx) {
   let rowsCache = [];
   const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || null; } catch { return null; } };
 
+  // Gate callout → kit .ctox-callout variants (base.css).
+  const GATE_VARIANTS = { ok: ' is-success', block: ' is-danger', offline: ' is-warning' };
   function setGate(html, kind) {
     if (!gateEl) return;
-    gateEl.className = 'ats-gate' + (kind ? ' ats-gate--' + kind : '');
+    gateEl.className = 'ctox-callout' + (GATE_VARIANTS[kind] || '');
     gateEl.innerHTML = html || '';
   }
 
@@ -173,12 +175,13 @@ function applicationRow(r) {
   const ts = Number(r.received_at_ms || r.created_at_ms || 0);
 
   const contact = [email, phone].filter(Boolean).map(esc).join(' · ');
+  // Internal metadata (record id, dedupe key, vacancy, doc count) is only
+  // needed on demand — collapsed behind a per-row disclosure.
   const metaParts = [];
   if (id) metaParts.push('<span class="ats-tag">' + esc(id) + '</span>');
   if (dedupe) metaParts.push(`${esc(text.dedupe)}: ` + esc(dedupe));
   if (vacancy) metaParts.push(`${esc(text.vacancyLabel)}: ` + esc(vacancy));
   if (docs) metaParts.push(`${docs} ${esc(text.documents)}`);
-  if (ts) metaParts.push(`${esc(text.received)}: ${esc(fmtDate(ts))}`);
 
   const label = candidate.name || r.name || id;
 
@@ -188,13 +191,16 @@ function applicationRow(r) {
     + ' data-context-label="' + esc(label) + '">'
     + '<div class="ats-item-body">'
     + '<div class="ats-item-main">'
+    + '<span class="ats-name">' + esc(name) + '</span>'
     + '<span class="' + ('ctox-badge ' + statusBadgeClass(status)).trim() + '" data-status="' + esc(status) + '">' + esc(status) + '</span>'
     + '<span class="ats-channel">' + esc(channel) + '</span>'
-    + '<span class="ats-name">' + esc(name) + '</span>'
     + '</div>'
     + (contact ? '<div class="ats-item-sub">' + contact + '</div>' : '')
-    + '<div class="ats-item-meta">' + metaParts.join(' · ') + '</div>'
+    + (metaParts.length
+      ? '<details class="ats-item-details"><summary>' + esc(text.details) + '</summary><div class="ats-item-meta">' + metaParts.join(' · ') + '</div></details>'
+      : '')
     + '</div>'
+    + (ts ? '<span class="ats-item-date">' + esc(fmtDate(ts)) + '</span>' : '')
     + '</div>';
 }
 
@@ -204,7 +210,6 @@ function fmtDate(ms) {
 
 function applyStaticCopy(root) {
   root.querySelectorAll('[data-copy]').forEach((node) => { node.textContent = text[node.dataset.copy] || node.textContent; });
-  root.querySelectorAll('[data-copy-placeholder]').forEach((node) => { node.placeholder = text[node.dataset.copyPlaceholder] || node.placeholder; });
 }
 
 async function ensureStyles() {

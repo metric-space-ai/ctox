@@ -45,7 +45,11 @@ assert.doesNotMatch(source, /border-radius:\s*(?:10|12|14|16|18|20|24)px/);
 assert.doesNotMatch(source, /box-shadow:\s*(?:0|inset|rgba|color-mix)/);
 assert.match(css, /@container business-app-window \(max-width: 1180px\)/);
 assert.match(css, /@container business-app-window \(max-width: 760px\)/);
-assert.match(css, /\.support-module[\s\S]*grid-template-columns: var\(--support-left-width\) minmax\(420px, 1fr\) var\(--support-right-width\)/);
+assert.match(html, /ctox-workspace[^"]*support-module/);
+assert.match(html, /data-resize-frame/);
+assert.match(html, /ctox-column-resizer[^>]*data-resizer-var="--ctox-left-width"/);
+assert.match(html, /ctox-column-resizer[^>]*data-resizer-var="--ctox-right-width"/);
+assert.doesNotMatch(css, /--support-left-width|--support-right-width/);
 
 const command = buildSupportCommand({
   commandType: 'support.conversation.claim',

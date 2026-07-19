@@ -1,61 +1,51 @@
+/* Threads — migrated onto the shared design system (shared/base.css + app.css).
+   Frame (.ctox-workspace[data-resize-frame]), panes (.ctox-pane), declarative
+   column resizers (.ctox-column-resizer[data-resizer-var]), pane headers
+   (.ctox-pane-header/.ctox-pane-kicker/.ctox-pane-title/.ctox-pane-actions/
+   .ctox-pane-icon), search (.ctox-pane-search), filter chips (.ctox-chip),
+   the thread list (.ctox-list/.ctox-list-item with .is-selected), status
+   displays (.ctox-badge), inspector cards (.ctox-card/.ctox-card-body),
+   choice rows (.ctox-choice), fields (.ctox-input/.ctox-textarea/
+   .ctox-field-label), key/value facts (.ctox-fields), inline status panels
+   (.ctox-callout), buttons (.ctox-button) and empty states (.ctox-empty) all
+   come from the kit. This file keeps only what is genuinely
+   threads-specific: the briefing stat strip, the chat-style timeline with
+   approval cards, the composer, the right-pane form stacking and the mobile
+   list/detail switcher. */
+
+/* The frame grid, column widths and resizer tracks come from .ctox-workspace;
+   the module only reserves room for the shell taskbar. */
 .threads-module {
-  --threads-left-width: minmax(260px, 320px);
-  --threads-right-width: minmax(280px, 360px);
-  display: grid;
-  grid-template-columns: var(--threads-left-width) minmax(0, 1fr) var(--threads-right-width);
-  gap: 12px;
-  height: 100%;
-  width: 100%;
-  padding: 12px 12px calc(var(--shell-taskbar-safe-area, 58px) + 12px);
-  box-sizing: border-box;
-  background: var(--bg);
-  color: var(--text);
-  overflow: hidden;
+  padding-bottom: calc(var(--shell-taskbar-safe-area, 58px) + 12px);
 }
 
-.threads-module * {
-  box-sizing: border-box;
-}
-
-.threads-pane {
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--surface);
-  box-shadow: none;
-}
-
-.threads-left,
-.threads-right {
-  background: var(--surface-2);
+/* Pane row templates: the kit ships auto/1fr; each threads pane declares its
+   own rows (left: header/filters/briefing/list, center: header/timeline/
+   composer/mobile bar, right: one scrolling card stack). */
+.threads-left {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 
 .threads-center {
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   position: relative;
 }
 
+.threads-right {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+/* Filter chip row: kit .ctox-chip buttons on a module flex line. */
 .threads-filter-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 12px;
+  gap: 4px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--hairline, var(--line));
 }
 
-.threads-list,
-.threads-timeline,
-.threads-right {
-  overflow: auto;
-}
-
-.threads-list {
-  padding: 8px;
-}
-
+/* custom: 3-up briefing stat strip (Entscheidungen / Blockaden /
+   AI-Ergebnisse) — a hairline-divided counter band the kit does not express */
 .threads-briefing {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -66,67 +56,55 @@
 
 .threads-briefing-item {
   min-width: 0;
-  padding: 9px 10px;
-  background: var(--surface-2);
+  padding: 7px 9px;
+  background: var(--surface);
 }
 
 .threads-briefing-value {
   display: block;
   color: var(--text-strong, var(--text));
-  font-size: 16px;
-  font-weight: 800;
+  font-size: 13px;
+  font-weight: 780;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
 }
 
 .threads-briefing-label {
   display: block;
+  margin-top: 2px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 10px;
   line-height: 1.25;
 }
 
+/* Thread list: rows are kit .ctox-list-item (hover/selected accent bar from
+   the kit); only the title/attention/meta/preview content stack is local. */
+/* custom: thread-row content stack inside the kit list row */
 .threads-list-item {
-  width: 100%;
   display: grid;
-  gap: 5px;
-  text-align: left;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  padding: 10px;
-  cursor: pointer;
-}
-
-.threads-list-item:hover,
-.threads-list-item.is-active {
-  border-color: var(--line);
-  background: var(--surface);
-}
-
-.threads-list-item.is-active {
-  border-color: var(--accent);
+  gap: 2px;
 }
 
 .threads-list-title {
-  font-size: 13px;
-  font-weight: 800;
-  line-height: 1.3;
   color: var(--text-strong, var(--text));
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.3;
 }
 
 .threads-list-meta,
 .threads-list-preview,
 .threads-message-meta {
+  color: var(--muted);
   font-size: 11.5px;
   line-height: 1.35;
-  color: var(--muted);
 }
 
 .threads-list-preview {
   color: var(--text);
 }
 
+/* custom: attention reasons line (warning-colored priority hint) */
 .threads-attention {
   min-height: 16px;
   color: var(--warning);
@@ -134,109 +112,100 @@
   font-weight: 650;
 }
 
+/* custom: chat-style timeline with author-aligned message bubbles — a
+   genuine special view the kit does not express (bubble alignment, own
+   accent tint) */
 .threads-timeline {
-  flex: 1;
-  padding: 18px;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .threads-message {
   max-width: 760px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--panel-radius);
   background: var(--surface-2);
-  padding: 12px 14px;
+  padding: 10px 12px;
 }
 
 .threads-message.is-mine {
   align-self: flex-end;
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
 }
 
 .threads-message-body {
+  margin-top: 4px;
   white-space: pre-wrap;
-  font-size: 13.5px;
-  line-height: 1.5;
-  margin-top: 6px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
+/* custom: approval decision card in the timeline — the one accent-tinted
+   call-to-action panel; facts use the kit .ctox-fields grid */
 .threads-approval-card {
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
-  padding: 12px;
   display: grid;
-  gap: 10px;
+  gap: 8px;
+  max-width: 760px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
+  border-radius: var(--panel-radius);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
 }
 
 .threads-approval-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
-.threads-approval-facts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px 12px;
-  margin: 0;
-}
-
-.threads-approval-facts div {
-  min-width: 0;
-}
-
-.threads-approval-facts dt {
-  color: var(--muted);
-  font-size: 10.5px;
-}
-
-.threads-approval-facts dd {
-  margin: 2px 0 0;
-  overflow-wrap: anywhere;
-  font-size: 12px;
-}
-
+/* Composer: kit .ctox-textarea + primary .ctox-button on a module grid. */
 .threads-composer {
-  border-top: 1px solid var(--line);
-  background: var(--surface-2);
-  padding: 12px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
-  gap: 10px;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--hairline, var(--line));
 }
 
-.threads-panel {
-  padding: 14px;
-  border-bottom: 1px solid var(--line);
+/* Right pane: kit .ctox-card inspector sections in one scrolling stack. */
+.threads-right-scroll {
   display: grid;
-  gap: 12px;
+  gap: 8px;
+  align-content: start;
+  padding: 10px;
 }
 
+/* h3 sits inside the kit card header, which already owns the uppercase
+   label typography — reset the UA heading style to inherit it. */
 .threads-panel h3 {
   margin: 0;
-  font-size: 14px;
-  font-weight: 800;
-  color: var(--text-strong, var(--text));
+  font: inherit;
 }
 
+/* Vertical form stacking inside the kit card body. */
 .threads-form {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .threads-form label {
   display: grid;
-  gap: 5px;
+  gap: 4px;
 }
 
 .threads-form .ctox-field-label {
   margin-bottom: 0;
 }
 
+/* Context panel content: kit .ctox-fields / .ctox-callout markup from JS;
+   only stacking and link styling are local. */
 .threads-context {
   display: grid;
   gap: 8px;
@@ -256,52 +225,41 @@
 .threads-notification-list {
   display: grid;
   gap: 8px;
-  margin-top: 12px;
 }
 
-.threads-notification-item {
-  display: grid;
-  gap: 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  padding: 9px;
-  font-size: 12px;
-}
-
-.threads-notification-item div {
+.threads-notification-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  margin-top: 8px;
 }
 
-@container business-app-window (max-width: 980px) {
-  .threads-module {
-    grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
-  }
-
-  .threads-right {
-    display: none;
-  }
-}
-
-/* Presence hint (advisory): another user has this thread open. */
+/* custom: presence hint (advisory) — another user has this thread open */
 .threads-presence-hint {
+  color: var(--warning);
   font-size: 11px;
   font-weight: 600;
-  color: var(--warning);
   white-space: nowrap;
 }
 
+/* Mobile-only chrome: hidden on desktop, shown by the ≤600px switcher. */
 .threads-mobile-back,
 .threads-mobile-actions {
   display: none;
 }
 
-.threads-sync-state[data-state="offline"] {
-  color: var(--danger);
+@container business-app-window (max-width: 980px) {
+  .threads-module {
+    grid-template-columns: var(--ctox-left-width, 240px) 12px minmax(0, 1fr);
+  }
+
+  .threads-right,
+  .threads-module > [data-resizer="right"] {
+    display: none;
+  }
 }
 
+/* Touch targets on coarse pointers. */
 @media (pointer: coarse) {
   .threads-module button,
   .threads-module input,
@@ -310,22 +268,26 @@
   }
 }
 
+/* custom: mobile list/detail switcher — below 600px threads becomes a
+   single-pane app where JS swaps list, detail and context views via
+   .is-mobile-detail/.is-context-open; the kit has no equivalent pattern */
 @container business-app-window (max-width: 600px) {
   .threads-module {
     display: block;
     padding: 0 0 calc(var(--shell-taskbar-safe-area, 52px) + env(safe-area-inset-bottom, 0px));
-    min-width: 0;
   }
 
-  .threads-pane {
+  .threads-module > [data-resizer] {
+    display: none;
+  }
+
+  .threads-left,
+  .threads-center,
+  .threads-right {
     width: 100%;
     height: 100%;
     border: 0;
     border-radius: 0;
-  }
-
-  .threads-left {
-    display: flex;
   }
 
   .threads-center,
@@ -338,7 +300,7 @@
   }
 
   .threads-module.is-mobile-detail .threads-center {
-    display: flex;
+    display: grid;
   }
 
   .threads-module.is-context-open .threads-center {
@@ -346,14 +308,12 @@
   }
 
   .threads-module.is-context-open .threads-right {
-    display: block;
+    display: grid;
     height: 100%;
-    background: var(--surface);
   }
 
   .threads-mobile-back {
-    display: inline-grid;
-    flex: 0 0 44px;
+    display: inline-flex;
   }
 
   .threads-filter-list {
@@ -364,28 +324,9 @@
 
   .threads-filter-list .ctox-chip {
     flex: 0 0 auto;
-    min-height: 36px;
-  }
-
-  .threads-list {
-    padding: 0;
-  }
-
-  .threads-list-item {
-    min-height: 76px;
-    border: 0;
-    border-bottom: 1px solid var(--line);
-    border-radius: 0;
-    padding: 10px 12px;
-  }
-
-  .threads-list-item.is-active {
-    background: color-mix(in srgb, var(--accent) 8%, var(--surface));
-    border-color: var(--line);
   }
 
   .threads-timeline {
-    padding: 12px;
     padding-bottom: 84px;
   }
 
@@ -394,33 +335,37 @@
     max-width: min(100%, 72ch);
   }
 
-  .threads-composer {
-    grid-template-columns: 1fr auto;
-    padding: 8px 10px;
-  }
-
   .threads-composer textarea {
     max-height: 120px;
   }
 
+  /* custom: mobile bottom action bar — thumb-reach action row, no desktop
+     kit equivalent */
   .threads-mobile-actions {
     position: absolute;
     inset: auto 0 0;
     z-index: 3;
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 4px;
     padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
     border-top: 1px solid var(--line);
     background: var(--surface);
   }
 
   .threads-mobile-actions button {
+    min-height: 40px;
     border: 0;
+    border-radius: var(--control-radius);
     background: transparent;
     color: var(--text);
     font: inherit;
     font-size: 11px;
     font-weight: 650;
+  }
+
+  .threads-mobile-actions button:hover {
+    background: var(--kit-hover);
   }
 
   .threads-approval-actions > button {
@@ -429,262 +374,16 @@
   }
 }
 
-/* ==========================================================================
-   Revision 31 compact OS layer
-
-   Threads is a timeline/approval workbench, not a dashboard. Routine inbox,
-   notification and note controls stay flat and compact; delegation, approval
-   and AI execution remain visible as operational actions without becoming
-   landing-page CTAs.
-   ========================================================================== */
-.threads-module {
-  --threads-surface: var(--surface);
-  --threads-surface-raised: var(--surface-2);
-  --threads-line: var(--line);
-  --threads-text: var(--text);
-  --threads-muted: var(--muted);
-  --threads-radius: var(--surface-radius, 4px);
-  --threads-control-radius: var(--control-radius, 3px);
-  gap: 8px;
-  padding: 8px 8px calc(var(--shell-taskbar-safe-area, 58px) + 8px);
-  background: var(--surface);
+/* Actions/attention column is collapsible and hidden by default so reading a
+   thread gets the full width; the header toggle re-reveals it on demand. */
+.threads-module.is-actions-hidden {
+  grid-template-columns: var(--ctox-left-width, 320px) 12px minmax(0, 1fr);
 }
-
-.threads-pane {
-  border-color: var(--threads-line);
-  border-radius: var(--threads-radius);
-  background: var(--threads-surface);
-  box-shadow: none;
+.threads-module.is-actions-hidden .threads-right,
+.threads-module.is-actions-hidden > [data-resizer="right"] {
+  display: none;
 }
-
-.threads-left,
-.threads-right,
-.threads-composer,
-.threads-panel,
-.threads-briefing-item,
-.threads-message {
-  background: var(--threads-surface);
-}
-
-.threads-left,
-.threads-right {
-  background: var(--threads-surface-raised);
-}
-
-.threads-filter-list {
-  gap: 5px;
-  padding: 8px 10px;
-}
-
-.threads-filter-list .ctox-chip {
-  min-height: 24px;
-  padding-inline: 8px;
-  border-radius: var(--threads-control-radius);
-  font-size: 11px;
-}
-
-.threads-briefing {
-  background: var(--threads-line);
-}
-
-.threads-briefing-item {
-  padding: 7px 9px;
-}
-
-.threads-briefing-value {
-  font-size: 13px;
-  font-weight: 780;
-  line-height: 1.1;
-}
-
-.threads-briefing-label {
-  margin-top: 2px;
-  font-size: 10px;
-  letter-spacing: 0;
-}
-
-.threads-list {
-  padding: 6px;
-}
-
-.threads-list-item {
-  gap: 4px;
-  padding: 8px;
-  border-radius: var(--threads-radius);
-  box-shadow: none;
-}
-
-.threads-list-item:hover,
-.threads-list-item.is-active {
-  background: var(--threads-surface);
-  border-color: var(--threads-line);
-}
-
-.threads-list-item.is-active {
-  border-color: color-mix(in srgb, var(--accent) 62%, var(--threads-line));
-}
-
-.threads-timeline {
-  gap: 8px;
-  padding: 12px;
-}
-
-.threads-message,
-.threads-approval-card,
-.threads-notification-item {
-  border-radius: var(--threads-radius);
-  box-shadow: none;
-}
-
-.threads-message {
-  padding: 10px 12px;
-  background: var(--threads-surface);
-}
-
-.threads-message.is-mine,
-.threads-approval-card {
-  background: color-mix(in srgb, var(--accent) 7%, var(--threads-surface));
-}
-
-.threads-message-body {
-  margin-top: 4px;
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.threads-approval-card {
-  gap: 8px;
-  padding: 10px;
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--threads-line));
-}
-
-.threads-approval-facts {
-  gap: 5px 10px;
-}
-
-.threads-approval-actions {
-  gap: 6px;
-}
-
-.threads-composer {
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  padding: 8px 10px;
-}
-
-.threads-composer .ctox-button.is-primary {
-  min-height: 32px;
-  border-color: var(--threads-line);
-  background: var(--threads-surface);
-  color: var(--threads-text);
-}
-
-.threads-panel {
-  gap: 8px;
-  padding: 10px;
-}
-
-.threads-panel h3 {
-  font-size: 13px;
-  line-height: 1.2;
-}
-
-.threads-form {
-  gap: 8px;
-}
-
-.threads-form label {
-  gap: 4px;
-}
-
-.threads-form .ctox-field-label {
-  font-size: 10px;
-  letter-spacing: 0.06em;
-}
-
-.threads-check {
-  display: grid !important;
-  grid-template-columns: 18px minmax(0, 1fr);
-  align-items: center;
-  column-gap: 8px;
-  min-height: 28px;
-}
-
-.threads-check input {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-}
-
-.threads-right .ctox-input,
-.threads-right .ctox-textarea,
-.threads-composer .ctox-textarea {
-  border-radius: var(--threads-control-radius);
-  box-shadow: none;
-}
-
-.threads-right .ctox-button,
-.threads-approval-actions .ctox-button {
-  min-height: 30px;
-  border-radius: var(--threads-control-radius);
-}
-
-.threads-right [data-ai-form] .ctox-button,
-.threads-right [data-approval-form] .ctox-button,
-.threads-approval-actions [data-approve-approval] {
-  border-color: color-mix(in srgb, var(--accent) 68%, var(--threads-line));
-  background: color-mix(in srgb, var(--accent) 14%, var(--threads-surface));
+.threads-toggle-actions[aria-pressed="true"] {
   color: var(--accent);
-  font-weight: 780;
-}
-
-.threads-right [data-note-form] .ctox-button.is-primary {
-  border-color: var(--threads-line);
-  background: var(--threads-surface);
-  color: var(--threads-text);
-}
-
-@container business-app-window (max-width: 980px) {
-  .threads-module {
-    gap: 6px;
-    padding: 6px 6px calc(var(--shell-taskbar-safe-area, 58px) + 6px);
-  }
-}
-
-@container business-app-window (max-width: 600px) {
-  .threads-module {
-    padding: 0 0 calc(var(--shell-taskbar-safe-area, 52px) + env(safe-area-inset-bottom, 0px));
-    background: var(--threads-surface);
-  }
-
-  .threads-pane {
-    border-radius: 0;
-  }
-
-  .threads-filter-list {
-    padding: 7px 8px;
-  }
-
-  .threads-list-item {
-    min-height: 68px;
-    padding: 9px 10px;
-  }
-
-  .threads-timeline {
-    padding: 10px;
-    padding-bottom: 82px;
-  }
-
-  .threads-composer {
-    padding: 8px;
-  }
-
-  .threads-mobile-actions {
-    gap: 4px;
-  }
-
-  .threads-mobile-actions button {
-    min-height: 40px;
-    border-radius: var(--threads-control-radius);
-  }
+  background: var(--accent-soft);
 }

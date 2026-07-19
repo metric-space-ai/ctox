@@ -122,7 +122,7 @@ async function ensureStyles() {
   const link = document.createElement('link');
   link.rel = 'stylesheet';
   const styleUrl = new URL('./index.css', import.meta.url);
-  styleUrl.searchParams.set('v', '20260711-work-inbox-v1');
+  styleUrl.searchParams.set('v', '20260718-kit-migration-v1');
   link.href = styleUrl.href;
   link.dataset.threadsStyle = 'true';
   document.head.append(link);
@@ -151,6 +151,7 @@ function bindElements(root) {
   els.watch = root.querySelector('[data-thread-watch]');
   els.snooze = root.querySelector('[data-thread-snooze]');
   els.archive = root.querySelector('[data-thread-archive]');
+  els.toggleActions = root.querySelector('[data-toggle-actions]');
   els.syncState = root.querySelector('[data-sync-state]');
   els.mobileBack = root.querySelector('[data-mobile-back]');
   els.mobileReply = root.querySelector('[data-mobile-reply]');
@@ -261,6 +262,10 @@ function wireUi() {
   els.watch?.addEventListener('click', () => toggleWatch().catch(showError));
   els.snooze?.addEventListener('click', () => snoozeSelectedThread().catch(showError));
   els.archive?.addEventListener('click', () => archiveSelectedThread().catch(showError));
+  els.toggleActions?.addEventListener('click', () => {
+    const hidden = els.root?.classList.toggle('is-actions-hidden');
+    els.toggleActions.setAttribute('aria-pressed', hidden ? 'false' : 'true');
+  });
   els.mobileBack?.addEventListener('click', () => {
     state.mobileView = 'list';
     persistNavigationState();
@@ -552,7 +557,7 @@ function renderList(threads) {
     const pending = approvalsForThread(thread.id).filter((item) => item.status === 'pending').length;
     const reasons = attentionReasons(thread);
     return `
-      <button type="button" class="threads-list-item ${thread.id === state.selectedId ? 'is-active' : ''}"
+      <button type="button" class="ctox-list-item threads-list-item ${thread.id === state.selectedId ? 'is-selected' : ''}"
         data-thread-id="${escapeAttr(thread.id)}"
         data-record-id="${escapeAttr(thread.source_record_id || thread.id)}"
         data-record-type="thread"
@@ -660,11 +665,11 @@ function renderApproval(approval) {
     <article class="threads-approval-card" data-approval-id="${escapeAttr(approval.id)}">
       <div class="threads-message-meta">${escapeHtml(state.t('approvalHeadingPrefix', 'CTOX Freigabe'))} · ${escapeHtml(approval.status || 'pending')} · ${escapeHtml(formatTime(approval.requested_at_ms || approval.created_at_ms))}</div>
       <div class="threads-message-body">${escapeHtml(approval.prompt || '')}</div>
-      <dl class="threads-approval-facts">
-        <div><dt>Ziel</dt><dd>${escapeHtml(approval.target_module || approval.source_module || 'CTOX')}</dd></div>
-        <div><dt>Risiko</dt><dd>${escapeHtml(risk)}</dd></div>
-        <div><dt>Erwartete Auswirkung</dt><dd>${escapeHtml(impact)}</dd></div>
-        <div><dt>Evidenz</dt><dd>${escapeHtml(evidence)}</dd></div>
+      <dl class="ctox-fields">
+        <dt>Ziel</dt><dd>${escapeHtml(approval.target_module || approval.source_module || 'CTOX')}</dd>
+        <dt>Risiko</dt><dd>${escapeHtml(risk)}</dd>
+        <dt>Erwartete Auswirkung</dt><dd>${escapeHtml(impact)}</dd>
+        <dt>Evidenz</dt><dd>${escapeHtml(evidence)}</dd>
       </dl>
       <div class="threads-message-meta">${escapeHtml(state.t('approvalRequester', 'Requester'))}: ${escapeHtml(approval.requester_display_name || approval.requester_user_id || '')} · ${escapeHtml(state.t('approvalReviewerShort', 'Reviewer'))}: ${escapeHtml(approval.reviewer_display_name || approval.reviewer_user_id || '')}</div>
       ${command ? `<div class="threads-message-meta">${escapeHtml(state.t('approvalCommand', 'Command'))}: ${escapeHtml(command.command_type || '')} · ${escapeHtml(command.status || '')}</div>` : ''}
@@ -713,11 +718,11 @@ function renderContext(thread) {
     : '<div class="ctox-empty">Kein verknüpfter App-Kontext.</div>';
   const notificationHtml = unread.length
     ? `<div class="threads-notification-list">${unread.map((item) => `
-        <div class="threads-notification-item">
+        <div class="ctox-callout threads-notification-item">
           <span>${escapeHtml(item.title || item.notification_type || 'Notification')}</span>
-          <div>
-            <button type="button" class="ctox-button" data-mark-notification="${escapeAttr(item.id)}">Gelesen</button>
-            <button type="button" class="ctox-button" data-dismiss-notification="${escapeAttr(item.id)}">Ausblenden</button>
+          <div class="threads-notification-actions">
+            <button type="button" class="ctox-button ctox-button--sm" data-mark-notification="${escapeAttr(item.id)}">Gelesen</button>
+            <button type="button" class="ctox-button ctox-button--sm" data-dismiss-notification="${escapeAttr(item.id)}">Ausblenden</button>
           </div>
         </div>
       `).join('')}</div>`
@@ -1262,6 +1267,7 @@ function updateConnectivity() {
   if (els.syncState) {
     els.syncState.textContent = online ? 'synchronisiert' : 'offline';
     els.syncState.dataset.state = online ? 'online' : 'offline';
+    els.syncState.classList.toggle('is-danger', !online);
   }
   els.root?.classList.toggle('is-offline', !online);
 }

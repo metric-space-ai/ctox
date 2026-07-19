@@ -1,4 +1,4 @@
-<main class="ctox-workspace fibu-module" data-fibu-root data-resize-frame>
+<main class="ctox-workspace fibu-module is-actions-hidden" data-fibu-root data-resize-frame>
   <!-- Left Spalte: Selector & Navigation (Strictly links and filters only) -->
   <aside class="ctox-pane fibu-left" aria-label="Fibu Navigation">
     <header class="ctox-pane-header ctox-pane-band">
@@ -78,6 +78,9 @@
           <h2 class="ctox-pane-title" data-active-title>SKR03 Kontenrahmen-Explorer</h2>
         </div>
         <div class="ctox-pane-actions" data-center-actions>
+          <button type="button" class="ctox-pane-icon fibu-toggle-actions" data-toggle-actions title="Assistent einblenden" aria-label="Assistent einblenden" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
+          </button>
           <!-- Dynamic actions based on view -->
         </div>
       </div>
@@ -422,8 +425,7 @@
       <div class="fibu-view-panel" data-panel="tests" hidden>
         <div class="ctox-toolbar fibu-panel-toolbar">
           <div class="fibu-tests-intro">
-            <h3 class="ctox-pane-title">Interaktive UI E2E-Testsuite</h3>
-            <p>Führen Sie Klick-Simulations-Tests direkt im echten DOM der Anwendung aus. Die Schritte werden visuell hervorgehoben.</p>
+            <p>Klick-Simulations-Tests im echten DOM — die aktiven Schritte werden visuell hervorgehoben.</p>
           </div>
           <button type="button" class="ctox-button is-primary" data-action="run-all-ui-tests">
             <span class="fibu-action-icon" data-icon="RUN" aria-hidden="true"></span>

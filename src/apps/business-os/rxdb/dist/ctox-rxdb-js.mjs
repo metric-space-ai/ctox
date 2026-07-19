@@ -697,6 +697,9 @@ function isStructuredValue(value) {
 function normalizeConflictStrategy(value) {
   return value === "field-merge" ? "field-merge" : "lww";
 }
+function normalizeDeleteStrategy(value) {
+  return value === "final" ? "final" : "default";
+}
 
 // src/apps/business-os/rxdb/src/hybrid-logical-clock.mjs
 var HLC_NODE_STORAGE_KEY = "ctox.businessOs.hlcNodeId.v1";
@@ -907,9 +910,9 @@ var CtoxRecoveryJournal = class {
     this.quotaCoordinator = quotaCoordinator;
     this.replayers = /* @__PURE__ */ new Map();
   }
-  registerCollection(collection, { schemaHash: schemaHash2 = "", applyBatch, resolveConflict = null } = {}) {
+  registerCollection(collection, { schemaHash: schemaHash2 = "", applyBatch, resolveConflict = null, applyMaster = null } = {}) {
     if (!collection || typeof applyBatch !== "function") return;
-    this.replayers.set(collection, { schemaHash: schemaHash2, applyBatch, resolveConflict });
+    this.replayers.set(collection, { schemaHash: schemaHash2, applyBatch, resolveConflict, applyMaster });
   }
   async appendBatch({ collection, schemaHash: schemaHash2 = "", primaryPath = "id", operation = "write", rows = [], baseById = null }) {
     const normalizedRows = structuredCloneSafe2(rows);
@@ -1087,6 +1090,15 @@ var CtoxRecoveryJournal = class {
     } else if (resolution === "restore_as_copy") {
       const rows = normalizeConflictRows(conflict.local).map((row) => restoreAsCopy(row?.document || row));
       await (replayer.resolveConflict || replayer.applyBatch)({ operation: "write", rows, baseById: null });
+    } else if (resolution === "keep_master") {
+      const master = conflict.master;
+      if (master && replayer?.applyMaster) {
+        await replayer.applyMaster({
+          operation: "write",
+          rows: [{ document: structuredCloneSafe2(master) }],
+          baseById: null
+        });
+      }
     }
     await updateRecord(this.db, CONFLICT_STORE, conflictId, (current) => ({
       ...current,
@@ -2146,13 +2158,14 @@ var CtoxIndexedDbStorage = class {
     this.recoveryJournal = recoveryJournal;
     this.quotaCoordinator = quotaCoordinator;
   }
-  collection(name, { schema = null, conflictStrategy = "lww" } = {}) {
+  collection(name, { schema = null, conflictStrategy = "lww", deleteStrategy = "default" } = {}) {
     if (!name || typeof name !== "string") {
       throw new TypeError("collection name must be a non-empty string");
     }
     return new CtoxIndexedDbCollection(this.db, name, {
       schema,
       conflictStrategy,
+      deleteStrategy,
       recoveryJournal: this.recoveryJournal,
       quotaCoordinator: this.quotaCoordinator
     });
@@ -2169,6 +2182,7 @@ var CtoxIndexedDbCollection = class {
   constructor(db, name, {
     schema = null,
     conflictStrategy = "lww",
+    deleteStrategy = "default",
     recoveryJournal = null,
     quotaCoordinator = null
   } = {}) {
@@ -2176,6 +2190,7 @@ var CtoxIndexedDbCollection = class {
     this.name = name;
     this.schema = schema || {};
     this.conflictStrategy = normalizeConflictStrategy(conflictStrategy);
+    this.deleteStrategy = normalizeDeleteStrategy(deleteStrategy);
     this.primaryPath = primaryPathFromSchema(schema);
     this.indexes = normalizeSchemaIndexes(schema, this.primaryPath);
     this.indexSignature = schemaIndexSignature(this.indexes);
@@ -2219,6 +2234,20 @@ var CtoxIndexedDbCollection = class {
           // HLC and durable WAL entry before the primary row changes.
           resolveConflict: (batch) => this.bulkWrite(batch.rows || [], {
             baseById: batch.baseById || null
+          }),
+          // SYNC-42: keep_master resolution of a quarantined conflict. The
+          // pull checkpoint already advanced past the master row, so it will
+          // not be re-delivered — apply the journaled master state
+          // authoritatively (origin-stamped, non-pushable, base cleared). Force
+          // bypasses the LWW gate (the local edit may outrank the master lwt)
+          // and `authoritativeMaster` bypasses the three-way merge that would
+          // otherwise just re-throw the same structured conflict. `reconciled`
+          // suppresses the delete_vs_update journaling for a master tombstone.
+          applyMaster: (batch) => this.bulkWrite(batch.rows || [], {
+            replicationOrigin: { role: "ctox_instance", reconciled: true },
+            force: true,
+            authoritativeMaster: true,
+            skipJournal: true
           })
         });
         await this.acknowledgePersistedMasterRecovery();
@@ -2340,6 +2369,7 @@ var CtoxIndexedDbCollection = class {
       throw error;
     }
     await this.persistOverwrittenLocalConflicts(result);
+    await this.persistStructuredConflictQuarantine(result);
     if (batchId) await this.recoveryJournal.commitBatch(batchId, result.success);
     if (replicationOrigin?.role) await this.recoveryJournal?.markMasterAcknowledged(this.name, result.success);
     return result;
@@ -2354,6 +2384,7 @@ var CtoxIndexedDbCollection = class {
     const success = {};
     const error = [];
     const overwrittenLocalConflicts = [];
+    const structuredConflicts = [];
     let localWriteLwtFloor = null;
     if (!replicationOrigin?.role) {
       localWriteLwtFloor = await latestCollectionLwtInTransaction(store, this.name) + 1;
@@ -2372,7 +2403,15 @@ var CtoxIndexedDbCollection = class {
           lwt = Math.max(lwt, localWriteLwtFloor);
           localWriteLwtFloor = lwt + 1;
         }
-        if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, nextDocument, this.name, this.conflictStrategy)) {
+        if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, nextDocument, this.name, this.conflictStrategy, this.deleteStrategy)) {
+          const rejectedUpdate = finalDeleteRejectedUpdateConflict({
+            previous,
+            incomingDocument: nextDocument,
+            collectionName: this.name,
+            deleteStrategy: this.deleteStrategy,
+            replicationOrigin
+          });
+          if (rejectedUpdate) overwrittenLocalConflicts.push(rejectedUpdate);
           if (previous?.doc) success[id] = previous.doc;
           continue;
         }
@@ -2384,12 +2423,19 @@ var CtoxIndexedDbCollection = class {
           replicationOrigin
         });
         if (overwriteConflict) overwrittenLocalConflicts.push(overwriteConflict);
-        const resolved = this.resolveIncomingWrite({
-          previous,
-          doc: nextDocument,
-          lwt,
-          replicationOrigin
-        });
+        let resolved;
+        try {
+          resolved = this.resolveIncomingWrite({
+            previous,
+            doc: nextDocument,
+            lwt,
+            replicationOrigin
+          });
+        } catch (conflictError) {
+          if (conflictError?.code !== "structured_conflict_requires_resolution") throw conflictError;
+          structuredConflicts.push(quarantineConflictRecord(conflictError, this.name, id, this.primaryPath));
+          continue;
+        }
         if (resolved.replicationOrigin?.role && previous && Number(previous.lwt || 0) >= resolved.lwt) {
           resolved.lwt = Number(previous.lwt) + 1;
         }
@@ -2428,7 +2474,7 @@ var CtoxIndexedDbCollection = class {
       });
       dispatchStorageChange(this.db.name, this.name, success, replicationOrigin);
     }
-    return { success, error, overwrittenLocalConflicts };
+    return { success, error, overwrittenLocalConflicts, structuredConflicts };
   }
   async bulkWrite(rows, {
     now = Date.now(),
@@ -2436,7 +2482,8 @@ var CtoxIndexedDbCollection = class {
     baseById = null,
     skipJournal = false,
     recoveryReplay = false,
-    force = false
+    force = false,
+    authoritativeMaster = false
   } = {}) {
     await this.initializeRecovery();
     const journalWrite = Boolean(this.recoveryJournal) && !skipJournal && !replicationOrigin?.role && Array.isArray(rows);
@@ -2456,7 +2503,7 @@ var CtoxIndexedDbCollection = class {
     try {
       await this.persistDeleteUpdateConflicts(validRows, replicationOrigin);
       result = await this.runWithQuotaRecovery(
-        () => this._bulkWriteOnce(writeRows, { now, replicationOrigin, baseById: journalBaseById, force }),
+        () => this._bulkWriteOnce(writeRows, { now, replicationOrigin, baseById: journalBaseById, force, authoritativeMaster }),
         { source: recoveryReplay ? "recovery-replay" : "bulk-write" }
       );
     } catch (error) {
@@ -2464,11 +2511,12 @@ var CtoxIndexedDbCollection = class {
       throw error;
     }
     await this.persistOverwrittenLocalConflicts(result);
+    await this.persistStructuredConflictQuarantine(result);
     if (batchId) await this.recoveryJournal.commitBatch(batchId, result.success);
     if (replicationOrigin?.role) await this.recoveryJournal?.markMasterAcknowledged(this.name, result.success);
     return result;
   }
-  async _bulkWriteOnce(rows, { now = Date.now(), replicationOrigin = null, baseById = null, force = false } = {}) {
+  async _bulkWriteOnce(rows, { now = Date.now(), replicationOrigin = null, baseById = null, force = false, authoritativeMaster = false } = {}) {
     if (!Array.isArray(rows)) {
       throw new TypeError("bulkWrite rows must be an array");
     }
@@ -2478,6 +2526,7 @@ var CtoxIndexedDbCollection = class {
     const success = {};
     const error = [];
     const overwrittenLocalConflicts = [];
+    const structuredConflicts = [];
     let localWriteLwtFloor = null;
     if (!replicationOrigin?.role) {
       localWriteLwtFloor = await latestCollectionLwtInTransaction(store, this.name) + 1;
@@ -2496,7 +2545,15 @@ var CtoxIndexedDbCollection = class {
           localWriteLwtFloor = lwt + 1;
         }
         const previous = await idbRequest(store.get([this.name, id]));
-        if (!force && !shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, doc, this.name, this.conflictStrategy)) {
+        if (!force && !shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, doc, this.name, this.conflictStrategy, this.deleteStrategy)) {
+          const rejectedUpdate = finalDeleteRejectedUpdateConflict({
+            previous,
+            incomingDocument: doc,
+            collectionName: this.name,
+            deleteStrategy: this.deleteStrategy,
+            replicationOrigin
+          });
+          if (rejectedUpdate) overwrittenLocalConflicts.push(rejectedUpdate);
           continue;
         }
         const overwriteConflict = force ? null : lwwOverwriteConflict({
@@ -2507,13 +2564,24 @@ var CtoxIndexedDbCollection = class {
           replicationOrigin
         });
         if (overwriteConflict) overwrittenLocalConflicts.push(overwriteConflict);
-        const resolved = this.resolveIncomingWrite({
-          previous,
-          doc,
-          lwt,
-          replicationOrigin,
-          explicitBase: baseById && Object.prototype.hasOwnProperty.call(baseById, id) ? baseById[id] : void 0
-        });
+        let resolved;
+        if (authoritativeMaster) {
+          resolved = { doc, lwt, replicationOrigin, base: void 0 };
+        } else {
+          try {
+            resolved = this.resolveIncomingWrite({
+              previous,
+              doc,
+              lwt,
+              replicationOrigin,
+              explicitBase: baseById && Object.prototype.hasOwnProperty.call(baseById, id) ? baseById[id] : void 0
+            });
+          } catch (conflictError) {
+            if (conflictError?.code !== "structured_conflict_requires_resolution") throw conflictError;
+            structuredConflicts.push(quarantineConflictRecord(conflictError, this.name, id, this.primaryPath));
+            continue;
+          }
+        }
         if (resolved.replicationOrigin?.role && previous && Number(previous.lwt || 0) >= resolved.lwt) {
           resolved.lwt = Number(previous.lwt) + 1;
         }
@@ -2552,7 +2620,7 @@ var CtoxIndexedDbCollection = class {
       });
       dispatchStorageChange(this.db.name, this.name, success, replicationOrigin);
     }
-    return { success, error, overwrittenLocalConflicts };
+    return { success, error, overwrittenLocalConflicts, structuredConflicts };
   }
   async runWithQuotaRecovery(operation, context = {}) {
     try {
@@ -2611,6 +2679,24 @@ var CtoxIndexedDbCollection = class {
     const conflicts = result?.overwrittenLocalConflicts;
     if (Array.isArray(result?.overwrittenLocalConflicts)) delete result.overwrittenLocalConflicts;
     if (!Array.isArray(conflicts)) return;
+    for (const conflict of conflicts) {
+      await this.recoveryJournal?.recordConflict?.(conflict);
+    }
+  }
+  // SYNC-42: journal the documents QUARANTINED by the batch apply (an
+  // unmergeable structured field conflict). Collected inside the storage
+  // transaction and journaled here AFTER it commits — so a quota-retried
+  // transaction never journals twice, and the good documents in the same batch
+  // are already durable. Each record carries a deterministic conflict id, so an
+  // idempotent re-delivery of the same batch (e.g. a crash between the primary
+  // commit and the pull checkpoint advancing) OVERWRITES the same record
+  // instead of appending a duplicate. The record captures local + master + base
+  // so db.conflicts.resolve() stays fully functional after the checkpoint has
+  // moved past the master row.
+  async persistStructuredConflictQuarantine(result) {
+    const conflicts = result?.structuredConflicts;
+    if (Array.isArray(result?.structuredConflicts)) delete result.structuredConflicts;
+    if (!Array.isArray(conflicts) || !conflicts.length) return;
     for (const conflict of conflicts) {
       await this.recoveryJournal?.recordConflict?.(conflict);
     }
@@ -3230,7 +3316,7 @@ function normalizeStoredReplicationFlags(record) {
     pushable
   };
 }
-function shouldAcceptDocumentWrite(existingRecord, incomingLwt, replicationOrigin = null, incomingDocument = null, collectionName = "", conflictStrategy = "lww") {
+function shouldAcceptDocumentWrite(existingRecord, incomingLwt, replicationOrigin = null, incomingDocument = null, collectionName = "", conflictStrategy = "lww", deleteStrategy = "default") {
   if (!existingRecord) return true;
   const existingLwt = Number(existingRecord.lwt || existingRecord.doc?._meta?.lwt || 0);
   const nextLwt = Number(incomingLwt || 0);
@@ -3244,6 +3330,12 @@ function shouldAcceptDocumentWrite(existingRecord, incomingLwt, replicationOrigi
     }
     const existingIsLocalWrite = !existingRecord.doc?._meta?.ctoxReplicationOrigin;
     if (!existingIsLocalWrite) return true;
+    if (deleteStrategy === "final") {
+      const incomingIsTombstone = Boolean(incomingDocument?._deleted);
+      const existingIsTombstone = Boolean(existingRecord.doc?._deleted);
+      if (incomingIsTombstone && !existingIsTombstone) return true;
+      if (existingIsTombstone && !incomingIsTombstone) return false;
+    }
     if (conflictStrategy === "field-merge") return nextLwt >= existingLwt;
     const localHlc = existingRecord.doc?._meta?.ctoxHlc;
     const masterHlc = incomingDocument?._meta?.ctoxHlc;
@@ -3280,6 +3372,43 @@ function lwwOverwriteConflict({
     master: incomingDocument,
     message: skewed ? "A local HLC is more than five minutes ahead of the native time reference; the master row won and the local update remains recoverable here." : "The master row won the whole-document LWW gate; the concurrent local update remains recoverable here.",
     ...skewed ? { clock: hybridLogicalClockStatus() } : {}
+  };
+}
+function finalDeleteRejectedUpdateConflict({
+  previous,
+  incomingDocument,
+  collectionName = "",
+  deleteStrategy = "default",
+  replicationOrigin = null
+}) {
+  if (deleteStrategy !== "final") return null;
+  if (!replicationOrigin?.role || !previous?.doc || !incomingDocument) return null;
+  if (NATIVE_AUTHORITATIVE_COLLECTIONS.has(collectionName)) return null;
+  if (previous.replicationOriginRole || previous.doc?._meta?.ctoxReplicationOrigin) return null;
+  if (!previous.doc?._deleted) return null;
+  if (incomingDocument._deleted) return null;
+  return {
+    code: "structured_conflict_requires_resolution",
+    conflictType: "delete_vs_update",
+    collection: collectionName,
+    base: previous.base || null,
+    local: previous.doc,
+    master: incomingDocument,
+    message: "The local delete is authoritative (finalDelete); the concurrent master update remains recoverable here."
+  };
+}
+function quarantineConflictRecord(error, collection, id, primaryPath = "id") {
+  return {
+    conflictId: `structured:${collection}:${id}`,
+    code: "structured_conflict_requires_resolution",
+    conflictType: "structured_field_conflict",
+    collection,
+    primaryPath,
+    fields: Array.isArray(error?.fields) ? error.fields : [],
+    base: error?.base ?? null,
+    local: error?.local ?? null,
+    master: error?.master ?? null,
+    message: error?.message || `Concurrent structured edits to ${collection}/${id} require manual resolution.`
   };
 }
 function isForwardReplicatedBusinessCommandState(existingDocument, incomingDocument) {
@@ -3728,6 +3857,7 @@ var ctoxIndexedDbStorageTestInternals = {
   documentMatchesReplicationOrigin,
   indexValuesFor,
   lwwOverwriteConflict,
+  finalDeleteRejectedUpdateConflict,
   normalizeDocument,
   normalizeStoredReplicationFlags,
   normalizeSchemaIndexes,
@@ -3759,6 +3889,7 @@ var MAX_PEER_SEND_QUEUE_BYTES = 16 * 1024 * 1024;
 var FAIR_SEND_SCHEDULE = ["high", "high", "high", "high", "normal", "normal", "low"];
 var MAX_SERIALIZED_FRAME_BYTES = 16384;
 var FRAME_ACK_TIMEOUT_MS = 3e4;
+var STALLED_INCOMING_TRANSFER_TIMEOUT_MS = FRAME_ACK_TIMEOUT_MS * 3;
 var FRAME_RESUME_TIMEOUT_MS = 1e3;
 var COMPLETED_FRAME_ACK_TTL_MS = 6e4;
 var MAX_GLOBAL_RTC_PEER_CONNECTIONS = 64;
@@ -4355,6 +4486,7 @@ var CtoxWebRtcNativePeer = class {
         }
         this.ensureConnection(remotePeerId);
       }
+      this.prunePeerMetadata(descriptors);
       this.events.emit("joined", message);
       return;
     }
@@ -4838,12 +4970,17 @@ var CtoxWebRtcNativePeer = class {
         totalBytes,
         received: /* @__PURE__ */ new Map(),
         createdAt: Date.now(),
+        // M3: advanced on every genuinely-new frame (see recordReceivedFrame);
+        // the stall sweep ages a transfer by time-since-progress, not birth, so
+        // a slow-but-live transfer is never discarded.
+        lastProgressAt: Date.now(),
         attempt: Number(payload.attempt || 0),
         contiguousSeq: -1,
         nextAckSeq: Math.min(FRAME_ACK_WINDOW - 1, totalFrames - 1)
       });
       this.completedFrameAcks.delete(transferId2);
       this.cleanupCompletedFrameAcks();
+      this.sweepStalledIncomingTransfers();
       this.recordTransportStatus({
         incomingTransfers: this.incomingFrames.size,
         completedAckCacheSize: this.completedFrameAcks.size
@@ -4957,6 +5094,7 @@ var CtoxWebRtcNativePeer = class {
       expiresAt: Date.now() + COMPLETED_FRAME_ACK_TTL_MS
     });
     this.cleanupCompletedFrameAcks();
+    this.sweepStalledIncomingTransfers();
     this.recordTransportStatus({
       incomingTransfers: this.incomingFrames.size,
       completedAckCacheSize: this.completedFrameAcks.size
@@ -5081,6 +5219,25 @@ var CtoxWebRtcNativePeer = class {
       ...this.peerMetadata.get(normalized.peerId) || {},
       ...normalized
     });
+  }
+  // M2: bound peerMetadata to the live room. Drop entries whose peer id is not
+  // in the latest room descriptor set AND has no live connection. Self is never
+  // stored (rememberPeerMetadata skips it). A no-op when `descriptors` is empty,
+  // so a delta/edge broadcast that omits the peer list never wipes the map.
+  prunePeerMetadata(descriptors = []) {
+    const present = /* @__PURE__ */ new Set();
+    for (const descriptor of Array.isArray(descriptors) ? descriptors : []) {
+      if (descriptor?.peerId) present.add(String(descriptor.peerId));
+    }
+    if (present.size === 0) return 0;
+    let removed = 0;
+    for (const peerId of [...this.peerMetadata.keys()]) {
+      if (present.has(peerId)) continue;
+      if (this.connections.has(peerId)) continue;
+      this.peerMetadata.delete(peerId);
+      removed += 1;
+    }
+    return removed;
   }
   shouldConnectToRemotePeer(remotePeerId) {
     const peerId = String(remotePeerId || "");
@@ -5334,6 +5491,34 @@ var CtoxWebRtcNativePeer = class {
         this.completedFrameAcks.delete(transferId);
       }
     }
+  }
+  // M3: drop incoming transfers that have made no progress within the stall
+  // window, freeing their buffered chunks (up to MAX_TRANSFER_BYTES each).
+  // Runs opportunistically from the same frame-activity path as the completed-
+  // ack cleanup, so a stalled transfer is reclaimed while other traffic flows
+  // rather than lingering until the peer is finally dropped. An actively-
+  // progressing transfer resets `lastProgressAt` and is never discarded.
+  sweepStalledIncomingTransfers(now = Date.now(), timeoutMs = STALLED_INCOMING_TRANSFER_TIMEOUT_MS) {
+    if (this.incomingFrames.size === 0) return 0;
+    let swept = 0;
+    for (const [transferId, entry] of [...this.incomingFrames.entries()]) {
+      const lastProgressAt = Number(entry.lastProgressAt ?? entry.createdAt ?? now);
+      if (now - lastProgressAt < timeoutMs) continue;
+      this.incomingFrames.delete(transferId);
+      swept += 1;
+      this.events.emit("error", {
+        code: "ctox_webrtc_incoming_transfer_stalled",
+        peerId: entry.peerId,
+        transferId,
+        receivedFrames: entry.received?.size || 0,
+        totalFrames: entry.totalFrames,
+        ageMs: now - lastProgressAt
+      });
+    }
+    if (swept > 0) {
+      this.recordTransportStatus({ incomingTransfers: this.incomingFrames.size });
+    }
+    return swept;
   }
 };
 function normalizeSignalingControlPlaneError(payload = {}) {
@@ -5942,6 +6127,7 @@ function jsonEscapedCharLen(ch) {
 function recordReceivedFrame(entry, seq, data) {
   const hadFrame = entry.received.has(seq);
   entry.received.set(seq, data);
+  if (!hadFrame) entry.lastProgressAt = Date.now();
   if (!hadFrame && seq === Number(entry.contiguousSeq ?? -1) + 1) {
     while (entry.contiguousSeq + 1 < entry.totalFrames && entry.received.has(entry.contiguousSeq + 1)) {
       entry.contiguousSeq += 1;
@@ -6082,6 +6268,7 @@ var CLIENT_QUERY_STREAM_LIMIT = Math.max(1, Math.min(6, SERVER_QUERY_STREAM_LIMI
 var CLIENT_QUERY_QUEUE_LIMIT = 128;
 var CLIENT_QUERY_QUEUE_BUDGET_BYTES = 1024 * 1024;
 var CLIENT_FILE_COLLECTOR_LIMIT = 8;
+var DEFAULT_QUERY_COLLECTOR_BUDGET_BYTES = 8 * 1024 * 1024;
 var QUERY_STREAM_LIMIT_RETRY_MS = 160;
 var QUERY_STREAM_LIMIT_RETRIES = 6;
 var QUERY_RATE_LIMIT_RETRY_MS = 100;
@@ -6101,7 +6288,8 @@ var DEFAULT_FILE_COLLECTOR_BUDGET_BYTES = 512 * 1024;
 function createDemandLoadingTransport({
   getPeerId,
   collectorTimeoutMs = DEFAULT_COLLECTOR_TIMEOUT_MS,
-  fileCollectorBudgetBytes = DEFAULT_FILE_COLLECTOR_BUDGET_BYTES
+  fileCollectorBudgetBytes = DEFAULT_FILE_COLLECTOR_BUDGET_BYTES,
+  queryCollectorBudgetBytes = DEFAULT_QUERY_COLLECTOR_BUDGET_BYTES
 } = {}) {
   if (typeof getPeerId !== "function") {
     throw new TypeError("createDemandLoadingTransport requires getPeerId");
@@ -6115,6 +6303,10 @@ function createDemandLoadingTransport({
   const acceptedFileBudgetBytes = Math.max(
     Number(CTOX_FILE_RPC.maxBytesPerChunk) || 1,
     Number(fileCollectorBudgetBytes) || DEFAULT_FILE_COLLECTOR_BUDGET_BYTES
+  );
+  const acceptedQueryBudgetBytes = Math.max(
+    Number(CTOX_QUERY_RPC.maxBytesPerChunk) || 1,
+    Number(queryCollectorBudgetBytes) || DEFAULT_QUERY_COLLECTOR_BUDGET_BYTES
   );
   const metrics = {
     queryFetchRequests: 0,
@@ -6130,11 +6322,13 @@ function createDemandLoadingTransport({
     maxQueuedQueryRequests: 0,
     maxQueuedQueryBytes: 0,
     maxBufferedQueryChunks: 0,
+    maxBufferedQueryChunkBytes: 0,
     maxBufferedFileChunks: 0,
     maxBufferedFileChunkBytes: 0,
     queryCollectorTimeouts: 0,
     fileCollectorTimeouts: 0,
-    fileCollectorBudgetExceeded: 0
+    fileCollectorBudgetExceeded: 0,
+    queryCollectorBudgetExceeded: 0
   };
   function updatePeaks() {
     metrics.maxPendingQueryCollectors = Math.max(metrics.maxPendingQueryCollectors, queryCollectors.size);
@@ -6142,6 +6336,7 @@ function createDemandLoadingTransport({
     metrics.maxQueuedQueryRequests = Math.max(metrics.maxQueuedQueryRequests, queryStreamState.queue.length);
     metrics.maxQueuedQueryBytes = Math.max(metrics.maxQueuedQueryBytes, queuedQueryBytes());
     metrics.maxBufferedQueryChunks = Math.max(metrics.maxBufferedQueryChunks, bufferedChunkCount(queryCollectors));
+    metrics.maxBufferedQueryChunkBytes = Math.max(metrics.maxBufferedQueryChunkBytes, bufferedQueryChunkBytes(queryCollectors));
     metrics.maxBufferedFileChunks = Math.max(metrics.maxBufferedFileChunks, bufferedChunkCount(fileCollectors));
     metrics.maxBufferedFileChunkBytes = Math.max(metrics.maxBufferedFileChunkBytes, bufferedFileChunkBytes(fileCollectors));
   }
@@ -6149,6 +6344,25 @@ function createDemandLoadingTransport({
     if (!chunk || !chunk.requestId) return;
     const slot = queryCollectors.get(chunk.requestId);
     if (!slot) return;
+    slot.bufferedBytes = (slot.bufferedBytes || 0) + queryChunkBytes(chunk);
+    if (slot.bufferedBytes > acceptedQueryBudgetBytes) {
+      queryCollectors.delete(chunk.requestId);
+      clearCollectorTimer(slot);
+      metrics.queryCollectorsRejected += 1;
+      metrics.queryCollectorBudgetExceeded += 1;
+      const error = new Error(`QUERY_COLLECTOR_BUDGET_EXCEEDED: ${slot.bufferedBytes} > ${acceptedQueryBudgetBytes}`);
+      error.code = "QUERY_COLLECTOR_BUDGET_EXCEEDED";
+      error.retryable = false;
+      slot.reject(error);
+      Promise.resolve(
+        peer?.request?.(slot.peerId, CTOX_QUERY_RPC.cancel, [{
+          requestId: chunk.requestId,
+          reason: error.code
+        }], 2e3)
+      ).catch(() => {
+      });
+      return;
+    }
     slot.chunks.push(chunk);
     metrics.queryChunksReceived += 1;
     updatePeaks();
@@ -6307,7 +6521,7 @@ function createDemandLoadingTransport({
     const peerId = await waitForPeerId();
     if (!peerId) throw new Error("PEER_UNAVAILABLE");
     const promise = new Promise((resolve, reject) => {
-      queryCollectors.set(requestId, { chunks: [], resolve, reject, peerId });
+      queryCollectors.set(requestId, { chunks: [], resolve, reject, peerId, bufferedBytes: 0 });
       metrics.queryFetchRequests += 1;
       updatePeaks();
     });
@@ -6472,9 +6686,11 @@ function createDemandLoadingTransport({
       queuedQueryBytes: queuedQueryBytes(),
       activeQueryStreams: queryStreamState.active,
       bufferedQueryChunks: bufferedChunkCount(queryCollectors),
+      bufferedQueryChunkBytes: bufferedQueryChunkBytes(queryCollectors),
       bufferedFileChunks: bufferedChunkCount(fileCollectors),
       bufferedFileChunkBytes: bufferedFileChunkBytes(fileCollectors),
       fileCollectorBudgetBytes: acceptedFileBudgetBytes,
+      queryCollectorBudgetBytes: acceptedQueryBudgetBytes,
       cancelledQueryRequestCacheSize: cancelledQueryRequests.size,
       ...metrics
     };
@@ -6675,6 +6891,25 @@ function bufferedChunkCount(collectors) {
   let total = 0;
   for (const slot of collectors.values()) {
     total += Array.isArray(slot?.chunks) ? slot.chunks.length : 0;
+  }
+  return total;
+}
+function queryChunkBytes(chunk) {
+  if (!chunk || typeof chunk !== "object") return 0;
+  if (typeof chunk.compressedBase64 === "string") return chunk.compressedBase64.length;
+  if (chunk.documents != null) {
+    try {
+      return JSON.stringify(chunk.documents).length;
+    } catch {
+      return 0;
+    }
+  }
+  return 0;
+}
+function bufferedQueryChunkBytes(collectors) {
+  let total = 0;
+  for (const slot of collectors.values()) {
+    total += Number(slot?.bufferedBytes) || 0;
   }
   return total;
 }
@@ -7259,7 +7494,15 @@ function createFileDemandLoader({
   let requestSequence = 0;
   const resolveReplicationOrigin = () => (typeof replicationOrigin === "function" ? replicationOrigin() : replicationOrigin) || null;
   return {
-    async fetchFile(fileId, { range = null } = {}) {
+    // `materialize` (default true) keeps the legacy contract: the returned array
+    // carries every chunk's base64 inline, which inline consumers (the Business
+    // OS importer, which assembles a Blob) require. Callers that persist and then
+    // read back from storage can pass `materialize: false` (M6): chunks are
+    // written to storage and released as they arrive instead of accumulating the
+    // whole file in RAM; the returned array then carries only `{ sequence, hash }`
+    // metadata. `readPersistedChunk` lets such a caller pull bytes back per row.
+    async fetchFile(fileId, { range = null, materialize = true } = {}) {
+      const inlineReturn = materialize !== false;
       const inflightKey = fileInflightKey(fileId, range);
       if (inflight.has(inflightKey)) {
         bump(status, "fileStreamDedupHits");
@@ -7271,6 +7514,7 @@ function createFileDemandLoader({
         bump(status, "activeFileStreams", 1);
         try {
           const presence = persistChunks ? await getPresence(sidecarBackend, collectionName, fileId) : null;
+          const knownSequences = persistChunks ? await reconcilePresentSequences(sidecarBackend, collectionName, fileId, presence?.presentSequences || []) : [];
           const validChunks = [];
           const consumedSequences = /* @__PURE__ */ new Set();
           let returnedBytes = 0;
@@ -7279,21 +7523,8 @@ function createFileDemandLoader({
             const sequence = Number(chunk.sequence);
             if (!Number.isFinite(sequence) || consumedSequences.has(sequence)) return;
             const bytesBase64 = String(chunk.bytesBase64 || "");
-            const decodedBytes = Math.floor(bytesBase64.length * 3 / 4);
-            returnedBytes += decodedBytes;
-            if (returnedBytes > returnBudgetBytes) {
-              const error = new Error(`FILE_RETURN_BUDGET_EXCEEDED: ${returnedBytes} > ${returnBudgetBytes}; request a byte range`);
-              error.code = "FILE_RETURN_BUDGET_EXCEEDED";
-              error.retryable = false;
-              throw error;
-            }
+            const hash = chunk.hash || null;
             consumedSequences.add(sequence);
-            const normalized = {
-              sequence,
-              bytesBase64,
-              hash: chunk.hash || null
-            };
-            validChunks.push(normalized);
             bump(status, "fileBytesReceived", bytesBase64.length);
             if (persistChunks) {
               await storageCollection.bulkWrite([{
@@ -7301,8 +7532,29 @@ function createFileDemandLoader({
                 file_id: fileId,
                 sequence,
                 bytes_base64: bytesBase64,
-                hash: normalized.hash
+                hash
               }], { replicationOrigin: resolveReplicationOrigin() });
+              await sidecarBackend.putDocumentAccess({
+                collection: collectionName,
+                id: `${fileId}-${sequence}`,
+                lastAccessedAt: clock(),
+                pinReason: "file-chunk",
+                dirty: false,
+                estimatedBytes: bytesBase64.length
+              });
+            }
+            if (inlineReturn) {
+              const decodedBytes = Math.floor(bytesBase64.length * 3 / 4);
+              returnedBytes += decodedBytes;
+              if (returnedBytes > returnBudgetBytes) {
+                const error = new Error(`FILE_RETURN_BUDGET_EXCEEDED: ${returnedBytes} > ${returnBudgetBytes}; request a byte range`);
+                error.code = "FILE_RETURN_BUDGET_EXCEEDED";
+                error.retryable = false;
+                throw error;
+              }
+              validChunks.push({ sequence, bytesBase64, hash });
+            } else {
+              validChunks.push({ sequence, hash });
             }
           };
           const chunks = await requestFileFetch({
@@ -7310,7 +7562,7 @@ function createFileDemandLoader({
             collectionName,
             fileId,
             range,
-            knownSequences: presence?.presentSequences || [],
+            knownSequences,
             onChunk: consumeChunk
           });
           if (!Array.isArray(chunks)) {
@@ -7338,8 +7590,11 @@ function createFileDemandLoader({
               collection: collectionName,
               fileId,
               expectedChunkCount: expectedTotal,
+              // Union the RECONCILED prior set (evicted sequences already dropped)
+              // with the freshly-persisted ones, so the blob names exactly the
+              // rows actually on disk and never re-accretes phantom sequences.
               presentSequences: dedupeSorted([
-                ...presence?.presentSequences || [],
+                ...knownSequences,
                 ...sequences
               ]),
               lastVerifiedAt: clock()
@@ -7385,8 +7640,36 @@ function createFileDemandLoader({
         }
       }
       return slots.length;
+    },
+    // M6 companion: read a persisted chunk's base64 back from storage. Callers
+    // that fetched with `materialize: false` use this to stream bytes without the
+    // loader ever holding the whole file in RAM. Returns null if the row is gone
+    // (e.g. evicted) — the caller can re-fetch that sequence.
+    async readPersistedChunk(fileId, sequence) {
+      if (typeof storageCollection.getStoredRecord !== "function") return null;
+      const row = await storageCollection.getStoredRecord(`${fileId}-${sequence}`);
+      if (!row) return null;
+      return {
+        sequence: Number(row.sequence),
+        bytesBase64: String(row.bytes_base64 || ""),
+        hash: row.hash || null
+      };
     }
   };
+}
+async function reconcilePresentSequences(backend, collection, fileId, presentSequences) {
+  const sequences = Array.isArray(presentSequences) ? presentSequences : [];
+  if (!sequences.length || typeof backend.getDocumentAccess !== "function") return sequences;
+  const surviving = [];
+  for (const sequence of sequences) {
+    try {
+      const access = await backend.getDocumentAccess(collection, `${fileId}-${sequence}`);
+      if (access) surviving.push(sequence);
+    } catch {
+      surviving.push(sequence);
+    }
+  }
+  return surviving;
 }
 async function getPresence(backend, collection, fileId) {
   const record = await backend.getDocumentAccess(collection, `${fileId}-presence`);
@@ -9350,10 +9633,23 @@ var CtoxWebRtcReplicationState = class {
   async resolveWholeDocumentLwwConflicts(rows, peerId) {
     const retryRows = [];
     const acceptedMaster = [];
+    const finalDelete = this.collection.storageCollection?.deleteStrategy === "final";
     for (const row of rows) {
       const local = row?.newDocumentState;
       const master = row?.assumedMasterState;
       const nativeAuthoritative = ["business_commands", "ctox_queue_tasks"].includes(this.collection.name);
+      if (finalDelete && !nativeAuthoritative) {
+        const localDeleted = Boolean(local?._deleted);
+        const masterDeleted = Boolean(master?._deleted);
+        if (localDeleted && !masterDeleted) {
+          retryRows.push(row);
+          continue;
+        }
+        if (masterDeleted && !localDeleted) {
+          if (master) acceptedMaster.push(master);
+          continue;
+        }
+      }
       if (isFutureHybridLogicalClock(local?._meta?.ctoxHlc)) {
         await this.collection.storageCollection?.recoveryJournal?.recordConflict?.({
           code: "clock_skew_detected",
@@ -10479,6 +10775,37 @@ var multiTabSyncCoordinatorTestInternals = Object.freeze({
   stableHash
 });
 
+// src/apps/business-os/rxdb/src/sync-profile-registry.mjs
+var REGISTRY_KEY = "__ctoxCollectionSyncProfiles";
+var VALID_PROFILES = /* @__PURE__ */ new Set(["demand-only", "demand-chunks"]);
+function registryMap() {
+  const existing = globalThis[REGISTRY_KEY];
+  if (existing instanceof Map) return existing;
+  const created = /* @__PURE__ */ new Map();
+  try {
+    globalThis[REGISTRY_KEY] = created;
+  } catch {
+  }
+  return created;
+}
+function registerCollectionSyncProfile(name, profile) {
+  const key = String(name || "").trim();
+  if (!key) return;
+  if (!VALID_PROFILES.has(profile)) {
+    registryMap().delete(key);
+    return;
+  }
+  registryMap().set(key, profile);
+}
+function getCollectionSyncProfile(name) {
+  const key = String(name || "").trim();
+  if (!key) return null;
+  return registryMap().get(key) || null;
+}
+function clearCollectionSyncProfiles() {
+  registryMap().clear();
+}
+
 // src/apps/business-os/rxdb/src/rx-database.mjs
 function getCtoxIndexedDbStorage() {
   return { name: "ctox-indexeddb-native" };
@@ -10576,10 +10903,12 @@ var CtoxRxDatabase = class {
       if (this.collections[name]) continue;
       const schema = definition?.schema || definition;
       const conflictStrategy = definition?.conflictStrategy;
+      const deleteStrategy = definition?.deleteStrategy;
+      registerCollectionSyncProfile(name, definition?.syncProfile);
       const collection = new CtoxRxCollection({
         name,
         schema,
-        storageCollection: this.storage.collection(name, { schema, conflictStrategy })
+        storageCollection: this.storage.collection(name, { schema, conflictStrategy, deleteStrategy })
       });
       this.collections[name] = collection;
       this[name] = collection;
@@ -11535,6 +11864,7 @@ export {
   canonicalJson,
   canonicalQueryJson,
   canonicalizeQueryInput,
+  clearCollectionSyncProfiles,
   compareHybridLogicalClocks,
   correctedHybridLogicalClockNowMs,
   createActiveCollectionRegistry,
@@ -11559,6 +11889,7 @@ export {
   encryptRecoveryArtifact,
   formatHybridLogicalClock,
   getActiveCollectionRegistry,
+  getCollectionSyncProfile,
   getConnectionHandlerSimplePeer,
   getCtoxIndexedDbStorage,
   getMultiTabSyncCoordinator,
@@ -11578,6 +11909,7 @@ export {
   recoverQueryMetaQuota,
   recoveryCryptoTestInternals,
   recoveryJournalTestInternals,
+  registerCollectionSyncProfile,
   remoteSupportsQueryFetch,
   removeRxDatabase,
   replicateWebRTC,

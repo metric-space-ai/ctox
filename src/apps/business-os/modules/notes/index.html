@@ -1,4 +1,4 @@
-<main class="notes-module" data-notes-root>
+<main class="ctox-workspace notes-module" data-notes-root data-resize-frame>
   <!-- 0. App-Wide Client Pin Lock Screen (Zero-Knowledge Overlay) -->
   <div class="nn-pin-overlay" data-client-lock-screen hidden>
     <div class="nn-pin-container">
@@ -39,7 +39,7 @@
   </div>
 
   <!-- Spalte 1: Linke Sidebar (Notesnook Navigation) -->
-  <section class="notes-sidebar-pane" aria-label="Notesnook Sidebar" data-left-content>
+  <aside class="ctox-pane notes-sidebar-pane" aria-label="Notesnook Sidebar" data-left-content>
     <header class="ctox-pane-header ctox-pane-band nn-brand-head">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
@@ -51,19 +51,27 @@
           </span>
           <h2 class="ctox-pane-title">Notesnook</h2>
         </div>
+        <div class="ctox-pane-actions">
+          <button class="ctox-pane-icon" type="button" data-action="lock-app" title="Sperren" aria-label="Sperren">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            </svg>
+          </button>
+        </div>
       </div>
     </header>
 
-    <div class="notes-folder-list nn-nav-list">
+    <div class="nn-nav-list">
       <!-- Kategorie: Alle Notizen -->
-      <div class="notes-folder-item active" data-nav-category="notes">
+      <div class="ctox-list-item notes-folder-item is-selected" data-nav-category="notes">
         <div class="notes-folder-item-left">
           <svg class="notes-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M7 3h7l4 4v14H7V3ZM14 3v4h4"></path>
           </svg>
           <span class="notes-folder-name" data-t="notes">Notizen</span>
         </div>
-        <span class="notes-folder-count" data-count="notes">0</span>
+        <span class="ctox-badge notes-folder-count" data-count="notes">0</span>
       </div>
 
       <!-- Kategorie: Notizbücher (Notebooks) -->
@@ -72,7 +80,7 @@
           <svg class="nn-nav-arrow active" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
           <span>Notizbücher</span>
         </div>
-        <button class="nn-add-sidebar-btn" type="button" data-action="create-notebook" title="Neues Notizbuch" aria-label="Neues Notizbuch">
+        <button class="ctox-icon-button ctox-icon-button--sm" type="button" data-action="create-notebook" title="Neues Notizbuch" aria-label="Neues Notizbuch">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
         </button>
       </div>
@@ -86,7 +94,7 @@
           <svg class="nn-nav-arrow active" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
           <span>Tags</span>
         </div>
-        <button class="nn-add-sidebar-btn" type="button" data-action="create-tag" title="Neuer Tag" aria-label="Neuer Tag">
+        <button class="ctox-icon-button ctox-icon-button--sm" type="button" data-action="create-tag" title="Neuer Tag" aria-label="Neuer Tag">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
         </button>
       </div>
@@ -98,51 +106,41 @@
       <div class="nn-sidebar-divider"></div>
 
       <!-- Kategorie: Favoriten -->
-      <div class="notes-folder-item" data-nav-category="favorites">
+      <div class="ctox-list-item notes-folder-item" data-nav-category="favorites">
         <div class="notes-folder-item-left">
           <svg class="notes-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M12 4l2.35 4.9 5.4.7-4 3.75 1 5.35L12 16.1l-4.75 2.6 1-5.35-4-3.75 5.4-.7L12 4Z"></path>
           </svg>
           <span>Favoriten</span>
         </div>
-        <span class="notes-folder-count" data-count="favorites">0</span>
+        <span class="ctox-badge notes-folder-count" data-count="favorites">0</span>
       </div>
 
       <!-- Kategorie: Papierkorb -->
-      <div class="notes-folder-item" data-nav-category="trash">
+      <div class="ctox-list-item notes-folder-item" data-nav-category="trash">
         <div class="notes-folder-item-left">
           <svg class="notes-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M5 7h14M10 7V5h4v2M8 7l1 13h6l1-13M10.5 11v5M13.5 11v5"></path>
           </svg>
           <span>Papierkorb</span>
         </div>
-        <span class="notes-folder-count" data-count="trash">0</span>
+        <span class="ctox-badge notes-folder-count" data-count="trash">0</span>
       </div>
     </div>
-
-    <div class="notes-sidebar-footer nn-sidebar-footer">
-      <button class="nn-lock-client-btn" type="button" data-action="lock-app" title="Notesnook sperren">
-        <svg class="nn-footer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-        </svg>
-        <span>Sperren</span>
-      </button>
-    </div>
-  </section>
+  </aside>
 
   <!-- Resizer Links -->
-  <div class="notes-resizer" data-resizer="left" role="separator" aria-orientation="vertical" aria-label="Sidebar-Breite anpassen"></div>
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="180" data-resizer-max="380" aria-label="Sidebar-Breite anpassen"></button>
 
   <!-- Spalte 2: Mittlere Notizliste -->
-  <section class="notes-list-pane" aria-label="Notes List">
-    <header class="ctox-pane-header ctox-pane-band nn-list-head" style="position: relative; overflow: visible;">
+  <section class="ctox-pane notes-list-pane" aria-label="Notes List">
+    <header class="ctox-pane-header ctox-pane-band nn-list-head">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker nn-kicker" data-list-kicker>Notesnook</span>
+          <span class="ctox-pane-kicker" data-list-kicker>Notesnook</span>
           <h2 class="ctox-pane-title" data-notes-count-label>Alle Notizen</h2>
         </div>
-        <div class="ctox-pane-actions" style="position: relative;">
+        <div class="ctox-pane-actions">
           <!-- Sort/Filter Auslöser -->
           <button class="ctox-pane-icon nn-filter-trigger" type="button" data-action="toggle-filter" title="Sortieren & Filtern" aria-label="Sortieren & Filtern">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -151,7 +149,7 @@
           </button>
 
           <!-- Sort/Filter Popover -->
-          <div class="nn-filter-popover" data-filter-popover hidden style="position: absolute; right: 0; top: calc(100% + 4px); z-index: 100;">
+          <div class="nn-filter-popover" data-filter-popover hidden>
             <div class="nn-popover-section">
               <h4>Sortierung</h4>
               <button class="nn-popover-item active" data-sort="updated">Zuletzt aktualisiert</button>
@@ -168,26 +166,26 @@
         </div>
       </div>
       <div class="ctox-pane-tools">
-        <input class="ctox-pane-search nn-input-search" data-search type="search" placeholder="Durchsuche Notizen..." />
+        <input class="ctox-pane-search" data-search type="search" placeholder="Durchsuche Notizen..." />
       </div>
     </header>
 
-    <div class="notes-scroll nn-cards-scroll" data-notes-list>
+    <div class="ctox-pane-scroll nn-cards-scroll" data-notes-list>
       <!-- Dynamische Notizkarten -->
     </div>
   </section>
 
   <!-- Resizer Rechts -->
-  <div class="notes-resizer" data-resizer="right" role="separator" aria-orientation="vertical" aria-label="Listenbreite anpassen"></div>
+  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="240" data-resizer-max="480" aria-label="Listenbreite anpassen"></button>
 
   <!-- Spalte 3: Rechter Editor-Bereich -->
-  <section class="notes-pane notes-center" aria-label="Note Editor" data-right-content>
+  <section class="ctox-pane notes-center" aria-label="Note Editor" data-right-content>
     <!-- Editor Header: Notesnook Meta-Kopfzeile -->
-    <header class="notes-pane-head notes-center-head nn-editor-head">
+    <header class="ctox-pane-header ctox-pane-band nn-editor-head">
       <div class="nn-note-meta-left">
         <!-- Notizbuch Zuweisung -->
         <div class="nn-meta-select-wrap">
-          <button class="nn-meta-btn nn-notebook-select-btn" type="button">
+          <button class="ctox-button ctox-button--sm nn-meta-btn nn-notebook-select-btn" type="button">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
             <span data-note-notebook-label>Kein Notizbuch</span>
             <svg class="nn-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
@@ -199,7 +197,7 @@
 
         <!-- Tags Zuweisung -->
         <div class="nn-meta-select-wrap">
-          <button class="nn-meta-btn nn-tags-select-btn" type="button">
+          <button class="ctox-button ctox-button--sm nn-meta-btn nn-tags-select-btn" type="button">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h7l9 9-7 7-9-9V4ZM8.5 8.5h.01"></path></svg>
             <span>Tags verwalten</span>
             <svg class="nn-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
@@ -210,30 +208,34 @@
         </div>
       </div>
 
-      <div class="notes-center-controls nn-editor-controls ctox-pane-actions">
-        <!-- Notiz Aktionen -->
-        <button class="ctox-pane-icon nn-action-btn" type="button" data-action="star-note" title="Favorit umschalten" aria-label="Favorit umschalten">
+      <div class="ctox-pane-actions nn-editor-controls">
+        <button class="ctox-pane-icon" type="button" data-action="star-note" title="Favorit umschalten" aria-label="Favorit umschalten">
           <svg class="nn-star-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M12 4l2.35 4.9 5.4.7-4 3.75 1 5.35L12 16.1l-4.75 2.6 1-5.35-4-3.75 5.4-.7L12 4Z"></path>
           </svg>
         </button>
 
-        <button class="ctox-pane-icon nn-action-btn" type="button" data-action="lock-note" title="Notiz verschlüsseln" aria-label="Notiz verschlüsseln">
-          <svg class="nn-lock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-          </svg>
-        </button>
+        <div class="nn-meta-select-wrap">
+          <button class="ctox-pane-icon" type="button" data-action="toggle-note-meta" title="Weitere Aktionen" aria-label="Weitere Aktionen" aria-haspopup="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="5" r="1.4"></circle>
+              <circle cx="12" cy="12" r="1.4"></circle>
+              <circle cx="12" cy="19" r="1.4"></circle>
+            </svg>
+          </button>
+          <div class="nn-dropdown-menu" data-note-meta-menu hidden>
+            <button class="nn-dropdown-item" type="button" data-action="lock-note" title="Notiz verschlüsseln">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+              <span>Notiz verschlüsseln</span>
+            </button>
+            <button class="nn-dropdown-item is-danger" type="button" data-action="delete-note" title="Notiz löschen">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7h14M10 7V5h4v2M8 7l1 13h6l1-13M10.5 11v5M13.5 11v5"></path></svg>
+              <span>Notiz löschen</span>
+            </button>
+          </div>
+        </div>
 
-        <button class="ctox-pane-icon nn-action-btn nn-trash-btn" type="button" data-action="delete-note" title="Notiz löschen" aria-label="Notiz löschen">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M5 7h14M10 7V5h4v2M8 7l1 13h6l1-13M10.5 11v5M13.5 11v5"></path>
-          </svg>
-        </button>
-
-        <div class="toolbar-separator" data-sep-trash></div>
-
-        <button class="ctox-pane-icon nn-new-note-trigger" type="button" data-action="create-note" title="Neuen Entwurf starten" aria-label="Neuen Entwurf starten">
+        <button class="ctox-pane-icon" type="button" data-action="create-note" title="Neuen Entwurf starten" aria-label="Neuen Entwurf starten">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M12 5v14M5 12h14"></path>
           </svg>
@@ -242,7 +244,7 @@
     </header>
 
     <!-- Editor Workbench -->
-    <div class="notes-editor-workspace nn-editor-workspace">
+    <div class="nn-editor-workspace">
       <!-- 1. Passcode Locked Note Decryption Pad (Overlay inside Sheet) -->
       <div class="nn-note-lock-overlay" data-note-lock-screen hidden>
         <div class="nn-note-lock-pad">
@@ -257,14 +259,14 @@
           <p>Diese Notiz ist mit einem Zero-Knowledge-Passwort gesichert.</p>
           <div class="nn-decrypt-row">
             <input class="ctox-input nn-decrypt-input" type="password" data-note-passcode-input placeholder="Passwort eingeben..." />
-            <button class="ctox-button is-primary nn-decrypt-btn" type="button" data-action="decrypt-note">Entschlüsseln</button>
+            <button class="ctox-button is-primary" type="button" data-action="decrypt-note">Entschlüsseln</button>
           </div>
           <span class="nn-lock-hint">Standard-Passwort: <strong>1234</strong></span>
         </div>
       </div>
 
       <!-- Das edle Schreibblatt (Paper Sheet) -->
-      <div class="notes-paper-sheet nn-paper-sheet" data-paper-sheet-pane>
+      <div class="nn-paper-sheet" data-paper-sheet-pane>
         <!-- Tag Badges am Notizenanfang -->
         <div class="nn-note-badges" data-note-badges-container></div>
 
@@ -272,9 +274,9 @@
         <div class="notes-note-date" data-note-date></div>
 
         <!-- WYSIWYG Editor Container -->
-        <div class="notes-tab-panel" style="display: flex; flex: 1; min-height: 550px;">
+        <div class="notes-tab-panel">
           <div class="nn-wysiwyg-editor-host">
-            <div class="notes-textarea notes-wysiwyg-editor nn-wysiwyg-editor"
+            <div class="nn-wysiwyg-editor"
                  data-notes-editor
                  contenteditable="true"
                  placeholder="Schreib etwas…"></div>
@@ -285,10 +287,10 @@
 
     <!-- Notesnook Rich Text Editor Control Toolbar -->
     <div class="nn-floating-toolbar-wrapper">
-      <div class="notes-toolbar nn-editor-toolbar">
+      <div class="nn-editor-toolbar">
         <!-- 1. Textstiltypen Dropdown -->
         <div class="nn-format-wrapper">
-          <button class="icon-button nn-toolbar-btn" type="button" aria-label="Formatvorlage" title="Formatvorlage" data-action="format-text">
+          <button class="ctox-pane-icon" type="button" aria-label="Formatvorlage" title="Formatvorlage" data-action="format-text">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="4 7 4 4 20 4 20 7"></polyline>
               <line x1="9" y1="20" x2="15" y2="20"></line>
@@ -296,63 +298,63 @@
             </svg>
           </button>
           <!-- Headers Dropdown -->
-          <div class="notes-format-dropdown nn-toolbar-dropdown" data-headers-dropdown data-format-dropdown hidden>
-            <button type="button" data-format-cmd="formatBlock" data-val="h1" style="font-weight: 700; font-size: 16px;">Titel (H1)</button>
-            <button type="button" data-format-cmd="formatBlock" data-val="h2" style="font-weight: 600; font-size: 14px;">Überschrift (H2)</button>
-            <button type="button" data-format-cmd="formatBlock" data-val="h3" style="font-weight: 500; font-size: 13px;">Unterüberschrift (H3)</button>
-            <button type="button" data-format-cmd="formatBlock" data-val="p" style="font-size: 13px;">Standardtext (Paragraph)</button>
+          <div class="nn-toolbar-dropdown" data-headers-dropdown data-format-dropdown hidden>
+            <button class="nn-dropdown-item" type="button" data-format-cmd="formatBlock" data-val="h1" style="font-weight: 700; font-size: 16px;">Titel (H1)</button>
+            <button class="nn-dropdown-item" type="button" data-format-cmd="formatBlock" data-val="h2" style="font-weight: 600; font-size: 14px;">Überschrift (H2)</button>
+            <button class="nn-dropdown-item" type="button" data-format-cmd="formatBlock" data-val="h3" style="font-weight: 500; font-size: 13px;">Unterüberschrift (H3)</button>
+            <button class="nn-dropdown-item" type="button" data-format-cmd="formatBlock" data-val="p" style="font-size: 13px;">Standardtext (Paragraph)</button>
           </div>
         </div>
 
         <div class="toolbar-separator"></div>
 
         <!-- 2. Textauszeichnungen (Inline Commands) -->
-        <button class="icon-button nn-toolbar-btn" type="button" title="Fett" data-format-cmd="bold">
+        <button class="ctox-pane-icon" type="button" title="Fett" data-format-cmd="bold">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h8a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z"></path><path d="M6 12h9a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z"></path></svg>
         </button>
-        <button class="icon-button nn-toolbar-btn" type="button" title="Kursiv" data-format-cmd="italic">
+        <button class="ctox-pane-icon" type="button" title="Kursiv" data-format-cmd="italic">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="4" x2="10" y2="4"></line><line x1="14" y1="20" x2="5" y2="20"></line><line x1="15" y1="4" x2="9" y2="20"></line></svg>
         </button>
-        <button class="icon-button nn-toolbar-btn" type="button" title="Unterstreichen" data-format-cmd="underline">
+        <button class="ctox-pane-icon" type="button" title="Unterstreichen" data-format-cmd="underline">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v7a6 6 0 0 0 12 0V3"></path><line x1="4" y1="21" x2="20" y2="21"></line></svg>
         </button>
-        <button class="icon-button nn-toolbar-btn" type="button" title="Durchgestrichen" data-format-cmd="strikeThrough">
+        <button class="ctox-pane-icon" type="button" title="Durchgestrichen" data-format-cmd="strikeThrough">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><path d="M16 4H9a4 4 0 0 0-4 4 4 4 0 0 0 4 4h6a4 4 0 0 1 4 4 4 4 0 0 1-4 4H7"></path></svg>
         </button>
-        <button class="icon-button nn-toolbar-btn" type="button" title="Inline Code" data-format-cmd="insertHTML" data-val="<code class='nn-inline-code'>Code</code>">
+        <button class="ctox-pane-icon" type="button" title="Inline Code" data-format-cmd="insertHTML" data-val="<code class='nn-inline-code'>Code</code>">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
         </button>
-        <button class="icon-button nn-toolbar-btn" type="button" title="Textmarker (Highlight)" data-format-cmd="hiliteColor" data-val="#00883733">
+        <button class="ctox-pane-icon" type="button" title="Textmarker (Highlight)" data-format-cmd="hiliteColor" data-val="#00883733">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z"></path><path d="M12 8V16"></path><path d="M8 12H16"></path></svg>
         </button>
 
         <div class="toolbar-separator"></div>
 
         <!-- 3. Ausrichtungen -->
-        <button class="icon-button nn-toolbar-btn" type="button" title="Linksbündig" data-format-cmd="justifyLeft">
+        <button class="ctox-pane-icon" type="button" title="Linksbündig" data-format-cmd="justifyLeft">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="17" y1="10" x2="3" y2="10"></line><line x1="21" y1="6" x2="3" y2="6"></line><line x1="21" y1="14" x2="3" y2="14"></line><line x1="17" y1="18" x2="3" y2="18"></line></svg>
         </button>
-        <button class="icon-button nn-toolbar-btn" type="button" title="Zentriert" data-format-cmd="justifyCenter">
+        <button class="ctox-pane-icon" type="button" title="Zentriert" data-format-cmd="justifyCenter">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="10" x2="6" y2="10"></line><line x1="21" y1="6" x2="3" y2="6"></line><line x1="21" y1="14" x2="3" y2="14"></line><line x1="18" y1="18" x2="6" y2="18"></line></svg>
         </button>
 
         <div class="toolbar-separator"></div>
 
         <!-- 4. Listen & Aufzählungen -->
-        <button class="icon-button nn-toolbar-btn" type="button" title="Checkliste" data-action="insert-checklist">
+        <button class="ctox-pane-icon" type="button" title="Checkliste" data-action="insert-checklist">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="9 11 12 14 22 4"></polyline>
             <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
           </svg>
         </button>
-        <button class="icon-button nn-toolbar-btn" type="button" title="Aufzählungsliste" data-format-cmd="insertUnorderedList">
+        <button class="ctox-pane-icon" type="button" title="Aufzählungsliste" data-format-cmd="insertUnorderedList">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
         </button>
 
         <div class="toolbar-separator"></div>
 
         <!-- 5. Inserter für komplexe Blöcke -->
-        <button class="icon-button nn-toolbar-btn" type="button" title="Tabelle einfügen" data-action="insert-table">
+        <button class="ctox-pane-icon" type="button" title="Tabelle einfügen" data-action="insert-table">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M3 3h18v18H3z"></path>
             <line x1="3" y1="9" x2="21" y2="9"></line>
@@ -362,7 +364,7 @@
         </button>
 
         <!-- Code Block -->
-        <button class="icon-button nn-toolbar-btn" type="button" title="Code-Block einfügen" data-action="insert-codeblock">
+        <button class="ctox-pane-icon" type="button" title="Code-Block einfügen" data-action="insert-codeblock">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="8 6 2 12 8 18"></polyline>
             <polyline points="16 18 22 12 16 6"></polyline>
@@ -372,7 +374,7 @@
 
         <!-- Callout Block Wrapper -->
         <div class="nn-format-wrapper">
-          <button class="icon-button nn-toolbar-btn" type="button" aria-label="Callout-Block einfügen" title="Callout-Block einfügen" data-action="format-callouts">
+          <button class="ctox-pane-icon" type="button" aria-label="Callout-Block einfügen" title="Callout-Block einfügen" data-action="format-callouts">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
               <line x1="9" y1="9" x2="15" y2="9"></line>
@@ -381,18 +383,18 @@
             </svg>
           </button>
           <!-- Callout Options Dropdown -->
-          <div class="notes-format-dropdown nn-toolbar-dropdown" data-callouts-dropdown hidden>
-            <button type="button" data-callout-type="info">💡 Info-Box (Blau)</button>
-            <button type="button" data-callout-type="warning">⚠️ Warnungs-Box (Orange)</button>
-            <button type="button" data-callout-type="tip">❇️ Tipp-Box (Grün)</button>
-            <button type="button" data-callout-type="danger">🚨 Gefahr-Box (Rot)</button>
+          <div class="nn-toolbar-dropdown" data-callouts-dropdown hidden>
+            <button class="nn-dropdown-item" type="button" data-callout-type="info">💡 Info-Box (Blau)</button>
+            <button class="nn-dropdown-item" type="button" data-callout-type="warning">⚠️ Warnungs-Box (Orange)</button>
+            <button class="nn-dropdown-item" type="button" data-callout-type="tip">❇️ Tipp-Box (Grün)</button>
+            <button class="nn-dropdown-item" type="button" data-callout-type="danger">🚨 Gefahr-Box (Rot)</button>
           </div>
         </div>
 
-        <button class="icon-button nn-toolbar-btn" type="button" title="Trennlinie" data-format-cmd="insertHorizontalRule">
+        <button class="ctox-pane-icon" type="button" title="Trennlinie" data-format-cmd="insertHorizontalRule">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
         </button>
-        <button class="icon-button nn-toolbar-btn" type="button" title="Zeitstempel" data-action="insert-timestamp">
+        <button class="ctox-pane-icon" type="button" title="Zeitstempel" data-action="insert-timestamp">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"></circle>
             <polyline points="12 6 12 12 16 14"></polyline>
@@ -402,8 +404,8 @@
     </div>
 
     <!-- Notesnook Editor Statusleiste -->
-    <footer class="notes-editor-footer nn-editor-footer">
-      <div class="nn-footer-left">
+    <footer class="nn-editor-footer">
+      <div>
         <!-- Reaktive Sync-Cloud -->
         <div class="nn-sync-indicator">
           <svg class="nn-sync-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -414,11 +416,11 @@
       </div>
 
       <!-- Lesezeit Berechner -->
-      <span class="nn-read-time" data-notes-read-time>1 Min. Lesezeit</span>
+      <span class="ctox-badge" data-notes-read-time>1 Min. Lesezeit</span>
 
-      <div class="nn-footer-right">
-        <span class="notes-word-count nn-stats" data-notes-words>0 Wörter</span>
-        <span class="notes-char-count nn-stats" data-notes-chars>0 Zeichen</span>
+      <div>
+        <span class="nn-stats" data-notes-words>0 Wörter</span>
+        <span class="nn-stats" data-notes-chars>0 Zeichen</span>
       </div>
     </footer>
   </section>

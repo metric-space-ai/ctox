@@ -1,15 +1,20 @@
-<main class="ctox-workspace ctox-workspace--single ats-module ats-nachweise" data-ats-root data-credentials-root>
+<main class="ctox-workspace ctox-workspace--single ats-nachweise is-actions-hidden" data-ats-root data-credentials-root>
   <section class="ctox-pane ctox-record-workbench">
     <header class="ctox-pane-header ctox-pane-band ctox-record-workbench__header">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-ats-sub data-i18n="subtitle">Ablaufende, verifizierte Nachweise je Subjekt mit Einsatz-Gate und Leistungsnachweis-Freigabe.</span>
+          <span class="ctox-pane-kicker" data-i18n="kicker">ATS</span>
           <h2 class="ctox-pane-title" data-ats-title>Nachweise</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon" data-toggle-actions data-i18n-title="actionsLabel" title="Prüfung & Sign-off" aria-label="Prüfung & Sign-off" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
+          </button>
         </div>
       </div>
     </header>
-    <div class="ctox-pane-scroll ats-body ctox-record-workbench__body">
-      <form class="ats-form ctox-compact-form" data-ats-form data-credentials-form>
+    <div class="ctox-pane-scroll ctox-record-workbench__body">
+      <form class="ctox-compact-form" data-ats-form data-credentials-form>
         <div class="ctox-compact-form__fields">
           <label class="ctox-compact-field"><span data-i18n="subjectLabel">Subjekt</span><input class="ctox-input" type="text" name="subject_id" placeholder="Subjekt-ID (Kandidat/Mitarbeiter)" data-i18n-placeholder="subjectPlaceholder" required data-f /></label>
           <label class="ctox-compact-field"><span data-i18n="credentialTypeLabel">Nachweistyp</span><select class="ctox-select" name="credential_type" data-credential-type data-f></select></label>
@@ -19,7 +24,8 @@
         <div class="ctox-compact-form__actions"><button type="submit" class="ctox-button is-primary" data-i18n="addCredential">Nachweis hinzufügen</button></div>
       </form>
 
-      <form class="ats-form ats-form--gate ctox-compact-form" data-ats-gate-form>
+      <div data-ats-advanced>
+      <form class="ctox-compact-form" data-ats-gate-form>
         <div class="ctox-compact-form__fields">
           <label class="ctox-compact-field"><span data-i18n="deploymentSubjectLabel">Einsatz-Subjekt</span><input class="ctox-input" type="text" name="subject_id" placeholder="Subjekt-ID für Einsatz-Prüfung" data-i18n-placeholder="deploymentSubjectPlaceholder" required data-f /></label>
           <label class="ctox-compact-field"><span data-i18n="requiredTypesLabel">Pflicht-Typen</span><input class="ctox-input" type="text" name="required_types" placeholder="Pflicht-Typen (kommagetrennt)" data-i18n-placeholder="requiredTypesPlaceholder" data-f /></label>
@@ -27,7 +33,7 @@
         <div class="ctox-compact-form__actions"><button type="submit" class="ctox-button" data-i18n="checkReadiness">Einsatzbereitschaft prüfen</button></div>
       </form>
 
-      <form class="ats-form ats-form--signoff ctox-compact-form" data-ats-signoff-form>
+      <form class="ctox-compact-form" data-ats-signoff-form>
         <div class="ctox-compact-form__fields">
           <label class="ctox-compact-field"><span data-i18n="recordLabel">Leistungsnachweis</span><input class="ctox-input" type="text" name="record_id" placeholder="Leistungsnachweis-ID (Sign-off)" data-i18n-placeholder="recordPlaceholder" required data-f /></label>
           <label class="ctox-compact-field"><span data-i18n="rateLabel">Verrechnungssatz</span><input class="ctox-input" type="number" name="charge_rate" step="0.01" min="0" placeholder="Verrechnungssatz €/h (Pflicht für Abrechnung)" data-i18n-placeholder="ratePlaceholder" data-f /></label>
@@ -37,10 +43,11 @@
         </div>
         <div class="ctox-compact-form__actions"><button type="submit" class="ctox-button" data-i18n="releaseBilling">Entleiher-Sign-off → Abrechnung freigeben</button></div>
       </form>
+      </div>
 
-      <div class="ats-gate" data-ats-gate></div>
-      <div class="ats-count ctox-record-workbench__status" data-ats-count></div>
-      <div class="ats-list ctox-record-list" data-ats-list data-credentials-list></div>
+      <div class="ctox-callout" data-ats-gate hidden></div>
+      <div class="ctox-record-workbench__status" data-ats-count></div>
+      <div class="ctox-record-list" data-ats-list data-credentials-list></div>
     </div>
   </section>
 </main>

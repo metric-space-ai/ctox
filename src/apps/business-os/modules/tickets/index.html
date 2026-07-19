@@ -1,5 +1,5 @@
-<main class="tickets-module" data-tickets-root data-resize-frame>
-  <aside class="tickets-pane tickets-left" aria-label="Tickets">
+<main class="ctox-workspace tickets-module is-actions-hidden" data-tickets-root data-resize-frame>
+  <aside class="ctox-pane tickets-pane tickets-left" aria-label="Tickets">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
@@ -9,6 +9,9 @@
         <div class="ctox-pane-actions">
           <button class="ctox-pane-icon" type="button" data-ticket-create-local aria-label="Ticket anlegen" title="Ticket anlegen">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <button class="ctox-pane-icon" type="button" data-toggle-actions aria-label="Kontrollen einblenden" title="Kontrollen einblenden" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
           </button>
         </div>
       </div>
@@ -24,10 +27,12 @@
       </div>
       <p class="tickets-command-status" data-ticket-command-status hidden></p>
     </header>
-    <div class="tickets-list os-scrollbar" data-ticket-list></div>
+    <div class="ctox-pane-body">
+      <div class="ctox-list os-scrollbar" data-ticket-list></div>
+    </div>
   </aside>
-  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--tickets-left-width" data-resizer-min="260" data-resizer-max="520" aria-label="Spaltenbreite anpassen"></button>
-  <section class="tickets-pane tickets-center" aria-label="Ticket detail" data-ticket-detail></section>
-  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--tickets-right-width" data-resizer-min="260" data-resizer-max="560" aria-label="Rechte Spaltenbreite anpassen"></button>
-  <aside class="tickets-pane tickets-right" aria-label="Ticket operations context" data-ticket-context></aside>
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="260" data-resizer-max="520" aria-label="Spaltenbreite anpassen"></button>
+  <section class="ctox-pane tickets-pane tickets-center" aria-label="Ticket detail" data-ticket-detail></section>
+  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="260" data-resizer-max="560" aria-label="Rechte Spaltenbreite anpassen"></button>
+  <aside class="ctox-pane tickets-pane tickets-right" aria-label="Ticket operations context" data-ticket-context></aside>
 </main>

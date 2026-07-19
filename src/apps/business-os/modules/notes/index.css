@@ -1,128 +1,38 @@
 /* ==========================================================================
-   Notes compact operational editor
+   Notes — module CSS on top of the shared kit (shared/base.css + app.css).
+
+   Frame, panes, resizers, pane headers, search, list rows, badges, buttons
+   and empty states all come from the kit:
+     .ctox-workspace[data-resize-frame] + .ctox-pane
+     .ctox-column-resizer[data-resizer-var]  (shell-wired, persistent)
+     .ctox-pane-header/.ctox-pane-band/.ctox-pane-kicker/.ctox-pane-title
+     .ctox-pane-search, .ctox-pane-icon, .ctox-icon-button--sm
+     .ctox-list-item(.is-selected), .ctox-badge, .ctox-button(--sm),
+     .ctox-input, .ctox-callout, .ctox-empty
+
+   What remains here is only what the kit cannot express:
+   brand row, sidebar nav structure, module dropdown menus, the paper-sheet
+   WYSIWYG editor with its content typography, the format toolbar, the sync
+   status footer, and the zero-knowledge PIN/decrypt overlays.
    ========================================================================== */
 
-/* Fonts resolve through the shell tokens --font-sans / --font-mono; the
-   no-build runtime does not load CDN web fonts. Tokens are scoped to the
-   module root and the body-attached notes context menu — module CSS must not
-   write custom properties on :root. */
 .notes-module,
 .notes-context-menu {
-  /* Module aliases derive directly from the shell tokens (customers pattern);
-     the shell already flips them per theme. */
-  --nn-background: var(--bg);
-  --nn-panel-bg: var(--surface);
-  --nn-panel-bg-sec: var(--surface-2);
-
-  --nn-accent: var(--accent);
-  --nn-accent-hover: color-mix(in srgb, var(--accent) 8%, transparent);
-  --nn-accent-active: color-mix(in srgb, var(--accent) 16%, transparent);
-  --nn-accent-foreground: var(--surface);
-
-  --nn-border: var(--line);
-  --nn-text: var(--text);
-  --nn-text-strong: var(--text-strong, var(--text));
-  --nn-text-muted: var(--muted);
-  --nn-hover: var(--surface-2);
+  /* Module aliases kept deliberately tiny; everything else uses shell tokens
+     directly. Shadows stay flat per the module design contract. */
   --nn-shadow: none;
   --nn-paper-shadow: none;
-
-  --notes-sidebar-w: var(--notes-left-width, 240px);
-  --notes-list-w: var(--notes-right-width, 300px);
+  /* Workspace column defaults; the shell resizer persists overrides inline. */
+  --ctox-left-width: 240px;
+  --ctox-right-width: 300px;
 }
 
-/* Dark theme: only the hover wash genuinely differs from the shell tokens. */
-:root[data-theme="dark"] .notes-module,
-:root[data-theme="dark"] .notes-context-menu {
-  --nn-hover: color-mix(in srgb, var(--text) 6%, transparent);
-}
-
-[hidden] {
-  display: none !important;
-}
-
-/* Layout Root */
-.notes-module[data-notes-root] {
-  display: flex;
-  height: 100%;
-  width: 100%;
-  background: var(--nn-background);
-  color: var(--nn-text);
-  font-family: var(--font-sans);
-  overflow: hidden;
-  box-sizing: border-box;
-  position: relative;
-  transition: background 0.25s, color 0.25s;
-}
-
-/* --- Columns Layout --- */
-.notes-sidebar-pane,
-.notes-list-pane,
-.notes-center {
+/* Pane internals: sidebar and editor have more than header+body, so they lay
+   out as flex columns inside the kit .ctox-pane chrome. */
+.ctox-pane.notes-sidebar-pane,
+.ctox-pane.notes-center {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  overflow: hidden;
-  position: relative;
-  box-sizing: border-box;
-}
-
-/* 1. Left Sidebar Pane */
-.notes-sidebar-pane {
-  width: var(--notes-sidebar-w);
-  min-width: 180px;
-  max-width: 380px;
-  flex: 0 0 var(--notes-sidebar-w);
-  background: var(--nn-panel-bg);
-  border-right: 1px solid var(--nn-border);
-  z-index: 5;
-  transition: background 0.25s, border-color 0.25s;
-}
-
-.notes-resizer {
-  width: 6px;
-  flex: 0 0 6px;
-  cursor: col-resize;
-  background: transparent;
-  position: relative;
-  z-index: 8;
-  touch-action: none;
-}
-
-.notes-resizer::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 2px;
-  width: 2px;
-  background: transparent;
-  transition: background 0.15s;
-}
-
-.notes-resizer:hover::after,
-.notes-resizer.is-active::after,
-.notes-resizer:focus-visible::after {
-  background: var(--nn-accent);
-}
-
-/* 2. Middle List Pane */
-.notes-list-pane {
-  width: var(--notes-list-w);
-  min-width: 240px;
-  max-width: 480px;
-  flex: 0 0 var(--notes-list-w);
-  background: var(--nn-background);
-  border-right: 1px solid var(--nn-border);
-  z-index: 4;
-  transition: background 0.25s, border-color 0.25s;
-}
-
-/* 3. Right Editor Pane */
-.notes-center {
-  flex: 1;
-  background: var(--nn-background);
-  z-index: 3;
 }
 
 /* --- Brand Header (Left Sidebar) ---
@@ -139,9 +49,9 @@
   width: 20px;
   height: 20px;
   flex: 0 0 auto;
-  border-radius: 4px;
-  background: var(--nn-panel-bg-sec);
-  color: var(--nn-accent);
+  border-radius: var(--control-radius);
+  background: var(--surface-2);
+  color: var(--accent);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -152,20 +62,31 @@
   height: 12px;
 }
 
-/* --- Left Sidebar lists (Notebooks / Tags) --- */
+/* --- Left Sidebar nav structure (custom: collapsible Notebook/Tag-Nav,
+   kein Kit-Pendant) — rows themselves are kit .ctox-list-item. --- */
 .nn-nav-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 8px 6px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
 }
 
 .nn-sidebar-divider {
   height: 1px;
-  background: var(--nn-border);
+  background: var(--hairline, var(--line));
   margin: 7px 8px;
+}
+
+/* Group labels (nav sections + date buckets in the note list). */
+.nn-nav-header,
+.notes-group-header {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
 }
 
 .nn-nav-header {
@@ -174,11 +95,6 @@
   justify-content: space-between;
   padding: 6px 8px 3px 6px;
   margin-top: 8px;
-  font-size: 10.5px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--nn-text-muted);
 }
 
 .nn-nav-header-left {
@@ -192,287 +108,265 @@
   width: 12px;
   height: 12px;
   transition: transform 0.2s ease;
-  transform: rotate(0deg);
 }
 
 .nn-nav-arrow.active {
   transform: rotate(90deg);
 }
 
-.nn-add-sidebar-btn {
-  border: 0;
-  background: transparent;
-  color: var(--nn-text-muted);
-  cursor: pointer;
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.nn-add-sidebar-btn svg {
+.nn-nav-header .ctox-icon-button svg {
   width: 12px;
   height: 12px;
-  flex: 0 0 auto;
-}
-
-.nn-add-sidebar-btn:hover {
-  background: var(--nn-hover);
-  color: var(--nn-accent);
 }
 
 .nn-sidebar-sublist {
   display: flex;
   flex-direction: column;
-  gap: 1px;
   padding-left: 10px;
 }
 
-/* Sidebar Item Styling */
+/* Folder/nav rows: interaction visuals (hover, hairline, .is-selected) come
+   from .ctox-list-item; this is only the inner two-column layout. */
 .notes-folder-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 8px;
-  border-radius: var(--control-radius);
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--nn-text);
-  font-weight: 500;
-  transition: background 0.15s, color 0.15s;
+  gap: 8px;
 }
 
-.notes-folder-item:focus-visible,
-.nn-nav-header:focus-visible,
-.notes-card:focus-visible,
-.nn-add-sidebar-btn:focus-visible,
-.nn-lock-client-btn:focus-visible,
-.nn-meta-btn:focus-visible,
-.nn-toolbar-btn:focus-visible,
-.nn-pin-pad button:focus-visible {
-  outline: 2px solid var(--nn-accent);
-  outline-offset: 2px;
-}
-
-.notes-folder-item:hover {
-  background: var(--nn-hover);
-  color: var(--nn-text-strong);
-}
-
-.notes-folder-item.active {
-  background: var(--nn-accent-hover);
-  color: var(--nn-accent);
-  font-weight: 600;
-}
-
-.notes-folder-item.active .notes-folder-icon,
-.notes-folder-item.active .notes-folder-item-left .ctox-action-icon {
-  color: var(--nn-accent);
+.notes-folder-item-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 .notes-folder-icon,
 .notes-folder-item-left .ctox-action-icon {
   width: 16px;
   height: 16px;
-  color: var(--nn-text-muted);
-  margin-right: 10px;
+  color: var(--muted);
   flex-shrink: 0;
 }
 
-.notes-folder-count {
-  font-size: 11px;
-  background: var(--nn-border);
-  color: var(--nn-text-muted);
-  padding: 1px 6px;
-  border-radius: var(--control-radius);
-  font-weight: 600;
+.notes-folder-item.is-selected .notes-folder-icon,
+.notes-folder-item.is-selected .notes-folder-item-left .ctox-action-icon {
+  color: var(--accent);
 }
 
-.notes-folder-item.active .notes-folder-count {
-  background: var(--nn-accent);
-  color: var(--nn-accent-foreground);
-}
-
-/* --- Left Sidebar Footer (Lock App) --- */
-.nn-sidebar-footer {
-  padding: 8px 8px 64px;
-  border-top: 1px solid var(--nn-border);
-}
-
-.nn-lock-client-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: 100%;
-  padding: 7px 8px;
-  border-radius: var(--control-radius);
-  border: 1px solid var(--nn-border);
-  background: var(--nn-background);
-  color: var(--nn-text);
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.nn-lock-client-btn:hover {
-  border-color: var(--nn-accent);
-  color: var(--nn-accent);
-  background: var(--nn-accent-hover);
-}
-
-.nn-footer-icon {
-  width: 14px;
-  height: 14px;
+/* Focus ring for the div-based interactive rows (kit styles cover buttons). */
+.notes-folder-item:focus-visible,
+.notes-card:focus-visible,
+.nn-nav-header:focus-visible,
+.nn-pin-pad button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 /* --- Middle Pane (Notes List) ---
-   Header band, title/kicker typography, the filter icon button and the search
-   input all come from the shared kit (.ctox-pane-band, .ctox-pane-title,
-   .ctox-pane-kicker, .ctox-pane-icon, .ctox-pane-search). */
+   Header band, kicker/title, filter icon button and search all come from the
+   kit. The head needs visible overflow so the sort popover can escape it. */
+.nn-list-head {
+  position: relative;
+  overflow: visible;
+}
 
-/* Filter Popover Dropdown */
-.nn-filter-popover {
+.nn-list-head .ctox-pane-actions {
+  position: relative;
+}
+
+.nn-cards-scroll {
+  padding: 6px;
+}
+
+.notes-group-header {
+  margin: 10px 4px 5px 4px;
+}
+
+/* custom: Modul-Menüs (Sortier-Popover, Notizbuch-/Tag-Zuweisung,
+   Format-Dropdowns) — das Kit hat keine Popover-Menü-Komponente. */
+.nn-filter-popover,
+.nn-dropdown-menu,
+.nn-toolbar-dropdown {
   position: absolute;
-  top: 40px;
-  right: 0;
-  width: 210px;
-  background: var(--nn-panel-bg);
-  border: 1px solid var(--nn-border);
+  background: var(--surface);
+  border: 1px solid var(--hairline, var(--line));
   border-radius: var(--control-radius);
   box-shadow: var(--nn-shadow);
   z-index: 100;
-  padding: 8px;
+  padding: 5px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 1px;
   animation: popIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.nn-filter-popover {
+  top: calc(100% + 4px);
+  right: 0;
+  width: 210px;
+  padding: 8px;
+  gap: 8px;
+}
+
+.nn-dropdown-menu {
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 180px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.nn-toolbar-dropdown {
+  bottom: calc(100% + 4px);
+  left: 0;
+  width: 180px;
 }
 
 .nn-popover-section h4 {
   font-size: 9.5px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--nn-text-muted);
+  color: var(--muted);
   margin: 0 0 6px 4px;
 }
 
-.nn-popover-item {
+.nn-popover-item,
+.nn-dropdown-item {
   width: 100%;
   text-align: left;
   border: 0;
   background: transparent;
   padding: 5px 8px;
   border-radius: var(--control-radius);
+  font: inherit;
   font-size: 12px;
-  color: var(--nn-text);
+  color: var(--text);
   cursor: pointer;
   font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
-.nn-popover-item:hover {
-  background: var(--nn-hover);
-  color: var(--nn-text-strong);
+.nn-popover-item:hover,
+.nn-dropdown-item:hover {
+  background: var(--kit-hover);
+  color: var(--text-strong, var(--text));
 }
 
-.nn-popover-item.active {
-  background: var(--nn-accent-hover);
-  color: var(--nn-accent);
+.nn-popover-item.active,
+.nn-dropdown-item.active {
+  background: var(--accent-soft);
+  color: color-mix(in srgb, var(--accent) 78%, var(--text));
   font-weight: 600;
+}
+
+.nn-dropdown-item.is-danger {
+  color: var(--danger);
+}
+.nn-dropdown-item.is-danger svg {
+  color: var(--danger);
+}
+.nn-dropdown-item.is-danger:hover {
+  background: var(--danger-soft);
 }
 
 .nn-popover-divider {
   height: 1px;
-  background: var(--nn-border);
+  background: var(--hairline, var(--line));
   margin: 2px 0;
 }
 
-/* --- Note Cards (Middle Pane) --- */
-.nn-cards-scroll {
-  flex: 1;
-  overflow-y: auto;
-  padding: 6px;
+.nn-dropdown-item-check {
+  width: 12px;
+  height: 12px;
+  color: var(--accent);
 }
 
-.notes-group-header {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-weight: 700;
-  color: var(--nn-text-muted);
-  margin: 10px 4px 5px 4px;
+/* Tags management dropdown */
+.nn-tags-dropdown {
+  padding: 8px;
+  gap: 5px;
 }
 
-.notes-card {
+.nn-tag-select-item {
   display: flex;
-  flex-direction: column;
-  padding: 9px 10px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text);
   cursor: pointer;
-  background: var(--nn-background);
-  border: 0;
-  border-bottom: 1px solid var(--nn-border);
-  position: relative;
-  transition: all 0.15s ease;
-  margin-bottom: 0;
-  border-left: 1px solid transparent;
+  padding: 4px;
   border-radius: var(--control-radius);
 }
 
-.notes-card:hover {
-  background: var(--nn-hover);
+.nn-tag-select-item:hover {
+  background: var(--kit-hover);
 }
 
-.notes-card.active {
-  background: var(--nn-accent-hover);
-  border-color: color-mix(in srgb, var(--nn-accent) 40%, var(--nn-border));
-  box-shadow: none;
+.nn-tag-select-item input {
+  accent-color: var(--accent);
+  cursor: pointer;
+  margin: 0;
+}
+
+.nn-dropdown-empty {
+  padding: 10px 14px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* --- Note Cards (Middle Pane) ---
+   Rows are kit .ctox-list-item (padding, hover, .is-selected incl. accent
+   bar); this is only the card content layout. */
+.notes-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nn-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
 }
 
 .notes-card-title {
-  font-size: 13.5px;
   font-weight: 600;
-  color: var(--nn-text-strong);
-  margin-bottom: 4px;
+  color: var(--text-strong, var(--text));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
 .notes-card-meta {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 2px;
+  min-width: 0;
 }
 
-.nn-card-meta-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+.notes-card-date,
+.notes-card-snippet {
+  color: var(--muted);
   font-size: 11px;
-  color: var(--nn-text-muted);
-}
-
-.notes-card-date {
-  font-weight: 500;
-  flex-shrink: 0;
 }
 
 .notes-card-snippet {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex: 1;
-  color: var(--nn-text-muted);
-  font-size: 11px;
 }
 
-/* Badges on card */
+/* Badges on card: the pills themselves are kit .ctox-badge. */
 .nn-card-badges {
   display: flex;
   flex-wrap: wrap;
@@ -480,39 +374,13 @@
   margin-top: 2px;
 }
 
-.nn-card-badge {
-  font-size: 9px;
-  font-weight: 600;
-  padding: 1px 5px;
-  border-radius: 4px;
-  white-space: nowrap;
-}
-
-.nn-card-badge.notebook-badge {
-  background: var(--nn-border);
-  color: var(--nn-text);
-  border: 1px solid var(--nn-border);
-}
-
-.nn-card-badge.tag-badge {
-  background: var(--accent-soft);
-  color: var(--nn-accent);
-  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
-}
-
-/* Presence hint (advisory): another user has this note open. */
-.nn-card-badge.presence-badge {
-  background: var(--warning-soft);
-  color: var(--warning);
-  border: 1px solid color-mix(in srgb, var(--warning) 30%, transparent);
-}
-
 /* Card Icons */
 .nn-card-icons {
   display: flex;
   align-items: center;
   gap: 4px;
-  color: var(--nn-text-muted);
+  color: var(--muted);
+  flex: 0 0 auto;
 }
 
 .nn-card-icon {
@@ -522,25 +390,24 @@
 }
 
 .nn-card-icon.starred {
-  color: var(--nn-accent);
-  fill: var(--nn-accent);
+  color: var(--accent);
+  fill: var(--accent);
 }
 
 .nn-card-icon.locked {
-  color: var(--nn-accent);
+  color: var(--accent);
 }
 
-/* --- Right Editor Header --- */
+/* --- Right Editor Header ---
+   Band + icon buttons are kit; layout of meta selectors vs. actions is
+   module-specific. */
 .nn-editor-head {
-  border-bottom: 1px solid var(--nn-border);
-  background: var(--nn-background);
-  padding: 12px 18px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  flex-shrink: 0;
   gap: 10px;
   min-width: 0;
+  flex-shrink: 0;
 }
 
 .nn-note-meta-left {
@@ -555,32 +422,22 @@
   position: relative;
 }
 
+/* Dropdown triggers are kit .ctox-button--sm; only truncation + icon sizing
+   is module-specific. */
 .nn-meta-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  border-radius: 5px;
-  border: 1px solid var(--nn-border);
-  background: var(--nn-panel-bg);
-  color: var(--nn-text);
-  font-size: 11.5px;
-  font-weight: 550;
-  cursor: pointer;
-  transition: all 0.15s;
   max-width: 150px;
 }
 
-.nn-meta-btn:hover {
-  background: var(--nn-hover);
-  color: var(--nn-text-strong);
-  border-color: var(--nn-accent);
+.nn-meta-btn span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nn-meta-btn svg {
   width: 12px;
   height: 12px;
-  color: var(--nn-text-muted);
+  color: var(--muted);
   flex-shrink: 0;
 }
 
@@ -588,132 +445,40 @@
   width: 8px !important;
   height: 8px !important;
   margin-left: 2px;
-  color: var(--nn-text-muted);
+  color: var(--muted);
 }
 
-/* Dropdown list for note assignments */
-.nn-dropdown-menu {
-  position: absolute;
-  top: 32px;
-  left: 0;
-  min-width: 180px;
-  max-height: 240px;
-  overflow-y: auto;
-  background: var(--nn-panel-bg);
-  border: 1px solid var(--nn-border);
-  border-radius: var(--control-radius);
-  box-shadow: var(--nn-shadow);
-  z-index: 100;
-  padding: 5px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.nn-dropdown-item {
-  width: 100%;
-  text-align: left;
-  border: 0;
-  background: transparent;
-  padding: 5px 8px;
-  border-radius: var(--control-radius);
-  font-size: 12px;
-  color: var(--nn-text);
-  cursor: pointer;
-  font-weight: 500;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.nn-dropdown-item:hover {
-  background: var(--nn-hover);
-  color: var(--nn-text-strong);
-}
-
-.nn-dropdown-item.active {
-  background: var(--nn-accent-hover);
-  color: var(--nn-accent);
-  font-weight: 600;
-}
-
-.nn-dropdown-item-check {
-  width: 12px;
-  height: 12px;
-  color: var(--nn-accent);
-}
-
-/* Tags management dropdown */
-.nn-tags-dropdown {
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.nn-tag-select-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--nn-text);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: var(--control-radius);
-}
-
-.nn-tag-select-item:hover {
-  background: var(--nn-hover);
-}
-
-.nn-tag-select-item input {
-  accent-color: var(--nn-accent);
-  cursor: pointer;
-}
-
-/* Editor Action Controls — the buttons themselves are kit .ctox-pane-icon;
-   this block only keeps the module-specific wrap behaviour and states. */
 .nn-editor-controls {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  justify-content: flex-end;
   flex-wrap: wrap;
-  min-width: 0;
 }
 
-.nn-meta-btn:disabled,
-.nn-toolbar-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-  pointer-events: none;
-}
-
-.nn-action-btn.active {
-  color: var(--nn-accent);
-  background: var(--nn-accent-hover);
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
-}
-
-.nn-action-btn.active .nn-star-icon {
+/* Favorite star keeps its warning fill on the kit is-active state. */
+.ctox-pane-icon.is-active .nn-star-icon {
   color: var(--warning);
   fill: var(--warning);
 }
 
-.nn-trash-btn:hover {
-  color: var(--danger);
-  background: var(--danger-soft);
-  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+/* Toolbar group separators (previously unstyled). */
+.toolbar-separator {
+  width: 1px;
+  height: 18px;
+  background: var(--hairline, var(--line));
+  margin: 0 3px;
+  flex: 0 0 auto;
+  align-self: center;
 }
 
-/* --- Centered Paper Sheet & Desk --- */
+/* --- Centered Paper Sheet & Desk ---
+   custom: das Notesnook-Schreibblatt (zentrierte Papierfläche mit eigener
+   Inhalts-Typografie) — bewusst keine Kit-Pane-Fläche. */
 .nn-editor-workspace {
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
   position: relative;
-  background: var(--nn-panel-bg);
+  background: var(--surface);
   padding: 12px 10px;
 }
 
@@ -724,8 +489,8 @@
   display: flex;
   flex-direction: column;
   flex: 1;
-  background: var(--nn-background);
-  border: 1px solid var(--nn-border);
+  background: var(--bg);
+  border: 1px solid var(--hairline, var(--line));
   border-radius: var(--control-radius);
   box-shadow: var(--nn-paper-shadow);
   position: relative;
@@ -737,6 +502,18 @@
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
+}
+
+.notes-note-date {
+  padding: 8px 24px 0 24px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.notes-tab-panel {
+  display: flex;
+  flex: 1;
+  min-height: 550px;
 }
 
 /* WYSIWYG Editor Textarea */
@@ -755,30 +532,30 @@
   outline: 0;
   resize: none;
   background: transparent;
-  color: var(--nn-text);
+  color: var(--text);
   padding: 16px 48px 48px 48px;
   font-family: var(--font-sans);
   font-size: 14.5px;
   line-height: 1.6;
   overflow-y: auto;
-  caret-color: var(--nn-accent);
+  caret-color: var(--accent);
   box-sizing: border-box;
 }
 
 .nn-wysiwyg-editor::selection {
-  background: var(--nn-accent-hover);
+  background: var(--accent-soft);
 }
 
 .nn-wysiwyg-editor::placeholder {
-  color: var(--nn-text-muted);
+  color: var(--muted);
   opacity: 0.5;
 }
 
-/* Headings inside Editor */
+/* custom: Inhalts-Typografie des Editors (vom Nutzer erzeugte Inhalte). */
 .nn-wysiwyg-editor h1,
 .nn-wysiwyg-editor h2,
 .nn-wysiwyg-editor h3 {
-  color: var(--nn-text-strong);
+  color: var(--text-strong, var(--text));
   margin-top: 18px;
   margin-bottom: 8px;
   font-weight: 700;
@@ -787,7 +564,7 @@
 
 .nn-wysiwyg-editor h1 {
   font-size: 22px;
-  border-bottom: 1px solid var(--nn-border);
+  border-bottom: 1px solid var(--hairline, var(--line));
   padding-bottom: 6px;
   margin-top: 0;
 }
@@ -808,10 +585,10 @@
 .nn-inline-code {
   font-family: var(--font-mono);
   font-size: 12.5px;
-  background: var(--nn-panel-bg-sec);
-  color: var(--nn-accent);
+  background: var(--surface-2);
+  color: var(--accent);
   padding: 2px 5px;
-  border-radius: 4px;
+  border-radius: var(--control-radius);
   font-weight: 500;
 }
 
@@ -819,11 +596,11 @@
 .nn-code-block {
   font-family: var(--font-mono);
   font-size: 12.5px;
-  background: var(--nn-panel-bg-sec);
-  color: var(--nn-text-strong);
+  background: var(--surface-2);
+  color: var(--text-strong, var(--text));
   padding: 12px 16px;
-  border-radius: 6px;
-  border: 1px solid color-mix(in srgb, var(--nn-accent) 32%, var(--nn-border));
+  border-radius: var(--kit-radius);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--hairline, var(--line)));
   margin: 12px 0;
   overflow-x: auto;
   line-height: 1.5;
@@ -837,16 +614,18 @@
   border: 0;
 }
 
-/* Custom Callout Box Block */
+/* custom: Callout-Blöcke im Editor — semantische Kit-Farben statt
+   hartkodierter rgba-Palette, damit beide Themes funktionieren. */
 .callout {
   display: flex;
   gap: 12px;
   padding: 12px 16px;
-  border-radius: 6px;
+  border-radius: var(--kit-radius);
   margin: 14px 0;
   font-size: 13.5px;
   line-height: 1.5;
   box-sizing: border-box;
+  border: 1px solid var(--hairline, var(--line));
 }
 
 .callout-icon {
@@ -868,42 +647,42 @@
 
 /* Callout variants */
 .callout-info {
-  background: rgba(2, 136, 209, 0.06);
-  border: 1px solid rgba(2, 136, 209, 0.35);
-  color: var(--nn-text);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--text);
 }
 .callout-info .callout-content strong {
-  color: #0288d1;
+  color: color-mix(in srgb, var(--accent) 80%, var(--text));
 }
 
 .callout-warning {
-  background: rgba(245, 124, 0, 0.06);
-  border: 1px solid rgba(245, 124, 0, 0.35);
-  color: var(--nn-text);
+  background: var(--warning-soft);
+  border-color: color-mix(in srgb, var(--warning) 30%, transparent);
+  color: var(--text);
 }
 .callout-warning .callout-content strong {
-  color: #f57c00;
+  color: var(--warning);
 }
 
 .callout-tip {
-  background: rgba(0, 136, 55, 0.06);
-  border: 1px solid rgba(0, 136, 55, 0.35);
-  color: var(--nn-text);
+  background: var(--success-soft);
+  border-color: color-mix(in srgb, var(--success) 30%, transparent);
+  color: var(--text);
 }
 .callout-tip .callout-content strong {
-  color: #008837;
+  color: var(--success);
 }
 
 .callout-danger {
-  background: rgba(211, 47, 47, 0.06);
-  border: 1px solid rgba(211, 47, 47, 0.35);
-  color: var(--nn-text);
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+  color: var(--text);
 }
 .callout-danger .callout-content strong {
-  color: #d32f2f;
+  color: var(--danger);
 }
 
-/* Checklists styling */
+/* custom: Checklisten im Editor (interaktive Todo-Zeilen). */
 .notes-todo-row {
   display: flex;
   align-items: flex-start;
@@ -929,7 +708,7 @@
   -webkit-appearance: none;
   width: 18px;
   height: 18px;
-  border: 2px solid var(--nn-accent);
+  border: 2px solid var(--accent);
   border-radius: 50%;
   cursor: pointer;
   margin-top: 2px;
@@ -943,15 +722,15 @@
 }
 
 .notes-todo-checkbox:checked {
-  background-color: var(--nn-accent);
-  border-color: var(--nn-accent);
+  background-color: var(--accent);
+  border-color: var(--accent);
 }
 
 .notes-todo-checkbox:checked::after {
   content: "";
   width: 4px;
   height: 8px;
-  border: solid #ffffff;
+  border: solid var(--accent-foreground, #ffffff);
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
   position: absolute;
@@ -967,10 +746,10 @@
 .notes-todo-checkbox:checked + .notes-todo-text {
   text-decoration: line-through;
   opacity: 0.65;
-  color: var(--nn-text-muted);
+  color: var(--muted);
 }
 
-/* Table styling */
+/* custom: Editierbare Tabelle im Editor (Inhalt, keine Datentabelle). */
 .notes-table {
   width: 100%;
   border-collapse: collapse;
@@ -978,30 +757,31 @@
 }
 
 .notes-table td {
-  border: 1px solid var(--nn-border);
+  border: 1px solid var(--hairline, var(--line));
   padding: 6px 10px;
   font-size: 13px;
   outline: none;
 }
 
 .notes-table td:focus {
-  background: var(--nn-accent-hover);
-  border-color: var(--nn-accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
 }
 
 /* Horizontal line */
 .nn-wysiwyg-editor hr {
   border: 0;
   height: 1px;
-  background: var(--nn-border);
+  background: var(--hairline, var(--line));
   margin: 16px 0;
 }
 
-/* --- Floating Editor Format Toolbar --- */
+/* --- Floating Editor Format Toolbar ---
+   custom: Formatier-Leiste des Editors (Buttons selbst sind kit
+   .ctox-pane-icon). */
 .nn-floating-toolbar-wrapper {
   padding: 10px 16px;
-  background: var(--nn-background);
-  border-top: 1px solid var(--nn-border);
+  border-top: 1px solid var(--hairline, var(--line));
   display: flex;
   justify-content: center;
   flex-shrink: 0;
@@ -1011,72 +791,27 @@
   display: flex;
   align-items: center;
   gap: 2px;
-  background: var(--nn-panel-bg);
+  background: var(--surface-2);
   padding: 4px;
-  border-radius: 8px;
-  border: 1px solid var(--nn-border);
+  border-radius: var(--kit-radius);
+  border: 1px solid var(--hairline, var(--line));
   max-width: 100%;
   overflow: visible;
   flex-wrap: wrap;
-}
-
-.nn-toolbar-btn {
-  width: 28px;
-  height: 28px;
-  border-radius: 5px;
-  color: var(--nn-text);
-  border: 0;
-  background: transparent;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.nn-toolbar-btn:hover {
-  background: var(--nn-hover);
-  color: var(--nn-accent);
-}
-
-.nn-toolbar-btn svg {
-  width: 15px;
-  height: 15px;
 }
 
 .nn-format-wrapper {
   position: relative;
 }
 
-.nn-toolbar-dropdown {
-  position: absolute;
-  bottom: 34px;
-  left: 0;
-  width: 180px;
-  background: var(--nn-panel-bg);
-  border: 1px solid var(--nn-border);
-  border-radius: 6px;
-  box-shadow: var(--nn-shadow);
-  z-index: 100;
-  padding: 5px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
+/* Draft/restore banners: kit .ctox-callout + module row layout. */
 .nn-draft-banner,
 .nn-restore-banner {
-  background: var(--accent-soft);
-  border-bottom: 1px solid var(--nn-border);
-  padding: 8px 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  font-size: 12.5px;
-  color: var(--nn-accent);
   margin-bottom: 10px;
-  border-radius: 4px;
 }
 
 .nn-banner-actions {
@@ -1085,19 +820,8 @@
   gap: 8px;
 }
 
-.nn-banner-actions button,
-.nn-draft-banner button,
-.nn-restore-banner button {
-  background: var(--nn-accent);
-  color: var(--nn-accent-foreground);
-  border: 0;
-  padding: 4px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 600;
-}
-
+/* custom: Modul-Toast mit Undo-Aktionsbutton (die Shell-Notifications haben
+   keinen Aktionsbutton). */
 .nn-action-toast {
   position: absolute;
   right: 18px;
@@ -1108,23 +832,13 @@
   gap: 12px;
   max-width: min(420px, calc(100% - 36px));
   padding: 10px 12px;
-  border: 1px solid var(--nn-border);
-  border-radius: 8px;
-  background: var(--nn-panel-bg);
-  color: var(--nn-text-strong);
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--kit-radius);
+  background: var(--surface);
+  color: var(--text-strong, var(--text));
   box-shadow: var(--nn-shadow);
   font-size: 12px;
   font-weight: 600;
-}
-
-.nn-action-toast button {
-  border: 0;
-  background: var(--nn-accent-hover);
-  color: var(--nn-accent);
-  border-radius: 5px;
-  padding: 5px 8px;
-  font: inherit;
-  cursor: pointer;
 }
 
 @container business-app-window (max-width: 1120px) {
@@ -1138,19 +852,25 @@
   }
 }
 
-/* --- Editor Status Footer --- */
+/* --- Editor Status Footer ---
+   custom: kompakte Statusleiste (Sync-Puls, Lesezeit, Zähler). */
 .nn-editor-footer {
-  height: 30px;
-  border-top: 1px solid var(--nn-border);
-  background: var(--nn-panel-bg);
+  min-height: 30px;
+  border-top: 1px solid var(--hairline, var(--line));
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   padding: 0 16px;
   font-size: 11px;
-  color: var(--nn-text-muted);
+  color: var(--muted);
   flex-shrink: 0;
-  transition: background 0.25s, border-color 0.25s;
+}
+
+.nn-editor-footer > div {
+  display: flex;
+  align-items: center;
+  min-width: 0;
 }
 
 .nn-sync-indicator {
@@ -1163,12 +883,12 @@
 .nn-sync-icon {
   width: 12px;
   height: 12px;
-  color: var(--nn-accent);
+  color: var(--accent);
 }
 
 /* Pulse Animation for Syncing status */
 .nn-sync-indicator.syncing {
-  color: var(--nn-text);
+  color: var(--text);
 }
 
 .nn-sync-indicator.syncing .nn-sync-icon {
@@ -1180,21 +900,13 @@
   to { opacity: 1; transform: scale(1.05); }
 }
 
-.nn-read-time {
-  font-weight: 600;
-  background: var(--nn-border);
-  color: var(--nn-text-strong);
-  padding: 1px 6px;
-  border-radius: var(--control-radius);
-  font-size: 10.5px;
-}
-
 .nn-stats {
   margin-left: 10px;
   font-weight: 500;
 }
 
-/* --- Client App PIN Pad Lock Screen (Zero-Knowledge Overlay) --- */
+/* --- Client App PIN Pad Lock Screen ---
+   custom: Zero-Knowledge-PIN-Overlay (Spezialansicht, kein Kit-Pendant). */
 .nn-pin-overlay {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
@@ -1205,12 +917,12 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--nn-text);
+  color: var(--text);
 }
 
 .nn-pin-container {
-  background: var(--nn-panel-bg);
-  border: 1px solid var(--nn-border);
+  background: var(--surface);
+  border: 1px solid var(--hairline, var(--line));
   border-radius: var(--control-radius);
   padding: 22px;
   width: min(280px, calc(100% - 32px));
@@ -1224,7 +936,7 @@
   height: 44px;
   border-radius: var(--control-radius);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--nn-accent);
+  color: var(--accent);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1245,7 +957,7 @@
 
 .nn-pin-container p {
   font-size: 12px;
-  color: var(--nn-text-muted);
+  color: var(--muted);
   margin: 0 0 16px 0;
 }
 
@@ -1261,14 +973,14 @@
   width: 10px;
   height: 10px;
   border-radius: var(--control-radius);
-  border: 1px solid var(--nn-border);
+  border: 1px solid var(--hairline, var(--line));
   background: transparent;
   transition: all 0.15s;
 }
 
 .nn-pin-dot.filled {
-  background: var(--nn-accent);
-  border-color: var(--nn-accent);
+  background: var(--accent);
+  border-color: var(--accent);
   box-shadow: none;
 }
 
@@ -1289,9 +1001,10 @@
 .nn-pin-pad button {
   height: 40px;
   border-radius: var(--control-radius);
-  border: 1px solid var(--nn-border);
-  background: var(--nn-background);
-  color: var(--nn-text);
+  border: 1px solid var(--hairline, var(--line));
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
   font-size: 16px;
   font-weight: 600;
   cursor: pointer;
@@ -1302,12 +1015,12 @@
 }
 
 .nn-pin-pad button:hover {
-  background: var(--nn-hover);
+  background: var(--kit-hover);
 }
 
 .nn-pin-pad button:active {
   transform: translateY(1px);
-  background: var(--nn-accent);
+  background: var(--accent);
 }
 
 .nn-pin-pad button[data-action] {
@@ -1317,33 +1030,35 @@
 }
 
 .nn-pin-pad button[data-action="pin-clear"] {
-  color: var(--nn-text-muted);
+  color: var(--muted);
   border: 0;
   background: transparent;
 }
 
 .nn-pin-pad button[data-action="pin-ok"] {
-  background: var(--nn-accent-hover);
-  color: var(--nn-accent);
-  border-color: var(--nn-accent);
+  background: var(--accent-soft);
+  color: color-mix(in srgb, var(--accent) 80%, var(--text));
+  border-color: var(--accent);
 }
 
 .nn-pin-pad button[data-action="pin-ok"]:hover {
-  background: var(--nn-accent);
-  color: var(--nn-accent-foreground);
+  background: var(--accent);
+  color: var(--accent-foreground, var(--surface));
 }
 
 .nn-pin-hint {
   margin-top: 14px;
   font-size: 10px;
-  color: var(--nn-text-muted);
+  color: var(--muted);
 }
 
-/* --- Note Decryption Locked Pad Overlay --- */
+/* --- Note Decryption Locked Pad Overlay ---
+   custom: Zero-Knowledge-Entsperr-Pad (Input/Button sind kit .ctox-input /
+   .ctox-button). */
 .nn-note-lock-overlay {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: var(--nn-panel-bg);
+  background: var(--surface);
   z-index: 1000;
   display: flex;
   align-items: center;
@@ -1354,8 +1069,8 @@
   max-width: 420px;
   width: 90%;
   padding: 22px;
-  background: var(--nn-background);
-  border: 1px solid var(--nn-border);
+  background: var(--bg);
+  border: 1px solid var(--hairline, var(--line));
   border-radius: var(--control-radius);
   box-shadow: none;
   text-align: center;
@@ -1364,7 +1079,7 @@
 
 .nn-lock-icon-huge {
   margin-bottom: 16px;
-  color: var(--nn-accent);
+  color: var(--accent);
 }
 
 .nn-lock-icon-huge svg {
@@ -1376,12 +1091,12 @@
   font-size: 15px;
   font-weight: 700;
   margin: 0 0 6px 0;
-  color: var(--nn-text-strong);
+  color: var(--text-strong, var(--text));
 }
 
 .nn-note-lock-pad p {
   font-size: 12px;
-  color: var(--nn-text-muted);
+  color: var(--muted);
   margin: 0 0 20px 0;
 }
 
@@ -1402,7 +1117,7 @@
 
 .nn-lock-hint {
   font-size: 10px;
-  color: var(--nn-text-muted);
+  color: var(--muted);
 }
 
 /* Animations */
@@ -1424,58 +1139,11 @@
 }
 
 @container business-app-window (max-width: 760px) {
-  .notes-module[data-notes-root] {
-    flex-direction: column;
-    overflow-y: auto;
-    overflow-x: hidden;
-  }
-
-  .notes-sidebar-pane,
-  .notes-list-pane,
-  .notes-center {
-    width: 100%;
-    min-width: 0;
-    max-width: none;
-    flex: 0 0 auto;
-  }
-
-  .notes-sidebar-pane {
-    max-height: 220px;
-    border-right: 0;
-    border-bottom: 1px solid var(--nn-border);
-  }
-
-  .notes-list-pane {
-    min-height: 260px;
-    max-height: 38vh;
-    border-right: 0;
-    border-bottom: 1px solid var(--nn-border);
-  }
-
-  .notes-center {
-    flex: 1 0 560px;
-    min-height: 560px;
-  }
-
-  .notes-resizer {
-    display: none;
-  }
-
-  .nn-brand-head,
-  .nn-list-head,
-  .nn-editor-head {
-    padding: 10px 12px;
-  }
-
+  /* Frame collapse (single column, hidden resizers) comes from the kit. */
   .nn-nav-list {
     padding: 8px;
   }
 
-  .nn-sidebar-footer {
-    padding: 8px 8px 72px;
-  }
-
-  .nn-list-head,
   .nn-editor-head {
     align-items: stretch;
     flex-direction: column;
@@ -1511,7 +1179,7 @@
   }
 
   .notes-tab-panel {
-    min-height: 360px !important;
+    min-height: 360px;
   }
 
   .nn-floating-toolbar-wrapper {
@@ -1526,9 +1194,7 @@
   }
 
   .nn-editor-footer {
-    height: auto;
     min-height: 34px;
-    gap: 8px;
     flex-wrap: wrap;
     padding: 6px 12px;
   }

@@ -247,6 +247,17 @@ function bindStaticEvents(state) {
       },
     }));
   });
+  // Bulk-actions kebab reveals the (otherwise hidden) "Alle reparsen" row —
+  // mirrors the threads / conversations / buchhaltung collapse idiom. The
+  // primary search + sort stay permanently visible.
+  state.host.querySelector('[data-toggle-bulk]')?.addEventListener('click', () => {
+    const bulk = state.host.querySelector('[data-cv-bulk-actions]');
+    const toggle = state.host.querySelector('[data-toggle-bulk]');
+    if (!bulk || !toggle) return;
+    const willHide = !bulk.hasAttribute('hidden');
+    bulk.toggleAttribute('hidden', willHide);
+    toggle.setAttribute('aria-pressed', willHide ? 'false' : 'true');
+  });
 }
 
 function subscribeToCollections(state) {
@@ -530,6 +541,17 @@ function renderSidebar(state) {
       }));
     });
   });
+  // Per-card kebab reveals the per-record print options (anonymize + logo)
+  // — secondary toggles that aren't part of the primary workflow row.
+  list.querySelectorAll('[data-toggle-card-options]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const options = button.closest('.cv-card')?.querySelector('[data-cv-card-options]');
+      if (!options) return;
+      const willHide = !options.hasAttribute('hidden');
+      options.toggleAttribute('hidden', willHide);
+      button.setAttribute('aria-pressed', willHide ? 'false' : 'true');
+    });
+  });
 }
 
 function visibleItems(state) {
@@ -677,7 +699,6 @@ function renderCandidateCard(state, item) {
         <div class="cv-card-info">
           <h3 class="cv-card-name">${escapeHtml(displayCandidateName(model))}</h3>
           <div class="cv-card-line cv-card-role">${escapeHtml(role)}</div>
-          <div class="cv-card-file">${escapeHtml(model.source?.filename || item.record.filename || 'cv.pdf')}</div>
           <div class="cv-card-line">${escapeHtml(location || phaseLabel(phase))}</div>
         </div>
         <span class="ctox-badge ${phase === 'uploaded' ? 'is-warning' : 'is-info'}">${escapeHtml(statusShort(phase))}</span>
@@ -698,6 +719,14 @@ function renderCandidateCard(state, item) {
             <select class="ctox-select" data-cv-template ${controlsDisabled || approved ? 'disabled' : ''} aria-label="${escapeAttr(tr('Print Template', 'Print template'))}">
               ${templateOptions}
             </select>
+            <button class="ctox-pane-icon" type="button" data-toggle-card-options title="${escapeAttr(tr('Druck-Optionen', 'Print options'))}" aria-label="${escapeAttr(tr('Druck-Optionen', 'Print options'))}" aria-pressed="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="6" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="18" r="1.4"/></svg>
+            </button>
+          </div>
+          <!-- Per-record print toggles (anonymize / logo) are hidden by default
+               and revealed via the kebab above — they're one-time settings,
+               not part of the primary workflow row. -->
+          <div class="cv-card-options" data-cv-card-options hidden>
             <button class="ctox-pane-icon${model.print?.anonymize ? ' is-active' : ''}" type="button" data-cv-toggle-anon title="${escapeAttr(tr('Anonymisieren', 'Anonymize'))}" aria-label="${escapeAttr(tr('Anonymisieren', 'Anonymize'))}" ${controlsDisabled || approved ? 'disabled' : ''}>${iconEyeOff()}</button>
             <button class="ctox-pane-icon${model.print?.showLogo ? ' is-active' : ''}" type="button" data-cv-logo-control title="${escapeAttr(model.print?.logoDataUrl ? tr('Logo anzeigen', 'Show logo') : tr('Logo wählen', 'Choose logo'))}" aria-label="${escapeAttr(model.print?.logoDataUrl ? tr('Logo anzeigen', 'Show logo') : tr('Logo wählen', 'Choose logo'))}" ${controlsDisabled || approved ? 'disabled' : ''}>${iconImage()}</button>
           </div>
@@ -748,10 +777,7 @@ function renderOriginalPane(state, item) {
   return `
     <section class="cv-pane" data-cv-original-pane>
       <header class="ctox-pane-header cv-pane-head">
-        <div class="ctox-pane-titles">
-          <span class="ctox-pane-title">${escapeHtml(tr('Original PDF', 'Original PDF'))}</span>
-          <span class="cv-pane-sub">${escapeHtml(item.model.source?.filename || item.record.filename || '')}</span>
-        </div>
+        <h3 class="ctox-pane-title">${escapeHtml(tr('Original PDF', 'Original PDF'))}</h3>
       </header>
       <div class="cv-pane-body" data-cv-original-body>
         <div class="ctox-empty">${escapeHtml(tr('PDF wird geladen.', 'Loading PDF.'))}</div>
@@ -786,15 +812,11 @@ function renderOriginalFrame(state, item) {
 
 function renderPrintPane(item) {
   const model = item.model;
-  const template = normalizeTemplateId(model.print?.template || 'modern');
   const editor = workflowPhase(model) === 'review' ? renderFieldEditor(model) : '';
   return `
     <section class="cv-pane">
       <header class="ctox-pane-header cv-pane-head">
-        <div class="ctox-pane-titles">
-          <span class="ctox-pane-title">${escapeHtml(tr('Druckansicht', 'Print preview'))}</span>
-          <span class="cv-pane-sub">${escapeHtml(templateLabel(template))}${workflowPhase(model) === 'review' ? ' · ' + escapeHtml(tr('Korrekturmodus', 'Review mode')) : ''}</span>
-        </div>
+        <h3 class="ctox-pane-title">${escapeHtml(tr('Druckansicht', 'Print preview'))}</h3>
       </header>
       <div class="cv-pane-body">
         <div class="cv-print-workarea${editor ? ' has-editor' : ''}">
@@ -1056,10 +1078,7 @@ function renderFieldEditor(model) {
   return `
     <aside class="cv-field-editor" data-cv-field-editor>
       <header class="ctox-pane-header cv-field-editor-head">
-        <div class="ctox-pane-titles">
-          <span class="ctox-pane-title">${escapeHtml(tr('Felder', 'Fields'))}</span>
-          <span class="cv-pane-sub">${escapeHtml(tr('Ninja CV-Profil', 'Ninja CV profile'))}</span>
-        </div>
+        <h3 class="ctox-pane-title">${escapeHtml(tr('Felder', 'Fields'))}</h3>
       </header>
       <section class="cv-editor-block">
         <h4 class="ctox-field-label">${escapeHtml(tr('Stammdaten', 'Core data'))}</h4>

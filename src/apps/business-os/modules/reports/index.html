@@ -1,5 +1,5 @@
-<main class="reports-module" data-reports-root data-resize-frame>
-  <aside class="reports-rail" data-left-content>
+<main class="ctox-workspace reports-module is-actions-hidden" data-reports-root data-resize-frame>
+  <aside class="ctox-pane reports-rail" aria-label="Reports Liste">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
@@ -14,11 +14,6 @@
       </div>
       <div class="ctox-pane-tools">
         <input class="ctox-pane-search" type="search" data-report-search placeholder="Suchen..." aria-label="Bugs und Features suchen" />
-        <select class="ctox-pane-filter" data-report-kind aria-label="Typ filtern">
-          <option value="all">Alle Typen</option>
-          <option value="bug">Bugs</option>
-          <option value="feature">Features</option>
-        </select>
         <select class="ctox-pane-filter" data-report-status aria-label="Status filtern">
           <option value="all">Alle Status</option>
           <option value="open">Offen</option>
@@ -28,8 +23,30 @@
         </select>
       </div>
     </header>
-    <div class="reports-list os-scrollbar" data-reports-list></div>
+    <nav class="reports-kind-chips" data-report-kind-chips aria-label="Typ filtern">
+      <button type="button" class="ctox-chip is-active" data-report-kind="all">Alle</button>
+      <button type="button" class="ctox-chip" data-report-kind="bug">Bugs</button>
+      <button type="button" class="ctox-chip" data-report-kind="feature">Features</button>
+    </nav>
+    <div class="ctox-list" data-reports-list></div>
   </aside>
-  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--reports-left-width" data-resizer-min="260" data-resizer-max="500" aria-label="Spaltenbreite anpassen"></button>
-  <section class="reports-detail" data-reports-detail data-right-content></section>
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="260" data-resizer-max="500" aria-label="Spaltenbreite anpassen"></button>
+  <section class="ctox-pane reports-detail" aria-label="Report Details">
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-report-kind-label></span>
+          <h2 class="ctox-pane-title" data-report-title>Eintrag auswählen</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon reports-toggle-actions" data-toggle-actions title="Aktionen einblenden" aria-label="Aktionen einblenden" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
+          </button>
+        </div>
+      </div>
+    </header>
+    <div class="ctox-pane-scroll reports-detail-scroll" data-reports-detail-scroll></div>
+  </section>
+  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="280" data-resizer-max="440" aria-label="Spaltenbreite anpassen"></button>
+  <aside class="ctox-pane reports-actions" aria-label="Report Aktionen" data-reports-actions></aside>
 </main>

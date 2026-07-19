@@ -1,13 +1,15 @@
 /* ============================================================================
    Browser-Modul — nur Spezialfälle.
    Alle normalen Elemente kommen aus dem Kit (shared/base.css + app.css):
-   Buttons (.ctox-button/.ctox-icon-button), Eingaben (.ctox-input), Tabs
-   (.ctox-pane-tabs/.ctox-pane-tab), Statusanzeige (.ctox-badge), Hinweise
-   (.ctox-callout), Toolbar (.ctox-toolbar), Leerzustand (.ctox-empty),
-   Kicker (.ctox-pane-kicker), Aktionszeilen (.ctox-pane-tools).
+   Buttons (.ctox-button/.ctox-icon-button/.ctox-pane-icon), Eingaben
+   (.ctox-input/.ctox-select), Tabs (.ctox-pane-tabs/.ctox-pane-tab),
+   Statusanzeige (.ctox-badge), Hinweise (.ctox-callout), Toolbar
+   (.ctox-toolbar), Leerzustand (.ctox-empty), Kicker (.ctox-pane-kicker),
+   Aktionszeilen (.ctox-pane-tools/.ctox-choice/.ctox-compact-field).
    Diese Datei enthält nur, was das Kit nicht ausdrücken kann: den
    Remote-Viewport (Canvas), die Browser-Chrome-Struktur (Tab-Leiste,
-   Adresszeile, Status-/Download-Leiste) und die versteckte Diagnose-Ansicht.
+   einklappbarer Erweiterungsbereich, Adresszeile, Status-/Download-Leiste)
+   und die Diagnose-Ansicht innerhalb des Erweiterungsbereichs.
    ========================================================================== */
 
 /* custom: App-Grundstruktur — Browser-Chrome oben, Remote-Viewport füllt den
@@ -51,6 +53,63 @@
 
 .browser-new-window {
   flex: 0 0 auto;
+}
+
+/* custom: Toggle für erweiterte Aktionen rechts neben dem "+" Neues-Fenster.
+   Standardzustand eingeklappt (aria-pressed="false"); sichtbare Markierung
+   nur, wenn die Klappe offen ist. */
+.browser-toggle-advanced {
+  flex: 0 0 auto;
+}
+
+.browser-toggle-advanced[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* custom: Einklappbarer Erweiterungsbereich unterhalb der Tab-Leiste —
+   Hauptaugenmerk der Browser-Chrome ist Tab-Leiste, Adresszeile und
+   Frame; selten benötigte Aktionen (Steuerung übernehmen, Beobachter,
+   Clipboard, Upload, Senden, Stopp) und Diagnoseflächen sitzen hier und
+   werden nur bei Bedarf eingeblendet. Kein zusätzlicher Außenrahmen —
+   eine feine Hairline trennt vom Hauptbereich. */
+.browser-advanced {
+  display: grid;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--hairline, var(--line));
+  background: var(--surface-2);
+}
+
+.browser-advanced.is-advanced-hidden {
+  display: none;
+}
+
+.browser-advanced-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.browser-advanced-actions .ctox-button,
+.browser-advanced-actions .ctox-choice,
+.browser-advanced-actions .ctox-compact-field {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.browser-advanced-actions .ctox-compact-field {
+  min-width: 0;
+}
+
+.browser-advanced-actions .ctox-compact-field > .ctox-select {
+  margin-top: 3px;
+  min-height: 30px;
+}
+
+.browser-advanced-actions .ctox-choice {
+  padding: 6px 10px;
 }
 
 /* custom: Auth-Assist-Inhalt in der Kit-Callout — Titel und Hinweiszeilen
@@ -125,11 +184,6 @@
   display: grid;
   grid-template-rows: minmax(0, 1fr);
   background: var(--bg);
-}
-
-.browser-toolbar {
-  /* Optik kommt von .ctox-toolbar; die Klasse bleibt als Layout-Hook für
-     die Container-Queries unten. */
 }
 
 /* custom: Adresszeilen-Layout — Navigationsgruppe plus wachsende
@@ -207,8 +261,9 @@
   display: none;
 }
 
-/* custom: versteckte Diagnose-Ansicht (Command-/Handoff-Verlauf, nur über
-   den aria-hidden Diagnose-Block erreichbar). */
+/* custom: versteckte Diagnose-Ansicht im Erweiterungsbereich (Command-/
+   Handoff-Verlauf; bleibt aria-hidden und ist UI-unsichtbar, hält aber
+   die JS-Vertragsoberfläche stabil). */
 .browser-command-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -238,6 +293,10 @@
   .browser-tabbar {
     flex-wrap: wrap;
   }
+
+  .browser-advanced-actions {
+    flex-wrap: wrap;
+  }
 }
 
 @container business-app-window (max-width: 640px) {
@@ -250,5 +309,10 @@
     grid-template-columns: minmax(0, 1fr);
     align-items: start;
     padding-block: 5px;
+  }
+
+  .browser-advanced-actions .ctox-button,
+  .browser-advanced-actions .ctox-choice {
+    flex: 1 1 auto;
   }
 }

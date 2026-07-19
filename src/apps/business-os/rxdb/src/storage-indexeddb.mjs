@@ -1,6 +1,6 @@
 import { CtoxEventEmitter } from './event-target.mjs';
 import { schemaHash, sha256Hex } from './schema.mjs';
-import { normalizeConflictStrategy, threeWayMergeDocuments } from './conflict-merge.mjs';
+import { normalizeConflictStrategy, normalizeDeleteStrategy, threeWayMergeDocuments } from './conflict-merge.mjs';
 import {
   compareHybridLogicalClocks,
   formatHybridLogicalClock,
@@ -46,13 +46,14 @@ export class CtoxIndexedDbStorage {
     this.quotaCoordinator = quotaCoordinator;
   }
 
-  collection(name, { schema = null, conflictStrategy = 'lww' } = {}) {
+  collection(name, { schema = null, conflictStrategy = 'lww', deleteStrategy = 'default' } = {}) {
     if (!name || typeof name !== 'string') {
       throw new TypeError('collection name must be a non-empty string');
     }
     return new CtoxIndexedDbCollection(this.db, name, {
       schema,
       conflictStrategy,
+      deleteStrategy,
       recoveryJournal: this.recoveryJournal,
       quotaCoordinator: this.quotaCoordinator,
     });
@@ -72,6 +73,7 @@ export class CtoxIndexedDbCollection {
   constructor(db, name, {
     schema = null,
     conflictStrategy = 'lww',
+    deleteStrategy = 'default',
     recoveryJournal = null,
     quotaCoordinator = null,
   } = {}) {
@@ -82,6 +84,11 @@ export class CtoxIndexedDbCollection {
     // a sibling of `schema` in the collection definition so schema hashes
     // stay untouched.
     this.conflictStrategy = normalizeConflictStrategy(conflictStrategy);
+    // SYNC-41: 'default' (whole-doc LWW deletes) or 'final' (a tombstone
+    // always wins over a concurrent non-tombstone update, regardless of
+    // HLC/lwt). An INDEPENDENT sibling of `conflictStrategy` — a collection may
+    // combine 'field-merge' updates with 'final' deletes.
+    this.deleteStrategy = normalizeDeleteStrategy(deleteStrategy);
     this.primaryPath = primaryPathFromSchema(schema);
     this.indexes = normalizeSchemaIndexes(schema, this.primaryPath);
     this.indexSignature = schemaIndexSignature(this.indexes);
@@ -134,6 +141,20 @@ export class CtoxIndexedDbCollection {
           // HLC and durable WAL entry before the primary row changes.
           resolveConflict: (batch) => this.bulkWrite(batch.rows || [], {
             baseById: batch.baseById || null,
+          }),
+          // SYNC-42: keep_master resolution of a quarantined conflict. The
+          // pull checkpoint already advanced past the master row, so it will
+          // not be re-delivered — apply the journaled master state
+          // authoritatively (origin-stamped, non-pushable, base cleared). Force
+          // bypasses the LWW gate (the local edit may outrank the master lwt)
+          // and `authoritativeMaster` bypasses the three-way merge that would
+          // otherwise just re-throw the same structured conflict. `reconciled`
+          // suppresses the delete_vs_update journaling for a master tombstone.
+          applyMaster: (batch) => this.bulkWrite(batch.rows || [], {
+            replicationOrigin: { role: 'ctox_instance', reconciled: true },
+            force: true,
+            authoritativeMaster: true,
+            skipJournal: true,
           }),
         });
         await this.acknowledgePersistedMasterRecovery();
@@ -280,6 +301,7 @@ export class CtoxIndexedDbCollection {
       throw error;
     }
     await this.persistOverwrittenLocalConflicts(result);
+    await this.persistStructuredConflictQuarantine(result);
     if (batchId) await this.recoveryJournal.commitBatch(batchId, result.success);
     if (replicationOrigin?.role) await this.recoveryJournal?.markMasterAcknowledged(this.name, result.success);
     return result;
@@ -295,6 +317,7 @@ export class CtoxIndexedDbCollection {
     const success = {};
     const error = [];
     const overwrittenLocalConflicts = [];
+    const structuredConflicts = [];
     let localWriteLwtFloor = null;
     if (!replicationOrigin?.role) {
       localWriteLwtFloor = await latestCollectionLwtInTransaction(store, this.name) + 1;
@@ -314,7 +337,18 @@ export class CtoxIndexedDbCollection {
         lwt = Math.max(lwt, localWriteLwtFloor);
         localWriteLwtFloor = lwt + 1;
       }
-      if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, nextDocument, this.name, this.conflictStrategy)) {
+      if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, nextDocument, this.name, this.conflictStrategy, this.deleteStrategy)) {
+        // SYNC-41 case (b): a local tombstone kept the row against a concurrent
+        // master update — journal the losing master update so it stays
+        // recoverable (delete_vs_update), never silently dropped.
+        const rejectedUpdate = finalDeleteRejectedUpdateConflict({
+          previous,
+          incomingDocument: nextDocument,
+          collectionName: this.name,
+          deleteStrategy: this.deleteStrategy,
+          replicationOrigin,
+        });
+        if (rejectedUpdate) overwrittenLocalConflicts.push(rejectedUpdate);
         if (previous?.doc) success[id] = previous.doc;
         continue;
       }
@@ -326,12 +360,21 @@ export class CtoxIndexedDbCollection {
         replicationOrigin,
       });
       if (overwriteConflict) overwrittenLocalConflicts.push(overwriteConflict);
-      const resolved = this.resolveIncomingWrite({
-        previous,
-        doc: nextDocument,
-        lwt,
-        replicationOrigin,
-      });
+      let resolved;
+      try {
+        resolved = this.resolveIncomingWrite({
+          previous,
+          doc: nextDocument,
+          lwt,
+          replicationOrigin,
+        });
+      } catch (conflictError) {
+        // SYNC-42: quarantine one unmergeable document instead of aborting the
+        // whole batch (see _bulkWriteOnce for the full rationale).
+        if (conflictError?.code !== 'structured_conflict_requires_resolution') throw conflictError;
+        structuredConflicts.push(quarantineConflictRecord(conflictError, this.name, id, this.primaryPath));
+        continue;
+      }
       if (resolved.replicationOrigin?.role && previous && Number(previous.lwt || 0) >= resolved.lwt) {
         resolved.lwt = Number(previous.lwt) + 1;
       }
@@ -365,7 +408,7 @@ export class CtoxIndexedDbCollection {
       });
       dispatchStorageChange(this.db.name, this.name, success, replicationOrigin);
     }
-    return { success, error, overwrittenLocalConflicts };
+    return { success, error, overwrittenLocalConflicts, structuredConflicts };
   }
 
   async bulkWrite(rows, {
@@ -375,6 +418,7 @@ export class CtoxIndexedDbCollection {
     skipJournal = false,
     recoveryReplay = false,
     force = false,
+    authoritativeMaster = false,
   } = {}) {
     await this.initializeRecovery();
     const journalWrite = Boolean(this.recoveryJournal)
@@ -399,7 +443,7 @@ export class CtoxIndexedDbCollection {
     try {
       await this.persistDeleteUpdateConflicts(validRows, replicationOrigin);
       result = await this.runWithQuotaRecovery(
-        () => this._bulkWriteOnce(writeRows, { now, replicationOrigin, baseById: journalBaseById, force }),
+        () => this._bulkWriteOnce(writeRows, { now, replicationOrigin, baseById: journalBaseById, force, authoritativeMaster }),
         { source: recoveryReplay ? 'recovery-replay' : 'bulk-write' },
       );
     } catch (error) {
@@ -407,12 +451,13 @@ export class CtoxIndexedDbCollection {
       throw error;
     }
     await this.persistOverwrittenLocalConflicts(result);
+    await this.persistStructuredConflictQuarantine(result);
     if (batchId) await this.recoveryJournal.commitBatch(batchId, result.success);
     if (replicationOrigin?.role) await this.recoveryJournal?.markMasterAcknowledged(this.name, result.success);
     return result;
   }
 
-  async _bulkWriteOnce(rows, { now = Date.now(), replicationOrigin = null, baseById = null, force = false } = {}) {
+  async _bulkWriteOnce(rows, { now = Date.now(), replicationOrigin = null, baseById = null, force = false, authoritativeMaster = false } = {}) {
     if (!Array.isArray(rows)) {
       throw new TypeError('bulkWrite rows must be an array');
     }
@@ -422,6 +467,7 @@ export class CtoxIndexedDbCollection {
     const success = {};
     const error = [];
     const overwrittenLocalConflicts = [];
+    const structuredConflicts = [];
     let localWriteLwtFloor = null;
     if (!replicationOrigin?.role) {
       localWriteLwtFloor = await latestCollectionLwtInTransaction(store, this.name) + 1;
@@ -446,7 +492,16 @@ export class CtoxIndexedDbCollection {
       // OLDER than the rejected local edit, so the normal origin-write gate
       // would veto the rollback; the conflict is journaled separately by the
       // reconcile path, so no overwrite-conflict record is minted here.
-      if (!force && !shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, doc, this.name, this.conflictStrategy)) {
+      if (!force && !shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, doc, this.name, this.conflictStrategy, this.deleteStrategy)) {
+        // SYNC-41 case (b): journal the master update the local tombstone beat.
+        const rejectedUpdate = finalDeleteRejectedUpdateConflict({
+          previous,
+          incomingDocument: doc,
+          collectionName: this.name,
+          deleteStrategy: this.deleteStrategy,
+          replicationOrigin,
+        });
+        if (rejectedUpdate) overwrittenLocalConflicts.push(rejectedUpdate);
         continue;
       }
       const overwriteConflict = force ? null : lwwOverwriteConflict({
@@ -457,15 +512,39 @@ export class CtoxIndexedDbCollection {
         replicationOrigin,
       });
       if (overwriteConflict) overwrittenLocalConflicts.push(overwriteConflict);
-      const resolved = this.resolveIncomingWrite({
-        previous,
-        doc,
-        lwt,
-        replicationOrigin,
-        explicitBase: baseById && Object.prototype.hasOwnProperty.call(baseById, id)
-          ? baseById[id]
-          : undefined,
-      });
+      let resolved;
+      if (authoritativeMaster) {
+        // SYNC-42 keep_master: store the journaled master state whole-doc,
+        // origin-stamped, base cleared. Never re-run the three-way merge — it
+        // would re-throw the very structured conflict we are resolving.
+        resolved = { doc, lwt, replicationOrigin, base: undefined };
+      } else {
+        try {
+          resolved = this.resolveIncomingWrite({
+            previous,
+            doc,
+            lwt,
+            replicationOrigin,
+            explicitBase: baseById && Object.prototype.hasOwnProperty.call(baseById, id)
+              ? baseById[id]
+              : undefined,
+          });
+        } catch (conflictError) {
+          // SYNC-42: a single document that cannot be safely field-merged is
+          // QUARANTINED, not fatal. Record it to the conflict store (base +
+          // local + master, everything a later db.conflicts.resolve() needs)
+          // and SKIP it, leaving the local row untouched. The rest of the batch
+          // still commits inside this transaction and the pull checkpoint
+          // advances past it, so one unresolvable document no longer freezes
+          // the whole collection's pull. Journaling happens AFTER the tx commits
+          // (persistStructuredConflictQuarantine) with a deterministic conflict
+          // id, so an idempotent batch re-delivery overwrites instead of
+          // duplicating.
+          if (conflictError?.code !== 'structured_conflict_requires_resolution') throw conflictError;
+          structuredConflicts.push(quarantineConflictRecord(conflictError, this.name, id, this.primaryPath));
+          continue;
+        }
+      }
       if (resolved.replicationOrigin?.role && previous && Number(previous.lwt || 0) >= resolved.lwt) {
         // Accepted master state whose payload timestamp did not advance:
         // keep the stored lwt monotonic so local checkpoint consumers
@@ -502,7 +581,7 @@ export class CtoxIndexedDbCollection {
       });
       dispatchStorageChange(this.db.name, this.name, success, replicationOrigin);
     }
-    return { success, error, overwrittenLocalConflicts };
+    return { success, error, overwrittenLocalConflicts, structuredConflicts };
   }
 
   async runWithQuotaRecovery(operation, context = {}) {
@@ -568,6 +647,25 @@ export class CtoxIndexedDbCollection {
     const conflicts = result?.overwrittenLocalConflicts;
     if (Array.isArray(result?.overwrittenLocalConflicts)) delete result.overwrittenLocalConflicts;
     if (!Array.isArray(conflicts)) return;
+    for (const conflict of conflicts) {
+      await this.recoveryJournal?.recordConflict?.(conflict);
+    }
+  }
+
+  // SYNC-42: journal the documents QUARANTINED by the batch apply (an
+  // unmergeable structured field conflict). Collected inside the storage
+  // transaction and journaled here AFTER it commits — so a quota-retried
+  // transaction never journals twice, and the good documents in the same batch
+  // are already durable. Each record carries a deterministic conflict id, so an
+  // idempotent re-delivery of the same batch (e.g. a crash between the primary
+  // commit and the pull checkpoint advancing) OVERWRITES the same record
+  // instead of appending a duplicate. The record captures local + master + base
+  // so db.conflicts.resolve() stays fully functional after the checkpoint has
+  // moved past the master row.
+  async persistStructuredConflictQuarantine(result) {
+    const conflicts = result?.structuredConflicts;
+    if (Array.isArray(result?.structuredConflicts)) delete result.structuredConflicts;
+    if (!Array.isArray(conflicts) || !conflicts.length) return;
     for (const conflict of conflicts) {
       await this.recoveryJournal?.recordConflict?.(conflict);
     }
@@ -1247,6 +1345,7 @@ function shouldAcceptDocumentWrite(
   incomingDocument = null,
   collectionName = '',
   conflictStrategy = 'lww',
+  deleteStrategy = 'default',
 ) {
   if (!existingRecord) return true;
   const existingLwt = Number(existingRecord.lwt || existingRecord.doc?._meta?.lwt || 0);
@@ -1287,6 +1386,23 @@ function shouldAcceptDocumentWrite(
     // may win, until its own push round-trips through the master.
     const existingIsLocalWrite = !existingRecord.doc?._meta?.ctoxReplicationOrigin;
     if (!existingIsLocalWrite) return true;
+    // SYNC-41 finalDelete: a tombstone on EITHER side beats a concurrent
+    // non-tombstone regardless of HLC/lwt (and regardless of conflictStrategy).
+    // This is the pull-gate half of the delete-vs-update decision; the losing
+    // update stays recoverable (case a is journaled by
+    // `persistDeleteUpdateConflicts`, case b by `finalDeleteRejectedUpdateConflict`
+    // in the bulk-write callers). Two tombstones or two updates fall through to
+    // the normal LWW/HLC / field-merge ordering below.
+    if (deleteStrategy === 'final') {
+      const incomingIsTombstone = Boolean(incomingDocument?._deleted);
+      const existingIsTombstone = Boolean(existingRecord.doc?._deleted);
+      // Master tombstone wins over the concurrent local update (accept it,
+      // even if the local update carries a higher HLC — no resurrection).
+      if (incomingIsTombstone && !existingIsTombstone) return true;
+      // Local (unsynced) tombstone wins over the concurrent master update
+      // (reject it — the local delete is authoritative and will push).
+      if (existingIsTombstone && !incomingIsTombstone) return false;
+    }
     // Field-merge collections resolve concurrency in `resolveIncomingWrite`
     // (three-way merge), which runs AFTER this gate accepts the master row —
     // the incoming master must reach the merge/settle branch so the base can
@@ -1360,6 +1476,65 @@ function lwwOverwriteConflict({
       ? 'A local HLC is more than five minutes ahead of the native time reference; the master row won and the local update remains recoverable here.'
       : 'The master row won the whole-document LWW gate; the concurrent local update remains recoverable here.',
     ...(skewed ? { clock: hybridLogicalClockStatus() } : {}),
+  };
+}
+
+// SYNC-41: a finalDelete collection's unsynced LOCAL tombstone beat a
+// concurrent MASTER update at the pull gate (the delete is authoritative and
+// will push). The master update would otherwise be silently dropped, so journal
+// it as `delete_vs_update` — the same recoverable-loss record the master-wins
+// direction produces in `persistDeleteUpdateConflicts`, just inverted (the
+// winning side is the local tombstone, the recoverable losing side is the
+// master update). Returns the conflict-store payload or null when this is not a
+// finalDelete local-tombstone-vs-master-update rejection.
+function finalDeleteRejectedUpdateConflict({
+  previous,
+  incomingDocument,
+  collectionName = '',
+  deleteStrategy = 'default',
+  replicationOrigin = null,
+}) {
+  if (deleteStrategy !== 'final') return null;
+  if (!replicationOrigin?.role || !previous?.doc || !incomingDocument) return null;
+  if (NATIVE_AUTHORITATIVE_COLLECTIONS.has(collectionName)) return null;
+  // The kept row must be an UNSYNCED LOCAL tombstone; the rejected master row
+  // must be a non-tombstone (a concurrent update). Two tombstones or a
+  // master tombstone never reach this branch (the gate accepts those).
+  if (previous.replicationOriginRole || previous.doc?._meta?.ctoxReplicationOrigin) return null;
+  if (!previous.doc?._deleted) return null;
+  if (incomingDocument._deleted) return null;
+  return {
+    code: 'structured_conflict_requires_resolution',
+    conflictType: 'delete_vs_update',
+    collection: collectionName,
+    base: previous.base || null,
+    local: previous.doc,
+    master: incomingDocument,
+    message: 'The local delete is authoritative (finalDelete); the concurrent master update remains recoverable here.',
+  };
+}
+
+// SYNC-42: build the conflict-store payload for a document quarantined by the
+// batch apply. The deterministic `conflictId` (one per collection+id) makes
+// re-journaling idempotent: a batch replayed after a crash overwrites the same
+// pending record rather than appending a duplicate, and a newer conflict for
+// the same id supersedes the stale one. Captures base/local/master so
+// db.conflicts.resolve(keep_local | keep_master | restore_as_copy) works even
+// after the pull checkpoint advanced past the master row (it will not be
+// re-delivered).
+function quarantineConflictRecord(error, collection, id, primaryPath = 'id') {
+  return {
+    conflictId: `structured:${collection}:${id}`,
+    code: 'structured_conflict_requires_resolution',
+    conflictType: 'structured_field_conflict',
+    collection,
+    primaryPath,
+    fields: Array.isArray(error?.fields) ? error.fields : [],
+    base: error?.base ?? null,
+    local: error?.local ?? null,
+    master: error?.master ?? null,
+    message: error?.message
+      || `Concurrent structured edits to ${collection}/${id} require manual resolution.`,
   };
 }
 
@@ -1868,6 +2043,7 @@ export const ctoxIndexedDbStorageTestInternals = {
   documentMatchesReplicationOrigin,
   indexValuesFor,
   lwwOverwriteConflict,
+  finalDeleteRejectedUpdateConflict,
   normalizeDocument,
   normalizeStoredReplicationFlags,
   normalizeSchemaIndexes,

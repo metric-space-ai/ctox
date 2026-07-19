@@ -1,6 +1,6 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 
-const STYLE_BUILD = '20260717-browser-kit-migration-v83';
+const STYLE_BUILD = '20260718-browser-reduction-v1';
 
 // Module-level translator; set from locales/<lang>.json during mount.
 let t = (key, fallback) => fallback ?? key;
@@ -36,6 +36,8 @@ export async function mount(ctx) {
     sessionList: root.querySelector('[data-browser-session-list]'),
     refresh: root.querySelector('[data-browser-refresh]'),
     start: root.querySelector('[data-browser-start]'),
+    toggleAdvanced: root.querySelector('[data-browser-toggle-advanced]'),
+    advanced: root.querySelector('[data-browser-advanced]'),
     privateMode: root.querySelector('[data-browser-private]'),
     viewport: root.querySelector('[data-browser-viewport]'),
     newTab: root.querySelector('[data-browser-new-tab]'),
@@ -151,6 +153,11 @@ export async function mount(ctx) {
   }
 
   refs.refresh?.addEventListener('click', safeLoadAndRender);
+  refs.toggleAdvanced?.addEventListener('click', () => {
+    if (!refs.advanced) return;
+    const hidden = refs.advanced.classList.toggle('is-advanced-hidden');
+    refs.toggleAdvanced.setAttribute('aria-pressed', hidden ? 'false' : 'true');
+  });
   const startNewBrowserSession = (url = refs.address?.value || 'https://example.com') => {
     const now = Date.now();
     const sessionId = `${userSessionPrefix(ctx.session)}_${now}`;

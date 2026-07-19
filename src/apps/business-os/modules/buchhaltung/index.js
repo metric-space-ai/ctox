@@ -1,6 +1,5 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { importTemplateToDb } from './templates/skr.js';
-import { CtoxResizer } from '../../shared/resizer.js';
 import { showBusinessConfirm } from '../../shared/dialogs.js';
 
 
@@ -212,7 +211,7 @@ export async function mount(ctx) {
   registerGoBDHooks();
 
   // 4. Load Active Kontenrahmen Select Value
-  const savedSKR = localStorage.getItem('ctox_fibu_skr') || 'SKR03';
+  const savedSKR = state.skrName || 'SKR03';
   state.skrName = savedSKR;
   if (state.els.skrSelect) {
     state.els.skrSelect.value = savedSKR;
@@ -356,52 +355,9 @@ function setupResizers(host) {
   // Column resizing is now owned by the shell-global resizer (app.js
   // `setupModuleResizers`): the `.ctox-column-resizer[data-resizer-var]`
   // handles in index.html, inside the `[data-resize-frame]` root, get
-  // drag/keyboard/persistence for free. This DIY (CtoxResizer + localStorage)
-  // is retired; we no-op so call sites keep working without dangling refs.
+  // drag/keyboard/persistence for free.
+  void host;
   return () => {};
-
-  // eslint-disable-next-line no-unreachable
-  const containerEl = host.querySelector('[data-fibu-root]') || host;
-  const leftResizer = host.querySelector('.fibu-col-resizer[data-resizer="left"]');
-  const rightResizer = host.querySelector('.fibu-col-resizer[data-resizer="right"]');
-
-  const cleanups = [];
-
-  if (leftResizer) {
-    const resizerL = new CtoxResizer({
-      resizerEl: leftResizer,
-      containerEl,
-      cssVar: '--fibu-left-width',
-      side: 'left',
-      minWidth: 240,
-      maxWidth: 450,
-      onResize: (width) => localStorage.setItem('ctox.buchhaltung.leftWidth', width)
-    });
-    cleanups.push(() => resizerL.destroy());
-  }
-
-  if (rightResizer) {
-    const resizerR = new CtoxResizer({
-      resizerEl: rightResizer,
-      containerEl,
-      cssVar: '--fibu-right-width',
-      side: 'right',
-      minWidth: 280,
-      maxWidth: 500,
-      onResize: (width) => localStorage.setItem('ctox.buchhaltung.rightWidth', width)
-    });
-    cleanups.push(() => resizerR.destroy());
-  }
-
-  // Set initial widths from localStorage
-  const leftWidth = localStorage.getItem('ctox.buchhaltung.leftWidth') || '300';
-  const rightWidth = localStorage.getItem('ctox.buchhaltung.rightWidth') || '360';
-  containerEl.style.setProperty('--fibu-left-width', `${leftWidth}px`);
-  containerEl.style.setProperty('--fibu-right-width', `${rightWidth}px`);
-
-  return () => {
-    cleanups.forEach(c => c());
-  };
 }
 
 // =========================================================================
@@ -685,6 +641,28 @@ function wireEvents() {
   const els = state.els;
   if (!els.root) return;
 
+  // Right Companion pane toggle — hidden by default so the center workbench
+  // gets the full width; persistence is per-shell-window via storageScope so
+  // the operator's chosen layout survives across mounts.
+  const toggleActions = els.root.querySelector('[data-toggle-actions]');
+  const storageKey = 'ctox.buchhaltung.layout.actionsHidden';
+  if (toggleActions) {
+    const saved = state.ctx?.storageScope?.get?.(storageKey);
+    if (saved === 'false') {
+      els.root.classList.remove('is-actions-hidden');
+      toggleActions.setAttribute('aria-pressed', 'true');
+    }
+    toggleActions.addEventListener('click', () => {
+      const willHide = els.root.classList.toggle('is-actions-hidden');
+      toggleActions.setAttribute('aria-pressed', String(!willHide));
+      toggleActions.setAttribute(
+        'aria-label',
+        willHide ? 'Assistent einblenden' : 'Assistent ausblenden'
+      );
+      state.ctx?.storageScope?.set?.(storageKey, String(willHide));
+    });
+  }
+
   // Left Nav Click Events
   els.navItems.forEach(item => {
     item.addEventListener('click', () => {
@@ -698,7 +676,6 @@ function wireEvents() {
   // SKR Selector change
   els.skrSelect?.addEventListener('change', async (e) => {
     state.skrName = e.target.value;
-    localStorage.setItem('ctox_fibu_skr', state.skrName);
     await autoInitializeAccounts();
     await loadAllFibuData();
     renderActiveView();
@@ -4305,34 +4282,32 @@ async function dispatchBuchhaltungContextChat(state, context, message, mode = 'd
     activeRecord = state.assets?.find?.((a) => a.id === state.selectedAssetId);
   }
 
-  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
-    detail: {
-      text: trimmed,
-      module: 'buchhaltung',
-      source_title: 'Buchhaltung',
-      command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
-      record_id: safeMode === 'app' ? 'buchhaltung' : (activeRecord?.id || 'buchhaltung'),
+  const commandId = `cmd_buchhaltung_context_${crypto.randomUUID?.() || Date.now()}`;
+  await state.ctx.commandBus.dispatch({
+    id: commandId,
+    module: 'buchhaltung',
+    command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
+    record_id: safeMode === 'app' ? 'buchhaltung' : (activeRecord?.id || 'buchhaltung'),
+    inbound_channel: 'business_os.buchhaltung',
+    payload: {
       title,
       instruction,
-      payload: {
-        title,
-        instruction,
-        prompt: trimmed,
-        user_message: trimmed,
-        mode: safeMode,
-        target: safeMode === 'app' ? 'app' : (safeMode === 'ask' ? 'read' : 'data'),
-        selected_record: activeRecord,
-        context,
-        thread_key: 'business-os/buchhaltung',
-      },
-      client_context: {
-        action: 'context-chat',
-        mode: safeMode,
-        column: context.column,
-        record_type: context.record_type,
-        record_id: activeRecord?.id || '',
-      },
+      prompt: trimmed,
+      user_message: trimmed,
+      mode: safeMode,
+      target: safeMode === 'app' ? 'app' : (safeMode === 'ask' ? 'read' : 'data'),
+      selected_record: activeRecord,
+      context,
+      thread_key: 'business-os/buchhaltung',
     },
-  }));
+    client_context: {
+      action: 'context-chat',
+      mode: safeMode,
+      column: context.column,
+      record_type: context.record_type,
+      record_id: activeRecord?.id || '',
+      source_module: 'buchhaltung',
+    },
+  });
   hideBuchhaltungContextMenu(state);
 }

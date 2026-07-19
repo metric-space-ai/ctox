@@ -1,45 +1,73 @@
-/* Nachweise — module-specific layer on top of shared/base.css.
-   Frame, header, inputs, buttons, badges and empty state come from the kit;
-   this file only keeps the card list (variable content) and the gate callout. */
+/* nachweise/index.css — module-specific styling on top of shared/base.css.
+   Frame, pane, header, subtitle, body, compact form/fields, inputs, buttons,
+   badges, status line, record list, callout and empty state all come from
+   the kit (.ctox-record-workbench, .ctox-compact-form, .ctox-input/.ctox-select,
+   .ctox-button, .ctox-badge, .ctox-callout, .ctox-empty). Only the rich
+   record rows and the gate-callout detail content live here. */
 
-.ats-nachweise .ats-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 14px;
+/* Einsatz-Gate and Entleiher-Sign-off are rare server-command actions: hidden
+   by default (is-actions-hidden on root), revealed on demand via the header
+   toggle [data-toggle-actions] — threads' / consent's idiom. All form hooks
+   stay intact; only visibility changes. */
+.ats-nachweise.is-actions-hidden [data-ats-advanced] { display: none; }
+.ats-nachweise [data-toggle-actions][aria-pressed="true"] { color: var(--accent); }
+
+/* Detail lines inside the gate callout (sign-off result summary). */
+.ats-nachweise .ats-result-row {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
 }
 
-/* Horizontal wrap forms: undo the kit's block-level control width. */
-.ats-nachweise .ats-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.ats-nachweise .ats-form .ctox-input,
-.ats-nachweise .ats-form .ctox-select { width: auto; flex: 1 1 180px; min-width: 140px; }
-.ats-nachweise .ats-form--gate { border-top: 1px solid var(--hairline, var(--line)); padding-top: 12px; }
-.ats-nachweise .ats-form--signoff { padding-bottom: 4px; }
+/* Blocker list inside the gate callout (deployment check / sign-off). */
+.ats-nachweise .ats-blockers {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
 
-.ats-nachweise .ats-count { font-size: 13px; color: var(--muted); }
-.ats-nachweise .ats-count:empty { display: none; }
+.ats-nachweise .ats-blockers li {
+  font-size: 12px;
+  margin: 2px 0;
+}
 
-/* Card list — module-owned (variable content), tokens only. */
-.ats-nachweise .ats-item { padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); margin-bottom: 6px; font-size: 13px; }
-.ats-nachweise .ats-item--rich { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center; padding: 10px 12px; }
-.ats-nachweise .ats-item-main { font-size: 13px; font-weight: 600; }
-.ats-nachweise .ats-item-main .ats-item-sub { font-weight: 400; color: var(--muted); }
-.ats-nachweise .ats-item-meta { grid-column: 1 / 2; font-size: 12px; color: var(--muted); }
-.ats-nachweise .ats-item-side { grid-column: 2 / 3; grid-row: 1 / 3; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+/* custom: rich record rows — credential title + subject, a meta line, and a
+   trailing side cluster (status badges + deployment-check action). Richer
+   than .ctox-list-item, so they stay module-owned (on kit tokens/radii). */
+.ats-nachweise .ats-item {
+  padding: 8px 12px;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--panel-radius);
+  margin-bottom: 6px;
+  background: var(--surface);
+}
 
-/* Gate callout (deployment check / sign-off result) — no kit alert component yet. */
-.ats-nachweise .ats-gate { font-size: 13px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
-.ats-nachweise .ats-gate:empty { display: none; }
-.ats-nachweise .ats-gate--ok { border-color: color-mix(in srgb, var(--success) 45%, var(--line)); background: var(--success-soft); }
-.ats-nachweise .ats-gate--block { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); background: var(--danger-soft); }
-.ats-nachweise .ats-gate--offline { border-color: color-mix(in srgb, var(--warning) 45%, var(--line)); background: var(--warning-soft); }
-.ats-nachweise .ats-gate .ats-result-row { margin-top: 4px; font-size: 12px; color: var(--muted); }
-.ats-nachweise .ats-gate .ats-blockers { margin: 6px 0 0; padding-left: 18px; }
-.ats-nachweise .ats-gate .ats-blockers li { font-size: 12px; margin: 2px 0; }
+.ats-nachweise .ats-item--rich {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  align-items: center;
+}
 
-/* Canonical compact workbench owns body and form geometry. */
-.ats-nachweise .ctox-record-workbench__body { display: flex; padding: 8px; gap: 8px; }
-.ats-nachweise .ctox-compact-form { display: grid; }
-.ats-nachweise .ctox-compact-form .ctox-input,
-.ats-nachweise .ctox-compact-form .ctox-select { width: 100%; min-width: 0; }
-.ats-nachweise .ats-form--gate { padding-top: 7px; }
+.ats-nachweise .ats-item-main {
+  font-weight: 600;
+}
+
+.ats-nachweise .ats-item-main .ats-item-sub {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.ats-nachweise .ats-item-meta {
+  grid-column: 1 / 2;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ats-nachweise .ats-item-side {
+  grid-column: 2 / 3;
+  grid-row: 1 / 3;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}

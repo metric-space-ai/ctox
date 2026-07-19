@@ -1,14 +1,14 @@
-const MOD_BUILD = '20260706-kit1';
+const MOD_BUILD = '20260718-reduce1';
 const MODULE_ID = 'placements';
 const PRIMARY = 'placements';
 const TITLE = 'placements';
 const CREATE_COMMAND = 'ats.placement.create';
 const COPY = {
   de: {
-    kicker: 'Vermittlungen', candidate: 'Kandidat-ID', client: 'Kunden-Account-ID', placementType: 'Vermittlungsart', directHire: 'Festanstellung (Personalvermittlung)', temporary: 'Arbeitnehmerüberlassung (Zeitarbeit)', qualifications: 'Pflicht-Qualifikationen (Komma)', fee: 'Honorar', guarantee: 'Garantie (Tage)', create: 'Anlegen', entries: 'Einträge', empty: 'Noch keine Einträge.', earlyLeaveBooked: 'Frühausstieg verbucht.', clawback: 'Clawback', credit: 'Gutschrift', offlineService: 'Offline: Befehlsdienst nicht verfügbar.', offlineSend: 'Offline: Befehl konnte nicht gesendet werden.', candidateRequired: 'Kandidat-ID erforderlich.', blocked: 'Blockiert.', placementCreated: 'Placement angelegt.', placement: 'Placement', feeInvoice: 'Honorar-Rechnung', days: 'Tage', invoice: 'Rechnung', cancellation: 'Storno', earlyLeave: 'Frühausstieg'
+    kicker: 'Vermittlungen', candidate: 'Kandidat-ID', client: 'Kunden-Account-ID', placementType: 'Vermittlungsart', directHire: 'Festanstellung (Personalvermittlung)', temporary: 'Arbeitnehmerüberlassung (Zeitarbeit)', qualifications: 'Pflicht-Qualifikationen (Komma)', fee: 'Honorar', guarantee: 'Garantie (Tage)', create: 'Anlegen', more: 'Weitere Angaben', entries: 'Einträge', empty: 'Noch keine Einträge.', earlyLeaveBooked: 'Frühausstieg verbucht.', clawback: 'Clawback', credit: 'Gutschrift', offlineService: 'Offline: Befehlsdienst nicht verfügbar.', offlineSend: 'Offline: Befehl konnte nicht gesendet werden.', candidateRequired: 'Kandidat-ID erforderlich.', blocked: 'Blockiert.', placementCreated: 'Placement angelegt.', placement: 'Placement', feeInvoice: 'Honorar-Rechnung', invoice: 'Rechnung', cancellation: 'Storno', earlyLeave: 'Frühausstieg', details: 'Details'
   },
   en: {
-    kicker: 'Placements', candidate: 'Candidate ID', client: 'Client account ID', placementType: 'Placement type', directHire: 'Permanent placement', temporary: 'Temporary staffing', qualifications: 'Required qualifications (comma-separated)', fee: 'Fee', guarantee: 'Guarantee (days)', create: 'Create', entries: 'records', empty: 'No placements yet.', earlyLeaveBooked: 'Early leave recorded.', clawback: 'Clawback', credit: 'Credit note', offlineService: 'Offline: command service unavailable.', offlineSend: 'Offline: command could not be sent.', candidateRequired: 'Candidate ID is required.', blocked: 'Blocked.', placementCreated: 'Placement created.', placement: 'Placement', feeInvoice: 'Fee invoice', days: 'days', invoice: 'Invoice', cancellation: 'Cancellation', earlyLeave: 'Early leave'
+    kicker: 'Placements', candidate: 'Candidate ID', client: 'Client account ID', placementType: 'Placement type', directHire: 'Permanent placement', temporary: 'Temporary staffing', qualifications: 'Required qualifications (comma-separated)', fee: 'Fee', guarantee: 'Guarantee (days)', create: 'Create', more: 'More details', entries: 'records', empty: 'No placements yet.', earlyLeaveBooked: 'Early leave recorded.', clawback: 'Clawback', credit: 'Credit note', offlineService: 'Offline: command service unavailable.', offlineSend: 'Offline: command could not be sent.', candidateRequired: 'Candidate ID is required.', blocked: 'Blocked.', placementCreated: 'Placement created.', placement: 'Placement', feeInvoice: 'Fee invoice', invoice: 'Invoice', cancellation: 'Cancellation', earlyLeave: 'Early leave', details: 'Details'
   }
 };
 let text = COPY.de;
@@ -34,9 +34,11 @@ export async function mount(ctx) {
   let rowsCache = [];
   const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || null; } catch { return null; } };
 
+  // Gate callout → kit .ctox-callout variants (base.css).
+  const GATE_VARIANTS = { ok: ' is-success', block: ' is-danger', offline: ' is-warning' };
   function setGate(html, kind) {
     if (!gateEl) return;
-    gateEl.className = 'ats-gate' + (kind ? ' ats-gate--' + kind : '');
+    gateEl.className = 'ctox-callout' + (GATE_VARIANTS[kind] || '');
     gateEl.innerHTML = html || '';
   }
 
@@ -180,20 +182,21 @@ function placementRow(r) {
   const active = status !== 'early_leave' && status !== 'cancelled';
   const fee = r.fee == null ? '—' : esc(String(r.fee));
   const badgeClass = ('ctox-badge ' + statusBadgeClass(status)).trim();
+  // Commercial metadata (fee, guarantee, invoice, cancellation) is only
+  // needed on demand — collapsed behind a per-row disclosure.
+  const metaParts = [`${esc(text.fee)}: ` + fee, `${esc(text.guarantee)}: ` + esc(String(r.guarantee_days ?? '—'))];
+  if (r.fee_invoice_id) metaParts.push(`${esc(text.invoice)}: ` + esc(r.fee_invoice_id));
+  if (r.storno_credit_note_id) metaParts.push(`${esc(text.cancellation)}: ` + esc(r.storno_credit_note_id));
   return '<div class="ats-item ats-item--rich" data-id="' + esc(r.id || '') + '" data-context-record-id="' + esc(r.id || '') + '" data-context-record-type="placement" data-context-label="' + esc((r.candidate_id || '') + ' → ' + (r.client_account_id || '')) + '">'
     + '<div class="ats-item-main">'
     + '<span class="' + badgeClass + '" data-status="' + esc(status) + '">' + esc(status) + '</span> '
     + '<strong>' + esc(r.candidate_id || '—') + '</strong> &rarr; ' + esc(r.client_account_id || '—')
     + '</div>'
-    + `<div class="ats-item-meta">${esc(text.fee)}: ` + fee + ` &middot; ${esc(text.guarantee)}: ` + esc(String(r.guarantee_days ?? '—')) + ` ${esc(text.days)}`
-    + (r.fee_invoice_id ? ` &middot; ${esc(text.invoice)}: ` + esc(r.fee_invoice_id) : '')
-    + (r.storno_credit_note_id ? ` &middot; ${esc(text.cancellation)}: ` + esc(r.storno_credit_note_id) : '')
-    + '</div>'
+    + '<details class="ats-item-meta ats-item-details"><summary>' + esc(text.details) + '</summary><div>' + metaParts.join(' &middot; ') + '</div></details>'
     + (active ? '<button type="button" class="ctox-button ats-action" data-early-leave="' + esc(r.id || '') + '">' + esc(text.earlyLeave) + '</button>' : '')
     + '</div>';
 }
 function applyStaticCopy(root) {
   root.querySelectorAll('[data-copy]').forEach((node) => { node.textContent = text[node.dataset.copy] || node.textContent; });
-  root.querySelectorAll('[data-copy-placeholder]').forEach((node) => { node.placeholder = text[node.dataset.copyPlaceholder] || node.placeholder; });
 }
 function esc(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }

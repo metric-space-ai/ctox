@@ -1,121 +1,53 @@
 /* interviews/index.css — module-specific styling on top of shared/base.css.
-   Header, inputs, buttons, badges and empty state come from the kit
-   (.ctox-pane-*, .ctox-input/.ctox-select, .ctox-button, .ctox-badge,
-   .ctox-empty); only the interviews frame, group heads, rich list rows,
-   score column and gate/result rows live here. */
+   Frame, header, subtitle, body, compact form/fields, inputs, buttons,
+   badges, status line, record list, callout and empty state all come from
+   the kit (.ctox-record-workbench, .ctox-compact-form, .ctox-input/.ctox-select,
+   .ctox-button, .ctox-badge, .ctox-callout, .ctox-empty). Only the interviews
+   group heads, rich list rows, score column and gate result rows live here.
+   The create form and per-row action clusters are hidden by default and
+   revealed via toggles (is-form-hidden / is-actions-open). */
 
-.ats-interviews {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-  box-sizing: border-box;
-  color: var(--text);
-}
-
-.ats-interviews .ats-sub {
-  margin: 6px 0 0;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.ats-interviews .ats-sub:empty {
+/* The kit only re-asserts [hidden] inside .ctox-workspace; the gate callout
+   lives in a record workbench, so mirror the rule here. */
+.ats-interviews .ctox-callout[hidden] {
   display: none;
 }
 
-.ats-interviews .ats-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  padding: 14px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+/* The create form is situational: hidden by default (is-form-hidden on root),
+   revealed via the header toggle — consent's data-toggle-rights /
+   threads' data-toggle-actions idiom. Pressed-state tint comes from the kit's
+   .ctox-pane-icon[aria-pressed="true"] rule. */
+.ats-interviews.is-form-hidden [data-ats-form] {
+  display: none;
 }
 
-.ats-interviews .ats-form {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.ats-interviews .ats-form .ctox-input {
-  width: auto;
-  flex: 1 1 160px;
-}
-
-.ats-interviews .ats-form .ctox-select {
-  width: auto;
-  flex: 0 1 auto;
-}
-
-.ats-interviews .ats-count {
-  font-size: 13px;
-  color: var(--muted);
-}
-
+/* custom: section labels splitting the record list into meetings/scorecards —
+   the kit has no list group-head element. */
 .ats-interviews .ats-group-head {
   margin: 8px 0 2px;
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
 }
 
-/* Gate (result / blockers). */
-.ats-interviews .ats-gate {
-  padding: 8px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  font-size: 13px;
-}
-
-.ats-interviews .ats-gate:empty {
-  display: none;
-}
-
-.ats-interviews .ats-gate--ok {
-  border-color: color-mix(in srgb, var(--success) 45%, var(--line));
-  background: var(--success-soft);
-}
-
-.ats-interviews .ats-gate--block {
-  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
-  background: var(--danger-soft);
-}
-
-.ats-interviews .ats-gate--offline {
-  border-color: color-mix(in srgb, var(--warning) 45%, var(--line));
-  background: var(--warning-soft);
-}
-
-.ats-interviews .ats-gate .ats-result-row {
+/* Detail line inside the gate callout (created/updated record summary). */
+.ats-interviews .ats-result-row {
   margin-top: 4px;
   font-size: 12px;
   color: var(--muted);
 }
 
-.ats-interviews .ats-gate .ats-blockers {
-  margin: 6px 0 0;
-  padding-left: 18px;
-}
-
-.ats-interviews .ats-gate .ats-blockers li {
-  font-size: 12px;
-  margin: 2px 0;
-}
-
-/* Rich list rows (variable content — module-owned card list on kit tokens). */
+/* custom: rich record rows — badge + two-line body + trailing action cluster
+   or score figure. Richer than .ctox-list-item, so they stay module-owned
+   (on kit tokens/radii). */
 .ats-interviews .ats-item {
   padding: 8px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--panel-radius);
   margin-bottom: 6px;
   background: var(--surface);
-  font-size: 13px;
 }
 
 .ats-interviews .ats-item--rich {
@@ -126,7 +58,6 @@
 }
 
 .ats-interviews .ats-item-main {
-  font-size: 13px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -139,25 +70,33 @@
   color: var(--muted);
 }
 
-.ats-interviews .ats-actions {
+/* Trailing cell of a rich row: per-row "…" toggle plus the on-demand action
+   cluster (or the score figure on scorecard rows). */
+.ats-interviews .ats-item-trail {
   display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Per-record actions are hidden until the row's "…" toggle opens them —
+   the row's default state is badge + body only. */
+.ats-interviews .ats-actions {
+  display: none;
   flex-wrap: wrap;
   gap: 6px;
   justify-content: flex-end;
 }
 
+.ats-interviews .ats-item.is-actions-open .ats-actions {
+  display: flex;
+}
+
+/* custom: scorecard overall-score figure (large tabular number at row end). */
 .ats-interviews .ats-score {
   min-width: 36px;
   text-align: right;
   font-size: 18px;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
   color: var(--text);
 }
-
-/* Canonical compact workbench owns frame, body and form geometry. */
-.ats-interviews.ctox-record-workbench { display: grid; }
-.ats-interviews .ctox-record-workbench__subtitle { margin: 4px 0 0; }
-.ats-interviews .ctox-record-workbench__body { display: flex; padding: 8px; gap: 8px; }
-.ats-interviews .ctox-compact-form { display: grid; }
-.ats-interviews .ctox-compact-form .ctox-input,
-.ats-interviews .ctox-compact-form .ctox-select { width: 100%; }

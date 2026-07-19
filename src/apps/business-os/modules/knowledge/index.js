@@ -25,6 +25,8 @@ const labels = {
     syncUnavailable: 'Knowledge Store ist noch nicht verbunden.',
     noRunbooks: 'Keine Runbooks vorhanden.',
     tableUnavailable: 'Für diesen Eintrag ist keine Tabelle verfügbar.',
+    dataIncomplete: 'Daten unvollständig',
+    dataIncompleteHint: 'Die Tabelle wird erst angezeigt, wenn alle Daten-Chunks konsistent und vollständig repliziert wurden.',
     queued: 'Command angelegt',
     queueFailed: 'Command konnte nicht angelegt werden',
     edit: 'Bearbeiten',
@@ -43,6 +45,8 @@ const labels = {
     syncUnavailable: 'Knowledge store is not connected yet.',
     noRunbooks: 'No runbooks available.',
     tableUnavailable: 'This item has no table.',
+    dataIncomplete: 'Incomplete data',
+    dataIncompleteHint: 'The table is shown only after all data chunks are replicated consistently and completely.',
     queued: 'Command queued',
     queueFailed: 'Could not queue command',
     edit: 'Edit',
@@ -67,6 +71,9 @@ const state = {
   tableLimit: 120,
   editing: false,
   sourceScope: 'all',
+  sortMode: 'recent',
+  sortDir: 'desc',
+  flagFilters: new Set(),
   messages: null,
   openGroups: new Set(['research/drone-design/drone-bearing-loads']),
   contextMenu: null,
@@ -74,6 +81,7 @@ const state = {
   localSubscriptionCleanup: null,
   syncWarmupPromise: null,
   refreshInFlight: false,
+  refreshPending: false,
   missingCollections: [],
   loadError: '',
 };
@@ -126,7 +134,7 @@ async function ensureStyles() {
   document.head.append(link);
 }
 
-// Monochrome stroke icons for header/close buttons. Delegates to the shell's
+// Monochrome stroke icons for header/close buttons. Delegates to the shell
 // getActionIcon (shared/icons.js via mount ctx); the inline paths are the same
 // actionIconPaths glyphs as a fallback for older shells.
 const ACTION_ICON_FALLBACK_PATHS = {
@@ -149,6 +157,7 @@ function documentTemplate() {
   return `
     <main class="knowledge-module" data-knowledge-root data-resize-frame>
       <section class="ctox-pane knowledge-pane knowledge-left" aria-label="Knowledge">
+        <!-- Row 1: title + management-only icons (top-right). -->
         <header class="ctox-pane-header ctox-pane-band">
           <div class="ctox-pane-title-row">
             <div class="ctox-pane-titles">
@@ -157,20 +166,39 @@ function documentTemplate() {
             </div>
             <div class="ctox-pane-actions">
               <button class="ctox-pane-icon" type="button" data-action="create-knowledge-book" aria-label="Knowledge Book erstellen" title="Knowledge Book erstellen">${actionIcon('add')}</button>
-              <button class="ctox-pane-icon" type="button" data-action="configure-knowledge" aria-label="Knowledge konfigurieren" title="Knowledge konfigurieren">${actionIcon('settings')}</button>
               <button class="ctox-pane-icon" type="button" data-action="import-knowledge-book" aria-label="Knowledge Book importieren" title="Knowledge Book importieren">${actionIcon('download')}</button>
               <button class="ctox-pane-icon" type="button" data-action="export-knowledge-book" aria-label="Knowledge Books exportieren" title="Knowledge Books exportieren">${actionIcon('export')}</button>
             </div>
           </div>
-          <div class="ctox-pane-tools">
-            <input class="ctox-pane-search" data-search placeholder="Suchen..." />
-          </div>
         </header>
-        <div class="knowledge-scope-switch">
-          <div class="ctox-pane-tabs" role="tablist" aria-label="Knowledge Quelle">
-            <button type="button" class="ctox-pane-tab" role="tab" data-scope="user" aria-selected="false">User</button>
-            <button type="button" class="ctox-pane-tab" role="tab" data-scope="system" aria-selected="false">System</button>
-            <button type="button" class="ctox-pane-tab" role="tab" data-scope="all" aria-selected="true">Alle</button>
+        <!-- Row 2: filter section — search + a single toggle. Everything else
+             (scope, sort, content type) lives in the advanced tray and stays
+             collapsed until the toggle is pressed. -->
+        <div class="knowledge-filterbar">
+          <input class="ctox-pane-search" data-search placeholder="Suchen…" />
+          <button class="ctox-pane-icon knowledge-filter-toggle" type="button" data-action="toggle-filters" aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--knowledge-surface-muted)"/><circle cx="15" cy="12" r="2.4" fill="var(--knowledge-surface-muted)"/><circle cx="8" cy="17" r="2.4" fill="var(--knowledge-surface-muted)"/></svg></button>
+        </div>
+        <div class="knowledge-filter-advanced" data-filter-advanced hidden>
+          <div class="knowledge-filter-row">
+            <select class="ctox-select knowledge-select" data-scope aria-label="Bereich">
+              <option value="all">Alle Bereiche</option>
+              <option value="user">Nur User</option>
+              <option value="system">Nur System</option>
+            </select>
+            <div class="knowledge-sort">
+              <select class="ctox-select knowledge-select" data-sort aria-label="Sortieren nach">
+                <option value="recent">Bearbeitet</option>
+                <option value="created">Erstellt</option>
+                <option value="name">Name</option>
+                <option value="entries">Einträge</option>
+              </select>
+              <button type="button" class="knowledge-sort-dir" data-action="toggle-sort-dir" data-dir="desc" aria-label="Sortierrichtung umkehren" title="Absteigend"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="6 13 12 19 18 13"/></svg></button>
+            </div>
+          </div>
+          <div class="knowledge-filter-chips" role="group" aria-label="Enthält">
+            <button type="button" class="ctox-chip" data-flag="skillbooks" aria-pressed="false">Skillbooks</button>
+            <button type="button" class="ctox-chip" data-flag="runbooks" aria-pressed="false">Runbooks</button>
+            <button type="button" class="ctox-chip" data-flag="tables" aria-pressed="false">Tabellen</button>
           </div>
         </div>
         <div class="knowledge-scroll" data-knowledge-list>
@@ -179,22 +207,27 @@ function documentTemplate() {
       </section>
       <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--knowledge-left-width" data-resizer-min="300" data-resizer-max="720" aria-label="Spaltenbreite anpassen"></button>
       <section class="ctox-pane knowledge-pane knowledge-center" aria-label="Knowledge Dokument">
+        <!-- Row 1: title + action icon only (edit), top-right. -->
         <header class="ctox-pane-header ctox-pane-band knowledge-center-head">
           <div class="ctox-pane-title-row">
+            <button class="ctox-pane-icon knowledge-mobile-back" type="button" data-action="mobile-back" aria-label="Zurück zur Liste" title="Zurück zur Liste"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
             <div class="ctox-pane-titles">
               <span class="ctox-pane-kicker" data-selected-kind>${escapeHtml(copy.selected)}</span>
               <h2 class="ctox-pane-title" data-selected-title>${escapeHtml(copy.noSelection)}</h2>
             </div>
-            <div class="ctox-pane-actions">
-              <div class="ctox-pane-tabs" role="tablist" aria-label="Knowledge Ansicht">
-                <button type="button" class="ctox-pane-tab" role="tab" data-tab="skill" aria-selected="true">Skill</button>
-                <button type="button" class="ctox-pane-tab" role="tab" data-tab="runbooks" aria-selected="false">Runbooks</button>
-                <button type="button" class="ctox-pane-tab" role="tab" data-tab="data" aria-selected="false">Data</button>
-              </div>
-            </div>
+            <div class="ctox-pane-actions"></div>
           </div>
         </header>
+        <!-- Row 3: view switcher (its own band below the header, never top-right). -->
+        <div class="knowledge-view-switch">
+          <div class="ctox-pane-tabs" role="tablist" aria-label="Knowledge Ansicht">
+            <button type="button" class="ctox-pane-tab" role="tab" data-tab="skill" aria-selected="true">Skill<span class="view-count" data-count-skill></span></button>
+            <button type="button" class="ctox-pane-tab" role="tab" data-tab="runbooks" aria-selected="false">Runbooks<span class="view-count" data-count-runbooks></span></button>
+            <button type="button" class="ctox-pane-tab" role="tab" data-tab="data" aria-selected="false">Tabellen<span class="view-count" data-count-tables></span></button>
+          </div>
+        </div>
         <div class="knowledge-tab-panel" data-panel="skill">
+          <button class="ctox-pane-icon knowledge-content-edit" type="button" data-action="edit-active" aria-label="Bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
           <div class="ctox-toolbar knowledge-edit-bar" data-skill-toolbar>
             <div class="knowledge-edit-actions">
               <button class="ctox-button" type="button" data-action="edit-markdown">Bearbeiten</button>
@@ -207,6 +240,7 @@ function documentTemplate() {
           <textarea class="markdown-editor" data-markdown-editor hidden></textarea>
         </div>
         <div class="knowledge-tab-panel" data-panel="runbooks" hidden>
+          <button class="ctox-pane-icon knowledge-content-edit" type="button" data-action="edit-active" aria-label="Bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
           <div class="knowledge-secondary-switcher" data-runbook-switcher></div>
           <div class="ctox-toolbar knowledge-edit-bar" data-runbook-toolbar>
             <div class="knowledge-edit-actions">
@@ -228,14 +262,17 @@ function documentTemplate() {
           <div class="dataframe-bar">
             <div><strong data-table-title>DataFrame</strong><span data-table-meta></span></div>
             <div class="table-pager">
-              <button class="ctox-button" type="button" data-action="export-table-csv">CSV</button>
-              <button class="ctox-button" type="button" data-action="prev-rows">Zurück</button>
-              <button class="ctox-button" type="button" data-action="next-rows">Weiter</button>
+              <button class="ctox-pane-icon" type="button" data-action="export-table-csv" aria-label="Als CSV exportieren" title="Als CSV exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11M12 14l-4-4M12 14l4-4M5 20h14"/></svg></button>
+              <button class="ctox-pane-icon" type="button" data-action="prev-rows" aria-label="Vorherige Zeilen" title="Vorherige Zeilen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
+              <button class="ctox-pane-icon" type="button" data-action="next-rows" aria-label="Nächste Zeilen" title="Nächste Zeilen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
             </div>
           </div>
           <div class="dataframe-host" data-dataframe-host></div>
         </div>
       </section>
+      <footer class="knowledge-footer" data-knowledge-footer>
+        <span data-knowledge-footer-count>—</span>
+      </footer>
     </main>
   `;
 }
@@ -266,9 +303,9 @@ function bindElements(root) {
 function wireEvents() {
   els.search.addEventListener('input', renderKnowledgeList);
   els.kindFilter?.addEventListener('change', renderKnowledgeList);
-  for (const button of state.ctx.host.querySelectorAll('[data-scope]')) {
-    button.addEventListener('click', () => setSourceScope(button.dataset.scope || 'user'));
-  }
+  state.ctx.host.querySelector('select[data-scope]')?.addEventListener('change', (event) => {
+    setSourceScope(event.target.value || 'all');
+  });
   for (const button of state.ctx.host.querySelectorAll('[data-tab]')) {
     button.addEventListener('click', () => setTab(button.dataset.tab || 'book'));
   }
@@ -278,7 +315,48 @@ function wireEvents() {
   state.ctx.host.querySelector('[data-action="create-knowledge-book"]')?.addEventListener('click', () => openCreateKnowledgeBookDrawer());
   state.ctx.host.querySelector('[data-action="import-knowledge-book"]')?.addEventListener('click', () => openImportKnowledgeBookDrawer());
   state.ctx.host.querySelector('[data-action="export-knowledge-book"]')?.addEventListener('click', () => openExportKnowledgeBookDrawer());
-  state.ctx.host.querySelector('[data-action="configure-knowledge"]').addEventListener('click', () => openKnowledgeConfig());
+  state.ctx.host.querySelector('[data-action="configure-knowledge"]')?.addEventListener('click', () => openKnowledgeConfig());
+  // Filter section: the gear toggles the advanced-filter panel in place.
+  state.ctx.host.querySelector('[data-action="toggle-filters"]')?.addEventListener('click', (event) => {
+    const btn = event.currentTarget;
+    const panel = state.ctx.host.querySelector('[data-filter-advanced]');
+    if (!panel) return;
+    const open = panel.hasAttribute('hidden');
+    if (open) panel.removeAttribute('hidden'); else panel.setAttribute('hidden', '');
+    btn.setAttribute('aria-expanded', String(open));
+  });
+  // Advanced-filter controls: sort field (dropdown) + direction toggle + kind
+  // flags, all re-render the list.
+  state.ctx.host.querySelector('select[data-sort]')?.addEventListener('change', (event) => {
+    state.sortMode = event.target.value || 'recent';
+    renderKnowledgeList();
+  });
+  state.ctx.host.querySelector('[data-action="toggle-sort-dir"]')?.addEventListener('click', (event) => {
+    state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+    const btn = event.currentTarget;
+    btn.dataset.dir = state.sortDir;
+    btn.title = state.sortDir === 'asc' ? 'Aufsteigend' : 'Absteigend';
+    renderKnowledgeList();
+  });
+  state.ctx.host.querySelectorAll('[data-filter-advanced] [data-flag]').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      const flag = chip.dataset.flag;
+      if (state.flagFilters.has(flag)) state.flagFilters.delete(flag);
+      else state.flagFilters.add(flag);
+      chip.setAttribute('aria-pressed', String(state.flagFilters.has(flag)));
+      renderKnowledgeList();
+    });
+  });
+  // Mobile master-detail: back to the list.
+  state.ctx.host.querySelector('[data-action="mobile-back"]')?.addEventListener('click', () => {
+    state.ctx.host.querySelector('[data-knowledge-root]')?.classList.remove('is-detail');
+  });
+  // Fractal header edit: the pencil in the pane header edits whatever the
+  // active tab shows — it just triggers the edit control of that panel.
+  state.ctx.host.querySelector('[data-action="edit-active"]')?.addEventListener('click', () => {
+    const editBtn = state.ctx.host.querySelector('.knowledge-tab-panel:not([hidden]) [data-action="edit-markdown"], .knowledge-tab-panel:not([hidden]) [data-action="edit-runbook"]');
+    if (editBtn) editBtn.click();
+  });
   state.ctx.host.querySelector('[data-action="edit-markdown"]')?.addEventListener('click', toggleMarkdownEditor);
   state.ctx.host.querySelector('[data-action="save-markdown"]')?.addEventListener('click', queueMarkdownSave);
   state.ctx.host.querySelector('[data-action="cancel-markdown"]')?.addEventListener('click', cancelMarkdownEdit);
@@ -293,32 +371,47 @@ function wireEvents() {
 }
 
 async function loadKnowledgeFromLocal(options = {}) {
-  if (state.refreshInFlight) return;
-  state.refreshInFlight = true;
+  return runCoalescedRefresh(state, () => refreshKnowledgeFromLocal(options));
+}
+
+async function runCoalescedRefresh(status, refresh) {
+  if (status.refreshInFlight) {
+    status.refreshPending = true;
+    return;
+  }
+  status.refreshInFlight = true;
+  try {
+    await refresh();
+  } finally {
+    status.refreshInFlight = false;
+    if (status.refreshPending) {
+      status.refreshPending = false;
+      await runCoalescedRefresh(status, refresh);
+    }
+  }
+}
+
+async function refreshKnowledgeFromLocal(options = {}) {
   state.loadError = '';
   state.missingCollections = [];
-  try {
-    // Local-first: render whatever is in IndexedDB RIGHT NOW. Never block the
-    // first paint on a sync round trip — `wireLocalRealtime()` subscribes to
-    // the knowledge collections and re-renders the moment replicated records
-    // land, and the sync toast surfaces "data still loading". The old initial
-    // path awaited a sync warm-up AND polled up to 9s for records before
-    // showing anything, which made every Knowledge open feel frozen.
-    if (options.initial) {
-      // Kick sync off in the background; do NOT await it.
-      ensureKnowledgeDataSyncStarted().catch(() => {});
-    }
-    const snapshot = await readLocalKnowledgeSnapshot();
-    state.loadError = snapshot.error || '';
-    state.missingCollections = snapshot.missingCollections || [];
-    applyKnowledgeRecords(snapshot);
-    renderKnowledgeList();
-    renderRunbooks();
-    if (state.selectedId) await selectKnowledge(state.selectedId);
-    else renderEmptyKnowledgeSelection();
-  } finally {
-    state.refreshInFlight = false;
+  // Local-first: render whatever is in IndexedDB RIGHT NOW. Never block the
+  // first paint on a sync round trip — `wireLocalRealtime()` subscribes to
+  // the knowledge collections and re-renders the moment replicated records
+  // land, and the sync toast surfaces "data still loading". The old initial
+  // path awaited a sync warm-up AND polled up to 9s for records before
+  // showing anything, which made every Knowledge open feel frozen.
+  if (options.initial) {
+    // Kick sync off in the background; do NOT await it.
+    ensureKnowledgeDataSyncStarted().catch(() => {});
   }
+  const snapshot = await readLocalKnowledgeSnapshot();
+  state.loadError = snapshot.error || '';
+  state.missingCollections = snapshot.missingCollections || [];
+  applyKnowledgeRecords(snapshot);
+  renderKnowledgeList();
+  renderRunbooks();
+  if (state.selectedId) await selectKnowledge(state.selectedId);
+  else renderEmptyKnowledgeSelection();
 }
 
 function applyKnowledgeRecords({ items = [], runbooks = [], tables = [] }) {
@@ -502,7 +595,7 @@ function renderEmptyKnowledgeSelection() {
   els.markdownView.hidden = false;
   els.markdownEditor.value = '';
   // The list-pane on the left already shows the "no entries" empty-state.
-  // Don't repeat it inside the detail-view; show a brief hint instead.
+  // Do not repeat it inside the detail-view; show a brief hint instead.
   els.markdownView.innerHTML = `<p>${escapeHtml(copy.detailEmptyHint || (state.lang === 'en' ? 'Pick a knowledge entry on the left to view it here.' : 'Wähle links einen Knowledge-Eintrag, um ihn hier anzuzeigen.'))}</p>`;
   els.tableHost.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(copy.tableUnavailable)}</strong></div>`;
   if (els.runbookSwitcher) els.runbookSwitcher.innerHTML = '';
@@ -1005,6 +1098,8 @@ function relatedToSkillbook(skillbook, entry) {
 
 async function selectSkillbook(group, skillbook) {
   if (!group) return;
+  // Mobile master-detail: selecting an entry switches to the content view.
+  state.ctx?.host?.querySelector('[data-knowledge-root]')?.classList.add('is-detail');
   const skillbookEntry = typeof skillbook === 'string' ? group.entries.find((entry) => entry.id === skillbook) : skillbook;
   const context = skillbookContext(group, skillbookEntry);
   state.selectedGroupId = group.id;
@@ -1021,7 +1116,7 @@ async function selectSkillbook(group, skillbook) {
 function renderKnowledgeList() {
   const copy = state.messages || labels[state.lang];
   const term = els.search.value.trim().toLowerCase();
-  const visibleGroups = state.groups
+  let visibleGroups = state.groups
     .map((group) => ({
       ...group,
       entries: group.entries.filter((entry) => {
@@ -1033,11 +1128,38 @@ function renderKnowledgeList() {
       if (!term) return true;
       return `${group.title} ${group.summary || ''} ${group.domain || ''} ${group.entries.map((entry) => `${entry.title} ${entry.subtitle || ''} ${entry.summary || ''}`).join(' ')}`.toLowerCase().includes(term);
     });
+  // Advanced filters: only groups that carry the selected kinds.
+  if (state.flagFilters && state.flagFilters.size) {
+    visibleGroups = visibleGroups.filter((group) => {
+      const has = {
+        skillbooks: skillbooksForGroup(group).length > 0,
+        runbooks: group.runbookIds.length > 0,
+        tables: group.tableIds.length > 0,
+      };
+      return [...state.flagFilters].every((flag) => has[flag]);
+    });
+  }
+  // Advanced sort: pick the field comparator (ascending sense), then apply the
+  // chosen direction. More fields than the old three, each reversible.
+  const ascending = {
+    recent: (a, b) => groupRecency(a) - groupRecency(b),
+    created: (a, b) => groupCreated(a) - groupCreated(b),
+    name: (a, b) => (a.title || '').localeCompare(b.title || '', 'de'),
+    entries: (a, b) => groupSize(a) - groupSize(b),
+  }[state.sortMode] || ((a, b) => groupRecency(a) - groupRecency(b));
+  const dir = state.sortDir === 'asc' ? 1 : -1;
+  visibleGroups.sort((a, b) => ascending(a, b) * dir);
   if (!visibleGroups.length) {
     els.list.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(knowledgeEmptyStateMessage(copy, term))}</strong></div>`;
     return;
   }
   els.list.replaceChildren(...visibleGroups.map((group) => renderKnowledgeBundle(group)));
+  const footer = state.ctx.host.querySelector('[data-knowledge-footer-count]');
+  if (footer) {
+    const n = visibleGroups.length;
+    const scopeLabel = state.sourceScope === 'all' ? 'Alle' : state.sourceScope === 'system' ? 'System' : 'User';
+    footer.textContent = `${n} ${n === 1 ? 'Eintrag' : 'Einträge'} · ${scopeLabel}`;
+  }
 }
 
 function knowledgeEmptyStateMessage(copy, term = '') {
@@ -1051,6 +1173,40 @@ function sourceScopeFor(entry) {
   const source = String(entry?.source_path || entry?.source_system || entry?.subtitle || '').toLowerCase();
   if (source.startsWith('embedded:skills/system') || source.includes('ctox_core')) return 'system';
   return 'user';
+}
+
+// Newest entry timestamp in a group, for the "Zuletzt bearbeitet" sort.
+function groupRecency(group) {
+  let max = 0;
+  for (const entry of group.entries || []) {
+    const t = Number(entry.updated_at_ms || entry.updated_at || entry.payload?.updated_at_ms || 0) || 0;
+    if (t > max) max = t;
+  }
+  return max;
+}
+
+// Earliest creation timestamp in a group, for the "Erstellt" sort.
+function groupCreated(group) {
+  let min = Infinity;
+  for (const entry of group.entries || []) {
+    const t = Number(entry.created_at_ms || entry.created_at || entry.payload?.created_at_ms || 0) || 0;
+    if (t && t < min) min = t;
+  }
+  return min === Infinity ? 0 : min;
+}
+
+// Total content count of a group (skillbooks + runbooks + tables), for the
+// "Anzahl Einträge" sort.
+function groupSize(group) {
+  return skillbooksForGroup(group).length + (group.runbookIds?.length || 0) + (group.tableIds?.length || 0);
+}
+
+// Scannable count badges (Research-style numbers) — only non-zero kinds show,
+// so you can tell whether a shard has content before clicking it.
+function bundleCountsHtml(skillbooks, runbooks, tables) {
+  const pill = (n, label) => (n > 0 ? `<span class="kb-count"><b>${n}</b> ${label}</span>` : '');
+  const pills = [pill(skillbooks, 'Skillbooks'), pill(runbooks, 'Runbooks'), pill(tables, 'Tabellen')].filter(Boolean).join('');
+  return pills || '<span class="kb-count kb-empty">leer</span>';
 }
 
 function renderKnowledgeBundle(group) {
@@ -1067,18 +1223,21 @@ function renderKnowledgeBundle(group) {
   const tableCount = group.tableIds.length;
   const runbookCount = group.runbookIds.length;
   const skillbookCount = skillbooksForGroup(group).length;
+  const isOpen = state.openGroups.has(group.id);
   section.innerHTML = `
-    <button class="knowledge-bundle-head" type="button">
-      <span class="bundle-caret" aria-hidden="true"></span>
-      <span class="bundle-domain">${escapeHtml(group.domainLabel || 'Knowledge')}</span>
-      <strong>${escapeHtml(group.title)}</strong>
-      <small>${escapeHtml(`${skillbookCount} Skillbooks · ${runbookCount} Runbooks · ${tableCount} Tabellen`)}</small>
-    </button>
+    <div class="knowledge-bundle-head">
+      <button class="bundle-caret" type="button" aria-label="Auf- oder zuklappen" aria-expanded="${isOpen}"></button>
+      <button class="bundle-select" type="button">
+        <span class="bundle-domain">${escapeHtml(group.domainLabel || 'Knowledge')}</span>
+        <strong>${escapeHtml(group.title)}</strong>
+        <span class="bundle-counts">${bundleCountsHtml(skillbookCount, runbookCount, tableCount)}</span>
+      </button>
+    </div>
     <div class="knowledge-bundle-items"></div>
   `;
-  section.querySelector('.knowledge-bundle-head').addEventListener('click', () => {
-    const wasOpen = state.openGroups.has(group.id);
-    const wasSelected = state.selectedGroupId === group.id;
+  // Fractal grammar: caret toggles expand, the row selects, the top-right
+  // pencil edits — three separate targets, mirroring the pane header.
+  const selectBundle = () => {
     state.selectedGroupId = group.id;
     const skillbook = selectedSkillbookForGroup(group);
     state.selectedSkillbookId = skillbook?.id || '';
@@ -1086,14 +1245,19 @@ function renderKnowledgeBundle(group) {
     state.selectedId = context.skill?.id || skillbook?.id || group.primaryItemId || group.entries[0]?.id || '';
     state.selectedTableId = context.tables[0]?.id || group.tableIds[0] || '';
     state.selectedRunbookId = normaliseRunbookId(context.runbooks[0]?.id || context.runbooks[0]?.runbook_id || group.runbookIds[0] || state.selectedRunbookId);
-    if (wasSelected && wasOpen) {
-      state.openGroups.delete(group.id);
-      renderKnowledgeList();
-      renderActiveTab();
-      return;
-    }
     state.openGroups.add(group.id);
     selectSkillbook(group, skillbook);
+  };
+  section.querySelector('.bundle-caret').addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (state.openGroups.has(group.id)) state.openGroups.delete(group.id);
+    else state.openGroups.add(group.id);
+    renderKnowledgeList();
+  });
+  // The whole head selects (no dead zones) — only the caret is carved out.
+  section.querySelector('.knowledge-bundle-head').addEventListener('click', (event) => {
+    if (event.target.closest('.bundle-caret')) return;
+    selectBundle();
   });
   const list = section.querySelector('.knowledge-bundle-items');
   list.append(renderSkillbookList(group));
@@ -1103,38 +1267,124 @@ function renderKnowledgeBundle(group) {
 function renderSkillbookList(group) {
   const block = document.createElement('div');
   block.className = 'knowledge-kind-group';
-  block.innerHTML = '<div class="knowledge-kind-title">Skillbooks</div>';
-  const skillbooks = skillbooksForGroup(group);
-  if (!skillbooks.length) {
-    const fallback = group.entries.find((entry) => entry.id === group.primaryItemId) || group.entries[0];
-    if (fallback) block.append(renderSkillbookItem(fallback, group));
-    return block;
+  const groupName = (group.title || '').trim().toLowerCase();
+  const context = skillbookContext(group);
+  // Skip skillbooks that just repeat the group name — expanding must reveal
+  // something new (the contents), not the same line you already see collapsed.
+  const skillbooks = skillbooksForGroup(group).filter(
+    (sb) => (sb.title || '').trim().toLowerCase() !== groupName,
+  );
+  const kindTitle = (label) => {
+    const el = document.createElement('div');
+    el.className = 'knowledge-kind-title';
+    el.textContent = label;
+    return el;
+  };
+  if (skillbooks.length) {
+    block.append(kindTitle('Skillbooks'));
+    for (const sb of skillbooks) block.append(renderSkillbookItem(sb, group));
   }
-  for (const skillbook of skillbooks) block.append(renderSkillbookItem(skillbook, group));
+  const runbooks = context.runbooks || [];
+  if (runbooks.length) {
+    block.append(kindTitle('Runbooks'));
+    for (const rb of runbooks) {
+      block.append(renderSubEntry(rb.title || rb.name || rb.runbook_id || rb.id, () => {
+        state.selectedGroupId = group.id;
+        state.openGroups.add(group.id);
+        state.selectedRunbookId = normaliseRunbookId(rb.id || rb.runbook_id);
+        state.activeTab = 'runbooks';
+        render();
+      }));
+    }
+  }
+  const tables = context.tables || [];
+  if (tables.length) {
+    block.append(kindTitle('Tabellen'));
+    for (const tbl of tables) {
+      block.append(renderSubEntry(tbl.title || tbl.name || tbl.id, () => {
+        state.selectedGroupId = group.id;
+        state.openGroups.add(group.id);
+        state.selectedTableId = tbl.id;
+        state.selectedId = tbl.id;
+        state.activeTab = 'data';
+        render();
+      }));
+    }
+  }
+  if (!block.children.length) {
+    const fallback = group.entries.find((entry) => entry.id === group.primaryItemId) || group.entries[0];
+    if (fallback) { block.append(kindTitle('Skillbooks')); block.append(renderSkillbookItem(fallback, group)); }
+  }
   return block;
 }
 
-function renderSkillbookItem(item, group) {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'knowledge-item knowledge-skillbook-item';
-  button.dataset.knowledgeId = item.id;
-  button.dataset.contextModule = 'knowledge';
-  button.dataset.contextRecordType = item.kind;
-  button.dataset.contextRecordId = item.id;
-  button.dataset.contextLabel = item.title || item.id;
-  button.dataset.knowledgeColumn = 'sources';
-  button.setAttribute('aria-current', String(group.id === state.selectedGroupId && item.id === selectedSkillbookForGroup(group)?.id));
-  const context = skillbookContext(group, item);
-  button.innerHTML = `
-    <strong>${escapeHtml(item.title || item.id)}</strong>
-    <small>${escapeHtml(`${context.runbooks.length} Runbooks · ${context.tables.length} Tabellen`)}</small>
+// A leaf sub-entry (a runbook or a table) inside an expanded group: a select
+// row with an edit + trash icon top-right, same grammar as the items above.
+function renderSubEntry(label, onSelect) {
+  const wrap = document.createElement('div');
+  wrap.className = 'knowledge-item knowledge-subentry';
+  wrap.innerHTML = `
+    <button class="item-select" type="button"><strong>${escapeHtml(label || '—')}</strong></button>
+    <button class="ctox-pane-icon item-edit" type="button" aria-label="Bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
   `;
-  button.addEventListener('click', () => {
-    state.openGroups.add(group.id);
-    selectSkillbook(group, item);
+  wrap.querySelector('.item-select').addEventListener('click', onSelect);
+  wrap.querySelector('.item-edit').addEventListener('click', (event) => {
+    event.stopPropagation();
+    onSelect();
+    requestAnimationFrame(() => {
+      const editBtn = state.ctx.host.querySelector('.knowledge-tab-panel:not([hidden]) [data-action="edit-markdown"], .knowledge-tab-panel:not([hidden]) [data-action="edit-runbook"]');
+      if (editBtn) editBtn.click();
+    });
   });
-  return button;
+  return wrap;
+}
+
+function renderSkillbookItem(item, group) {
+  const wrap = document.createElement('div');
+  wrap.className = 'knowledge-item knowledge-skillbook-item';
+  wrap.dataset.knowledgeId = item.id;
+  wrap.dataset.contextModule = 'knowledge';
+  wrap.dataset.contextRecordType = item.kind;
+  wrap.dataset.contextRecordId = item.id;
+  wrap.dataset.contextLabel = item.title || item.id;
+  wrap.dataset.knowledgeColumn = 'sources';
+  wrap.setAttribute('aria-current', String(group.id === state.selectedGroupId && item.id === selectedSkillbookForGroup(group)?.id));
+  const context = skillbookContext(group, item);
+  wrap.innerHTML = `
+    <button class="item-select" type="button">
+      <strong>${escapeHtml(item.title || item.id)}</strong>
+      <small>${escapeHtml(`${context.runbooks.length} Runbooks · ${context.tables.length} Tabellen`)}</small>
+    </button>
+    <button class="ctox-pane-icon item-edit" type="button" aria-label="${escapeHtml(item.title || 'Eintrag')} bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
+    <button class="ctox-pane-icon item-trash" type="button" aria-label="${escapeHtml(item.title || 'Eintrag')} löschen" title="Löschen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M10 11v6M14 11v6"/></svg></button>
+  `;
+  const openItem = () => { state.openGroups.add(group.id); selectSkillbook(group, item); };
+  wrap.querySelector('.item-select').addEventListener('click', openItem);
+  wrap.querySelector('.item-edit').addEventListener('click', (event) => {
+    event.stopPropagation();
+    openItem();
+    requestAnimationFrame(() => {
+      const editBtn = state.ctx.host.querySelector('.knowledge-tab-panel:not([hidden]) [data-action="edit-markdown"], .knowledge-tab-panel:not([hidden]) [data-action="edit-runbook"]');
+      if (editBtn) editBtn.click();
+    });
+  });
+  wrap.querySelector('.item-trash').addEventListener('click', (event) => {
+    event.stopPropagation();
+    deleteKnowledgeEntry(item, group);
+  });
+  return wrap;
+}
+
+// Deletion is destructive — always confirm. Wired to the module delete path
+// if present; otherwise it surfaces a clear message rather than silently no-op.
+function deleteKnowledgeEntry(item, group) {
+  const name = item.title || item.id;
+  if (!window.confirm(`„${name}" wirklich löschen?`)) return;
+  if (typeof requestKnowledgeDelete === 'function') {
+    requestKnowledgeDelete(item, group);
+  } else if (state.ctx?.commandBus?.dispatch) {
+    state.ctx.commandBus.dispatch({ command_type: 'knowledge.entry.delete', payload: { id: item.id } }).catch(() => {});
+  }
 }
 
 function groupEntriesByKind(entries) {
@@ -1237,9 +1487,8 @@ async function selectKnowledge(id) {
 
 function setSourceScope(scope) {
   state.sourceScope = ['system', 'user', 'all'].includes(scope) ? scope : 'user';
-  for (const button of state.ctx.host.querySelectorAll('[data-scope]')) {
-    button.setAttribute('aria-selected', String(button.dataset.scope === state.sourceScope));
-  }
+  const scopeSelect = state.ctx.host.querySelector('select[data-scope]');
+  if (scopeSelect) scopeSelect.value = state.sourceScope;
   const firstVisibleGroup = state.groups.find((group) => group.entries.some((entry) => state.sourceScope === 'all' || sourceScopeFor(entry) === state.sourceScope));
   if (firstVisibleGroup) {
     state.selectedGroupId = firstVisibleGroup.id;
@@ -1318,7 +1567,23 @@ function setActionHidden(action, hidden) {
   if (button) button.hidden = hidden;
 }
 
+// Counts on the view-switcher tabs, so you can see what a selection holds
+// before clicking a tab (Skill · Runbooks (n) · Tabellen (n)).
+function updateViewCounts() {
+  const host = state.ctx?.host;
+  if (!host) return;
+  const context = skillbookContext();
+  const set = (sel, n) => {
+    const el = host.querySelector(sel);
+    if (el) el.textContent = n ? ` ${n}` : '';
+  };
+  set('[data-count-skill]', context.skill ? 1 : 0);
+  set('[data-count-runbooks]', context.runbooks.length);
+  set('[data-count-tables]', context.tables.length);
+}
+
 async function renderActiveTab() {
+  updateViewCounts();
   if (!hasKnowledgeSelection() && state.activeTab !== 'skill') {
     state.activeTab = 'skill';
     renderEmptyKnowledgeSelection();
@@ -1480,7 +1745,14 @@ async function renderTable() {
     return;
   }
   try {
-    const localRows = localDataFrameRows(tableSource);
+    const completeness = dataFrameCompleteness(tableSource);
+    if (!completeness.complete) {
+      els.tableTitle.textContent = schemaTitleForTable(tableSource);
+      els.tableMeta.textContent = `${copy.dataIncomplete} · ${completeness.reason}`;
+      els.tableHost.innerHTML = `<div class="ctox-empty knowledge-error" role="alert"><strong>${escapeHtml(copy.dataIncomplete)}</strong><span>${escapeHtml(copy.dataIncompleteHint)}</span><span>${escapeHtml(completeness.reason)}</span></div>`;
+      return;
+    }
+    const localRows = completeness.rows;
     const schema = localDataFrameSchema(tableSource);
     const rows = localRows.length
       ? {
@@ -1496,6 +1768,10 @@ async function renderTable() {
   } catch (error) {
     els.tableHost.innerHTML = `<div class="ctox-empty knowledge-error"><strong>DataFrame konnte nicht geladen werden</strong><span>${escapeHtml(error.message || String(error))}</span></div>`;
   }
+}
+
+function schemaTitleForTable(table) {
+  return table?.title || table?.payload?.title || 'DataFrame';
 }
 
 function activeTableId() {
@@ -2208,7 +2484,8 @@ function handleShellMessage(event) {
 }
 
 function localDataFrameSchema(item) {
-  const rows = localDataFrameRows(item);
+  const completeness = dataFrameCompleteness(item);
+  const rows = completeness.rows;
   const rawColumns = firstArray(
     item?.columns,
     item?.schema?.columns,
@@ -2221,11 +2498,17 @@ function localDataFrameSchema(item) {
   return {
     title: item?.title || item?.payload?.title || 'DataFrame',
     columns,
-    row_count: Number(item?.row_count ?? item?.payload?.row_count ?? rows.length),
+    row_count: Number(completeness.expectedRows ?? item?.row_count ?? item?.payload?.row_count ?? rows.length),
+    complete: completeness.complete,
+    completeness,
   };
 }
 
 function localDataFrameRows(item) {
+  return dataFrameCompleteness(item).rows;
+}
+
+function rawDataFrameRows(item) {
   const rows = firstArray(
     item?.rows,
     item?.records,
@@ -2237,6 +2520,236 @@ function localDataFrameRows(item) {
     item?.payload?.dataframe?.rows,
   );
   return rows.map((row) => row && typeof row === 'object' ? row : { value: row });
+}
+
+function dataFrameCompleteness(item) {
+  const chunks = dataframeChunks(item);
+  const rootRowsComplete = explicitRowsComplete(item);
+  if (!chunks && rootRowsComplete !== undefined && rootRowsComplete !== true) {
+    return incompleteDataFrame(rootRowsComplete === false ? 'rows_complete=false' : 'invalid rows_complete');
+  }
+  if (!chunks) {
+    const rows = rawDataFrameRows(item);
+    return {
+      complete: true,
+      rows,
+      expectedRows: rows.length,
+      actualRows: rows.length,
+      chunkCount: 1,
+      reason: '',
+    };
+  }
+  return validateKnowledgeTableChunks(chunks, item);
+}
+
+function dataframeChunks(item) {
+  const explicitChunks = [
+    item?.chunks,
+    item?.payload?.chunks,
+    item?.dataframe?.chunks,
+    item?.payload?.dataframe?.chunks,
+  ].find(Array.isArray);
+  if (explicitChunks) return explicitChunks;
+  if (hasChunkMetadata(item)) return [item];
+  return null;
+}
+
+function hasChunkMetadata(record) {
+  return [
+    'chunk_index',
+    'chunk_count',
+    'row_offset',
+    'rows_offset',
+    'rows_complete',
+  ].some((key) => firstPresentValue(record, [key]) !== undefined);
+}
+
+function validateKnowledgeTableChunks(chunks, table = {}) {
+  const records = Array.isArray(chunks) ? chunks : [];
+  const metadataRecords = [table, ...records].filter((record) => record && typeof record === 'object');
+  if (!records.length) return incompleteDataFrame('no chunks');
+
+  const chunkCountCandidates = metadataRecords.flatMap((record) => numericFieldValues(record, ['chunk_count']));
+  if (chunkCountCandidates.some((value) => !Number.isFinite(value))) {
+    return incompleteDataFrame('invalid chunk_count');
+  }
+  const chunkCountValues = uniqueNumbers(chunkCountCandidates);
+  if (chunkCountValues.length !== 1 || chunkCountValues[0] < 1) {
+    return incompleteDataFrame('inconsistent chunk_count');
+  }
+  const expectedChunkCount = chunkCountValues[0];
+  if (expectedChunkCount !== records.length) {
+    return incompleteDataFrame(`chunk_count=${expectedChunkCount}, received=${records.length}`);
+  }
+
+  const normalized = records.map((record, position) => {
+    const rows = rawDataFrameRows(record);
+    if (['chunk_index', 'row_offset', 'rows_offset', 'row_start', 'start_row', 'start_offset', 'offset', 'chunk_row_count', 'rows_count', 'row_count_in_chunk', 'row_count']
+      .some((key) => numericFieldValues(record, [key]).length > 1 && new Set(numericFieldValues(record, [key])).size > 1)) {
+      return { record, position, invalidMetadata: true, rows };
+    }
+    return {
+      record,
+      position,
+      index: numericField(record, ['chunk_index']),
+      offset: numericField(record, ['row_offset', 'rows_offset', 'row_start', 'start_row', 'start_offset', 'offset']),
+      rowCount: numericField(record, ['chunk_row_count', 'rows_count', 'row_count_in_chunk']),
+      rows,
+      rowsComplete: explicitRowsComplete(record),
+    };
+  });
+
+  if (normalized.some((chunk) => chunk.invalidMetadata)) {
+    return incompleteDataFrame('conflicting chunk metadata');
+  }
+
+  if (normalized.some((chunk) => !Number.isInteger(chunk.index) || chunk.index < 0)) {
+    return incompleteDataFrame('invalid chunk_index');
+  }
+  if (new Set(normalized.map((chunk) => chunk.index)).size !== normalized.length) {
+    return incompleteDataFrame('duplicate chunk_index');
+  }
+  const sorted = [...normalized].sort((left, right) => left.index - right.index);
+  if (sorted.some((chunk, index) => chunk.index !== index)) {
+    return incompleteDataFrame('non-contiguous chunk_index');
+  }
+  if (sorted.some((chunk) => !Number.isInteger(chunk.offset) || chunk.offset < 0)) {
+    return incompleteDataFrame('missing or invalid row offset');
+  }
+  if (sorted.some((chunk) => chunk.rowCount != null && chunk.rowCount !== chunk.rows.length)) {
+    return incompleteDataFrame('chunk row total mismatch');
+  }
+  const rowsCompleteValues = metadataRecords.flatMap((record) => explicitRowsCompleteValues(record));
+  if (rowsCompleteValues.some((value) => value !== true && value !== false)) {
+    return incompleteDataFrame('invalid rows_complete');
+  }
+  if (rowsCompleteValues.some((value) => value === false)) {
+    return incompleteDataFrame('rows_complete=false');
+  }
+
+  const totalCandidates = [];
+  for (const key of ['rows_total', 'total_rows', 'total_row_count', 'expected_row_count']) {
+    for (const record of metadataRecords) {
+      totalCandidates.push(...numericFieldValues(record, [key]));
+    }
+  }
+  totalCandidates.push(...numericFieldValues(table, ['row_count']));
+  if (!totalCandidates.length) {
+    const chunkRowCounts = records.map((record) => numericField(record, ['row_count']));
+    if (chunkRowCounts.every((value) => value != null && value === chunkRowCounts[0])) {
+      totalCandidates.push(chunkRowCounts[0]);
+    }
+  }
+  const uniqueTotals = uniqueNumbers(totalCandidates);
+  if (totalCandidates.some((value) => !Number.isFinite(value)) || uniqueTotals.length !== 1 || uniqueTotals[0] < 0) {
+    return incompleteDataFrame('inconsistent or missing row total');
+  }
+  const expectedRows = uniqueTotals[0];
+
+  const chunkRowCountValues = records.map((record) => numericFieldValues(record, ['row_count']));
+  const presentChunkRowCounts = chunkRowCountValues.filter((values) => values.length);
+  if (presentChunkRowCounts.length && presentChunkRowCounts.length !== records.length) {
+    return incompleteDataFrame('missing chunk row_count');
+  }
+  if (presentChunkRowCounts.length === records.length) {
+    const rowCounts = sorted.map((chunk) => numericFieldValues(chunk.record, ['row_count'])[0]);
+    const countsAreTotal = rowCounts.every((value) => value === expectedRows);
+    const countsAreChunkSizes = rowCounts.every((value, index) => value === sorted[index].rows.length);
+    if (rowCounts.some((value) => !Number.isFinite(value)) || (!countsAreTotal && !countsAreChunkSizes)) {
+      return incompleteDataFrame('chunk row_count mismatch');
+    }
+  }
+
+  let nextOffset = 0;
+  for (const chunk of sorted) {
+    if (chunk.offset !== nextOffset) return incompleteDataFrame('row offsets contain a gap or overlap');
+    nextOffset += chunk.rows.length;
+  }
+  if (nextOffset !== expectedRows) {
+    return incompleteDataFrame(`row total=${expectedRows}, assembled=${nextOffset}`);
+  }
+
+  return {
+    complete: true,
+    rows: sorted.flatMap((chunk) => chunk.rows),
+    expectedRows,
+    actualRows: nextOffset,
+    chunkCount: expectedChunkCount,
+    reason: '',
+  };
+}
+
+function incompleteDataFrame(reason) {
+  return {
+    complete: false,
+    rows: [],
+    expectedRows: null,
+    actualRows: 0,
+    chunkCount: 0,
+    reason: String(reason || 'unknown chunk error'),
+  };
+}
+
+function explicitRowsComplete(record) {
+  const value = explicitRowsCompleteValues(record)[0];
+  if (value === undefined || value === null || value === '') return undefined;
+  return value;
+}
+
+function explicitRowsCompleteValues(record) {
+  return rawFieldValues(record, ['rows_complete']).map((value) => {
+    if (value === true || value === false) return value;
+    if (typeof value === 'string' && value.trim().toLowerCase() === 'true') return true;
+    if (typeof value === 'string' && value.trim().toLowerCase() === 'false') return false;
+    return value;
+  });
+}
+
+function numericField(record, keys) {
+  const value = numericFieldValues(record, keys)[0];
+  if (value === undefined || value === null || value === '') return null;
+  return Number.isFinite(value) ? value : null;
+}
+
+function numericFieldValues(record, keys) {
+  return rawFieldValues(record, keys).map((value) => Number(value));
+}
+
+function rawFieldValues(record, keys) {
+  const payload = record?.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload
+    : null;
+  const nested = record?.dataframe && typeof record.dataframe === 'object' && !Array.isArray(record.dataframe)
+    ? record.dataframe
+    : null;
+  const containers = [record, payload, nested].filter(Boolean);
+  return keys.flatMap((key) => containers
+    .filter((container) => valuePresent(container, key))
+    .map((container) => container[key])
+    .filter((value) => value !== undefined && value !== null && value !== ''));
+}
+
+function firstPresentValue(record, keys) {
+  const payload = record?.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload
+    : null;
+  const nested = record?.dataframe && typeof record.dataframe === 'object' && !Array.isArray(record.dataframe)
+    ? record.dataframe
+    : null;
+  for (const key of keys) {
+    if (valuePresent(record, key)) return record[key];
+    if (valuePresent(payload, key)) return payload[key];
+    if (valuePresent(nested, key)) return nested[key];
+  }
+  return undefined;
+}
+
+function valuePresent(record, key) {
+  return Boolean(record && Object.prototype.hasOwnProperty.call(record, key));
+}
+
+function uniqueNumbers(values) {
+  return [...new Set(values.filter((value) => Number.isFinite(value)))];
 }
 
 function firstArray(...values) {
@@ -2690,7 +3203,9 @@ function exportActiveTableCsv() {
   const tableRecord = tableForItem(item || { id: tableId }, state.tables);
   const tableSource = mergeKnowledgeTableData(item, tableRecord);
   if (!tableSource?.has_table) return;
-  const rows = localDataFrameRows(tableSource);
+  const completeness = dataFrameCompleteness(tableSource);
+  if (!completeness.complete) return;
+  const rows = completeness.rows;
   const schema = localDataFrameSchema(tableSource);
   const csv = dataframeToCsv(schema.columns || [], rows);
   downloadTextFile(
@@ -2749,6 +3264,9 @@ export const __knowledgeTestHooks = {
   knowledgeItemsFromTables,
   knowledgeGroupMatchesDomain,
   knowledgeEmptyStateMessage,
+  runCoalescedRefresh,
+  validateKnowledgeTableChunks,
+  dataFrameCompleteness,
   localDataFrameRows,
   localDataFrameSchema,
   mergeKnowledgeTableData,

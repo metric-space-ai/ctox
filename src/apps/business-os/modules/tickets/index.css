@@ -1,87 +1,84 @@
+/* Migration to the shared design system: the frame (.ctox-workspace +
+   [data-resize-frame] with declarative .ctox-column-resizer handles), panes
+   (.ctox-pane), pane headers/bands/kicker/title, search and filter select
+   (.ctox-pane-search/.ctox-pane-filter), list rows (.ctox-list/.ctox-list-item
+   with .is-selected), inspector cards (.ctox-card/.ctox-card-body), key/value
+   fields (.ctox-fields), status badges (.ctox-badge + is-* variants), buttons
+   (.ctox-button) and empty states (.ctox-empty) all come from shared/base.css
+   + app.css. This file only keeps what is tickets-specific: row/card content
+   composition, the event timeline, prose bodies, the action row layout, the
+   command status line, the collapsible controls column, and the stacked
+   narrow-viewport layout. */
+
+/* Controls/context column is collapsible and hidden by default so the ticket
+   timeline gets the full width; the left-pane header toggle re-reveals it on
+   demand. Mirrors the threads module's pattern. */
+.tickets-module.is-actions-hidden {
+  grid-template-columns: var(--ctox-left-width, 340px) 12px minmax(0, 1fr);
+}
+
+.tickets-module.is-actions-hidden .tickets-right,
+.tickets-module.is-actions-hidden > [data-resizer="right"] {
+  display: none;
+}
+
+.tickets-module > [data-toggle-actions][aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Standard width defaults for the declarative resizers — the shell writes
+   inline --ctox-*-width onto the frame element while dragging. */
 .tickets-module {
-  --tickets-left-width: 340px;
-  --tickets-right-width: 360px;
-  /* Module palette = aliases of the shell tokens (app.css owns light/dark). */
-  --tickets-bg: var(--bg);
-  --tickets-surface: var(--surface);
-  --tickets-surface-2: var(--surface-2);
-  --tickets-border: var(--line);
-  --tickets-text: var(--text);
-  --tickets-muted: var(--muted);
-  --tickets-accent: var(--accent);
-  display: grid;
-  grid-template-columns: var(--tickets-left-width) 6px minmax(420px, 1fr) 6px var(--tickets-right-width);
-  height: 100%;
-  min-height: 0;
-  background: var(--tickets-bg);
-  color: var(--tickets-text);
+  --ctox-left-width: 340px;
+  --ctox-right-width: 360px;
 }
 
-.tickets-pane {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  border-color: var(--tickets-border);
-  background: var(--tickets-surface);
+/* Empty/loading states are injected as a pane's only child: span both pane
+   grid rows so .ctox-empty fills the whole column. */
+.tickets-pane > .ctox-empty {
+  grid-row: 1 / -1;
 }
 
-.tickets-left,
-.tickets-center {
-  border-right: 1px solid var(--tickets-border);
-}
-
-.tickets-right {
-  border-left: 1px solid var(--tickets-border);
-}
-
-.tickets-list,
+/* Detail/context scrollers stack sections and cards vertically. */
 .tickets-detail-scroll,
 .tickets-context-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-}
-
-.tickets-pane > .tickets-empty {
-  flex: 1 1 auto;
-}
-
-.tickets-list {
-  padding: 8px;
-}
-
-.tickets-detail-scroll {
-  padding: 16px 20px 28px;
-}
-
-.tickets-context-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   padding: 12px;
 }
 
-.ticket-row {
+.tickets-section {
   display: grid;
   gap: 6px;
-  width: 100%;
-  min-height: 92px;
-  margin: 0 0 6px;
-  padding: 10px;
-  border: 1px solid transparent;
-  border-radius: var(--control-radius);
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
+  align-content: start;
 }
 
-.ticket-row:hover,
-.ticket-row.is-selected {
-  border-color: color-mix(in srgb, var(--tickets-accent) 34%, transparent);
-  background: color-mix(in srgb, var(--tickets-accent) 10%, transparent);
+/* Section headings use the kit .ctox-field-label look on an h3 — reset the
+   UA heading margins so the grid gap alone controls spacing. */
+.tickets-section > h3 {
+  margin: 0;
+}
+
+/* custom: ticket-row content (source/status meta line, title, subtitle)
+   inside kit .ctox-list-item rows — padding, hover and the selected accent
+   bar come from the kit. */
+.ticket-row {
+  display: grid;
+  gap: 4px;
+}
+
+.ticket-row-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .ticket-row strong,
-.tickets-context-item strong {
+.tickets-context-item-title {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -91,49 +88,21 @@
 }
 
 .ticket-row small,
-.tickets-context-item small,
-.ticket-row-meta {
+.tickets-context-item-meta {
+  display: block;
   overflow: hidden;
-  color: var(--tickets-muted);
+  color: var(--muted);
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
 }
 
-.ticket-row-meta {
-  display: flex;
-  gap: 8px;
-  justify-content: space-between;
+.tickets-context-item-meta {
+  margin: 2px 0 6px;
 }
 
-.tickets-context-item span {
-  color: var(--tickets-muted);
-  font-size: 12px;
-}
-
-.tickets-section {
-  display: grid;
-  gap: 10px;
-  margin-bottom: 18px;
-}
-
-.tickets-section h3 {
-  margin: 0;
-  color: var(--tickets-muted);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
-.tickets-body {
-  max-width: 78ch;
-  margin: 0;
-  white-space: pre-wrap;
-  font-size: 13px;
-  line-height: 1.55;
-}
-
+/* custom: event timeline — chronological entries with pre-wrap bodies; the
+   kit has no timeline pattern. */
 .ticket-timeline {
   display: grid;
   gap: 8px;
@@ -142,44 +111,68 @@
   list-style: none;
 }
 
-.ticket-timeline li,
-.tickets-context-item {
+.ticket-timeline li {
   display: grid;
   gap: 5px;
   min-width: 0;
   padding: 10px;
-  border: 1px solid var(--tickets-border);
+  border: 1px solid var(--hairline, var(--line));
   border-radius: var(--control-radius);
-  background: var(--tickets-surface-2);
+  background: var(--surface);
+}
+
+.ticket-timeline li > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ticket-timeline strong {
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
+.ticket-timeline small {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .ticket-timeline p {
   margin: 4px 0 0;
-  color: var(--tickets-text);
   white-space: pre-wrap;
   font-size: 12px;
   line-height: 1.45;
+}
+
+/* custom: prose bodies (ticket description, clarification answers) — long
+   pre-wrap text, no kit equivalent. */
+.tickets-body {
+  max-width: 78ch;
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  font-size: 12.5px;
+  line-height: 1.55;
 }
 
 .tickets-note {
-  margin: 2px 0 0;
-  color: var(--tickets-text);
+  margin: 6px 0 0;
   white-space: pre-wrap;
   font-size: 12px;
   line-height: 1.45;
 }
 
-.tickets-context-item {
-  margin-bottom: 8px;
+/* Action rows hold kit .ctox-button controls; only the wrap layout is local. */
+.tickets-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
 }
 
-.tickets-context-item.is-compact {
-  padding: 8px;
-}
-
+/* Command feedback line under the left pane tools ([data-state] is a JS
+   hook: module JS toggles data-state="error"). */
 .tickets-command-status {
   margin: 8px 0 0;
-  color: var(--tickets-muted);
+  color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
 }
@@ -188,48 +181,17 @@
   color: var(--danger);
 }
 
-.tickets-action-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 4px;
+/* Inline "no entries" line inside cards/sections — pane-level empty states
+   use the kit .ctox-empty instead. */
+.tickets-inline-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 
-.tickets-empty {
-  display: grid;
-  gap: 6px;
-  padding: 14px;
-  color: var(--tickets-muted);
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.tickets-empty strong {
-  color: var(--tickets-text);
-  font-size: 13px;
-}
-
-.tickets-empty span {
-  display: block;
-  max-width: 46ch;
-}
-
-.tickets-empty.is-centered {
-  min-height: 100%;
-  align-content: center;
-  justify-items: center;
-  text-align: center;
-}
-
-.tickets-empty.is-context {
-  padding: 18px 14px;
-}
-
-.tickets-empty.is-loading {
-  min-height: 96px;
-  align-content: center;
-}
-
+/* custom: narrow windows stack the three panes vertically (earlier than the
+   kit's 760px collapse, because ticket triage needs all three columns
+   readable without horizontal squeezing). */
 @container business-app-window (max-width: 1160px) {
   .tickets-module {
     grid-template-columns: minmax(0, 1fr);
@@ -237,6 +199,7 @@
     height: auto;
     min-height: 100%;
     overflow-y: auto;
+    gap: 8px;
   }
 
   .tickets-module > [data-resizer] {
@@ -246,29 +209,12 @@
   .tickets-left,
   .tickets-center,
   .tickets-right {
-    display: flex !important;
     min-height: 220px;
-    border-right: 0;
-    border-left: 0;
-    border-bottom: 1px solid var(--tickets-border);
   }
 }
 
 @container business-app-window (max-width: 640px) {
   .tickets-module {
     grid-template-rows: minmax(220px, 38vh) minmax(380px, 1fr) minmax(240px, 42vh);
-  }
-
-  .tickets-left,
-  .tickets-center {
-    border-right: 0;
-  }
-
-  .tickets-left {
-    border-bottom: 1px solid var(--tickets-border);
-  }
-
-  .tickets-detail-scroll {
-    padding: 12px 14px 20px;
   }
 }

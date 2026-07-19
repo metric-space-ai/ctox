@@ -334,10 +334,11 @@ export async function mount(ctx) {
   });
 
   wireEvents();
-  
-  // Setup column resizing logic
-  const resizerCleanup = setupResizers(ctx.host);
-  
+
+  // Column resizing is shell-owned: the .ctox-column-resizer[data-resizer-var]
+  // handles inside [data-resize-frame] are wired by the shell (app.js
+  // setupModuleResizers), including width persistence.
+
   // Setup App Lock on startup if cached as locked
   const cachePrefix = state.ctx.module?.id === 'notizen' ? 'ctox.notizen' : 'ctox.notes';
   if (localStorage.getItem(`${cachePrefix}.appLocked`) === 'true') {
@@ -394,8 +395,7 @@ export async function mount(ctx) {
     state.contextMenu?.remove();
     state.contextMenu = null;
     state.ctx.host?.querySelector('.nn-action-toast')?.remove();
-    
-    resizerCleanup();
+
     unbindEvents();
     
     // Clean up stylesheet
@@ -451,6 +451,8 @@ function bindElements(host) {
   els.lockNoteBtn = host.querySelector('[data-action="lock-note"]');
   els.deleteBtn = host.querySelector('[data-action="delete-note"]');
   els.createNoteBtn = host.querySelector('[data-action="create-note"]');
+  els.noteMetaMenu = host.querySelector('[data-note-meta-menu]');
+  els.noteMetaMenuToggle = host.querySelector('[data-action="toggle-note-meta"]');
   
   // Editor Lock Screen
   els.noteLockScreen = host.querySelector('[data-note-lock-screen]');
@@ -511,9 +513,16 @@ function wireEvents() {
   els.tagsSelectBtn?.addEventListener('click', handleTagsSelectBtnClick);
   
   els.starBtn?.addEventListener('click', handleStarNoteClick);
-  els.lockNoteBtn?.addEventListener('click', handleLockNoteClick);
-  els.deleteBtn?.addEventListener('click', handleDeleteNote);
+  els.lockNoteBtn?.addEventListener('click', () => {
+    handleLockNoteClick();
+    closeAllDropdowns();
+  });
+  els.deleteBtn?.addEventListener('click', () => {
+    handleDeleteNote();
+    closeAllDropdowns();
+  });
   els.createNoteBtn?.addEventListener('click', handleCreateNote);
+  els.noteMetaMenuToggle?.addEventListener('click', handleNoteMetaMenuToggle);
   
   // Decrypt locked notes click/keypress handlers
   els.decryptNoteBtn?.addEventListener('click', handleDecryptNoteClick);
@@ -737,7 +746,7 @@ function renderSidebar() {
   els.folderList?.querySelectorAll('[data-nav-category]').forEach(el => {
     const category = el.getAttribute('data-nav-category');
     const active = state.activeCategory === category && !state.activeNotebook && !state.activeTag;
-    el.classList.toggle('active', active);
+    el.classList.toggle('is-selected', active);
     
     // Set Count Badge
     const countEl = el.querySelector('.notes-folder-count');
@@ -759,7 +768,7 @@ function renderSidebar() {
       const active = state.activeNotebook === nb && !state.activeCategory && !state.activeTag;
       const count = state.notes.filter(n => n.notebook === nb && !n.is_trashed).length;
       html += `
-        <div class="notes-folder-item ${active ? 'active' : ''}" data-nav-notebook="${escapeHtml(nb)}">
+        <div class="ctox-list-item notes-folder-item ${active ? 'is-selected' : ''}" data-nav-notebook="${escapeHtml(nb)}">
           <div class="notes-folder-item-left">
             <svg class="notes-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
@@ -767,7 +776,7 @@ function renderSidebar() {
             </svg>
             <span class="notes-folder-name">${escapeHtml(nb)}</span>
           </div>
-          <span class="notes-folder-count">${count}</span>
+          <span class="ctox-badge notes-folder-count">${count}</span>
         </div>
       `;
     });
@@ -798,12 +807,12 @@ function renderSidebar() {
         return (n.tags || '').split(',').map(x => x.trim()).includes(tg) && !n.is_trashed;
       }).length;
       html += `
-        <div class="notes-folder-item ${active ? 'active' : ''}" data-nav-tag="${escapeHtml(tg)}">
+        <div class="ctox-list-item notes-folder-item ${active ? 'is-selected' : ''}" data-nav-tag="${escapeHtml(tg)}">
           <div class="notes-folder-item-left">
             ${state.ctx?.getActionIcon?.('tag') || ''}
             <span class="notes-folder-name">${escapeHtml(tg)}</span>
           </div>
-          <span class="notes-folder-count">${count}</span>
+          <span class="ctox-badge notes-folder-count">${count}</span>
         </div>
       `;
     });
@@ -993,16 +1002,16 @@ function renderNotesList() {
     
     let badgesHtml = '';
     if (note.notebook) {
-      badgesHtml += `<span class="nn-card-badge notebook-badge">📁 ${escapeHtml(note.notebook)}</span>`;
+      badgesHtml += `<span class="ctox-badge">📁 ${escapeHtml(note.notebook)}</span>`;
     }
     if (note.tags) {
       (note.tags || '').split(',').map(x => x.trim()).filter(Boolean).forEach(tg => {
-        badgesHtml += `<span class="nn-card-badge tag-badge">#${escapeHtml(tg)}</span>`;
+        badgesHtml += `<span class="ctox-badge is-info">#${escapeHtml(tg)}</span>`;
       });
     }
-    
+
     return `
-      <div class="notes-card ${active ? 'active' : ''}" data-note-id="${escapeHtml(note.id)}" data-context-record-id="${escapeHtml(note.id)}" data-context-record-type="note" data-context-label="${escapeHtml(note.title || note.id)}">
+      <div class="ctox-list-item notes-card ${active ? 'is-selected' : ''}" data-note-id="${escapeHtml(note.id)}" data-context-record-id="${escapeHtml(note.id)}" data-context-record-type="note" data-context-label="${escapeHtml(note.title || note.id)}">
         <div class="nn-card-row">
           <div class="notes-card-title">${escapeHtml(note.title || state.t('untitled'))}</div>
           <div class="nn-card-icons">
@@ -1077,16 +1086,16 @@ function renderEditor() {
     if (els.editor) els.editor.innerHTML = '';
     if (els.words) els.words.textContent = `0 ${state.t('words')}`;
     if (els.chars) els.chars.textContent = `0 ${state.t('chars')}`;
-    els.starBtn?.classList.remove('active');
-    els.lockNoteBtn?.classList.remove('active');
+    els.starBtn?.classList.remove('is-active');
+    els.lockNoteBtn?.classList.remove('is-active');
     els.noteLockScreen?.setAttribute('hidden', '');
     setToolbarDisabled(true, 'Keine Notiz ausgewählt');
     return;
   }
-  
+
   // Update Star & Lock buttons active styling
-  els.starBtn?.classList.toggle('active', !!note.is_favorite);
-  els.lockNoteBtn?.classList.toggle('active', !!note.is_locked);
+  els.starBtn?.classList.toggle('is-active', !!note.is_favorite);
+  els.lockNoteBtn?.classList.toggle('is-active', !!note.is_locked);
   
   // Update Notebook selector labels
   els.noteNotebookLabel.textContent = note.notebook || 'Kein Notizbuch';
@@ -1094,11 +1103,11 @@ function renderEditor() {
   // Update badges container
   let badgesHtml = '';
   if (note.notebook) {
-    badgesHtml += `<span class="nn-card-badge notebook-badge">📁 ${escapeHtml(note.notebook)}</span>`;
+    badgesHtml += `<span class="ctox-badge">📁 ${escapeHtml(note.notebook)}</span>`;
   }
   if (note.tags) {
     (note.tags || '').split(',').map(x => x.trim()).filter(Boolean).forEach(tg => {
-      badgesHtml += `<span class="nn-card-badge tag-badge">#${escapeHtml(tg)}</span>`;
+      badgesHtml += `<span class="ctox-badge is-info">#${escapeHtml(tg)}</span>`;
     });
   }
   // Presence hint: other users with this note open right now.
@@ -1110,7 +1119,7 @@ function renderEditor() {
     && entry.actorId !== ownActorId);
   if (presencePeers.length) {
     const names = [...new Set(presencePeers.map((entry) => entry.actorName || entry.actorId))].join(', ');
-    badgesHtml += `<span class="nn-card-badge presence-badge">✎ ${escapeHtml(names)} ${escapeHtml(state.t('presenceEditing', 'bearbeitet gerade'))}</span>`;
+    badgesHtml += `<span class="ctox-badge is-warning">✎ ${escapeHtml(names)} ${escapeHtml(state.t('presenceEditing', 'bearbeitet gerade'))}</span>`;
   }
   if (els.noteBadgesContainer) {
     els.noteBadgesContainer.innerHTML = badgesHtml;
@@ -1122,11 +1131,10 @@ function renderEditor() {
   // Show Restore banner if trashed
   if (note.is_trashed && els.editorWorkspace) {
     const banner = document.createElement('div');
-    banner.className = 'nn-restore-banner';
-    banner.style.cssText = 'background: var(--accent-soft); border-bottom: 1px solid var(--line); padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; color: var(--accent); margin-bottom: 10px; border-radius: 4px;';
+    banner.className = 'ctox-callout nn-restore-banner';
     banner.innerHTML = `
       <span>⚠️ Diese Notiz ist im Papierkorb.</span>
-      <button type="button" data-action="restore-note" style="background: var(--accent); color: var(--surface); border: 0; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600;">Wiederherstellen</button>
+      <button type="button" class="ctox-button ctox-button--sm is-primary" data-action="restore-note">Wiederherstellen</button>
     `;
     els.editorWorkspace.prepend(banner);
     banner.querySelector('[data-action="restore-note"]')?.addEventListener('click', handleRestoreNoteClick);
@@ -1134,12 +1142,12 @@ function renderEditor() {
 
   if (note[DRAFT_NOTE_MARKER] && els.editorWorkspace) {
     const banner = document.createElement('div');
-    banner.className = 'nn-draft-banner';
+    banner.className = 'ctox-callout nn-draft-banner';
     banner.innerHTML = `
       <span>${escapeHtml(state.t('draftStatus'))}</span>
       <div class="nn-banner-actions">
-        <button type="button" data-action="save-draft-note">${escapeHtml(state.t('save', 'Speichern'))}</button>
-        <button type="button" data-action="discard-draft-note">${escapeHtml(state.t('discard', 'Verwerfen'))}</button>
+        <button type="button" class="ctox-button ctox-button--sm is-primary" data-action="save-draft-note">${escapeHtml(state.t('save', 'Speichern'))}</button>
+        <button type="button" class="ctox-button ctox-button--sm" data-action="discard-draft-note">${escapeHtml(state.t('discard', 'Verwerfen'))}</button>
       </div>
     `;
     els.editorWorkspace.prepend(banner);
@@ -1697,11 +1705,10 @@ async function handleDecryptNoteClick() {
   } catch (error) {
     console.error('Decryption failed', error);
     if (els.notePasscodeInput) {
-      els.notePasscodeInput.style.borderColor = 'var(--danger)';
-      els.notePasscodeInput.style.boxShadow = '0 0 0 3px color-mix(in srgb, var(--danger) 20%, transparent)';
+      // Kit-native invalid state (.ctox-input[aria-invalid]) instead of inline styles.
+      els.notePasscodeInput.setAttribute('aria-invalid', 'true');
       setTimeout(() => {
-        els.notePasscodeInput.style.borderColor = '';
-        els.notePasscodeInput.style.boxShadow = '';
+        els.notePasscodeInput?.removeAttribute('aria-invalid');
       }, 800);
     }
   }
@@ -1854,19 +1861,19 @@ function handleTagsSelectBtnClick(e) {
     
     if (state.tags.length === 0) {
       els.tagsDropdown.innerHTML = `
-        <div style="padding: 10px 14px; font-size:11.5px; color: var(--nn-text-muted);">
+        <div class="nn-dropdown-empty">
           Keine Tags erstellt
         </div>
       `;
       return;
     }
-    
+
     let html = '';
     state.tags.forEach(tg => {
       const isChecked = assignedTags.includes(tg);
       html += `
-        <label class="nn-dropdown-item" style="cursor:pointer; display:flex; align-items:center; gap:8px;">
-          <input type="checkbox" data-note-tag-check="${escapeHtml(tg)}" ${isChecked ? 'checked' : ''} style="accent-color: var(--nn-accent);" />
+        <label class="nn-tag-select-item">
+          <input type="checkbox" data-note-tag-check="${escapeHtml(tg)}" ${isChecked ? 'checked' : ''} />
           <span>🏷️ ${escapeHtml(tg)}</span>
         </label>
       `;
@@ -2183,10 +2190,11 @@ function handleTimestampBtnClick() {
 }
 
 function handleGlobalClick(e) {
-  if (e.target.closest('.nn-meta-select-wrap') || 
-      e.target.closest('.nn-format-wrapper') || 
-      e.target.closest('.nn-filter-trigger') || 
-      e.target.closest('[data-action="toggle-filter"]')) {
+  if (e.target.closest('.nn-meta-select-wrap') ||
+      e.target.closest('.nn-format-wrapper') ||
+      e.target.closest('.nn-filter-trigger') ||
+      e.target.closest('[data-action="toggle-filter"]') ||
+      e.target.closest('[data-action="toggle-note-meta"]')) {
     return;
   }
   closeAllDropdowns();
@@ -2212,6 +2220,17 @@ function closeAllDropdowns() {
   if (els.filterPopover) els.filterPopover.hidden = true;
   if (els.headersDropdown) els.headersDropdown.hidden = true;
   if (els.calloutsDropdown) els.calloutsDropdown.hidden = true;
+  if (els.noteMetaMenu) els.noteMetaMenu.hidden = true;
+  if (els.noteMetaMenuToggle) els.noteMetaMenuToggle.setAttribute('aria-expanded', 'false');
+}
+
+function handleNoteMetaMenuToggle(e) {
+  e.stopPropagation();
+  if (!els.noteMetaMenu) return;
+  const wasHidden = els.noteMetaMenu.hidden;
+  closeAllDropdowns();
+  els.noteMetaMenu.hidden = !wasHidden;
+  els.noteMetaMenuToggle?.setAttribute('aria-expanded', wasHidden ? 'true' : 'false');
 }
 
 function showActionToast(message, actionLabel = '', onAction = null) {
@@ -2228,6 +2247,7 @@ function showActionToast(message, actionLabel = '', onAction = null) {
   if (actionLabel && typeof onAction === 'function') {
     const action = document.createElement('button');
     action.type = 'button';
+    action.className = 'ctox-button ctox-button--sm';
     action.textContent = actionLabel;
     action.addEventListener('click', async () => {
       try {
@@ -2656,120 +2676,6 @@ function escapeHtml(value) {
     '"': '&quot;',
     "'": '&#39;',
   })[char]);
-}
-
-function setupResizers(host) {
-  const leftResizer = host.querySelector('[data-resizer="left"]');
-  const rightResizer = host.querySelector('[data-resizer="right"]');
-  const containerEl = host.querySelector('[data-notes-root]') || host;
-  const leftPane = host.querySelector('.notes-sidebar-pane');
-  const listPane = host.querySelector('.notes-list-pane');
-  
-  const cleanups = [];
-  const cachePrefix = getCachePrefix();
-
-  const attachLocalResizer = ({ handle, pane, cssVar, storageKey, minWidth, maxWidth }) => {
-    if (!handle || !pane) return null;
-
-    let startX = 0;
-    let startWidth = 0;
-    let raf = 0;
-
-    const clamp = (width) => Math.max(minWidth, Math.min(maxWidth, width));
-    const setWidth = (width) => {
-      const next = clamp(width);
-      containerEl.style.setProperty(cssVar, `${next}px`);
-      handle.setAttribute('aria-valuenow', String(Math.round(next)));
-      handle.setAttribute('aria-valuetext', `${Math.round(next)} px`);
-      localStorage.setItem(storageKey, String(Math.round(next)));
-      return next;
-    };
-    const currentWidth = () => {
-      const raw = window.getComputedStyle(containerEl).getPropertyValue(cssVar);
-      const parsed = parseFloat(raw);
-      return clamp(Number.isFinite(parsed) ? parsed : pane.getBoundingClientRect().width);
-    };
-    const onPointerMove = (event) => {
-      if (raf) cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        raf = 0;
-        setWidth(startWidth + event.clientX - startX);
-      });
-    };
-    const onPointerUp = () => {
-      if (raf) cancelAnimationFrame(raf);
-      raf = 0;
-      document.body.classList.remove('is-resizing');
-      handle.classList.remove('is-active');
-      window.removeEventListener('pointermove', onPointerMove);
-      window.removeEventListener('pointerup', onPointerUp);
-      window.removeEventListener('pointercancel', onPointerUp);
-    };
-    const onPointerDown = (event) => {
-      event.preventDefault();
-      startX = event.clientX;
-      startWidth = currentWidth();
-      document.body.classList.add('is-resizing');
-      handle.classList.add('is-active');
-      window.addEventListener('pointermove', onPointerMove);
-      window.addEventListener('pointerup', onPointerUp);
-      window.addEventListener('pointercancel', onPointerUp);
-    };
-    const onKeyDown = (event) => {
-      const delta = event.key === 'ArrowLeft' ? -24 : event.key === 'ArrowRight' ? 24 : 0;
-      if (event.key === 'Home') {
-        event.preventDefault();
-        setWidth(minWidth);
-      } else if (event.key === 'End') {
-        event.preventDefault();
-        setWidth(maxWidth);
-      } else if (delta) {
-        event.preventDefault();
-        setWidth(currentWidth() + delta);
-      }
-    };
-
-    handle.style.touchAction = 'none';
-    handle.tabIndex = 0;
-    handle.setAttribute('aria-valuemin', String(minWidth));
-    handle.setAttribute('aria-valuemax', String(maxWidth));
-    setWidth(currentWidth());
-    handle.addEventListener('pointerdown', onPointerDown);
-    handle.addEventListener('keydown', onKeyDown);
-
-    return () => {
-      handle.removeEventListener('pointerdown', onPointerDown);
-      handle.removeEventListener('keydown', onKeyDown);
-      onPointerUp();
-    };
-  };
-  
-  const leftWidth = localStorage.getItem(`${cachePrefix}.layout.leftWidth`) || '240';
-  const rightWidth = localStorage.getItem(`${cachePrefix}.layout.rightWidth`) || '300';
-  containerEl.style.setProperty('--notes-left-width', `${leftWidth}px`);
-  containerEl.style.setProperty('--notes-right-width', `${rightWidth}px`);
-  const leftCleanup = attachLocalResizer({
-    handle: leftResizer,
-    pane: leftPane,
-    cssVar: '--notes-left-width',
-    storageKey: `${cachePrefix}.layout.leftWidth`,
-    minWidth: 180,
-    maxWidth: 380
-  });
-  const rightCleanup = attachLocalResizer({
-    handle: rightResizer,
-    pane: listPane,
-    cssVar: '--notes-right-width',
-    storageKey: `${cachePrefix}.layout.rightWidth`,
-    minWidth: 240,
-    maxWidth: 480
-  });
-  if (leftCleanup) cleanups.push(leftCleanup);
-  if (rightCleanup) cleanups.push(rightCleanup);
-  
-  return () => {
-    cleanups.forEach(c => c());
-  };
 }
 
 function initNotesContextMenu(state) {

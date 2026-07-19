@@ -118,14 +118,29 @@
   gap: 4px;
 }
 
-/* custom: the live data-status badge sits in the title column, so it must
-   left-align and ellipsize instead of stretching (badges are inline-flex). */
-.calendar-data-status {
-  align-self: flex-start;
-  max-width: 100%;
-  margin-top: 4px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* custom: the live data-status badge sits in the actions row, hidden by
+   default and only revealed when there is a real status (no DB / error). */
+.calendar-data-status[hidden] {
+  display: none;
+}
+
+/* Right-pane collapse: hidden by default so the calendar grid gets the full
+   width; the header toggle re-reveals it on demand for booking/hold auditing. */
+.calendar-app.is-right-hidden {
+  grid-template-columns:
+    var(--ctox-left-width, 320px)
+    12px
+    minmax(0, 1fr);
+}
+
+.calendar-app.is-right-hidden #calendar-right,
+.calendar-app.is-right-hidden > [data-resizer="right"] {
+  display: none;
+}
+
+.calendar-toggle-right[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: color-mix(in srgb, var(--accent) 78%, var(--text));
 }
 
 /* custom: calendar source rows — kit .ctox-list-item extended with the
@@ -243,7 +258,7 @@
   border-top: 1px solid var(--line);
   border-top-left-radius: 16px;
   border-top-right-radius: 16px;
-  box-shadow: 0 -16px 40px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--shadow-lg, var(--panel-shadow));
   transform: translateY(100%);
   transition: transform 240ms cubic-bezier(0.25, 0.8, 0.25, 1);
   z-index: 50;

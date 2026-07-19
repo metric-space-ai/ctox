@@ -1,144 +1,70 @@
-/* src/apps/business-os/modules/shiftflow/index.css */
+/* ==========================================================================
+   Shiftflow — module CSS on top of the shared kit (shared/base.css + app.css).
+
+   Frame, columns, resizers, pane headers, kickers/titles, search, filters,
+   tabs, action strips, list rows, badges, tables, cards, buttons, inputs,
+   choice rows, callouts and empty states all come from the kit:
+     .ctox-workspace[data-resize-frame] + .ctox-pane
+     .ctox-column-resizer[data-resizer-var]  (shell-wired, persistent)
+     .ctox-pane-header/.ctox-pane-band/.ctox-pane-kicker/.ctox-pane-title
+     .ctox-pane-search/.ctox-pane-filter/.ctox-pane-tabs/.ctox-pane-tab
+     .ctox-action-strip, .ctox-run-control (publish automation)
+     .ctox-list-item, .ctox-avatar, .ctox-badge, .ctox-table, .ctox-card
+     .ctox-button(--sm, is-primary, is-danger), .ctox-input/.ctox-select/
+     .ctox-textarea, .ctox-field-label, .ctox-fields, .ctox-choice,
+     .ctox-callout, .ctox-empty
+
+   What remains here is only what the kit cannot express: the week calendar
+   grid with department-coded shift cards and drag & drop, the AI planner
+   panel, the colored avatar presence dots, the quick-assign weekday matrix,
+   the project color picker, the module's responsive re-layout, and the
+   collapsible right pane (UX reduction — hidden by default).
+   ========================================================================== */
+
+/* The right pane (AI planner + shift/employee detail inspector) collapses and
+   hides by default so the schedule grid gets the full width; the center-pane
+   header toggle re-reveals it on demand. Mirrors the threads / tickets
+   module pattern. */
+.shiftflow-app.is-actions-hidden {
+  grid-template-columns: var(--ctox-left-width, 280px) 12px minmax(0, 1fr);
+}
+
+.shiftflow-app.is-actions-hidden .shiftflow-right-pane,
+.shiftflow-app.is-actions-hidden > [data-resizer="right"] {
+  display: none;
+}
+
+.shiftflow-app .ctox-pane-actions [data-toggle-actions][aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
 
 .shiftflow-app {
-  /* Module palette = aliases of the shell tokens (app.css owns light/dark). */
-  --shiftflow-bg: var(--bg);
-  --shiftflow-surface: var(--surface);
-  --shiftflow-surface-2: var(--surface-2);
-  --shiftflow-line: var(--line);
-  --shiftflow-text: var(--text);
-  --shiftflow-muted: var(--muted);
-  --shiftflow-accent: var(--accent);
-  --shiftflow-accent-soft: var(--accent-soft);
-  --shiftflow-danger: var(--danger);
-  --shiftflow-radius: var(--control-radius);
-  --shiftflow-panel-radius: var(--surface-radius);
+  /* Workspace column defaults; the shell resizer persists overrides inline. */
+  --ctox-left-width: 280px;
+  --ctox-right-width: 340px;
 
-  /* Layout column width variables */
-  --shiftflow-left-width: 280px;
-  --shiftflow-right-width: 340px;
-
-  /* SVG Icons represented as Data-URIs for mask application */
+  /* SVG icon data-URIs for the mask-based icon system (AI panel, export). */
   --shiftflow-icon-spark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2L9 9 2 12l7 3 3 7 3-7 7-3-7-3-3-7z'/%3E%3C/svg%3E");
   --shiftflow-icon-edit: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4 17.2V20h2.8L17.9 8.9 15.1 6.1 4 17.2ZM19.7 7.1c.4-.4.4-1 0-1.4l-1.4-1.4a1 1 0 0 0-1.4 0l-1.1 1.1 2.8 2.8 1.1-1.1Z'/%3E%3C/svg%3E");
   --shiftflow-icon-delete: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M8 4h8l1 2h4v2H3V6h4l1-2Zm1 6h2v8H9v-8Zm4 0h2v8h-2v-8Zm-6 0h10l-.7 10H7.7L7 10Z'/%3E%3C/svg%3E");
   --shiftflow-icon-search: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M10 4a6 6 0 1 0 0 12 6 6 0 0 0 0-12Zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm5.3 8.9 4.4 4.4-1.4 1.4-4.4-4.4 1.4-1.4Z'/%3E%3C/svg%3E");
   --shiftflow-icon-replacement: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 3a5 5 0 0 1 5 5h-2a3 3 0 1 0-3 3h1v2h-1a5 5 0 0 1 0-10Zm6 7h2v3h3v2h-3v3h-2v-3h-3v-2h3v-3ZM4 18.5C4 15.5 7.6 14 11 14v2c-2.8 0-5 1.1-5 2.5V20h8v2H4v-3.5Z'/%3E%3C/svg%3E");
   --shiftflow-icon-document: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6 3h9l5 5v13H6V3Zm2 2v14h10V9h-4V5H8Zm8 .8V7h1.2L16 5.8ZM10 12h6v2h-6v-2Zm0 4h6v2h-6v-2Z'/%3E%3C/svg%3E");
-
-  display: grid;
-  grid-template-areas: "left center right";
-  grid-template-columns: var(--shiftflow-left-width, 280px) minmax(420px, 1fr) var(--shiftflow-right-width, 340px);
-  gap: 12px;
-  height: 100%;
-  min-height: 0;
-  padding: 12px;
-  box-sizing: border-box;
-  background: var(--shiftflow-bg);
-  color: var(--shiftflow-text);
-  font: 13.5px/1.5 var(--font-sans);
-  overflow: hidden;
-  position: relative;
 }
 
-/* -------------------------------------------------------------
- * Column Resizers & Global Resizing Styles
- * ------------------------------------------------------------- */
-.shiftflow-col-resizer {
-  position: absolute;
-  top: 12px;
-  bottom: 12px;
-  width: 12px;
-  cursor: col-resize;
-  z-index: 30;
+/* The right pane stacks two switchable sections (AI planner / inspector) over
+   the full height instead of the kit's header+body grid rows. */
+.ctox-pane.shiftflow-right-pane {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  touch-action: none;
-}
-
-.shiftflow-col-resizer[data-shiftflow-col-resizer="left"] {
-  left: calc(var(--shiftflow-left-width, 280px) + 18px);
-  transform: translateX(-50%);
-}
-
-.shiftflow-col-resizer[data-shiftflow-col-resizer="right"] {
-  right: calc(var(--shiftflow-right-width, 340px) + 18px);
-  transform: translateX(50%);
-}
-
-.shiftflow-col-resizer[hidden] {
-  display: none;
-}
-
-.shiftflow-col-resizer::before {
-  content: "";
-  width: 4px;
-  height: 48px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--line);
-  opacity: 0.5;
-  transition: opacity 120ms ease, background 120ms ease, width 120ms ease;
-}
-
-.shiftflow-col-resizer:hover::before,
-.shiftflow-col-resizer.is-active::before {
-  opacity: 1;
-  background: var(--accent);
-  width: 5px;
-}
-
-body.is-shiftflow-resizing,
-body.is-shiftflow-resizing * {
-  cursor: col-resize !important;
-  user-select: none !important;
-}
-
-/* -------------------------------------------------------------
- * Panel Architectures
- * ------------------------------------------------------------- */
-.shiftflow-panel {
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  border: 1px solid var(--shiftflow-line);
-  border-radius: var(--shiftflow-panel-radius);
-  background: var(--shiftflow-surface);
-  box-shadow: none;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
-.shiftflow-left-pane {
-  grid-area: left;
-}
-
-.shiftflow-center-pane {
-  grid-area: center;
-}
-
-.shiftflow-right-pane {
-  grid-area: right;
-}
-
-.shiftflow-left-pane {
-  container-type: inline-size;
-}
-
-.shiftflow-right-pane {
-  background: var(--shiftflow-surface-2);
-}
-
-.shiftflow-center-pane,
-.shiftflow-right-pane {
-  min-width: 0;
+  flex-direction: column;
+  background: var(--surface-2);
 }
 
 .shiftflow-right-pane-section {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1 1 auto;
   min-height: 0;
 }
 
@@ -146,172 +72,74 @@ body.is-shiftflow-resizing * {
   display: none !important;
 }
 
-/* -------------------------------------------------------------
- * Headers, Typography & Kickers
- * ------------------------------------------------------------- */
-.shiftflow-section-title {
-  display: block;
-  color: var(--shiftflow-muted);
-  font-size: 11px;
-  font-weight: 780;
-  line-height: 1.1;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 8px;
+/* View switcher bodies inside the center pane (scheduler/timesheets/billing);
+   JS toggles the .hidden hook. */
+.shiftflow-view-content {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-/* -------------------------------------------------------------
- * Interactive Controls (Buttons, Inputs, Selects)
- * ------------------------------------------------------------- */
-[data-shiftflow-root] .shiftflow-icon-mask::before {
-  content: "";
-  width: 16px;
-  height: 16px;
-  background: currentColor;
-  display: block;
-}
-
-[data-shiftflow-root] .shiftflow-icon-mask[data-icon="spark"]::before {
-  -webkit-mask: var(--shiftflow-icon-spark) center / contain no-repeat;
-  mask: var(--shiftflow-icon-spark) center / contain no-repeat;
-}
-
-[data-shiftflow-root] [data-icon="spark"]::before {
-  -webkit-mask: var(--shiftflow-icon-spark) center / contain no-repeat;
-  mask: var(--shiftflow-icon-spark) center / contain no-repeat;
-}
-
-[data-shiftflow-root] .shiftflow-icon-mask[data-icon="edit"]::before {
-  -webkit-mask: var(--shiftflow-icon-edit) center / contain no-repeat;
-  mask: var(--shiftflow-icon-edit) center / contain no-repeat;
-}
-
-[data-shiftflow-root] .shiftflow-icon-mask[data-icon="delete"]::before {
-  -webkit-mask: var(--shiftflow-icon-delete) center / contain no-repeat;
-  mask: var(--shiftflow-icon-delete) center / contain no-repeat;
-}
-
-[data-shiftflow-root] [data-icon="search"]::before {
-  -webkit-mask: var(--shiftflow-icon-search) center / contain no-repeat;
-  mask: var(--shiftflow-icon-search) center / contain no-repeat;
-}
-
-[data-shiftflow-root] [data-icon="replacement"]::before {
-  -webkit-mask: var(--shiftflow-icon-replacement) center / contain no-repeat;
-  mask: var(--shiftflow-icon-replacement) center / contain no-repeat;
-}
-
-[data-shiftflow-root] [data-icon="document"]::before {
-  -webkit-mask: var(--shiftflow-icon-document) center / contain no-repeat;
-  mask: var(--shiftflow-icon-document) center / contain no-repeat;
-}
-
-.shiftflow-icon-text-btn,
-.shiftflow-ai-action-shortcut {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.shiftflow-icon-text-btn::before,
-.shiftflow-ai-action-shortcut::before {
-  content: "";
-  width: 14px;
-  height: 14px;
-  flex: 0 0 14px;
-  background: currentColor;
-}
-
-.shiftflow-publish-status {
+  flex-direction: column;
   min-width: 0;
-  max-width: 220px;
+  min-height: 0;
   overflow: hidden;
-  color: var(--shiftflow-muted);
-  font-size: 11px;
-  font-weight: 700;
-  text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.shiftflow-view-content.hidden {
+  display: none !important;
 }
 
 /* -------------------------------------------------------------
- * Left Pane Elements (Search, Filters, Employee Cards)
+ * Sidebar layout (left pane content under the kit pane body)
  * ------------------------------------------------------------- */
-.shiftflow-employee-list-container {
-  padding: 12px;
+.shiftflow-sidebar {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  overflow-y: auto;
+  padding: 12px;
 }
 
-.shiftflow-employee-list-section {
+.shiftflow-sidebar-section {
   display: flex;
   flex-direction: column;
 }
 
-.shiftflow-employee-list {
+.shiftflow-section-head {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
+.shiftflow-section-head .ctox-field-label {
+  margin: 0;
+}
+
+.shiftflow-employee-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.shiftflow-employee-list,
+.shiftflow-project-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.shiftflow-separator {
+  border: 0;
+  height: 1px;
+  margin: 0;
+  background: var(--hairline, var(--line));
+}
+
+/* -------------------------------------------------------------
+ * List row content (kit rows are .ctox-list-item; the inner
+ * avatar + name/meta layout is module content)
+ * ------------------------------------------------------------- */
 .employee-card {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px;
-  border: 1px solid transparent;
-  border-radius: var(--shiftflow-radius);
-  background: transparent;
-  cursor: pointer;
-  transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1),
-              border-color 0.15s cubic-bezier(0.34, 1.56, 0.64, 1),
-              background 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-.employee-card:hover {
-  background: var(--shiftflow-surface-2);
-  border-color: color-mix(in srgb, var(--shiftflow-line) 40%, transparent);
-  transform: translateY(-1px);
-}
-
-.employee-card.selected {
-  border-color: color-mix(in srgb, var(--shiftflow-accent) 42%, var(--shiftflow-line));
-  background: color-mix(in srgb, var(--shiftflow-accent-soft) 58%, var(--shiftflow-surface));
-}
-
-.emp-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  font-size: 11px;
-  font-weight: 860;
-  color: #fff;
-  position: relative;
-  flex-shrink: 0;
-}
-
-.emp-avatar::after {
-  content: '';
-  position: absolute;
-  bottom: -1px;
-  right: -1px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  border: 1.5px solid var(--shiftflow-surface);
-  background: color-mix(in srgb, var(--shiftflow-muted) 40%, transparent);
-}
-
-.employee-card.active .emp-avatar::after {
-  background: var(--shiftflow-accent);
-  border-color: color-mix(in srgb, var(--shiftflow-accent) 55%, var(--shiftflow-surface));
 }
 
 .emp-info {
@@ -322,9 +150,7 @@ body.is-shiftflow-resizing * {
 }
 
 .emp-name {
-  font-size: 13px;
-  font-weight: 820;
-  color: var(--shiftflow-text);
+  font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -332,29 +158,89 @@ body.is-shiftflow-resizing * {
 
 .emp-meta {
   font-size: 11.5px;
-  color: var(--shiftflow-muted);
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* -------------------------------------------------------------
- * Center Pane: Scheduler Timeline Grid
- * ------------------------------------------------------------- */
-.shiftflow-view-content {
-  flex-grow: 1;
-  overflow: hidden;
+/* custom: colored initials avatars carry a presence dot (on-duty state);
+   the kit avatar has no presence indicator. */
+.emp-avatar {
+  position: relative;
+  color: #fff;
+}
+
+.emp-avatar::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--surface);
+  background: color-mix(in srgb, var(--muted) 40%, transparent);
+}
+
+.employee-card.active .emp-avatar::after {
+  background: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--surface));
+}
+
+.project-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.project-card-info {
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
 }
 
-.shiftflow-view-content.hidden {
-  display: none !important;
+.project-card-name {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+.project-card-client {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+/* Project color dot (data-driven color set inline). */
+.project-card-badge {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* -------------------------------------------------------------
+ * custom: Dienstplan-Kalendergrid — Wochen-Zeitleiste mit Tageszellen,
+   abteilungsfarbcodierten Schichtkarten und Drag&Drop-Zielen. Das Kit hat
+   kein Kalender-/Timeline-Element, daher eigene Geometrie.
+ * ------------------------------------------------------------- */
 .shiftflow-scheduler-container {
-  flex-grow: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
 }
@@ -362,8 +248,8 @@ body.is-shiftflow-resizing * {
 .shiftflow-scheduler-grid-header {
   display: grid;
   grid-template-columns: 180px repeat(7, 1fr);
-  border-bottom: 1px solid var(--shiftflow-line);
-  background: var(--shiftflow-surface-2);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -372,10 +258,11 @@ body.is-shiftflow-resizing * {
 .shiftflow-grid-corner-cell {
   padding: 12px 16px;
   font-size: 11px;
-  font-weight: 780;
-  color: var(--shiftflow-muted);
+  font-weight: 700;
+  color: var(--muted);
   text-transform: uppercase;
-  border-right: 1px solid var(--shiftflow-line);
+  letter-spacing: 0.06em;
+  border-right: 1px solid var(--line);
   display: flex;
   align-items: center;
 }
@@ -386,27 +273,27 @@ body.is-shiftflow-resizing * {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  border-right: 1px solid var(--shiftflow-line);
+  border-right: 1px solid var(--line);
   font-size: 11px;
-  font-weight: 760;
-  color: var(--shiftflow-muted);
+  font-weight: 700;
+  color: var(--muted);
   text-align: center;
 }
 
 .grid-day-cell.today {
-  background: color-mix(in srgb, var(--shiftflow-accent) 5%, transparent);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
 }
 
 .day-number {
   font-size: 15px;
-  font-weight: 840;
-  color: var(--shiftflow-text);
+  font-weight: 800;
+  color: var(--text);
   margin-top: 2px;
 }
 
 .grid-day-cell.today .day-number {
-  color: var(--shiftflow-accent);
-  background: color-mix(in srgb, var(--shiftflow-accent) 15%, transparent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
   width: 24px;
   height: 24px;
   border-radius: 50%;
@@ -422,18 +309,18 @@ body.is-shiftflow-resizing * {
 .scheduler-row {
   display: grid;
   grid-template-columns: 180px repeat(7, 1fr);
-  border-bottom: 1px solid var(--shiftflow-line);
+  border-bottom: 1px solid var(--line);
   min-height: 84px;
-  background: var(--shiftflow-surface);
+  background: var(--surface);
 }
 
 .scheduler-row:hover {
-  background: color-mix(in srgb, var(--shiftflow-surface-2) 30%, transparent);
+  background: color-mix(in srgb, var(--surface-2) 30%, transparent);
 }
 
 .row-employee-cell {
   padding: 12px 16px;
-  border-right: 1px solid var(--shiftflow-line);
+  border-right: 1px solid var(--line);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -441,7 +328,7 @@ body.is-shiftflow-resizing * {
 }
 
 .grid-shift-cell {
-  border-right: 1px solid var(--shiftflow-line);
+  border-right: 1px solid var(--line);
   padding: 6px;
   display: flex;
   flex-direction: column;
@@ -452,41 +339,35 @@ body.is-shiftflow-resizing * {
 }
 
 .grid-shift-cell.today {
-  background: color-mix(in srgb, var(--shiftflow-accent) 2%, transparent);
+  background: color-mix(in srgb, var(--accent) 2%, transparent);
 }
 
-/* -------------------------------------------------------------
- * Shift Cards
- * ------------------------------------------------------------- */
+/* Shift cards: department color coding is the planning-relevant signal. */
 .shift-card {
   appearance: none;
-  --shiftflow-dept: var(--shiftflow-accent);
-  --shiftflow-dept-strong: var(--shiftflow-accent);
+  --shiftflow-dept: var(--accent);
+  --shiftflow-dept-strong: var(--accent);
   padding: 8px 10px;
-  border: 1px solid transparent;
-  border-radius: var(--shiftflow-radius);
+  border: 1px solid color-mix(in srgb, var(--shiftflow-dept) 38%, var(--line));
+  border-radius: var(--control-radius);
+  background: color-mix(in srgb, var(--shiftflow-dept) 13%, var(--surface));
+  color: var(--text);
+  font: inherit;
   font-size: 11px;
   display: flex;
   flex-direction: column;
   gap: 3px;
   cursor: pointer;
-  font: inherit;
   text-align: left;
   position: relative;
   z-index: 2;
   overflow: hidden;
-  box-shadow: none;
-  transition: transform 0.15s ease,
-              border-color 0.15s ease,
-              background 0.15s ease;
-  background: color-mix(in srgb, var(--shiftflow-dept) 13%, var(--shiftflow-surface));
-  color: var(--shiftflow-text);
-  border-color: color-mix(in srgb, var(--shiftflow-dept) 38%, var(--shiftflow-line));
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 }
 
 .shift-card:hover {
   transform: translateY(-1px);
-  border-color: color-mix(in srgb, var(--shiftflow-dept-strong) 55%, var(--shiftflow-line));
+  border-color: color-mix(in srgb, var(--shiftflow-dept-strong) 55%, var(--line));
 }
 
 .shift-card:active {
@@ -519,10 +400,20 @@ body.is-shiftflow-resizing * {
 }
 
 .shift-time {
-  font-weight: 840;
+  font-weight: 800;
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.shift-title {
+  font-weight: 700;
+  margin-top: 2px;
+}
+
+.shift-meta {
+  margin-top: 2px;
+  font-size: 9px;
 }
 
 .shift-tag {
@@ -531,9 +422,9 @@ body.is-shiftflow-resizing * {
   border-radius: 3px;
   font-size: 8.5px;
   text-transform: uppercase;
-  font-weight: 860;
+  font-weight: 800;
   background: color-mix(in srgb, var(--shiftflow-dept) 18%, transparent);
-  color: var(--shiftflow-text);
+  color: var(--text);
 }
 
 .add-shift-hover-btn {
@@ -543,16 +434,15 @@ body.is-shiftflow-resizing * {
   transform: translate(-50%, -50%) scale(0.85);
   opacity: 0;
   pointer-events: none;
-  transition: all 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
-  background: var(--shiftflow-surface);
-  border: 1px solid var(--shiftflow-line);
-  color: var(--shiftflow-accent);
+  transition: all 0.15s ease;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--accent);
   padding: 4px 10px;
   font-size: 11px;
-  font-weight: 800;
-  border-radius: var(--shiftflow-radius);
+  font-weight: 700;
+  border-radius: var(--control-radius);
   cursor: pointer;
-  box-shadow: none;
   z-index: 1;
 }
 
@@ -562,56 +452,68 @@ body.is-shiftflow-resizing * {
   transform: translate(-50%, -50%) scale(1);
 }
 
+/* Project indicator strip inside schedule slots (data-driven color inline). */
+.project-strip {
+  height: 4px;
+  width: 100%;
+  border-radius: 2px;
+  margin-top: 4px;
+}
+
+/* Drag & drop mechanics for the calendar grid. */
+[draggable="true"] {
+  cursor: grab;
+}
+
+[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.employee-card.is-dragging {
+  opacity: 0.4;
+  transform: scale(0.96);
+}
+
+.shiftflow-grid-cell {
+  position: relative;
+  transition: background 0.2s ease;
+}
+
+.shiftflow-grid-cell.drag-over {
+  background: color-mix(in srgb, var(--accent) 8%, transparent) !important;
+  outline: 2px solid var(--accent) !important;
+  outline-offset: -2px;
+  z-index: 10;
+}
+
 /* -------------------------------------------------------------
- * Timesheets View
+ * Timesheets workbench — approval rows under the kit action strip
  * ------------------------------------------------------------- */
-.shiftflow-timesheets-toolbar {
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--shiftflow-line);
-  background: var(--shiftflow-surface);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.shiftflow-toolbar-title {
-  font-size: 13.5px;
-  font-weight: 820;
-}
-
 .shiftflow-timesheets-list {
-  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
+  gap: 8px;
+  padding: 12px;
 }
 
+/* custom: Stundenzettel-Freigabekarte (Avatar + Soll/Ist-Details +
+   Stundenblock + Aktionsleiste) — zusammengesetzte Zeile, die die Kit-
+   Listenzeile nicht abbildet. */
 .timesheet-card {
-  background: var(--shiftflow-surface);
-  border: 1px solid var(--shiftflow-line);
-  border-radius: var(--shiftflow-radius);
-  padding: 12px 16px;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  transition: transform 0.15s ease,
-              border-color 0.15s ease,
-              background 0.15s ease;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--panel-radius);
+  background: var(--surface);
 }
 
-.timesheet-card:hover {
-  border-color: var(--shiftflow-accent);
-  transform: translateY(-1px);
-  background: color-mix(in srgb, var(--shiftflow-accent) 5%, var(--shiftflow-surface));
-}
-
-.timesheet-info-block {
+.timesheet-card-main {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   min-width: 0;
-  flex: 1;
 }
 
 .timesheet-details {
@@ -623,9 +525,8 @@ body.is-shiftflow-resizing * {
 }
 
 .timesheet-primary {
-  font-size: 13px;
-  font-weight: 820;
-  color: var(--shiftflow-text);
+  font-weight: 700;
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -633,41 +534,338 @@ body.is-shiftflow-resizing * {
 
 .timesheet-secondary {
   font-size: 11.5px;
-  color: var(--shiftflow-muted);
+  font-weight: 400;
+  color: var(--muted);
 }
 
-.timesheet-actions {
+.timesheet-meta-row {
   display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.timesheet-notes {
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--muted);
+}
+
+.timesheet-hours-block {
+  text-align: right;
+  flex: 0 0 auto;
+}
+
+.timesheet-hours {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.timesheet-time-range {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.timesheet-warning-row {
+  margin-top: 4px;
+}
+
+.timesheet-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* -------------------------------------------------------------
+ * Billing workbench — KPI cards (kit .ctox-card) + aggregation table
+ * ------------------------------------------------------------- */
+.shiftflow-billing-date-selector {
+  gap: 12px;
+}
+
+.shiftflow-date-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.shiftflow-date-field .ctox-field-label {
+  margin: 0;
+}
+
+.shiftflow-date-field .ctox-input {
+  width: auto;
+}
+
+.shiftflow-financial-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--hairline, var(--line));
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+/* custom: große Kennzahl in den Stat-Kacheln (Hero-Zahl der Karte). */
+.shiftflow-fin-value {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.text-revenue {
+  color: var(--text);
+}
+
+.text-cost {
+  color: color-mix(in srgb, var(--text) 60%, var(--danger));
+}
+
+.text-margin {
+  color: var(--accent);
+}
+
+.shiftflow-billing-content-wrapper {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 12px 16px;
+}
+
+.billing-project-cell {
+  font-weight: 700;
+}
+
+.billing-project-cell .project-card-badge {
+  display: inline-block;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+
+/* Billing detail rows inside the right drawer. */
+.shiftflow-billing-detail-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 400px;
+  overflow-y: auto;
+  margin-top: 4px;
+}
+
+.shiftflow-billing-detail-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--hairline, var(--line));
+}
+
+.shiftflow-billing-detail-name {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.shiftflow-billing-detail-meta {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.shiftflow-billing-detail-hours {
+  font-weight: 700;
+  align-self: center;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* -------------------------------------------------------------
+ * Detail inspector (right pane) — kit fields/badges + module extras
+ * ------------------------------------------------------------- */
+.shiftflow-detail-pane {
+  background: var(--surface);
+}
+
+.shiftflow-detail-body {
+  min-height: 0;
+}
+
+.shiftflow-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+
+.shiftflow-inspector-person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.shiftflow-inspector-name {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.shiftflow-inspector-sub {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.shiftflow-inspector-hint {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.3;
+}
+
+.shiftflow-inspector-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.shiftflow-inspector-actions > .ctox-button {
+  flex: 1 1 auto;
+}
+
+.shiftflow-accent-text {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.shiftflow-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+/* custom: Wochenauslastungs-Fortschrittsbalken — das Kit hat keine
+   Progress-Anzeige. */
+.shiftflow-progress-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.shiftflow-progress-head .ctox-field-label {
+  margin: 0;
+}
+
+.shiftflow-progress-value {
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.shiftflow-progress {
+  width: 100%;
+  height: 6px;
+  background: var(--surface-3, var(--surface-2));
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.shiftflow-progress-bar {
+  height: 100%;
+  border-radius: 3px;
+}
+
+/* custom: Schnell-Zuweisung — Wochentag-Matrix pro Projekt im Inspector. */
+.shiftflow-quick-assign {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.shiftflow-quick-assign-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border-radius: var(--control-radius);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline, var(--line));
+}
+
+.shiftflow-quick-assign-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.shiftflow-quick-assign-title span:last-child {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shiftflow-quick-assign-days {
+  display: flex;
+  gap: 2px;
+  margin-top: 2px;
+}
+
+.quick-assign-day-btn {
+  padding: 3px 5px;
+  min-width: 26px;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: var(--control-radius);
+  border: 1px solid var(--hairline, var(--line));
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.quick-assign-day-btn:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+/* -------------------------------------------------------------
+ * custom: KI-Planungs-Assistent — Chat-Blasen und Aktions-Shortcuts;
+   ein konversationelles Panel, das das Kit nicht abdeckt.
+ * ------------------------------------------------------------- */
+.shiftflow-ai-title {
+  flex-direction: row;
   align-items: center;
   gap: 8px;
 }
 
-.timesheet-duration {
-  font-size: 14px;
-  font-weight: 880;
-  color: var(--shiftflow-accent);
-  margin-right: 8px;
+.shiftflow-ai-title .shiftflow-icon-mask {
+  color: var(--accent);
 }
 
-/* -------------------------------------------------------------
- * Right Pane AI Chat & Inspector
- * ------------------------------------------------------------- */
+.shiftflow-ai-title .ctox-pane-title {
+  margin: 0;
+}
+
 .shiftflow-ai-chat-card {
   padding: 14px;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  border-bottom: 1px solid var(--shiftflow-line);
-  background: var(--shiftflow-surface);
+  border-bottom: 1px solid var(--hairline, var(--line));
+  background: var(--surface);
 }
 
 .shiftflow-ai-chat-body {
   max-height: 160px;
   overflow-y: auto;
   padding: 10px;
-  border-radius: var(--shiftflow-radius);
-  background: var(--shiftflow-surface-2);
-  border: 1px solid var(--shiftflow-line);
+  border-radius: var(--control-radius);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline, var(--line));
 }
 
 .shiftflow-ai-msg {
@@ -676,21 +874,8 @@ body.is-shiftflow-resizing * {
   font-size: 12px;
 }
 
-.shiftflow-ai-avatar {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--shiftflow-accent) 15%, transparent);
-  color: var(--shiftflow-accent);
-  display: grid;
-  place-items: center;
-  font-weight: 860;
-  font-size: 9px;
-  flex-shrink: 0;
-}
-
 .shiftflow-ai-text {
-  color: var(--shiftflow-text);
+  color: var(--text);
   line-height: 1.45;
 }
 
@@ -701,29 +886,33 @@ body.is-shiftflow-resizing * {
 }
 
 .shiftflow-ai-action-shortcut {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   padding: 8px 12px;
   text-align: left;
-  border: 1px solid var(--shiftflow-line);
-  border-radius: var(--shiftflow-radius);
-  background: var(--shiftflow-surface-2);
-  color: var(--shiftflow-text);
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--control-radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
   cursor: pointer;
-  transition: all 120ms ease;
+  transition: background 120ms ease, border-color 120ms ease;
 }
 
 .shiftflow-ai-action-shortcut:hover {
-  background: color-mix(in srgb, var(--shiftflow-accent) 10%, var(--shiftflow-surface));
-  border-color: var(--shiftflow-accent);
-  color: var(--shiftflow-accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
 }
 
+/* Conflicts roster (items are kit .ctox-callout.is-danger). */
 .shiftflow-conflicts-alert-container {
   padding: 14px;
-  flex-grow: 1;
-  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .shiftflow-conflicts-list {
@@ -732,74 +921,39 @@ body.is-shiftflow-resizing * {
   gap: 8px;
 }
 
-.shiftflow-conflict-empty-state {
-  font-size: 11.5px;
-  color: var(--shiftflow-muted);
-  text-align: center;
-  padding: 24px;
-  border: 1px dashed var(--shiftflow-line);
-  border-radius: var(--shiftflow-radius);
-  background: var(--shiftflow-surface);
-}
-
 .shiftflow-conflict-item {
-  background: color-mix(in srgb, var(--shiftflow-danger) 6%, var(--shiftflow-surface));
-  border: 1px solid color-mix(in srgb, var(--shiftflow-danger) 25%, transparent);
-  border-radius: var(--shiftflow-radius);
-  padding: 10px 12px;
-  font-size: 11px;
-  line-height: 1.45;
-  color: var(--shiftflow-text);
-}
-
-.shiftflow-conflict-item-title {
-  font-weight: 840;
-  color: var(--shiftflow-danger);
-  margin-bottom: 2px;
-}
-
-.shiftflow-inspector-content {
-  padding: 14px;
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
+  gap: 8px;
 }
 
-.shiftflow-inspector-card {
-  background: var(--shiftflow-surface);
-  border: 1px solid var(--shiftflow-line);
-  border-radius: var(--shiftflow-radius);
-  padding: 12px;
-}
-
-.shiftflow-detail-pane {
-  background: var(--shiftflow-surface);
-}
-
-.shiftflow-detail-body {
-  min-height: 0;
-  overflow-y: auto;
+/* Publish status line inside the scheduler action strip. */
+.shiftflow-publish-status {
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* -------------------------------------------------------------
- * Side Drawer Forms (Business OS Standard)
+ * Side drawer forms (shell drawer chrome + kit fields)
  * ------------------------------------------------------------- */
 .shiftflow-drawer-body {
-  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  box-sizing: border-box;
-  overflow-y: auto;
+  gap: 14px;
   height: 100%;
+  overflow-y: auto;
 }
 
 .shiftflow-drawer-form {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  box-sizing: border-box;
+  gap: 12px;
 }
 
 .shiftflow-drawer-form label {
@@ -808,38 +962,14 @@ body.is-shiftflow-resizing * {
   gap: 5px;
 }
 
-.shiftflow-drawer-form label > span {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 780;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  line-height: 1.1;
+.shiftflow-drawer-form label .ctox-field-label {
+  margin: 0;
 }
 
 .shiftflow-drawer-form .form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
-}
-
-.shiftflow-drawer-form .shiftflow-checkbox-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  padding: 6px 0;
-}
-
-.shiftflow-drawer-form .shiftflow-checkbox-group label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text);
-  text-transform: none;
-  letter-spacing: normal;
-  cursor: pointer;
 }
 
 .shiftflow-drawer-actions {
@@ -853,177 +983,7 @@ body.is-shiftflow-resizing * {
   grid-template-columns: 1fr 1fr 1fr;
 }
 
-.shiftflow-drawer-actions button {
-  width: 100%;
-}
-
-
-/* -------------------------------------------------------------
- * Container Queries for Sidebar Compacting (< 360px)
- * ------------------------------------------------------------- */
-@container (max-width: 360px) {
-  .ctox-pane-band {
-    padding: 8px;
-  }
-
-  .shiftflow-employee-list-container {
-    padding: 8px;
-    gap: 12px;
-  }
-  
-  .employee-card {
-    padding: 6px;
-    gap: 8px;
-  }
-  
-  .emp-avatar {
-    width: 28px;
-    height: 28px;
-    font-size: 10px;
-  }
-  
-  .emp-name {
-    font-size: 12px;
-  }
-  
-  .emp-meta {
-    font-size: 10.5px;
-  }
-  
-  .shiftflow-checkbox-group {
-    flex-direction: column;
-    gap: 6px;
-  }
-}
-
-/* -------------------------------------------------------------
- * Nested Left Sidebar Content & Project List Styles
- * ------------------------------------------------------------- */
-.shiftflow-left-content {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.shiftflow-sidebar-scrollable {
-  flex: 1;
-  overflow-y: auto;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.shiftflow-sidebar-section {
-  display: flex;
-  flex-direction: column;
-}
-
-.shiftflow-section-title-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.shiftflow-button-text-add {
-  background: none;
-  border: none;
-  color: var(--shiftflow-accent);
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
-  transition: all 0.2s ease;
-}
-
-.shiftflow-button-text-add:hover {
-  background: color-mix(in srgb, var(--shiftflow-accent) 10%, transparent);
-}
-
-.shiftflow-separator {
-  border: 0;
-  height: 1px;
-  background: var(--shiftflow-line);
-  margin: 8px 0;
-}
-
-.shiftflow-project-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.project-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px;
-  background: var(--shiftflow-surface-2);
-  border: 1px solid var(--shiftflow-line);
-  border-radius: var(--shiftflow-radius);
-  cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
-}
-
-.project-card:hover {
-  transform: translateY(-1px);
-  border-color: color-mix(in srgb, var(--shiftflow-text) 15%, transparent);
-  background: color-mix(in srgb, var(--shiftflow-accent) 4%, var(--shiftflow-surface-2));
-}
-
-.project-card-info {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  flex: 1;
-}
-
-.project-card-name {
-  font-size: 12.5px;
-  font-weight: 760;
-  color: var(--shiftflow-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.project-card-client {
-  font-size: 10.5px;
-  color: var(--shiftflow-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.project-card-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.project-card-badge {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.project-card-rate {
-  font-size: 10.5px;
-  font-weight: 680;
-  color: var(--shiftflow-text);
-  background: color-mix(in srgb, var(--shiftflow-text) 5%, transparent);
-  padding: 2px 6px;
-  border-radius: 4px;
-  white-space: nowrap;
-}
-
-/* Radio button Color Picker for Project Modal */
+/* custom: Projekt-Farbwahl als Swatch-Radios — kein Kit-Element. */
 .shiftflow-color-picker {
   display: flex;
   gap: 8px;
@@ -1054,203 +1014,103 @@ body.is-shiftflow-resizing * {
 }
 
 .color-option-label:has(input:checked) {
-  outline: 2px solid var(--shiftflow-text);
+  outline: 2px solid var(--text);
   outline-offset: 2px;
 }
 
 /* -------------------------------------------------------------
- * Drag & Drop Mechanics
+ * Mask icon system (AI shortcuts, export button, panel title)
  * ------------------------------------------------------------- */
-[draggable="true"] {
-  cursor: grab;
+[data-shiftflow-root] .shiftflow-icon-mask::before,
+[data-shiftflow-root] .shiftflow-icon-text-btn::before,
+[data-shiftflow-root] .shiftflow-ai-action-shortcut::before {
+  content: "";
+  display: block;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  background: currentColor;
 }
 
-[draggable="true"]:active {
-  cursor: grabbing;
+[data-shiftflow-root] .shiftflow-icon-mask::before {
+  width: 16px;
+  height: 16px;
 }
 
-.employee-card.is-dragging {
-  opacity: 0.4;
-  transform: scale(0.96);
-  border: 1px dashed var(--shiftflow-accent) !important;
+.shiftflow-icon-text-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.shiftflow-grid-cell {
-  position: relative;
-  transition: all 0.2s ease;
+[data-shiftflow-root] [data-icon="spark"]::before {
+  -webkit-mask: var(--shiftflow-icon-spark) center / contain no-repeat;
+  mask: var(--shiftflow-icon-spark) center / contain no-repeat;
 }
 
-.shiftflow-grid-cell.drag-over {
-  background: color-mix(in srgb, var(--shiftflow-accent) 8%, transparent) !important;
-  outline: 2px solid var(--shiftflow-accent) !important;
-  outline-offset: -2px;
-  z-index: 10;
+[data-shiftflow-root] .shiftflow-icon-mask[data-icon="edit"]::before {
+  -webkit-mask: var(--shiftflow-icon-edit) center / contain no-repeat;
+  mask: var(--shiftflow-icon-edit) center / contain no-repeat;
+}
+
+[data-shiftflow-root] .shiftflow-icon-mask[data-icon="delete"]::before {
+  -webkit-mask: var(--shiftflow-icon-delete) center / contain no-repeat;
+  mask: var(--shiftflow-icon-delete) center / contain no-repeat;
+}
+
+[data-shiftflow-root] [data-icon="search"]::before {
+  -webkit-mask: var(--shiftflow-icon-search) center / contain no-repeat;
+  mask: var(--shiftflow-icon-search) center / contain no-repeat;
+}
+
+[data-shiftflow-root] [data-icon="replacement"]::before {
+  -webkit-mask: var(--shiftflow-icon-replacement) center / contain no-repeat;
+  mask: var(--shiftflow-icon-replacement) center / contain no-repeat;
+}
+
+[data-shiftflow-root] [data-icon="document"]::before {
+  -webkit-mask: var(--shiftflow-icon-document) center / contain no-repeat;
+  mask: var(--shiftflow-icon-document) center / contain no-repeat;
 }
 
 /* -------------------------------------------------------------
- * Dual-Timeline Toolbar Switcher
+ * custom: responsives Re-Layout — der Dienstplan braucht seine eigene
+   Staffelung (3 Spalten → Kalender + untere Reihe → gestapelt), weil das
+   Kalendergrid eine Mindestbreite hat.
  * ------------------------------------------------------------- */
-.shiftflow-scheduler-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 16px;
-  background: var(--shiftflow-surface-2);
-  border-bottom: 1px solid var(--shiftflow-line);
-  flex-shrink: 0;
-}
-
-/* -------------------------------------------------------------
- * Billing & Aggregation Workbench
- * ------------------------------------------------------------- */
-.shiftflow-billing-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  background: var(--shiftflow-surface-2);
-  border-bottom: 1px solid var(--shiftflow-line);
-  flex-shrink: 0;
-  flex-wrap: wrap;
-}
-
-.shiftflow-billing-date-selector {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.shiftflow-input-wrapper {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.shiftflow-input-label {
-  font-size: 10.5px;
-  font-weight: 780;
-  color: var(--shiftflow-muted);
-  text-transform: uppercase;
-}
-
-.shiftflow-financial-summary {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 16px;
-  padding: 16px;
-  background: var(--shiftflow-surface);
-  border-bottom: 1px solid var(--shiftflow-line);
-  flex-shrink: 0;
-}
-
-.shiftflow-fin-card {
-  background: var(--shiftflow-surface-2);
-  border: 1px solid var(--shiftflow-line);
-  border-radius: var(--shiftflow-panel-radius);
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  box-shadow: none;
-}
-
-.shiftflow-fin-label {
-  font-size: 10.5px;
-  font-weight: 780;
-  color: var(--shiftflow-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.shiftflow-fin-value {
-  font-size: 20px;
-  font-weight: 850;
-  letter-spacing: -0.02em;
-}
-
-.text-revenue {
-  color: var(--shiftflow-text);
-}
-
-.text-cost {
-  color: color-mix(in srgb, var(--shiftflow-text) 60%, var(--shiftflow-danger));
-}
-
-.text-margin {
-  color: var(--shiftflow-accent);
-}
-
-.shiftflow-billing-content-wrapper {
-  flex: 1;
-  padding: 16px;
-  overflow-y: auto;
-}
-
-/* Project indicator badge in schedule slots */
-.project-strip {
-  height: 4px;
-  width: 100%;
-  border-radius: 2px;
-  margin-top: 4px;
-}
-
 @container business-app-window (max-width: 1180px) {
   .shiftflow-app {
-    grid-template-areas:
-      "left center"
-      "right right";
-    grid-template-columns: var(--shiftflow-left-width, 260px) minmax(360px, 1fr);
+    grid-template-columns: var(--ctox-left-width, 280px) 12px minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) minmax(220px, 34vh);
   }
 
-  .shiftflow-col-resizer[data-shiftflow-col-resizer="right"] {
+  .shiftflow-app .ctox-column-resizer[data-resizer="right"] {
     display: none;
   }
 
-  .shiftflow-right-pane {
+  .shiftflow-app .shiftflow-right-pane {
     grid-column: 1 / -1;
+    grid-row: 2;
     min-height: 0;
   }
 }
 
 @container business-app-window (max-width: 720px) {
   .shiftflow-app {
-    grid-template-areas:
-      "center"
-      "left"
-      "right";
-    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(420px, 68vh) minmax(260px, 42vh) minmax(260px, 42vh);
-    gap: 8px;
-    padding: 8px;
     overflow-y: auto;
   }
 
-  .shiftflow-col-resizer {
-    display: none;
+  .shiftflow-app .shiftflow-center-pane {
+    grid-row: 1;
   }
 
-  .shiftflow-panel {
-    min-width: 0;
+  .shiftflow-app .shiftflow-left-pane {
+    grid-row: 2;
   }
 
-  .shiftflow-scheduler-toolbar,
-  .shiftflow-billing-toolbar,
-  .shiftflow-timesheets-toolbar {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .shiftflow-scheduler-toolbar .ctox-pane-tabs,
-  .shiftflow-billing-date-selector {
-    width: 100%;
-    flex-wrap: wrap;
-  }
-
-  .shiftflow-scheduler-toolbar .ctox-pane-tab {
-    min-width: 0;
-    flex: 1 1 auto;
+  .shiftflow-app .shiftflow-right-pane {
+    grid-row: 3;
   }
 
   .shiftflow-scheduler-grid-header,
@@ -1266,11 +1126,5 @@ body.is-shiftflow-resizing * {
 
   .shiftflow-financial-summary {
     grid-template-columns: 1fr;
-    gap: 10px;
-    padding: 12px;
-  }
-
-  .shiftflow-billing-content-wrapper {
-    padding: 12px;
   }
 }

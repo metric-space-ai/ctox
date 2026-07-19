@@ -25,11 +25,23 @@
   min-height: 0;
 }
 
+/* Collapsible sidebar extras (install actions + discovery info): hidden by
+   default per the M3 reduction — common view is browse/search. A "…" icon
+   button in the pane header toggles [hidden] on this section. */
+.store-sidebar-extras {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+}
+
+.store-sidebar-extras[hidden] {
+  display: none;
+}
+
 .store-create-scratch-wrapper {
   display: grid;
   gap: 6px;
-  padding: 10px;
-  border-bottom: 1px solid var(--hairline, var(--line));
 }
 
 .store-action-btn {
@@ -68,11 +80,8 @@
   min-width: 0;
 }
 
-/* Sidebar discovery info panel: kit .ctox-callout, module owns the margin
+/* Sidebar discovery info panel: kit .ctox-callout, module owns the spacing
    and the sync-state status colors. */
-.store-info-box {
-  margin: 10px;
-}
 
 .store-info-box h4 {
   margin: 0 0 6px;
@@ -89,7 +98,7 @@
 
 .store-refresh-btn {
   width: 100%;
-  margin: 12px 0 10px;
+  margin: 10px 0 8px;
 }
 
 .store-sync-state {
@@ -179,14 +188,11 @@
   gap: 8px;
 }
 
-/* Kit .ctox-empty inside the card grid: span all columns, keep the dashed
-   catalog placeholder frame. */
+/* Kit .ctox-empty inside the card grid: span all columns; rely on the
+   kit's muted centered text — no extra card around the empty state. */
 .store-empty-state {
   grid-column: 1 / -1;
   min-height: 190px;
-  border: 1px dashed color-mix(in srgb, var(--text) 13%, transparent);
-  border-radius: var(--panel-radius);
-  background: color-mix(in srgb, var(--text) 3%, transparent);
 }
 
 .store-empty-state span {

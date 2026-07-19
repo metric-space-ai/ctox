@@ -172,9 +172,26 @@ test('presentation layer stays compact and shell-native', async () => {
   assert.doesNotMatch(source, /border-(?:left|right)\s*:\s*(?:[2-9]|[0-9]{2,})px/);
   assert.doesNotMatch(source, /border-radius:\s*(?:10|12|14|16|18|20|24)px/);
   assert.doesNotMatch(source, /box-shadow:\s*(?:0|inset|rgba|color-mix)/);
-  assert.match(css, /@container business-app-window \(max-width: 880px\)/);
-  assert.match(css, /\.reports-module[\s\S]*grid-template-columns: var\(--reports-left-width, 320px\) 12px minmax\(0, 1fr\)/);
-  assert.match(css, /\.reports-module \[data-resizer\][\s\S]*display: none !important/);
+  // 3-pane contract: collapsible actions column on the right, hidden by
+  // default, toggle from the detail header. Resizers driven by the shell's
+  // kit width vars.
+  assert.match(html, /class="ctox-workspace reports-module[^"]*"/);
+  assert.match(html, /is-actions-hidden/);
+  assert.match(html, /data-toggle-actions/);
+  assert.match(html, /class="ctox-pane reports-actions"/);
+  assert.match(html, /data-resizer-var="--ctox-left-width"/);
+  assert.match(html, /data-resizer-var="--ctox-right-width"/);
+  assert.match(css, /--ctox-left-width: 320px/);
+  assert.match(css, /--ctox-right-width: 340px/);
+  // Collapsed actions column is two-pane; resizers hide on narrow viewports.
+  assert.match(css, /\.reports-module\.is-actions-hidden[\s\S]*grid-template-columns: var\(--ctox-left-width, 320px\) 12px minmax\(0, 1fr\)/);
+  assert.match(css, /\.reports-module[^\{]*\[data-resizer\][\s\S]*display: none !important/);
+  assert.match(css, /@container business-app-window \(max-width: 1180px\)/);
+  assert.match(css, /@container business-app-window \(max-width: 760px\)/);
+  // Decorative helpers from the previous layout are gone — the icon button's
+  // aria-label/title is the single source of the accessible name.
+  assert.doesNotMatch(css, /\.reports-sr-only/);
+  assert.doesNotMatch(html, /reports-sr-only/);
 });
 
 let passed = 0;

@@ -97,7 +97,6 @@ const FALLBACK_LABELS = {
     emptyDetailTitle: 'Keine Konversation ausgewählt',
     emptyDetailBody: 'Wähle links eine Konversation, um die Timeline aus CTOX-Sicht zu sehen.',
     rightEmptyBody: 'Kontaktdaten und verknüpfte Datensätze erscheinen hier.',
-    cardLabelContact: 'Kontakt',
     cardLabelChannels: 'Aktive Channels',
     cardLabelOutbound: 'Outbound',
     cardLabelStats: 'Aktivität',
@@ -219,7 +218,6 @@ const FALLBACK_LABELS = {
     emptyDetailTitle: 'No conversation selected',
     emptyDetailBody: 'Pick a conversation on the left to view the CTOX-side timeline.',
     rightEmptyBody: 'Contact details and linked records appear here.',
-    cardLabelContact: 'Contact',
     cardLabelChannels: 'Active channels',
     cardLabelOutbound: 'Outbound',
     cardLabelStats: 'Activity',
@@ -320,6 +318,14 @@ export async function mount(ctx) {
   ctx.left?.replaceChildren?.();
   ctx.right?.replaceChildren?.();
 
+  // Right pane (Kontext & Status) collapses the workspace to two columns so
+  // the timeline gets the full width; toggled from the left pane header
+  // (data-toggle-actions). Secondary filters (account/direction/date) are
+  // collapsed on mount and re-revealed on demand (data-toggle-filters).
+  const toggleActionsEl = root?.querySelector('[data-toggle-actions]');
+  const toggleFiltersEl = root?.querySelector('[data-toggle-filters]');
+  const secondaryFiltersEl = root?.querySelector('[data-conv-secondary-filters-wrap]');
+
   // Standardised 3-column resizer system
   const leftResizerEl = ctx.host.querySelector('[data-resizer="left"]');
   const rightResizerEl = ctx.host.querySelector('[data-resizer="right"]');
@@ -343,6 +349,29 @@ export async function mount(ctx) {
   void leftResizerEl;
   void rightResizerEl;
   void CtoxResizer;
+
+  // Wire the right-pane and secondary-filter header toggles.
+  if (toggleActionsEl) {
+    toggleActionsEl.addEventListener('click', () => {
+      const hidden = root?.classList.toggle('is-actions-hidden');
+      toggleActionsEl.setAttribute('aria-pressed', String(!hidden));
+      toggleActionsEl.setAttribute(
+        'aria-label',
+        hidden ? 'Kontext einblenden' : 'Kontext ausblenden',
+      );
+    });
+  }
+  if (toggleFiltersEl && secondaryFiltersEl) {
+    toggleFiltersEl.addEventListener('click', () => {
+      const willShow = secondaryFiltersEl.hidden;
+      secondaryFiltersEl.hidden = !willShow;
+      toggleFiltersEl.setAttribute('aria-pressed', String(willShow));
+      toggleFiltersEl.setAttribute(
+        'aria-label',
+        willShow ? 'Filter ausblenden' : 'Filter einblenden',
+      );
+    });
+  }
 
   const messages = await loadModuleMessages(import.meta.url, ctx.locale, FALLBACK_LABELS);
   const t = (key, fallback) => messages[key] ?? fallback ?? key;
@@ -1586,9 +1615,6 @@ export async function mount(ctx) {
     }
     refs.rightEmpty.hidden = true;
     refs.rightDetail.hidden = false;
-    refs.contactAvatar.textContent = avatarGlyphFor(bucket.displayName);
-    refs.contactName.textContent = bucket.displayName;
-    refs.contactHandle.textContent = formatParticipantHandles(bucket.participants);
 
     refs.channelsBody.replaceChildren();
     const messageCountByChannel = countMessagesByChannel(bucket);
@@ -2442,9 +2468,6 @@ function collectRefs(root) {
     rightEmptyTitle: root.querySelector('[data-right-empty-title]'),
     rightEmptyBody: root.querySelector('[data-right-empty-body]'),
     rightDetail: root.querySelector('[data-conv-right-detail]'),
-    contactAvatar: root.querySelector('[data-conv-contact-avatar]'),
-    contactName: root.querySelector('[data-conv-contact-name]'),
-    contactHandle: root.querySelector('[data-conv-contact-handle]'),
     outboundCard: root.querySelector('[data-conv-outbound-card]'),
     outboundBody: root.querySelector('[data-conv-outbound-card-body]'),
     channelsBody: root.querySelector('[data-conv-channels-card-body]'),
@@ -2468,7 +2491,6 @@ function applyStaticLabels(root, t) {
     '[data-empty-detail-title]': 'emptyDetailTitle',
     '[data-empty-detail-body]': 'emptyDetailBody',
     '[data-right-empty-body]': 'rightEmptyBody',
-    '[data-conv-card-label-contact]': 'cardLabelContact',
     '[data-conv-card-label-channels]': 'cardLabelChannels',
     '[data-conv-card-label-outbound]': 'cardLabelOutbound',
     '[data-conv-card-label-stats]': 'cardLabelStats',

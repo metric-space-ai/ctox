@@ -1,6 +1,6 @@
-<div class="shiftflow-app" data-shiftflow-root data-resize-frame>
-  <!-- LEFT PANEL: Team, Status & Projects -->
-  <aside class="shiftflow-panel shiftflow-left-pane" id="shiftflow-left">
+<main class="ctox-workspace shiftflow-app is-actions-hidden" data-shiftflow-root data-resize-frame>
+  <!-- LEFT PANE: Team, Status & Projects -->
+  <aside class="ctox-pane shiftflow-left-pane" id="shiftflow-left">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
@@ -23,49 +23,43 @@
       </div>
     </header>
 
-    <!-- Search and dynamic lists nested inside a flex row-2 container to respect panel architecture -->
-    <div class="shiftflow-left-content">
-
-      <!-- Live Active Employee Status & List + Project List in scrollable area -->
-      <div class="shiftflow-sidebar-scrollable os-scrollbar">
+    <div class="ctox-pane-body">
+      <div class="ctox-pane-scroll shiftflow-sidebar os-scrollbar">
         <!-- Employees Section -->
-        <div class="shiftflow-sidebar-section">
-          <div class="shiftflow-section-title-bar">
-            <span class="shiftflow-section-title" data-t="employees">Mitarbeiter</span>
-          </div>
-          <div class="shiftflow-employee-list-container">
-            <div class="shiftflow-employee-list-section">
-              <div class="shiftflow-section-title"><span data-t="onDuty">Im Dienst</span> <span class="ctox-badge is-success" id="activeEmployeesCount">0</span></div>
+        <section class="shiftflow-sidebar-section">
+          <div class="shiftflow-employee-groups">
+            <div class="shiftflow-employee-group">
+              <div class="shiftflow-section-head"><span class="ctox-field-label" data-t="onDuty">Im Dienst</span> <span class="ctox-badge is-success" id="activeEmployeesCount">0</span></div>
               <div class="shiftflow-employee-list" id="activeEmployeeList"></div>
             </div>
-            <div class="shiftflow-employee-list-section">
-              <div class="shiftflow-section-title"><span data-t="absent">Abwesend</span> <span class="ctox-badge" id="inactiveEmployeesCount">0</span></div>
+            <div class="shiftflow-employee-group">
+              <div class="shiftflow-section-head"><span class="ctox-field-label" data-t="absent">Abwesend</span> <span class="ctox-badge" id="inactiveEmployeesCount">0</span></div>
               <div class="shiftflow-employee-list" id="inactiveEmployeeList"></div>
             </div>
           </div>
-        </div>
+        </section>
 
         <hr class="shiftflow-separator" />
 
         <!-- Projects Section -->
-        <div class="shiftflow-sidebar-section">
-          <div class="shiftflow-section-title-bar">
-            <span class="shiftflow-section-title" data-t="projectsAndLocations">Projekte & Einsatzorte</span>
-            <button class="os-btn" id="addProjectBtn" data-t="addProjectBtnText" data-t-title="addProject" data-t-aria="addProject" title="Projekt hinzufügen" aria-label="Projekt hinzufügen" style="padding: 2px 8px; font-size: 11px;">+ Projekt</button>
+        <section class="shiftflow-sidebar-section">
+          <div class="shiftflow-section-head">
+            <span class="ctox-field-label" data-t="projectsAndLocations">Projekte & Einsatzorte</span>
+            <button class="ctox-button ctox-button--sm" id="addProjectBtn" data-t="addProjectBtnText" data-t-title="addProject" data-t-aria="addProject" title="Projekt hinzufügen" aria-label="Projekt hinzufügen">+ Projekt</button>
           </div>
           <div class="shiftflow-project-list" id="projectList">
             <!-- Projects will be rendered dynamically -->
           </div>
-        </div>
+        </section>
       </div>
     </div>
   </aside>
 
-  <!-- LEFT RESIZER -->
-  <button class="shiftflow-col-resizer ctox-column-resizer" type="button" data-t-aria="adjustLeftWidth" aria-label="Linke Spaltenbreite anpassen" data-shiftflow-col-resizer="left" data-resizer="left" data-resizer-var="--shiftflow-left-width" data-resizer-min="220" data-resizer-max="480"></button>
+  <!-- LEFT RESIZER (shell-owned, declarative) -->
+  <button class="ctox-column-resizer" type="button" data-t-aria="adjustLeftWidth" aria-label="Linke Spaltenbreite anpassen" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="220" data-resizer-max="480"></button>
 
-  <!-- CENTER PANEL: Main Scheduler, Timesheets & Billing -->
-  <main class="shiftflow-panel shiftflow-center-pane" id="shiftflow-center">
+  <!-- CENTER PANE: Main Scheduler, Timesheets & Billing -->
+  <section class="ctox-pane shiftflow-center-pane" id="shiftflow-center">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
@@ -80,22 +74,26 @@
           </div>
           <button class="ctox-pane-icon" id="prevWeekBtn" data-t-title="prevWeek" data-t-aria="prevWeek" title="Vorherige Woche" aria-label="Vorherige Woche"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg></button>
           <button class="ctox-pane-icon" id="nextWeekBtn" data-t-title="nextWeek" data-t-aria="nextWeek" title="Nächste Woche" aria-label="Nächste Woche"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></button>
+          <button type="button" class="ctox-pane-icon" data-toggle-actions data-t-title="aiAssistantToggle" data-t-aria="aiAssistantToggle" title="CTOX Planungs-Assistent" aria-label="CTOX Planungs-Assistent einblenden" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button>
         </div>
       </div>
     </header>
 
     <!-- VIEW 1: SCHEDULER TIMELINE (Calendar Grid) -->
     <div class="shiftflow-view-content" id="schedulerView">
-      <!-- Toolbar for Dual-Timeline Switcher -->
-      <div class="shiftflow-scheduler-toolbar">
-        <div class="ctox-pane-tabs" role="group" aria-label="Timeline Fokus">
-          <button type="button" class="ctox-pane-tab active" id="toggleViewEmployeesBtn" data-t="employeeTimeline" aria-pressed="true">Mitarbeiter-Timeline</button>
-          <button type="button" class="ctox-pane-tab" id="toggleViewProjectsBtn" data-t="projectTimeline" aria-pressed="false">Projekt-Timeline</button>
-        </div>
-        <div class="flex-spacer"></div>
-        <span class="shiftflow-publish-status" id="publishScheduleStatus" aria-live="polite"></span>
-        <button type="button" class="os-btn" id="btnPublishSchedule" data-t="publishSchedule" style="font-size:12px; padding:6px 12px; height:32px;">Dienstplan veröffentlichen</button>
-      </div>
+      <!-- Toolbar for Dual-Timeline Switcher + signature publish automation -->
+      <header class="ctox-action-strip">
+        <span class="ctox-action-strip__group">
+          <div class="ctox-pane-tabs" role="group" aria-label="Timeline Fokus">
+            <button type="button" class="ctox-pane-tab active" id="toggleViewEmployeesBtn" data-t="employeeTimeline" aria-pressed="true">Mitarbeiter-Timeline</button>
+            <button type="button" class="ctox-pane-tab" id="toggleViewProjectsBtn" data-t="projectTimeline" aria-pressed="false">Projekt-Timeline</button>
+          </div>
+        </span>
+        <span class="ctox-action-strip__group">
+          <span class="shiftflow-publish-status" id="publishScheduleStatus" aria-live="polite"></span>
+          <button type="button" class="ctox-run-control" id="btnPublishSchedule" data-t="publishSchedule">Dienstplan veröffentlichen</button>
+        </span>
+      </header>
 
       <div class="shiftflow-scheduler-container os-scrollbar">
         <!-- Calendar Grid Header (Days) -->
@@ -112,48 +110,54 @@
 
     <!-- VIEW 2: TIMESHEETS WORKBENCH -->
     <div class="shiftflow-view-content hidden" id="timesheetsView">
-      <div class="shiftflow-timesheets-toolbar">
-        <div class="shiftflow-toolbar-title" data-t="timesheetsToolbarTitle">Soll/Ist-Vergleich & Stundenfreigabe</div>
-        <div class="shiftflow-toolbar-actions">
-          <button class="os-btn os-btn-primary" id="approveAllTimesheetsBtn" data-t="approveAll">Alle freigeben</button>
-        </div>
-      </div>
-      <div class="shiftflow-timesheets-list os-scrollbar" id="timesheetsList">
+      <header class="ctox-action-strip">
+        <span class="ctox-action-strip__group">
+          <button class="ctox-button is-primary" id="approveAllTimesheetsBtn" data-t="approveAll">Alle freigeben</button>
+        </span>
+      </header>
+      <div class="ctox-pane-scroll shiftflow-timesheets-list os-scrollbar" id="timesheetsList">
         <!-- Timesheets will be loaded here -->
       </div>
     </div>
 
     <!-- VIEW 3: BILLING & AGGREGATION WORKBENCH -->
     <div class="shiftflow-view-content hidden" id="billingView">
-      <div class="shiftflow-billing-toolbar">
-        <div class="shiftflow-billing-date-selector">
-          <div class="shiftflow-input-wrapper">
-            <span class="shiftflow-input-label" data-t="dateFrom">Von</span>
-            <input type="date" id="billingStartDate" class="os-input" />
-          </div>
-          <div class="shiftflow-input-wrapper">
-            <span class="shiftflow-input-label" data-t="dateTo">Bis</span>
-            <input type="date" id="billingEndDate" class="os-input" />
-          </div>
-          <button class="os-btn" id="billingFilterApplyBtn" data-t="filter" style="height:32px; padding:0 12px;">Filtern</button>
-        </div>
-        <div class="flex-spacer"></div>
-        <button class="os-btn shiftflow-icon-text-btn" id="exportInvoiceDraftBtn" data-icon="document" data-t="exportInvoiceDraft" style="height:32px; padding:0 12px;">Rechnungsentwurf (JSON)</button>
-      </div>
+      <header class="ctox-action-strip">
+        <span class="ctox-action-strip__group shiftflow-billing-date-selector">
+          <label class="shiftflow-date-field">
+            <span class="ctox-field-label" data-t="dateFrom">Von</span>
+            <input type="date" id="billingStartDate" class="ctox-input" />
+          </label>
+          <label class="shiftflow-date-field">
+            <span class="ctox-field-label" data-t="dateTo">Bis</span>
+            <input type="date" id="billingEndDate" class="ctox-input" />
+          </label>
+          <button class="ctox-button" id="billingFilterApplyBtn" data-t="filter">Filtern</button>
+        </span>
+        <span class="ctox-action-strip__group">
+          <button class="ctox-button shiftflow-icon-text-btn" id="exportInvoiceDraftBtn" data-icon="document" data-t="exportInvoiceDraft">Rechnungsentwurf (JSON)</button>
+        </span>
+      </header>
 
       <!-- Financial Margins Dashboard -->
       <div class="shiftflow-financial-summary">
-        <div class="shiftflow-fin-card">
-          <span class="shiftflow-fin-label" data-t="billingTotalRevenueLabel">Umsatz (Abrechenbar)</span>
-          <span class="shiftflow-fin-value text-revenue" id="billingTotalRevenue">0,00 €</span>
+        <div class="ctox-card">
+          <header data-t="billingTotalRevenueLabel">Umsatz (Abrechenbar)</header>
+          <div class="ctox-card-body">
+            <span class="shiftflow-fin-value text-revenue" id="billingTotalRevenue">0,00 €</span>
+          </div>
         </div>
-        <div class="shiftflow-fin-card">
-          <span class="shiftflow-fin-label" data-t="billingTotalCostLabel">Lohnkosten (Intern)</span>
-          <span class="shiftflow-fin-value text-cost" id="billingTotalCost">0,00 €</span>
+        <div class="ctox-card">
+          <header data-t="billingTotalCostLabel">Lohnkosten (Intern)</header>
+          <div class="ctox-card-body">
+            <span class="shiftflow-fin-value text-cost" id="billingTotalCost">0,00 €</span>
+          </div>
         </div>
-        <div class="shiftflow-fin-card">
-          <span class="shiftflow-fin-label" data-t="billingTotalMarginLabel">Bruttomarge (Projekte)</span>
-          <span class="shiftflow-fin-value text-margin" id="billingTotalMargin">0,00 € (0%)</span>
+        <div class="ctox-card">
+          <header data-t="billingTotalMarginLabel">Bruttomarge (Projekte)</header>
+          <div class="ctox-card-body">
+            <span class="shiftflow-fin-value text-margin" id="billingTotalMargin">0,00 € (0%)</span>
+          </div>
         </div>
       </div>
 
@@ -178,27 +182,27 @@
         </table>
       </div>
     </div>
-  </main>
+  </section>
 
-  <!-- RIGHT RESIZER -->
-  <button class="shiftflow-col-resizer ctox-column-resizer" type="button" data-t-aria="adjustRightWidth" aria-label="Rechte Spaltenbreite anpassen" data-shiftflow-col-resizer="right" data-resizer="right" data-resizer-var="--shiftflow-right-width" data-resizer-min="280" data-resizer-max="520"></button>
+  <!-- RIGHT RESIZER (shell-owned, declarative) -->
+  <button class="ctox-column-resizer" type="button" data-t-aria="adjustRightWidth" aria-label="Rechte Spaltenbreite anpassen" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="280" data-resizer-max="520"></button>
 
-  <!-- RIGHT PANEL: AI Planner & Detail Inspector -->
-  <aside class="shiftflow-panel shiftflow-right-pane" id="shiftflow-right">
+  <!-- RIGHT PANE: AI Planner & Detail Inspector -->
+  <aside class="ctox-pane shiftflow-right-pane" id="shiftflow-right">
     <!-- Tab 1: AI Planner Context -->
     <div class="shiftflow-right-pane-section" id="aiPlannerSection">
       <header class="ctox-pane-header ctox-pane-band">
         <div class="ctox-pane-title-row">
-          <div class="ctox-pane-titles" style="display:flex; flex-direction:row; align-items:center; gap:8px;">
-            <span class="shiftflow-icon-mask" data-icon="spark" style="color:var(--shiftflow-accent);"></span>
-            <h2 class="ctox-pane-title" style="margin:0;" data-t="aiAssistantTitle">CTOX Planungs-Assistent</h2>
+          <div class="ctox-pane-titles shiftflow-ai-title">
+            <span class="shiftflow-icon-mask" data-icon="spark" aria-hidden="true"></span>
+            <h2 class="ctox-pane-title" data-t="aiAssistantTitle">CTOX Planungs-Assistent</h2>
           </div>
         </div>
       </header>
       <div class="shiftflow-ai-chat-card">
-        <div class="shiftflow-ai-chat-body" id="aiPlannerChatBody">
+        <div class="shiftflow-ai-chat-body os-scrollbar" id="aiPlannerChatBody">
           <div class="shiftflow-ai-msg bot">
-            <div class="shiftflow-ai-avatar">AI</div>
+            <div class="ctox-avatar ctox-avatar--sm">AI</div>
             <div class="shiftflow-ai-text" data-t="aiAssistantWelcome">Hallo! Ich bin dein CTOX Planungs-Assistent. Ich kann dir dabei helfen, den Dienstplan automatisch zu optimieren, Konflikte zu prüfen oder kurzfristigen Schicht-Ersatz bei Krankheit zu finden. Was kann ich heute für dich tun?</div>
           </div>
         </div>
@@ -210,10 +214,12 @@
       </div>
 
       <!-- Conflicts Alert Roster -->
-      <div class="shiftflow-conflicts-alert-container os-scrollbar">
-        <div class="shiftflow-section-title" data-t="conflictsAndWarnings">Konflikte & Warnungen</div>
+      <div class="ctox-pane-scroll shiftflow-conflicts-alert-container os-scrollbar">
+        <div class="shiftflow-section-head">
+          <span class="ctox-field-label" data-t="conflictsAndWarnings">Konflikte & Warnungen</span>
+        </div>
         <div class="shiftflow-conflicts-list" id="conflictsList">
-          <div class="shiftflow-conflict-empty-state" data-t="noConflictsDetected">Keine aktiven Konflikte erkannt. Der Dienstplan erfüllt alle Vorgaben.</div>
+          <div class="ctox-empty" data-t="noConflictsDetected">Keine aktiven Konflikte erkannt. Der Dienstplan erfüllt alle Vorgaben.</div>
         </div>
       </div>
     </div>
@@ -230,9 +236,9 @@
           </div>
         </div>
       </header>
-      <div class="shiftflow-detail-body os-scrollbar" id="inspectorContent">
+      <div class="ctox-pane-scroll shiftflow-detail-body os-scrollbar" id="inspectorContent">
         <!-- Detail view will be loaded here -->
       </div>
     </div>
   </aside>
-</div>
+</main>
