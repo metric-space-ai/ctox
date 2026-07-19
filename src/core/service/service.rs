@@ -6145,11 +6145,13 @@ fn start_prompt_worker(
             let app_validation_precompleted = false;
             let systematic_research = is_systematic_research_job(&job);
             let research_validation_failure = if result.is_ok() && systematic_research {
+                let research_started_at =
+                    systematic_research_started_at(&root, &job, research_attempt_started_at);
                 match validate_systematic_research_workspace(
                     &root,
                     &job,
                     &command_turn_id,
-                    research_attempt_started_at,
+                    research_started_at,
                 ) {
                     Ok(receipt) => {
                         push_event(
@@ -10803,6 +10805,44 @@ fn systematic_research_binding(job: &QueuedPrompt) -> Result<(&str, &str)> {
     Ok((run_id, command_id))
 }
 
+fn systematic_research_started_at(
+    root: &Path,
+    job: &QueuedPrompt,
+    fallback_started_at: u64,
+) -> u64 {
+    let db_path = crate::paths::core_db(root);
+    let Ok(conn) = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return fallback_started_at;
+    };
+    let mut earliest = None;
+    for message_key in &job.leased_message_keys {
+        let created_at = conn
+            .query_row(
+                "SELECT MIN(created_at)
+                 FROM ctox_harness_flow_events
+                 WHERE message_key = ?1
+                   AND event_kind = 'business_command_context_loaded'",
+                params![message_key],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten();
+        let Some(epoch) = created_at
+            .as_deref()
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .and_then(|value| u64::try_from(value.timestamp()).ok())
+            .filter(|epoch| *epoch <= fallback_started_at)
+        else {
+            continue;
+        };
+        earliest = Some(earliest.map_or(epoch, |current: u64| current.min(epoch)));
+    }
+    earliest.unwrap_or(fallback_started_at)
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum SystematicResearchDepth {
     Quick,
@@ -10852,9 +10892,9 @@ fn required_systematic_research_depth(job: &QueuedPrompt) -> SystematicResearchD
 fn validate_systematic_research_deep_research_receipt(
     job: &QueuedPrompt,
     workspace: &Path,
-    expected_attempt_id: &str,
-    attempt_started_at: u64,
+    research_started_at: u64,
 ) -> Result<Value> {
+    let (expected_run_id, expected_command_id) = systematic_research_binding(job)?;
     let codex_home =
         ctox_core::config::find_codex_home().context("resolve harness state directory")?;
     let state_db = [
@@ -10873,8 +10913,9 @@ fn validate_systematic_research_deep_research_receipt(
         &conn,
         &codex_home,
         workspace,
-        expected_attempt_id,
-        attempt_started_at,
+        &expected_run_id,
+        &expected_command_id,
+        research_started_at,
         required_systematic_research_depth(job),
     )
 }
@@ -10883,8 +10924,9 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
     conn: &Connection,
     codex_home: &Path,
     workspace: &Path,
-    expected_attempt_id: &str,
-    attempt_started_at: u64,
+    expected_run_id: &str,
+    expected_command_id: &str,
+    research_started_at: u64,
     required_depth: SystematicResearchDepth,
 ) -> Result<Value> {
     let workspace = workspace
@@ -10918,7 +10960,8 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
         let file = std::fs::File::open(&rollout_path)
             .with_context(|| format!("open harness rollout {}", rollout_path.display()))?;
         let mut calls = BTreeMap::<String, (SystematicResearchDepth, u64)>::new();
-        let mut attempt_bound = false;
+        let mut run_bound = false;
+        let mut command_bound = false;
         let mut workspace_bound = false;
         for line in BufReader::new(file).lines() {
             let line = line?;
@@ -10933,17 +10976,21 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
             else {
                 continue;
             };
-            if timestamp < attempt_started_at {
+            if timestamp < research_started_at {
                 continue;
             }
             let payload = value.get("payload").unwrap_or(&Value::Null);
             if payload.get("type").and_then(Value::as_str) == Some("task_started") {
-                attempt_bound = false;
+                run_bound = false;
+                command_bound = false;
                 workspace_bound = false;
                 calls.clear();
             }
-            if line.contains(expected_attempt_id) {
-                attempt_bound = true;
+            if line.contains(expected_run_id) {
+                run_bound = true;
+            }
+            if line.contains(expected_command_id) {
+                command_bound = true;
             }
             if value.get("type").and_then(Value::as_str) == Some("turn_context") {
                 workspace_bound = payload
@@ -10957,7 +11004,7 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
                     if payload.get("name").and_then(Value::as_str)
                         == Some("ctox_deep_research") =>
                 {
-                    if !attempt_bound || !workspace_bound {
+                    if !run_bound || !command_bound || !workspace_bound {
                         continue;
                     }
                     let Some(call_id) = payload.get("call_id").and_then(Value::as_str) else {
@@ -11035,6 +11082,8 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
                             "thread_id": thread_id,
                             "call_id": call_id,
                             "called_at_epoch": called_at,
+                            "research_run_id": expected_run_id,
+                            "research_command_id": expected_command_id,
                             "research_workspace": research_workspace.cloned(),
                             "rollout_path": rollout_path,
                         }));
@@ -11047,7 +11096,7 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
     }
 
     anyhow::bail!(
-        "systematic research requires a successful persisted typed ctox_deep_research call at depth {}; observed current-attempt calls: {}",
+        "systematic research requires a successful persisted typed ctox_deep_research call at depth {} in the current durable research run; observed calls: {}",
         required_depth.as_str(),
         if observed_depths.is_empty() {
             "none".to_string()
@@ -11071,7 +11120,7 @@ fn systematic_research_validation_receipt_path(job: &QueuedPrompt) -> Option<Pat
 fn validate_systematic_research_web_receipts(
     root: &Path,
     manifest: &Value,
-    attempt_started_at: u64,
+    research_started_at: u64,
 ) -> Result<()> {
     fn normalized_sha256(value: &str) -> Option<&str> {
         let digest = value.strip_prefix("sha256:").unwrap_or(value);
@@ -11263,7 +11312,7 @@ fn validate_systematic_research_web_receipts(
             url_matches
                 && created_at > 0
                 && checked_at > 0
-                && created_at >= attempt_started_at
+                && created_at >= research_started_at
                 && now.saturating_sub(created_at) <= MAX_WEB_RECEIPT_AGE_SECS
                 && checked_at == manifest_checked_at
                 && entry.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
@@ -11307,7 +11356,7 @@ fn validate_systematic_research_workspace(
     root: &Path,
     job: &QueuedPrompt,
     expected_attempt_id: &str,
-    attempt_started_at: u64,
+    research_started_at: u64,
 ) -> Result<PathBuf> {
     use sha2::Digest;
 
@@ -11374,10 +11423,9 @@ fn validate_systematic_research_workspace(
         let deep_research_receipt = validate_systematic_research_deep_research_receipt(
             job,
             &workspace,
-            expected_attempt_id,
-            attempt_started_at,
+            research_started_at,
         )?;
-        validate_systematic_research_web_receipts(root, &manifest_value, attempt_started_at)?;
+        validate_systematic_research_web_receipts(root, &manifest_value, research_started_at)?;
         let output = Command::new("python3")
             .arg(&validator)
             .arg(&manifest)
@@ -24460,11 +24508,13 @@ mod tests {
         )
         .unwrap();
         let timestamp = now_iso_string();
-        let expected_attempt_id = "business-command-turn:current-attempt";
-        let attempt_started_at = current_epoch_secs().saturating_sub(1);
+        let expected_run_id = "run-1";
+        let expected_command_id = "command-1";
+        let research_started_at = current_epoch_secs().saturating_sub(1);
         let write_rollout = |depth: &str,
                              no_workspace: bool,
-                             attempt_id: &str,
+                             run_id: &str,
+                             command_id: &str,
                              turn_workspace: &Path,
                              preceding_tool: Option<&str>| {
             let arguments = serde_json::json!({
@@ -24499,7 +24549,9 @@ mod tests {
                         "role": "user",
                         "content": [{
                             "type": "input_text",
-                            "text": format!("Research Attempt ID: {attempt_id}"),
+                            "text": format!(
+                                "Research Run ID: {run_id}\nResearch Command ID: {command_id}"
+                            ),
                         }],
                     }
                 })
@@ -24558,58 +24610,80 @@ mod tests {
         write_rollout(
             "exhaustive",
             false,
-            "business-command-turn:foreign-attempt",
+            "foreign-run",
+            "foreign-command",
             &workspace,
             None,
         );
-        let foreign_attempt = validate_systematic_research_deep_research_receipt_from_conn(
+        let foreign_binding = validate_systematic_research_deep_research_receipt_from_conn(
             &conn,
             &codex_home,
             &workspace,
-            expected_attempt_id,
-            attempt_started_at,
+            expected_run_id,
+            expected_command_id,
+            research_started_at,
             SystematicResearchDepth::Exhaustive,
         )
         .unwrap_err();
-        assert!(foreign_attempt
-            .to_string()
-            .contains("observed current-attempt calls: none"));
+        assert!(foreign_binding.to_string().contains("observed calls: none"));
 
-        write_rollout("exhaustive", false, expected_attempt_id, &codex_home, None);
+        write_rollout(
+            "exhaustive",
+            false,
+            expected_run_id,
+            expected_command_id,
+            &codex_home,
+            None,
+        );
         let foreign_workspace = validate_systematic_research_deep_research_receipt_from_conn(
             &conn,
             &codex_home,
             &workspace,
-            expected_attempt_id,
-            attempt_started_at,
+            expected_run_id,
+            expected_command_id,
+            research_started_at,
             SystematicResearchDepth::Exhaustive,
         )
         .unwrap_err();
         assert!(foreign_workspace
             .to_string()
-            .contains("observed current-attempt calls: none"));
+            .contains("observed calls: none"));
 
-        write_rollout("standard", false, expected_attempt_id, &workspace, None);
+        write_rollout(
+            "standard",
+            false,
+            expected_run_id,
+            expected_command_id,
+            &workspace,
+            None,
+        );
         let shallow = validate_systematic_research_deep_research_receipt_from_conn(
             &conn,
             &codex_home,
             &workspace,
-            expected_attempt_id,
-            attempt_started_at,
+            expected_run_id,
+            expected_command_id,
+            research_started_at,
             SystematicResearchDepth::Exhaustive,
         )
         .unwrap_err();
-        assert!(shallow
-            .to_string()
-            .contains("observed current-attempt calls: standard"));
+        assert!(shallow.to_string().contains("observed calls: standard"));
 
-        write_rollout("exhaustive", true, expected_attempt_id, &workspace, None);
+        write_rollout(
+            "exhaustive",
+            true,
+            expected_run_id,
+            expected_command_id,
+            &workspace,
+            None,
+        );
         let unpersisted = validate_systematic_research_deep_research_receipt_from_conn(
             &conn,
             &codex_home,
             &workspace,
-            expected_attempt_id,
-            attempt_started_at,
+            expected_run_id,
+            expected_command_id,
+            research_started_at,
             SystematicResearchDepth::Exhaustive,
         )
         .unwrap_err();
@@ -24620,7 +24694,8 @@ mod tests {
         write_rollout(
             "exhaustive",
             false,
-            expected_attempt_id,
+            expected_run_id,
+            expected_command_id,
             &workspace,
             Some("exec_command"),
         );
@@ -24628,20 +24703,29 @@ mod tests {
             &conn,
             &codex_home,
             &workspace,
-            expected_attempt_id,
-            attempt_started_at,
+            expected_run_id,
+            expected_command_id,
+            research_started_at,
             SystematicResearchDepth::Exhaustive,
         )
         .unwrap();
         assert_eq!(receipt_after_inventory["depth"], "exhaustive");
 
-        write_rollout("exhaustive", false, expected_attempt_id, &workspace, None);
+        write_rollout(
+            "exhaustive",
+            false,
+            expected_run_id,
+            expected_command_id,
+            &workspace,
+            None,
+        );
         let receipt = validate_systematic_research_deep_research_receipt_from_conn(
             &conn,
             &codex_home,
             &workspace,
-            expected_attempt_id,
-            attempt_started_at,
+            expected_run_id,
+            expected_command_id,
+            research_started_at,
             SystematicResearchDepth::Exhaustive,
         )
         .unwrap();
@@ -24659,8 +24743,9 @@ mod tests {
                 &conn,
                 &codex_home,
                 &workspace,
-                expected_attempt_id,
-                attempt_started_at,
+                expected_run_id,
+                expected_command_id,
+                research_started_at,
                 SystematicResearchDepth::Exhaustive,
             )
             .unwrap_err();

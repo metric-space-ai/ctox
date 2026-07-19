@@ -341,8 +341,11 @@ The evidence manifest must copy the task's exact `Research Run ID` and
 `Research Command ID` into `research_run_id` and `research_command_id`.
 It must also copy the server-injected `Research Attempt ID` into
 `research_attempt_id`; `run_id` must equal `research_run_id`. The only accepted
-manifest path is `validation/evidence-manifest.json`, and every admitted Web
-Stack receipt must have been created during that server attempt.
+manifest path is `validation/evidence-manifest.json`. Every admitted Web Stack
+receipt must belong to the same durable research run, command, and workspace.
+Immutable retrieval receipts may be reused across bounded correction attempts
+of that run; the manifest itself and the completion result must always carry
+the current server attempt ID.
 All artifact paths are workspace-relative; absolute paths, `..` escapes, and
 symlink escapes are rejected. Free subagents are not part of CTOX research:
 never call `spawn_agent`, `spawn_agents_on_csv`, or related collaboration
@@ -395,8 +398,9 @@ just below the cutoff.
 
 Write each `ctox web deep-research` / `ctox web scholarly search`
 result batch into `ctox knowledge data append --domain <d> --key
-source_catalog --rows '[…]'` **before** issuing the next discovery
-call. Reasons:
+source_candidates --rows '[…]'` **before** issuing the next discovery call.
+Promote only the rows whose original-content receipts pass the evidence guard
+into `source_catalog`. Reasons:
 
 - Native API-tool responses are large; without incremental persistence
   the agent's per-turn context fills with raw search envelopes, those

@@ -354,8 +354,11 @@ to rework. A passing guard writes a content-hash-bound validation receipt under
 
 The service also verifies the parent worker's durable rollout before accepting
 systematic research. It requires a successful typed `ctox_deep_research` call
-from the current attempt, at the depth declared by the server-bound task, and a
-persisted research workspace inside the task workspace. Shallower calls and
+from the same durable research run and command, at the depth declared by the
+server-bound task, and a persisted research workspace inside the task
+workspace. Immutable Web Stack and deep-research receipts may span bounded
+rework attempts of that same run, command, and workspace; the evidence manifest
+and completion result remain bound to the current attempt. Shallower calls and
 `no_workspace` discovery runs cannot satisfy completion. The complete Web Stack
 remains visible from the first model turn so Systematic Research can iterate
 scholarly search, focused web search, direct reads, browser work, and broad
