@@ -1536,9 +1536,11 @@ fn is_data_file_url(raw: &str) -> bool {
 }
 
 fn read_has_meaningful_evidence(read: &Value) -> bool {
-    read.get("summary")
-        .and_then(Value::as_str)
-        .is_some_and(is_meaningful_evidence_text)
+    read_has_validated_data_evidence(read)
+        || read
+            .get("summary")
+            .and_then(Value::as_str)
+            .is_some_and(is_meaningful_evidence_text)
         || read
             .get("excerpts")
             .and_then(Value::as_array)
@@ -1563,6 +1565,42 @@ fn read_has_meaningful_evidence(read: &Value) -> bool {
                         })
                 })
             })
+}
+
+fn read_has_validated_data_evidence(read: &Value) -> bool {
+    let Some(content_kind) = read.get("response_content_kind").and_then(Value::as_str) else {
+        return false;
+    };
+    if !content_kind.starts_with("data_")
+        || read.get("evidence_eligible").and_then(Value::as_bool) != Some(true)
+        || !read_transport_verified(read)
+        || !read
+            .get("snapshot_hash")
+            .and_then(Value::as_str)
+            .is_some_and(|hash| hash.starts_with("sha256:") && hash.len() == 71)
+        || !read
+            .get("response_artifact_path")
+            .and_then(Value::as_str)
+            .is_some_and(|path| !path.trim().is_empty())
+    {
+        return false;
+    }
+    if content_kind != "data_zip" {
+        return true;
+    }
+    let Some(manifest) = read.get("response_archive_manifest") else {
+        return false;
+    };
+    manifest.get("archive_sha256").and_then(Value::as_str)
+        == read.get("snapshot_hash").and_then(Value::as_str)
+        && manifest
+            .get("member_count")
+            .and_then(Value::as_u64)
+            .is_some_and(|count| count > 0)
+        && manifest
+            .get("data_member_count")
+            .and_then(Value::as_u64)
+            .is_some_and(|count| count > 0)
 }
 
 fn mark_source_read_failure(source: &mut Value, reason: &str) {
@@ -3330,6 +3368,31 @@ mod tests {
             "excerpts": [],
             "find_results": [],
         })));
+        let archive_hash =
+            "sha256:c9e92c5e5be0aeadab0d42e2ded5d85822f3e8b8e00029d434a68822e108ca98";
+        let archive_read = json!({
+            "verification_status": "verified",
+            "http_status": 200,
+            "snapshot_hash": archive_hash,
+            "response_content_kind": "data_zip",
+            "response_artifact_path": "/tmp/original.zip",
+            "response_archive_manifest": {
+                "archive_sha256": archive_hash,
+                "member_count": 221,
+                "data_member_count": 171,
+            },
+            "transport_evidence_eligible": true,
+            "evidence_eligible": true,
+            "summary": "",
+            "excerpts": [],
+            "find_results": [],
+        });
+        assert!(read_has_validated_data_evidence(&archive_read));
+        assert!(read_has_meaningful_evidence(&archive_read));
+        let mut missing_manifest = archive_read.clone();
+        missing_manifest["response_archive_manifest"] = Value::Null;
+        assert!(!read_has_validated_data_evidence(&missing_manifest));
+        assert!(!read_has_meaningful_evidence(&missing_manifest));
     }
 
     #[test]
