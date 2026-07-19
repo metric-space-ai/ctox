@@ -902,10 +902,25 @@
   background: var(--knowledge-surface);
 }
 .knowledge-module .knowledge-filter-toggle[aria-expanded="true"] { color: var(--knowledge-accent); }
+/* Advanced filter tray: a single recessed fill that drops down under the search
+   row. One surface (a fill, not a border box) holding clearly labelled groups —
+   scope, sort, content type — each a full-width segmented control or chip row. */
 .knowledge-module .knowledge-filter-advanced {
-  padding: 8px 12px 10px;
-  border-bottom: 1px solid var(--knowledge-line);
-  background: var(--knowledge-surface);
+  display: grid;
+  gap: var(--space-3);
+  margin: 6px 10px 8px;
+  padding: 10px;
+  border-radius: var(--knowledge-control-radius);
+  background: var(--kit-fill);
+}
+.knowledge-module .knowledge-filter-advanced .knowledge-subtabs {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+}
+.knowledge-module .knowledge-filter-advanced .knowledge-subtabs .ctox-pane-tab {
+  flex: 1 1 0;
+  min-width: 0;
 }
 .knowledge-module .knowledge-filter-hint {
   margin: 0;
@@ -1040,16 +1055,16 @@
 /* the sort sub-tabs inside the filter panel are also one level down */
 .knowledge-module .knowledge-subtabs .ctox-pane-tab { font-size: var(--fs-meta); }
 
-/* Advanced filter contents */
-.knowledge-module .knowledge-filter-group { display: grid; gap: 5px; margin-bottom: 9px; }
-.knowledge-module .knowledge-filter-group:last-child { margin-bottom: 0; }
+/* Advanced filter contents — the tray sets the inter-group gap, so groups carry
+   no margin of their own; each is just a label stacked over its control. */
+.knowledge-module .knowledge-filter-group { display: grid; gap: 6px; margin: 0; }
 .knowledge-module .knowledge-filter-label {
   font-size: var(--fs-micro);
   color: var(--knowledge-muted);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
 }
-.knowledge-module .knowledge-filter-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.knowledge-module .knowledge-filter-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .knowledge-module .knowledge-filter-chips .ctox-chip { cursor: pointer; font-size: var(--fs-meta); }
 .knowledge-module .knowledge-filter-chips .ctox-chip[aria-pressed="true"] {
   background: var(--knowledge-accent);

@@ -170,14 +170,24 @@ function documentTemplate() {
             </div>
           </div>
         </header>
-        <!-- Row 2: filter section — search input + gear that expands advanced filters. -->
+        <!-- Row 2: filter section — search + a single toggle. Everything else
+             (scope, sort, content type) lives in the advanced tray and stays
+             collapsed until the toggle is pressed. -->
         <div class="knowledge-filterbar">
-          <input class="ctox-pane-search" data-search placeholder="Suchen..." />
-          <button class="ctox-pane-icon knowledge-filter-toggle" type="button" data-action="toggle-filters" aria-expanded="false" aria-label="Erweiterte Filter" title="Erweiterte Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="8" x2="20" y2="8"/><line x1="4" y1="16" x2="20" y2="16"/><circle cx="10" cy="8" r="2.2" fill="var(--knowledge-surface)"/><circle cx="15" cy="16" r="2.2" fill="var(--knowledge-surface)"/></svg></button>
+          <input class="ctox-pane-search" data-search placeholder="Suchen…" />
+          <button class="ctox-pane-icon knowledge-filter-toggle" type="button" data-action="toggle-filters" aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--knowledge-surface-muted)"/><circle cx="15" cy="12" r="2.4" fill="var(--knowledge-surface-muted)"/><circle cx="8" cy="17" r="2.4" fill="var(--knowledge-surface-muted)"/></svg></button>
         </div>
         <div class="knowledge-filter-advanced" data-filter-advanced hidden>
           <div class="knowledge-filter-group">
-            <span class="knowledge-filter-label">Sortieren</span>
+            <span class="knowledge-filter-label">Bereich</span>
+            <div class="ctox-pane-tabs knowledge-subtabs" role="tablist" aria-label="Knowledge Quelle">
+              <button type="button" class="ctox-pane-tab" role="tab" data-scope="user" aria-selected="false">User</button>
+              <button type="button" class="ctox-pane-tab" role="tab" data-scope="system" aria-selected="false">System</button>
+              <button type="button" class="ctox-pane-tab" role="tab" data-scope="all" aria-selected="true">Alle</button>
+            </div>
+          </div>
+          <div class="knowledge-filter-group">
+            <span class="knowledge-filter-label">Sortierung</span>
             <div class="ctox-pane-tabs knowledge-subtabs" role="tablist" aria-label="Sortierung">
               <button type="button" class="ctox-pane-tab" data-sort="recent" aria-selected="true">Zuletzt</button>
               <button type="button" class="ctox-pane-tab" data-sort="edited" aria-selected="false">Bearbeitet</button>
@@ -185,20 +195,12 @@ function documentTemplate() {
             </div>
           </div>
           <div class="knowledge-filter-group">
-            <span class="knowledge-filter-label">Nur mit Inhalt</span>
+            <span class="knowledge-filter-label">Enthält</span>
             <div class="knowledge-filter-chips">
               <button type="button" class="ctox-chip" data-flag="skillbooks" aria-pressed="false">Skillbooks</button>
               <button type="button" class="ctox-chip" data-flag="runbooks" aria-pressed="false">Runbooks</button>
               <button type="button" class="ctox-chip" data-flag="tables" aria-pressed="false">Tabellen</button>
             </div>
-          </div>
-        </div>
-        <!-- Row 3: main switcher (source scope). -->
-        <div class="knowledge-scope-switch">
-          <div class="ctox-pane-tabs" role="tablist" aria-label="Knowledge Quelle">
-            <button type="button" class="ctox-pane-tab" role="tab" data-scope="user" aria-selected="false">User</button>
-            <button type="button" class="ctox-pane-tab" role="tab" data-scope="system" aria-selected="false">System</button>
-            <button type="button" class="ctox-pane-tab" role="tab" data-scope="all" aria-selected="true">Alle</button>
           </div>
         </div>
         <div class="knowledge-scroll" data-knowledge-list>
