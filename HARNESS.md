@@ -140,9 +140,9 @@ narrow no-MCP profile remain deliberately isolated sessions because they have a
 different capability/instruction contract. A queue job's workspace is applied
 as the typed per-turn cwd rather than encoded only in prompt prose.
 Systematic-research jobs are also isolated: each attempt starts a fresh
-non-persistent, MCP-free session while retaining the built-in typed CTOX Web
-tools. This prevents prior research history from influencing a new evidence
-run.
+non-persistent session with the typed CTOX Web tools. This prevents prior
+research history from influencing a new evidence run while preserving the
+server-authoritative research toolchain.
 Before reuse, the worker compares the current composed base instructions and
 model with the live session contract. A mismatch rebuilds the process-local
 client and resumes the durable thread with the new contract.

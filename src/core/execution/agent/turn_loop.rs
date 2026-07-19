@@ -36,6 +36,7 @@ fn turn_counters() -> &'static Mutex<HashMap<i64, RefreshTelemetry>> {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ChatTurnSessionOptions {
     pub(crate) disable_mcp_servers: bool,
+    pub(crate) force_isolated_session: bool,
     pub(crate) base_instructions: Option<String>,
     pub(crate) plain_prompt: bool,
     pub(crate) turn_timeout_secs_override: Option<u64>,

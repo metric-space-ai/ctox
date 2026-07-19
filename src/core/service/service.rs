@@ -10065,7 +10065,8 @@ fn chat_turn_session_options_for_queue_job(
 ) -> turn_loop::ChatTurnSessionOptions {
     if is_systematic_research_job(job) {
         return turn_loop::ChatTurnSessionOptions {
-            disable_mcp_servers: true,
+            disable_mcp_servers: false,
+            force_isolated_session: true,
             base_instructions: None,
             plain_prompt: false,
             turn_timeout_secs_override: None,
@@ -10074,6 +10075,7 @@ fn chat_turn_session_options_for_queue_job(
     if business_os_app_module_target_from_prompt(&job.prompt).is_some() {
         return turn_loop::ChatTurnSessionOptions {
             disable_mcp_servers: true,
+            force_isolated_session: false,
             base_instructions: Some(BUSINESS_OS_APP_AUTHORING_BASE_INSTRUCTIONS.to_string()),
             plain_prompt: true,
             turn_timeout_secs_override: Some(BUSINESS_OS_APP_AUTHORING_TURN_TIMEOUT_SECS),
@@ -10083,7 +10085,10 @@ fn chat_turn_session_options_for_queue_job(
 }
 
 fn queue_job_reuses_persistent_session(options: &turn_loop::ChatTurnSessionOptions) -> bool {
-    !options.disable_mcp_servers && options.base_instructions.is_none() && !options.plain_prompt
+    !options.force_isolated_session
+        && !options.disable_mcp_servers
+        && options.base_instructions.is_none()
+        && !options.plain_prompt
 }
 
 fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
@@ -30334,13 +30339,14 @@ Business OS command:
     }
 
     #[test]
-    fn systematic_research_queue_jobs_use_isolated_mcp_free_session() {
+    fn systematic_research_queue_jobs_use_isolated_standard_session() {
         let workspace = temp_root("systematic-research-session-options");
         let job = systematic_research_test_job(&workspace);
 
         let options = chat_turn_session_options_for_queue_job(&job);
 
-        assert!(options.disable_mcp_servers);
+        assert!(!options.disable_mcp_servers);
+        assert!(options.force_isolated_session);
         assert!(!options.plain_prompt);
         assert!(options.base_instructions.is_none());
         assert_eq!(options.turn_timeout_secs_override, None);
@@ -30366,6 +30372,7 @@ Business OS command:
 
         let options = chat_turn_session_options_for_queue_job(&job);
         assert!(options.disable_mcp_servers);
+        assert!(!options.force_isolated_session);
         assert!(options.plain_prompt);
         assert!(!queue_job_reuses_persistent_session(&options));
         let base_instructions = options
@@ -30383,6 +30390,7 @@ Business OS command:
         job.prompt = "Write a short implementation note.".to_string();
         let options = chat_turn_session_options_for_queue_job(&job);
         assert!(!options.disable_mcp_servers);
+        assert!(!options.force_isolated_session);
         assert!(!options.plain_prompt);
         assert!(options.base_instructions.is_none());
         assert!(queue_job_reuses_persistent_session(&options));
