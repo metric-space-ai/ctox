@@ -4,6 +4,11 @@ import { CTOX_COMMAND_AUTHORIZATION } from './command-lifecycle.generated.js';
 const COMMAND_ACCEPT_TIMEOUT_MS = 45000;
 const COMMAND_SYNC_READY_TIMEOUT_MS = 45000;
 const COMMAND_SYNC_FLUSH_TIMEOUT_MS = 15000;
+// A follower first gives the elected tab a short chance to flush and then
+// opens its own bounded WebRTC bridge when that leader is frozen or blocked
+// by a native browser dialog. That failover legitimately takes longer than a
+// normal leader-side push, so it needs a separate deadline.
+const COMMAND_FOLLOWER_SYNC_FLUSH_TIMEOUT_MS = 45000;
 const COMMAND_CAPABILITY_TIMEOUT_MS = 5000;
 const COMMAND_CAPABILITY_NEGATIVE_CACHE_MS = 10000;
 const MAX_SIMULTANEOUS_COMMAND_WATCHERS = 128;
@@ -1159,10 +1164,10 @@ async function flushSyncBridge(bridge) {
     }
     await withTimeout(
       () => resolvedBridge.flush(),
-      COMMAND_SYNC_FLUSH_TIMEOUT_MS,
+      followerSyncFlushTimeoutMs(resolvedBridge),
       {
         code: 'sync_unavailable',
-        message: 'CTOX Sync Engine leader did not confirm the command push before the deadline.',
+        message: 'CTOX Sync Engine could not complete multi-tab command failover before the deadline.',
       },
     );
     return;
@@ -1180,6 +1185,14 @@ async function flushSyncBridge(bridge) {
       message: 'CTOX Sync Engine could not push command dependencies before the deadline.',
     },
   );
+}
+
+function followerSyncFlushTimeoutMs(bridge) {
+  const requested = Number(bridge?.flushTimeoutMs);
+  if (!Number.isFinite(requested) || requested <= 0) {
+    return COMMAND_FOLLOWER_SYNC_FLUSH_TIMEOUT_MS;
+  }
+  return Math.max(100, Math.min(COMMAND_FOLLOWER_SYNC_FLUSH_TIMEOUT_MS, requested));
 }
 
 async function refreshProjectionBridges(bridges) {
