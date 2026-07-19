@@ -239,10 +239,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                     },
                 ) {
                     Ok(read_payload) => {
-                        let transport_verified = read_payload
-                            .get("evidence_eligible")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false);
+                        let transport_verified = read_transport_verified(&read_payload);
                         let content_extracted = read_has_meaningful_evidence(&read_payload);
                         let evidence_relevance_score = read_payload
                             .get("evidence_relevance_score")
@@ -332,6 +329,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             "response_content_kind": read_payload.get("response_content_kind").cloned().unwrap_or(Value::Null),
                             "response_body": read_payload.get("response_body").cloned().unwrap_or(Value::Null),
                             "source_tier": read_payload.get("source_tier").cloned().unwrap_or(Value::Null),
+                            "transport_evidence_eligible": read_payload.get("transport_evidence_eligible").cloned().unwrap_or(Value::Bool(false)),
                             "evidence_eligible": read_payload.get("evidence_eligible").cloned().unwrap_or(Value::Bool(false)),
                         });
                     }
@@ -571,6 +569,7 @@ fn extract_explicit_dois(text: &str) -> Vec<String> {
     let mut seen = BTreeSet::new();
     for token in text.split_whitespace() {
         let candidate = token
+            .trim_end_matches(['.', ':', ',', ';'])
             .trim_matches(|ch: char| {
                 matches!(
                     ch,
@@ -1342,7 +1341,7 @@ fn read_has_actual_full_text_or_data(source: &Value, read: &Value) -> bool {
         .get("response_content_kind")
         .and_then(Value::as_str)
         .is_some_and(|kind| kind.starts_with("data_"))
-        && read.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
+        && read_transport_verified(read)
     {
         return true;
     }
@@ -1389,6 +1388,16 @@ fn read_has_actual_full_text_or_data(source: &Value, read: &Value) -> bool {
         .filter(|paragraph| is_meaningful_evidence_text(paragraph))
         .count();
     evidence_text.chars().count() >= 400 && paragraph_count >= 2
+}
+
+fn read_transport_verified(read: &Value) -> bool {
+    read.get("transport_evidence_eligible")
+        .and_then(Value::as_bool)
+        // Cached payloads from before the transport/relevance split only
+        // contain evidence_eligible. Keep those fail-closed unless they were
+        // already fully admitted.
+        .or_else(|| read.get("evidence_eligible").and_then(Value::as_bool))
+        .unwrap_or(false)
 }
 
 fn is_metadata_landing_source(source: &Value, read_url: &str, canonical_url: &str) -> bool {
@@ -2857,6 +2866,10 @@ mod tests {
             ),
             vec!["10.1234/abc.9"]
         );
+        assert_eq!(
+            extract_explicit_dois("Verify (DOI 10.5281/zenodo.20111572)."),
+            vec!["10.5281/zenodo.20111572"]
+        );
     }
 
     #[test]
@@ -3704,14 +3717,26 @@ mod tests {
             "url": "https://example.test/original-data.zip",
             "canonical_url": "https://example.test/original-data.zip",
             "response_content_kind": "data_zip",
+            "transport_evidence_eligible": true,
             "evidence_eligible": true,
             "page_text_excerpt": "",
         });
         assert!(read_has_actual_full_text_or_data(&source, &read));
 
-        let mut rejected = read;
-        rejected["evidence_eligible"] = Value::Bool(false);
-        assert!(!read_has_actual_full_text_or_data(&source, &rejected));
+        let mut relevance_rejected = read.clone();
+        relevance_rejected["evidence_eligible"] = Value::Bool(false);
+        assert!(read_has_actual_full_text_or_data(
+            &source,
+            &relevance_rejected
+        ));
+
+        let mut transport_rejected = read;
+        transport_rejected["transport_evidence_eligible"] = Value::Bool(false);
+        transport_rejected["evidence_eligible"] = Value::Bool(false);
+        assert!(!read_has_actual_full_text_or_data(
+            &source,
+            &transport_rejected
+        ));
     }
 
     #[test]
