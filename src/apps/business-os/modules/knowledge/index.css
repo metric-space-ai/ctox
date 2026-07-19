@@ -115,51 +115,6 @@
   padding: 6px 0 8px;
 }
 
-.knowledge-module .knowledge-bundle-head {
-  display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
-  align-items: center;
-  column-gap: 4px;
-  width: 100%;
-  min-width: 0;
-  border-radius: var(--knowledge-control-radius);
-  padding: 1px 3px;
-}
-
-.knowledge-module .knowledge-bundle-head:hover {
-  background: var(--kit-hover);
-}
-
-.knowledge-module .bundle-caret {
-  align-self: stretch;
-  width: 16px;
-  min-height: 26px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0.55;
-  transform: rotate(0deg);
-  transition: transform 0.16s ease, opacity 0.12s ease;
-  padding: 0;
-}
-
-.knowledge-module .bundle-caret:hover { opacity: 1; }
-
-.knowledge-module .bundle-caret::before {
-  content: "›";
-  font-size: var(--fs-title);
-  font-weight: 700;
-  line-height: 1;
-}
-
-.knowledge-module .knowledge-bundle[data-open="true"] .bundle-caret {
-  transform: rotate(90deg);
-}
-
 .knowledge-module .bundle-select {
   min-width: 0;
   border: 0;
@@ -176,80 +131,15 @@
   background: color-mix(in srgb, var(--knowledge-accent) 13%, var(--knowledge-surface));
 }
 
-/* Fractal edit icon: same top-right grammar as the pane header, but quiet —
-   revealed on hover of the row, when the row is selected, or on focus. */
-.knowledge-module .bundle-edit {
-  opacity: 0;
-  transition: opacity 0.12s ease;
-}
-
-.knowledge-module .knowledge-bundle-head:hover .bundle-edit,
-.knowledge-module .knowledge-bundle[aria-current="true"] .bundle-edit,
-.knowledge-module .bundle-edit:focus-visible {
-  opacity: 0.65;
-}
-
-.knowledge-module .bundle-edit:hover { opacity: 1; }
-
-.knowledge-module .knowledge-bundle-head .bundle-domain,
-.knowledge-module .knowledge-bundle-head strong,
-.knowledge-module .knowledge-bundle-head small {
+.knowledge-module .bundle-select strong {
   display: block;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.knowledge-module .knowledge-bundle-head .bundle-domain {
-  color: var(--knowledge-muted);
-  font-size: var(--fs-micro);
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  opacity: 0.7;
-}
-
-.knowledge-module .knowledge-bundle-head strong {
-  margin-top: 1px;
   font-size: var(--fs-base);
   font-weight: 600;
   line-height: 1.2;
-}
-
-.knowledge-module .knowledge-bundle-head small {
-  margin-top: 2px;
-  color: var(--knowledge-muted);
-  font-size: var(--fs-micro);
-  font-weight: 400;
-  opacity: 0.8;
-}
-
-.knowledge-module .knowledge-bundle-items {
-  display: grid;
-  gap: 2px;
-  margin: 2px 0 2px 13px;
-  padding-left: 11px;
-  border-left: 1px solid var(--knowledge-soft-line);
-}
-
-.knowledge-module .knowledge-bundle[data-open="false"] .knowledge-bundle-items {
-  display: none;
-}
-
-.knowledge-module .knowledge-kind-group {
-  display: grid;
-  gap: 2px;
-}
-
-.knowledge-module .knowledge-kind-title {
-  padding: 5px 4px 1px;
-  color: var(--knowledge-muted);
-  font-size: var(--fs-micro);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  opacity: 0.65;
 }
 
 .knowledge-module .knowledge-item,
@@ -1064,7 +954,6 @@
   opacity: 0.85;
 }
 .knowledge-module .bundle-counts { display: inline; }
-.knowledge-module .knowledge-bundle[data-open="true"] .bundle-counts { display: none; }
 .knowledge-module .kb-count { white-space: nowrap; }
 
 /* ============================================================================
@@ -1168,10 +1057,6 @@
   border-color: transparent;
   background: var(--kit-fill);
 }
-/* Nested items: a single hairline guide is the only inner line, kept faint. */
-.knowledge-module .knowledge-bundle-items {
-  border-left-color: color-mix(in srgb, var(--knowledge-line) 55%, transparent);
-}
 /* Row separators between the header bands stay as single hairlines, but the
    filter/scope/switch bands drop their own background so they read as one
    surface, not stacked boxes. */
@@ -1181,10 +1066,8 @@
 .knowledge-module .knowledge-view-switch { background: transparent; }
 
 /* ============================================================================
-   Items & sub-entries: a select area + edit/trash icons top-right (fractal),
-   flat (no box). The whole shard head is clickable (no dead zones).
+   Legacy flat item rows (kept for the legacy list path).
    ========================================================================== */
-.knowledge-module .knowledge-bundle-head { cursor: pointer; }
 .knowledge-module .knowledge-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;

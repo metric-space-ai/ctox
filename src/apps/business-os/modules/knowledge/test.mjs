@@ -323,7 +323,10 @@ test('presentation follows compact Business OS knowledge contract', async () => 
   assert.match(css, /--knowledge-shadow:\s*none;/);
   assert.match(css, /--knowledge-panel-radius:\s*var\(--surface-radius\)/);
   assert.match(css, /--knowledge-control-radius:\s*var\(--control-radius\)/);
-  assert.match(css, /\.bundle-caret::before\s*\{[\s\S]*?content:\s*"›"/);
+  // Shards are pure selectors: no inline expansion machinery — the content
+  // pane's tabs + second-level switcher are the only navigation into a group.
+  assert.doesNotMatch(css, /bundle-caret|knowledge-bundle-items/);
+  assert.match(css, /\.bundle-meta\s*\{/);
 });
 
 let passed = 0;
