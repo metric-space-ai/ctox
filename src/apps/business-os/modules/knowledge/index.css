@@ -1009,7 +1009,18 @@
    left accent bar when selected, hover border — plus scannable count badges
    (Research-style numbers) instead of a verbose "0 · 0 · 0" meta line.
    ========================================================================== */
-.knowledge-module .knowledge-scroll { padding: 8px 10px; }
+/* Clear zone break: the header + filter section is the toolbar (base surface);
+   the element list below is a recessed well, split off by a divider line so the
+   two never read as one continuous surface. Shards are raised (base surface)
+   cards sitting inside the well. */
+.knowledge-module .knowledge-scroll {
+  padding: 10px;
+  /* --surface-2 resolves equal to --surface in this theme, so a token alone
+     gives no recess. Mix toward black for a guaranteed-darker well in both
+     themes; the raised (surface) shards then clearly sit above it. */
+  background: color-mix(in srgb, #000 7%, var(--knowledge-surface));
+  border-top: 1px solid var(--knowledge-line);
+}
 .knowledge-module .knowledge-bundle {
   gap: 2px;
   margin-bottom: 6px;
@@ -1212,15 +1223,15 @@
   padding: 9px 11px;
   border: 0;
   border-radius: var(--knowledge-control-radius);
-  background: var(--knowledge-surface-muted);
+  background: var(--knowledge-surface);
   box-shadow: none;
   position: relative;
 }
 .knowledge-module .knowledge-bundle:hover {
-  background: color-mix(in srgb, var(--knowledge-text) 5%, var(--knowledge-surface-muted));
+  background: color-mix(in srgb, var(--knowledge-text) 6%, var(--knowledge-surface));
 }
 .knowledge-module .knowledge-bundle[aria-current="true"] {
-  background: color-mix(in srgb, var(--knowledge-accent) 12%, var(--knowledge-surface-muted));
+  background: color-mix(in srgb, var(--knowledge-accent) 12%, var(--knowledge-surface));
 }
 /* Selection accent bar: a flat 2px fill via pseudo-element (no shadow, no thick
    border) — keeps the Matching-style accent while staying inside kit discipline. */
