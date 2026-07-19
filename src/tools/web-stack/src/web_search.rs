@@ -875,6 +875,28 @@ fn render_direct_web_read_payload(
     doc: EvidenceDoc,
     workspace_evidence: Option<Value>,
 ) -> Value {
+    let transport_evidence_eligible = evidence_doc_is_admitted_for_read(&doc);
+    let evidence_relevance_score = request
+        .query
+        .as_deref()
+        .and_then(normalize_text)
+        .or_else(|| {
+            request
+                .find
+                .first()
+                .and_then(|pattern| normalize_text(pattern))
+        })
+        .and_then(|query| score_evidence_doc_relevance(&doc, &query));
+    let evidence_eligible =
+        transport_evidence_eligible && evidence_relevance_score.is_some_and(|score| score >= 8);
+    let evidence_rejection_reason = doc
+        .response_receipt
+        .as_ref()
+        .and_then(|receipt| receipt.admission_rejection_reason.clone())
+        .or_else(|| {
+            (transport_evidence_eligible && !evidence_eligible)
+                .then(|| "query_relevance_not_established".to_string())
+        });
     let mut find_results = request
         .find
         .iter()
@@ -967,22 +989,19 @@ fn render_direct_web_read_payload(
             .response_receipt
             .as_ref()
             .map(|receipt| receipt.byte_count),
-        "admission_rejection_reason": doc
-            .response_receipt
-            .as_ref()
-            .and_then(|receipt| receipt.admission_rejection_reason.clone()),
+        "admission_rejection_reason": evidence_rejection_reason,
         "response_body": doc.response_body,
         "response_artifact_path": doc.response_artifact_path,
         "workspace_evidence": workspace_evidence,
         "source_tier": doc.source_tier,
-        "evidence_eligible": evidence_doc_is_admitted_for_read(&doc),
-        "evidence_relevance_score": request
-            .query
-            .as_deref()
-            .and_then(normalize_text)
-            .or_else(|| request.find.first().and_then(|pattern| normalize_text(pattern)))
-            .and_then(|query| score_evidence_doc_relevance(&doc, &query)),
-        "evidence_content_kind": evidence_content_kind(&doc),
+        "transport_evidence_eligible": transport_evidence_eligible,
+        "evidence_eligible": evidence_eligible,
+        "evidence_relevance_score": evidence_relevance_score,
+        "evidence_content_kind": if evidence_eligible {
+            evidence_content_kind(&doc)
+        } else {
+            "none"
+        },
         "dataset_content_extracted": evidence_doc_has_meaningful_content(&doc)
             && evidence_content_kind(&doc) == "page_content",
         "context": render_direct_read_context(&read_query, &doc),
@@ -8579,7 +8598,14 @@ mod tests {
         .unwrap();
 
         assert_eq!(payload["workspace_evidence"]["persisted"], true);
+        assert_eq!(payload["transport_evidence_eligible"], true);
+        assert_eq!(payload["evidence_eligible"], false);
         assert!(payload["evidence_relevance_score"].is_null());
+        assert_eq!(payload["evidence_content_kind"], "none");
+        assert_eq!(
+            payload["admission_rejection_reason"],
+            "query_relevance_not_established"
+        );
         let cache: PageCacheFile = serde_json::from_str(
             &fs::read_to_string(page_cache_path(&root)).expect("direct read page cache"),
         )
@@ -8589,6 +8615,44 @@ mod tests {
             .get(&normalize_url_cache_key("https://example.com/mock-result"))
             .expect("direct read cache entry");
         assert_eq!(entry.evidence_relevance_score, None);
+    }
+
+    #[test]
+    fn ctox_web_read_rejects_transport_valid_but_identifier_mismatched_content() {
+        let root = unique_test_root("ctox_web_read_identifier_mismatch");
+        let evidence_workspace = root
+            .join("task")
+            .join(".ctox")
+            .join("web-read")
+            .join("call-1");
+        set_runtime_config(&root, "CTOX_WEB_SEARCH_PROVIDER", "mock");
+
+        let payload = run_ctox_web_read_tool(
+            &root,
+            &DirectWebReadRequest {
+                url: "https://example.com/mock-result".to_string(),
+                query: Some(format!(
+                    "{} ISO 281",
+                    "dynamic bearing load rating ".repeat(8)
+                )),
+                find: Vec::new(),
+                workspace: Some(evidence_workspace.clone()),
+                include_full_text: false,
+                country: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(payload["workspace_evidence"]["persisted"], true);
+        assert!(evidence_workspace.join("receipt.json").is_file());
+        assert_eq!(payload["transport_evidence_eligible"], true);
+        assert_eq!(payload["evidence_eligible"], false);
+        assert!(payload["evidence_relevance_score"].is_null());
+        assert_eq!(payload["evidence_content_kind"], "none");
+        assert_eq!(
+            payload["admission_rejection_reason"],
+            "query_relevance_not_established"
+        );
     }
 
     #[test]
