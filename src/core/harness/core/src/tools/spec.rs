@@ -1151,7 +1151,7 @@ fn create_ctox_web_read_tool() -> ToolSpec {
             "query".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Optional reading intent used to bias summaries and excerpt selection."
+                    "Reading intent used for server-owned relevance scoring and excerpt selection. Required when the read may become research evidence; use a precise factual or engineering focus, not the URL or host name."
                         .to_string(),
                 ),
             },
@@ -1169,7 +1169,7 @@ fn create_ctox_web_read_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "ctox_web_read".to_string(),
-        description: "Opens one concrete web page through CTOX's evidence extractor and optionally runs find-in-page on the extracted text."
+        description: "Opens one concrete web page through CTOX's evidence extractor and optionally runs find-in-page on the extracted text. Research evidence requires a precise `query`; URL-only reads intentionally receive no server relevance score and cannot be promoted."
             .to_string(),
         strict: false,
         defer_loading: None,

@@ -778,16 +778,13 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
 
     let url = normalize_text(&request.url).context("ctox_web_read requires a non-empty url")?;
     crate::egress::assert_fetchable_url(&url)?;
-    let read_query = request
+    let relevance_query = request
         .query
         .as_deref()
         .and_then(normalize_text)
-        .or_else(|| {
-            request
-                .find
-                .first()
-                .and_then(|pattern| normalize_text(pattern))
-        })
+        .or_else(|| request.find.first().and_then(|pattern| normalize_text(pattern)));
+    let read_query = relevance_query
+        .clone()
         .unwrap_or_else(|| display_url(&url));
     let hit = SearchHit {
         title: display_url(&url),
@@ -845,7 +842,13 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
         .map(|receipt| receipt.final_url.as_str())
         .unwrap_or(doc.canonical_url.as_str());
     let mut session = WebSearchSession::new(root, &config)?;
-    session.store_page_doc(&url, final_url, content_type, &doc, &read_query);
+    session.store_page_doc(
+        &url,
+        final_url,
+        content_type,
+        &doc,
+        relevance_query.as_deref().unwrap_or_default(),
+    );
     session.persist_page_cache()?;
     let workspace_evidence = request
         .workspace
@@ -970,7 +973,12 @@ fn render_direct_web_read_payload(
         "workspace_evidence": workspace_evidence,
         "source_tier": doc.source_tier,
         "evidence_eligible": evidence_doc_is_admitted_for_read(&doc),
-        "evidence_relevance_score": score_evidence_doc_relevance(&doc, read_query),
+        "evidence_relevance_score": request
+            .query
+            .as_deref()
+            .and_then(normalize_text)
+            .or_else(|| request.find.first().and_then(|pattern| normalize_text(pattern)))
+            .and_then(|query| score_evidence_doc_relevance(&doc, &query)),
         "evidence_content_kind": evidence_content_kind(&doc),
         "dataset_content_extracted": evidence_doc_has_meaningful_content(&doc)
             && evidence_content_kind(&doc) == "page_content",
@@ -1152,30 +1160,7 @@ fn evidence_doc_has_immutable_response(doc: &EvidenceDoc) -> bool {
 
 fn meaningful_extracted_page_text(text: &str) -> bool {
     let normalized = normalize_ws(text);
-    !normalized.is_empty()
-        && !is_boilerplate_evidence_text(&normalized)
-        && is_meaningful_evidence_text(&normalized)
-}
-
-fn is_boilerplate_evidence_text(text: &str) -> bool {
-    let lowered = text.to_ascii_lowercase();
-    [
-        "privacy policy",
-        "terms of service",
-        "cookie settings",
-        "we use cookies",
-        "all rights reserved",
-        "sign in",
-        "log in",
-        "login required",
-        "javascript is required",
-        "enable javascript",
-        "access denied",
-        "verify you are human",
-        "captcha",
-    ]
-    .iter()
-    .any(|marker| lowered.contains(marker))
+    !normalized.is_empty() && is_meaningful_evidence_text(&normalized)
 }
 
 fn evidence_content_kind(doc: &EvidenceDoc) -> &'static str {
@@ -1224,7 +1209,7 @@ fn is_meaningful_evidence_text(text: &str) -> bool {
 
 fn is_evidence_boilerplate(text: &str) -> bool {
     let lowered = text.to_ascii_lowercase();
-    [
+    let markers = [
         "javascript is required",
         "please enable javascript",
         "enable javascript to continue",
@@ -1236,9 +1221,25 @@ fn is_evidence_boilerplate(text: &str) -> bool {
         "authentication required",
         "privacy policy",
         "terms of service",
-    ]
-    .iter()
-    .any(|marker| lowered.contains(marker))
+        "all rights reserved",
+        "access denied",
+        "verify you are human",
+        "captcha",
+    ];
+    let marker_hits = markers
+        .iter()
+        .map(|marker| lowered.matches(marker).count())
+        .sum::<usize>();
+    if marker_hits == 0 {
+        return false;
+    }
+
+    // Login and consent shells are short or dominated by repeated boilerplate.
+    // Long papers, standards, and manufacturer manuals routinely contain one
+    // copyright/privacy phrase and must not be rejected for that alone.
+    let chars = lowered.chars().count();
+    let words = lowered.split_whitespace().count().max(1);
+    chars <= 1_200 || (marker_hits >= 3 && marker_hits.saturating_mul(80) >= words)
 }
 
 fn canonical_read_fallback_url(url: &str) -> Option<String> {
@@ -4601,7 +4602,12 @@ fn content_type_is_disallowed(content_type: Option<&str>, url: &str) -> bool {
 
 fn response_byte_limit(config: &SearchConfig, url: &str, content_type: Option<&str>) -> usize {
     let content_type = content_type.unwrap_or_default().to_ascii_lowercase();
-    if is_data_url_suffix(url)
+    let path_is_pdf = Url::parse(url)
+        .ok()
+        .is_some_and(|parsed| parsed.path().to_ascii_lowercase().ends_with(".pdf"));
+    if path_is_pdf
+        || content_type.contains("application/pdf")
+        || is_data_url_suffix(url)
         || content_type.contains("application/zip")
         || content_type.contains("application/x-zip-compressed")
         || content_type.contains("application/gzip")
@@ -6978,7 +6984,10 @@ fn query_terms(query: &str) -> Vec<String> {
     for term in query
         .split(|ch: char| !ch.is_alphanumeric())
         .map(str::trim)
-        .filter(|term| term.len() >= 3 || term.chars().all(|ch| ch.is_ascii_digit()))
+        .filter(|term| {
+            !term.is_empty()
+                && (term.len() >= 3 || term.chars().all(|ch| ch.is_ascii_digit()))
+        })
     {
         let lowered = term.to_ascii_lowercase();
         if STOP_WORDS.contains(&lowered.as_str()) || terms.contains(&lowered) {
@@ -8528,6 +8537,42 @@ mod tests {
                 .and_then(|receipt| receipt.sha256.as_deref()),
             entry.snapshot_hash.as_deref()
         );
+    }
+
+    #[test]
+    fn ctox_web_read_without_intent_has_no_relevance_score() {
+        let root = unique_test_root("ctox_web_read_without_intent");
+        let evidence_workspace = root
+            .join("task")
+            .join(".ctox")
+            .join("web-read")
+            .join("call-1");
+        set_runtime_config(&root, "CTOX_WEB_SEARCH_PROVIDER", "mock");
+
+        let payload = run_ctox_web_read_tool(
+            &root,
+            &DirectWebReadRequest {
+                url: "https://example.com/mock-result".to_string(),
+                query: None,
+                find: Vec::new(),
+                workspace: Some(evidence_workspace),
+                include_full_text: false,
+                country: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(payload["workspace_evidence"]["persisted"], true);
+        assert!(payload["evidence_relevance_score"].is_null());
+        let cache: PageCacheFile = serde_json::from_str(
+            &fs::read_to_string(page_cache_path(&root)).expect("direct read page cache"),
+        )
+        .expect("valid direct read page cache");
+        let entry = cache
+            .entries
+            .get(&normalize_url_cache_key("https://example.com/mock-result"))
+            .expect("direct read cache entry");
+        assert_eq!(entry.evidence_relevance_score, None);
     }
 
     #[test]
@@ -11358,6 +11403,47 @@ mod tests {
             .expect_err("over-limit response must be rejected");
         assert!(error.to_string().contains("rejected without truncation"));
         assert_eq!(server.join().expect("fixture server"), 1);
+    }
+
+    #[test]
+    fn long_source_text_with_copyright_notice_is_not_boilerplate() {
+        let text = format!(
+            "{} All rights reserved.",
+            "Rolling bearing rating life, equivalent dynamic load, operating clearance, \
+             lubrication, sealing, speed, and contamination are documented with equations, \
+             units, test conditions, and engineering limitations. "
+                .repeat(20)
+        );
+        assert!(meaningful_extracted_page_text(&text));
+        assert!(!is_evidence_boilerplate(&text));
+        assert!(is_evidence_boilerplate(
+            "Please sign in to continue. Authentication required."
+        ));
+    }
+
+    #[test]
+    fn pdf_responses_use_the_original_file_size_limit() {
+        let config = test_config(ProviderKind::Mock);
+        assert_eq!(
+            response_byte_limit(
+                &config,
+                "https://example.org/manual.pdf?download=1",
+                Some("application/octet-stream")
+            ),
+            config.max_data_file_bytes
+        );
+        assert_eq!(
+            response_byte_limit(
+                &config,
+                "https://example.org/download",
+                Some("application/pdf")
+            ),
+            config.max_data_file_bytes
+        );
+        assert_eq!(
+            response_byte_limit(&config, "https://example.org/page", Some("text/html")),
+            config.max_page_bytes
+        );
     }
 
     #[test]

@@ -212,6 +212,13 @@ operator shell. If the typed tools are absent in a managed run, stop
 fail-closed and report the platform defect instead of substituting shell
 output, native web search, or memory.
 
+Every typed `ctox_web_read` that may become evidence must include a precise
+`query` describing the factual or engineering reading intent. URL-only reads
+intentionally receive no server-owned relevance score and must remain
+discovery-only. If a typed read is rejected, record that rejection; never
+download the same URL with `curl`, Python, shell, browser automation, or another
+unbound fallback for evidence.
+
 1. **`ctox web deep-research`** — mandatory first move for any technical
    library construction:
 
