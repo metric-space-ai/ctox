@@ -342,6 +342,7 @@
     "outbound.pipeline.outreach_draft",
     "outbound.pipeline.write_outreach_draft",
     "outbound.source.import",
+    "rem.persistence.save",
     "research.knowledge.refresh",
     "research.systematic.report.create",
     "research.systematic.run",

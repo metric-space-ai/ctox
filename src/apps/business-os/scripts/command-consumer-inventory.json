@@ -8,6 +8,7 @@
     "modules/app-store/index.js",
     "modules/appsec-pentest/index.js",
     "modules/browser/index.js",
+    "modules/buchhaltung/index.js",
     "modules/coding-agents/index.js",
     "modules/consent/index.js",
     "modules/conversations/index.js",
@@ -43,6 +44,7 @@
   ],
   "projection_readers": [
     "app.js",
+    "desktop-apps/code-editor/app.js",
     "desktop-apps/file-viewer/app.js",
     "modules/appsec-pentest/index.js",
     "modules/conversations/index.js",
