@@ -20,6 +20,57 @@ use rusqlite::{Connection, params};
 use serde_json::json;
 use tokio::sync::oneshot;
 
+#[test]
+fn required_initial_tool_is_the_only_visible_required_tool_before_its_call() {
+    let tools = vec![
+        json!({"type": "function", "name": "exec_command"}),
+        json!({"type": "function", "name": "ctox_deep_research"}),
+    ];
+
+    let (visible, choice) =
+        super::apply_required_initial_tool(tools, &[], Some("ctox_deep_research")).unwrap();
+
+    assert_eq!(choice, "auto");
+    assert_eq!(visible, vec![json!({
+        "type": "function",
+        "name": "ctox_deep_research"
+    })]);
+}
+
+#[test]
+fn required_initial_tool_releases_normal_tool_selection_after_its_call() {
+    let tools = vec![
+        json!({"type": "function", "name": "exec_command"}),
+        json!({"type": "function", "name": "ctox_deep_research"}),
+    ];
+    let input = vec![ResponseItem::FunctionCall {
+        id: None,
+        name: "ctox_deep_research".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: "call-1".to_string(),
+    }];
+
+    let (visible, choice) =
+        super::apply_required_initial_tool(tools.clone(), &input, Some("ctox_deep_research"))
+            .unwrap();
+
+    assert_eq!(choice, "auto");
+    assert_eq!(visible, tools);
+}
+
+#[test]
+fn required_initial_tool_fails_closed_when_not_model_visible() {
+    let error = super::apply_required_initial_tool(
+        vec![json!({"type": "function", "name": "exec_command"})],
+        &[],
+        Some("ctox_deep_research"),
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("is not model-visible"));
+}
+
 fn persist_runtime_state_json(root: &std::path::Path, raw_json: &str) {
     let db_path = root.join("runtime/ctox.sqlite3");
     if let Some(parent) = db_path.parent() {
@@ -787,6 +838,7 @@ fn managed_local_gpt_oss_request_preserves_explicit_none_reasoning() {
         base_instructions: BaseInstructions::default(),
         personality: None,
         output_schema: None,
+        required_initial_tool: None,
     };
 
     let request = session
@@ -827,6 +879,7 @@ fn openrouter_kimi_responses_request_disables_default_thinking() {
         base_instructions: BaseInstructions::default(),
         personality: None,
         output_schema: None,
+        required_initial_tool: None,
     };
 
     let request = session

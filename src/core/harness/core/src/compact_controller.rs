@@ -1735,6 +1735,7 @@ async fn run_structured_prompt<T: DeserializeOwned>(
         base_instructions: sess.get_base_instructions().await,
         personality: turn_context.personality,
         output_schema: Some(output_schema),
+        required_initial_tool: None,
     };
 
     let max_retries = turn_context.provider.stream_max_retries();

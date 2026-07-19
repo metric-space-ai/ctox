@@ -857,6 +857,7 @@ async fn send_input_accepts_structured_items() {
             },
         ],
         final_output_json_schema: None,
+        required_initial_tool: None,
     };
     let captured = manager
         .captured_ops()

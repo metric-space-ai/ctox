@@ -590,6 +590,7 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
                         text: "hello".to_string(),
                         text_elements: Vec::new(),
                     }],
+                    required_initial_tool: None,
                     developer_instructions: None,
                     cwd: None,
                     approval_policy: None,

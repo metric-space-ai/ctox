@@ -816,6 +816,7 @@ pub(crate) struct TurnContext {
     pub(crate) features: ManagedFeatures,
     pub(crate) ghost_snapshot: GhostSnapshotConfig,
     pub(crate) final_output_json_schema: Option<Value>,
+    pub(crate) required_initial_tool: Option<String>,
     pub(crate) ctox_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) truncation_policy: TruncationPolicy,
@@ -933,6 +934,7 @@ impl TurnContext {
             features,
             ghost_snapshot: self.ghost_snapshot.clone(),
             final_output_json_schema: self.final_output_json_schema.clone(),
+            required_initial_tool: self.required_initial_tool.clone(),
             ctox_linux_sandbox_exe: self.ctox_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy,
@@ -1154,6 +1156,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(crate) service_tier: Option<Option<ServiceTier>>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
+    pub(crate) required_initial_tool: Option<Option<String>>,
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
 }
@@ -1385,6 +1388,7 @@ impl Session {
             features: per_turn_config.features.clone(),
             ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
             final_output_json_schema: None,
+            required_initial_tool: None,
             ctox_linux_sandbox_exe: per_turn_config.ctox_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: model_info.truncation_policy.into(),
@@ -2045,6 +2049,7 @@ impl Session {
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
+                required_initial_tool: None,
             },
         )
         .await;
@@ -2350,6 +2355,7 @@ impl Session {
                 sub_id,
                 session_configuration,
                 updates.final_output_json_schema,
+                updates.required_initial_tool,
                 sandbox_policy_changed,
             )
             .await)
@@ -2360,6 +2366,7 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
+        required_initial_tool: Option<Option<String>>,
         sandbox_policy_changed: bool,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
@@ -2424,6 +2431,9 @@ impl Session {
 
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
+        }
+        if let Some(required_initial_tool) = required_initial_tool {
+            turn_context.required_initial_tool = required_initial_tool;
         }
         let turn_context = Arc::new(turn_context);
         turn_context.turn_metadata_state.spawn_git_enrichment_task();
@@ -2529,6 +2539,7 @@ impl Session {
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
+            /*required_initial_tool*/ None,
             /*sandbox_policy_changed*/ false,
         )
         .await
@@ -4503,6 +4514,7 @@ mod handlers {
                         reasoning_summary: summary,
                         service_tier,
                         final_output_json_schema: Some(final_output_json_schema),
+                        required_initial_tool: None,
                         personality,
                         app_server_client_name: None,
                     },
@@ -4511,10 +4523,12 @@ mod handlers {
             Op::UserInput {
                 items,
                 final_output_json_schema,
+                required_initial_tool,
             } => (
                 items,
                 SessionSettingsUpdate {
                     final_output_json_schema: Some(final_output_json_schema),
+                    required_initial_tool: Some(required_initial_tool),
                     ..Default::default()
                 },
             ),
@@ -5281,6 +5295,7 @@ async fn spawn_review_thread(
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
         cwd: parent_turn_context.cwd.clone(),
         final_output_json_schema: None,
+        required_initial_tool: None,
         ctox_linux_sandbox_exe: parent_turn_context.ctox_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         js_repl: Arc::clone(&sess.js_repl),
@@ -6168,6 +6183,7 @@ pub(crate) fn build_prompt(
         base_instructions,
         personality: turn_context.personality,
         output_schema: turn_context.final_output_json_schema.clone(),
+        required_initial_tool: turn_context.required_initial_tool.clone(),
     }
 }
 #[allow(clippy::too_many_arguments)]

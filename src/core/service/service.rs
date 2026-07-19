@@ -10070,6 +10070,7 @@ fn chat_turn_session_options_for_queue_job(
             base_instructions: None,
             plain_prompt: false,
             turn_timeout_secs_override: None,
+            required_initial_tool: Some("ctox_deep_research".to_string()),
         };
     }
     if business_os_app_module_target_from_prompt(&job.prompt).is_some() {
@@ -10079,6 +10080,7 @@ fn chat_turn_session_options_for_queue_job(
             base_instructions: Some(BUSINESS_OS_APP_AUTHORING_BASE_INSTRUCTIONS.to_string()),
             plain_prompt: true,
             turn_timeout_secs_override: Some(BUSINESS_OS_APP_AUTHORING_TURN_TIMEOUT_SECS),
+            required_initial_tool: None,
         };
     }
     turn_loop::ChatTurnSessionOptions::default()
@@ -30350,6 +30352,10 @@ Business OS command:
         assert!(!options.plain_prompt);
         assert!(options.base_instructions.is_none());
         assert_eq!(options.turn_timeout_secs_override, None);
+        assert_eq!(
+            options.required_initial_tool.as_deref(),
+            Some("ctox_deep_research")
+        );
         assert!(!queue_job_reuses_persistent_session(&options));
     }
 
@@ -30374,6 +30380,7 @@ Business OS command:
         assert!(options.disable_mcp_servers);
         assert!(!options.force_isolated_session);
         assert!(options.plain_prompt);
+        assert!(options.required_initial_tool.is_none());
         assert!(!queue_job_reuses_persistent_session(&options));
         let base_instructions = options
             .base_instructions
@@ -30393,6 +30400,7 @@ Business OS command:
         assert!(!options.force_isolated_session);
         assert!(!options.plain_prompt);
         assert!(options.base_instructions.is_none());
+        assert!(options.required_initial_tool.is_none());
         assert!(queue_job_reuses_persistent_session(&options));
         assert_eq!(options.turn_timeout_secs_override, None);
     }

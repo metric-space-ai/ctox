@@ -360,6 +360,12 @@ workspace. Shallower calls, `no_workspace` discovery runs, or attempts that run
 another external tool first cannot satisfy completion. Agent prose, externally
 imported SQLite rows, and files written after the fact are not substitutes for
 this tool receipt or for independently persisted reviewer provenance.
+The first model request is constrained server-side to that one typed tool.
+After its call enters turn history, the full standard tool surface returns.
+MiniMax-M3 supports automatic or disabled tool selection through the managed
+Responses proxy, so a text-only refusal remains possible; it fails closed at
+the completion gate. A different external action is impossible because no
+other tool is model-visible during the initial request.
 
 Rejected or incomplete work is fed back into the same durable queue item or
 internal work item where possible. The review path has finite retry budgets and eventually

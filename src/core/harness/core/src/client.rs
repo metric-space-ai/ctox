@@ -727,6 +727,37 @@ impl Drop for ModelClientSession {
     }
 }
 
+fn apply_required_initial_tool(
+    mut tools: Vec<Value>,
+    input: &[ResponseItem],
+    required_initial_tool: Option<&str>,
+) -> Result<(Vec<Value>, String)> {
+    let Some(required_initial_tool) = required_initial_tool else {
+        return Ok((tools, "auto".to_string()));
+    };
+    let already_called = input.iter().any(|item| match item {
+        ResponseItem::FunctionCall { name, .. } | ResponseItem::CustomToolCall { name, .. } => {
+            name == required_initial_tool
+        }
+        _ => false,
+    });
+    if already_called {
+        return Ok((tools, "auto".to_string()));
+    }
+
+    tools.retain(|tool| tool.get("name").and_then(Value::as_str) == Some(required_initial_tool));
+    if tools.is_empty() {
+        return Err(CodexErr::InvalidRequest(format!(
+            "required initial tool `{required_initial_tool}` is not model-visible"
+        )));
+    }
+    // MiniMax-M3 exposes only `auto` and `none` through the managed Responses
+    // proxy. Restricting the visible surface to this one tool still guarantees
+    // that any first external action is the required action; a text-only turn
+    // fails the service-owned completion gate.
+    Ok((tools, "auto".to_string()))
+}
+
 impl ModelClientSession {
     fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
@@ -749,6 +780,8 @@ impl ModelClientSession {
         let instructions = &prompt.base_instructions.text;
         let input = prompt.get_formatted_input();
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
+        let (tools, tool_choice) =
+            apply_required_initial_tool(tools, &input, prompt.required_initial_tool.as_deref())?;
         let default_reasoning_effort = model_info.default_reasoning_level;
         let supports_managed_local_reasoning =
             self.client.state.provider.requires_socket_transport()
@@ -798,7 +831,7 @@ impl ModelClientSession {
             previous_response_id: None,
             input,
             tools,
-            tool_choice: "auto".to_string(),
+            tool_choice,
             parallel_tool_calls: prompt.parallel_tool_calls,
             reasoning,
             max_output_tokens: managed_local_responses_max_output_tokens(

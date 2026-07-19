@@ -3776,6 +3776,10 @@ pub enum TurnStatus {
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
+    /// Require this model-visible tool as the first external action of the
+    /// turn. Normal tool selection resumes after that call is in turn history.
+    #[ts(optional = nullable)]
+    pub required_initial_tool: Option<String>,
     /// Replace the session's model-visible developer instructions for this
     /// turn and subsequent turns. CTOX uses this existing turn-context lane
     /// for its freshly rebuilt runtime context so the actual user input stays
@@ -7771,6 +7775,7 @@ mod tests {
         let without_override = TurnStartParams {
             thread_id: "thread_123".to_string(),
             input: vec![],
+            required_initial_tool: None,
             developer_instructions: None,
             cwd: None,
             approval_policy: None,

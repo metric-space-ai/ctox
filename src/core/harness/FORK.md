@@ -39,6 +39,13 @@ session so the built-in typed CTOX Web tools remain available. Completion
 validation reads the durable rollout and requires `ctox_deep_research` to be the
 first external action. This prevents stale research context or an untracked
 preliminary tool call from contaminating a new evidence run.
+The app-server turn contract can additionally require one initial tool. While
+that call is absent from turn history, the model request exposes only the named
+tool; subsequent requests restore the normal tool list. MiniMax-M3 only accepts
+automatic or disabled tool selection through the managed Responses proxy, so a
+text-only turn is rejected later by CTOX, while a different external action is
+impossible. CTOX uses this only for the initial `ctox_deep_research` action of
+systematic-research queue attempts.
 
 The structured compaction controller treats provider formatting failures as a
 recoverable model-surface limitation. If a provider returns prose or an empty

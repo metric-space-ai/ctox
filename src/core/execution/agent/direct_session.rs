@@ -766,7 +766,7 @@ impl PersistentSession {
         timeout: Option<Duration>,
         exact_prompt_preflight: Option<ExactPromptTokenCount>,
     ) -> Result<String> {
-        self.run_turn_inner_with_context(prompt, None, timeout, exact_prompt_preflight)
+        self.run_turn_inner_with_context(prompt, None, timeout, exact_prompt_preflight, None)
     }
 
     pub(crate) fn run_turn_inner_with_context(
@@ -775,6 +775,7 @@ impl PersistentSession {
         developer_instructions: Option<&str>,
         timeout: Option<Duration>,
         exact_prompt_preflight: Option<ExactPromptTokenCount>,
+        required_initial_tool: Option<&str>,
     ) -> Result<String> {
         anyhow::ensure!(
             !self.poisoned,
@@ -798,6 +799,7 @@ impl PersistentSession {
         let disable_mcp_servers = self.disable_mcp_servers;
         let read_only_sandbox = self.read_only_sandbox;
         let persistent_worker = self.persistent_worker;
+        let required_initial_tool = required_initial_tool.map(str::to_string);
         self.ctx_log.log(
             "turn_request",
             &format!("\"prompt_len\":{},\"timeout\":{:?}", prompt.len(), timeout),
@@ -829,6 +831,7 @@ impl PersistentSession {
                 read_only_sandbox,
                 persistent_worker,
                 exact_prompt_preflight,
+                required_initial_tool.as_deref(),
             )
             .await
         });
@@ -1257,6 +1260,7 @@ impl PersistentSession {
         read_only_sandbox: bool,
         persistent_worker: bool,
         exact_prompt_preflight: Option<ExactPromptTokenCount>,
+        required_initial_tool: Option<&str>,
     ) -> Result<String> {
         // Reuse the session's thread across turns. The previous fresh-thread-
         // per-turn workaround ("the thread may not accept new TurnStart
@@ -1355,6 +1359,7 @@ impl PersistentSession {
                 text_elements: Vec::new(),
             }
             .into()],
+            required_initial_tool: required_initial_tool.map(str::to_string),
             developer_instructions: developer_instructions.map(str::to_string),
             cwd: Some(cwd.to_path_buf()),
             approval_policy: Some(AskForApproval::Never.into()),

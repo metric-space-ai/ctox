@@ -359,6 +359,7 @@ impl AgentControl {
                 Op::UserInput {
                     items,
                     final_output_json_schema: None,
+                    required_initial_tool: None,
                 },
             )
             .await;

@@ -40,6 +40,7 @@ pub(crate) struct ChatTurnSessionOptions {
     pub(crate) base_instructions: Option<String>,
     pub(crate) plain_prompt: bool,
     pub(crate) turn_timeout_secs_override: Option<u64>,
+    pub(crate) required_initial_tool: Option<String>,
 }
 
 struct ToolFreeSemanticSummarizer {
@@ -1089,6 +1090,7 @@ where
             Some(&rendered_prompt.context_instructions),
             Some(Duration::from_secs(config.turn_timeout_secs)),
             exact_prompt_preflight.clone(),
+            options.required_initial_tool.as_deref(),
         )?,
         None => owned_session
             .as_mut()
@@ -1098,6 +1100,7 @@ where
                 Some(&rendered_prompt.context_instructions),
                 Some(Duration::from_secs(config.turn_timeout_secs)),
                 exact_prompt_preflight.clone(),
+                options.required_initial_tool.as_deref(),
             )?,
     };
     emit("persist-assistant-turn");

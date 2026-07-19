@@ -42,6 +42,9 @@ pub struct Prompt {
 
     /// Optional the output schema for the model's response.
     pub output_schema: Option<Value>,
+
+    /// Tool that must be the first external action in this turn.
+    pub required_initial_tool: Option<String>,
 }
 
 impl Prompt {
