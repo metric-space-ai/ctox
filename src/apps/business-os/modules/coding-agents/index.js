@@ -6,10 +6,11 @@ import { loadModuleMessages } from '../../shared/i18n.js';
 // provider/session/diagnostics machinery is gone; the standard shell frame
 // (.ctox-workspace--two-pane with data-resize-frame) stays.
 
-const ROOT_CLASSES = 'ctox-workspace ctox-workspace--two-pane coding-agents-module';
+const ROOT_CLASSES = 'ctox-workspace coding-agents-module';
 const CODING_TURN_COMMAND = 'ctox.coding.turn';
 const COMMAND_LOG_COLLECTION = 'business_commands';
 const SESSIONS_COLLECTION = 'coding_agent_sessions';
+const EVENTS_COLLECTION = 'coding_agent_events';
 const RECENT_TURNS_LIMIT = 8;
 
 // Optional model override. DEFAULT = no `model` in the payload, so the turn
@@ -550,6 +551,11 @@ function subscribeProjectionUpdates() {
     scheduleProjectionRefresh(SESSIONS_COLLECTION, () => loadActiveSession());
   });
   if (sessionSub) subscriptions.push(sessionSub);
+  const events = state.ctx?.db?.collection?.(EVENTS_COLLECTION);
+  const eventsSub = events?.$?.subscribe?.(() => {
+    scheduleProjectionRefresh(EVENTS_COLLECTION, () => loadSessionEvents());
+  });
+  if (eventsSub) subscriptions.push(eventsSub);
   return subscriptions;
 }
 
@@ -586,7 +592,20 @@ async function loadActiveSession() {
       String(doc.workspace_root || '') === state.activeModuleId,
   );
   state.activeSession = session || null;
+  await loadSessionEvents();
   renderRecentTurns();
+}
+
+// The conversation: native coding_agent_events (role/text/status/seq) of the
+// active session — this IS the chat transcript the pi sidecar writes.
+async function loadSessionEvents() {
+  const sessionId = state.activeSession?.session_id
+    || (state.activeModuleId ? `pi:${state.activeModuleId}` : '');
+  if (!sessionId) { state.sessionEvents = []; return; }
+  const docs = await readCollectionDocs(EVENTS_COLLECTION);
+  state.sessionEvents = (Array.isArray(docs) ? docs : [])
+    .filter((doc) => doc && doc.is_deleted !== true && String(doc.session_id || '') === sessionId)
+    .sort((left, right) => Number(left.seq || 0) - Number(right.seq || 0));
 }
 
 async function loadRecentTurns() {
@@ -622,43 +641,61 @@ function renderRecentTurns() {
   if (!box) return;
   box.innerHTML = '';
 
-  if (state.activeModuleId) {
-    box.appendChild(renderSessionBanner());
-  }
-
-  if (!state.recentTurns.length) {
-    const empty = document.createElement('div');
-    empty.className = 'ctox-empty';
-    empty.innerHTML = `<strong>${escapeHtml(t('recentEmpty'))}</strong>`;
-    box.appendChild(empty);
+  if (!state.activeModuleId) {
+    box.innerHTML = `<div class="ctox-empty"><strong>Projekt links wählen</strong><br>Dann kannst du dem Agenten hier Aufträge geben.</div>`;
+    renderArtifact();
     return;
   }
 
-  state.recentTurns.forEach((turn) => {
-    const row = document.createElement('div');
-    row.className = 'ctox-list-item coding-agents-turn-row';
-    const statusLabel = turn.status === 'completed'
-      ? t('statusCompleted')
-      : turn.status === 'failed'
-        ? t('statusFailed')
-        : t('statusRunning');
-    const badgeClass = turn.status === 'failed' || !turn.ok
-      ? 'is-danger'
-      : turn.status === 'completed'
-        ? 'is-success'
-        : '';
-    const metaParts = [formatRecordTime(turn.timeMs)];
-    if (turn.appliedCount) metaParts.push(`${turn.appliedCount} ${turn.appliedCount === 1 ? t('fileChanged') : t('filesChanged')}`);
-    if (turn.error) metaParts.push(turn.error);
-    row.innerHTML = `
-      <div class="coding-agents-turn-row-main">
-        <span class="coding-agents-turn-row-prompt">${escapeHtml(turn.prompt || turn.moduleId)}</span>
-        <span class="ctox-badge ${badgeClass}">${escapeHtml(statusLabel)}</span>
-      </div>
-      <div class="coding-agents-turn-row-meta">${escapeHtml(metaParts.filter(Boolean).join(' · '))}</div>
-    `;
-    box.appendChild(row);
-  });
+  // The chat: native session events (the sidecar transcript) when present,
+  // otherwise the turn log as user-bubble + status line pairs.
+  const events = Array.isArray(state.sessionEvents) ? state.sessionEvents : [];
+  if (events.length) {
+    for (const event of events) {
+      const role = String(event.role || 'system');
+      if (role === 'user') {
+        box.insertAdjacentHTML('beforeend', `<div class="ca-msg is-user"><div class="ca-msg-body">${escapeHtml(event.text || '')}</div></div>`);
+      } else if (role === 'assistant' || role === 'agent') {
+        box.insertAdjacentHTML('beforeend', `<div class="ca-msg is-agent"><div class="ca-msg-meta">Agent${event.status ? ` · ${escapeHtml(event.status)}` : ''}</div><div class="ca-msg-body">${escapeHtml(event.text || '')}</div></div>`);
+      } else {
+        box.insertAdjacentHTML('beforeend', `<div class="ca-msg is-event">${escapeHtml(event.text || '')}${event.status ? ` · ${escapeHtml(event.status)}` : ''}</div>`);
+      }
+    }
+  } else if (!state.recentTurns.length) {
+    box.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(t('recentEmpty'))}</strong></div>`;
+  } else {
+    [...state.recentTurns].sort((a, b) => a.timeMs - b.timeMs).forEach((turn) => {
+      box.insertAdjacentHTML('beforeend', `<div class="ca-msg is-user"><div class="ca-msg-body">${escapeHtml(turn.prompt || turn.moduleId)}</div></div>`);
+      const statusLabel = turn.status === 'completed' ? t('statusCompleted') : turn.status === 'failed' ? t('statusFailed') : t('statusRunning');
+      const detail = [statusLabel, formatRecordTime(turn.timeMs),
+        turn.appliedCount ? `${turn.appliedCount} ${turn.appliedCount === 1 ? t('fileChanged') : t('filesChanged')}` : '',
+        turn.error].filter(Boolean).join(' · ');
+      box.insertAdjacentHTML('beforeend', `<div class="ca-msg is-event ${turn.status === 'failed' || !turn.ok ? 'is-failed' : ''}">${escapeHtml(detail)}</div>`);
+    });
+  }
+  box.scrollTop = box.scrollHeight;
+  const footer = els.root?.querySelector('#ca-footer');
+  if (footer) footer.textContent = `${state.recentTurns.length} Turns · ${state.activeModuleId || '—'}`;
+  renderArtifact();
+}
+
+// Column 3: the agent's free HTML artifact — a live page the agent maintains
+// about its task (contract: session.metadata.artifact_html). Sandboxed.
+function renderArtifact() {
+  const frame = els.root?.querySelector('#ca-artifact');
+  const empty = els.root?.querySelector('#ca-artifact-empty');
+  if (!frame || !empty) return;
+  let metadata = state.activeSession?.metadata;
+  if (typeof metadata === 'string') { try { metadata = JSON.parse(metadata); } catch { metadata = null; } }
+  const html = metadata && typeof metadata === 'object' ? String(metadata.artifact_html || '') : '';
+  if (html.trim()) {
+    frame.srcdoc = html;
+    frame.hidden = false;
+    empty.hidden = true;
+  } else {
+    frame.hidden = true;
+    empty.hidden = false;
+  }
 }
 
 function renderSessionBanner() {

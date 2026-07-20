@@ -23,7 +23,10 @@ test('presentation layer stays compact and shell-native', () => {
   assert.doesNotMatch(source, gradientPattern);
   assert.doesNotMatch(source, hardNeutralPattern);
   // Standard shell frame: kit workspace + declarative resizer, no DIY grid.
-  assert.match(html, /class="ctox-workspace ctox-workspace--two-pane coding-agents-module/);
+  // Three-column contract (Claude-Code pattern): projects | agent chat | live artifact.
+  assert.match(html, /class="ctox-workspace coding-agents-module/);
+  assert.match(html, /coding-agents-chat/);
+  assert.match(html, /id="ca-artifact"[^>]*sandbox=""/);
   assert.match(html, /data-resize-frame/);
   assert.match(html, /class="ctox-column-resizer"[^>]*data-resizer-var="--ctox-left-width"/);
   assert.doesNotMatch(js, /CtoxResizer/);

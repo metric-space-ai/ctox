@@ -11,6 +11,7 @@
     "app-store",
     "importer",
     "reports",
-    "appsec-pentest"
+    "appsec-pentest",
+    "coding-agents"
   ]
 }

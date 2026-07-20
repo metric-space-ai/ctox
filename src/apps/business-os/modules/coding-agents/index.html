@@ -1,82 +1,72 @@
-<main class="ctox-workspace ctox-workspace--two-pane coding-agents-module" data-coding-agents-root data-resize-frame>
+<!-- Shell fragment: styles + mount(ctx) come from the Business OS shell. -->
+<p class="ctox-standalone-note">Dieses Modul-Fragment läuft nur innerhalb der CTOX Business-OS-Shell. Öffne die App unter <strong>http://localhost:8765/business-os/#coding-agents</strong>.</p>
+<main class="ctox-workspace coding-agents-module" data-coding-agents-root data-resize-frame>
 
-  <!-- Column 1: Left Pane (App/Module Picker) -->
-  <section class="ctox-pane coding-agents-left" aria-label="Apps">
+  <!-- Column 1: projects (Business OS apps the pi agent can work on) -->
+  <section class="ctox-pane coding-agents-left" aria-label="Projekte">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker" data-ca-left-kicker>pi Coding Agent</span>
-          <h2 class="ctox-pane-title" data-ca-left-title>Apps</h2>
+          <h2 class="ctox-pane-title" data-ca-left-title>Projekte</h2>
         </div>
-        <div class="ctox-pane-actions">
-          <button type="button" class="ctox-pane-icon" id="ca-refresh-apps" title="Aktualisieren" aria-label="Aktualisieren">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4"/></svg>
-          </button>
-        </div>
+        <div class="ctox-pane-actions"></div>
       </div>
     </header>
-
-    <!-- Installed Business OS apps the pi agent can target -->
-    <div class="ctox-pane-body">
+    <div class="ctox-pane-body coding-agents-well">
       <div class="ctox-list" id="ca-app-list">
         <div class="ctox-empty"><strong>Apps werden geladen…</strong></div>
       </div>
     </div>
+    <footer class="coding-agents-footer"><span id="ca-footer"></span></footer>
   </section>
 
-  <!-- Left Resizer Handle (shell-owned declarative resizer) -->
-  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="240" data-resizer-max="420" aria-label="App-Spalte anpassen"></button>
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="220" data-resizer-max="400" aria-label="Projekt-Spalte anpassen"></button>
 
-  <!-- Column 2: Center Pane (Delegation Workbench) -->
-  <section class="ctox-pane coding-agents-center" aria-label="pi-Coding Workbench">
+  <!-- Column 2: the conversation with the agent -->
+  <section class="ctox-pane coding-agents-center" aria-label="Agent-Chat">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker" id="ca-active-app-kicker">pi Coding Agent</span>
-          <h2 class="ctox-pane-title" id="ca-active-app-title">Workbench</h2>
+          <h2 class="ctox-pane-title" id="ca-active-app-title">Kein Projekt gewählt</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button type="button" class="ctox-pane-icon" id="ca-open-editor" title="Im Source-Editor öffnen" aria-label="Im Source-Editor öffnen" disabled>↗</button>
-          <span class="ctox-badge" id="ca-model-badge">CTOX (Standard)</span>
+          <button type="button" class="ctox-pane-icon" id="ca-open-editor" title="Im Source-Editor öffnen" aria-label="Im Source-Editor öffnen" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M9 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3"/></svg>
+          </button>
         </div>
       </div>
     </header>
-
-    <div class="ctox-pane-scroll coding-agents-workbench">
-
-      <!-- Task delegation form -->
-      <form class="ctox-card coding-agents-turn-card" id="ca-turn-form">
-        <header><span data-ca-form-title>Neuer Coding-Turn</span></header>
-        <div class="ctox-card-body coding-agents-turn-body">
-          <div>
-            <label class="ctox-field-label" for="ca-task-input" data-ca-task-label>Aufgabe</label>
-            <textarea id="ca-task-input" class="ctox-textarea" rows="5" placeholder="Beschreibe, was der pi-Agent an dieser App ändern soll…" required disabled></textarea>
-          </div>
-          <div class="coding-agents-turn-controls">
-            <label class="ctox-field-label" for="ca-model-select" data-ca-model-label>Modell</label>
-            <select id="ca-model-select" class="ctox-pane-filter"></select>
-            <button type="submit" class="ctox-run-control" id="ca-run" disabled><span aria-hidden="true">▶</span> <span data-ca-run-label>Delegieren</span></button>
-          </div>
-          <p class="coding-agents-hint" id="ca-hint" aria-live="polite"></p>
-        </div>
-      </form>
-
-      <!-- Last turn result -->
-      <section class="ctox-card coding-agents-result-card" id="ca-result" hidden>
-        <header>
-          <span data-ca-result-title>Letzter Turn</span>
-          <span class="ctox-badge" id="ca-result-badge"></span>
-        </header>
-        <div class="ctox-card-body" id="ca-result-body"></div>
-      </section>
-
-      <!-- Recent turns from the command log -->
-      <section class="coding-agents-recent">
-        <h3 class="ctox-field-label coding-agents-recent-title" data-ca-recent-title>Letzte Turns</h3>
-        <div class="ctox-list coding-agents-recent-list" id="ca-recent-list"></div>
-      </section>
-
-    </div>
+    <div class="coding-agents-chat" id="ca-recent-list" aria-live="polite"></div>
+    <div id="ca-result" hidden><span id="ca-result-badge"></span><span id="ca-result-body"></span></div>
+    <form class="coding-agents-composer" id="ca-turn-form">
+      <textarea id="ca-task-input" class="ctox-textarea" rows="2" placeholder="Beschreibe, was der Agent an diesem Projekt tun soll…" required disabled></textarea>
+      <div class="coding-agents-composer-side">
+        <select id="ca-model-select" class="ctox-select" aria-label="Modell"></select>
+        <button type="submit" class="ctox-button is-primary" id="ca-run" disabled><span aria-hidden="true">▶</span> <span data-ca-run-label>Delegieren</span></button>
+      </div>
+      <p class="coding-agents-hint" id="ca-hint" aria-live="polite"></p>
+    </form>
   </section>
+
+  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="260" data-resizer-max="560" aria-label="Artefakt-Spalte anpassen"></button>
+
+  <!-- Column 3: the agent's live artifact (free HTML the agent maintains) -->
+  <aside class="ctox-pane coding-agents-right" aria-label="Task-Artefakt">
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">Artefakt</span>
+          <h2 class="ctox-pane-title" id="ca-artifact-title">Task-Fortschritt</h2>
+        </div>
+        <div class="ctox-pane-actions"></div>
+      </div>
+    </header>
+    <div class="coding-agents-artifact-host">
+      <iframe id="ca-artifact" class="coding-agents-artifact" sandbox="" title="Task-Artefakt" hidden></iframe>
+      <div class="ctox-empty" id="ca-artifact-empty"><strong>Noch kein Artefakt.</strong><br>Der Agent veröffentlicht hier eine Live-Seite zu seinem Task (session.metadata.artifact_html).</div>
+    </div>
+  </aside>
 
 </main>
