@@ -3104,10 +3104,13 @@ fn business_os_static_cache_control(is_index: bool, rel: &str, request_url: &str
         return "no-cache, must-revalidate";
     }
 
-    // Packaged shell assets are immutable per URL: their `?v=` cache-buster
-    // is changed with the release.
+    // Release query keys remain useful for cache partitioning, but they are
+    // not a correctness boundary. A missed manual key bump must never leave a
+    // managed instance executing an old shell or module bundle after upgrade.
+    // Revalidate versioned packaged assets on navigation so the server's
+    // active release remains authoritative.
     if request_url.contains("?v=") || request_url.contains("&v=") {
-        "public, max-age=31536000, immutable"
+        "no-cache, must-revalidate"
     } else {
         "public, max-age=300, stale-while-revalidate=86400"
     }
@@ -3608,7 +3611,7 @@ mod tests {
                 "modules/calendar/index.js",
                 "/modules/calendar/index.js?v=shell-release"
             ),
-            "public, max-age=31536000, immutable"
+            "no-cache, must-revalidate"
         );
     }
 
