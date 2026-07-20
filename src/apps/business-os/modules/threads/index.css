@@ -619,3 +619,42 @@
 .threads-mention-popup button:hover { background: var(--kit-hover); }
 .threads-mention-popup button b { font-size: var(--fs-sm, 12px); font-weight: 600; }
 .threads-mention-popup button span { color: var(--muted); font-size: var(--fs-micro); }
+
+/* Timeline: system events are compact protocol lines, not chat bubbles. */
+.threads-message.is-event {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 10px;
+  border: 0;
+  background: transparent;
+  max-width: none;
+  color: var(--muted);
+  font-size: var(--fs-meta);
+}
+.threads-message.is-event .threads-event-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.threads-message.is-event .threads-event-meta { flex: 0 0 auto; font-size: var(--fs-micro); }
+/* Inline reference links: quiet, but unmistakably clickable. */
+.threads-msg-link {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--control-radius);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--fs-meta);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.threads-msg-link:hover { text-decoration: underline; background: var(--kit-hover); }
+.threads-msg-link.is-rework { color: var(--warning, #d8a03a); }
+/* Decide cluster sits below the always-on link cluster on approval cards. */
+.threads-card-actions.is-decide { top: 40px; }

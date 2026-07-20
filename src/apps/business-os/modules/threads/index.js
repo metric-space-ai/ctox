@@ -293,6 +293,11 @@ function wireUi() {
       navigateDeepLink(deepLink.getAttribute('data-thread-deep-link') || '');
       return;
     }
+    const rework = target?.closest?.('[data-rework-context]');
+    if (rework) {
+      requestRework(rework.getAttribute('data-rework-context') || '').catch(showError);
+      return;
+    }
     const question = target?.closest?.('[data-question-approval]');
     if (question) {
       askApprovalQuestion(question.getAttribute('data-question-approval') || '').catch(showError);
@@ -832,9 +837,30 @@ function renderTimeline(thread) {
     if (entry.type === 'approval') return renderApproval(entry.item);
     const message = entry.item;
     const mine = message.author_user_id && message.author_user_id === me;
+    const kind = message.event_type || message.kind || 'note';
+    const sourceLink = sourceDeepLinkFor(message);
+    const linkHtml = sourceLink
+      ? `<button type="button" class="threads-msg-link" data-thread-deep-link="${escapeAttr(sourceLink)}" title="Objekt öffnen">↗ ${escapeHtml(message.source_label || message.source_module || 'Quelle')}</button>`
+      : '';
+    const isEvent = ['ctox_status', 'approval_request', 'approval_approved', 'approval_rejected', 'handoff', 'status'].includes(kind)
+      || (!message.author_user_id && message.actor_type !== 'ai');
+    if (isEvent) {
+      // System events are protocol, not conversation: one compact line, the
+      // human-readable head first, references as links — never a chat bubble.
+      const failed = /blockiert|fehlgeschlagen|failed/i.test(message.body || '');
+      const head = String(message.body || '').split('\n')[0];
+      return `
+        <div class="threads-message is-event" data-message-id="${escapeAttr(message.id)}">
+          <span class="threads-event-text">${escapeHtml(head)}</span>
+          <span class="threads-event-meta">${escapeHtml(relativeTime(message.created_at_ms || message.updated_at_ms))}</span>
+          ${linkHtml}
+          ${failed ? `<button type="button" class="threads-msg-link is-rework" data-rework-context="${escapeAttr(head)}" title="CTOX beauftragen, das nachzuarbeiten">↻ Nacharbeiten</button>` : ''}
+        </div>
+      `;
+    }
     return `
       <article class="threads-message ${mine ? 'is-mine' : ''}" data-message-id="${escapeAttr(message.id)}">
-        <div class="threads-message-meta">${escapeHtml(message.actor_type === 'ai' ? 'AI' : (message.author_display_name || message.author_user_id || 'system'))} · ${escapeHtml(formatTime(message.created_at_ms || message.updated_at_ms))} · ${escapeHtml(message.event_type || message.kind || 'note')}</div>
+        <div class="threads-message-meta">${escapeHtml(message.actor_type === 'ai' ? 'CTOX' : (message.author_display_name || message.author_user_id || 'System'))} · ${escapeHtml(relativeTime(message.created_at_ms || message.updated_at_ms))}${linkHtml ? ' · ' : ''}${linkHtml}</div>
         <div class="threads-message-body">${escapeHtml(message.body || '')}</div>
       </article>
     `;
@@ -852,9 +878,12 @@ function renderApproval(approval) {
   const evidence = approvalEvidence(approval);
   return `
     <article class="threads-approval-card" data-approval-id="${escapeAttr(approval.id)}">
+      <div class="threads-card-actions">
+        ${sourceDeepLinkFor(approval) ? `<button type="button" class="ctox-pane-icon" data-thread-deep-link="${escapeAttr(sourceDeepLinkFor(approval))}" aria-label="Objekt in der Quell-App öffnen" title="Objekt in der Quell-App öffnen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M9 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3"/></svg></button>` : ''}
+        ${(command?.status === 'failed' || task?.status === 'failed') ? `<button type="button" class="ctox-pane-icon" data-rework-context="${escapeAttr(approval.prompt || approval.instruction || '')}" aria-label="CTOX nacharbeiten lassen" title="CTOX nacharbeiten lassen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>` : ''}
+      </div>
       ${canDecide ? `
-        <div class="threads-card-actions">
-          ${sourceDeepLinkFor(approval) ? `<button type="button" class="ctox-pane-icon" data-thread-deep-link="${escapeAttr(sourceDeepLinkFor(approval))}" aria-label="Objekt in der Quell-App öffnen" title="Objekt in der Quell-App öffnen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M9 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3"/></svg></button>` : ''}
+        <div class="threads-card-actions is-decide">
           <button type="button" class="ctox-pane-icon is-confirm" data-approve-approval="${escapeAttr(approval.id)}" aria-label="${escapeHtml(state.t('approvalApprove', 'Freigeben'))}" title="${escapeHtml(state.t('approvalApprove', 'Freigeben'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l5 5L19 7"/></svg></button>
           <button type="button" class="ctox-pane-icon is-danger" data-reject-approval="${escapeAttr(approval.id)}" aria-label="${escapeHtml(state.t('approvalReject', 'Ablehnen'))}" title="${escapeHtml(state.t('approvalReject', 'Ablehnen'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
           <button type="button" class="ctox-pane-icon" data-question-approval="${escapeAttr(approval.id)}" aria-label="Rückfrage an Requester" title="Rückfrage an Requester"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 9a3 3 0 1 1 4.2 2.75c-.9.4-1.2 1-1.2 2.05"/><path d="M12 17.3v.2"/></svg></button>
@@ -870,8 +899,8 @@ function renderApproval(approval) {
         <dt>Evidenz</dt><dd>${escapeHtml(evidence)}</dd>
       </dl>
       <div class="threads-message-meta">${escapeHtml(state.t('approvalRequester', 'Requester'))}: ${escapeHtml(approval.requester_display_name || approval.requester_user_id || '')} · ${escapeHtml(state.t('approvalReviewerShort', 'Reviewer'))}: ${escapeHtml(approval.reviewer_display_name || approval.reviewer_user_id || '')}</div>
-      ${command ? `<div class="threads-message-meta">${escapeHtml(state.t('approvalCommand', 'Command'))}: ${escapeHtml(command.command_type || '')} · ${escapeHtml(command.status || '')}</div>` : ''}
-      ${task ? `<div class="threads-message-meta">${escapeHtml(state.t('approvalTask', 'Task'))}: ${escapeHtml(task.title || task.id)} · ${escapeHtml(task.status || '')}</div>` : ''}
+      ${command ? `<div class="threads-message-meta"><button type="button" class="threads-msg-link" data-thread-deep-link="#ctox?command_id=${escapeAttr(command.command_id || command.id || '')}" title="Befehl in der CTOX-App öffnen">↗ ${escapeHtml(state.t('approvalCommand', 'Command'))}: ${escapeHtml(command.command_type || '')} · ${escapeHtml(command.status || '')}</button></div>` : ''}
+      ${task ? `<div class="threads-message-meta"><button type="button" class="threads-msg-link" data-thread-deep-link="#ctox?task_id=${escapeAttr(task.id || '')}" title="Aufgabe in der CTOX-App öffnen">↗ ${escapeHtml(state.t('approvalTask', 'Task'))}: ${escapeHtml(task.title || task.id)} · ${escapeHtml(task.status || '')}</button></div>` : ''}
     </article>
   `;
 }
@@ -1701,5 +1730,21 @@ async function askApprovalQuestion(approvalId) {
     recordId: approval.thread_id || approvalId,
     sourceModule: approval.source_module || 'threads',
   });
+  await refresh();
+}
+
+
+// Failed CTOX work gets a one-click follow-up: dispatch a real AI request in
+// this thread asking CTOX to rework exactly that item.
+async function requestRework(context) {
+  const thread = selectedThread();
+  if (!thread) return;
+  const goal = window.prompt('Was soll CTOX nacharbeiten?', `Nacharbeiten: ${context}`.trim());
+  if (!goal) return;
+  await dispatchThreadsCommand('threads.ai.request', {
+    thread_id: thread.id,
+    goal,
+    risk_class: 'internal',
+  }, { recordId: thread.id });
   await refresh();
 }

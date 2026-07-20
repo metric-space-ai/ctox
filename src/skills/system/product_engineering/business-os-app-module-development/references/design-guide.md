@@ -223,6 +223,12 @@ Rules that go with it:
   preview); humans pick people from the roster (`business_users`) — never
   type user ids; @-mentions in the composer become `target_user_ids` and
   notify; delegate and ask-back are first-class actions next to approve.
+- **Timeline rule**: system events render as compact protocol lines (one
+  line, muted, human-readable head first), never as chat bubbles — only
+  people and AI messages get bubbles. EVERY reference in a timeline is a
+  link (source object, command, task — `#<module>?record_id/command_id/
+  task_id`), and every failure line carries a one-click follow-up action
+  that dispatches real work (rework via `threads.ai.request`), not dead text.
 - **Personal-inbox rule**: an inbox view shows only what needs THIS user now
   — my pending reviews, my mentions, my unread human threads, work assigned
   to me. Admins are not a firehose: someone else's review queue lives under
