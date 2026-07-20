@@ -52,6 +52,8 @@ const ROOM_CIRCUIT_FAILURE_THRESHOLD = 5;
 const ROOM_CIRCUIT_OPEN_MS = 120_000;
 const ROOM_RETRY_BASE_MS = 1_000;
 const ROOM_RETRY_MAX_MS = 30_000;
+const COLLECTION_START_GAP_MS = 500;
+const COLLECTION_RESTART_GAP_MS = 500;
 const DESKTOP_ICON_SAFE_FIELDS = new Set([
   'id',
   'target_type',
@@ -355,7 +357,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
   emitDiagnostic({ phase: 'ready' });
   const ensureMultiTabCoordinator = async () => {
     if (multiTabCoordinator) return multiTabCoordinator;
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260720-checkpoint-head-v68');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260720-queue-pressure-v69');
     if (typeof rxdb?.getMultiTabSyncCoordinator !== 'function') return null;
     multiTabCoordinator = rxdb.getMultiTabSyncCoordinator({
       databaseName: db?.name || db?.raw?.name || 'ctox_business_os_js_v1',
@@ -640,14 +642,10 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
           scheduleRestart: scheduleRestartOfUnhealthyCollections,
         });
       });
-      // 50 ms spacing between collection starts. The original 500 ms guarded
-      // the pre-multiplex world where every start dialled its own
-      // RTCPeerConnection through signaling; since phase 3 all collections
-      // share ONE room peer and a "start" is just a registration + catch-up
-      // pull on the existing channel. 500 ms turned an 18-collection shell
-      // start into 9 s of pure queue delay. A small gap is kept so start
-      // bursts stay ordered and the first connection wins the race cleanly.
-      collectionStartQueue = bridgePromise.catch(() => {}).then(() => delay(50));
+      // Every collection shares one bounded room send queue. Pacing initial
+      // catch-up keeps a legitimate multi-collection bootstrap below the
+      // wedged-peer recycle threshold while preserving deterministic order.
+      collectionStartQueue = bridgePromise.catch(() => {}).then(() => delay(COLLECTION_START_GAP_MS));
       bridges.set(collection, bridgePromise);
       publishResourceBudget();
       try {
@@ -727,7 +725,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
           batch.push(await this.startCollection(collection, {
             pin: pinnedBeforeRestart.get(collection) === true,
           }));
-          await delay(250);
+          await delay(COLLECTION_RESTART_GAP_MS);
         }
         return batch;
       };
@@ -1063,7 +1061,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
   if (collection === 'desktop_icons') {
     await repairDesktopIconsBeforeReplication(rxCollection);
   }
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260720-checkpoint-head-v68');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260720-queue-pressure-v69');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }
@@ -2501,6 +2499,9 @@ function classifyPeerLifecycleEvent(error) {
   } else if (haystack.includes('ERR_PC_CONSTRUCTOR') || haystack.includes('Cannot create so many PeerConnections')) {
     lifecycleCode = 'peer_connection_limit';
     lifecycleMessage = 'Browser peer connection limit was reached; reconnect repair is scheduled.';
+  } else if (haystack.includes('ctox_webrtc_send_queue_budget_exceeded')) {
+    lifecycleCode = 'peer_send_queue_pressure';
+    lifecycleMessage = 'WebRTC send queue exceeded its hard budget; the wedged peer was recycled and reconnect repair is scheduled.';
   } else if (haystack.includes('Still in CONNECTING state')) {
     lifecycleCode = 'peer_connect_timeout';
     lifecycleMessage = 'WebRTC peer stayed in connecting state; reconnect repair is scheduled.';
