@@ -5837,22 +5837,36 @@ fn start_prompt_worker(
             } else {
                 artifact_first_execution_prompt(&job)
             };
-            let execution_prompt = attach_typed_business_command_context(
-                &root,
-                &job,
-                base_execution_prompt,
-                &command_turn_id,
-                conversation_thread_key.as_deref(),
-            )
-            .map(|mut prompt| {
-                if is_systematic_research_job(&job) {
-                    let required_depth = required_systematic_research_depth(&job).as_str();
-                    prompt.push_str(&format!(
-                        "\n\nServer-bound research attempt:\nResearch Attempt ID: {command_turn_id}\nRequired Deep Research Depth: {required_depth}\nWrite the exact attempt ID to research_attempt_id in validation/evidence-manifest.json. The manifest schema is exactly ctox.research.evidence.v2; read references/evidence_integrity.md before creating or repairing it and run evidence_guard.py yourself before completion. Ensure this durable research run contains a successful typed ctox_deep_research call at the required depth with a persisted research workspace inside the task workspace. Reuse immutable receipts already produced by the same Research Run ID, Research Command ID, and workspace across bounded correction attempts; do not repeat discovery solely because the reviewer requested a manifest repair. Do not spawn or delegate to child agents. CTOX validates original-content receipts, hashes, data integrity, and claim lineage deterministically before its independent service-owned completion-review gate. Completion rejects any other attempt ID, manifest path or schema, shallower depth, no-workspace run, or missing evidence."
-                    ));
-                }
-                outbound_email_first_execution_prompt(&job, prompt)
-            });
+            let execution_prompt = materialize_systematic_research_skill(&root, &job).and_then(
+                |systematic_research_skill_dir| {
+                    attach_typed_business_command_context(
+                        &root,
+                        &job,
+                        base_execution_prompt,
+                        &command_turn_id,
+                        conversation_thread_key.as_deref(),
+                    )
+                    .map(|mut prompt| {
+                        if is_systematic_research_job(&job) {
+                            let required_depth =
+                                required_systematic_research_depth(&job).as_str();
+                            let skill_dir = systematic_research_skill_dir
+                                .as_ref()
+                                .expect("systematic research skill must be materialized");
+                            let evidence_contract =
+                                skill_dir.join("references/evidence_integrity.md");
+                            let evidence_guard = skill_dir.join("scripts/evidence_guard.py");
+                            prompt.push_str(&format!(
+                                "\n\nServer-bound research attempt:\nResearch Attempt ID: {command_turn_id}\nRequired Deep Research Depth: {required_depth}\nThe complete read-only Systematic Research skill package is materialized inside this task workspace at {}.\nBefore creating or repairing validation/evidence-manifest.json, read the exact contract at {}. Run `python3 {} validation/evidence-manifest.json` yourself before completion. The manifest must use top-level `schema_version: \"ctox.research.evidence.v2\"`, `run_id`, `research_run_id`, `research_command_id`, the exact current `research_attempt_id`, `as_of`, and non-empty `sources` and `evidence` arrays plus `claims`, `data_files`, and `knowledge` exactly as that contract defines. A top-level `schema` or `manifest_version` is not a substitute for `schema_version`.\nWrite the exact attempt ID to research_attempt_id in validation/evidence-manifest.json. Ensure this durable research run contains a successful typed ctox_deep_research call at the required depth with a persisted research workspace inside the task workspace. Reuse immutable receipts already produced by the same Research Run ID, Research Command ID, and workspace across bounded correction attempts; do not repeat discovery solely because the reviewer requested a manifest repair. Do not call the sandboxed `ctox` CLI for Knowledge writeback. After the evidence guard and independent review pass, the native research.systematic.run command imports the validated dashboard/knowledge CSV outputs into Knowledge and projects them over RxDB/WebRTC. Do not spawn or delegate to child agents. CTOX validates original-content receipts, hashes, data integrity, and claim lineage deterministically before its independent service-owned completion-review gate. Completion rejects any other attempt ID, manifest path or schema, shallower depth, no-workspace run, or missing evidence.",
+                                skill_dir.display(),
+                                evidence_contract.display(),
+                                evidence_guard.display(),
+                            ));
+                        }
+                        outbound_email_first_execution_prompt(&job, prompt)
+                    })
+                },
+            );
             let session_options = chat_turn_session_options_for_queue_job(&job);
             let result = execution_prompt.and_then(|execution_prompt| {
                 if queue_job_reuses_persistent_session(&session_options) {
@@ -10781,6 +10795,31 @@ fn is_systematic_research_job(job: &QueuedPrompt) -> bool {
         || job.prompt.contains("research.systematic.run")
         || job.prompt.contains("research.systematic.report.create")
         || job.prompt.contains("research.knowledge.refresh")
+}
+
+fn materialize_systematic_research_skill(
+    root: &Path,
+    job: &QueuedPrompt,
+) -> Result<Option<PathBuf>> {
+    if !is_systematic_research_job(job) {
+        return Ok(None);
+    }
+    let workspace = job
+        .workspace_root
+        .as_deref()
+        .map(Path::new)
+        .context("systematic research requires a typed workspace root")?;
+    std::fs::create_dir_all(workspace).with_context(|| {
+        format!(
+            "create systematic research task workspace {}",
+            workspace.display()
+        )
+    })?;
+    let export_root = workspace.join(".ctox/system-skills");
+    let skill_dir =
+        crate::skill_store::export_system_skill(root, "systematic-research", &export_root)
+            .context("materialize systematic-research skill inside task workspace")?;
+    Ok(Some(skill_dir))
 }
 
 fn business_os_app_validation_may_own_completion(job: &QueuedPrompt) -> bool {

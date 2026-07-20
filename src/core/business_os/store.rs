@@ -17735,6 +17735,12 @@ pub fn complete_business_command_from_queue_reply(
             Some(reply_text),
         )?
     } else if is_systematic_research_command(&command) {
+        promote_systematic_research_workspace_outputs(
+            root,
+            &command_id,
+            &command,
+            queue_task.as_ref(),
+        )?;
         process_systematic_research_command(
             root,
             &conn,
@@ -32189,6 +32195,419 @@ struct SystematicResearchEvidence {
     source_receipt_links: Vec<Value>,
     source_receipt_snapshot_hashes: Vec<String>,
     knowledge_version: Value,
+}
+
+#[derive(Debug, Clone)]
+struct SystematicResearchCsvOutput {
+    file_name: &'static str,
+    table_key: &'static str,
+    title: &'static str,
+    require_manifest_evidence: bool,
+    require_manifest_claim: bool,
+}
+
+type ValidatedResearchClaim = (String, String, String, String, String, String);
+
+fn promote_systematic_research_workspace_outputs(
+    root: &Path,
+    command_id: &str,
+    command: &BusinessCommand,
+    queue_task: Option<&channels::QueueTaskView>,
+) -> anyhow::Result<usize> {
+    let workspace = queue_task
+        .and_then(|task| task.workspace_root.as_deref())
+        .map(Path::new)
+        .context("systematic research writeback requires the leased task workspace")?
+        .canonicalize()
+        .context("canonicalize systematic research task workspace")?;
+    let domain = first_string_field(&command.payload, &["knowledge_domain", "domain"])
+        .or_else(|| first_string_field(&command.client_context, &["knowledge_domain", "domain"]))
+        .context("systematic research writeback requires a Knowledge domain")?;
+    let run_id = first_string_field(&command.payload, &["research_run_id", "run_id"])
+        .or_else(|| first_string_field(&command.client_context, &["research_run_id", "run_id"]))
+        .context("systematic research writeback requires an immutable research_run_id")?;
+
+    let validation_receipt_path = workspace
+        .join(".ctox")
+        .join("systematic-research-validation.json");
+    let validation_receipt: Value =
+        serde_json::from_slice(&fs::read(&validation_receipt_path).with_context(|| {
+            format!(
+                "read systematic research validation receipt {}",
+                validation_receipt_path.display()
+            )
+        })?)
+        .context("parse systematic research validation receipt")?;
+    anyhow::ensure!(
+        validation_receipt
+            .get("schema_version")
+            .and_then(Value::as_str)
+            == Some("ctox.systematic-research.validation.v1")
+            && validation_receipt.get("status").and_then(Value::as_str) == Some("pass"),
+        "systematic research writeback requires a passing native validation receipt"
+    );
+    anyhow::ensure!(
+        validation_receipt
+            .get("research_run_id")
+            .and_then(Value::as_str)
+            == Some(run_id.as_str())
+            && validation_receipt
+                .get("research_command_id")
+                .and_then(Value::as_str)
+                == Some(command_id),
+        "systematic research validation receipt is bound to another run or command"
+    );
+
+    let manifest_path = workspace.join("validation/evidence-manifest.json");
+    let manifest_bytes = fs::read(&manifest_path)
+        .with_context(|| format!("read evidence manifest {}", manifest_path.display()))?;
+    let manifest_sha256 = format!("{:x}", Sha256::digest(&manifest_bytes));
+    let manifest: Value =
+        serde_json::from_slice(&manifest_bytes).context("parse systematic research manifest")?;
+    anyhow::ensure!(
+        validation_receipt
+            .get("manifests")
+            .and_then(Value::as_array)
+            .is_some_and(|manifests| manifests.iter().any(|item| {
+                item.get("manifest_sha256").and_then(Value::as_str)
+                    == Some(manifest_sha256.as_str())
+            })),
+        "systematic research validation receipt does not cover the current evidence manifest"
+    );
+    anyhow::ensure!(
+        manifest.get("schema_version").and_then(Value::as_str) == Some("ctox.research.evidence.v2")
+            && manifest.get("research_run_id").and_then(Value::as_str) == Some(run_id.as_str())
+            && manifest.get("research_command_id").and_then(Value::as_str) == Some(command_id),
+        "systematic research manifest binding changed after validation"
+    );
+
+    let evidence = manifest
+        .get("evidence")
+        .and_then(Value::as_array)
+        .context("systematic research manifest has no evidence array")?;
+    let mut eligible_sources = HashMap::new();
+    let mut evidence_by_id = HashMap::new();
+    for item in evidence {
+        let evidence_id = first_string_field(item, &["evidence_id"])
+            .context("systematic research evidence is missing evidence_id")?;
+        let source_id = first_string_field(item, &["source_id"])
+            .context("systematic research evidence is missing source_id")?;
+        let snapshot_id = first_string_field(item, &["snapshot_id"])
+            .context("systematic research evidence is missing snapshot_id")?;
+        let canonical_url = first_string_field(item, &["canonical_url"])
+            .context("systematic research evidence is missing canonical_url")?;
+        let snapshot_hash = first_string_field(item, &["snapshot_sha256"])
+            .context("systematic research evidence is missing snapshot_sha256")?;
+        eligible_sources.insert(
+            source_id.clone(),
+            (canonical_url.clone(), snapshot_hash.clone()),
+        );
+        evidence_by_id.insert(
+            evidence_id,
+            (source_id, snapshot_id, canonical_url, snapshot_hash),
+        );
+    }
+    anyhow::ensure!(
+        !eligible_sources.is_empty(),
+        "systematic research writeback requires eligible manifest evidence"
+    );
+    let claims = manifest
+        .get("claims")
+        .and_then(Value::as_array)
+        .context("systematic research manifest has no claims array")?;
+    let mut validated_claims: HashMap<String, ValidatedResearchClaim> = HashMap::new();
+    for claim in claims {
+        let claim_id = first_string_field(claim, &["claim_id"])
+            .context("systematic research claim is missing claim_id")?;
+        let evidence_id = first_string_field(claim, &["evidence_id"])
+            .context("systematic research claim is missing evidence_id")?;
+        let source_id = first_string_field(claim, &["source_id"])
+            .context("systematic research claim is missing source_id")?;
+        let snapshot_id = first_string_field(claim, &["snapshot_id"])
+            .context("systematic research claim is missing snapshot_id")?;
+        let canonical_url = first_string_field(claim, &["canonical_url"])
+            .context("systematic research claim is missing canonical_url")?;
+        let quote = first_string_field(claim, &["evidence_quote"])
+            .context("systematic research claim is missing evidence_quote")?;
+        let (expected_source_id, expected_snapshot_id, expected_url, snapshot_hash) =
+            evidence_by_id.get(&evidence_id).with_context(|| {
+                format!(
+                    "systematic research claim {claim_id} references unknown evidence {evidence_id}"
+                )
+            })?;
+        anyhow::ensure!(
+            source_id == *expected_source_id
+                && snapshot_id == *expected_snapshot_id
+                && canonical_url == *expected_url,
+            "systematic research claim {claim_id} does not match its evidence lineage"
+        );
+        validated_claims.insert(
+            claim_id,
+            (
+                evidence_id,
+                source_id,
+                snapshot_id,
+                canonical_url,
+                snapshot_hash.clone(),
+                quote,
+            ),
+        );
+    }
+    anyhow::ensure!(
+        !validated_claims.is_empty(),
+        "systematic research writeback requires validated manifest claims"
+    );
+
+    let outputs = [
+        SystematicResearchCsvOutput {
+            file_name: "source_candidates.csv",
+            table_key: "source_candidates",
+            title: "Discovery Candidates",
+            require_manifest_evidence: false,
+            require_manifest_claim: false,
+        },
+        SystematicResearchCsvOutput {
+            file_name: "evidence_points.csv",
+            table_key: "evidence_points",
+            title: "Evidence Points",
+            require_manifest_evidence: false,
+            require_manifest_claim: true,
+        },
+        SystematicResearchCsvOutput {
+            file_name: "evaluation_matrix.csv",
+            table_key: "evaluation_matrix",
+            title: "Evaluation Matrix",
+            require_manifest_evidence: false,
+            require_manifest_claim: false,
+        },
+        SystematicResearchCsvOutput {
+            file_name: "semantic_graph_nodes.csv",
+            table_key: "semantic_graph_nodes",
+            title: "Semantic Graph Nodes",
+            require_manifest_evidence: false,
+            require_manifest_claim: false,
+        },
+        SystematicResearchCsvOutput {
+            file_name: "semantic_graph_edges.csv",
+            table_key: "semantic_graph_edges",
+            title: "Semantic Graph Edges",
+            require_manifest_evidence: false,
+            require_manifest_claim: false,
+        },
+        // Promote the verified source registry last. It is the app-facing
+        // evidence gate for all dependent tables above.
+        SystematicResearchCsvOutput {
+            file_name: "source_catalog.csv",
+            table_key: "source_catalog",
+            title: "Verified Source Catalog",
+            require_manifest_evidence: true,
+            require_manifest_claim: false,
+        },
+    ];
+
+    let output_root = workspace.join("dashboard/knowledge");
+    let mut validated = Vec::with_capacity(outputs.len());
+    for output in &outputs {
+        let path = output_root
+            .join(output.file_name)
+            .canonicalize()
+            .with_context(|| format!("canonicalize research output {}", output.file_name))?;
+        anyhow::ensure!(
+            path.starts_with(&workspace),
+            "systematic research output escapes the task workspace: {}",
+            path.display()
+        );
+        let rows = validate_systematic_research_csv(
+            &path,
+            output,
+            &run_id,
+            command_id,
+            &eligible_sources,
+            &validated_claims,
+        )?;
+        validated.push((output, path, rows));
+    }
+
+    for (output, path, expected_rows) in validated {
+        let describe_args = vec![
+            "data".to_string(),
+            "describe".to_string(),
+            "--domain".to_string(),
+            domain.clone(),
+            "--key".to_string(),
+            output.table_key.to_string(),
+        ];
+        if crate::knowledge::dispatch_capturing(root, &describe_args).is_err() {
+            let create_args = vec![
+                "data".to_string(),
+                "create".to_string(),
+                "--domain".to_string(),
+                domain.clone(),
+                "--key".to_string(),
+                output.table_key.to_string(),
+                "--source-system".to_string(),
+                "systematic-research".to_string(),
+                "--title".to_string(),
+                output.title.to_string(),
+                "--description".to_string(),
+                format!("Validated systematic research output for {domain}; run {run_id}"),
+            ];
+            crate::knowledge::dispatch_capturing(root, &create_args)
+                .with_context(|| format!("create Knowledge table {domain}/{}", output.table_key))?;
+        }
+        let import_args = vec![
+            "data".to_string(),
+            "import".to_string(),
+            "--domain".to_string(),
+            domain.clone(),
+            "--key".to_string(),
+            output.table_key.to_string(),
+            "--from-file".to_string(),
+            path.display().to_string(),
+            "--mode".to_string(),
+            "replace".to_string(),
+        ];
+        let imported = crate::knowledge::dispatch_capturing(root, &import_args)
+            .with_context(|| format!("import Knowledge table {domain}/{}", output.table_key))?;
+        anyhow::ensure!(
+            imported.get("ok").and_then(Value::as_bool) == Some(true)
+                && imported.get("row_count").and_then(Value::as_i64) == Some(expected_rows as i64),
+            "Knowledge import row-count mismatch for {domain}/{}: expected {expected_rows}, got {}",
+            output.table_key,
+            imported
+        );
+    }
+
+    let projected = super::sync_knowledge_tables(root)
+        .context("project validated systematic research Knowledge over RxDB")?;
+    Ok(projected)
+}
+
+fn validate_systematic_research_csv(
+    path: &Path,
+    output: &SystematicResearchCsvOutput,
+    run_id: &str,
+    command_id: &str,
+    eligible_sources: &HashMap<String, (String, String)>,
+    validated_claims: &HashMap<String, ValidatedResearchClaim>,
+) -> anyhow::Result<usize> {
+    fn record_value<'a>(
+        record: &'a csv::StringRecord,
+        headers: &csv::StringRecord,
+        field: &str,
+    ) -> Option<&'a str> {
+        let index = headers.iter().position(|header| header == field)?;
+        record.get(index).map(str::trim)
+    }
+    fn normalized_hash(value: &str) -> &str {
+        value.trim().strip_prefix("sha256:").unwrap_or(value.trim())
+    }
+
+    let mut reader = csv::ReaderBuilder::new()
+        .flexible(false)
+        .from_path(path)
+        .with_context(|| format!("open systematic research CSV {}", path.display()))?;
+    let headers = reader
+        .headers()
+        .with_context(|| format!("read systematic research CSV header {}", path.display()))?
+        .clone();
+    for field in ["research_run_id", "research_command_id"] {
+        anyhow::ensure!(
+            headers.iter().any(|header| header == field),
+            "{} is missing required column {field}",
+            output.file_name
+        );
+    }
+    if output.require_manifest_evidence {
+        for field in ["source_id", "canonical_url", "snapshot_hash"] {
+            anyhow::ensure!(
+                headers.iter().any(|header| header == field),
+                "{} is missing required column {field}",
+                output.file_name
+            );
+        }
+    }
+    if output.require_manifest_claim {
+        for field in [
+            "claim_id",
+            "evidence_id",
+            "source_id",
+            "snapshot_id",
+            "canonical_url",
+            "snapshot_hash",
+            "quote",
+        ] {
+            anyhow::ensure!(
+                headers.iter().any(|header| header == field),
+                "{} is missing required column {field}",
+                output.file_name
+            );
+        }
+    }
+
+    let mut rows = 0usize;
+    for result in reader.records() {
+        let record =
+            result.with_context(|| format!("parse systematic research CSV {}", path.display()))?;
+        rows += 1;
+        anyhow::ensure!(
+            record_value(&record, &headers, "research_run_id") == Some(run_id)
+                && record_value(&record, &headers, "research_command_id") == Some(command_id),
+            "{} row {rows} is bound to another research run or command",
+            output.file_name
+        );
+        if output.require_manifest_evidence {
+            let source_id = record_value(&record, &headers, "source_id")
+                .filter(|value| !value.is_empty())
+                .with_context(|| format!("{} row {rows} has no source_id", output.file_name))?;
+            let (canonical_url, snapshot_hash) =
+                eligible_sources.get(source_id).with_context(|| {
+                    format!(
+                    "{} row {rows} source {source_id} is absent from validated manifest evidence",
+                    output.file_name
+                )
+                })?;
+            anyhow::ensure!(
+                record_value(&record, &headers, "canonical_url") == Some(canonical_url.as_str())
+                    && record_value(&record, &headers, "snapshot_hash").is_some_and(|value| {
+                        normalized_hash(value).eq_ignore_ascii_case(normalized_hash(snapshot_hash))
+                    }),
+                "{} row {rows} does not match validated evidence for source {source_id}",
+                output.file_name
+            );
+        }
+        if output.require_manifest_claim {
+            let claim_id = record_value(&record, &headers, "claim_id")
+                .filter(|value| !value.is_empty())
+                .with_context(|| format!("{} row {rows} has no claim_id", output.file_name))?;
+            let (evidence_id, source_id, snapshot_id, canonical_url, snapshot_hash, quote) =
+                validated_claims.get(claim_id).with_context(|| {
+                    format!(
+                        "{} row {rows} claim {claim_id} is absent from validated manifest claims",
+                        output.file_name
+                    )
+                })?;
+            anyhow::ensure!(
+                record_value(&record, &headers, "evidence_id") == Some(evidence_id.as_str())
+                    && record_value(&record, &headers, "source_id") == Some(source_id.as_str())
+                    && record_value(&record, &headers, "snapshot_id") == Some(snapshot_id.as_str())
+                    && record_value(&record, &headers, "canonical_url")
+                        == Some(canonical_url.as_str())
+                    && record_value(&record, &headers, "snapshot_hash").is_some_and(|value| {
+                        normalized_hash(value).eq_ignore_ascii_case(normalized_hash(snapshot_hash))
+                    })
+                    && record_value(&record, &headers, "quote") == Some(quote.as_str()),
+                "{} row {rows} does not match validated lineage for claim {claim_id}",
+                output.file_name
+            );
+        }
+    }
+    anyhow::ensure!(
+        rows > 0,
+        "systematic research output {} is empty",
+        output.file_name
+    );
+    Ok(rows)
 }
 
 fn systematic_research_evidence_snapshot(
