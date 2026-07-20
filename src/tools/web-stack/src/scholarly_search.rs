@@ -9,10 +9,9 @@
 //! full text during synthesis. The module deliberately does not fetch full
 //! text from unauthorized mirrors.
 //!
-//! The first metadata backend is Anna's Archive. The module is shaped so
-//! additional scholarly backends (OpenAlex, Crossref, arXiv) can be added
-//! later behind the same `ScholarlySearchProvider` enum without changing the
-//! return shape.
+//! Auto discovery combines the legal Crossref, OpenAlex, and Semantic Scholar
+//! metadata APIs. Anna's Archive remains an explicit metadata-only provider;
+//! it is never the default scientific discovery path.
 //!
 //! Backend protocol port note: Anna's Archive's `/search` URL parameter set
 //! (`lang`, `content`, `ext`, `sort`, `q`, `page`) is functional protocol
@@ -197,23 +196,7 @@ pub fn execute_scholarly_search(
         // APIs (Crossref / OpenAlex / Semantic Scholar) are legal open APIs and
         // are NOT gated by it — deep-research relies on them unconditionally,
         // and disabling shadow-archive search must not silently kill them.
-        ScholarlySearchProvider::Auto => {
-            if !is_enabled(root) {
-                bail!("CTOX scholarly search is disabled (CTOX_SCHOLARLY_SEARCH_ENABLED=false)");
-            }
-            match annas_archive_search(root, request) {
-                Ok(response) => Ok(response),
-                Err(err) => Ok(ScholarlySearchResponse {
-                    provider: ScholarlySearchProvider::Auto.as_str().to_string(),
-                    query: request.query.trim().to_string(),
-                    results: Vec::new(),
-                    executed_url: "auto:annas_archive_unavailable".to_string(),
-                    source_policy: format!(
-                        "{SOURCE_POLICY_NOTICE} Scholarly auto-discovery returned no records because the configured metadata backend was unavailable: {err}"
-                    ),
-                }),
-            }
-        }
+        ScholarlySearchProvider::Auto => auto_scholarly_search(root, request),
         ScholarlySearchProvider::AnnasArchive => {
             if !is_enabled(root) {
                 bail!("CTOX scholarly search is disabled (CTOX_SCHOLARLY_SEARCH_ENABLED=false)");
@@ -245,12 +228,116 @@ fn resolve_provider(
     root: &Path,
     requested: Option<ScholarlySearchProvider>,
 ) -> ScholarlySearchProvider {
-    let provider = requested.unwrap_or_else(|| {
-        runtime_config::get(root, "CTOX_SCHOLARLY_SEARCH_PROVIDER")
-            .map(|raw| ScholarlySearchProvider::from_label(&raw))
-            .unwrap_or(ScholarlySearchProvider::Auto)
-    });
-    provider
+    if let Some(provider) = requested {
+        return provider;
+    }
+    if let Some(raw) = runtime_config::get(root, "CTOX_SCHOLARLY_SEARCH_PROVIDER") {
+        return ScholarlySearchProvider::from_label(&raw);
+    }
+    if runtime_config::get(root, "CTOX_ANNAS_ARCHIVE_BASE_URL").is_some() {
+        return ScholarlySearchProvider::AnnasArchive;
+    }
+    ScholarlySearchProvider::Auto
+}
+
+fn auto_scholarly_search(
+    root: &Path,
+    request: &ScholarlySearchRequest,
+) -> Result<ScholarlySearchResponse> {
+    let providers = [
+        (
+            ScholarlySearchProvider::Crossref,
+            crossref_search(root, request),
+        ),
+        (
+            ScholarlySearchProvider::OpenAlex,
+            openalex_search(root, request),
+        ),
+        (
+            ScholarlySearchProvider::SemanticScholar,
+            semantic_scholar_search(root, request),
+        ),
+    ];
+    let mut successful = Vec::new();
+    let mut failures = Vec::new();
+    for (provider, result) in providers {
+        match result {
+            Ok(rows) => successful.push((provider, rows)),
+            Err(error) => failures.push(format!("{}: {error}", provider.as_str())),
+        }
+    }
+    if successful.is_empty() {
+        bail!(
+            "all scholarly metadata providers failed: {}",
+            failures.join("; ")
+        );
+    }
+
+    let limit = request.max_results.unwrap_or(25).clamp(1, 50);
+    let max_provider_rows = successful
+        .iter()
+        .map(|(_, rows)| rows.len())
+        .max()
+        .unwrap_or(0);
+    let mut seen = BTreeSet::new();
+    let mut merged = Vec::new();
+    for index in 0..max_provider_rows {
+        for (_, rows) in &successful {
+            let Some(row) = rows.get(index) else {
+                continue;
+            };
+            if request.only_doi && row.doi.is_none() {
+                continue;
+            }
+            if seen.insert(scholarly_result_identity(row)) {
+                merged.push(row.clone());
+                if merged.len() == limit {
+                    break;
+                }
+            }
+        }
+        if merged.len() == limit {
+            break;
+        }
+    }
+
+    let provider_names = successful
+        .iter()
+        .map(|(provider, _)| provider.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut response = database_response(root, "auto", request, merged);
+    response.executed_url = format!("api:auto({provider_names})");
+    response.source_policy = if failures.is_empty() {
+        SOURCE_POLICY_NOTICE.to_string()
+    } else {
+        format!(
+            "{SOURCE_POLICY_NOTICE} Partial provider failures: {}",
+            failures.join("; ")
+        )
+    };
+    Ok(response)
+}
+
+fn scholarly_result_identity(result: &ScholarlyResult) -> String {
+    if let Some(doi) = result.doi.as_deref() {
+        return format!(
+            "doi:{}",
+            doi.trim()
+                .trim_start_matches("https://doi.org/")
+                .trim_start_matches("http://doi.org/")
+                .to_ascii_lowercase()
+        );
+    }
+    let url = result.detail_url.trim().trim_end_matches('/');
+    if !url.is_empty() {
+        return format!("url:{}", url.to_ascii_lowercase());
+    }
+    format!(
+        "title:{}:{}",
+        result.title.trim().to_ascii_lowercase(),
+        result.year.unwrap_or_default()
+    )
 }
 
 fn is_enabled(root: &Path) -> bool {

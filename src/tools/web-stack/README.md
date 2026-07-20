@@ -87,6 +87,15 @@ Anna's Archive support is intentionally metadata-only. The tool may use it to
 discover bibliographic records when `--include-annas-archive` is explicit, but
 it must not download or reproduce unauthorized copyrighted full text.
 
+## Scholarly providers
+
+`ctox_web_scholarly_search` defaults to `auto`, which queries Crossref,
+OpenAlex, and Semantic Scholar independently, tolerates a partial provider
+outage, deduplicates DOI and canonical-URL matches, and interleaves the
+remaining records. Anna's Archive is available only as an explicitly selected
+metadata-only provider. A failed Anna's Archive request must never turn
+scientific auto-discovery into a successful empty result.
+
 ## Search providers
 
 `ctox_web_search` defaults to provider `auto`, which cascades

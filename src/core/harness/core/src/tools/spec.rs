@@ -1197,7 +1197,7 @@ fn create_ctox_scholarly_search_tool() -> ToolSpec {
             "provider".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Optional scholarly provider: `annas_archive` (default)."
+                    "Optional scholarly provider: `auto` (default; Crossref + OpenAlex + Semantic Scholar), `crossref`, `openalex`, `semantic_scholar`, or explicit metadata-only `annas_archive`."
                         .to_string(),
                 ),
             },
@@ -1279,7 +1279,7 @@ fn create_ctox_scholarly_search_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "ctox_scholarly_search".to_string(),
-        description: "Searches scholarly / shadow-archive metadata (Anna's Archive) for books, papers, magazines, and standards documents. Returns metadata-only records (title, authors, year, language, file format, file size, ISBN, DOI, MD5, detail URL, thumbnail). For DOI-bearing records, set with_oa_pdf=true to additionally resolve a legal open-access PDF URL via Unpaywall - that URL can then be passed to ctox_web_read for full-text extraction. Does not download from unauthorized mirrors."
+        description: "Searches scholarly metadata through Crossref, OpenAlex, and Semantic Scholar by default, with explicit Anna's Archive metadata lookup available for books and standards. Returns discovery-only records with title, authors, year, DOI, canonical metadata URL, open-access location, abstract/snippet, and reference identifiers. For DOI-bearing records, set with_oa_pdf=true to additionally resolve a legal open-access PDF URL via Unpaywall; pass the canonical original or OA URL to ctox_web_read before using it as evidence. Does not download from unauthorized mirrors."
             .to_string(),
         strict: false,
         defer_loading: None,
