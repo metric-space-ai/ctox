@@ -639,6 +639,8 @@ struct PageCacheFile {
     entries: BTreeMap<String, PageCacheEntry>,
     #[serde(default)]
     aliases: BTreeMap<String, String>,
+    #[serde(default)]
+    receipt_history: Vec<PageCacheReceiptEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -664,6 +666,60 @@ struct PageCacheEntry {
     #[serde(default)]
     evidence_relevance_score: Option<i64>,
     doc: EvidenceDoc,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PageCacheReceiptEntry {
+    created_at_epoch: u64,
+    original_url: String,
+    final_url: String,
+    #[serde(default)]
+    canonical_url: String,
+    #[serde(default)]
+    checked_at: u64,
+    #[serde(default)]
+    http_status: Option<u16>,
+    #[serde(default)]
+    snapshot_hash: Option<String>,
+    #[serde(default)]
+    evidence_eligible: bool,
+    #[serde(default)]
+    evidence_relevance_score: Option<i64>,
+    doc: PageCacheReceiptDoc,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PageCacheReceiptDoc {
+    #[serde(default)]
+    evidence_eligible: bool,
+    #[serde(default)]
+    extracted_text_sha256: Option<String>,
+    #[serde(default)]
+    response_artifact_path: Option<String>,
+    response_receipt: Option<ResponseReceipt>,
+}
+
+impl PageCacheReceiptEntry {
+    fn from_page_entry(entry: &PageCacheEntry) -> Self {
+        Self {
+            created_at_epoch: entry.created_at_epoch,
+            original_url: entry.original_url.clone(),
+            final_url: entry.final_url.clone(),
+            canonical_url: entry.canonical_url.clone(),
+            checked_at: entry.checked_at,
+            http_status: entry.http_status,
+            snapshot_hash: entry.snapshot_hash.clone(),
+            evidence_eligible: entry.evidence_eligible,
+            evidence_relevance_score: entry.evidence_relevance_score,
+            doc: PageCacheReceiptDoc {
+                evidence_eligible: entry.doc.evidence_eligible,
+                extracted_text_sha256: (!entry.doc.page_text.trim().is_empty())
+                    .then(|| snapshot_hash(entry.doc.page_text.as_bytes())),
+                response_artifact_path: entry.doc.response_artifact_path.clone(),
+                response_receipt: entry.doc.response_receipt.clone(),
+            },
+        }
+    }
 }
 
 struct WebSearchSession<'a> {
@@ -2274,6 +2330,14 @@ impl<'a> WebSearchSession<'a> {
         if storage_key.is_empty() {
             return;
         }
+        if let Some(previous) = self.page_cache.entries.get(&storage_key) {
+            self.page_cache
+                .receipt_history
+                .push(PageCacheReceiptEntry::from_page_entry(previous));
+        }
+        self.page_cache
+            .receipt_history
+            .push(PageCacheReceiptEntry::from_page_entry(&entry));
         self.page_cache.entries.insert(storage_key.clone(), entry);
         for url in aliases {
             let key = normalize_url_cache_key(url);
@@ -7854,9 +7918,26 @@ fn cache_file_is_oversized(path: &Path, max_bytes: u64) -> bool {
 }
 
 fn prune_expired_page_cache(file: &mut PageCacheFile, ttl_secs: u64) {
+    const MAX_RECEIPT_HISTORY: usize = 4_096;
+
     let now = unix_ts();
     file.entries
         .retain(|_, entry| now.saturating_sub(entry.created_at_epoch) <= ttl_secs);
+    file.receipt_history
+        .retain(|entry| now.saturating_sub(entry.created_at_epoch) <= ttl_secs);
+    file.receipt_history.sort_by(|left, right| {
+        right
+            .created_at_epoch
+            .cmp(&left.created_at_epoch)
+            .then_with(|| right.checked_at.cmp(&left.checked_at))
+    });
+    file.receipt_history.dedup_by(|left, right| {
+        left.checked_at == right.checked_at
+            && left.final_url == right.final_url
+            && left.snapshot_hash == right.snapshot_hash
+            && left.evidence_relevance_score == right.evidence_relevance_score
+    });
+    file.receipt_history.truncate(MAX_RECEIPT_HISTORY);
     let mut compacted = BTreeMap::<String, PageCacheEntry>::new();
     let mut aliases = BTreeMap::<String, String>::new();
     for (old_key, mut entry) in std::mem::take(&mut file.entries) {
@@ -12465,6 +12546,7 @@ mod tests {
             provider,
             searxng_base_url: None,
             timeout_ms: 1000,
+            response_timeout_cap_ms: None,
             default_top_k: 5,
             max_top_k: 8,
             user_agent: "ctox-test".to_string(),

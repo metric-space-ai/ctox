@@ -11238,6 +11238,13 @@ fn validate_systematic_research_web_receipts(
         let Some(expected) = expected else {
             return true;
         };
+        if let Some(actual) = doc
+            .get("extracted_text_sha256")
+            .and_then(Value::as_str)
+            .and_then(normalized_sha256)
+        {
+            return actual.eq_ignore_ascii_case(expected);
+        }
         let Some(page_text) = doc.get("page_text").and_then(Value::as_str) else {
             return false;
         };
@@ -11260,6 +11267,11 @@ fn validate_systematic_research_web_receipts(
         .get("entries")
         .and_then(Value::as_object)
         .context("CTOX Web Stack cache has no entries")?;
+    let receipt_history = cache
+        .get("receipt_history")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
     let evidence = manifest
         .get("evidence")
         .and_then(Value::as_array)
@@ -11354,65 +11366,69 @@ fn validate_systematic_research_web_receipts(
             })?)
         };
 
-        let matching_entry = entries.values().find(|entry| {
-            let doc = entry.get("doc").unwrap_or(&Value::Null);
-            let receipt = doc.get("response_receipt").unwrap_or(&Value::Null);
-            let response_kind = receipt
-                .get("content_kind")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let response_is_data = response_kind.starts_with("data_");
-            let manifest_kind_matches = if response_is_data {
-                content_kind == "data_file"
-            } else {
-                content_kind != "data_file" && content_scope == "full_text"
-            };
-            let url_matches = receipt.get("requested_url").and_then(Value::as_str)
-                == Some(manifest_request_url)
-                && receipt.get("final_url").and_then(Value::as_str) == Some(manifest_final_url)
-                && entry.get("final_url").and_then(Value::as_str) == Some(canonical_url);
-            let created_at = entry
-                .get("created_at_epoch")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            let checked_at = entry
-                .get("checked_at")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            url_matches
-                && created_at > 0
-                && checked_at > 0
-                && created_at >= research_started_at
-                && now.saturating_sub(created_at) <= MAX_WEB_RECEIPT_AGE_SECS
-                && checked_at == manifest_checked_at
-                && entry.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
-                && doc.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
-                && manifest_kind_matches
-                && (8..=10).contains(&relevance_score)
-                && entry
-                    .get("evidence_relevance_score")
-                    .and_then(Value::as_i64)
-                    == Some(relevance_score)
-                && entry.get("http_status").and_then(Value::as_u64) == Some(http_status)
-                && sha256_matches(
-                    entry.get("snapshot_hash").and_then(Value::as_str),
-                    normalized_snapshot_hash,
-                )
-                && receipt.get("status").and_then(Value::as_u64) == Some(http_status)
-                && receipt.get("byte_count").and_then(Value::as_u64) == Some(manifest_byte_count)
-                && receipt.get("content_kind").and_then(Value::as_str)
-                    == Some(manifest_content_kind)
-                && sha256_matches(
-                    receipt.get("sha256").and_then(Value::as_str),
-                    normalized_snapshot_hash,
-                )
-                && sha256_matches(
-                    receipt.get("sha256").and_then(Value::as_str),
-                    manifest_body_hash,
-                )
-                && data_artifact_matches(root, doc, receipt, normalized_snapshot_hash)
-                && extracted_text_matches(doc, extracted_text_sha256)
-        });
+        let matching_entry = entries
+            .values()
+            .chain(receipt_history.iter())
+            .find(|entry| {
+                let doc = entry.get("doc").unwrap_or(&Value::Null);
+                let receipt = doc.get("response_receipt").unwrap_or(&Value::Null);
+                let response_kind = receipt
+                    .get("content_kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let response_is_data = response_kind.starts_with("data_");
+                let manifest_kind_matches = if response_is_data {
+                    content_kind == "data_file"
+                } else {
+                    content_kind != "data_file" && content_scope == "full_text"
+                };
+                let url_matches = receipt.get("requested_url").and_then(Value::as_str)
+                    == Some(manifest_request_url)
+                    && receipt.get("final_url").and_then(Value::as_str) == Some(manifest_final_url)
+                    && entry.get("final_url").and_then(Value::as_str) == Some(canonical_url);
+                let created_at = entry
+                    .get("created_at_epoch")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                let checked_at = entry
+                    .get("checked_at")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                url_matches
+                    && created_at > 0
+                    && checked_at > 0
+                    && created_at >= research_started_at
+                    && now.saturating_sub(created_at) <= MAX_WEB_RECEIPT_AGE_SECS
+                    && checked_at == manifest_checked_at
+                    && entry.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
+                    && doc.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
+                    && manifest_kind_matches
+                    && (8..=10).contains(&relevance_score)
+                    && entry
+                        .get("evidence_relevance_score")
+                        .and_then(Value::as_i64)
+                        == Some(relevance_score)
+                    && entry.get("http_status").and_then(Value::as_u64) == Some(http_status)
+                    && sha256_matches(
+                        entry.get("snapshot_hash").and_then(Value::as_str),
+                        normalized_snapshot_hash,
+                    )
+                    && receipt.get("status").and_then(Value::as_u64) == Some(http_status)
+                    && receipt.get("byte_count").and_then(Value::as_u64)
+                        == Some(manifest_byte_count)
+                    && receipt.get("content_kind").and_then(Value::as_str)
+                        == Some(manifest_content_kind)
+                    && sha256_matches(
+                        receipt.get("sha256").and_then(Value::as_str),
+                        normalized_snapshot_hash,
+                    )
+                    && sha256_matches(
+                        receipt.get("sha256").and_then(Value::as_str),
+                        manifest_body_hash,
+                    )
+                    && data_artifact_matches(root, doc, receipt, normalized_snapshot_hash)
+                    && extracted_text_matches(doc, extracted_text_sha256)
+            });
         if matching_entry.is_none() {
             anyhow::bail!(
                 "evidence {evidence_id} is not bound to a matching admitted CTOX Web Stack retrieval for {canonical_url}"
