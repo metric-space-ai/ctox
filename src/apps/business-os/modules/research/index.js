@@ -2270,6 +2270,13 @@ function updateGraphInsights() {
 async function dispatchGraphAiAction(action) {
   const task = selectedTask();
   if (!task || state.graph.busyAction) return;
+  if (action !== 'document') {
+    const selectedNode = state.graphProjection?.nodes?.find((node) => node.id === state.selectedGraphNodeId) || null;
+    if (!selectedNode) {
+      await runSelectedResearch();
+      return;
+    }
+  }
   if (action === 'document' && !evidenceRankedSources().length) {
     setStatus(state.t('reportRequiresVerifiedSources', 'Reports sind ohne verifizierte Quellen nicht verfügbar.'));
     renderCenter();
