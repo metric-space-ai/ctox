@@ -16,6 +16,14 @@
 /* The frame grid, column widths and resizer tracks come from .ctox-workspace;
    the module only reserves room for the shell taskbar. */
 .threads-module {
+  /* Self-contained kit tokens (mirrors the Knowledge reference app) so the
+     module renders correctly even against an older packaged base.css. */
+  --fs-micro: 10px;
+  --fs-meta: 11px;
+  --fs-base: 13px;
+  --kit-fill: color-mix(in srgb, var(--text) 6%, transparent);
+  --kit-fill-strong: color-mix(in srgb, var(--text) 10%, transparent);
+  --kit-hover: color-mix(in srgb, var(--text) 5%, transparent);
   padding-bottom: calc(var(--shell-taskbar-safe-area, 58px) + 12px);
 }
 
@@ -23,7 +31,7 @@
    own rows (left: header/filters/briefing/list, center: header/timeline/
    composer/mobile bar, right: one scrolling card stack). */
 .threads-left {
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
 }
 
 .threads-center {
@@ -35,14 +43,109 @@
   grid-template-rows: minmax(0, 1fr);
 }
 
-/* Filter chip row: kit .ctox-chip buttons on a module flex line. */
-.threads-filter-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+/* Row 2 — one dense filter row: [search][view-toggle][filter]. */
+.threads-filterbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0 0;
+}
+.threads-view-toggle { display: inline-flex; gap: 2px; }
+.threads-view-toggle .ctox-pane-icon[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--kit-fill-strong);
+}
+.threads-filter-toggle { position: relative; }
+.threads-filter-toggle.has-active-filters::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+/* Collapsed tray: one recessed fill holding the secondary-queue dropdown. */
+.threads-filter-advanced {
+  margin-top: 6px;
+  padding: 8px;
+  border-radius: var(--control-radius);
+  background: var(--kit-fill);
+}
+.threads-filter-row { display: flex; gap: 6px; align-items: center; }
+.threads-select {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  font-size: var(--fs-meta);
+}
+.threads-filter-reset {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--control-radius);
+  background: var(--kit-fill-strong);
+  color: var(--muted);
+  cursor: pointer;
+}
+.threads-filter-reset svg { width: 15px; height: 15px; }
+.threads-filter-reset:hover { background: var(--accent); color: var(--surface); }
+/* Row 3 — primary queue band: equal segments with counts. */
+.threads-view-switch {
   padding: 8px 10px;
   border-bottom: 1px solid var(--hairline, var(--line));
 }
+.threads-view-switch .ctox-pane-tabs { display: flex; width: 100%; min-width: 0; }
+.threads-view-switch .ctox-pane-tab { flex: 1 1 0; min-width: 0; }
+.threads-view-switch .view-count {
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  color: var(--muted);
+  margin-left: 4px;
+}
+.threads-view-switch .ctox-pane-tab[aria-selected="true"] .view-count { color: var(--accent); }
+/* Element well: recessed zone under a divider — list never merges with the
+   toolbar above. */
+.threads-well {
+  background: color-mix(in srgb, #000 7%, var(--surface));
+  border-top: 1px solid var(--hairline, var(--line));
+}
+/* App floor. */
+.threads-footer {
+  padding: 6px 12px;
+  border-top: 1px solid var(--hairline, var(--line));
+  background: var(--surface);
+  color: var(--muted);
+  font-size: var(--fs-micro);
+}
+/* Compact list mode: single-line rows (attention + preview hidden). */
+.threads-module.is-list-view .threads-attention,
+.threads-module.is-list-view .threads-list-preview { display: none; }
+.threads-module.is-list-view .threads-list-item { padding: 6px 8px; }
+/* Element actions collected top-right of a card, as icons. */
+.threads-approval-card { position: relative; }
+.threads-card-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 2px;
+}
+.threads-card-actions .ctox-pane-icon { opacity: 0.6; }
+.threads-card-actions .ctox-pane-icon:hover { opacity: 1; }
+.threads-card-actions .is-confirm { color: var(--accent); }
+.threads-card-actions .is-danger { color: var(--danger, #e5484d); }
+/* Status badges dock under the title, small — never in the action cluster. */
+.threads-status-line { display: inline-flex; gap: 4px; margin-top: 2px; }
+.threads-notification-actions { display: inline-flex; gap: 2px; }
 
 /* custom: 3-up briefing stat strip (Entscheidungen / Blockaden /
    AI-Ergebnisse) — a hairline-divided counter band the kit does not express */
@@ -158,11 +261,6 @@
   background: color-mix(in srgb, var(--accent) 7%, var(--surface));
 }
 
-.threads-approval-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
 
 /* Composer: kit .ctox-textarea + primary .ctox-button on a module grid. */
 .threads-composer {
@@ -316,16 +414,6 @@
     display: inline-flex;
   }
 
-  .threads-filter-list {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    padding: 8px;
-  }
-
-  .threads-filter-list .ctox-chip {
-    flex: 0 0 auto;
-  }
-
   .threads-timeline {
     padding-bottom: 84px;
   }
@@ -368,10 +456,6 @@
     background: var(--kit-hover);
   }
 
-  .threads-approval-actions > button {
-    flex: 1 1 44%;
-    min-height: 44px;
-  }
 }
 
 /* Actions/attention column is collapsible and hidden by default so reading a

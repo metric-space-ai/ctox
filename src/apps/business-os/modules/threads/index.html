@@ -12,28 +12,50 @@
           </button>
         </div>
       </div>
-      <div class="ctox-pane-tools">
+      <!-- Row 2: filter section — search + view toggle + filter tray toggle.
+           The old permanent 12-chip wall lived here; secondary filters now sit
+           in the collapsed tray, primary views in the switcher band below. -->
+      <div class="threads-filterbar">
         <input class="ctox-pane-search" type="search" data-thread-search placeholder="Threads suchen" aria-label="Threads suchen">
+        <div class="threads-view-toggle" role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-view-mode="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-view-mode="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
+        <button type="button" class="ctox-pane-icon threads-filter-toggle" data-toggle-filters aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="threads-filter-advanced" data-filter-advanced hidden>
+        <div class="threads-filter-row">
+          <select class="ctox-select threads-select" data-filter-select aria-label="Ansicht">
+            <option value="inbox">Jetzt handeln</option>
+            <option value="waiting">Wartet auf mich</option>
+            <option value="running">AI arbeitet</option>
+            <option value="delegated">Wartet auf andere</option>
+            <option value="snoozed">Später</option>
+            <option value="team">Team Queue</option>
+            <option value="mentions">Erwähnungen</option>
+            <option value="approvals">Freigaben</option>
+            <option value="failed">Blockiert</option>
+            <option value="archived">Erledigt / Archiv</option>
+            <option value="all">Alle</option>
+          </select>
+          <button type="button" class="threads-filter-reset" data-reset-filters aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+        </div>
       </div>
     </header>
-    <nav class="threads-filter-list" aria-label="Thread Filter">
-      <button type="button" class="ctox-chip is-active" data-filter="inbox">Jetzt handeln</button>
-      <button type="button" class="ctox-chip" data-filter="waiting">Wartet auf mich</button>
-      <button type="button" class="ctox-chip" data-filter="running">AI arbeitet</button>
-      <button type="button" class="ctox-chip" data-filter="delegated">Wartet auf andere</button>
-      <button type="button" class="ctox-chip" data-filter="snoozed">Später</button>
-      <button type="button" class="ctox-chip" data-filter="archived">Erledigt</button>
-      <button type="button" class="ctox-chip" data-filter="team">Team Queue</button>
-      <button type="button" class="ctox-chip" data-filter="mentions">Erwähnungen</button>
-      <button type="button" class="ctox-chip" data-filter="approvals">Freigaben</button>
-      <button type="button" class="ctox-chip" data-filter="failed">Blockiert</button>
-      <button type="button" class="ctox-chip" data-filter="all">Alle</button>
-      <button type="button" class="ctox-chip" data-filter="archived">Archiv</button>
+    <!-- Row 3: primary view switcher band — the four everyday queues, counted. -->
+    <nav class="threads-view-switch" aria-label="Thread Ansichten">
+      <div class="ctox-pane-tabs">
+        <button type="button" class="ctox-pane-tab" role="tab" data-filter="inbox" aria-selected="true">Handeln<span class="view-count" data-count-inbox></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-filter="waiting" aria-selected="false">Wartet<span class="view-count" data-count-waiting></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-filter="running" aria-selected="false">AI<span class="view-count" data-count-running></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-filter="archived" aria-selected="false">Erledigt</button>
+      </div>
     </nav>
     <section class="threads-briefing" data-personal-briefing aria-label="Persönliches Briefing"></section>
-    <div class="ctox-pane-body">
+    <div class="ctox-pane-body threads-well">
       <div class="ctox-list threads-list" data-thread-list></div>
     </div>
+    <footer class="threads-footer"><span data-threads-footer-count></span></footer>
   </aside>
 
   <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="240" data-resizer-max="480" aria-label="Linke Spaltenbreite anpassen"></button>
@@ -47,10 +69,11 @@
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker" data-thread-source>Kontext</span>
           <h2 class="ctox-pane-title" data-thread-title>Kein Thread ausgewählt</h2>
+          <!-- Status is information, not an action — it lives with the titles,
+               never in the top-right action cluster. -->
+          <span class="threads-status-line"><span class="ctox-badge" data-thread-status>bereit</span><span class="ctox-badge" data-sync-state>lokal</span></span>
         </div>
         <div class="ctox-pane-actions">
-          <span class="ctox-badge" data-thread-status>bereit</span>
-          <span class="ctox-badge" data-sync-state>lokal</span>
           <button type="button" class="ctox-pane-icon" data-thread-watch title="Watch" aria-label="Watch">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6ZM12 9.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z"/></svg>
           </button>

@@ -48,6 +48,7 @@ let els = {};
 export async function mount(ctx) {
   state.ctx = ctx;
   state.filter = 'inbox';
+  state.listView = false;
   state.search = '';
   state.selectedId = '';
   state.mobileView = 'list';
@@ -122,7 +123,10 @@ async function ensureStyles() {
   const link = document.createElement('link');
   link.rel = 'stylesheet';
   const styleUrl = new URL('./index.css', import.meta.url);
-  styleUrl.searchParams.set('v', '20260718-kit-migration-v1');
+  // Inherit the module's own cache-buster (index.js is imported with
+  // ?v=<build>): fresh JS must never render against a stale cached sheet.
+  const version = String(import.meta.url).split('?v=')[1] || '20260720-threads-grammar-v2';
+  styleUrl.searchParams.set('v', version);
   link.href = styleUrl.href;
   link.dataset.threadsStyle = 'true';
   document.head.append(link);
@@ -217,10 +221,32 @@ function wireUi() {
   });
   els.filters.forEach((button) => {
     button.addEventListener('click', () => {
-      state.filter = button.dataset.filter || 'inbox';
-      els.filters.forEach((item) => item.classList.toggle('is-active', item === button));
-      syncSelection();
-      render();
+      setThreadFilter(button.dataset.filter || 'inbox');
+    });
+  });
+  // Filter tray: toggle, secondary-view dropdown, reset.
+  els.root?.querySelector('[data-toggle-filters]')?.addEventListener('click', (event) => {
+    const btn = event.currentTarget;
+    const panel = els.root.querySelector('[data-filter-advanced]');
+    if (!panel) return;
+    const open = panel.hasAttribute('hidden');
+    if (open) panel.removeAttribute('hidden'); else panel.setAttribute('hidden', '');
+    btn.setAttribute('aria-expanded', String(open));
+  });
+  els.root?.querySelector('select[data-filter-select]')?.addEventListener('change', (event) => {
+    setThreadFilter(event.target.value || 'inbox');
+  });
+  els.root?.querySelector('[data-reset-filters]')?.addEventListener('click', () => {
+    if (els.search) els.search.value = '';
+    state.search = '';
+    setThreadFilter('inbox');
+  });
+  // Shard cards vs. compact list rendering of the thread well.
+  els.root?.querySelectorAll('[data-view-mode]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.listView = button.dataset.viewMode === 'list';
+      els.root.querySelectorAll('[data-view-mode]').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.viewMode === 'list') === state.listView)));
+      els.root.classList.toggle('is-list-view', state.listView);
     });
   });
   els.list?.addEventListener('click', (event) => {
@@ -449,8 +475,48 @@ function render() {
   const threads = visibleThreads();
   renderBriefing();
   renderNotificationPreferences();
+  updateFilterControls(threads.length);
   renderList(threads);
   renderDetail(threads);
+}
+
+// The primary tab a filter maps to; secondary filters live in the tray only.
+const PRIMARY_FILTERS = ['inbox', 'waiting', 'running', 'archived'];
+const FILTER_LABELS = {
+  inbox: 'Jetzt handeln', waiting: 'Wartet auf mich', running: 'AI arbeitet',
+  delegated: 'Wartet auf andere', snoozed: 'Später', team: 'Team Queue',
+  mentions: 'Erwähnungen', approvals: 'Freigaben', failed: 'Blockiert',
+  archived: 'Erledigt / Archiv', all: 'Alle',
+};
+
+function setThreadFilter(filter) {
+  state.filter = filter || 'inbox';
+  syncSelection();
+  render();
+}
+
+function updateFilterControls(visibleCount) {
+  const root = els.root;
+  if (!root) return;
+  const me = currentUserId();
+  const isAdmin = currentUserRole() === 'chef' || currentUserRole() === 'admin';
+  // Counts per primary queue, computed with the same predicate the tab uses.
+  for (const filter of ['inbox', 'waiting', 'running']) {
+    const el = root.querySelector(`[data-count-${filter}]`);
+    if (el) el.textContent = ` (${state.data.threads.filter((thread) => threadMatchesFilter(thread, filter, me, isAdmin)).length})`;
+  }
+  for (const button of els.filters) {
+    button.setAttribute('aria-selected', String(button.dataset.filter === state.filter));
+  }
+  const select = root.querySelector('select[data-filter-select]');
+  if (select && select.value !== state.filter) select.value = state.filter;
+  // Accent dot on the filter toggle whenever a tray-only filter is active —
+  // the band alone would otherwise show no selection at all.
+  root.querySelector('[data-toggle-filters]')?.classList.toggle('has-active-filters', !PRIMARY_FILTERS.includes(state.filter));
+  const footer = root.querySelector('[data-threads-footer-count]');
+  if (footer) {
+    footer.textContent = `${visibleCount} ${visibleCount === 1 ? 'Thread' : 'Threads'} · ${FILTER_LABELS[state.filter] || state.filter}`;
+  }
 }
 
 function renderNotificationPreferences() {
@@ -485,35 +551,39 @@ function renderBriefing() {
   `).join('');
 }
 
+// One predicate for filtering AND for the counts on the switcher band — the
+// numbers a tab shows must be computed by the exact rule the tab applies.
+function threadMatchesFilter(thread, filter, me, isAdmin) {
+  if (!isAdmin && me && !threadRelevantToUser(thread, me)) return false;
+  if (filter === 'archived') return thread.status === 'archived';
+  if (thread.status === 'archived') return false;
+  if (filter === 'snoozed') return isSnoozed(thread);
+  if (isSnoozed(thread)) return false;
+  if (filter === 'approvals') {
+    return approvalsForThread(thread.id).some((item) => item.status === 'pending' && (!me || item.reviewer_user_id === me || isAdmin));
+  }
+  if (filter === 'mentions') return threadMentionsUser(thread.id, me);
+  if (filter === 'team') return !thread.assigned_user_id || thread.status === 'escalated';
+  if (filter === 'waiting') return threadWaitingOnUser(thread.id, me, isAdmin);
+  if (filter === 'delegated') return threadDelegatedByUser(thread, me);
+  if (filter === 'running') return threadHasRunningCtox(thread.id);
+  if (filter === 'failed') return threadHasFailedCtox(thread.id) || thread.status === 'blocked';
+  if (filter === 'watching') return arrayField(thread.watcher_user_ids).includes(me);
+  if (filter === 'inbox') {
+    return !me
+      || unreadNotificationsForThread(thread.id, me).length > 0
+      || arrayField(thread.participant_ids).includes(me)
+      || approvalsForThread(thread.id).some((item) => item.reviewer_user_id === me && item.status === 'pending');
+  }
+  return true;
+}
+
 function visibleThreads() {
   const me = currentUserId();
   const isAdmin = currentUserRole() === 'chef' || currentUserRole() === 'admin';
   const search = state.search.trim().toLowerCase();
   return state.data.threads
-    .filter((thread) => {
-      if (!isAdmin && me && !threadRelevantToUser(thread, me)) return false;
-      if (state.filter === 'archived') return thread.status === 'archived';
-      if (thread.status === 'archived') return false;
-      if (state.filter === 'snoozed') return isSnoozed(thread);
-      if (isSnoozed(thread)) return false;
-      if (state.filter === 'approvals') {
-        return approvalsForThread(thread.id).some((item) => item.status === 'pending' && (!me || item.reviewer_user_id === me || isAdmin));
-      }
-      if (state.filter === 'mentions') return threadMentionsUser(thread.id, me);
-      if (state.filter === 'team') return !thread.assigned_user_id || thread.status === 'escalated';
-      if (state.filter === 'waiting') return threadWaitingOnUser(thread.id, me, isAdmin);
-      if (state.filter === 'delegated') return threadDelegatedByUser(thread, me);
-      if (state.filter === 'running') return threadHasRunningCtox(thread.id);
-      if (state.filter === 'failed') return threadHasFailedCtox(thread.id) || thread.status === 'blocked';
-      if (state.filter === 'watching') return arrayField(thread.watcher_user_ids).includes(me);
-      if (state.filter === 'inbox') {
-        return !me
-          || unreadNotificationsForThread(thread.id, me).length > 0
-          || arrayField(thread.participant_ids).includes(me)
-          || approvalsForThread(thread.id).some((item) => item.reviewer_user_id === me && item.status === 'pending');
-      }
-      return true;
-    })
+    .filter((thread) => threadMatchesFilter(thread, state.filter, me, isAdmin))
     .filter((thread) => {
       if (!search) return true;
       const haystack = [
@@ -663,6 +733,13 @@ function renderApproval(approval) {
   const evidence = approvalEvidence(approval);
   return `
     <article class="threads-approval-card" data-approval-id="${escapeAttr(approval.id)}">
+      ${canDecide ? `
+        <div class="threads-card-actions">
+          <button type="button" class="ctox-pane-icon is-confirm" data-approve-approval="${escapeAttr(approval.id)}" aria-label="${escapeHtml(state.t('approvalApprove', 'Freigeben'))}" title="${escapeHtml(state.t('approvalApprove', 'Freigeben'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l5 5L19 7"/></svg></button>
+          <button type="button" class="ctox-pane-icon is-danger" data-reject-approval="${escapeAttr(approval.id)}" aria-label="${escapeHtml(state.t('approvalReject', 'Ablehnen'))}" title="${escapeHtml(state.t('approvalReject', 'Ablehnen'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-edit-approval="${escapeAttr(approval.id)}" aria-label="${escapeHtml(state.t('approvalEdit', 'Bearbeiten'))}" title="${escapeHtml(state.t('approvalEdit', 'Bearbeiten'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
+        </div>
+      ` : ''}
       <div class="threads-message-meta">${escapeHtml(state.t('approvalHeadingPrefix', 'CTOX Freigabe'))} · ${escapeHtml(approval.status || 'pending')} · ${escapeHtml(formatTime(approval.requested_at_ms || approval.created_at_ms))}</div>
       <div class="threads-message-body">${escapeHtml(approval.prompt || '')}</div>
       <dl class="ctox-fields">
@@ -674,13 +751,6 @@ function renderApproval(approval) {
       <div class="threads-message-meta">${escapeHtml(state.t('approvalRequester', 'Requester'))}: ${escapeHtml(approval.requester_display_name || approval.requester_user_id || '')} · ${escapeHtml(state.t('approvalReviewerShort', 'Reviewer'))}: ${escapeHtml(approval.reviewer_display_name || approval.reviewer_user_id || '')}</div>
       ${command ? `<div class="threads-message-meta">${escapeHtml(state.t('approvalCommand', 'Command'))}: ${escapeHtml(command.command_type || '')} · ${escapeHtml(command.status || '')}</div>` : ''}
       ${task ? `<div class="threads-message-meta">${escapeHtml(state.t('approvalTask', 'Task'))}: ${escapeHtml(task.title || task.id)} · ${escapeHtml(task.status || '')}</div>` : ''}
-      ${canDecide ? `
-        <div class="threads-approval-actions">
-          <button type="button" class="ctox-button" data-edit-approval="${escapeAttr(approval.id)}">${escapeHtml(state.t('approvalEdit', 'Bearbeiten'))}</button>
-          <button type="button" class="ctox-button" data-approve-approval="${escapeAttr(approval.id)}">${escapeHtml(state.t('approvalApprove', 'Freigeben'))}</button>
-          <button type="button" class="ctox-button is-danger" data-reject-approval="${escapeAttr(approval.id)}">${escapeHtml(state.t('approvalReject', 'Ablehnen'))}</button>
-        </div>
-      ` : ''}
     </article>
   `;
 }
@@ -721,8 +791,8 @@ function renderContext(thread) {
         <div class="ctox-callout threads-notification-item">
           <span>${escapeHtml(item.title || item.notification_type || 'Notification')}</span>
           <div class="threads-notification-actions">
-            <button type="button" class="ctox-button ctox-button--sm" data-mark-notification="${escapeAttr(item.id)}">Gelesen</button>
-            <button type="button" class="ctox-button ctox-button--sm" data-dismiss-notification="${escapeAttr(item.id)}">Ausblenden</button>
+            <button type="button" class="ctox-pane-icon" data-mark-notification="${escapeAttr(item.id)}" aria-label="Gelesen" title="Gelesen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l5 5L19 7"/></svg></button>
+            <button type="button" class="ctox-pane-icon" data-dismiss-notification="${escapeAttr(item.id)}" aria-label="Ausblenden" title="Ausblenden"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
           </div>
         </div>
       `).join('')}</div>`
