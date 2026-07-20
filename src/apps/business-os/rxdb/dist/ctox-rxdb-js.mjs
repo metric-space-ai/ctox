@@ -9347,11 +9347,9 @@ var CtoxWebRtcReplicationState = class {
     }
     this.ctox?.onPeerClose?.({ peerId, reason });
   }
-  // Checkpoints are only reusable against the SAME native storage generation:
-  // the storage epoch (bumped on a wire-format/storage reset) plus the native
-  // peer session id (new on every daemon run). A daemon restart therefore
-  // still forces a conservative full resync; a transport-level reconnect
-  // within one daemon run resumes from the last acknowledged checkpoint.
+  // Checkpoints are only reusable against the same native storage generation
+  // and collection head. A changed native projection forces a conservative
+  // full pull; a transport reconnect with an unchanged collection resumes.
   checkpointValidityKeyForPeer(peerId) {
     const remoteProtocol = this.remoteProtocolForPeer(peerId);
     return checkpointValidityKeyFromProtocol(remoteProtocol);
@@ -9550,9 +9548,9 @@ function checkpointValidityKeyFromProtocol(remoteProtocol) {
   const schemaHashValue = String(
     remoteProtocol.collection?.schemaHash || remoteProtocol.schemaHash || remoteProtocol.schema?.hash || ""
   ).trim();
-  if (capabilities.includes(CTOX_CHECKPOINT_GENERATION_CAPABILITY) && storageGeneration && schemaHashValue) {
+  if (capabilities.includes(CTOX_CHECKPOINT_GENERATION_CAPABILITY) && storageGeneration && epoch && schemaHashValue) {
     const collectionName = String(remoteProtocol.collection?.name || "").trim();
-    return `${storageGeneration}|${collectionName}|${schemaHashValue}`;
+    return `${storageGeneration}|${collectionName}|${schemaHashValue}|${epoch}`;
   }
   if (!epoch || !sessionId || !schemaHashValue) return "";
   return `${epoch}|${sessionId}|${schemaHashValue}`;

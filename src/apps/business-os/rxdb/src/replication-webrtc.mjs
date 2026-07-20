@@ -967,9 +967,10 @@ class CtoxWebRtcReplicationState {
     this.activeRemotePeerId = peerId;
     this.demandStatus.peerConnected = true;
     this.demandStatus.peerCapabilityQueryFetchV1 = queryFetchCapable === true;
-    // Seed retained checkpoints when the native storage generation matches —
-    // the catch-up pull/push below then resumes incrementally instead of
-    // re-reading everything from a null checkpoint after each reconnect.
+    // Seed retained checkpoints only when the native storage generation and
+    // collection head still match. The storage generation alone survives
+    // projection rewrites; reusing its old pull checkpoint after the browser
+    // cache lost rows would incorrectly treat a partial collection as synced.
     const validityKey = checkpointValidityKeyFromProtocol(normalizedRemoteProtocol);
     const localCheckpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
     const localValidityKey = localCheckpointValidityKey(localCheckpoint);
@@ -1675,11 +1676,9 @@ class CtoxWebRtcReplicationState {
     this.ctox?.onPeerClose?.({ peerId, reason });
   }
 
-  // Checkpoints are only reusable against the SAME native storage generation:
-  // the storage epoch (bumped on a wire-format/storage reset) plus the native
-  // peer session id (new on every daemon run). A daemon restart therefore
-  // still forces a conservative full resync; a transport-level reconnect
-  // within one daemon run resumes from the last acknowledged checkpoint.
+  // Checkpoints are only reusable against the same native storage generation
+  // and collection head. A changed native projection forces a conservative
+  // full pull; a transport reconnect with an unchanged collection resumes.
   checkpointValidityKeyForPeer(peerId) {
     const remoteProtocol = this.remoteProtocolForPeer(peerId);
     return checkpointValidityKeyFromProtocol(remoteProtocol);
@@ -1895,10 +1894,11 @@ class CtoxWebRtcReplicationState {
 
 const BROWSER_PEER_SESSION_ID = createBrowserPeerSessionId();
 
-// Native storage generation a checkpoint is valid against: storage epoch +
-// the native peer's per-run session id. Both must match for retained
-// checkpoints to be reused after a reconnect; empty when either is missing
-// (then no reuse happens and the conservative full resync runs).
+// Native storage generation and collection head a checkpoint is valid against.
+// `storageGeneration` alone is insufficient because it intentionally survives
+// normal projection updates. Binding retained checkpoints to the advertised
+// collection epoch prevents a locally incomplete collection from skipping
+// native rows after an upgrade or projection rewrite.
 function checkpointValidityKeyFromProtocol(remoteProtocol) {
   if (!remoteProtocol || typeof remoteProtocol !== 'object') return '';
   const capabilities = Array.isArray(remoteProtocol.capabilities) ? remoteProtocol.capabilities : [];
@@ -1919,9 +1919,10 @@ function checkpointValidityKeyFromProtocol(remoteProtocol) {
   ).trim();
   if (capabilities.includes(CTOX_CHECKPOINT_GENERATION_CAPABILITY)
       && storageGeneration
+      && epoch
       && schemaHashValue) {
     const collectionName = String(remoteProtocol.collection?.name || '').trim();
-    return `${storageGeneration}|${collectionName}|${schemaHashValue}`;
+    return `${storageGeneration}|${collectionName}|${schemaHashValue}|${epoch}`;
   }
   if (!epoch || !sessionId || !schemaHashValue) return '';
   return `${epoch}|${sessionId}|${schemaHashValue}`;

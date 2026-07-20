@@ -333,6 +333,7 @@
     "invoices.invoice.update",
     "invoices.payment.allocate",
     "knowledge.command",
+    "knowledge.entry.delete",
     "matching.match",
     "matching.source.parse_object",
     "matching.source.parse_requirement",
