@@ -7,7 +7,7 @@ import {
   sliceResearchGraphProjection,
 } from './research-graph-data.mjs';
 
-const BUILD = '20260717-semantic-graph-v2';
+const BUILD = '20260720-source-candidate-separation-v1';
 const DEFAULT_AXIS_X = 'evidence_strength';
 const DEFAULT_AXIS_Y = 'topic_fit';
 const ROW_LIMIT = 5000;
@@ -377,6 +377,8 @@ const state = {
   sourceSearchTerm: '',
   sourceActiveTag: 'all',
   mapMode: 'discovery',
+  candidateRows: [],
+  candidateModels: [],
   sourceRows: [],
   curatedRows: [],
   measurementRows: [],
@@ -1080,6 +1082,8 @@ function scoreResearchBase(base) {
 
 async function loadDashboardData() {
   const task = selectedTask();
+  state.candidateRows = [];
+  state.candidateModels = [];
   state.sourceRows = [];
   state.curatedRows = [];
   state.measurementRows = [];
@@ -1093,23 +1097,30 @@ async function loadDashboardData() {
   state.chunkDiagnostics = [];
   if (!task) return;
   const base = knowledgeBaseForTask(task);
-  const sourceTable = tableForKey(base, task.source_catalog_key) || firstTableMatching(base, /source|catalog|curated/i);
+  const candidateTable = tableForKey(base, task.candidate_catalog_key || 'source_candidates');
+  const sourceTable = tableForKey(
+    base,
+    task.source_catalog_key || tableKey(base, ['source_catalog', 'sources', 'curated_sources']),
+  );
   const curatedTable = tableForKey(base, task.curated_table_key) || firstTableMatching(base, /library|curated/i);
   const measurementTable = tableForKey(base, task.measurements_table_key) || firstTableMatching(base, /measure|load|point/i);
   const graphNodeTable = tableForKey(base, task.payload?.graph_contract?.nodes_table_key || 'semantic_graph_nodes') || firstTableMatching(base, /semantic.*graph.*node|concept.*node/i);
   const graphEdgeTable = tableForKey(base, task.payload?.graph_contract?.edges_table_key || 'semantic_graph_edges') || firstTableMatching(base, /semantic.*graph.*edge|concept.*edge/i);
-  const [sourceRows, curatedRows, measurementRows, graphNodeRows, graphEdgeRows] = await Promise.all([
+  const [candidateRows, sourceRows, curatedRows, measurementRows, graphNodeRows, graphEdgeRows] = await Promise.all([
+    candidateTable ? fetchTableRows(candidateTable.id) : Promise.resolve([]),
     sourceTable ? fetchTableRows(sourceTable.id) : Promise.resolve([]),
     curatedTable && curatedTable.id !== sourceTable?.id ? fetchTableRows(curatedTable.id) : Promise.resolve([]),
     measurementTable && measurementTable.id !== sourceTable?.id && measurementTable.id !== curatedTable?.id ? fetchTableRows(measurementTable.id) : Promise.resolve([]),
     graphNodeTable ? fetchTableRows(graphNodeTable.id) : Promise.resolve([]),
     graphEdgeTable ? fetchTableRows(graphEdgeTable.id) : Promise.resolve([]),
   ]);
+  state.candidateRows = candidateRows;
   state.sourceRows = sourceRows;
   state.curatedRows = curatedRows;
   state.measurementRows = measurementRows;
   state.graphNodeRows = graphNodeRows;
   state.graphEdgeRows = graphEdgeRows;
+  state.candidateModels = buildSourceModels(task, candidateRows, [], []);
   state.sourceModels = buildSourceModels(task, sourceRows, curatedRows, measurementRows);
   const evidenceMeasurementRows = filterMeasurementRowsForEvidence(measurementRows, state.sourceModels);
   const evidenceGraphRows = filterGraphRowsForEvidence(graphNodeRows, graphEdgeRows, evidenceSourceIds(state.sourceModels));
@@ -1898,7 +1909,8 @@ function renderCenter() {
       <section class="research-workbench">
         <div class="research-tabs-container">
           <div class="ctox-pane-tabs" role="tablist" aria-label="Research views">
-            ${tabButton('sources', `${state.t('sources', 'Sources')} (${state.sourceModels.length})`)}
+            ${tabButton('sources', `${state.t('sources', 'Sources')} (${evidenceRankedSources().length})`)}
+            ${tabButton('candidates', `${state.t('candidates', 'Candidates')} (${state.candidateModels.length})`)}
             ${tabButton('measurements', `${state.t('measurements', 'Measurements')} (${filterMeasurementRowsForEvidence(state.measurementRows, state.sourceModels).length})`)}
             ${tabButton('knowledge', `${state.t('knowledge', 'Knowledge')} (${state.curatedRows.length})`)}
             ${tabButton('reports', `${state.t('reports', 'Fachberichte')} (${researchReportsForTask(task).length})`)}
@@ -2399,7 +2411,7 @@ async function dispatchTargetedGraphResearch(task) {
     status: result?.task_status || result?.status || 'queued',
     command_id: commandId,
     task_queue_id: result?.task_id || '',
-    identified_count: state.sourceRows.length,
+    identified_count: state.candidateRows.length + state.sourceRows.length,
     accepted_count: evidenceRankedSources().length,
     used_count: evidenceRankedSources().length,
     payload: { result, graph_focus: focus },
@@ -2859,10 +2871,11 @@ function updateMapTransform() {
 }
 
 function renderActiveTable(task) {
+  if (state.activeTab === 'candidates') return renderSourcesWorkbench(state.candidateModels, { candidates: true });
   if (state.activeTab === 'measurements') return renderMeasurementsTable();
   if (state.activeTab === 'knowledge') return renderKnowledgeTables(task);
   if (state.activeTab === 'reports') return renderReportsWorkbench(task);
-  return renderSourcesWorkbench();
+  return renderSourcesWorkbench(evidenceRankedSources());
 }
 
 function renderSourcesTable(filteredList = state.sourceModels) {
@@ -2906,11 +2919,11 @@ function renderSourcesTable(filteredList = state.sourceModels) {
   `;
 }
 
-function renderSourcesWorkbench() {
+function renderSourcesWorkbench(sourceModels = evidenceRankedSources(), { candidates = false } = {}) {
   const activeTag = state.sourceActiveTag || 'all';
   const subthemes = [{ id: 'all', label: state.t('subthemeAll', 'Alle') }, ...domainTaxonomy(selectedTask()).clusters];
 
-  const filtered = filteredSources();
+  const filtered = filteredSources(sourceModels);
 
   return `
     <div class="research-sources-shards-wrapper">
@@ -2919,7 +2932,9 @@ function renderSourcesWorkbench() {
                class="ctox-input research-sources-shards-search"
                id="research-source-search-input"
                data-action="source-search"
-               placeholder="${escapeHtml(state.t('searchSourcesPlaceholder', 'Quelle suchen: NASA, UIUC, Tyto, PX4, Vibration ...'))}"
+               placeholder="${escapeHtml(candidates
+                 ? state.t('searchCandidatesPlaceholder', 'Kandidat suchen: DOI, Titel, Publisher ...')
+                 : state.t('searchSourcesPlaceholder', 'Quelle suchen: NASA, UIUC, Tyto, PX4, Vibration ...'))}"
                value="${escapeHtml(state.sourceSearchTerm || '')}"
                autocomplete="off" />
         <div class="research-sources-shards-filters">
@@ -2948,11 +2963,11 @@ function renderSourcesWorkbench() {
   `;
 }
 
-function filteredSources() {
+function filteredSources(sourceModels = state.sourceModels) {
   const activeTag = state.sourceActiveTag || 'all';
   const searchTerm = (state.sourceSearchTerm || '').trim().toLowerCase();
 
-  return state.sourceModels.filter((source) => {
+  return sourceModels.filter((source) => {
     if (activeTag !== 'all') {
       const tags = sourceTags(source);
       if (!tags.includes(activeTag)) return false;
@@ -3198,7 +3213,7 @@ function renderRight() {
       </section>
       ${renderScoringModel(task)}
       <section class="research-metric-grid">
-        <div><strong>${state.sourceModels.length}</strong><span>${escapeHtml(state.t('candidates', 'Candidates'))}</span></div>
+        <div><strong>${state.candidateModels.length}</strong><span>${escapeHtml(state.t('candidates', 'Candidates'))}</span></div>
         <div><strong>${evidenceRankedSources().length}</strong><span>${escapeHtml(state.t('sources', 'Sources'))}</span></div>
         <div><strong>${filterMeasurementRowsForEvidence(state.measurementRows, state.sourceModels).length}</strong><span>${escapeHtml(state.t('measurements', 'Measurements'))}</span></div>
         <div><strong>${avgScore()}</strong><span>${escapeHtml(state.t('avgScore', 'Avg score'))}</span></div>
@@ -3773,7 +3788,7 @@ async function runSelectedResearch() {
     status: result.task_status,
     command_id: commandId,
     task_queue_id: '',
-    identified_count: state.sourceRows.length,
+    identified_count: state.candidateRows.length + state.sourceRows.length,
     accepted_count: evidenceRankedSources().length,
     used_count: evidenceRankedSources().length,
     payload: { result },
@@ -4324,7 +4339,12 @@ function selectedTask() {
 }
 
 function selectedSource() {
-  return state.sourceModels.find((source) => source.id === state.selectedSourceId) || state.sourceModels[0] || null;
+  const visibleModels = state.activeTab === 'candidates' ? state.candidateModels : evidenceRankedSources();
+  return visibleModels.find((source) => source.id === state.selectedSourceId)
+    || state.sourceModels.find((source) => source.id === state.selectedSourceId)
+    || state.candidateModels.find((source) => source.id === state.selectedSourceId)
+    || visibleModels[0]
+    || null;
 }
 
 function latestRunForTask(taskId) {
@@ -4376,7 +4396,7 @@ function latestResearchCommandForTask(taskId) {
 
 function statusKindFor(status) {
   const value = String(status || '').toLowerCase();
-  if (['leased', 'running', 'in_progress', 'collecting'].includes(value)) return 'running';
+  if (['leased', 'running', 'in_progress', 'collecting', 'review_rework'].includes(value)) return 'running';
   if (['accepted', 'queued', 'pending'].includes(value)) return 'queued';
   if (['handled', 'completed', 'done', 'ready'].includes(value)) return 'completed';
   if (['blocked'].includes(value)) return 'blocked';
