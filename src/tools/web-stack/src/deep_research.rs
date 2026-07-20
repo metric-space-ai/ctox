@@ -15,6 +15,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use url::Url;
 
+use crate::scholarly_search::crossref_work_by_doi;
 use crate::scholarly_search::execute_scholarly_search;
 use crate::scholarly_search::openalex_work_by_id;
 use crate::scholarly_search::run_ctox_scholarly_search_tool;
@@ -2690,27 +2691,7 @@ fn resolve_scholarly_reference(root: &Path, reference_id: &str) -> Result<Schola
     if !doi.to_ascii_lowercase().starts_with("10.") || !doi.contains('/') {
         anyhow::bail!("unsupported scholarly reference id");
     }
-    let response = execute_scholarly_search(
-        root,
-        &ScholarlySearchRequest {
-            query: doi.to_string(),
-            provider: Some(ScholarlySearchProvider::Crossref),
-            max_results: Some(1),
-            with_oa_pdf: true,
-            only_doi: true,
-            ..Default::default()
-        },
-    )?;
-    response
-        .results
-        .into_iter()
-        .find(|result| {
-            result
-                .doi
-                .as_deref()
-                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(doi))
-        })
-        .ok_or_else(|| anyhow::anyhow!("Crossref did not resolve the cited DOI"))
+    crossref_work_by_doi(root, doi, true)
 }
 
 fn follow_scholarly_reference_chain(

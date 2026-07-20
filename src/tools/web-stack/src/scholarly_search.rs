@@ -1084,43 +1084,87 @@ fn crossref_search(root: &Path, request: &ScholarlySearchRequest) -> Result<Vec<
         .unwrap_or_default();
     let mut out = Vec::new();
     for item in items {
-        let title = first_string_field(item.get("title")).unwrap_or_else(|| "Untitled".to_string());
-        let doi = item
-            .get("DOI")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let Some(url) = item
-            .get("URL")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .or_else(|| doi.as_ref().map(|doi| format!("https://doi.org/{doi}")))
-        else {
-            continue;
-        };
         let rank = out.len() + 1;
-        out.push(ScholarlyResult {
-            provider: "crossref".to_string(),
-            source_id: doi.clone().unwrap_or_else(|| url.clone()),
-            detail_url: url,
-            title,
-            authors: None,
-            publisher: first_string_field(item.get("container-title")),
-            year: crossref_year(&item).and_then(|year| i32::try_from(year).ok()),
-            language: None,
-            file_format: None,
-            file_size_label: None,
-            isbn: None,
-            doi,
-            open_access_pdf: None,
-            open_access_license: None,
-            thumbnail_url: None,
-            snippet: crossref_snippet_text(&item),
-            tags: Vec::new(),
-            reference_ids: crossref_reference_ids(&item),
-            rank,
-        });
+        if let Some(result) = crossref_item_to_result(&item, rank) {
+            out.push(result);
+        }
     }
     Ok(out)
+}
+
+pub fn crossref_work_by_doi(
+    root: &Path,
+    raw_doi: &str,
+    with_oa_pdf: bool,
+) -> Result<ScholarlyResult> {
+    let doi = raw_doi
+        .trim()
+        .trim_start_matches("https://doi.org/")
+        .trim_start_matches("http://doi.org/")
+        .trim_start_matches("doi:")
+        .trim();
+    if !doi.to_ascii_lowercase().starts_with("10.") || !doi.contains('/') {
+        bail!("invalid DOI reference");
+    }
+
+    let base = runtime_config::get(root, "CTOX_CROSSREF_BASE_URL")
+        .unwrap_or_else(|| "https://api.crossref.org".to_string());
+    let mut url = format!("{}/works/{}", base.trim_end_matches('/'), encode_query(doi));
+    if let Some(email) = scholarly_contact_email(root) {
+        url.push_str(&format!("?mailto={}", encode_query(&email)));
+    }
+    let payload = fetch_json(root, &url)?;
+    let item = payload
+        .get("message")
+        .filter(|value| value.is_object())
+        .context("Crossref exact DOI response did not include a work")?;
+    let mut result =
+        crossref_item_to_result(item, 1).context("Crossref exact DOI response was incomplete")?;
+    if !result
+        .doi
+        .as_deref()
+        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(doi))
+    {
+        bail!("Crossref exact DOI response did not match the requested DOI");
+    }
+    if with_oa_pdf {
+        augment_results_with_open_access_pdfs(root, std::slice::from_mut(&mut result));
+    }
+    Ok(result)
+}
+
+fn crossref_item_to_result(item: &Value, rank: usize) -> Option<ScholarlyResult> {
+    let title = first_string_field(item.get("title")).unwrap_or_else(|| "Untitled".to_string());
+    let doi = item
+        .get("DOI")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let url = item
+        .get("URL")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| doi.as_ref().map(|doi| format!("https://doi.org/{doi}")))?;
+    Some(ScholarlyResult {
+        provider: "crossref".to_string(),
+        source_id: doi.clone().unwrap_or_else(|| url.clone()),
+        detail_url: url,
+        title,
+        authors: None,
+        publisher: first_string_field(item.get("container-title")),
+        year: crossref_year(item).and_then(|year| i32::try_from(year).ok()),
+        language: None,
+        file_format: None,
+        file_size_label: None,
+        isbn: None,
+        doi,
+        open_access_pdf: None,
+        open_access_license: None,
+        thumbnail_url: None,
+        snippet: crossref_snippet_text(item),
+        tags: Vec::new(),
+        reference_ids: crossref_reference_ids(item),
+        rank,
+    })
 }
 
 fn openalex_search(root: &Path, request: &ScholarlySearchRequest) -> Result<Vec<ScholarlyResult>> {
