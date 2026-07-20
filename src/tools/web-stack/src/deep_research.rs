@@ -165,6 +165,43 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
     let mut search_runs = Vec::new();
     seed_explicit_identifier_sources(&query_text, &mut seen_urls, &mut sources);
 
+    let web_plans = plans
+        .iter()
+        .filter(|plan| plan.label != "annas_archive_metadata")
+        .collect::<Vec<_>>();
+    let mut web_plan_results = Vec::with_capacity(web_plans.len());
+    for chunk in web_plans.chunks(4) {
+        web_plan_results.extend(std::thread::scope(|scope| {
+            let handles = chunk
+                .iter()
+                .map(|plan| {
+                    scope.spawn(move || {
+                        (
+                            *plan,
+                            run_ctox_web_search_tool(
+                                root,
+                                &CanonicalWebSearchRequest {
+                                    query: plan.query.clone(),
+                                    external_web_access: None,
+                                    allowed_domains: plan.domains.clone(),
+                                    user_location: SearchUserLocation::default(),
+                                    search_context_size: Some(request.depth.context_size()),
+                                    search_content_types: Vec::new(),
+                                    include_sources: true,
+                                    pinned_sources: Vec::new(),
+                                },
+                            ),
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("web search worker panicked"))
+                .collect::<Vec<_>>()
+        }));
+    }
+
     for plan in &plans {
         if plan.label == "annas_archive_metadata" {
             run_annas_archive_plan(
@@ -177,19 +214,12 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
             );
             continue;
         }
-        let payload = match run_ctox_web_search_tool(
-            root,
-            &CanonicalWebSearchRequest {
-                query: plan.query.clone(),
-                external_web_access: None,
-                allowed_domains: plan.domains.clone(),
-                user_location: SearchUserLocation::default(),
-                search_context_size: Some(request.depth.context_size()),
-                search_content_types: Vec::new(),
-                include_sources: true,
-                pinned_sources: Vec::new(),
-            },
-        ) {
+        let payload = match web_plan_results
+            .iter()
+            .find(|(candidate, _)| candidate.label == plan.label)
+            .map(|(_, result)| result)
+            .expect("every non-archive research plan has a worker result")
+        {
             Ok(payload) => payload,
             Err(err) => {
                 search_runs.push(json!({
@@ -2468,7 +2498,7 @@ fn collect_scholarly_database_sources(
         let seed_request = ScholarlySearchRequest {
             query: seed_query.clone(),
             provider: Some(ScholarlySearchProvider::Auto),
-            max_results: Some(16),
+            max_results: Some(scholarly_seed_results(request.depth)),
             with_oa_pdf: true,
             ..Default::default()
         };
@@ -2526,7 +2556,27 @@ fn collect_scholarly_database_sources(
     ];
     let mut rate_limited = BTreeSet::new();
     for query in queries {
-        for (label, provider, limit) in databases {
+        let provider_results = std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for (label, provider, limit) in databases {
+                if rate_limited.contains(label) {
+                    continue;
+                }
+                let query = query.clone();
+                handles.push(scope.spawn(move || {
+                    (
+                        label,
+                        provider,
+                        scholarly_db_query(root, &query, provider, limit),
+                    )
+                }));
+            }
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("scholarly database worker panicked"))
+                .collect::<Vec<_>>()
+        });
+        for (label, provider, _) in databases {
             if rate_limited.contains(label) {
                 runs.push(json!({
                     "database": label,
@@ -2537,7 +2587,12 @@ fn collect_scholarly_database_sources(
                 }));
                 continue;
             }
-            runs.push(match scholarly_db_query(root, &query, provider, limit) {
+            let result = provider_results
+                .iter()
+                .find(|(candidate, _, _)| *candidate == label)
+                .map(|(_, _, result)| result)
+                .expect("every active scholarly provider has a worker result");
+            runs.push(match result {
                 Ok(items) => {
                     if provider == ScholarlySearchProvider::OpenAlex {
                         queue_scholarly_references(
@@ -2549,7 +2604,8 @@ fn collect_scholarly_database_sources(
                         );
                     }
                     let values = items
-                        .into_iter()
+                        .iter()
+                        .cloned()
                         .map(scholarly_result_to_db_value)
                         .collect();
                     let count = push_database_sources(label, &query, values, seen_urls, sources);
@@ -2628,6 +2684,14 @@ fn scholarly_database_queries(
         queries.push(truncate_query_at_word_boundary(research_query, 140));
     }
     queries
+}
+
+fn scholarly_seed_results(depth: DeepResearchDepth) -> usize {
+    match depth {
+        DeepResearchDepth::Quick => 8,
+        DeepResearchDepth::Standard => 12,
+        DeepResearchDepth::Exhaustive => 16,
+    }
 }
 
 fn scholarly_db_query(
@@ -2770,48 +2834,76 @@ fn follow_scholarly_reference_chain(
     let mut added = 0usize;
     let mut failures = Vec::new();
     while lookups < budget {
-        let Some((reference_id, depth, parent_id)) = queue.pop_front() else {
-            break;
-        };
-        if depth > max_depth || !supported_scholarly_reference_id(&reference_id) {
-            continue;
+        let mut batch = Vec::new();
+        while batch.len() < 4 && lookups + batch.len() < budget {
+            let Some((reference_id, depth, parent_id)) = queue.pop_front() else {
+                break;
+            };
+            if depth <= max_depth && supported_scholarly_reference_id(&reference_id) {
+                batch.push((reference_id, depth, parent_id));
+            }
         }
-        lookups += 1;
-        match resolve_scholarly_reference(root, &reference_id) {
-            Ok(result) => {
-                resolved += 1;
-                if !scholarly_result_is_relevant(&result, research_query) {
-                    continue;
-                }
-                relevant += 1;
-                if depth < max_depth {
-                    queue_scholarly_references(
-                        std::slice::from_ref(&result),
+        if batch.is_empty() {
+            break;
+        }
+        lookups += batch.len();
+        let batch_results = std::thread::scope(|scope| {
+            let handles = batch
+                .iter()
+                .map(|(reference_id, depth, parent_id)| {
+                    scope.spawn(move || {
+                        (
+                            reference_id,
+                            *depth,
+                            parent_id,
+                            resolve_scholarly_reference(root, reference_id),
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("scholarly reference worker panicked"))
+                .collect::<Vec<_>>()
+        });
+        for (reference_id, depth, parent_id, result) in batch_results {
+            match result {
+                Ok(result) => {
+                    resolved += 1;
+                    if !scholarly_result_is_relevant(&result, research_query) {
+                        continue;
+                    }
+                    relevant += 1;
+                    if depth < max_depth {
+                        queue_scholarly_references(
+                            std::slice::from_ref(&result),
+                            research_query,
+                            depth + 1,
+                            queue,
+                            queued_references,
+                        );
+                    }
+                    let mut value = scholarly_result_to_db_value(result);
+                    value["citation_parent_id"] = Value::String(parent_id.clone());
+                    value["citation_depth"] = Value::Number((depth as u64).into());
+                    value["discovery_method"] =
+                        Value::String("scholarly_reference_chain".to_string());
+                    added += push_database_sources(
+                        "scholarly_reference",
                         research_query,
-                        depth + 1,
-                        queue,
-                        queued_references,
+                        vec![value],
+                        seen_urls,
+                        sources,
                     );
                 }
-                let mut value = scholarly_result_to_db_value(result);
-                value["citation_parent_id"] = Value::String(parent_id);
-                value["citation_depth"] = Value::Number((depth as u64).into());
-                value["discovery_method"] = Value::String("scholarly_reference_chain".to_string());
-                added += push_database_sources(
-                    "scholarly_reference",
-                    research_query,
-                    vec![value],
-                    seen_urls,
-                    sources,
-                );
-            }
-            Err(error) => {
-                if failures.len() < 12 {
-                    failures.push(json!({
-                        "reference_id": reference_id,
-                        "depth": depth,
-                        "error": error.to_string(),
-                    }));
+                Err(error) => {
+                    if failures.len() < 12 {
+                        failures.push(json!({
+                            "reference_id": reference_id,
+                            "depth": depth,
+                            "error": error.to_string(),
+                        }));
+                    }
                 }
             }
         }
