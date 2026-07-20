@@ -3192,7 +3192,10 @@ fn persist_zip_archive_manifest(archive_path: &Path, archive_sha256: &str) -> Re
     let manifest_path = archive_path.with_extension("zip.manifest.json");
     if let Ok(bytes) = fs::read(&manifest_path) {
         if let Ok(existing) = serde_json::from_slice::<Value>(&bytes) {
-            if existing.get("archive_sha256").and_then(Value::as_str) == Some(archive_sha256) {
+            if existing.get("schema_version").and_then(Value::as_str)
+                == Some("ctox.web.zip-manifest.v2")
+                && existing.get("archive_sha256").and_then(Value::as_str) == Some(archive_sha256)
+            {
                 return Ok(zip_manifest_receipt(
                     archive_sha256,
                     &manifest_path,
@@ -3252,13 +3255,7 @@ fn persist_zip_archive_manifest(archive_path: &Path, archive_sha256: &str) -> Re
             }
             Some(format!("sha256:{:x}", hasher.finalize()))
         };
-        let lower_name = name.to_ascii_lowercase();
-        let is_data_member = [
-            ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".xlsx", ".xls", ".parquet", ".h5",
-            ".hdf5",
-        ]
-        .iter()
-        .any(|suffix| lower_name.ends_with(suffix));
+        let is_data_member = archive_member_is_data(&name);
         if is_data_member {
             data_member_count += 1;
             if sample_data_members.len() < 24 {
@@ -3276,7 +3273,7 @@ fn persist_zip_archive_manifest(archive_path: &Path, archive_sha256: &str) -> Re
     }
 
     let full_manifest = json!({
-        "schema_version": "ctox.web.zip-manifest.v1",
+        "schema_version": "ctox.web.zip-manifest.v2",
         "archive_path": archive_path,
         "archive_sha256": archive_sha256,
         "member_count": members.len(),
@@ -3295,6 +3292,16 @@ fn persist_zip_archive_manifest(archive_path: &Path, archive_sha256: &str) -> Re
     ))
 }
 
+fn archive_member_is_data(name: &str) -> bool {
+    let lower_name = name.to_ascii_lowercase();
+    [
+        ".csv", ".tsv", ".tab", ".txt", ".dat", ".asc", ".json", ".jsonl", ".ndjson", ".xlsx",
+        ".xls", ".parquet", ".h5", ".hdf5",
+    ]
+    .iter()
+    .any(|suffix| lower_name.ends_with(suffix))
+}
+
 fn zip_manifest_receipt(
     archive_sha256: &str,
     manifest_path: &Path,
@@ -3302,7 +3309,7 @@ fn zip_manifest_receipt(
     manifest: &Value,
 ) -> Value {
     json!({
-        "schema_version": "ctox.web.zip-manifest-receipt.v1",
+        "schema_version": "ctox.web.zip-manifest-receipt.v2",
         "archive_sha256": archive_sha256,
         "manifest_path": manifest_path,
         "manifest_sha256": snapshot_hash(encoded),
@@ -3634,7 +3641,11 @@ fn response_admission_rejection(
         .iter()
         .filter(|marker| body.contains(**marker) || extracted.contains(**marker))
         .count();
-    if login_url || login_signal_count >= 1 {
+    // Journal and repository pages commonly include a dormant login form in
+    // their global navigation. It is only a wall when the response resolves
+    // to an authentication route or no substantial article body was found.
+    let extracted_body_chars = doc.page_text.trim().chars().count();
+    if login_url || (login_signal_count >= 1 && extracted_body_chars < 600) {
         return Some("login_or_authentication_wall".to_string());
     }
 
@@ -9292,6 +9303,15 @@ mod tests {
         assert!(evidence_doc_is_admitted_for_read(&rebuilt));
         assert!(rebuilt.page_text.is_empty());
         assert_eq!(rebuilt.summary, "Immutable original data file retrieved.");
+    }
+
+    #[test]
+    fn archive_manifest_recognizes_engineering_text_tables_as_data() {
+        assert!(archive_member_is_data(
+            "UIUC-propDB/volume-1/data/ance_8.5x6_2849cm_4000.txt"
+        ));
+        assert!(archive_member_is_data("measurements/run-01.dat"));
+        assert!(!archive_member_is_data("assets/header.png"));
     }
 
     #[test]

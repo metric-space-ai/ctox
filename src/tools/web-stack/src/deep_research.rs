@@ -1704,11 +1704,10 @@ fn read_has_actual_full_text_or_data(source: &Value, read: &Value) -> bool {
         return false;
     }
 
-    let paragraph_count = evidence_text
-        .split("\n\n")
-        .filter(|paragraph| is_meaningful_evidence_text(paragraph))
-        .count();
-    evidence_text.chars().count() >= 400 && paragraph_count >= 2
+    // HTML extractors do not consistently preserve paragraph separators. A
+    // canonical, non-metadata page with substantial immutable body text is
+    // still actual source content even when it arrives as one text block.
+    evidence_text.chars().count() >= 800
 }
 
 fn read_transport_verified(read: &Value) -> bool {
@@ -1722,9 +1721,12 @@ fn read_transport_verified(read: &Value) -> bool {
 }
 
 fn is_metadata_landing_source(source: &Value, read_url: &str, canonical_url: &str) -> bool {
+    let doi_resolver_did_not_reach_content = is_doi_resolver_url(canonical_url)
+        || (is_doi_resolver_url(read_url)
+            && (canonical_url.trim().is_empty()
+                || normalize_url_key(read_url) == normalize_url_key(canonical_url)));
     is_metadata_source_kind(source)
-        || is_doi_resolver_url(read_url)
-        || is_doi_resolver_url(canonical_url)
+        || doi_resolver_did_not_reach_content
         || is_zenodo_record_metadata_url(read_url)
         || is_zenodo_record_metadata_url(canonical_url)
         || is_github_repository_root_url(read_url)
@@ -2239,36 +2241,65 @@ fn source_read_url(source: &Value) -> Option<String> {
 }
 
 fn source_relevance_query(source: &Value, research_query: &str) -> String {
+    let is_data_file = source.get("source_type").and_then(Value::as_str) == Some("data_file");
+    if is_data_file {
+        let mut identity_text = String::new();
+        append_json_text(&mut identity_text, source.get("title"));
+        append_json_text(&mut identity_text, source.get("url"));
+        let terms = important_query_terms(&identity_text)
+            .into_iter()
+            .filter(|term| !term.chars().any(|ch| ch.is_ascii_digit()))
+            .take(6)
+            .collect::<Vec<_>>();
+        if !terms.is_empty() {
+            return truncate_query_at_word_boundary(&terms.join(" "), 96);
+        }
+    }
+
     let mut source_text = String::new();
     append_json_text(&mut source_text, source.get("title"));
-    append_json_text(&mut source_text, source.get("snippet"));
     append_json_text(&mut source_text, source.get("parent_title"));
-    let mut terms = important_query_terms(&source_text);
-    if source.get("source_type").and_then(Value::as_str) == Some("data_file") {
-        terms.retain(|term| !term.chars().any(|ch| ch.is_ascii_digit()));
+    let mut terms = important_query_terms(&source_text)
+        .into_iter()
+        .take(5)
+        .collect::<Vec<_>>();
+    if terms.is_empty() {
+        append_json_text(&mut source_text, source.get("snippet"));
+        terms = important_query_terms(&source_text)
+            .into_iter()
+            .take(5)
+            .collect();
     }
     let source_has_numeric_identifier = source_text.chars().any(|ch| ch.is_ascii_digit());
-    for term in topical_query_terms(research_query) {
-        if terms.len() >= 12 {
+    let mut supporting_text = source_text.to_ascii_lowercase();
+    append_json_text(&mut supporting_text, source.get("snippet"));
+    let research_terms = topical_query_terms(research_query);
+    for term in research_terms
+        .iter()
+        .filter(|term| supporting_text.contains(term.as_str()))
+        .chain(
+            research_terms
+                .iter()
+                .filter(|term| !supporting_text.contains(term.as_str())),
+        )
+    {
+        if terms.len() >= 6 {
             break;
         }
-        if (source.get("source_type").and_then(Value::as_str) == Some("data_file")
-            || !source_has_numeric_identifier)
-            && term.chars().any(|ch| ch.is_ascii_digit())
-        {
+        if !source_has_numeric_identifier && term.chars().any(|ch| ch.is_ascii_digit()) {
             continue;
         }
         if !terms
             .iter()
             .any(|existing| existing.eq_ignore_ascii_case(&term))
         {
-            terms.push(term);
+            terms.push(term.clone());
         }
     }
     if terms.is_empty() {
         return truncate_query_at_word_boundary(research_query, 140);
     }
-    truncate_query_at_word_boundary(&terms.join(" "), 140)
+    truncate_query_at_word_boundary(&terms.join(" "), 96)
 }
 
 fn followup_data_sources(parent: &Value, read: &Value) -> Vec<Value> {
@@ -2502,7 +2533,7 @@ fn collect_scholarly_database_sources(
         }
     }
     if request.include_papers {
-        runs.push(follow_openalex_reference_chain(
+        runs.push(follow_scholarly_reference_chain(
             root,
             research_query,
             request.depth,
@@ -2640,7 +2671,49 @@ fn scholarly_result_is_relevant(result: &ScholarlyResult, research_query: &str) 
     matched.len() >= 2
 }
 
-fn follow_openalex_reference_chain(
+fn supported_scholarly_reference_id(reference_id: &str) -> bool {
+    let value = reference_id.trim().to_ascii_lowercase();
+    value.contains("openalex.org/w") || (value.starts_with("10.") && value.contains('/'))
+}
+
+fn resolve_scholarly_reference(root: &Path, reference_id: &str) -> Result<ScholarlyResult> {
+    if reference_id.to_ascii_lowercase().contains("openalex.org/w") {
+        return openalex_work_by_id(root, reference_id);
+    }
+
+    let doi = reference_id
+        .trim()
+        .trim_start_matches("https://doi.org/")
+        .trim_start_matches("http://doi.org/")
+        .trim_start_matches("doi:")
+        .trim();
+    if !doi.to_ascii_lowercase().starts_with("10.") || !doi.contains('/') {
+        anyhow::bail!("unsupported scholarly reference id");
+    }
+    let response = execute_scholarly_search(
+        root,
+        &ScholarlySearchRequest {
+            query: doi.to_string(),
+            provider: Some(ScholarlySearchProvider::Crossref),
+            max_results: Some(1),
+            with_oa_pdf: true,
+            only_doi: true,
+            ..Default::default()
+        },
+    )?;
+    response
+        .results
+        .into_iter()
+        .find(|result| {
+            result
+                .doi
+                .as_deref()
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(doi))
+        })
+        .ok_or_else(|| anyhow::anyhow!("Crossref did not resolve the cited DOI"))
+}
+
+fn follow_scholarly_reference_chain(
     root: &Path,
     research_query: &str,
     research_depth: DeepResearchDepth,
@@ -2660,11 +2733,11 @@ fn follow_openalex_reference_chain(
         let Some((reference_id, depth, parent_id)) = queue.pop_front() else {
             break;
         };
-        if depth > max_depth || !reference_id.contains("openalex.org/W") {
+        if depth > max_depth || !supported_scholarly_reference_id(&reference_id) {
             continue;
         }
         lookups += 1;
-        match openalex_work_by_id(root, &reference_id) {
+        match resolve_scholarly_reference(root, &reference_id) {
             Ok(result) => {
                 resolved += 1;
                 if !scholarly_result_is_relevant(&result, research_query) {
@@ -2683,9 +2756,9 @@ fn follow_openalex_reference_chain(
                 let mut value = scholarly_result_to_db_value(result);
                 value["citation_parent_id"] = Value::String(parent_id);
                 value["citation_depth"] = Value::Number((depth as u64).into());
-                value["discovery_method"] = Value::String("openalex_reference_chain".to_string());
+                value["discovery_method"] = Value::String("scholarly_reference_chain".to_string());
                 added += push_database_sources(
-                    "openalex_reference",
+                    "scholarly_reference",
                     research_query,
                     vec![value],
                     seen_urls,
@@ -2704,7 +2777,7 @@ fn follow_openalex_reference_chain(
         }
     }
     json!({
-        "database": "openalex_reference_chain",
+        "database": "scholarly_reference_chain",
         "ok": failures.is_empty() || resolved > 0,
         "max_depth": max_depth,
         "lookup_budget": budget,
@@ -4123,6 +4196,38 @@ mod tests {
             .map(|score| Value::Number(score.into()))
             .unwrap_or(Value::Null);
         assert_eq!(assess_evidence_promotion(&source, true, true), (true, None));
+    }
+
+    #[test]
+    fn canonical_original_html_is_full_text_without_preserved_paragraph_breaks() {
+        let source = json!({
+            "source_type": "web",
+            "source_tier": "primary",
+            "url": "https://example.edu/propeller-database",
+        });
+        let read = json!({
+            "url": "https://example.edu/propeller-database",
+            "canonical_url": "https://example.edu/propeller-database",
+            "response_content_kind": "html",
+            "page_text_excerpt": "Measured small UAV propeller thrust torque RPM and aerodynamic coefficients. ".repeat(16),
+            "is_pdf": false,
+        });
+        assert!(read_has_actual_full_text_or_data(&source, &read));
+    }
+
+    #[test]
+    fn data_file_relevance_query_uses_file_identity_not_the_entire_research_scope() {
+        let source = json!({
+            "source_type": "data_file",
+            "title": "UIUC-propDB.zip",
+            "url": "https://m-selig.ae.illinois.edu/props/download/UIUC-propDB.zip",
+            "parent_title": "UIUC Propeller Data Site",
+        });
+        let query = source_relevance_query(
+            &source,
+            "small UAV propeller test bench measured thrust torque RPM vibration bearing loads datasets",
+        );
+        assert_eq!(query, "uiuc propdb zip https selig illinois");
     }
 
     #[test]
