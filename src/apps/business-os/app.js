@@ -3836,6 +3836,16 @@ function windowHeaderOptionsForModule(mod) {
       },
     ].filter(Boolean),
     onHeaderAction: (action) => {
+      // Toggle: clicking the active header tool again returns to the app.
+      // Without this the window looks stuck on Source/Versionen — the only
+      // way back was the easy-to-miss App tab inside the panel.
+      const windowInfo = findDesktopWindow(mod.id);
+      const winElement = windowInfo ? document.getElementById(windowInfo.id) : null;
+      const mode = action === 'lifecycle' ? 'versions' : action;
+      if (winElement && (winElement.dataset.integratedTool || '') === mode) {
+        integratedModuleToolSessions.get(windowInfo.id)?.showApp();
+        return;
+      }
       if (action === 'source') openModuleSourceEditor(mod.id);
       else if (action === 'versions' || action === 'lifecycle') openIntegratedModuleLifecycle(mod);
     },
