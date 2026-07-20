@@ -216,6 +216,10 @@ Rules that go with it:
   pill). Status is transient (toast) or contextual, never permanent chrome.
 - Sync/maintenance notices float as a toast — they must never displace the
   app layout.
+- **Pin workspace panes to explicit grid tracks** (`.app-left { grid-column: 1 }`,
+  resizer 2, center 3, resizer 4, right 5). The kit hides column resizers on
+  narrow windows; with auto-flow placement the center pane slides onto the
+  empty 12px resizer track and the main view visually disappears.
 - Module CSS must carry the module JS cache-buster
   (`index.css?v=` from `import.meta.url`); fresh JS over a stale cached
   sheet produces phantom layout bugs.

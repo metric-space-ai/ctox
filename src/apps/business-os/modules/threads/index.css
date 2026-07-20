@@ -34,6 +34,16 @@
   grid-template-rows: auto auto auto minmax(0, 1fr) auto;
 }
 
+/* Explicit tracks (the Knowledge idiom): the kit hides column resizers on
+   narrow windows — with auto-flow placement the center pane then slides onto
+   the empty 12px resizer track and the main view "disappears". Pinning every
+   pane to its column makes hidden resizers harmless. */
+.threads-left { grid-column: 1; grid-row: 1; }
+.threads-module > [data-resizer="left"] { grid-column: 2; grid-row: 1; }
+.threads-center { grid-column: 3; grid-row: 1; }
+.threads-module > [data-resizer="right"] { grid-column: 4; grid-row: 1; }
+.threads-right { grid-column: 5; grid-row: 1; }
+
 .threads-center {
   grid-template-rows: auto minmax(0, 1fr) auto auto;
   position: relative;
