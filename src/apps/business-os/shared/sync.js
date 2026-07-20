@@ -52,6 +52,25 @@ const ROOM_CIRCUIT_FAILURE_THRESHOLD = 5;
 const ROOM_CIRCUIT_OPEN_MS = 120_000;
 const ROOM_RETRY_BASE_MS = 1_000;
 const ROOM_RETRY_MAX_MS = 30_000;
+const DESKTOP_ICON_SAFE_FIELDS = new Set([
+  'id',
+  'target_type',
+  'target_module',
+  'target_record_id',
+  'label',
+  'glyph',
+  'x',
+  'y',
+  'pinned',
+  'hidden',
+  'sort_index',
+  'updated_at_ms',
+  '_deleted',
+  '_rev',
+  '_meta',
+  '_attachments',
+]);
+const desktopIconRepairPromises = new WeakMap();
 const RETRYABLE_CONTROL_PLANE_CODES = new Set([
   'control_plane_token_expired',
   'temporary_unavailable',
@@ -1041,7 +1060,10 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-    const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260720-checkpoint-head-v68');
+  if (collection === 'desktop_icons') {
+    await repairDesktopIconsBeforeReplication(rxCollection);
+  }
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260720-checkpoint-head-v68');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }
@@ -1368,6 +1390,69 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
       try { await withTimeout(replicationState.cancel?.(), 3000); } catch {}
     },
   };
+}
+
+async function repairDesktopIconsBeforeReplication(collection) {
+  let repairPromise = desktopIconRepairPromises.get(collection);
+  if (repairPromise) return repairPromise;
+  repairPromise = (async () => {
+    const documents = await collection.find().exec();
+    for (const document of documents || []) {
+      const raw = typeof document?.toJSON === 'function' ? document.toJSON() : document;
+      if (!desktopIconNeedsRepair(raw)) continue;
+      await collection.upsert(sanitizeDesktopIconForReplication(raw));
+    }
+  })();
+  desktopIconRepairPromises.set(collection, repairPromise);
+  try {
+    await repairPromise;
+  } catch (error) {
+    desktopIconRepairPromises.delete(collection);
+    throw error;
+  }
+}
+
+function desktopIconNeedsRepair(raw) {
+  if (!raw || typeof raw !== 'object') return false;
+  if (!isSafeDesktopIconGlyph(raw.glyph)) return true;
+  return Object.keys(raw).some((key) => !DESKTOP_ICON_SAFE_FIELDS.has(key));
+}
+
+function sanitizeDesktopIconForReplication(raw) {
+  const now = Date.now();
+  const icon = {
+    id: boundedString(raw.id, 128),
+    target_type: boundedString(raw.target_type, 32) || 'app',
+    target_module: boundedString(raw.target_module, 128),
+    target_record_id: boundedString(raw.target_record_id, 256),
+    label: boundedString(raw.label, 256),
+    glyph: isSafeDesktopIconGlyph(raw.glyph) ? String(raw.glyph).trim() : '◻︎',
+    x: boundedNumber(raw.x),
+    y: boundedNumber(raw.y),
+    pinned: Boolean(raw.pinned),
+    hidden: Boolean(raw.hidden),
+    sort_index: boundedNumber(raw.sort_index),
+    updated_at_ms: now,
+    _deleted: Boolean(raw._deleted),
+  };
+  if (typeof raw._rev === 'string' && raw._rev.length <= 256) icon._rev = raw._rev;
+  return icon;
+}
+
+function isSafeDesktopIconGlyph(value) {
+  const glyph = String(value || '').trim();
+  if (!glyph || glyph.length > 16) return false;
+  return !/^(?:data:|https?:)/i.test(glyph) && !/[<>{}]/.test(glyph);
+}
+
+function boundedString(value, maxLength) {
+  return String(value || '').trim().slice(0, maxLength);
+}
+
+function boundedNumber(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.max(-100_000, Math.min(100_000, number));
 }
 
 function formatLifecycleError(error) {
