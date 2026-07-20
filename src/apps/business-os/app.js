@@ -70,7 +70,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260718-knowledge-cards-v147';
+const APP_BUILD = '20260720-module-source-v148';
 
 ensureShellStylesheets();
 
@@ -9330,18 +9330,26 @@ function mergePackagedCatalogModules(cachedModules, packagedModules, options = {
       continue;
     }
     const current = merged[index];
-    const next = {
-      ...current,
-      ...shellMod,
-      layout: {
-        ...(current.layout || {}),
-        ...(shellMod.layout || {}),
-      },
-      store: {
-        ...(current.store || {}),
-        ...(shellMod.store || {}),
-      },
-    };
+    const currentBase = moduleBasePath(current);
+    const packagedBase = moduleBasePath(shellMod);
+    // A catalog row is also the asset-routing contract. Never retain
+    // lifecycle/source fields from an old runtime install while taking the
+    // entry, version, and presentation from a packaged module with the same
+    // id. That hybrid can display the new version while executing old code.
+    const next = currentBase !== packagedBase
+      ? { ...shellMod }
+      : {
+        ...current,
+        ...shellMod,
+        layout: {
+          ...(current.layout || {}),
+          ...(shellMod.layout || {}),
+        },
+        store: {
+          ...(current.store || {}),
+          ...(shellMod.store || {}),
+        },
+      };
     if (JSON.stringify(current) !== JSON.stringify(next)) {
       merged[index] = next;
       changedIds.push(shellMod.id);
