@@ -16,8 +16,9 @@
 
 // Phase-3 multiplex: ONE SharedRoomPeer carries EVERY collection of a sync
 // room. Recovery semantics here (push re-run flag, pull/push retry timers,
-// checkpoint retention keyed by storage epoch + native session) are pinned
-// by tests/replication-recovery-smoke.mjs.
+// checkpoint retention keyed by storage generation + collection epoch, with
+// native session fallback for v1 peers) are pinned by
+// tests/replication-recovery-smoke.mjs.
 import { CtoxSubject } from './observable.mjs';
 import { createCtoxWebRtcNativePeer } from './webrtc-native.mjs';
 import {

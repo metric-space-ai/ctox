@@ -551,7 +551,7 @@ parity.
 | Request vs disconnect race | `send_message_and_await_answer` subscribes to response **and** disconnect streams before sending and races them against a 60 s deadline; a peer dying mid-request fails the request instead of hanging the handshake/fork forever. Browser requests default to 15 s; a timed-out `ctoxProtocol`/`token` recycles the connection with `forceInitiator`. | `webrtc_helper.rs`, `webrtc-native.mjs::request` |
 | Send-queue wedge | Exactly one drainer per peer queue (`draining` flag); `DrainResetGuard` re-opens the drain slot if the draining task is aborted mid-send; `remove_peer` drops the whole queue so parked senders fail fast instead of waiting on a drainer that no longer exists. | `connection_handler_rs.rs` |
 | Handshake failure | `close_peer` force-closes that peer's transport so both sides observe a disconnect and rebuild cleanly — no half-dead channel-open-no-replication state. | `webrtc_types.rs::close_peer`, `index_mod.rs` |
-| Reconnect resync churn | Pull/push checkpoints are persisted and retained on peer drop, keyed by remote storage **epoch + native peer sessionId + schema hash**, and re-seeded only when all fields match. A daemon restart mints a new sessionId, so the **full resync after a daemon restart is intentional** (conservative correctness); a transport blip within one daemon run resumes incrementally. | `replication-webrtc.mjs::removePeer`, `checkpointValidityKeyFromProtocol` |
+| Reconnect resync churn | Pull/push checkpoints are persisted and retained on peer drop. Generation-v2 peers key them by persistent storage generation + collection + schema hash + current collection checkpoint epoch, so projection rewrites invalidate stale browser heads without forcing every daemon restart to resync. Mixed-version peers use checkpoint epoch + native peer sessionId + schema hash and therefore conservatively resync after a daemon restart. | `replication-webrtc.mjs::removePeer`, `checkpointValidityKeyFromProtocol` |
 | Missed trailing writes / stale pulls | Push re-run flag (`pushAgainAfterCurrent`): a local write landing during an in-flight push triggers another pass. Failed pulls/pushes re-arm single retry timers using `retryTime` (min 1 s). | `replication-webrtc.mjs` |
 | Browser-side repair | Error classification (§3.2) decides between recording a reconnect hint (blips, lifecycle events) and scheduling the unhealthy-collection sweep / full restart; an `active$` drop schedules a 750 ms restart. | `sync.js` |
 | Native peer death | Supervised respawn with capped backoff; config re-read per attempt (room-password rotation applies); bring-up failure or stale heartbeat ⇒ fatal exit ⇒ respawn — never a zombie. | `rxdb_peer.rs` (§4.2) |
@@ -679,10 +679,13 @@ dirty collections/ids. The leader broadcasts replicated invalidations back.
 `freeze`/`pagehide` releases ownership; persistent checkpoints handle catch-up.
 
 Peers advertising `ctox-checkpoint-generation-v2` validate retained
-checkpoints with the persistent native storage generation, collection, and
-schema hash. Process session remains diagnostic only. Mixed-version peers keep
-the conservative v1 epoch/session behavior. Native time in the handshake
-anchors browser HLCs; skew over five minutes is typed as
+checkpoints with the persistent native storage generation, collection, schema
+hash, and the collection's advertised checkpoint epoch. The epoch changes when
+the native collection head changes, so a projection rewrite cannot reuse a
+browser checkpoint that already advanced past newly projected rows. Process
+session remains diagnostic only. Mixed-version peers keep the conservative v1
+epoch/session behavior. Native time in the handshake anchors browser HLCs;
+skew over five minutes is typed as
 `clock_skew_detected`, and a strongly future HLC is persisted as a conflict
 instead of winning LWW automatically.
 
