@@ -316,6 +316,8 @@ pub fn run_ctox_person_research_tool(
                     find: find_terms_for_fields(&plan.target_fields),
                     workspace: None,
                     include_full_text: false,
+                    timeout_cap_ms: None,
+                    max_artifact_bytes: None,
                     country: Some(request.country.as_iso().to_string()),
                 },
             );

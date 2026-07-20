@@ -1631,14 +1631,23 @@ fn fetch_json(root: &Path, url: &str) -> Result<Value> {
                 let text = response.into_string().map_err(anyhow::Error::from)?;
                 return serde_json::from_str(&text).map_err(anyhow::Error::from);
             }
+            Err(ureq::Error::Status(429, response)) => {
+                let retry_after = response
+                    .header("retry-after")
+                    .and_then(|raw| raw.trim().parse::<u64>().ok());
+                let suffix = retry_after
+                    .map(|seconds| format!("; retry_after_seconds={seconds}"))
+                    .unwrap_or_default();
+                bail!("{url}: status code 429{suffix}");
+            }
             Err(ureq::Error::Status(status, response))
-                if status == 429 || matches!(status, 500 | 502 | 503 | 504) =>
+                if matches!(status, 500 | 502 | 503 | 504) =>
             {
                 let retry_after = response
                     .header("retry-after")
                     .and_then(|raw| raw.trim().parse::<u64>().ok())
                     .unwrap_or_else(|| 1u64 << attempt)
-                    .clamp(1, 30);
+                    .clamp(1, 8);
                 last_error = Some(anyhow::anyhow!("{url}: status code {status}"));
                 if attempt < 3 {
                     std::thread::sleep(Duration::from_secs(retry_after));

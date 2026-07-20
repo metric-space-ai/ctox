@@ -184,6 +184,14 @@ pub struct DirectWebReadRequest {
     /// Direct tool output keeps it out of the response and returns only the
     /// server-written workspace artifact path.
     pub include_full_text: bool,
+    /// Optional per-call network timeout ceiling. Systematic research sets a
+    /// depth-specific cap so one slow artifact cannot consume the whole round;
+    /// direct operator reads remain uncapped by default.
+    pub timeout_cap_ms: Option<u64>,
+    /// Optional per-call ceiling for PDFs and original data artifacts.
+    /// Systematic research uses smaller limits for quick discovery and keeps
+    /// the full configured allowance for exhaustive extraction.
+    pub max_artifact_bytes: Option<usize>,
     /// Optional country hint (e.g. `"DE"`) used when invoking a matched
     /// source-module's `extract_fields`. Some source modules gate behaviour
     /// on country (LinkedIn, Zefix); without this hint they fall back to
@@ -232,6 +240,7 @@ struct SearchConfig {
     max_data_file_bytes: usize,
     max_page_chars: usize,
     max_pdf_pages: usize,
+    response_timeout_cap_ms: Option<u64>,
     /// Hosts that bypass the SSRF egress guard (operator-configured SearXNG plus
     /// any `CTOX_WEB_EGRESS_ALLOW` entries). See [`crate::egress`].
     egress_allow_hosts: Vec<String>,
@@ -267,6 +276,7 @@ impl SearchConfig {
             ),
             max_page_chars: read_usize(root, "CTOX_WEB_SEARCH_MAX_PAGE_CHARS", 16_000),
             max_pdf_pages: read_usize(root, "CTOX_WEB_SEARCH_MAX_PDF_PAGES", 12),
+            response_timeout_cap_ms: None,
             egress_allow_hosts: {
                 let mut hosts = crate::egress::allow_hosts_from_config(root);
                 // A self-hosted SearXNG instance is a deliberate operator choice
@@ -774,7 +784,15 @@ pub fn run_ctox_web_search_tool(root: &Path, request: &CanonicalWebSearchRequest
 }
 
 pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Result<Value> {
-    let config = SearchConfig::from_root(root);
+    let mut config = SearchConfig::from_root(root);
+    config.response_timeout_cap_ms = request
+        .timeout_cap_ms
+        .map(|timeout_ms| timeout_ms.clamp(1_000, 180_000));
+    if let Some(max_artifact_bytes) = request.max_artifact_bytes {
+        config.max_data_file_bytes = config
+            .max_data_file_bytes
+            .min(max_artifact_bytes.clamp(1_000_000, 256_000_000));
+    }
     if !config.enabled {
         return Ok(json!({
             "ok": false,
@@ -4113,6 +4131,19 @@ fn fetch_http_page_content(config: &SearchConfig, hit: &SearchHit) -> Result<Fet
                     ));
                 }
                 let max_bytes = response_byte_limit(config, &final_url, content_type.as_deref());
+                if let Some(content_length) = response
+                    .header("content-length")
+                    .and_then(|raw| raw.trim().parse::<usize>().ok())
+                {
+                    if content_length > max_bytes {
+                        return Err(anyhow!(
+                            "evidence page {} declared {} bytes, exceeding the {} byte research limit",
+                            hit.url,
+                            content_length,
+                            max_bytes
+                        ));
+                    }
+                }
                 let mut body = Vec::new();
                 response
                     .into_reader()
@@ -7909,10 +7940,15 @@ fn build_agent_with_timeout(config: &SearchConfig, timeout: Duration) -> Result<
 
 fn response_timeout(config: &SearchConfig, url: &str) -> Duration {
     let configured = Duration::from_millis(config.timeout_ms);
-    if is_data_url_suffix(url) {
+    let desired = if is_data_url_suffix(url) {
         configured.max(Duration::from_secs(180))
     } else {
         configured
+    };
+    if let Some(cap_ms) = config.response_timeout_cap_ms {
+        desired.min(Duration::from_millis(cap_ms))
+    } else {
+        desired
     }
 }
 
@@ -9058,6 +9094,8 @@ mod tests {
                 find: vec!["CTOX_REMOTE_WEB_OK".to_string()],
                 workspace: Some(evidence_workspace.clone()),
                 include_full_text: false,
+                timeout_cap_ms: None,
+                max_artifact_bytes: None,
                 country: None,
             },
         )
@@ -9136,6 +9174,8 @@ mod tests {
                 find: Vec::new(),
                 workspace: Some(evidence_workspace),
                 include_full_text: false,
+                timeout_cap_ms: None,
+                max_artifact_bytes: None,
                 country: None,
             },
         )
@@ -9182,6 +9222,8 @@ mod tests {
                 find: Vec::new(),
                 workspace: Some(evidence_workspace.clone()),
                 include_full_text: false,
+                timeout_cap_ms: None,
+                max_artifact_bytes: None,
                 country: None,
             },
         )
@@ -9268,6 +9310,8 @@ mod tests {
                 find: Vec::new(),
                 workspace: None,
                 include_full_text: false,
+                timeout_cap_ms: None,
+                max_artifact_bytes: None,
                 country: None,
             },
         )
@@ -10040,6 +10084,8 @@ mod tests {
                     find: vec!["Attention Is All You Need".to_string()],
                     workspace: None,
                     include_full_text: false,
+                    timeout_cap_ms: None,
+                    max_artifact_bytes: None,
                     country: None,
                 },
             )
@@ -10998,6 +11044,8 @@ mod tests {
                 find: Vec::new(),
                 workspace: None,
                 include_full_text: false,
+                timeout_cap_ms: None,
+                max_artifact_bytes: None,
                 country: None,
             },
             doc,

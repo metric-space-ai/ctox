@@ -299,6 +299,8 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                         find: build_find_terms(&relevance_query),
                         workspace: None,
                         include_full_text: true,
+                        timeout_cap_ms: Some(research_read_timeout_cap_ms(request.depth)),
+                        max_artifact_bytes: Some(research_max_artifact_bytes(request.depth)),
                         country: None,
                     },
                 ) {
@@ -713,6 +715,22 @@ fn research_read_budget(depth: DeepResearchDepth, max_sources: usize) -> usize {
         .saturating_mul(2)
         .min(round_cap.max(max_sources))
         .min(300)
+}
+
+fn research_read_timeout_cap_ms(depth: DeepResearchDepth) -> u64 {
+    match depth {
+        DeepResearchDepth::Quick => 30_000,
+        DeepResearchDepth::Standard => 60_000,
+        DeepResearchDepth::Exhaustive => 180_000,
+    }
+}
+
+fn research_max_artifact_bytes(depth: DeepResearchDepth) -> usize {
+    match depth {
+        DeepResearchDepth::Quick => 16_000_000,
+        DeepResearchDepth::Standard => 64_000_000,
+        DeepResearchDepth::Exhaustive => 256_000_000,
+    }
 }
 
 fn research_candidate_pool_limit(depth: DeepResearchDepth, max_sources: usize) -> usize {

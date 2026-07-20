@@ -164,6 +164,8 @@ pub fn handle_web_command(
                         .collect(),
                     workspace: find_flag_value(args, "--workspace").map(PathBuf::from),
                     include_full_text: false,
+                    timeout_cap_ms: None,
+                    max_artifact_bytes: None,
                     country: find_flag_value(args, "--country").map(|s| s.trim().to_string()),
                 },
             )?;
