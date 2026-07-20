@@ -249,6 +249,14 @@ function wireUi() {
       els.root.classList.toggle('is-list-view', state.listView);
     });
   });
+  // Same toggle for the main view: timeline as cards or compact rows.
+  els.root?.querySelectorAll('[data-center-view]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.centerListView = button.dataset.centerView === 'list';
+      els.root.querySelectorAll('[data-center-view]').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.centerView === 'list') === state.centerListView)));
+      els.root.classList.toggle('is-center-list-view', state.centerListView);
+    });
+  });
   els.list?.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target : null;
     const row = target?.closest?.('[data-thread-id]');

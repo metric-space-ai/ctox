@@ -489,3 +489,18 @@
   text-transform: uppercase;
   color: var(--muted);
 }
+
+/* Main-view toggle: timeline renders as message cards or as compact rows.
+   Compact mode flattens each message to a single dense block — meta inline,
+   tight padding, no card fills. */
+.threads-module.is-center-list-view .threads-message,
+.threads-module.is-center-list-view .threads-approval-card {
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline, var(--line)) 55%, transparent);
+  max-width: none;
+}
+.threads-module.is-center-list-view .threads-message-meta { display: inline; margin-right: 6px; }
+.threads-module.is-center-list-view .threads-message-body { display: inline; }

@@ -6,11 +6,9 @@
           <span class="ctox-pane-kicker" data-label="hubKicker">Business OS</span>
           <h2 class="ctox-pane-title" data-label="threadsTitle">Threads</h2>
         </div>
-        <div class="ctox-pane-actions">
-          <button type="button" class="ctox-pane-icon" data-refresh title="Aktualisieren" aria-label="Aktualisieren">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4"/></svg>
-          </button>
-        </div>
+        <!-- No manual refresh: the module keeps itself current (bounded poll +
+             command receipts). Reactive data needs no reload button. -->
+        <div class="ctox-pane-actions"></div>
       </div>
       <!-- Row 2: filter section — search + view toggle + filter tray toggle.
            The old permanent 12-chip wall lived here; secondary filters now sit
@@ -69,11 +67,14 @@
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker" data-thread-source>Kontext</span>
           <h2 class="ctox-pane-title" data-thread-title>Kein Thread ausgewählt</h2>
-          <!-- Status is information, not an action — it lives with the titles,
-               never in the top-right action cluster. -->
-          <span class="threads-status-line"><span class="ctox-badge" data-thread-status>bereit</span><span class="ctox-badge" data-sync-state>lokal</span></span>
         </div>
         <div class="ctox-pane-actions">
+          <!-- View toggle for the timeline (cards vs. compact list) — every
+               main view that lists elements offers both renderings. -->
+          <div class="threads-view-toggle" role="group" aria-label="Timeline-Darstellung">
+            <button type="button" class="ctox-pane-icon" data-center-view="cards" aria-pressed="true" aria-label="Karten-Ansicht" title="Karten-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+            <button type="button" class="ctox-pane-icon" data-center-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+          </div>
           <button type="button" class="ctox-pane-icon" data-thread-watch title="Watch" aria-label="Watch">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6ZM12 9.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z"/></svg>
           </button>
