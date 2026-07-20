@@ -689,6 +689,11 @@ function relativeTime(ms) {
 // The accent line says why this needs ME — deduplicated against the title,
 // never raw system vocabulary.
 function whyMeLine(thread, pendingApprovals) {
+  // Server-authoritative first (hub contract): native refresh_thread_states
+  // writes attention_reasons in the contract vocabulary; local derivation is
+  // only the fallback until states replicate.
+  const stored = arrayField(userStateForThread(thread.id)?.attention_reasons);
+  if (stored.length) return stored.slice(0, 2).join(' · ');
   const parts = [];
   if (pendingApprovals > 0) parts.push('Freigabe nötig');
   else if (thread.status === 'blocked') parts.push('Blockiert');
