@@ -3631,13 +3631,15 @@ async function runSelectedResearch() {
   const tableContract = task.payload?.table_contract || RESEARCH_TABLE_CONTRACT;
   const existingTables = new Set((base?.tables || []).map((table) => table.table_key));
   const missingTables = Object.keys(tableContract).filter((key) => !existingTables.has(key));
-  const excludedSourceUrls = [...new Set((state.sourceModels || [])
-    .map((source) => source?.canonicalUrl || firstString(source?.row || {}, ['canonical_url']))
-    .map((url) => String(url || '').trim())
-    .filter((url) => /^https?:\/\//i.test(url)))];
-  const exclusionFlags = excludedSourceUrls
-    .map((url) => ` --exclude-url ${JSON.stringify(url)}`)
-    .join('');
+  const candidateTable = tableForKey(base, task.candidate_catalog_key || 'source_candidates');
+  const candidateRows = candidateTable ? await fetchTableRows(candidateTable.id) : [];
+  const verifiedSourceUrls = sourceUrlsFromRows((state.sourceModels || [])
+    .filter((source) => source.evidenceEligible)
+    .map((source) => source.row));
+  const excludedSourceUrls = [...new Set([
+    ...sourceUrlsFromRows(candidateRows),
+    ...sourceUrlsFromRows((state.sourceModels || []).map((source) => source.row)),
+  ])];
   const instruction = [
     `Führe systematic-research für das Business-OS Web Research Dashboard "${task.title}" fort.`,
     `Research Task ID: ${task.id}`,
@@ -3659,7 +3661,7 @@ async function runSelectedResearch() {
     `Portfolio axes: x=${normalizedAxisPair(task).x}, y=${normalizedAxisPair(task).y}`,
     '',
     'Nutze systematic-research als Eigentümer des gesamten iterativen Workflows. Inventarisiere zuerst Knowledge und plane orthogonale Suchfacetten. Wähle danach pro Runde selbstständig das passende Werkzeug aus ctox_scholarly_search, ctox_web_search, ctox_deep_research, ctox_web_read und Browser/Scrape. Ein ctox_deep_research-Aufruf ist nur eine mögliche Discovery-Runde und niemals die fertige Recherche. Für wissenschaftliche Themen sind Paper-Suche, DOI/OA-Auflösung sowie das Verfolgen relevanter Referenzen, Zitationen, Datensätze und Supplemente Pflicht. Schreibe jede Discovery-Runde vollständig nach source_candidates; diese Tabelle ist nur Audit/Discovery und niemals Evidence. Promoviere ausschließlich Quellen, die evidence_guard.py bestanden haben, nach source_catalog. Lies/prüfe jede kanonische Quelle, extrahiere Fakten nach evidence_points und schreibe nur belegte Optionen mit gewichteten Scores nach evaluation_matrix. Aktualisiere bestehende Zeilen, wenn sich Fokus oder Kriterien ändern, statt parallele Tabellen zu erzeugen. Die UI-Evidence-Gate-Felder verification_status=verified, transport_verified=true, content_extracted=true, actual_full_text_or_data=true, evidence_relevance_score>=8, http_status 2xx (nicht 204), snapshot_hash als SHA-256, canonical_url auf die Originalquelle, evidence_eligible=true und ein nicht-aggregierter source_tier sind zwingend; Metadaten-URLs, alte, fehlende, metadata_only, fachfremde oder rejected Zeilen bleiben ausschließlich in source_candidates.',
-    `${excludedSourceUrls.length} bereits verifizierte kanonische URLs sind als exclude_urls vorgegeben. Übergib sie vollständig an ctox_deep_research; sie dürfen weder erneut als neue Quelle promoviert werden noch das Lesebudget verbrauchen.`,
+    `${excludedSourceUrls.length} bereits bekannte kanonische URLs (${verifiedSourceUrls.length} evidence-eligible) sind in web_stack_plan.exclude_urls vorgegeben. Übergib diese Liste vollständig an jede ctox_deep_research-Runde, damit bekannte Kandidaten weder erneut als neue Discovery zählen noch das Such- und Lesebudget verbrauchen. Bereits bekannte, noch ungeprüfte Kandidaten dürfen ausschließlich gezielt mit ctox_web_read oder Browser/Scrape nachverifiziert werden.`,
     `Schreibe auf jede in diesem Lauf erzeugte oder aktualisierte Knowledge-Zeile research_run_id=${researchRunId} und research_command_id=${commandId}. Ohne beide exakten IDs gilt die Zeile nicht als Ergebnis dieses Laufs.`,
     'Vor Abschluss sind drei voneinander getrennte Audits auszuführen: Source-Audit (URL, Autorität, Inhalt, Snapshot), Data-Audit (Originaldatei, Zeile/Spalte, Einheit, Parsing, Umrechnung, Row-Count) und Claim-Audit (jede Knowledge- und Report-Aussage gegen freigegebene Evidence). Nicht bestandene Aussagen oder Quellen dürfen nicht in Knowledge, Scores oder Reports gelangen.',
     'Pflege parallel semantic_graph_nodes und semantic_graph_edges: kanonische fachliche Themen und Konzepte ausschließlich aus verifizierten Titeln, Zusammenfassungen und Evidenz; klare Definitionen, Aliase und Themenfeld-Bezeichnungen; typisierte belegte Relationen; Source-IDs, Konfidenz und Provenienz an jedem Datensatz. Technische Schlüssel, IDs, Hashes, URLs und generische Metadaten sind keine Konzepte. Schreibe inkrementell, damit die laufende Research-App über RxDB/WebRTC live aktualisiert wird.',
@@ -3685,9 +3687,10 @@ async function runSelectedResearch() {
       strategy: 'agentic_iterative_systematic_research',
       seed_query: task.prompt || task.title,
       exclude_urls: excludedSourceUrls,
+      verified_source_urls: verifiedSourceUrls,
       available_rounds: [
         'ctox web scholarly search --query <paper facet> --with-oa-pdf --only-doi',
-        `ctox web deep-research --query <broad or gap facet> --depth standard --max-sources 24${exclusionFlags}`,
+        'ctox web deep-research --query <broad or gap facet> --depth standard --max-sources 24 --exclude-url <repeat for every web_stack_plan.exclude_urls entry>',
         'ctox web search --query <focused source or official-domain facet>',
         'ctox web read --url <canonical-candidate-url> --query <precise evidence intent>',
         'browser/scrape for interactive or structured source extraction',
@@ -3768,6 +3771,16 @@ async function runSelectedResearch() {
   });
   setStatus(state.t('researchChatQueued', 'Research-Aufgabe im Chat gestartet.'));
   render();
+}
+
+function sourceUrlsFromRows(rows = []) {
+  return (rows || [])
+    .flatMap((row) => [
+      firstString(row, ['canonical_url']),
+      firstString(row, ['source_url', 'url', 'direct_url', 'doi']),
+    ])
+    .map((url) => String(url || '').trim())
+    .filter((url) => /^https?:\/\//i.test(url));
 }
 
 function researchScoringContract(scoringDimensions) {
