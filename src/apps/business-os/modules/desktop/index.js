@@ -18,6 +18,20 @@ const DESKTOP_SYNC_COLLECTIONS = Object.freeze([
   'desktop_layout',
   'desktop_notifications',
 ]);
+const DESKTOP_ICON_PERSISTED_FIELDS = new Set([
+  'id',
+  'target_type',
+  'target_module',
+  'target_record_id',
+  'label',
+  'glyph',
+  'x',
+  'y',
+  'pinned',
+  'hidden',
+  'sort_index',
+  'updated_at_ms',
+]);
 const DEFAULT_GRID = { cellW: 104, cellH: 120, offset: 24 };
 const COMPACT_GRID = { cellW: 88, cellH: 100, offset: 12 };
 const ICON_METRICS = {
@@ -1101,6 +1115,7 @@ export async function mount(ctx) {
         const existingDoc = existingById.get(seed.id);
         if (existingDoc && !force) {
           const patch = normalizeIconPatch(existingDoc, seed, grid, shouldUnhideDefaults);
+          clearUnpersistedIconFields(existingDoc, patch);
           if (Object.keys(patch).length) await existingDoc.incrementalPatch(patch);
           continue;
         }
@@ -1144,11 +1159,26 @@ export async function mount(ctx) {
     if (!doc.target_type) patch.target_type = seed.target_type;
     if (!doc.target_module) patch.target_module = seed.target_module;
     if (!doc.label || (doc.id === 'desk_icon_research' && doc.target_module === 'research' && doc.label === 'Research')) patch.label = seed.label;
-    if (!doc.glyph) patch.glyph = seed.glyph;
+    if (!isSafePersistedGlyph(doc.glyph)) patch.glyph = seed.glyph;
     if (!Number.isFinite(doc.sort_index)) patch.sort_index = seed.sort_index;
     if (shouldUnhide && doc.hidden) patch.hidden = false;
     if (Object.keys(patch).length) patch.updated_at_ms = Date.now();
     return patch;
+  }
+
+  function clearUnpersistedIconFields(doc, patch) {
+    const raw = typeof doc?.toJSON === 'function' ? doc.toJSON() : doc;
+    for (const key of Object.keys(raw || {})) {
+      if (key.startsWith('_') || DESKTOP_ICON_PERSISTED_FIELDS.has(key)) continue;
+      if (raw[key] === undefined) continue;
+      patch[key] = undefined;
+    }
+  }
+
+  function isSafePersistedGlyph(value) {
+    const glyph = String(value || '').trim();
+    if (!glyph || glyph.length > 16) return false;
+    return !/^(?:data:|https?:)/i.test(glyph) && !/[<>{}]/.test(glyph);
   }
 
   function clampIconPosition(doc, fallback, grid) {

@@ -52,8 +52,8 @@ export function createCtoxLauncher({ modules, apps, currentModuleId, openApp }) 
 
   function glyphFor(targetId) {
     const app = appDirectory.get(targetId);
-    if (app?.glyph) return app.glyph;
-    return MODULE_GLYPHS[targetId] || '◻︎';
+    const fallback = MODULE_GLYPHS[targetId] || '◻︎';
+    return safeGlyph(app?.glyph, fallback);
   }
 
   return { knows, entries, kindOf, open, glyphFor };
@@ -69,3 +69,10 @@ const MODULE_GLYPHS = {
   research: '🔬',
   'coding-agents': '🤖',
 };
+
+function safeGlyph(value, fallback) {
+  const glyph = String(value || '').trim();
+  if (!glyph || glyph.length > 16) return fallback;
+  if (/^(?:data:|https?:)/i.test(glyph) || /[<>{}]/.test(glyph)) return fallback;
+  return glyph;
+}
