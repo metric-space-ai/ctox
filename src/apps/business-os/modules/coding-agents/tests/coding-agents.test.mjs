@@ -72,8 +72,6 @@ test('turn payload only carries a model for an explicit provider pick', () => {
     assert.equal(explicit.model, undefined);
   }
 });
-  assert.equal('model' in fallback, false);
-});
 
 test('app catalog normalization keeps visible editable modules sorted by title', () => {
   const modules = hooks.normalizeCatalogModules([
