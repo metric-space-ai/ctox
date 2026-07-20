@@ -3,12 +3,16 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { __codingAgentsTestHooks as hooks } from '../index.js';
+import { __chatUiTestHooks as chatHooks } from '../../../vendor/chat-ui/chat-ui.mjs';
 
 test('presentation layer stays compact and shell-native', () => {
   const css = readFileSync(new URL('../index.css', import.meta.url), 'utf8');
   const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   const js = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
-  const source = `${css}\n${html}\n${js}`;
+  // The vendored chat core injects its own <style>; hold it to the same shell
+  // token rules as the module itself.
+  const chatUi = readFileSync(new URL('../../../vendor/chat-ui/chat-ui.mjs', import.meta.url), 'utf8');
+  const source = `${css}\n${html}\n${js}\n${chatUi}`;
   const surfacePattern = new RegExp(['ctox-pane--gla' + 'ss', 'gla' + 'ss', 'Prem' + 'ium'].join('|'), 'i');
   const sidePattern = new RegExp('border-' + '(?:left|right)\\s*:\\s*(?:[2-9]|[0-9]{2,})px');
   const radiusPattern = new RegExp('border-' + 'radius:\\s*(?:8|10|12|14|16|18|20|24)px');
@@ -140,4 +144,49 @@ test('module stays free of idle polling loops', () => {
 
 test('escaped text is safe to inject into render fragments', () => {
   assert.equal(hooks.escapeHtml('<script>alert(1)</script>'), '&lt;script&gt;alert(1)&lt;/script&gt;');
+});
+
+test('chat markdown escapes html/script injection before transforming', () => {
+  const html = chatHooks.renderMarkdown('<script>alert(1)</script> **bold** <img src=x onerror=alert(1)>');
+  // No raw tags survive — everything dangerous is entity-escaped.
+  assert.equal(html.includes('<script'), false);
+  assert.equal(html.includes('<img'), false);
+  assert.equal(html.includes('onerror'), true); // present, but only as inert escaped text
+  assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  // The safe subset still applies to the surrounding text.
+  assert.match(html, /<strong>bold<\/strong>/);
+
+  // A non-http(s) link scheme must never become an anchor.
+  const jsLink = chatHooks.renderMarkdown('[x](javascript:alert(1))');
+  assert.equal(jsLink.includes('<a '), false);
+  // A quote smuggled into a URL stays encoded and cannot break the attribute.
+  const attrBreak = chatHooks.renderMarkdown('[x](https://e.com" onmouseover="alert(1))');
+  assert.equal(/href="https:\/\/e\.com"[^>]*onmouseover/.test(attrBreak), false);
+});
+
+test('chat renders fenced code blocks with a copy control', () => {
+  const html = chatHooks.renderMarkdown('intro\n```\nconst a = 1;\n```');
+  assert.match(html, /class="cui-codeblock"/);
+  assert.match(html, /class="cui-copy"/);
+  assert.match(html, /<pre class="cui-pre"><code>const a = 1;<\/code><\/pre>/);
+  // Backticks inside a fence are content, not re-parsed as inline code.
+  const inlineCode = chatHooks.renderMarkdown('use `flag` here');
+  assert.match(inlineCode, /<code class="cui-code">flag<\/code>/);
+});
+
+test('chat renders system events as one-line protocol rows, not bubbles', () => {
+  const sys = chatHooks.renderRowHtml({ role: 'system', text: 'turn started', status: 'running' });
+  assert.equal(chatHooks.classifyRole({ role: 'system' }), 'system');
+  assert.match(sys.cls, /cui-row--system/);
+  assert.match(sys.html, /class="cui-proto/);
+  assert.equal(sys.html.includes('cui-bubble'), false);
+  assert.match(sys.html, /turn started · running/);
+
+  // A failed system event is flagged for the danger token.
+  const failed = chatHooks.renderRowHtml({ role: 'system', text: 'denied', failed: true });
+  assert.match(failed.html, /cui-proto is-failed/);
+
+  // People and assistants still get bubbles.
+  assert.match(chatHooks.renderRowHtml({ role: 'user', text: 'hi' }).html, /cui-bubble--user/);
+  assert.match(chatHooks.renderRowHtml({ role: 'assistant', text: 'hi' }).html, /cui-bubble--assistant/);
 });

@@ -108,6 +108,10 @@ const labels = {
 
 let els = {};
 let t = (k, f) => f || k;
+// Fluid vendored chat core (../../vendor/chat-ui). Loaded lazily so a missing
+// vendor file degrades to the inline transcript renderer instead of breaking
+// the whole module.
+let chatView = null;
 
 export async function mount(ctx) {
   state.ctx = ctx;
@@ -129,6 +133,7 @@ export async function mount(ctx) {
   applyStaticTexts();
   renderModelSelect();
   wireEvents();
+  await initChatView();
   const projectionSubscriptions = subscribeProjectionUpdates();
 
   // Column resizing is owned by the shell (setupModuleResizers in app.js),
@@ -142,8 +147,26 @@ export async function mount(ctx) {
     projectionSubscriptions.forEach((subscription) => {
       try { subscription?.unsubscribe?.(); } catch (err) { console.warn('[coding-agents] projection unsubscribe failed', err); }
     });
+    try { chatView?.destroy?.(); } catch (err) { console.warn('[coding-agents] chat-ui destroy failed', err); }
+    chatView = null;
     styleLink.remove();
   };
+}
+
+// Bring up the vendored chat core over #ca-recent-list. A load or construction
+// failure leaves chatView null and renderRecentTurns() falls back to the inline
+// transcript renderer — the module keeps working either way.
+async function initChatView() {
+  if (!els.recentList) return;
+  try {
+    const mod = await import('../../vendor/chat-ui/chat-ui.mjs');
+    if (typeof mod.createChatView === 'function') {
+      chatView = mod.createChatView(els.recentList, {});
+    }
+  } catch (err) {
+    console.warn('[coding-agents] chat-ui unavailable, using inline transcript', err);
+    chatView = null;
+  }
 }
 
 async function loadModuleMarkup() {
@@ -610,44 +633,89 @@ function turnFromCommand(doc) {
 function renderRecentTurns() {
   const box = els.recentList;
   if (!box) return;
-  box.innerHTML = '';
 
   if (!state.activeModuleId) {
+    // Directly owns the host here (no transcript); the chat view re-attaches
+    // its thread on the next update() once an app is selected.
     box.innerHTML = `<div class="ctox-empty"><strong>Projekt links wählen</strong><br>Dann kannst du dem Agenten hier Aufträge geben.</div>`;
     renderArtifact();
     return;
   }
 
   // The chat: native session events (the sidecar transcript) when present,
-  // otherwise the turn log as user-bubble + status line pairs.
-  const events = Array.isArray(state.sessionEvents) ? state.sessionEvents : [];
-  if (events.length) {
-    for (const event of events) {
-      const role = String(event.role || 'system');
-      if (role === 'user') {
-        box.insertAdjacentHTML('beforeend', `<div class="ca-msg is-user"><div class="ca-msg-body">${escapeHtml(event.text || '')}</div></div>`);
-      } else if (role === 'assistant' || role === 'agent') {
-        box.insertAdjacentHTML('beforeend', `<div class="ca-msg is-agent"><div class="ca-msg-meta">Agent${event.status ? ` · ${escapeHtml(event.status)}` : ''}</div><div class="ca-msg-body">${escapeHtml(event.text || '')}</div></div>`);
-      } else {
-        box.insertAdjacentHTML('beforeend', `<div class="ca-msg is-event">${escapeHtml(event.text || '')}${event.status ? ` · ${escapeHtml(event.status)}` : ''}</div>`);
-      }
-    }
-  } else if (!state.recentTurns.length) {
-    box.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(t('recentEmpty'))}</strong></div>`;
+  // otherwise the turn log as user-bubble + status-line pairs.
+  const events = buildTranscriptEvents();
+  const running = state.activeSession?.status === 'running';
+  const emptyText = t('recentEmpty');
+
+  if (chatView) {
+    chatView.update({ events, running, emptyText });
   } else {
-    [...state.recentTurns].sort((a, b) => a.timeMs - b.timeMs).forEach((turn) => {
-      box.insertAdjacentHTML('beforeend', `<div class="ca-msg is-user"><div class="ca-msg-body">${escapeHtml(turn.prompt || turn.moduleId)}</div></div>`);
-      const statusLabel = turn.status === 'completed' ? t('statusCompleted') : turn.status === 'failed' ? t('statusFailed') : t('statusRunning');
-      const detail = [statusLabel, formatRecordTime(turn.timeMs),
-        turn.appliedCount ? `${turn.appliedCount} ${turn.appliedCount === 1 ? t('fileChanged') : t('filesChanged')}` : '',
-        turn.error].filter(Boolean).join(' · ');
-      box.insertAdjacentHTML('beforeend', `<div class="ca-msg is-event ${turn.status === 'failed' || !turn.ok ? 'is-failed' : ''}">${escapeHtml(detail)}</div>`);
-    });
+    renderTranscriptInline(box, events, emptyText);
   }
-  box.scrollTop = box.scrollHeight;
+
   const footer = els.root?.querySelector('#ca-footer');
   if (footer) footer.textContent = `${state.recentTurns.length} Turns · ${state.activeModuleId || '—'}`;
   renderArtifact();
+}
+
+// The canonical transcript for the active app: native sidecar events when we
+// have them, otherwise synthesized user-prompt + status-line pairs from the
+// command log — shaped as chat-ui event objects (role/text/status/key).
+function buildTranscriptEvents() {
+  const sessionEvents = Array.isArray(state.sessionEvents) ? state.sessionEvents : [];
+  if (sessionEvents.length) {
+    return sessionEvents.map((event, index) => ({
+      key: event.seq != null ? `evt:${event.seq}` : `evt:${event.id || index}`,
+      role: String(event.role || 'system'),
+      text: String(event.text || ''),
+      status: String(event.status || ''),
+    }));
+  }
+
+  const events = [];
+  [...state.recentTurns].sort((a, b) => a.timeMs - b.timeMs).forEach((turn) => {
+    events.push({ key: `turn:${turn.id}:u`, role: 'user', text: turn.prompt || turn.moduleId });
+    const statusLabel = turn.status === 'completed'
+      ? t('statusCompleted')
+      : turn.status === 'failed'
+        ? t('statusFailed')
+        : t('statusRunning');
+    const detail = [
+      statusLabel,
+      formatRecordTime(turn.timeMs),
+      turn.appliedCount ? `${turn.appliedCount} ${turn.appliedCount === 1 ? t('fileChanged') : t('filesChanged')}` : '',
+      turn.error,
+    ].filter(Boolean).join(' · ');
+    events.push({
+      key: `turn:${turn.id}:s`,
+      role: 'system',
+      text: detail,
+      failed: turn.status === 'failed' || !turn.ok,
+    });
+  });
+  return events;
+}
+
+// Fallback renderer used only when the vendored chat-ui failed to load. Keeps
+// the previous inline .ca-msg presentation so the module never goes blank.
+function renderTranscriptInline(box, events, emptyText) {
+  box.innerHTML = '';
+  if (!events.length) {
+    box.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(emptyText)}</strong></div>`;
+    return;
+  }
+  for (const event of events) {
+    const role = String(event.role || 'system');
+    if (role === 'user') {
+      box.insertAdjacentHTML('beforeend', `<div class="ca-msg is-user"><div class="ca-msg-body">${escapeHtml(event.text || '')}</div></div>`);
+    } else if (role === 'assistant' || role === 'agent') {
+      box.insertAdjacentHTML('beforeend', `<div class="ca-msg is-agent"><div class="ca-msg-meta">Agent${event.status ? ` · ${escapeHtml(event.status)}` : ''}</div><div class="ca-msg-body">${escapeHtml(event.text || '')}</div></div>`);
+    } else {
+      box.insertAdjacentHTML('beforeend', `<div class="ca-msg is-event ${event.failed ? 'is-failed' : ''}">${escapeHtml(event.text || '')}${event.status ? ` · ${escapeHtml(event.status)}` : ''}</div>`);
+    }
+  }
+  box.scrollTop = box.scrollHeight;
 }
 
 // Column 3: the agent's free HTML artifact — a live page the agent maintains

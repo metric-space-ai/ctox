@@ -1,0 +1,9 @@
+{
+  "name": "chat-ui",
+  "author": "Claude Opus 4.8 (Anthropic), for the CTOX Business OS coding-agents module",
+  "purpose": "Self-contained, dependency-free chat transcript view (safe markdown subset, fenced code blocks with copy, sticky auto-scroll, subtle enter animation, typing indicator) for the coding-agents module. A 'fluid chat core' in the spirit of t3.chat / t3code, but implemented from scratch.",
+  "date": "2026-07-20",
+  "license": "AGPL-3.0-only",
+  "provenance": "hand-written, no upstream copy",
+  "note": "Not a vendored bundle: one hand-authored browser-ESM file, no build step, no CDN, no network imports. Uses ONLY Business OS shell design tokens (var(--surface), --line, --text, --muted, --accent, --control-radius, --danger, --font-mono, --accent-foreground). The markdown renderer escapes ALL input first, then applies a fixed set of known-safe transforms; raw input never reaches innerHTML."
+}
