@@ -1322,7 +1322,10 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     }
     if (now - lastErrorLogAt > 5000) {
       lastErrorLogAt = now;
-      console.error(`[business-os] WebRTC replication failed for ${collection}`, error);
+      const serializedError = serializeError(error);
+      console.error(
+        `[business-os] WebRTC replication failed for ${collection}: ${JSON.stringify(serializedError)}`,
+      );
     }
     recordCollection?.(collection, {
       status: 'error',
@@ -1400,7 +1403,15 @@ async function repairDesktopIconsBeforeReplication(collection) {
     for (const document of documents || []) {
       const raw = typeof document?.toJSON === 'function' ? document.toJSON() : document;
       if (!desktopIconNeedsRepair(raw)) continue;
+      await removeDesktopIconAttachments(document);
       await collection.upsert(sanitizeDesktopIconForReplication(raw));
+      const repairedDocument = await collection.findOne(raw.id).exec();
+      const repaired = typeof repairedDocument?.toJSON === 'function'
+        ? repairedDocument.toJSON()
+        : repairedDocument;
+      if (desktopIconNeedsRepair(repaired)) {
+        throw new Error(`Desktop icon ${boundedString(raw.id, 128)} remains unsafe after repair.`);
+      }
     }
   })();
   desktopIconRepairPromises.set(collection, repairPromise);
@@ -1415,6 +1426,8 @@ async function repairDesktopIconsBeforeReplication(collection) {
 function desktopIconNeedsRepair(raw) {
   if (!raw || typeof raw !== 'object') return false;
   if (!isSafeDesktopIconGlyph(raw.glyph)) return true;
+  if (raw._attachments && Object.keys(raw._attachments).length > 0) return true;
+  if (encodedJsonSize(raw) > 64 * 1024) return true;
   return Object.keys(raw).some((key) => !DESKTOP_ICON_SAFE_FIELDS.has(key));
 }
 
@@ -1435,8 +1448,27 @@ function sanitizeDesktopIconForReplication(raw) {
     updated_at_ms: now,
     _deleted: Boolean(raw._deleted),
   };
-  if (typeof raw._rev === 'string' && raw._rev.length <= 256) icon._rev = raw._rev;
   return icon;
+}
+
+async function removeDesktopIconAttachments(document) {
+  const attachments = typeof document?.allAttachments === 'function'
+    ? document.allAttachments()
+    : [];
+  for (const attachment of attachments || []) {
+    await attachment?.remove?.();
+  }
+}
+
+function encodedJsonSize(value) {
+  try {
+    const json = JSON.stringify(value);
+    return typeof TextEncoder === 'function'
+      ? new TextEncoder().encode(json).byteLength
+      : json.length;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
 }
 
 function isSafeDesktopIconGlyph(value) {
@@ -1900,7 +1932,7 @@ function serializeError(error) {
   if (!error) return null;
   const signalingControlPlaneError = classifySignalingControlPlaneError(error);
   if (signalingControlPlaneError) return signalingControlPlaneError;
-  return {
+  const serialized = {
     name: typeof error.name === 'string' ? error.name : 'Error',
     message: String(error.message || error),
     code: error.code || null,
@@ -1908,6 +1940,32 @@ function serializeError(error) {
     severity: error.severity || null,
     retryable: typeof error.retryable === 'boolean' ? error.retryable : null,
   };
+  const details = serializeErrorDetails(error);
+  if (details) serialized.details = details;
+  return serialized;
+}
+
+function serializeErrorDetails(error) {
+  if (!error || typeof error !== 'object') return null;
+  const details = {};
+  for (const key of ['parameters', 'errors', 'error', 'direction', 'collection', 'method', 'reason']) {
+    if (error[key] == null) continue;
+    details[key] = boundedDiagnosticValue(error[key]);
+  }
+  return Object.keys(details).length ? details : null;
+}
+
+function boundedDiagnosticValue(value) {
+  try {
+    const json = JSON.stringify(value, (key, nested) => (
+      isSecretParam(key) ? '[redacted]' : nested
+    ));
+    if (!json) return String(value).slice(0, 4000);
+    if (json.length > 16_000) return `${json.slice(0, 16_000)}…`;
+    return JSON.parse(json);
+  } catch {
+    return String(value).slice(0, 4000);
+  }
 }
 
 function sanitizeReplicationTransportStatus(status) {
