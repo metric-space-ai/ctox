@@ -2,6 +2,19 @@
 
 Use this before claiming a Business OS app is done.
 
+- Every list/selection column follows the Canonical Column Grammar from
+  `design-guide.md`: header (kicker+title left, action icons top-right) →
+  collapsed filter tray (dropdowns, ✓-chips, reset, active-dot) → counted
+  view-switcher band (`Name (n)`, zeros included) → recessed element well
+  under a divider → one-line footer.
+- Every element-listing view (left column AND main view) has the cards ↔
+  compact-list toggle; shards are pure selectors (no inline expansion).
+- Element actions are collected top-right icons (pencil/trash/✓/✗/▶); no
+  text buttons in the content flow; no manual refresh button; no standing
+  status badges; sync notices float as toasts.
+- Module CSS is loaded with the module's own cache-buster and the module
+  version is three-part semver.
+
 - The target directory is correct for runtime or source mode.
 - Three relevant shipped Business OS apps were chosen and inspected.
 - The app is vanilla HTML/CSS/browser ESM with no build step.

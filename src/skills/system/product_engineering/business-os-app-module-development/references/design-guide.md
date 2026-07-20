@@ -168,6 +168,59 @@ asked for.
 - Only show a reveal control when there is something to reveal (e.g. hide the
   inspector toggle when nothing is selected).
 
+### Canonical Column Grammar (binding — learned on Knowledge/Threads, 2026-07)
+
+Every list/selection column follows ONE template, top to bottom. The same
+grammar repeats fractally: what holds for the pane holds for every element
+inside it (header + title left, action icons top-right).
+
+1. **Header row**: kicker (micro caps) + title on the left; action icons
+   (create/import/export …) collected top-right. Nothing else.
+2. **Filter section** — one dense row `[search][view-toggle][filter-icon]`,
+   never wrapping into extra rows. The filter icon expands a collapsed tray
+   (one recessed fill): scope/secondary views as **dropdowns** (never
+   full-width button banks), sort as a **dropdown plus an up/down direction
+   toggle** (more than 3 sort fields, each reversible), content-type chips
+   with an explicit `✓` when active, a reset (`↺`) icon in the dropdown row,
+   and an **accent dot on the filter icon whenever any filter is active**.
+   Scope (User/System/Alle …) is a filter — never a permanently visible row.
+3. **View switcher band**: the 3–4 primary views as equal segmented tabs with
+   **counts in parentheses, zeros included** — `Handeln (3)`, `Skill (1)`,
+   `Runbooks (0)`. A second switcher level uses smaller type, equal segments,
+   ellipsis + full title in the tooltip. Sibling labels drop their common
+   ` · ` prefix so truncation never renders identical labels.
+4. **Element well**: the list sits in a recessed zone under a divider line —
+   toolbar and content never merge into one surface. Shards are flat surface
+   cards (fill, no border); selection = accent fill + a flat 2px `::before`
+   accent bar (no `box-shadow: inset`, forbidden by the kit guard).
+5. **Footer**: one line, `N Einträge · <scope/filter label>`.
+
+Rules that go with it:
+
+- **Where there are shards there is a list view.** Every view that lists
+  elements — the left column AND the main view — offers cards ↔ compact
+  rows via the two view-toggle icons.
+- **A shard is a pure selector**: title + ONE muted meta line
+  (`KICKER · Kind (n) · Kind (n)`). No inline expansion inside selection
+  lists — the content pane's tabs + second-level switcher are the only
+  navigation into a group. Expanding in the list duplicates navigation and
+  breeds dead controls.
+- **Element actions are icons, collected top-right of the element**: pencil,
+  trash, save (`✓`), cancel (`✗`), execute (`▶`). Never text buttons in the
+  content flow. The one big text button is reserved for THE essential action
+  of a form/composer (submit).
+- **Reactive only**: no manual refresh button. Data updates via
+  subscriptions or a bounded poll. If a refresh button feels needed, the
+  data wiring is wrong.
+- **No standing status badges** (`bereit`, `synchronisiert`, error text as a
+  pill). Status is transient (toast) or contextual, never permanent chrome.
+- Sync/maintenance notices float as a toast — they must never displace the
+  app layout.
+- Module CSS must carry the module JS cache-buster
+  (`index.css?v=` from `import.meta.url`); fresh JS over a stale cached
+  sheet produces phantom layout bugs.
+- Module version is always three-part semver (`1.2.3`) in `module.json`.
+
 ## Anti-Patterns
 
 - Landing-page hero instead of the actual app.
@@ -182,3 +235,18 @@ asked for.
   as a business-app UI template.
 - Root CSS palettes, forced dark/light themes, or unreadable status colors
   under a custom brand.
+- Permanent walls of filter chips (10+ always-visible buttons) instead of the
+  collapsed filter tray plus a counted primary-view band.
+- Inline expansion (caret + sublists) inside a selection list — a shard
+  selects; content is navigated in the main view only.
+- A manual refresh/reload button on reactive data.
+- Standing status badges (`bereit`/`synchronisiert`/error pills) in a pane
+  header.
+- Text buttons for element actions (Bearbeiten/Löschen/Freigeben) in the
+  content flow instead of collected top-right icons.
+- Toggles or view switchers placed top-right in the pane header action
+  cluster — the top-right is for element actions; switchers live in their
+  own band or the filter row.
+- A sync/maintenance banner that displaces the layout instead of floating.
+- Count badges as pill chrome costing extra rows — counts are inline text in
+  parentheses, zeros included.
