@@ -6932,6 +6932,24 @@ fn start_prompt_worker(
                                 &job.leased_message_keys,
                             );
                         } else if !job.leased_message_keys.is_empty() {
+                            let approved_completion_hold = matches!(
+                                &review_disposition,
+                                CompletionReviewDisposition::Approved { .. }
+                            )
+                            .then(|| {
+                                let reason = if outcome_witness_error.is_some() {
+                                    review::HoldReason::MissingArtifact
+                                } else {
+                                    review::HoldReason::Technical {
+                                        policy_id: "post-review-terminalization".to_string(),
+                                    }
+                                };
+                                let summary = founder_send_error.clone().unwrap_or_else(|| {
+                                    "Reviewed work could not be committed to its terminal Business OS state."
+                                        .to_string()
+                                });
+                                (reason, summary)
+                            });
                             let terminal_queue_failure = matches!(
                                 &review_disposition,
                                 CompletionReviewDisposition::TerminalQueueFailure { .. }
@@ -6955,51 +6973,64 @@ fn start_prompt_worker(
                                 } else {
                                     "pending"
                                 };
-                            let (ack_result, ack_label) =
-                                if let CompletionReviewDisposition::Hold { reason, summary } =
-                                    &review_disposition
-                                {
-                                    (
+                            let (ack_result, ack_label) = if let Some((reason, summary)) =
+                                &approved_completion_hold
+                            {
+                                (
                                         channels::hold_leased_messages(
                                             &root,
                                             &job.leased_message_keys,
                                             reason,
                                             summary,
                                         ),
-                                        format!("queue lease(s) held ({reason:?})"),
-                                    )
-                                } else if retry_status == "failed" {
-                                    let failure_reason = if app_validation_terminal_failure {
-                                        founder_send_error.as_deref().unwrap_or(
-                                            "Business OS app validation repair attempts exhausted",
-                                        )
-                                    } else {
-                                        match &review_disposition {
-                                            CompletionReviewDisposition::TerminalQueueFailure {
-                                                summary,
-                                            } => summary.as_str(),
-                                            _ => "terminal queue failure",
-                                        }
-                                    };
-                                    (
-                                        channels::ack_leased_messages_with_failure_reason(
-                                            &root,
-                                            &job.leased_message_keys,
-                                            retry_status,
-                                            failure_reason,
+                                        format!(
+                                            "approved queue lease(s) held after terminalization failure ({reason:?})"
                                         ),
-                                        format!("queue lease(s) ({retry_status})"),
+                                    )
+                            } else if let CompletionReviewDisposition::Hold { reason, summary } =
+                                &review_disposition
+                            {
+                                (
+                                    channels::hold_leased_messages(
+                                        &root,
+                                        &job.leased_message_keys,
+                                        reason,
+                                        summary,
+                                    ),
+                                    format!("queue lease(s) held ({reason:?})"),
+                                )
+                            } else if retry_status == "failed" {
+                                let failure_reason = if app_validation_terminal_failure {
+                                    founder_send_error.as_deref().unwrap_or(
+                                        "Business OS app validation repair attempts exhausted",
                                     )
                                 } else {
-                                    (
-                                        channels::ack_leased_messages(
-                                            &root,
-                                            &job.leased_message_keys,
-                                            retry_status,
-                                        ),
-                                        format!("queue lease(s) ({retry_status})"),
-                                    )
+                                    match &review_disposition {
+                                        CompletionReviewDisposition::TerminalQueueFailure {
+                                            summary,
+                                        } => summary.as_str(),
+                                        _ => "terminal queue failure",
+                                    }
                                 };
+                                (
+                                    channels::ack_leased_messages_with_failure_reason(
+                                        &root,
+                                        &job.leased_message_keys,
+                                        retry_status,
+                                        failure_reason,
+                                    ),
+                                    format!("queue lease(s) ({retry_status})"),
+                                )
+                            } else {
+                                (
+                                    channels::ack_leased_messages(
+                                        &root,
+                                        &job.leased_message_keys,
+                                        retry_status,
+                                    ),
+                                    format!("queue lease(s) ({retry_status})"),
+                                )
+                            };
                             record_queue_ack_and_refresh_business_os_projections_locked(
                                 &root,
                                 &mut shared,
