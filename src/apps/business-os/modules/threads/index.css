@@ -13,8 +13,10 @@
    approval cards, the composer, the right-pane form stacking and the mobile
    list/detail switcher. */
 
-/* The frame grid, column widths and resizer tracks come from .ctox-workspace;
-   the module only reserves room for the shell taskbar. */
+/* The frame grid, column widths and resizer tracks come from .ctox-workspace.
+   No taskbar reserve here: the chat dock floats over the DESKTOP, not inside
+   every window — a blanket padding-bottom leaves a dead band in windowed mode.
+   The mobile sheet (container <=600px) keeps its own safe-area padding. */
 .threads-module {
   /* Self-contained kit tokens (mirrors the Knowledge reference app) so the
      module renders correctly even against an older packaged base.css. */
@@ -24,7 +26,6 @@
   --kit-fill: color-mix(in srgb, var(--text) 6%, transparent);
   --kit-fill-strong: color-mix(in srgb, var(--text) 10%, transparent);
   --kit-hover: color-mix(in srgb, var(--text) 5%, transparent);
-  padding-bottom: calc(var(--shell-taskbar-safe-area, 58px) + 12px);
 }
 
 /* Pane row templates: the kit ships auto/1fr; each threads pane declares its
