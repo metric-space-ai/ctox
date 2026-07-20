@@ -114,7 +114,13 @@
    Explicit grid pins — hidden resizers must never shift panes.
    ========================================================================== */
 .coding-agents-module {
-  grid-template-columns: minmax(220px, var(--ctox-left-width, 280px)) 12px minmax(0, 1fr) 12px minmax(260px, var(--ctox-right-width, 380px));
+  /* Chat keeps a hard minimum: side maxes must never starve the center track. */
+  grid-template-columns: minmax(200px, var(--ctox-left-width, 280px)) 12px minmax(300px, 1fr) 12px minmax(220px, var(--ctox-right-width, 380px));
+}
+@container business-app-window (max-width: 860px) {
+  .coding-agents-module { grid-template-columns: minmax(180px, 240px) 12px minmax(0, 1fr); }
+  .coding-agents-right,
+  .coding-agents-module > [data-resizer="right"] { display: none; }
 }
 .coding-agents-left { grid-column: 1; grid-row: 1; grid-template-rows: auto minmax(0, 1fr) auto; }
 .coding-agents-module > [data-resizer="left"] { grid-column: 2; grid-row: 1; }

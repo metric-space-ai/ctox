@@ -118,12 +118,18 @@ export async function mount(ctx) {
   const messages = await loadModuleMessages(import.meta.url, ctx.locale, labels);
   t = (key, fallback) => messages[key] ?? fallback ?? key;
 
-  // Inject stylesheet dynamically
-  const styleLink = document.createElement('link');
-  styleLink.rel = 'stylesheet';
-  styleLink.href = new URL('./index.css', import.meta.url).href;
-  styleLink.id = 'coding-agents-module-styles';
-  document.head.appendChild(styleLink);
+  // Inject stylesheet dynamically; CSS must inherit the JS cache-buster so a
+  // deploy never leaves fresh JS running against a stale cached stylesheet.
+  const cssVersion = String(import.meta.url).split('?v=')[1] || '';
+  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
+  let styleLink = document.getElementById('coding-agents-module-styles');
+  if (!styleLink) {
+    styleLink = document.createElement('link');
+    styleLink.rel = 'stylesheet';
+    styleLink.id = 'coding-agents-module-styles';
+    document.head.appendChild(styleLink);
+  }
+  if (styleLink.getAttribute('href') !== cssHref) styleLink.href = cssHref;
 
   ctx.host.innerHTML = await loadModuleMarkup();
   ctx.left.replaceChildren();
