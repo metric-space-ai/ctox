@@ -3622,6 +3622,28 @@ fn response_admission_rejection(
         return Some("invalid_data_response".to_string());
     }
 
+    let blocked_url = url.contains("validate.perfdrive.com")
+        || url.contains("/captcha")
+        || url.contains("/recaptcha")
+        || url.contains("/challenge");
+    let bot_markers = [
+        "radware bot manager captcha",
+        "confirm you are a human",
+        "verify that you are human",
+        "verify you are human",
+        "captcha-form",
+        "g-recaptcha",
+        "h-captcha",
+        "cf-turnstile",
+        "request blocked",
+    ];
+    let bot_signal = bot_markers
+        .iter()
+        .any(|marker| body.contains(*marker) || extracted.contains(*marker));
+    if blocked_url || (bot_signal && doc.page_text.trim().chars().count() < 1_200) {
+        return Some("bot_or_captcha_wall".to_string());
+    }
+
     let login_url = ["/login", "/signin", "/sign-in", "/authenticate", "/auth/"]
         .iter()
         .any(|marker| url.contains(marker));

@@ -1139,6 +1139,7 @@ fn crossref_item_to_result(item: &Value, rank: usize) -> Option<ScholarlyResult>
         .get("DOI")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
+    let licensed_pdf = crossref_open_access_pdf(item);
     let url = item
         .get("URL")
         .and_then(Value::as_str)
@@ -1157,14 +1158,46 @@ fn crossref_item_to_result(item: &Value, rank: usize) -> Option<ScholarlyResult>
         file_size_label: None,
         isbn: None,
         doi,
-        open_access_pdf: None,
-        open_access_license: None,
+        open_access_pdf: licensed_pdf.as_ref().map(|(url, _)| url.clone()),
+        open_access_license: licensed_pdf.map(|(_, license)| license),
         thumbnail_url: None,
         snippet: crossref_snippet_text(item),
         tags: Vec::new(),
         reference_ids: crossref_reference_ids(item),
         rank,
     })
+}
+
+fn crossref_open_access_pdf(item: &Value) -> Option<(String, String)> {
+    let license = item
+        .get("license")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.get("URL").and_then(Value::as_str))
+        .map(str::trim)
+        .find(|url| {
+            let lower = url.to_ascii_lowercase();
+            lower.contains("creativecommons.org/licenses/")
+                || lower.contains("creativecommons.org/publicdomain/")
+        })?
+        .to_string();
+    let pdf = item
+        .get("link")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|entry| {
+            entry
+                .get("content-type")
+                .and_then(Value::as_str)
+                .is_some_and(|content_type| content_type.eq_ignore_ascii_case("application/pdf"))
+        })
+        .and_then(|entry| entry.get("URL"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|url| !url.is_empty())?;
+    Some((pdf.to_string(), license))
 }
 
 fn openalex_search(root: &Path, request: &ScholarlySearchRequest) -> Result<Vec<ScholarlyResult>> {
@@ -1342,6 +1375,48 @@ pub(crate) fn openalex_work_by_id(root: &Path, work_id: &str) -> Result<Scholarl
     Ok(openalex_item_to_result(&item, detail_url, title, doi, 1))
 }
 
+pub(crate) fn openalex_work_by_doi(root: &Path, raw_doi: &str) -> Result<ScholarlyResult> {
+    let doi = raw_doi
+        .trim()
+        .trim_start_matches("https://doi.org/")
+        .trim_start_matches("http://doi.org/")
+        .trim_start_matches("doi:")
+        .trim();
+    if !doi.to_ascii_lowercase().starts_with("10.") || !doi.contains('/') {
+        bail!("invalid DOI reference");
+    }
+    let base = runtime_config::get(root, "CTOX_OPENALEX_BASE_URL")
+        .unwrap_or_else(|| "https://api.openalex.org".to_string());
+    let identifier = format!("https://doi.org/{doi}");
+    let mut url = format!(
+        "{}/works/{}",
+        base.trim_end_matches('/'),
+        encode_query(&identifier)
+    );
+    if let Some(email) = scholarly_contact_email(root) {
+        url.push_str(&format!("?mailto={}", encode_query(&email)));
+    }
+    let item = fetch_json(root, &url)?;
+    let title = item
+        .get("display_name")
+        .and_then(Value::as_str)
+        .unwrap_or("Untitled")
+        .to_string();
+    let resolved_doi = item
+        .get("doi")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let result = openalex_item_to_result(&item, identifier, title, resolved_doi, 1);
+    if !result.doi.as_deref().is_some_and(|candidate| {
+        candidate
+            .trim_start_matches("https://doi.org/")
+            .eq_ignore_ascii_case(doi)
+    }) {
+        bail!("OpenAlex exact DOI response did not match the requested DOI");
+    }
+    Ok(result)
+}
+
 fn openalex_item_to_result(
     item: &Value,
     detail_url: String,
@@ -1380,7 +1455,7 @@ fn openalex_item_to_result(
         // Prefer the curated free full-text location over the often paywalled
         // primary location.
         open_access_pdf: openalex_pdf_url(item),
-        open_access_license: None,
+        open_access_license: openalex_oa_license(item),
         thumbnail_url: None,
         snippet: item
             .get("abstract_inverted_index")
@@ -1389,6 +1464,21 @@ fn openalex_item_to_result(
         reference_ids: openalex_reference_ids(item),
         rank,
     }
+}
+
+fn openalex_oa_license(item: &Value) -> Option<String> {
+    for key in ["best_oa_location", "primary_location"] {
+        if let Some(license) = item
+            .get(key)
+            .and_then(|location| location.get("license"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(license.to_string());
+        }
+    }
+    None
 }
 
 fn crossref_reference_ids(item: &Value) -> Vec<String> {

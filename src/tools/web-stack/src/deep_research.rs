@@ -17,6 +17,7 @@ use url::Url;
 
 use crate::scholarly_search::crossref_work_by_doi;
 use crate::scholarly_search::execute_scholarly_search;
+use crate::scholarly_search::openalex_work_by_doi;
 use crate::scholarly_search::openalex_work_by_id;
 use crate::scholarly_search::run_ctox_scholarly_search_tool;
 use crate::scholarly_search::ScholarlyResult;
@@ -290,10 +291,17 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             });
                         let actual_full_text_or_data =
                             read_has_actual_full_text_or_data(&source, &read_payload);
-                        source["canonical_url"] = read_payload
-                            .get("canonical_url")
-                            .cloned()
-                            .unwrap_or_else(|| Value::String(url.clone()));
+                        if transport_verified {
+                            source["canonical_url"] = read_payload
+                                .get("canonical_url")
+                                .cloned()
+                                .unwrap_or_else(|| Value::String(url.clone()));
+                        } else {
+                            source["read_response_url"] = read_payload
+                                .get("final_url")
+                                .cloned()
+                                .unwrap_or(Value::Null);
+                        }
                         source["verification_status"] = read_payload
                             .get("verification_status")
                             .cloned()
@@ -307,17 +315,24 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                         if let Some(receipt) = zenodo_archive_receipt(&source, &read_payload) {
                             source["archive_receipt"] = receipt;
                         }
-                        let (evidence_eligible, rejection_reason) = assess_evidence_promotion(
+                        let (evidence_eligible, assessed_rejection_reason) = assess_evidence_promotion(
                             &source,
                             transport_verified,
                             content_extracted,
                         );
+                        let upstream_rejection_reason = read_payload
+                            .get("admission_rejection_reason")
+                            .and_then(Value::as_str);
+                        let rejection_reason = upstream_rejection_reason.or(assessed_rejection_reason);
                         if evidence_eligible {
                             admitted_sources += 1;
                         }
                         source["evidence_eligible"] = Value::Bool(evidence_eligible);
                         if let Some(reason) = rejection_reason {
                             source["evidence_rejection_reason"] = Value::String(reason.to_string());
+                            if reason == "bot_or_captcha_wall" {
+                                source["unblocking_required"] = Value::Bool(true);
+                            }
                         }
                         source["checked_at"] = read_payload
                             .get("checked_at")
@@ -381,6 +396,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             "response_content_kind": read_payload.get("response_content_kind").cloned().unwrap_or(Value::Null),
                             "response_artifact_path": read_payload.get("response_artifact_path").cloned().unwrap_or(Value::Null),
                             "response_archive_manifest": read_payload.get("response_archive_manifest").cloned().unwrap_or(Value::Null),
+                            "admission_rejection_reason": read_payload.get("admission_rejection_reason").cloned().unwrap_or(Value::Null),
                             "source_tier": read_payload.get("source_tier").cloned().unwrap_or(Value::Null),
                             "transport_evidence_eligible": read_payload.get("transport_evidence_eligible").cloned().unwrap_or(Value::Bool(false)),
                             "evidence_eligible": read_payload.get("evidence_eligible").cloned().unwrap_or(Value::Bool(false)),
@@ -443,6 +459,30 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
         })
         .count();
     let failed_page_reads = sources_with_read.saturating_sub(successful_page_reads);
+    let blocked_sources = enriched
+        .iter()
+        .filter(|source| {
+            source
+                .get("unblocking_required")
+                .and_then(Value::as_bool)
+                == Some(true)
+        })
+        .map(|source| {
+            json!({
+                "title": source.get("title").cloned().unwrap_or(Value::Null),
+                "canonical_url": source.get("url").cloned().unwrap_or(Value::Null),
+                "blocked_response_url": source.get("read_response_url").cloned().unwrap_or(Value::Null),
+                "reason": source.get("evidence_rejection_reason").cloned().unwrap_or(Value::Null),
+                "doi": source
+                    .get("scholarly_metadata")
+                    .and_then(|metadata| metadata.get("doi"))
+                    .cloned()
+                    .or_else(|| source.get("doi").cloned())
+                    .unwrap_or(Value::Null),
+                "next_action": "Use browser/scrape or resolve an alternate lawful repository/full-text location; do not retry the same blocked URL unchanged."
+            })
+        })
+        .collect::<Vec<_>>();
     let verified_sources = enriched
         .iter()
         .filter(|source| source.get("evidence_eligible").and_then(Value::as_bool) == Some(true))
@@ -519,6 +559,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                 + enriched.iter().take(24).count(),
         },
         "data_links": data_links,
+        "blocked_sources": blocked_sources,
         "figure_candidates": figure_candidates,
         "source_candidates": enriched,
         "sources": verified_sources,
@@ -2691,7 +2732,23 @@ fn resolve_scholarly_reference(root: &Path, reference_id: &str) -> Result<Schola
     if !doi.to_ascii_lowercase().starts_with("10.") || !doi.contains('/') {
         anyhow::bail!("unsupported scholarly reference id");
     }
-    crossref_work_by_doi(root, doi, true)
+    let mut result = crossref_work_by_doi(root, doi, true)?;
+    if let Ok(openalex) = openalex_work_by_doi(root, doi) {
+        if result.open_access_pdf.is_none() {
+            result.open_access_pdf = openalex.open_access_pdf;
+            result.open_access_license = openalex.open_access_license;
+        }
+        result
+            .reference_ids
+            .extend(openalex.reference_ids.into_iter());
+        result.reference_ids.sort();
+        result.reference_ids.dedup();
+        if result.snippet.is_none() {
+            result.snippet = openalex.snippet;
+        }
+        result.provider = "crossref+openalex".to_string();
+    }
+    Ok(result)
 }
 
 fn follow_scholarly_reference_chain(
