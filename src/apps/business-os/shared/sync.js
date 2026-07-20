@@ -1401,8 +1401,15 @@ async function repairDesktopIconsBeforeReplication(collection) {
     for (const document of documents || []) {
       const raw = typeof document?.toJSON === 'function' ? document.toJSON() : document;
       if (!desktopIconNeedsRepair(raw)) continue;
+      const sanitized = sanitizeDesktopIconForReplication(raw);
       await removeDesktopIconAttachments(document);
-      await collection.upsert(sanitizeDesktopIconForReplication(raw));
+      // The app-local storage upsert deliberately field-merges documents.
+      // Remove the corrupted cache row first so unknown legacy fields cannot
+      // survive the repair and permanently block WebRTC replication.
+      if (typeof collection?.storageCollection?.hardDeleteByIds === 'function') {
+        await collection.storageCollection.hardDeleteByIds([raw.id]);
+      }
+      await collection.upsert(sanitized);
       const repairedDocument = await collection.findOne(raw.id).exec();
       const repaired = typeof repairedDocument?.toJSON === 'function'
         ? repairedDocument.toJSON()

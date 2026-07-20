@@ -70,7 +70,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260720-serialized-catchup-v151';
+const APP_BUILD = '20260720-desktop-icon-repair-v152';
 
 ensureShellStylesheets();
 
