@@ -471,3 +471,21 @@
   color: var(--accent);
   background: var(--accent-soft);
 }
+
+/* Right pane: ONE frame (the pane). The stacked action forms are flat
+   sections split by hairlines — kicker-style headings, no card-in-pane
+   frames (shard grammar rule 4). */
+.threads-right .ctox-card.threads-panel {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  border-bottom: 1px solid var(--hairline, var(--line));
+}
+.threads-right .ctox-card.threads-panel:last-child { border-bottom: 0; }
+.threads-right .ctox-card.threads-panel > header h3 {
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
