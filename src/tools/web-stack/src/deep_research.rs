@@ -114,14 +114,6 @@ impl DeepResearchDepth {
         }
     }
 
-    fn read_budget(self) -> usize {
-        match self {
-            Self::Quick => 8,
-            Self::Standard => 80,
-            Self::Exhaustive => 260,
-        }
-    }
-
     fn database_query_budget(self) -> usize {
         match self {
             Self::Quick => 2,
@@ -315,15 +307,17 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                         if let Some(receipt) = zenodo_archive_receipt(&source, &read_payload) {
                             source["archive_receipt"] = receipt;
                         }
-                        let (evidence_eligible, assessed_rejection_reason) = assess_evidence_promotion(
-                            &source,
-                            transport_verified,
-                            content_extracted,
-                        );
+                        let (evidence_eligible, assessed_rejection_reason) =
+                            assess_evidence_promotion(
+                                &source,
+                                transport_verified,
+                                content_extracted,
+                            );
                         let upstream_rejection_reason = read_payload
                             .get("admission_rejection_reason")
                             .and_then(Value::as_str);
-                        let rejection_reason = upstream_rejection_reason.or(assessed_rejection_reason);
+                        let rejection_reason =
+                            upstream_rejection_reason.or(assessed_rejection_reason);
                         if evidence_eligible {
                             admitted_sources += 1;
                         }
@@ -680,7 +674,15 @@ fn build_systematic_coverage(
 }
 
 fn research_read_budget(depth: DeepResearchDepth, max_sources: usize) -> usize {
-    depth.read_budget().max(max_sources).min(300)
+    let round_cap = match depth {
+        DeepResearchDepth::Quick => 16,
+        DeepResearchDepth::Standard => 32,
+        DeepResearchDepth::Exhaustive => 64,
+    };
+    max_sources
+        .saturating_mul(2)
+        .min(round_cap.max(max_sources))
+        .min(300)
 }
 
 fn research_candidate_pool_limit(depth: DeepResearchDepth, max_sources: usize) -> usize {
@@ -4603,9 +4605,9 @@ mod tests {
         );
         assert_eq!(
             research_candidate_pool_limit(DeepResearchDepth::Standard, 8),
-            80
+            32
         );
-        assert_eq!(research_read_budget(DeepResearchDepth::Standard, 8), 80);
+        assert_eq!(research_read_budget(DeepResearchDepth::Standard, 8), 16);
     }
 
     #[test]

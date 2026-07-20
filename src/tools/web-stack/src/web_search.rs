@@ -7910,7 +7910,7 @@ fn build_agent_with_timeout(config: &SearchConfig, timeout: Duration) -> Result<
 fn response_timeout(config: &SearchConfig, url: &str) -> Duration {
     let configured = Duration::from_millis(config.timeout_ms);
     if is_data_url_suffix(url) {
-        configured.max(Duration::from_secs(600))
+        configured.max(Duration::from_secs(180))
     } else {
         configured
     }
@@ -12244,7 +12244,7 @@ mod tests {
                 &config,
                 "https://zenodo.org/api/records/20111572/files/Propeller_Database.zip/content"
             ),
-            Duration::from_secs(600)
+            Duration::from_secs(180)
         );
         assert_eq!(
             response_timeout(&config, "https://example.org/article"),

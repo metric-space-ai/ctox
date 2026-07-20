@@ -245,20 +245,31 @@ fn auto_scholarly_search(
     root: &Path,
     request: &ScholarlySearchRequest,
 ) -> Result<ScholarlySearchResponse> {
-    let providers = [
-        (
-            ScholarlySearchProvider::Crossref,
-            crossref_search(root, request),
-        ),
-        (
-            ScholarlySearchProvider::OpenAlex,
-            openalex_search(root, request),
-        ),
-        (
-            ScholarlySearchProvider::SemanticScholar,
-            semantic_scholar_search(root, request),
-        ),
-    ];
+    let providers = std::thread::scope(|scope| {
+        let crossref = scope.spawn(|| crossref_search(root, request));
+        let openalex = scope.spawn(|| openalex_search(root, request));
+        let semantic_scholar = scope.spawn(|| semantic_scholar_search(root, request));
+        [
+            (
+                ScholarlySearchProvider::Crossref,
+                crossref
+                    .join()
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!("Crossref worker panicked"))),
+            ),
+            (
+                ScholarlySearchProvider::OpenAlex,
+                openalex
+                    .join()
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!("OpenAlex worker panicked"))),
+            ),
+            (
+                ScholarlySearchProvider::SemanticScholar,
+                semantic_scholar
+                    .join()
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!("Semantic Scholar worker panicked"))),
+            ),
+        ]
+    });
     let mut successful = Vec::new();
     let mut failures = Vec::new();
     for (provider, result) in providers {
@@ -900,23 +911,37 @@ fn augment_results_with_open_access_pdfs(root: &Path, results: &mut [ScholarlyRe
         .unwrap_or_else(|| {
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36".to_string()
         });
-    let agent = ureq::AgentBuilder::new()
-        .user_agent(&user_agent)
-        .timeout(Duration::from_millis(timeout_ms))
-        .build();
     let unpaywall_base = runtime_config::get(root, "CTOX_UNPAYWALL_BASE_URL")
         .unwrap_or_else(|| UNPAYWALL_DEFAULT_BASE_URL.to_string());
-    for hit in results.iter_mut() {
-        let Some(doi) = hit.doi.as_deref() else {
-            continue;
-        };
-        if let Ok(Some(resolved)) =
-            resolve_unpaywall_oa_pdf(&agent, &unpaywall_base, &contact_email, doi)
-        {
-            hit.open_access_pdf = Some(resolved.url);
-            hit.open_access_license = resolved.license;
-        }
+    if results.is_empty() {
+        return;
     }
+    let worker_count = results.len().min(4);
+    let chunk_size = results.len().div_ceil(worker_count);
+    std::thread::scope(|scope| {
+        for chunk in results.chunks_mut(chunk_size) {
+            let contact_email = &contact_email;
+            let unpaywall_base = &unpaywall_base;
+            let user_agent = &user_agent;
+            scope.spawn(move || {
+                let agent = ureq::AgentBuilder::new()
+                    .user_agent(user_agent)
+                    .timeout(Duration::from_millis(timeout_ms))
+                    .build();
+                for hit in chunk {
+                    let Some(doi) = hit.doi.as_deref() else {
+                        continue;
+                    };
+                    if let Ok(Some(resolved)) =
+                        resolve_unpaywall_oa_pdf(&agent, unpaywall_base, contact_email, doi)
+                    {
+                        hit.open_access_pdf = Some(resolved.url);
+                        hit.open_access_license = resolved.license;
+                    }
+                }
+            });
+        }
+    });
 }
 
 #[derive(Debug, Clone)]
