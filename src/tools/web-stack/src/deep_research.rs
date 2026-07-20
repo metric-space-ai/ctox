@@ -1654,11 +1654,29 @@ fn is_non_scoreable_source(source: &Value) -> bool {
         .unwrap_or_default()
         .to_ascii_lowercase();
     source.get("metadata_only").and_then(Value::as_bool) == Some(true)
+        || is_discovery_only_source(source)
         || source_type.contains("metadata")
         || source_type == "aggregator"
         || source_tier == "metadata"
         || source_tier == "aggregator"
         || is_likely_reference_collection(source)
+}
+
+fn is_discovery_only_source(source: &Value) -> bool {
+    let url = source
+        .get("canonical_url")
+        .and_then(Value::as_str)
+        .or_else(|| source.get("url").and_then(Value::as_str))
+        .unwrap_or_default();
+    let title = source
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let snippet = source
+        .get("snippet")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    is_low_value_generic_source(url, title, snippet)
 }
 
 fn assess_evidence_promotion(
@@ -1674,6 +1692,9 @@ fn assess_evidence_promotion(
     }
     if is_zenodo_record_metadata_source(source) {
         return (false, Some("archive_metadata_requires_original_file_parse"));
+    }
+    if is_discovery_only_source(source) {
+        return (false, Some("discovery_only_source"));
     }
     let metadata_source_with_actual_file = source
         .get("actual_full_text_or_data")
@@ -2062,7 +2083,11 @@ fn is_low_value_generic_source(url: &str, _title: &str, _snippet: &str) -> bool 
         "wikipedia.org",
         "wiktionary.org",
         "researchgate.net",
-        "scholar.google.com",
+        "scholar.google.",
+        "academia.edu",
+        "semanticscholar.org",
+        "openalex.org",
+        "crossref.org",
     ]
     .iter()
     .any(|needle| domain.contains(needle));
@@ -3411,6 +3436,10 @@ fn fetch_text(url: &str) -> Result<String> {
 
 fn classify_source(url: &str, scholarly: bool, metadata_only: bool) -> &'static str {
     let domain = domain_for_url(url);
+    let scholarly_document = scholarly
+        && Url::parse(url)
+            .ok()
+            .is_some_and(|parsed| parsed.path().to_ascii_lowercase().ends_with(".pdf"));
     if is_data_file_url(url) {
         "data_file"
     } else if is_zenodo_record_metadata_url(url) {
@@ -3435,7 +3464,7 @@ fn classify_source(url: &str, scholarly: bool, metadata_only: bool) -> &'static 
         || domain.contains("academia.edu")
     {
         "aggregator"
-    } else if scholarly
+    } else if scholarly_document
         || domain.contains("sciencedirect.com")
         || domain.contains("springer.com")
         || domain.contains("nature.com")
