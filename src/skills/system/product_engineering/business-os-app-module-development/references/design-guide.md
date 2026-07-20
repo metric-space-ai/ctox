@@ -239,6 +239,13 @@ Rules that go with it:
   resizer 2, center 3, resizer 4, right 5). The kit hides column resizers on
   narrow windows; with auto-flow placement the center pane slides onto the
   empty 12px resizer track and the main view visually disappears.
+- **The primary column keeps a hard minimum; side panes yield.** Fixed/maxed
+  side tracks (`minmax(220px, 280px) … minmax(260px, 380px)`) grow to their
+  max BEFORE a `minmax(0, 1fr)` center gets anything — in a narrow window the
+  main view collapses to 0px while both side panes render. Give the primary
+  track a real minimum (`minmax(300px, 1fr)`) and add a
+  `@container business-app-window (max-width: …)` rule that hides the least
+  important pane (e.g. an artifact/detail pane) so the primary surface wins.
 - Module CSS must carry the module JS cache-buster
   (`index.css?v=` from `import.meta.url`); fresh JS over a stale cached
   sheet produces phantom layout bugs.
