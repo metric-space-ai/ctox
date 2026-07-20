@@ -11892,3 +11892,73 @@ async function loadGlobalCtoxContextUsers() {
     return sessionUser;
   }
 }
+
+
+// ============================================================================
+// Human-in-the-loop: decisions surface AT the object. When any app is opened
+// on a record (#<module>?record_id=<id> or ?record=<id>) that has a PENDING
+// CTOX approval, the shell shows a decision banner right there — approve,
+// reject, or jump to the thread. Threads stays the inbox; the object app is
+// an equally valid place to decide.
+async function maybeShowRecordApprovalBanner() {
+  try {
+    document.querySelectorAll('[data-record-approval-banner]').forEach((node) => node.remove());
+    const query = String(window.location.hash || '').split('?')[1] || '';
+    const params = new URLSearchParams(query);
+    const recordId = params.get('record_id') || params.get('record') || '';
+    if (!recordId || !state.db?.collection) return;
+    const collection = await state.db.collection('ctox_task_approval_requests');
+    if (!collection?.find) return;
+    const docs = await collection.find({ selector: { status: 'pending' } }).exec();
+    const pending = (docs || []).map((doc) => (doc?.toJSON ? doc.toJSON() : doc)).find((doc) => (
+      doc && !doc.is_deleted
+      && (doc.source_record_id === recordId || doc.target_record_id === recordId)
+    ));
+    if (!pending) return;
+    const host = document.querySelector('[data-module-host]') || document.body;
+    const banner = document.createElement('section');
+    banner.className = 'ctox-record-approval-banner';
+    banner.dataset.recordApprovalBanner = pending.id || '';
+    banner.setAttribute('role', 'region');
+    banner.setAttribute('aria-label', 'Offene CTOX-Freigabe zu diesem Objekt');
+    banner.innerHTML = `
+      <div class="ctox-record-approval-copy">
+        <strong>Offene CTOX-Freigabe</strong>
+        <span>${escapeHtml(pending.prompt || pending.instruction || pending.source_label || pending.id || '')}</span>
+      </div>
+      <div class="ctox-record-approval-actions">
+        <button type="button" class="ctox-pane-icon is-confirm" data-record-approval-approve aria-label="Freigeben" title="Freigeben"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l5 5L19 7"/></svg></button>
+        <button type="button" class="ctox-pane-icon is-danger" data-record-approval-reject aria-label="Ablehnen" title="Ablehnen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        ${pending.thread_id ? `<button type="button" class="ctox-pane-icon" data-record-approval-thread aria-label="Im Thread ansehen" title="Im Thread ansehen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16v10H8l-4 4V6Z"/></svg></button>` : ''}
+      </div>
+    `;
+    const decide = async (decision) => {
+      const note = decision === 'reject' ? (window.prompt('Begründung oder Änderungswunsch:') || '') : '';
+      try {
+        await state.commandBus?.dispatch?.({
+          command_type: decision === 'approve' ? 'threads.ctox_approval.approve' : 'threads.ctox_approval.reject',
+          module: 'threads',
+          record_id: pending.id,
+          payload: {
+            approval_request_id: pending.id,
+            expected_updated_at_ms: Number(pending.updated_at_ms || 0),
+            decision_note: note,
+          },
+        });
+      } catch (error) {
+        console.warn('[record-approval] decision dispatch failed', error);
+      }
+      banner.remove();
+    };
+    banner.querySelector('[data-record-approval-approve]')?.addEventListener('click', () => { decide('approve'); });
+    banner.querySelector('[data-record-approval-reject]')?.addEventListener('click', () => { decide('reject'); });
+    banner.querySelector('[data-record-approval-thread]')?.addEventListener('click', () => {
+      window.location.hash = `#threads?thread_id=${encodeURIComponent(pending.thread_id)}`;
+    });
+    host.append(banner);
+  } catch (error) {
+    console.warn('[record-approval] banner check failed', error);
+  }
+}
+window.addEventListener('hashchange', () => { maybeShowRecordApprovalBanner(); });
+setTimeout(() => { maybeShowRecordApprovalBanner(); }, 4000);
