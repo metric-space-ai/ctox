@@ -1618,7 +1618,17 @@ fn score_read_evidence_relevance(read: &Value, query: &str) -> Option<i64> {
         .iter()
         .filter(|term| body.contains(term.as_str()))
         .count();
-    Some((matched_terms as i64) * 16)
+    Some(normalized_relevance_score(
+        matched_terms,
+        topical_terms.len(),
+    ))
+}
+
+fn normalized_relevance_score(matched_terms: usize, total_terms: usize) -> i64 {
+    if total_terms == 0 {
+        return 0;
+    }
+    i64::try_from((matched_terms * 10 + total_terms / 2) / total_terms).unwrap_or(10)
 }
 
 fn read_body_evidence_text(read: &Value) -> String {

@@ -997,7 +997,10 @@ fn render_direct_web_read_payload(
             .as_ref()
             .map(|receipt| receipt.byte_count),
         "admission_rejection_reason": evidence_rejection_reason,
-        "response_body": doc.response_body,
+        // Immutable bytes stay behind the artifact and workspace receipts.
+        // Serializing a PDF into a tool response expands it into a huge JSON
+        // array and can exhaust the model context before synthesis.
+        "response_body": Value::Null,
         "response_artifact_path": doc.response_artifact_path,
         "response_archive_manifest": doc.response_archive_manifest,
         "workspace_evidence": workspace_evidence,
@@ -1014,10 +1017,9 @@ fn render_direct_web_read_payload(
             && evidence_content_kind(&doc) == "page_content",
         "context": render_direct_read_context(&read_query, &doc),
         "extracted_fields": extracted,
-        // Raw HTML body for downstream parsers that need DOM access
-        // (e.g. scrape-target scripts revising selectors). PDFs and
-        // cache-loaded pages from older CTOX versions return null.
-        "raw_html": doc.raw_html,
+        // DOM consumers can use the immutable HTML artifact or the dedicated
+        // scrape/browser tools without putting the full body into model input.
+        "raw_html": Value::Null,
     })
 }
 
@@ -1182,7 +1184,14 @@ fn score_evidence_doc_relevance(doc: &EvidenceDoc, query: &str) -> Option<i64> {
         .iter()
         .filter(|term| body.contains(term.as_str()))
         .count();
-    Some((matched_terms as i64) * 16)
+    Some(normalized_relevance_score(matched_terms, terms.len()))
+}
+
+fn normalized_relevance_score(matched_terms: usize, total_terms: usize) -> i64 {
+    if total_terms == 0 {
+        return 0;
+    }
+    i64::try_from((matched_terms * 10 + total_terms / 2) / total_terms).unwrap_or(10)
 }
 
 fn evidence_doc_is_data_file(doc: &EvidenceDoc) -> bool {
