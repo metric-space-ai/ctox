@@ -72,6 +72,10 @@ export async function mount(ctx) {
   updateConnectivity();
   state.cleanup.push(wireRealtime());
   ensureRoster().then(renderRosterSelects).catch(() => {});
+  // Whose inbox is this? Anchor the identity in the pane header.
+  const kicker = els.root?.querySelector('[data-label="hubKicker"]');
+  const displayName = state.ctx?.session?.user?.display_name || currentUserId() || '';
+  if (kicker && displayName) kicker.textContent = `Inbox · ${displayName}`;
   // Presence (advisory UX): publish which thread this user has open and show
   // who else is looking at the same thread. Cleared on unmount.
   state.presenceRemote = [];
@@ -519,7 +523,7 @@ const FILTER_LABELS = {
   inbox: 'Jetzt handeln', waiting: 'Wartet auf mich', running: 'AI arbeitet',
   delegated: 'Wartet auf andere', snoozed: 'Später', team: 'Team Queue',
   mentions: 'Erwähnungen', approvals: 'Freigaben', failed: 'Blockiert',
-  archived: 'Erledigt / Archiv', all: 'Alle',
+  archived: 'Erledigt / Archiv', all: 'Alle', system: 'CTOX-Tasks (System)',
 };
 
 function setThreadFilter(filter) {
@@ -548,7 +552,8 @@ function updateFilterControls(visibleCount) {
   root.querySelector('[data-toggle-filters]')?.classList.toggle('has-active-filters', !PRIMARY_FILTERS.includes(state.filter));
   const footer = root.querySelector('[data-threads-footer-count]');
   if (footer) {
-    footer.textContent = `${visibleCount} ${visibleCount === 1 ? 'Thread' : 'Threads'} · ${FILTER_LABELS[state.filter] || state.filter}`;
+    const who = state.ctx?.session?.user?.display_name || currentUserId() || '';
+    footer.textContent = `${visibleCount} ${visibleCount === 1 ? 'Thread' : 'Threads'} · ${FILTER_LABELS[state.filter] || state.filter}${who ? ` · als ${who}` : ''}`;
   }
 }
 
@@ -587,7 +592,11 @@ function renderBriefing() {
 // One predicate for filtering AND for the counts on the switcher band — the
 // numbers a tab shows must be computed by the exact rule the tab applies.
 function threadMatchesFilter(thread, filter, me, isAdmin) {
-  if (!isAdmin && me && !threadRelevantToUser(thread, me)) return false;
+  // Personal relevance applies to EVERYONE including admins — an admin wants
+  // their inbox, not a firehose. The wide views are 'all', 'team', 'system'.
+  const wideView = ['all', 'team', 'system'].includes(filter);
+  if (!wideView && me && !threadRelevantToUser(thread, me)) return false;
+  if (filter === 'system') return thread.kind === 'ctox_task';
   if (filter === 'archived') return thread.status === 'archived';
   if (thread.status === 'archived') return false;
   if (filter === 'snoozed') return isSnoozed(thread);
@@ -603,10 +612,20 @@ function threadMatchesFilter(thread, filter, me, isAdmin) {
   if (filter === 'failed') return threadHasFailedCtox(thread.id) || thread.status === 'blocked';
   if (filter === 'watching') return arrayField(thread.watcher_user_ids).includes(me);
   if (filter === 'inbox') {
-    return !me
-      || unreadNotificationsForThread(thread.id, me).length > 0
-      || arrayField(thread.participant_ids).includes(me)
-      || approvalsForThread(thread.id).some((item) => item.reviewer_user_id === me && item.status === 'pending');
+    if (!me) return true;
+    // The human inbox: only what concretely needs THIS user, now.
+    // Only MY reviews. Someone else's pending approval is their inbox item —
+    // admins see the whole review queue under 'approvals' or 'team'.
+    if (approvalsForThread(thread.id).some((item) => item.status === 'pending' && item.reviewer_user_id === me)) return true;
+    if (threadMentionsUser(thread.id, me)) return true;
+    if (thread.kind === 'ctox_task') {
+      // Machine work surfaces here only when it ESCALATES to a human. A
+      // "work finished" notification is an AI result, not a call to act.
+      return thread.status === 'blocked' || thread.status === 'escalated' || threadHasFailedCtox(thread.id);
+    }
+    return unreadNotificationsForThread(thread.id, me).length > 0
+      || (arrayField([thread.assigned_user_id]).includes(me)
+        && ['open', 'blocked', 'escalated'].includes(thread.status || 'open'));
   }
   return true;
 }

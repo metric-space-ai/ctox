@@ -223,6 +223,12 @@ Rules that go with it:
   preview); humans pick people from the roster (`business_users`) — never
   type user ids; @-mentions in the composer become `target_user_ids` and
   notify; delegate and ask-back are first-class actions next to approve.
+- **Personal-inbox rule**: an inbox view shows only what needs THIS user now
+  — my pending reviews, my mentions, my unread human threads, work assigned
+  to me. Admins are not a firehose: someone else's review queue lives under
+  team/approvals views. Machine work (kind `ctox_task`) enters the inbox only
+  when it escalates (blocked/failed) — a "finished" notification is a result,
+  not a call to act. The pane header names whose inbox it is.
 - **Pin workspace panes to explicit grid tracks** (`.app-left { grid-column: 1 }`,
   resizer 2, center 3, resizer 4, right 5). The kit hides column resizers on
   narrow windows; with auto-flow placement the center pane slides onto the
