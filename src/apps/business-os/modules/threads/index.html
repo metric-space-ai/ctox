@@ -79,6 +79,9 @@
             <button type="button" class="ctox-pane-icon" data-center-view="cards" aria-pressed="true" aria-label="Karten-Ansicht" title="Karten-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
             <button type="button" class="ctox-pane-icon" data-center-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
           </div>
+          <button type="button" class="ctox-pane-icon" data-thread-delegate title="An Teammitglied übergeben" aria-label="An Teammitglied übergeben">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM3.5 19.5a5.5 5.5 0 0 1 11 0"/><path d="M16 8h5M18.5 5.5 21 8l-2.5 2.5"/></svg>
+          </button>
           <button type="button" class="ctox-pane-icon" data-thread-watch title="Watch" aria-label="Watch">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6ZM12 9.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z"/></svg>
           </button>
@@ -96,6 +99,7 @@
     </header>
     <div class="threads-timeline" data-thread-timeline></div>
     <form class="threads-composer" data-message-form>
+      <div class="threads-mention-popup" data-mention-popup hidden></div>
       <textarea class="ctox-textarea" data-message-body rows="3" placeholder="Antwort oder Notiz in diesen Thread schreiben"></textarea>
       <button type="submit" class="ctox-button is-primary">Senden</button>
     </form>
@@ -130,7 +134,7 @@
         <header><h3>Übergabe</h3></header>
         <div class="ctox-card-body">
           <form data-handoff-form class="threads-form">
-            <label><span class="ctox-field-label">An User</span><input class="ctox-input" data-handoff-target required></label>
+            <label><span class="ctox-field-label">An</span><select class="ctox-select" data-handoff-target data-roster-select required></select></label>
             <label><span class="ctox-field-label">Erwartung</span><textarea class="ctox-textarea" data-handoff-body rows="3" required></textarea></label>
             <label><span class="ctox-field-label">Frist</span><input class="ctox-input" type="datetime-local" data-handoff-due></label>
             <label><span class="ctox-field-label">Rückgabe wenn</span><input class="ctox-input" data-handoff-return-reason placeholder="z. B. Evidenz fehlt"></label>
@@ -155,7 +159,7 @@
           <form data-note-form class="threads-form">
             <label>
               <span class="ctox-field-label">An User</span>
-              <input class="ctox-input" type="text" data-note-target placeholder="user-id oder mehrere mit Komma">
+              <select class="ctox-select" data-note-target data-roster-select></select>
             </label>
             <label>
               <span class="ctox-field-label">Notiz</span>
@@ -172,7 +176,7 @@
           <form data-approval-form class="threads-form">
             <label>
               <span class="ctox-field-label">Reviewer</span>
-              <input class="ctox-input" type="text" data-approval-reviewer placeholder="erfahrener-user-id">
+              <select class="ctox-select" data-approval-reviewer data-roster-select></select>
             </label>
             <label>
               <span class="ctox-field-label">Prompt</span>

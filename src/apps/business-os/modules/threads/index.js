@@ -71,6 +71,7 @@ export async function mount(ctx) {
   restoreDraft();
   updateConnectivity();
   state.cleanup.push(wireRealtime());
+  ensureRoster().then(renderRosterSelects).catch(() => {});
   // Presence (advisory UX): publish which thread this user has open and show
   // who else is looking at the same thread. Cleared on unmount.
   state.presenceRemote = [];
@@ -288,6 +289,11 @@ function wireUi() {
       navigateDeepLink(deepLink.getAttribute('data-thread-deep-link') || '');
       return;
     }
+    const question = target?.closest?.('[data-question-approval]');
+    if (question) {
+      askApprovalQuestion(question.getAttribute('data-question-approval') || '').catch(showError);
+      return;
+    }
     const approve = target?.closest?.('[data-approve-approval]');
     const reject = target?.closest?.('[data-reject-approval]');
     const edit = target?.closest?.('[data-edit-approval]');
@@ -302,6 +308,16 @@ function wireUi() {
   els.source?.addEventListener('click', () => {
     navigateDeepLink(els.source.dataset.threadDeepLink || '');
   });
+  // Delegate is a thread action, not a buried form: open the action pane and
+  // put the cursor into the handoff target picker.
+  els.root?.querySelector('[data-thread-delegate]')?.addEventListener('click', () => {
+    els.root.classList.remove('is-actions-hidden');
+    els.toggleActions?.setAttribute('aria-pressed', 'true');
+    const target = els.root.querySelector('[data-handoff-target]');
+    target?.focus();
+    target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  });
+  wireMentionPopup();
   els.watch?.addEventListener('click', () => toggleWatch().catch(showError));
   els.snooze?.addEventListener('click', () => snoozeSelectedThread().catch(showError));
   els.archive?.addEventListener('click', () => archiveSelectedThread().catch(showError));
@@ -632,27 +648,88 @@ function syncSelection() {
   }
 }
 
+// Inbox-shard anatomy: one glance answers WHAT (title), WHY ME (kind + due),
+// HOW URGENT (unread dot, relative time), FROM WHOM (sender initial, foreign
+// preview). Three lines, anchored left (dot/avatar) and right (time).
+function relativeTime(ms) {
+  const t = Number(ms || 0);
+  if (!t) return '';
+  const diff = Date.now() - t;
+  if (diff < 60000) return 'jetzt';
+  if (diff < 3600000) return `vor ${Math.round(diff / 60000)} min`;
+  if (diff < 86400000) return `vor ${Math.round(diff / 3600000)} h`;
+  if (diff < 7 * 86400000) return `vor ${Math.round(diff / 86400000)} d`;
+  return formatTime(t);
+}
+
+// The accent line says why this needs ME — deduplicated against the title,
+// never raw system vocabulary.
+function whyMeLine(thread, pendingApprovals) {
+  const parts = [];
+  if (pendingApprovals > 0) parts.push('Freigabe nötig');
+  else if (thread.status === 'blocked') parts.push('Blockiert');
+  else if (threadHasFailedCtox(thread.id)) parts.push('Fehlgeschlagen');
+  else if (threadHasRunningCtox(thread.id)) parts.push('AI arbeitet');
+  else if (!thread.assigned_user_id) parts.push('Unzugeteilt');
+  const due = Number(thread.due_at_ms || 0);
+  if (due) {
+    const days = Math.ceil((due - Date.now()) / 86400000);
+    if (days < 0) parts.push('Frist überschritten');
+    else if (days === 0) parts.push('Frist heute');
+    else if (days <= 7) parts.push(`Frist ${new Date(due).toLocaleDateString('de-DE', { weekday: 'short' })}`);
+  }
+  return parts.join(' · ');
+}
+
+// The preview must inform: the latest message from someone OTHER than me,
+// prefixed with its sender — my own reply tells me nothing.
+function foreignPreview(thread) {
+  const me = currentUserId();
+  const messages = messagesForThread(thread.id);
+  const foreign = [...messages].reverse().find((item) => (item.author_user_id || item.actor_id) !== me);
+  const last = foreign || messages[messages.length - 1];
+  if (!last?.body) return { sender: '', text: thread.next_step || thread.source_label || '' };
+  const sender = last.author_display_name || last.author_user_id || (last.actor_type === 'ai' ? 'CTOX' : '');
+  return { sender, text: last.body };
+}
+
+function threadSenderInitial(preview) {
+  const name = String(preview.sender || '').trim();
+  if (!name) return '·';
+  if (name.toUpperCase() === 'CTOX') return '⌬';
+  return name.slice(0, 1).toUpperCase();
+}
+
 function renderList(threads) {
   if (!els.list) return;
   if (!threads.length) {
     els.list.innerHTML = `<div class="ctox-empty">${escapeHtml(state.t('noThreads', 'Keine relevanten Threads vorhanden.'))}</div>`;
     return;
   }
+  const me = currentUserId();
   els.list.innerHTML = threads.map((thread) => {
-    const messages = messagesForThread(thread.id);
-    const last = messages[messages.length - 1];
     const pending = approvalsForThread(thread.id).filter((item) => item.status === 'pending').length;
-    const reasons = attentionReasons(thread);
+    const unread = unreadNotificationsForThread(thread.id, me).length;
+    const why = whyMeLine(thread, pending);
+    const preview = foreignPreview(thread);
     return `
-      <button type="button" class="ctox-list-item threads-list-item ${thread.id === state.selectedId ? 'is-selected' : ''}"
+      <button type="button" class="ctox-list-item threads-list-item ${thread.id === state.selectedId ? 'is-selected' : ''} ${unread ? 'is-unread' : ''}"
         data-thread-id="${escapeAttr(thread.id)}"
         data-record-id="${escapeAttr(thread.source_record_id || thread.id)}"
         data-record-type="thread"
         data-title="${escapeAttr(thread.title || '')}">
-        <span class="threads-list-title">${escapeHtml(thread.title || thread.id)}</span>
-        <span class="threads-attention" aria-label="Priorität ${attentionScore(thread)}">${reasons.slice(0, 2).map(escapeHtml).join(' · ')}</span>
-        <span class="threads-list-meta">${escapeHtml(thread.source_module || 'threads')} · ${escapeHtml(formatTime(thread.last_message_at_ms || thread.updated_at_ms))}${pending ? ` · ${pending} offen` : ''}</span>
-        <span class="threads-list-preview">${escapeHtml(last?.body || thread.source_label || '')}</span>
+        <span class="threads-item-anchor" aria-hidden="true">
+          <span class="threads-item-dot"></span>
+          <span class="threads-item-avatar">${escapeHtml(threadSenderInitial(preview))}</span>
+        </span>
+        <span class="threads-item-main">
+          <span class="threads-item-top">
+            <span class="threads-list-title">${escapeHtml(thread.title || thread.id)}</span>
+            <time class="threads-item-time">${escapeHtml(relativeTime(thread.last_message_at_ms || thread.updated_at_ms))}</time>
+          </span>
+          ${why ? `<span class="threads-attention">${escapeHtml(why)}</span>` : ''}
+          <span class="threads-list-preview">${preview.sender ? `<b>${escapeHtml(preview.sender)}:</b> ` : ''}${escapeHtml(preview.text)}</span>
+        </span>
       </button>
     `;
   }).join('');
@@ -761,6 +838,7 @@ function renderApproval(approval) {
           ${sourceDeepLinkFor(approval) ? `<button type="button" class="ctox-pane-icon" data-thread-deep-link="${escapeAttr(sourceDeepLinkFor(approval))}" aria-label="Objekt in der Quell-App öffnen" title="Objekt in der Quell-App öffnen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M9 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3"/></svg></button>` : ''}
           <button type="button" class="ctox-pane-icon is-confirm" data-approve-approval="${escapeAttr(approval.id)}" aria-label="${escapeHtml(state.t('approvalApprove', 'Freigeben'))}" title="${escapeHtml(state.t('approvalApprove', 'Freigeben'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l5 5L19 7"/></svg></button>
           <button type="button" class="ctox-pane-icon is-danger" data-reject-approval="${escapeAttr(approval.id)}" aria-label="${escapeHtml(state.t('approvalReject', 'Ablehnen'))}" title="${escapeHtml(state.t('approvalReject', 'Ablehnen'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-question-approval="${escapeAttr(approval.id)}" aria-label="Rückfrage an Requester" title="Rückfrage an Requester"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 9a3 3 0 1 1 4.2 2.75c-.9.4-1.2 1-1.2 2.05"/><path d="M12 17.3v.2"/></svg></button>
           <button type="button" class="ctox-pane-icon" data-edit-approval="${escapeAttr(approval.id)}" aria-label="${escapeHtml(state.t('approvalEdit', 'Bearbeiten'))}" title="${escapeHtml(state.t('approvalEdit', 'Bearbeiten'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
         </div>
       ` : ''}
@@ -828,9 +906,11 @@ async function submitMessage() {
   const thread = state.data.threads.find((item) => item.id === state.selectedId);
   const body = String(els.messageBody?.value || '').trim();
   if (!thread || !body) return;
+  const mentionTargets = mentionTargetsIn(body);
   await dispatchThreadsCommand('threads.message.create', {
     thread_id: thread.id,
     body,
+    ...(mentionTargets.length ? { target_user_ids: mentionTargets, kind: 'mention', message_kind: 'mention' } : {}),
   }, {
     recordId: thread.id,
     sourceModule: thread.source_module || 'threads',
@@ -1490,4 +1570,117 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value).replace(/`/g, '&#96;');
+}
+
+
+// ============================================================================
+// Team roster + mentions: humans pick people, they never type user ids.
+async function ensureRoster() {
+  if (Array.isArray(state.roster) && state.roster.length) return state.roster;
+  try {
+    const collection = await state.ctx.db.collection('business_users');
+    const docs = await collection.find({}).exec();
+    state.roster = (docs || [])
+      .map((doc) => (doc?.toJSON ? doc.toJSON() : doc))
+      .filter((user) => user && !user.is_deleted && (user.id || user.user_id))
+      .map((user) => ({ id: user.id || user.user_id, name: user.display_name || user.name || user.id || user.user_id }));
+  } catch {
+    state.roster = [];
+  }
+  // The current user always exists, even before the roster replicates.
+  const me = currentUserId();
+  if (me && !state.roster.some((user) => user.id === me)) {
+    state.roster.push({ id: me, name: state.ctx?.session?.user?.display_name || me });
+  }
+  return state.roster;
+}
+
+function renderRosterSelects() {
+  const roster = state.roster || [];
+  for (const select of els.root?.querySelectorAll('select[data-roster-select]') || []) {
+    const current = select.value;
+    select.innerHTML = ['<option value="">— Person wählen —</option>',
+      ...roster.map((user) => `<option value="${escapeAttr(user.id)}">${escapeHtml(user.name)}</option>`)].join('');
+    if (current) select.value = current;
+  }
+}
+
+// @mention parsing: match @token (and @"two words" prefixes) against roster
+// names and ids, case-insensitive.
+function mentionTargetsIn(body) {
+  const roster = state.roster || [];
+  const targets = new Set();
+  for (const match of String(body || '').matchAll(/@([\p{L}\p{N}_.-]+)/gu)) {
+    const token = match[1].toLowerCase();
+    for (const user of roster) {
+      if (user.id.toLowerCase() === token
+        || user.name.toLowerCase() === token
+        || user.name.toLowerCase().split(/\s+/)[0] === token) {
+        targets.add(user.id);
+      }
+    }
+  }
+  return [...targets];
+}
+
+// Lightweight @-autocomplete: typing "@pre" over the composer shows matching
+// teammates; click or Enter inserts the name.
+function wireMentionPopup() {
+  const textarea = els.messageBody;
+  const popup = els.root?.querySelector('[data-mention-popup]');
+  if (!textarea || !popup) return;
+  const close = () => { popup.hidden = true; popup.innerHTML = ''; };
+  const apply = (user) => {
+    const value = textarea.value;
+    const upto = value.slice(0, textarea.selectionStart).replace(/@([\p{L}\p{N}_.-]*)$/u, `@${user.name.split(/\s+/)[0]} `);
+    textarea.value = upto + value.slice(textarea.selectionStart);
+    textarea.focus();
+    close();
+  };
+  textarea.addEventListener('input', async () => {
+    const upto = textarea.value.slice(0, textarea.selectionStart);
+    const match = upto.match(/@([\p{L}\p{N}_.-]*)$/u);
+    if (!match) { close(); return; }
+    const roster = await ensureRoster();
+    const query = match[1].toLowerCase();
+    const hits = roster.filter((user) => !query
+      || user.name.toLowerCase().includes(query)
+      || user.id.toLowerCase().includes(query)).slice(0, 6);
+    if (!hits.length) { close(); return; }
+    popup.innerHTML = hits.map((user) => `<button type="button" data-mention-id="${escapeAttr(user.id)}"><b>${escapeHtml(user.name)}</b><span>${escapeHtml(user.id)}</span></button>`).join('');
+    popup.hidden = false;
+    for (const button of popup.querySelectorAll('[data-mention-id]')) {
+      button.addEventListener('click', () => {
+        const user = roster.find((entry) => entry.id === button.dataset.mentionId);
+        if (user) apply(user);
+      });
+    }
+  });
+  textarea.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') close();
+    if (event.key === 'Enter' && !popup.hidden) {
+      const first = popup.querySelector('[data-mention-id]');
+      if (first) { event.preventDefault(); first.click(); }
+    }
+  });
+  textarea.addEventListener('blur', () => { window.setTimeout(close, 200); });
+}
+
+// A third decision besides approve/reject: ask the requester before deciding.
+// Directed at the requester (mention -> notification), the approval stays open.
+async function askApprovalQuestion(approvalId) {
+  const approval = approvalById(approvalId);
+  if (!approval) return;
+  const requester = approval.requester_user_id || '';
+  const question = window.prompt(`Rückfrage an ${approval.requester_display_name || requester || 'Requester'}:`);
+  if (!question) return;
+  await dispatchThreadsCommand('threads.message.create', {
+    thread_id: approval.thread_id || state.selectedId,
+    body: `Rückfrage zur Freigabe: ${question}`,
+    ...(requester ? { target_user_ids: [requester], kind: 'mention', message_kind: 'mention' } : {}),
+  }, {
+    recordId: approval.thread_id || approvalId,
+    sourceModule: approval.source_module || 'threads',
+  });
+  await refresh();
 }

@@ -523,3 +523,99 @@
    must never be blind. */
 [data-thread-source].is-linked { cursor: pointer; }
 [data-thread-source].is-linked:hover { color: var(--accent); text-decoration: underline; }
+
+/* Inbox-shard anatomy: [anchor: unread dot + sender initial] [main: title+time /
+   why-me / foreign preview]. Three lines, scannable like a good mail row. */
+.threads-list-item {
+  grid-template-columns: 26px minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: start;
+}
+.threads-item-anchor {
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+  padding-top: 2px;
+}
+.threads-item-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: transparent;
+}
+.threads-list-item.is-unread .threads-item-dot { background: var(--accent); }
+.threads-item-avatar {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--kit-fill-strong);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+.threads-item-main { display: grid; gap: 2px; min-width: 0; }
+.threads-item-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.threads-item-top .threads-list-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.threads-list-item.is-unread .threads-list-title { color: var(--text-strong, var(--text)); }
+.threads-item-time {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+.threads-attention {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.threads-list-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.threads-list-preview b { font-weight: 600; color: var(--muted); }
+/* Compact list mode: line one only. */
+.threads-module.is-list-view .threads-item-avatar { display: none; }
+
+/* @-mention autocomplete: floats above the composer, kit fills, no frames. */
+.threads-composer { position: relative; }
+.threads-mention-popup {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 10px;
+  z-index: 20;
+  display: grid;
+  min-width: 220px;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+.threads-mention-popup button {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.threads-mention-popup button:hover { background: var(--kit-hover); }
+.threads-mention-popup button b { font-size: var(--fs-sm, 12px); font-weight: 600; }
+.threads-mention-popup button span { color: var(--muted); font-size: var(--fs-micro); }

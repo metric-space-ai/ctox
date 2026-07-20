@@ -216,6 +216,13 @@ Rules that go with it:
   pill). Status is transient (toast) or contextual, never permanent chrome.
 - Sync/maintenance notices float as a toast — they must never displace the
   app layout.
+- **Hub/inbox contract (Threads reference)**: a decision surface links the
+  object it decides about (deep link + decision banner at the record); inbox
+  rows answer WHAT / WHY ME / HOW URGENT / FROM WHOM in one glance (unread
+  dot, sender initial, relative time, derived why-me line, foreign-message
+  preview); humans pick people from the roster (`business_users`) — never
+  type user ids; @-mentions in the composer become `target_user_ids` and
+  notify; delegate and ask-back are first-class actions next to approve.
 - **Pin workspace panes to explicit grid tracks** (`.app-left { grid-column: 1 }`,
   resizer 2, center 3, resizer 4, right 5). The kit hides column resizers on
   narrow windows; with auto-flow placement the center pane slides onto the
