@@ -155,7 +155,10 @@ struct ResearchSearchPlan {
 pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -> Result<Value> {
     let query_text = normalize_required_query(&request.query)?;
     let profile = ResearchProfile::resolve(root);
-    let search_query = derive_research_search_query(&query_text, request.focus.as_deref(), profile);
+    // Keep the topical core independent from the optional focus. The focus is
+    // represented by its own plan below; appending it here made every facet
+    // inherit the same long query and defeated systematic diversification.
+    let search_query = derive_research_search_query(&query_text, None, profile);
     let max_sources = request.max_sources.clamp(3, 300);
     let plans = build_research_search_plan(&search_query, request, profile)
         .into_iter()
@@ -647,22 +650,15 @@ fn research_candidate_pool_limit(depth: DeepResearchDepth, max_sources: usize) -
 fn select_balanced_sources(sources: Vec<Value>, max_sources: usize) -> Vec<Value> {
     let mut selected = Vec::new();
     let mut buckets = BTreeMap::<String, Vec<Value>>::new();
-    let relevant_count = sources
-        .iter()
-        .filter(|source| {
-            source
-                .get("discovery_score")
-                .and_then(Value::as_i64)
-                .is_some_and(|score| score >= 0)
-        })
-        .count();
-    let filter_low_relevance = relevant_count >= max_sources.min(8);
     for source in sources {
-        if filter_low_relevance
-            && source
-                .get("discovery_score")
-                .and_then(Value::as_i64)
-                .is_some_and(|score| score < 0)
+        // Negative discovery scores are an explicit off-topic decision. Keep
+        // those rows in source_candidates for the rejection audit, but never
+        // spend the bounded full-text budget on them merely because a weak
+        // provider returned too few relevant alternatives.
+        if source
+            .get("discovery_score")
+            .and_then(Value::as_i64)
+            .is_some_and(|score| score < 0)
         {
             continue;
         }
@@ -942,7 +938,23 @@ fn truncate_query_at_word_boundary(query: &str, max_chars: usize) -> String {
 }
 
 fn compose_search_query(core: &str, suffix: &str) -> String {
-    truncate_query_at_word_boundary(&format!("{core} {suffix}"), 180)
+    const MAX_QUERY_CHARS: usize = 150;
+    const MAX_CORE_CHARS: usize = 96;
+
+    let suffix = truncate_query_at_word_boundary(suffix, MAX_QUERY_CHARS);
+    if suffix.is_empty() {
+        return truncate_query_at_word_boundary(core, MAX_QUERY_CHARS);
+    }
+    let reserved_core_chars = MAX_QUERY_CHARS
+        .saturating_sub(suffix.chars().count())
+        .saturating_sub(1)
+        .min(MAX_CORE_CHARS);
+    let core = truncate_query_at_word_boundary(core, reserved_core_chars);
+    if core.is_empty() {
+        suffix
+    } else {
+        format!("{core} {suffix}")
+    }
 }
 
 fn build_research_search_plan(
@@ -953,7 +965,7 @@ fn build_research_search_plan(
     let mut plans = vec![
         ResearchSearchPlan {
             label: "broad_web",
-            query: query.to_string(),
+            query: truncate_query_at_word_boundary(query, 120),
             domains: Vec::new(),
             scholarly: false,
             metadata_only: false,
@@ -2189,7 +2201,13 @@ fn should_attempt_source_read(source: &Value) -> bool {
         .get("source_type")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if source_type == "annas_archive_metadata" {
+    if source_type == "annas_archive_metadata"
+        || (source_type == "paper_metadata"
+            && source
+                .get("open_access_pdf")
+                .and_then(Value::as_str)
+                .is_none())
+    {
         return false;
     }
     source_read_url(source).is_some()
@@ -2363,6 +2381,59 @@ fn collect_scholarly_database_sources(
     let mut runs = Vec::new();
     let mut citation_queue = VecDeque::<(String, usize, String)>::new();
     let mut queued_references = BTreeSet::new();
+    let seed_query = compose_search_query(
+        &topical_query_terms(research_query)
+            .into_iter()
+            .take(8)
+            .collect::<Vec<_>>()
+            .join(" "),
+        "experimental measurement",
+    );
+    if !seed_query.is_empty() {
+        let seed_request = ScholarlySearchRequest {
+            query: seed_query.clone(),
+            provider: Some(ScholarlySearchProvider::Auto),
+            max_results: Some(16),
+            with_oa_pdf: true,
+            ..Default::default()
+        };
+        runs.push(match execute_scholarly_search(root, &seed_request) {
+            Ok(response) => {
+                queue_scholarly_references(
+                    &response.results,
+                    research_query,
+                    1,
+                    &mut citation_queue,
+                    &mut queued_references,
+                );
+                let values = response
+                    .results
+                    .into_iter()
+                    .map(scholarly_result_to_db_value)
+                    .collect();
+                let count = push_database_sources(
+                    "scholarly_auto_seed",
+                    &seed_query,
+                    values,
+                    seen_urls,
+                    sources,
+                );
+                json!({
+                    "database": "scholarly_auto_seed",
+                    "query": seed_query,
+                    "ok": true,
+                    "result_count": count,
+                })
+            }
+            Err(err) => json!({
+                "database": "scholarly_auto_seed",
+                "query": seed_query,
+                "ok": false,
+                "rate_limited": is_rate_limit_error(&err),
+                "error": err.to_string(),
+            }),
+        });
+    }
     let queries =
         scholarly_database_queries(research_query, plans, request.depth.database_query_budget());
     // The academic metadata clients now live behind `ScholarlySearchProvider`
@@ -2451,7 +2522,7 @@ fn scholarly_database_queries(
 ) -> Vec<String> {
     let core = topical_query_terms(research_query)
         .into_iter()
-        .take(12)
+        .take(8)
         .collect::<Vec<_>>()
         .join(" ");
     let mut seen = BTreeSet::new();
@@ -3627,6 +3698,53 @@ mod tests {
     }
 
     #[test]
+    fn negative_discovery_scores_never_consume_the_read_budget() {
+        let selected = select_balanced_sources(
+            vec![
+                json!({
+                    "url": "https://example.org/relevant",
+                    "source_type": "web",
+                    "discovery_score": 30,
+                }),
+                json!({
+                    "url": "https://example.org/off-topic",
+                    "source_type": "web",
+                    "discovery_score": -1,
+                }),
+            ],
+            10,
+        );
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0]["url"], "https://example.org/relevant");
+    }
+
+    #[test]
+    fn facet_queries_reserve_space_for_the_facet() {
+        let core = "small uav propeller test bench measured thrust torque rpm vibration bearing loads datasets primary measurements original datasets scientific papers";
+        let query = compose_search_query(
+            core,
+            "original file CSV TXT XLSX ZIP supplementary data download",
+        );
+
+        assert!(query.chars().count() <= 150);
+        assert!(query.contains("small uav propeller"));
+        assert!(query.ends_with("original file CSV TXT XLSX ZIP supplementary data download"));
+    }
+
+    #[test]
+    fn metadata_only_doi_pages_do_not_consume_the_read_budget() {
+        assert!(!should_attempt_source_read(&json!({
+            "source_type": "paper_metadata",
+            "url": "https://doi.org/10.1234/example",
+        })));
+        assert!(should_attempt_source_read(&json!({
+            "source_type": "open_access_paper",
+            "url": "https://repository.example/paper.pdf",
+        })));
+    }
+
+    #[test]
     fn explicit_doi_parser_rejects_unrelated_numbers() {
         assert_eq!(
             extract_explicit_dois(
@@ -4348,7 +4466,7 @@ mod tests {
     }
 
     #[test]
-    fn scholarly_metadata_sources_are_read_but_annas_archive_is_not() {
+    fn metadata_only_scholarly_sources_do_not_consume_the_read_budget() {
         let paper = json!({
             "source_type": "paper_metadata",
             "url": "https://doi.org/10.1234/example",
@@ -4359,7 +4477,7 @@ mod tests {
             "url": "https://annas-archive.org/search?q=example",
             "metadata_only": true,
         });
-        assert!(should_attempt_source_read(&paper));
+        assert!(!should_attempt_source_read(&paper));
         assert!(!should_attempt_source_read(&annas));
     }
 
