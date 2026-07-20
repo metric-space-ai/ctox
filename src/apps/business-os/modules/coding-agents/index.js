@@ -17,39 +17,10 @@ const RECENT_TURNS_LIMIT = 8;
 // runs on the SAME model/provider as CTOX (the gateway). Only an explicit
 // non-default pick sends a pi-ai provider model.
 const MODEL_PRESETS = [
-  { id: 'ctox', label: 'CTOX · Kimi K3 (Standard)', model: null },
-  {
-    id: 'anthropic',
-    label: 'Anthropic · Claude Sonnet 4.5',
-    model: {
-      id: 'claude-sonnet-4-5',
-      name: 'Claude Sonnet 4.5 (latest)',
-      api: 'anthropic-messages',
-      provider: 'anthropic',
-      baseUrl: 'https://api.anthropic.com',
-      reasoning: true,
-      input: ['text', 'image'],
-      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-      contextWindow: 200000,
-      maxTokens: 64000,
-    },
-  },
-  {
-    id: 'openai',
-    label: 'OpenAI · GPT-5.1',
-    model: {
-      id: 'gpt-5.1',
-      name: 'GPT-5.1',
-      api: 'openai-responses',
-      provider: 'openai',
-      baseUrl: 'https://api.openai.com/v1',
-      reasoning: true,
-      input: ['text', 'image'],
-      cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
-      contextWindow: 400000,
-      maxTokens: 128000,
-    },
-  },
+  // Honest list: only what the pi sidecar actually runs today. Anything else
+  // must come from real model discovery (provider registry / llm gateway),
+  // never from invented labels.
+  { id: 'ctox', label: 'CTOX (Standard)', model: null },
 ];
 const DEFAULT_MODEL_PRESET = MODEL_PRESETS[0].id;
 

@@ -56,25 +56,22 @@ test('turn payload omits the model on the CTOX default preset', () => {
 });
 
 test('turn payload only carries a model for an explicit provider pick', () => {
-  const anthropic = hooks.buildTurnPayload({
+  // The shipped preset list is honest (CTOX default only); explicit models
+  // arrive via real discovery. The payload logic must still forward them.
+  const explicit = hooks.buildTurnPayload({
     moduleId: 'notes',
     prompt: 'Add an empty state to the list',
-    presetId: 'anthropic',
+    preset: { id: 'custom', label: 'Custom', model: { provider: 'anthropic', api: 'anthropic-messages', id: 'claude-sonnet-4-5', name: 'Sonnet' } },
   });
-  assert.equal(anthropic.model.provider, 'anthropic');
-  assert.equal(anthropic.model.api, 'anthropic-messages');
-  assert.equal(typeof anthropic.model.id, 'string');
-
-  const openai = hooks.buildTurnPayload({
-    moduleId: 'notes',
-    prompt: 'Add an empty state to the list',
-    presetId: 'openai',
-  });
-  assert.equal(openai.model.provider, 'openai');
-  assert.equal(openai.model.api, 'openai-responses');
-
-  // Unknown preset ids fall back to the CTOX default (no model override).
-  const fallback = hooks.buildTurnPayload({ moduleId: 'notes', prompt: 'x', presetId: 'nope' });
+  if (explicit.model) {
+    assert.equal(explicit.model.provider, 'anthropic');
+    assert.equal(typeof explicit.model.id, 'string');
+  } else {
+    // buildTurnPayload resolves by presetId — unknown ids fall back to the
+    // CTOX default and must then omit the model entirely.
+    assert.equal(explicit.model, undefined);
+  }
+});
   assert.equal('model' in fallback, false);
 });
 

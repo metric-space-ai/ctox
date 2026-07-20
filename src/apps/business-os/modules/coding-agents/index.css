@@ -183,3 +183,6 @@
 /* Artifact pane: the iframe IS the content. */
 .coding-agents-artifact-host { position: relative; min-height: 0; display: grid; }
 .coding-agents-artifact { width: 100%; height: 100%; border: 0; background: var(--surface); }
+
+/* In-shell, the standalone note must be invisible (file:// fallback only). */
+.ctox-standalone-note { display: none; }
