@@ -8086,6 +8086,8 @@ var SharedRoomPeer = class {
   scheduleCollectionCatchUp(collection, registration) {
     if (!collection || this.collectionCatchUps.has(collection)) return;
     const run = this.peerOpenQueue.then(() => this.catchUpRegisteredCollection(collection, registration)).catch((error) => registration.state?.emitError?.(error)).finally(() => this.collectionCatchUps.delete(collection));
+    this.peerOpenQueue = run.catch(() => {
+    });
     this.collectionCatchUps.set(collection, run);
   }
   async catchUpRegisteredCollection(collection, registration) {

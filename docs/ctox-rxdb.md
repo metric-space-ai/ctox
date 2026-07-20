@@ -168,9 +168,12 @@ through `collectionStartQueue` (500 ms spacing). Key mechanics, all in
   native-peer-open deadline still guards room bring-up.
 - *Watchdog:* a 30 s `nativePeerOpenWatchdog` per bridge escalates to
   `onFatalPeerError` if no native DataChannel opens.
-- *Bounded send pressure:* collection catch-up starts are paced at 500 ms so a
-  normal multi-collection bootstrap stays below the per-peer queue budget. A
-  peer that still reaches the hard budget is treated as wedged and recycled.
+- *Bounded send pressure:* collection registration is paced at 500 ms and the
+  complete initial pull/push catch-up is serialized room-wide. The room-wide
+  chain is reused after reconnects, when every collection is already
+  registered; otherwise a reconnect would fan out every `masterChangesSince`
+  request at once. A peer that still reaches the hard budget is treated as
+  wedged and recycled.
 - *Suspend/resume:* `suspendCollections`/`resumeCollections` park bridges as
   `paused` without tearing the runtime down.
 - *Checkpoint handshake evidence:* a peer only counts as protocol-ready when

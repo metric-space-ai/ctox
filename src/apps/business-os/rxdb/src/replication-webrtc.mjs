@@ -262,6 +262,11 @@ class SharedRoomPeer {
       .then(() => this.catchUpRegisteredCollection(collection, registration))
       .catch((error) => registration.state?.emitError?.(error))
       .finally(() => this.collectionCatchUps.delete(collection));
+    // A shared peer reconnect re-drives every registered collection at once.
+    // Keep the complete initial pull/push for each collection on one room-wide
+    // chain; merely pacing collection registration does not protect a peer
+    // that reconnects after all collections are already registered.
+    this.peerOpenQueue = run.catch(() => {});
     this.collectionCatchUps.set(collection, run);
   }
 
