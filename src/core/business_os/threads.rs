@@ -816,6 +816,7 @@ fn create_note(
         now,
         &mut projections,
     )?;
+    refresh_thread_states(root, &conn, &thread_id, now, &mut projections)?;
 
     Ok(json!({
         "ok": true,
@@ -880,6 +881,7 @@ fn update_note(
             &mut projections,
         )?;
     }
+    refresh_thread_states(root, &conn, &thread_id, now, &mut projections)?;
     Ok(json!({
         "ok": true,
         "message_id": message_id,
@@ -903,12 +905,17 @@ fn delete_note(
     let thread_id = value_string(&message, "thread_id");
     soft_delete_payload(&mut message, now);
     let conn = store::open_store(root)?;
+    let mut projections = vec![ProjectionRef {
+        collection: "user_thread_messages",
+        record_id: message_id.clone(),
+    }];
     store::upsert_business_record(&conn, "user_thread_messages", &message_id, now, message)?;
+    refresh_thread_states(root, &conn, &thread_id, now, &mut projections)?;
     Ok(json!({
         "ok": true,
         "message_id": message_id,
         "thread_id": thread_id,
-        "projections": [{ "collection": "user_thread_messages", "record_id": message_id }],
+        "projections": projection_values(projections),
     }))
 }
 
@@ -992,6 +999,7 @@ fn create_message(
         now,
         &mut projections,
     )?;
+    refresh_thread_states(root, &conn, &thread_id, now, &mut projections)?;
     Ok(json!({
         "ok": true,
         "thread_id": thread_id,
@@ -1109,6 +1117,7 @@ fn request_approval(
         now,
         &mut projections,
     )?;
+    refresh_thread_states(root, &conn, &thread_id, now, &mut projections)?;
 
     Ok(json!({
         "ok": true,
@@ -1213,6 +1222,7 @@ fn edit_approval(
         now,
         &mut projections,
     )?;
+    refresh_thread_states(root, &conn, &thread_id, now, &mut projections)?;
 
     Ok(json!({
         "ok": true,
@@ -1319,6 +1329,7 @@ fn approve_approval(
         now,
         &mut projections,
     )?;
+    refresh_thread_states(root, &conn, &thread_id, now, &mut projections)?;
 
     Ok(json!({
         "ok": true,
@@ -1458,6 +1469,7 @@ fn decide_without_queue(
         now,
         &mut projections,
     )?;
+    refresh_thread_states(root, &conn, &thread_id, now, &mut projections)?;
     Ok(json!({
         "ok": true,
         "approval_request_id": approval_id,
@@ -1501,12 +1513,17 @@ fn update_thread_watch(
     set_object_array_strings(&mut thread, "watcher_user_ids", &watchers);
     set_object_i64(&mut thread, "updated_at_ms", now);
     let conn = store::open_store(root)?;
+    let mut projections = vec![ProjectionRef {
+        collection: "user_threads",
+        record_id: thread_id.clone(),
+    }];
     store::upsert_business_record(&conn, "user_threads", &thread_id, now, thread)?;
+    refresh_thread_states(root, &conn, &thread_id, now, &mut projections)?;
     Ok(json!({
         "ok": true,
         "thread_id": thread_id,
         "watching": watch,
-        "projections": [{ "collection": "user_threads", "record_id": thread_id }],
+        "projections": projection_values(projections),
     }))
 }
 
@@ -1532,11 +1549,16 @@ fn archive_thread(
     set_object_string(&mut next, "status", "archived");
     set_object_i64(&mut next, "archived_at_ms", now);
     store::upsert_business_record(&conn, "user_threads", &thread_id, now, next)?;
+    let mut projections = vec![ProjectionRef {
+        collection: "user_threads",
+        record_id: thread_id.clone(),
+    }];
+    refresh_thread_states(root, &conn, &thread_id, now, &mut projections)?;
     Ok(json!({
         "ok": true,
         "thread_id": thread_id,
         "status": "archived",
-        "projections": [{ "collection": "user_threads", "record_id": thread_id }],
+        "projections": projection_values(projections),
     }))
 }
 
@@ -1563,13 +1585,18 @@ fn snooze_thread(
     set_object_i64(&mut thread, "snoozed_until_ms", until);
     set_object_i64(&mut thread, "updated_at_ms", now);
     let conn = store::open_store(root)?;
+    let mut projections = vec![ProjectionRef {
+        collection: "user_threads",
+        record_id: thread_id.clone(),
+    }];
     store::upsert_business_record(&conn, "user_threads", &thread_id, now, thread)?;
+    refresh_thread_states(root, &conn, &thread_id, now, &mut projections)?;
     Ok(json!({
         "ok": true,
         "thread_id": thread_id,
         "status": "snoozed",
         "snoozed_until_ms": until,
-        "projections": [{ "collection": "user_threads", "record_id": thread_id }],
+        "projections": projection_values(projections),
     }))
 }
 
@@ -1626,12 +1653,17 @@ fn update_user_thread_state(
     set_object_i64(&mut next, "updated_at_ms", now);
     let conn = store::open_store(root)?;
     store::upsert_business_record(&conn, "user_thread_states", &state_id, now, next)?;
+    let mut projections = vec![ProjectionRef {
+        collection: "user_thread_states",
+        record_id: state_id.clone(),
+    }];
+    refresh_thread_states(root, &conn, &thread_id, now, &mut projections)?;
     Ok(json!({
         "ok": true,
         "thread_id": thread_id,
         "user_id": user_id,
         "state_id": state_id,
-        "projections": [{ "collection": "user_thread_states", "record_id": state_id }],
+        "projections": projection_values(projections),
     }))
 }
 
@@ -1686,12 +1718,17 @@ fn assign_thread(
     }
     set_object_i64(&mut thread, "updated_at_ms", now);
     let conn = store::open_store(root)?;
+    let mut projections = vec![ProjectionRef {
+        collection: "user_threads",
+        record_id: thread_id.clone(),
+    }];
     store::upsert_business_record(&conn, "user_threads", &thread_id, now, thread)?;
+    refresh_thread_states(root, &conn, &thread_id, now, &mut projections)?;
     Ok(json!({
         "ok": true,
         "thread_id": thread_id,
         "assigned_user_id": assignee,
-        "projections": [{ "collection": "user_threads", "record_id": thread_id }],
+        "projections": projection_values(projections),
     }))
 }
 
@@ -1734,7 +1771,17 @@ fn create_handoff(
         ..command.clone()
     };
     let assignment = assign_thread(root, session, &assign, false)?;
-    Ok(json!({ "ok": true, "thread_id": thread_id, "message": result, "assignment": assignment }))
+    let now = now_ms();
+    let conn = store::open_store(root)?;
+    let mut projections = Vec::new();
+    refresh_thread_states(root, &conn, &thread_id, now, &mut projections)?;
+    Ok(json!({
+        "ok": true,
+        "thread_id": thread_id,
+        "message": result,
+        "assignment": assignment,
+        "projections": projection_values(projections),
+    }))
 }
 
 fn create_ai_request(
@@ -1902,34 +1949,26 @@ fn update_notification_status(
     set_object_string(&mut next, "status", status);
     store::upsert_business_record(&conn, "user_notifications", &notification_id, now, next)?;
     let thread_id = value_string(&notification, "thread_id");
-    let state_id = format!(
-        "thread_state_{}_{}",
-        slug_part(&notification_user),
-        slug_part(&thread_id)
-    );
+    let state_id = thread_state_id(&notification_user, &thread_id);
+    let mut projections = vec![ProjectionRef {
+        collection: "user_notifications",
+        record_id: notification_id.clone(),
+    }];
     if let Some(mut user_state) = load_record(root, "user_thread_states", &state_id)? {
-        let unread = user_state
-            .get("unread_count")
-            .and_then(Value::as_i64)
-            .unwrap_or(0)
-            .saturating_sub(1);
-        set_object_i64(&mut user_state, "unread_count", unread);
         set_object_i64(&mut user_state, "last_seen_at_ms", now);
         set_object_i64(&mut user_state, "updated_at_ms", now);
-        if unread == 0 {
-            user_state["attention_reasons"] = json!([]);
-            set_object_i64(&mut user_state, "attention_score", 0);
-        }
         store::upsert_business_record(&conn, "user_thread_states", &state_id, now, user_state)?;
+        projections.push(ProjectionRef {
+            collection: "user_thread_states",
+            record_id: state_id.clone(),
+        });
     }
+    refresh_thread_states(root, &conn, &thread_id, now, &mut projections)?;
     Ok(json!({
         "ok": true,
         "notification_id": notification_id,
         "status": status,
-        "projections": [
-            { "collection": "user_notifications", "record_id": notification_id },
-            { "collection": "user_thread_states", "record_id": state_id }
-        ],
+        "projections": projection_values(projections),
     }))
 }
 
@@ -2093,6 +2132,7 @@ fn project_ctox_command_document(
             projections,
         )?;
     }
+    refresh_thread_states(root, conn, &thread_id, now, projections)?;
     Ok(())
 }
 
@@ -2175,6 +2215,7 @@ fn project_ctox_task_document(
             projections,
         )?;
     }
+    refresh_thread_states(root, conn, &thread_id, now, projections)?;
     Ok(())
 }
 
@@ -2273,6 +2314,7 @@ fn project_app_record_document(
             projections,
         )?;
     }
+    refresh_thread_states(root, conn, &thread_id, now, projections)?;
     Ok(())
 }
 
@@ -2717,91 +2759,6 @@ fn upsert_app_status_notifications(
             &notification_id,
             now,
             record,
-            projections,
-        )?;
-        let state_id = format!(
-            "thread_state_{}_{}",
-            slug_part(user_id),
-            slug_part(thread_id)
-        );
-        let existing_state = conn
-            .query_row(
-                "SELECT payload_json FROM business_records WHERE collection = 'user_thread_states' AND record_id = ?1",
-                params![state_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?
-            .and_then(|payload| serde_json::from_str::<Value>(&payload).ok())
-            .unwrap_or_else(|| json!({}));
-        let mut reasons = array_strings(existing_state.get("attention_reasons"));
-        let reason = match notification_type {
-            "approval_requested" | "approval_request" => "approval",
-            "mention" | "mentioned" => "mention",
-            "ctox_failed" | "ai_failed" => "ai_failed",
-            "escalated" => "escalation",
-            _ => "unread",
-        };
-        if !reasons.iter().any(|value| value == reason) {
-            reasons.push(reason.to_owned());
-        }
-        let weight = match reason {
-            "approval" => 100,
-            "ai_failed" | "escalation" => 90,
-            "mention" => 70,
-            _ => 20,
-        };
-        let unread_count = conn.query_row(
-            "SELECT COUNT(*) FROM business_records
-              WHERE collection = 'user_notifications'
-                AND deleted = 0
-                AND json_extract(payload_json, '$.user_id') = ?1
-                AND json_extract(payload_json, '$.thread_id') = ?2
-                AND json_extract(payload_json, '$.status') = 'unread'",
-            params![user_id, thread_id],
-            |row| row.get::<_, i64>(0),
-        )?;
-        let previous_unread_count = existing_state
-            .get("unread_count")
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
-        let previous_score = existing_state
-            .get("attention_score")
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
-        let attention_score = previous_score.max(weight);
-        let state_changed = previous_unread_count != unread_count
-            || previous_score != attention_score
-            || array_strings(existing_state.get("attention_reasons")) != reasons;
-        let state_updated_at = if state_changed {
-            now
-        } else {
-            existing_state
-                .get("updated_at_ms")
-                .and_then(Value::as_i64)
-                .unwrap_or(now)
-        };
-        let state_record = json!({
-            "id": state_id,
-            "thread_id": thread_id,
-            "user_id": user_id,
-            "unread_count": unread_count,
-            "last_seen_at_ms": existing_state.get("last_seen_at_ms").and_then(Value::as_i64).unwrap_or(0),
-            "pinned": existing_state.get("pinned").and_then(Value::as_bool).unwrap_or(false),
-            "snoozed_until_ms": existing_state.get("snoozed_until_ms").and_then(Value::as_i64).unwrap_or(0),
-            "priority": value_string(&existing_state, "priority"),
-            "follow_up_at_ms": existing_state.get("follow_up_at_ms").and_then(Value::as_i64).unwrap_or(0),
-            "attention_score": attention_score,
-            "attention_reasons": reasons,
-            "notification_preferences": existing_state.get("notification_preferences").cloned().unwrap_or_else(|| json!({})),
-            "created_at_ms": existing_state.get("created_at_ms").and_then(Value::as_i64).unwrap_or(now),
-            "updated_at_ms": state_updated_at,
-        });
-        upsert_projection_record_if_changed(
-            conn,
-            "user_thread_states",
-            &state_id,
-            state_updated_at,
-            state_record,
             projections,
         )?;
     }
@@ -3312,6 +3269,221 @@ fn upsert_notifications(
         )?;
     }
     Ok(())
+}
+
+fn refresh_thread_states(
+    root: &Path,
+    conn: &Connection,
+    thread_id: &str,
+    now: i64,
+    projections: &mut Vec<ProjectionRef>,
+) -> anyhow::Result<()> {
+    let thread = load_record(root, "user_threads", thread_id)?
+        .with_context(|| format!("thread {thread_id} not found"))?;
+    let mut relevant_user_ids = array_strings(thread.get("participant_ids"))
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    relevant_user_ids.extend(array_strings(thread.get("watcher_user_ids")));
+    if let Some(assigned_user_id) = non_empty_string(&thread, "assigned_user_id") {
+        relevant_user_ids.insert(assigned_user_id);
+    }
+
+    let approvals = thread_collection_records(conn, "ctox_task_approval_requests", thread_id)?;
+    let mut pending_reviewers = BTreeSet::new();
+    for approval in approvals {
+        if value_string(&approval, "status") == "pending" {
+            if let Some(reviewer_user_id) = non_empty_string(&approval, "reviewer_user_id") {
+                pending_reviewers.insert(reviewer_user_id.clone());
+                relevant_user_ids.insert(reviewer_user_id);
+            }
+        }
+    }
+
+    let messages = thread_collection_records(conn, "user_thread_messages", thread_id)?;
+    let mut latest_handoff: Option<&Value> = None;
+    let mut latest_ctox_status: Option<&Value> = None;
+    for message in &messages {
+        relevant_user_ids.extend(array_strings(message.get("target_user_ids")));
+        let kind = first_non_empty_owned([
+            value_string(message, "kind"),
+            value_string(message, "event_type"),
+        ]);
+        if kind == "handoff"
+            && latest_handoff.is_none_or(|latest| {
+                document_updated_at_ms(message) > document_updated_at_ms(latest)
+            })
+        {
+            latest_handoff = Some(message);
+        }
+        if kind == "ctox_status"
+            && latest_ctox_status.is_none_or(|latest| {
+                document_updated_at_ms(message) > document_updated_at_ms(latest)
+            })
+        {
+            latest_ctox_status = Some(message);
+        }
+    }
+
+    let notifications = thread_collection_records(conn, "user_notifications", thread_id)?;
+    let mut unread_by_user = BTreeMap::<String, i64>::new();
+    let mut unread_mentions = BTreeSet::new();
+    for notification in &notifications {
+        if value_string(notification, "status") != "unread" {
+            continue;
+        }
+        let user_id = value_string(notification, "user_id");
+        if user_id.is_empty() {
+            continue;
+        }
+        *unread_by_user.entry(user_id.clone()).or_default() += 1;
+        if matches!(
+            value_string(notification, "notification_type").as_str(),
+            "mention" | "mentioned"
+        ) {
+            unread_mentions.insert(user_id);
+        }
+    }
+
+    let assigned_user_id = value_string(&thread, "assigned_user_id");
+    let thread_status = value_string(&thread, "status").to_ascii_lowercase();
+    if thread_status == "needs_review" {
+        for notification in &notifications {
+            if matches!(
+                value_string(notification, "notification_type").as_str(),
+                "approval_request" | "approval_requested"
+            ) {
+                if let Some(reviewer_user_id) = non_empty_string(notification, "user_id") {
+                    pending_reviewers.insert(reviewer_user_id.clone());
+                    relevant_user_ids.insert(reviewer_user_id);
+                }
+            }
+        }
+    }
+    let handoff_is_open = !matches!(
+        thread_status.as_str(),
+        "archived" | "completed" | "closed" | "cancelled" | "canceled"
+    );
+    let mut open_handoff_targets = BTreeSet::new();
+    if handoff_is_open && !assigned_user_id.is_empty() {
+        if let Some(handoff) = latest_handoff {
+            if array_strings(handoff.get("target_user_ids")).contains(&assigned_user_id) {
+                open_handoff_targets.insert(assigned_user_id.clone());
+            }
+        }
+    }
+
+    let latest_ctox_failed = latest_ctox_status.is_some_and(|message| {
+        let message_id = first_non_empty_owned([
+            value_string(message, "message_id"),
+            value_string(message, "id"),
+        ]);
+        matches!(
+            value_string(message, "execution_status")
+                .to_ascii_lowercase()
+                .as_str(),
+            "failed" | "error"
+        ) || notifications.iter().any(|notification| {
+            value_string(notification, "message_id") == message_id
+                && matches!(
+                    value_string(notification, "notification_type").as_str(),
+                    "ctox_failed" | "ai_failed"
+                )
+        })
+    });
+    let blocked = matches!(thread_status.as_str(), "blocked" | "escalated");
+
+    for user_id in relevant_user_ids {
+        if user_id.trim().is_empty() {
+            continue;
+        }
+        let unread_count = unread_by_user.get(&user_id).copied().unwrap_or(0);
+        let mut attention_reasons = Vec::new();
+        let mut attention_score = if unread_count > 0 { 40 } else { 0 };
+        if pending_reviewers.contains(&user_id) {
+            attention_reasons.push("Freigabe nötig".to_owned());
+            attention_score = attention_score.max(80);
+        }
+        if unread_mentions.contains(&user_id) {
+            attention_reasons.push("Erwähnung".to_owned());
+            attention_score = attention_score.max(60);
+        }
+        if open_handoff_targets.contains(&user_id) {
+            attention_reasons.push("Übergabe an dich".to_owned());
+            attention_score = attention_score.max(65);
+        }
+        if blocked {
+            attention_reasons.push("Blockiert".to_owned());
+            attention_score = attention_score.max(70);
+        }
+        if latest_ctox_failed {
+            attention_reasons.push("Fehlgeschlagen".to_owned());
+            attention_score = attention_score.max(70);
+        }
+
+        let state_id = thread_state_id(&user_id, thread_id);
+        let existing =
+            load_record(root, "user_thread_states", &state_id)?.unwrap_or_else(|| json!({}));
+        let priority =
+            non_empty_string(&existing, "priority").unwrap_or_else(|| "normal".to_owned());
+        let record = json!({
+            "id": state_id,
+            "thread_id": thread_id,
+            "user_id": user_id,
+            "attention_score": attention_score,
+            "attention_reasons": attention_reasons,
+            "unread_count": unread_count,
+            "priority": priority,
+            "pinned": existing.get("pinned").and_then(Value::as_bool).unwrap_or(false),
+            "snoozed_until_ms": existing.get("snoozed_until_ms").and_then(Value::as_i64).unwrap_or(0),
+            "follow_up_at_ms": existing.get("follow_up_at_ms").and_then(Value::as_i64).unwrap_or(0),
+            "last_seen_at_ms": existing.get("last_seen_at_ms").and_then(Value::as_i64).unwrap_or(0),
+            "notification_preferences": existing.get("notification_preferences").cloned().unwrap_or_else(|| json!({})),
+            "is_deleted": false,
+            "created_at_ms": existing.get("created_at_ms").and_then(Value::as_i64).unwrap_or(now),
+            "updated_at_ms": now,
+        });
+        upsert_projection_record_if_changed(
+            conn,
+            "user_thread_states",
+            &state_id,
+            now,
+            record,
+            projections,
+        )?;
+    }
+    Ok(())
+}
+
+fn thread_collection_records(
+    conn: &Connection,
+    collection: &str,
+    thread_id: &str,
+) -> anyhow::Result<Vec<Value>> {
+    let mut statement = conn.prepare(
+        "SELECT payload_json FROM business_records
+          WHERE collection = ?1
+            AND deleted = 0
+            AND json_extract(payload_json, '$.thread_id') = ?2",
+    )?;
+    let rows = statement.query_map(params![collection, thread_id], |row| {
+        row.get::<_, String>(0)
+    })?;
+    let mut records = Vec::new();
+    for row in rows {
+        let record = serde_json::from_str::<Value>(&row?)?;
+        if !document_is_deleted(&record) {
+            records.push(record);
+        }
+    }
+    Ok(records)
+}
+
+fn thread_state_id(user_id: &str, thread_id: &str) -> String {
+    format!(
+        "thread_state_{}_{}",
+        slug_part(user_id),
+        slug_part(thread_id)
+    )
 }
 
 fn load_record(root: &Path, collection: &str, record_id: &str) -> anyhow::Result<Option<Value>> {
@@ -3853,7 +4025,7 @@ fn ensure_reviewer_or_admin(session: &BusinessOsSession, approval: &Value) -> an
     let actor = actor_id(session);
     anyhow::ensure!(
         is_admin_session(session) || (!reviewer.is_empty() && reviewer == actor),
-        "only the assigned reviewer or admin can decide this approval request"
+        "Nur der eingetragene Reviewer oder ein Admin darf entscheiden."
     );
     Ok(())
 }
@@ -4927,6 +5099,217 @@ mod tests {
             Some("#tickets?record=case-1")
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn pending_approval_attention_is_scoped_to_reviewer() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        seed_threads_user(temp.path(), "bob", "Bob", "user")?;
+        seed_threads_user(temp.path(), "alice", "Alice", "user")?;
+
+        store::accept_rxdb_business_command(
+            temp.path(),
+            json!({
+                "id": "cmd-attention-approval-request",
+                "module": "threads",
+                "command_type": "threads.ctox_approval.request",
+                "record_id": "case-attention-approval",
+                "payload": {
+                    "approval_request_id": "approval-attention-1",
+                    "prompt": "Bitte den Vorgang freigeben.",
+                    "reviewer_user_id": "alice",
+                    "thread_id": "thread-attention-approval",
+                    "source_context": {
+                        "module": "threads",
+                        "record_type": "case",
+                        "record_id": "case-attention-approval"
+                    }
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "bob",
+                        "display_name": "Bob",
+                        "role": "user"
+                    }
+                }
+            }),
+        )?;
+
+        let alice_state = load_record(
+            temp.path(),
+            "user_thread_states",
+            &thread_state_id("alice", "thread-attention-approval"),
+        )?
+        .context("alice thread state")?;
+        assert_eq!(
+            array_strings(alice_state.get("attention_reasons")),
+            vec!["Freigabe nötig".to_owned()]
+        );
+        assert_eq!(
+            alice_state.get("attention_score").and_then(Value::as_i64),
+            Some(80)
+        );
+
+        let bob_state = load_record(
+            temp.path(),
+            "user_thread_states",
+            &thread_state_id("bob", "thread-attention-approval"),
+        )?
+        .context("bob thread state")?;
+        assert!(!array_strings(bob_state.get("attention_reasons"))
+            .contains(&"Freigabe nötig".to_owned()));
+        assert_eq!(
+            bob_state.get("attention_score").and_then(Value::as_i64),
+            Some(0)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unauthorized_actor_cannot_approve_and_request_stays_pending() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        seed_threads_user(temp.path(), "requester", "Requester", "user")?;
+        seed_threads_user(temp.path(), "alice", "Alice", "user")?;
+        seed_threads_user(temp.path(), "bob", "Bob", "user")?;
+        store::accept_rxdb_business_command(
+            temp.path(),
+            json!({
+                "id": "cmd-unauthorized-approval-request",
+                "module": "threads",
+                "command_type": "threads.ctox_approval.request",
+                "record_id": "case-unauthorized-approval",
+                "payload": {
+                    "approval_request_id": "approval-unauthorized-1",
+                    "prompt": "Bitte prüfen.",
+                    "reviewer_user_id": "alice",
+                    "source_context": {
+                        "module": "threads",
+                        "record_type": "case",
+                        "record_id": "case-unauthorized-approval"
+                    }
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "requester",
+                        "display_name": "Requester",
+                        "role": "user"
+                    }
+                }
+            }),
+        )?;
+        let expected_updated_at = approval_updated_at(temp.path(), "approval-unauthorized-1")?;
+
+        let bob_session = session_from_actor(ProjectionActor {
+            id: "bob".to_owned(),
+            display_name: "Bob".to_owned(),
+            role: "user".to_owned(),
+        });
+        let decision = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd-unauthorized-approval-decision".to_owned()),
+            module: "threads".to_owned(),
+            command_type: "threads.ctox_approval.approve".to_owned(),
+            record_id: Some("approval-unauthorized-1".to_owned()),
+            payload: json!({
+                "approval_request_id": "approval-unauthorized-1",
+                "expected_updated_at_ms": expected_updated_at
+            }),
+            client_context: json!({}),
+        };
+        let denied = approve_approval(temp.path(), &bob_session, &decision);
+        assert!(
+            denied.as_ref().err().is_some_and(|error| error
+                .to_string()
+                .contains("Nur der eingetragene Reviewer oder ein Admin darf entscheiden.")),
+            "unauthorized approval must fail with native reviewer authority: {denied:?}"
+        );
+        let approval = load_record(
+            temp.path(),
+            "ctox_task_approval_requests",
+            "approval-unauthorized-1",
+        )?
+        .context("pending approval")?;
+        assert_eq!(value_string(&approval, "status"), "pending");
+        assert_eq!(value_string(&approval, "decision_by_id"), "");
+        Ok(())
+    }
+
+    #[test]
+    fn mark_read_recomputes_unread_count_and_attention_score() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        seed_threads_user(temp.path(), "bob", "Bob", "user")?;
+        seed_threads_user(temp.path(), "alice", "Alice", "user")?;
+        store::accept_rxdb_business_command(
+            temp.path(),
+            json!({
+                "id": "cmd-attention-mention",
+                "module": "threads",
+                "command_type": "threads.note.create",
+                "record_id": "thread-attention-mention",
+                "payload": {
+                    "thread_id": "thread-attention-mention",
+                    "message_id": "msg-attention-mention",
+                    "message_type": "mention",
+                    "body": "@Alice bitte prüfen.",
+                    "target_user_ids": ["alice"],
+                    "source_context": {
+                        "module": "threads",
+                        "record_type": "thread",
+                        "record_id": "thread-attention-mention"
+                    }
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "bob",
+                        "display_name": "Bob",
+                        "role": "user"
+                    }
+                }
+            }),
+        )?;
+
+        let state_id = thread_state_id("alice", "thread-attention-mention");
+        let before = load_record(temp.path(), "user_thread_states", &state_id)?
+            .context("alice state before mark read")?;
+        assert_eq!(before.get("unread_count").and_then(Value::as_i64), Some(1));
+        assert_eq!(
+            array_strings(before.get("attention_reasons")),
+            vec!["Erwähnung".to_owned()]
+        );
+        assert_eq!(
+            before.get("attention_score").and_then(Value::as_i64),
+            Some(60)
+        );
+
+        store::accept_rxdb_business_command(
+            temp.path(),
+            json!({
+                "id": "cmd-attention-mark-read",
+                "module": "threads",
+                "command_type": "threads.notification.mark_read",
+                "record_id": "notif_msg-attention-mention_alice",
+                "payload": {
+                    "notification_id": "notif_msg-attention-mention_alice"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "alice",
+                        "display_name": "Alice",
+                        "role": "user"
+                    }
+                }
+            }),
+        )?;
+
+        let after = load_record(temp.path(), "user_thread_states", &state_id)?
+            .context("alice state after mark read")?;
+        assert_eq!(after.get("unread_count").and_then(Value::as_i64), Some(0));
+        assert!(array_strings(after.get("attention_reasons")).is_empty());
+        assert_eq!(
+            after.get("attention_score").and_then(Value::as_i64),
+            Some(0)
+        );
         Ok(())
     }
 
