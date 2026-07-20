@@ -32358,7 +32358,7 @@ fn promote_systematic_research_workspace_outputs(
         "systematic research writeback requires validated manifest claims"
     );
 
-    let outputs = [
+    let mut outputs = vec![
         SystematicResearchCsvOutput {
             file_name: "source_candidates.csv",
             table_key: "source_candidates",
@@ -32394,16 +32394,40 @@ fn promote_systematic_research_workspace_outputs(
             require_manifest_evidence: false,
             require_manifest_claim: false,
         },
-        // Promote the verified source registry last. It is the app-facing
-        // evidence gate for all dependent tables above.
-        SystematicResearchCsvOutput {
-            file_name: "source_catalog.csv",
-            table_key: "source_catalog",
-            title: "Verified Source Catalog",
+    ];
+    let requested_dashboard_tables = command
+        .payload
+        .pointer("/writeback_contract/dashboard_tables")
+        .and_then(Value::as_object);
+    if requested_dashboard_tables.is_some_and(|tables| tables.contains_key("measured_load_points"))
+    {
+        outputs.push(SystematicResearchCsvOutput {
+            file_name: "measured_load_points.csv",
+            table_key: "measured_load_points",
+            title: "Measured Load Points",
             require_manifest_evidence: true,
             require_manifest_claim: false,
-        },
-    ];
+        });
+    }
+    if requested_dashboard_tables.is_some_and(|tables| tables.contains_key("derived_bearing_loads"))
+    {
+        outputs.push(SystematicResearchCsvOutput {
+            file_name: "derived_bearing_loads.csv",
+            table_key: "derived_bearing_loads",
+            title: "Derived Bearing Loads",
+            require_manifest_evidence: true,
+            require_manifest_claim: true,
+        });
+    }
+    // Promote the verified source registry last. It is the app-facing
+    // evidence gate for every dependent table above.
+    outputs.push(SystematicResearchCsvOutput {
+        file_name: "source_catalog.csv",
+        table_key: "source_catalog",
+        title: "Verified Source Catalog",
+        require_manifest_evidence: true,
+        require_manifest_claim: false,
+    });
 
     let output_root = workspace.join("dashboard/knowledge");
     let mut validated = Vec::with_capacity(outputs.len());
