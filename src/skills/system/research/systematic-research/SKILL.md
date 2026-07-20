@@ -222,6 +222,15 @@ Plan, execute, inspect, persist and then reformulate. Repeat with different
 facets and the complete canonical exclusion list until the source space
 saturates. A single static envelope is not Systematic Research.
 
+For scientific work, the first scholarly response is a seed ledger, not a
+reason to start another broad sweep immediately. Select the relevant DOI/OA
+records, call `ctox_web_read` on at least the three strongest canonical
+original/full-text URLs, and record accepted or rejected read receipts before
+calling `ctox_deep_research`. If a provider reports CAPTCHA or HTTP 429, do not
+repeat the same provider/query in the next facet. Continue from admitted seeds,
+their references, repository links, and an orthogonal provider after its
+cooldown.
+
 In a managed Harness run, invoke the directly exposed typed tools
 `ctox_deep_research`, `ctox_scholarly_search`, and `ctox_web_read`. Do not run
 their `ctox web ...` CLI equivalents through `exec_command`: the shell sandbox

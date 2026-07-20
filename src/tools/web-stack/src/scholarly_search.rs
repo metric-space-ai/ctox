@@ -23,9 +23,10 @@ use anyhow::{bail, Context, Result};
 use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, SystemTime};
 use url::Url;
 
 use crate::runtime_config;
@@ -1058,6 +1059,7 @@ fn scholarly_contact_email(root: &Path) -> Option<String> {
         .or_else(|| runtime_config::get(root, "CTOX_UNPAYWALL_EMAIL"))
         .map(|email| email.trim().to_string())
         .filter(|email| !email.is_empty())
+        .or_else(|| Some("research@ctox.dev".to_string()))
 }
 
 fn crossref_search(root: &Path, request: &ScholarlySearchRequest) -> Result<Vec<ScholarlyResult>> {
@@ -1073,7 +1075,7 @@ fn crossref_search(root: &Path, request: &ScholarlySearchRequest) -> Result<Vec<
     if let Some(email) = scholarly_contact_email(root) {
         url.push_str(&format!("&mailto={}", encode_query(&email)));
     }
-    let payload = fetch_json(&url)?;
+    let payload = fetch_json(root, &url)?;
     let items = payload
         .get("message")
         .and_then(|message| message.get("items"))
@@ -1134,7 +1136,7 @@ fn openalex_search(root: &Path, request: &ScholarlySearchRequest) -> Result<Vec<
     if let Some(email) = scholarly_contact_email(root) {
         url.push_str(&format!("&mailto={}", encode_query(&email)));
     }
-    let payload = fetch_json(&url)?;
+    let payload = fetch_json(root, &url)?;
     let items = payload
         .get("results")
         .and_then(Value::as_array)
@@ -1192,7 +1194,7 @@ fn semantic_scholar_search(
         limit,
         encode_query(request.query.trim())
     );
-    let payload = fetch_json(&url)?;
+    let payload = fetch_json(root, &url)?;
     let items = payload
         .get("data")
         .and_then(Value::as_array)
@@ -1277,7 +1279,7 @@ pub(crate) fn openalex_work_by_id(root: &Path, work_id: &str) -> Result<Scholarl
     if let Some(email) = scholarly_contact_email(root) {
         url.push_str(&format!("?mailto={}", encode_query(&email)));
     }
-    let item = fetch_json(&url)?;
+    let item = fetch_json(root, &url)?;
     let title = item
         .get("display_name")
         .and_then(Value::as_str)
@@ -1456,18 +1458,64 @@ fn encode_query(raw: &str) -> String {
     url::form_urlencoded::byte_serialize(raw.as_bytes()).collect()
 }
 
-fn fetch_json(url: &str) -> Result<Value> {
+fn fetch_json(root: &Path, url: &str) -> Result<Value> {
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(8))
         .build();
-    let text = agent
-        .get(url)
-        .set("User-Agent", "ctox-scholarly/0.1")
-        .call()
-        .map_err(anyhow::Error::from)?
-        .into_string()
-        .map_err(anyhow::Error::from)?;
-    serde_json::from_str(&text).map_err(anyhow::Error::from)
+    let contact = scholarly_contact_email(root).unwrap_or_else(|| "research@ctox.dev".to_string());
+    let user_agent = format!("ctox-scholarly/0.1 (mailto:{contact})");
+    let mut last_error = None;
+    for attempt in 0..4u32 {
+        throttle_scholarly_host(url);
+        match agent.get(url).set("User-Agent", &user_agent).call() {
+            Ok(response) => {
+                let text = response.into_string().map_err(anyhow::Error::from)?;
+                return serde_json::from_str(&text).map_err(anyhow::Error::from);
+            }
+            Err(ureq::Error::Status(status, response))
+                if status == 429 || matches!(status, 500 | 502 | 503 | 504) =>
+            {
+                let retry_after = response
+                    .header("retry-after")
+                    .and_then(|raw| raw.trim().parse::<u64>().ok())
+                    .unwrap_or_else(|| 1u64 << attempt)
+                    .clamp(1, 30);
+                last_error = Some(anyhow::anyhow!("{url}: status code {status}"));
+                if attempt < 3 {
+                    std::thread::sleep(Duration::from_secs(retry_after));
+                }
+            }
+            Err(error) => return Err(anyhow::Error::from(error)),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("{url}: scholarly request failed")))
+}
+
+fn throttle_scholarly_host(url: &str) {
+    static LAST_REQUEST: OnceLock<Mutex<BTreeMap<String, SystemTime>>> = OnceLock::new();
+    let Ok(parsed) = Url::parse(url) else {
+        return;
+    };
+    let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
+    let interval = if host.contains("semanticscholar") {
+        Duration::from_millis(1_100)
+    } else if host.contains("openalex") {
+        Duration::from_millis(350)
+    } else {
+        Duration::from_millis(150)
+    };
+    let mut last_request = LAST_REQUEST
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(last) = last_request.get(&host) {
+        if let Ok(elapsed) = last.elapsed() {
+            if elapsed < interval {
+                std::thread::sleep(interval - elapsed);
+            }
+        }
+    }
+    last_request.insert(host, SystemTime::now());
 }
 
 #[cfg(test)]

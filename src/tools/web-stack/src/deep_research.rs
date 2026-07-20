@@ -122,9 +122,9 @@ impl DeepResearchDepth {
 
     fn database_query_budget(self) -> usize {
         match self {
-            Self::Quick => 3,
-            Self::Standard => 12,
-            Self::Exhaustive => 40,
+            Self::Quick => 2,
+            Self::Standard => 4,
+            Self::Exhaustive => 8,
         }
     }
 
@@ -892,7 +892,7 @@ fn derive_measurement_data_query(raw: &str) -> String {
     let mut terms = topical_query_terms(raw)
         .into_iter()
         .filter(|term| !term.chars().any(|ch| ch.is_ascii_digit()))
-        .take(10)
+        .take(16)
         .collect::<Vec<_>>();
     if lowered.contains("load") || lowered.contains("last") {
         terms.extend([
@@ -1411,7 +1411,7 @@ fn score_source_discovery(source: &Value, query: &str) -> i64 {
         }
     }
 
-    let mut score = topic_score * 8;
+    let mut score = topic_score * 10;
     for term in important_query_terms(query) {
         if haystack.contains(&term) {
             score += if topical_query_stopwords().contains(term.as_str()) {
@@ -1930,24 +1930,19 @@ fn topical_query_stopwords() -> BTreeSet<&'static str> {
         "current",
         "data",
         "dataset",
-        "force",
-        "load",
-        "loads",
-        "measured",
-        "measurement",
-        "moment",
-        "performance",
-        "power",
-        "rpm",
+        "find",
+        "information",
+        "official",
+        "original",
+        "real",
+        "report",
+        "research",
+        "review",
+        "small",
         "source",
         "sources",
-        "stand",
-        "takeoff",
-        "test",
-        "thrust",
-        "torque",
-        "voltage",
-        "weight",
+        "study",
+        "technical",
     ])
 }
 
@@ -2368,12 +2363,8 @@ fn collect_scholarly_database_sources(
     let mut runs = Vec::new();
     let mut citation_queue = VecDeque::<(String, usize, String)>::new();
     let mut queued_references = BTreeSet::new();
-    let queries = plans
-        .iter()
-        .filter(|plan| plan.scholarly)
-        .map(|plan| plan.query.clone())
-        .take(request.depth.database_query_budget())
-        .collect::<Vec<_>>();
+    let queries =
+        scholarly_database_queries(research_query, plans, request.depth.database_query_budget());
     // The academic metadata clients now live behind `ScholarlySearchProvider`
     // in `crate::scholarly_search`; this loop drives them and keeps the
     // `paper_metadata` source-type stamping + relevance scoring in
@@ -2451,6 +2442,46 @@ fn collect_scholarly_database_sources(
         ));
     }
     runs
+}
+
+fn scholarly_database_queries(
+    research_query: &str,
+    plans: &[ResearchSearchPlan],
+    budget: usize,
+) -> Vec<String> {
+    let core = topical_query_terms(research_query)
+        .into_iter()
+        .take(12)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut seen = BTreeSet::new();
+    let mut queries = Vec::new();
+    for plan in plans.iter().filter(|plan| plan.scholarly) {
+        let facet = match plan.label {
+            "scholarly_general" | "topic_literature" => "literature review",
+            "open_access" | "topic_open_access" => "open access",
+            "measured_data_sources" | "topic_measurement_data" => {
+                "experimental measurement dataset"
+            }
+            "load_and_operating_fields" => "force thrust torque RPM vibration",
+            "measurement_validation" => "calibration uncertainty repeatability",
+            "bearing_load_transfer" => "bearing radial axial load shaft",
+            "crossref_doi" => "DOI",
+            _ => "scholarly source",
+        };
+        let query = truncate_query_at_word_boundary(&format!("{core} {facet}"), 140);
+        let key = query.to_ascii_lowercase();
+        if !query.is_empty() && seen.insert(key) {
+            queries.push(query);
+            if queries.len() >= budget.max(1) {
+                break;
+            }
+        }
+    }
+    if queries.is_empty() {
+        queries.push(truncate_query_at_word_boundary(research_query, 140));
+    }
+    queries
 }
 
 fn scholarly_db_query(

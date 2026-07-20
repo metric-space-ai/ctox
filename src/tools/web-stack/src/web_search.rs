@@ -1814,11 +1814,10 @@ fn search_with_query_plan(
             let response = match run_search_provider(root, config, &query, *provider) {
                 Ok(response) => response,
                 Err(err) if auto_provider => {
-                    if is_rate_limit_error(&err) {
-                        // Persist the cooldown so a 429'd provider is not retried
-                        // (and re-throttled) on the next search, not only within
-                        // this multi-query call.
-                        let until_epoch = unix_ts() + 60;
+                    if let Some(cooldown_secs) = provider_block_cooldown_secs(&err) {
+                        // Persist the cooldown so blocked providers are not
+                        // hammered again by every facet in a research run.
+                        let until_epoch = unix_ts() + cooldown_secs;
                         provider_cooldown_until
                             .insert(*provider, UNIX_EPOCH + Duration::from_secs(until_epoch));
                         persist_provider_cooldown(root, *provider, until_epoch);
@@ -1928,8 +1927,24 @@ fn auto_provider_budget(root: &Path, provider: ProviderKind) -> usize {
         .unwrap_or(4)
 }
 
-fn is_rate_limit_error(err: &anyhow::Error) -> bool {
-    is_rate_limit_text(&format!("{err:#}"))
+fn provider_block_cooldown_secs(err: &anyhow::Error) -> Option<u64> {
+    let text = format!("{err:#}").to_ascii_lowercase();
+    if is_rate_limit_text(&text) {
+        return Some(5 * 60);
+    }
+    if text.contains("captcha")
+        || text.contains("/sorry/")
+        || text.contains("recaptcha")
+        || text.contains("anti-bot")
+        || text.contains("anomaly-modal")
+        || text.contains("bots use")
+    {
+        return Some(30 * 60);
+    }
+    if text.contains("consent wall") || text.contains("no result anchors matched") {
+        return Some(10 * 60);
+    }
+    None
 }
 
 fn is_rate_limit_text(text: &str) -> bool {
@@ -2429,16 +2444,57 @@ fn search_response_quality_ok(query: &str, hits: &[SearchHit]) -> bool {
     if hits.is_empty() {
         return false;
     }
-    let terms = significant_terms_with_numbers(query)
+    let focused_terms = significant_terms_with_numbers(query)
         .into_iter()
         .filter(|term| term.len() >= 3)
+        .filter(|term| !is_generic_search_modifier(term))
         .collect::<Vec<_>>();
+    let terms = if focused_terms.len() >= 2 {
+        focused_terms
+    } else {
+        significant_terms_with_numbers(query)
+            .into_iter()
+            .filter(|term| term.len() >= 3)
+            .collect()
+    };
     if terms.len() < 2 {
         return true;
     }
     hits.iter()
         .take(5)
         .any(|hit| score_search_hit_for_query(&terms, hit) >= 2)
+}
+
+fn is_generic_search_modifier(term: &str) -> bool {
+    matches!(
+        term,
+        "about"
+            | "benchmark"
+            | "current"
+            | "data"
+            | "dataset"
+            | "document"
+            | "file"
+            | "find"
+            | "information"
+            | "measured"
+            | "new"
+            | "official"
+            | "original"
+            | "paper"
+            | "pdf"
+            | "real"
+            | "report"
+            | "research"
+            | "result"
+            | "review"
+            | "small"
+            | "source"
+            | "study"
+            | "table"
+            | "technical"
+            | "test"
+    )
 }
 
 fn score_search_hit_for_query(terms: &[String], hit: &SearchHit) -> usize {
