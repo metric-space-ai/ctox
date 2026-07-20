@@ -11357,7 +11357,7 @@ fn validate_systematic_research_web_receipts(
                 && entry.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
                 && doc.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
                 && manifest_kind_matches
-                && relevance_score >= 8
+                && (8..=10).contains(&relevance_score)
                 && entry
                     .get("evidence_relevance_score")
                     .and_then(Value::as_i64)
@@ -24830,7 +24830,7 @@ mod tests {
                         "final_url": "https://example.edu/paper",
                         "canonical_url": "https://example.edu/paper",
                         "evidence_eligible": true,
-                        "evidence_relevance_score": 16,
+                        "evidence_relevance_score": 9,
                         "http_status": 200,
                         "snapshot_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "doc": {
@@ -24861,7 +24861,7 @@ mod tests {
                 "snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "content_kind": "article",
                 "content_scope": "full_text",
-                "relevance_score": 16,
+                "relevance_score": 9,
                 "retrieval_receipt": {
                     "request_url": "https://example.edu/paper",
                     "final_url": "https://example.edu/paper",
@@ -24908,7 +24908,7 @@ mod tests {
             .to_string()
             .contains("not bound to a matching admitted"));
 
-        manifest["evidence"][0]["relevance_score"] = Value::from(16);
+        manifest["evidence"][0]["relevance_score"] = Value::from(9);
         manifest["evidence"][0]["extracted_text"]["sha256"] = Value::String(
             "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_string(),
         );
@@ -24943,7 +24943,7 @@ mod tests {
                         "final_url": "https://example.edu/data.zip",
                         "canonical_url": "https://example.edu/data.zip",
                         "evidence_eligible": true,
-                        "evidence_relevance_score": 16,
+                        "evidence_relevance_score": 9,
                         "http_status": 200,
                         "snapshot_hash": format!("sha256:{digest}"),
                         "doc": {
@@ -24974,7 +24974,7 @@ mod tests {
                 "snapshot_sha256": digest,
                 "content_kind": "data_file",
                 "content_scope": "full_text",
-                "relevance_score": 16,
+                "relevance_score": 9,
                 "retrieval_receipt": {
                     "request_url": "https://example.edu/data.zip",
                     "final_url": "https://example.edu/data.zip",

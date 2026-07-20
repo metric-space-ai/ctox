@@ -36,8 +36,11 @@ An evidence entry is eligible only when all of these are true:
   bind `data_excerpt` to either the original text snapshot or a hash-verified
   ZIP member chain. The guard reads those bytes itself. A plausible
   paraphrase, model-written extract, or unbound transformed table is rejected.
-- `relevance_score` is numeric and at least 8/10, with a short reason tied to
-  the research facet. A shared keyword is not a relevance decision.
+- `relevance_score` is the exact integer `evidence_relevance_score` returned
+  by the current typed `ctox_web_read`, is between 8 and 10 inclusive, and has
+  a short reason tied to the research facet. Never estimate, rescale, round,
+  or overwrite this machine-computed value. A shared keyword is not a
+  relevance decision.
 
 Required lineage is immutable and exact:
 

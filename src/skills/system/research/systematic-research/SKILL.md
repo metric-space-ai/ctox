@@ -51,6 +51,9 @@ current 2xx response and the downloaded original content/data is present in a
 SHA-256-verified snapshot. Require actual full text or original data content,
 `relevance_score >= 8`, and the immutable
 `claim_id -> evidence_id -> snapshot_id -> source_id -> canonical_url` chain.
+Copy `relevance_score` exactly from the current typed `ctox_web_read`
+`evidence_relevance_score` field. Never estimate, rescale, round, or replace
+that machine-computed 0–10 value in the evidence manifest.
 For prose, use the server-written `workspace_evidence` / deep-research
 snapshot receipt and its full extracted-text artifact. Every claim must carry
 a verbatim `evidence_quote` (at least six words and 40 characters) that occurs

@@ -286,8 +286,12 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
             raise GuardError("evidence_requires_current_content_2xx")
         if item.get("freshness_status") != "current":
             raise GuardError("evidence_not_current")
-        if not isinstance(item.get("relevance_score"), (int, float)) or item["relevance_score"] < 8:
-            raise GuardError("evidence_relevance_below_8")
+        if (
+            not isinstance(item.get("relevance_score"), int)
+            or isinstance(item.get("relevance_score"), bool)
+            or not 8 <= item["relevance_score"] <= 10
+        ):
+            raise GuardError("evidence_relevance_not_exact_ctox_web_read_score")
         if item.get("evidence_status") != "eligible":
             raise GuardError("discovery_candidate_not_evidence")
         scope = require_string(item, "content_scope", "evidence").lower()
