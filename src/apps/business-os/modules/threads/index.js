@@ -282,6 +282,12 @@ function wireUi() {
   });
   els.timeline?.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target : null;
+    const deepLink = target?.closest?.('[data-thread-deep-link]');
+    if (deepLink) {
+      event.preventDefault();
+      navigateDeepLink(deepLink.getAttribute('data-thread-deep-link') || '');
+      return;
+    }
     const approve = target?.closest?.('[data-approve-approval]');
     const reject = target?.closest?.('[data-reject-approval]');
     const edit = target?.closest?.('[data-edit-approval]');
@@ -292,6 +298,9 @@ function wireUi() {
     } else if (edit) {
       editApproval(edit.getAttribute('data-edit-approval') || '').catch(showError);
     }
+  });
+  els.source?.addEventListener('click', () => {
+    navigateDeepLink(els.source.dataset.threadDeepLink || '');
   });
   els.watch?.addEventListener('click', () => toggleWatch().catch(showError));
   els.snooze?.addEventListener('click', () => snoozeSelectedThread().catch(showError));
@@ -670,7 +679,13 @@ function renderDetail(threads) {
   }
   if (els.messageBody) els.messageBody.disabled = false;
   if (els.title) els.title.textContent = thread.title || thread.id;
-  if (els.source) els.source.textContent = contextLabel(thread);
+  if (els.source) {
+    els.source.textContent = contextLabel(thread);
+    const sourceLink = sourceDeepLinkFor(thread);
+    els.source.dataset.threadDeepLink = sourceLink;
+    els.source.classList.toggle('is-linked', Boolean(sourceLink));
+    els.source.title = sourceLink ? 'Objekt in der Quell-App öffnen' : '';
+  }
   if (els.status) els.status.textContent = state.status || thread.status || 'open';
   setThreadActionState(thread);
   renderTimeline(thread);
@@ -743,6 +758,7 @@ function renderApproval(approval) {
     <article class="threads-approval-card" data-approval-id="${escapeAttr(approval.id)}">
       ${canDecide ? `
         <div class="threads-card-actions">
+          ${sourceDeepLinkFor(approval) ? `<button type="button" class="ctox-pane-icon" data-thread-deep-link="${escapeAttr(sourceDeepLinkFor(approval))}" aria-label="Objekt in der Quell-App öffnen" title="Objekt in der Quell-App öffnen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M9 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3"/></svg></button>` : ''}
           <button type="button" class="ctox-pane-icon is-confirm" data-approve-approval="${escapeAttr(approval.id)}" aria-label="${escapeHtml(state.t('approvalApprove', 'Freigeben'))}" title="${escapeHtml(state.t('approvalApprove', 'Freigeben'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l5 5L19 7"/></svg></button>
           <button type="button" class="ctox-pane-icon is-danger" data-reject-approval="${escapeAttr(approval.id)}" aria-label="${escapeHtml(state.t('approvalReject', 'Ablehnen'))}" title="${escapeHtml(state.t('approvalReject', 'Ablehnen'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
           <button type="button" class="ctox-pane-icon" data-edit-approval="${escapeAttr(approval.id)}" aria-label="${escapeHtml(state.t('approvalEdit', 'Bearbeiten'))}" title="${escapeHtml(state.t('approvalEdit', 'Bearbeiten'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
@@ -1156,6 +1172,19 @@ function renderContextRow(row) {
     ? `<a href="${escapeAttr(deepLink)}" data-thread-deep-link="${escapeAttr(deepLink)}">${escapeHtml(value || deepLink)}</a>`
     : `<span>${escapeHtml(value)}</span>`;
   return `<dt>${escapeHtml(label)}</dt><dd>${valueHtml}</dd>`;
+}
+
+// Human-in-the-loop rule: a decision surface must link the OBJECT it decides
+// about. Prefer an explicit deep link; otherwise derive the source app hash
+// so approving never happens blind.
+function sourceDeepLinkFor(entry) {
+  if (!entry) return '';
+  const explicit = String(entry.source_deep_link || '').trim();
+  if (explicit) return explicit;
+  const module = String(entry.source_module || entry.target_module || '').trim();
+  if (!module || module === 'threads') return '';
+  const recordId = String(entry.source_record_id || entry.target_record_id || '').trim();
+  return `#${module}${recordId ? `?record_id=${encodeURIComponent(recordId)}` : ''}`;
 }
 
 function navigateDeepLink(value) {

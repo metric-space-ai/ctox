@@ -518,3 +518,8 @@
 /* Standalone note: visible ONLY when the fragment is opened without the shell
    (file://) — inside Business OS this module stylesheet loads and hides it. */
 .ctox-standalone-note { display: none; }
+
+/* The center kicker links to the source object when one exists — approving
+   must never be blind. */
+[data-thread-source].is-linked { cursor: pointer; }
+[data-thread-source].is-linked:hover { color: var(--accent); text-decoration: underline; }
