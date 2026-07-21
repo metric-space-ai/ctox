@@ -944,22 +944,23 @@ export function createWindowManager({
     const corner = CONST.SNAP_CORNER;
     const horizontalDrag = Math.abs(clientX - dragStartX) > Math.abs(clientY - dragStartY) + 12;
     let zone = null;
-    if (y < topEdge || y > bottomEdge || x < leftEdge || x > rightEdge) {
-      snapPreviewEl.removeAttribute('data-snap');
-      snapPreviewEl.classList.remove('is-visible');
-      snapPreviewEl.hidden = true;
-      return;
-    }
-    if (horizontalDrag && x < leftEdge + edge) zone = 'left';
-    else if (horizontalDrag && x > rightEdge - edge) zone = 'right';
-    else if (y < topEdge + corner && x < leftEdge + corner) zone = 'top-left';
-    else if (y < topEdge + corner && x > rightEdge - corner) zone = 'top-right';
-    else if (y > bottomEdge - corner && x < leftEdge + corner) zone = 'bottom-left';
-    else if (y > bottomEdge - corner && x > rightEdge - corner) zone = 'bottom-right';
-    else if (y < topEdge + edge) zone = 'top';
-    else if (y > bottomEdge - edge) zone = 'bottom';
-    else if (x < leftEdge + edge) zone = 'left';
-    else if (x > rightEdge - edge) zone = 'right';
+    // A pointer past an inset boundary (chat dock, menubar, taskbar) means
+    // "dock at that edge", not "abort" — clamp into the usable area instead of
+    // cancelling. Cancelling here is why left/right docking never triggered
+    // whenever a side inset was present: the natural drag to the physical
+    // screen edge overshoots the inner edge band and killed the preview.
+    const xc = Math.min(Math.max(x, leftEdge), rightEdge);
+    const yc = Math.min(Math.max(y, topEdge), bottomEdge);
+    if (horizontalDrag && xc < leftEdge + edge) zone = 'left';
+    else if (horizontalDrag && xc > rightEdge - edge) zone = 'right';
+    else if (yc < topEdge + corner && xc < leftEdge + corner) zone = 'top-left';
+    else if (yc < topEdge + corner && xc > rightEdge - corner) zone = 'top-right';
+    else if (yc > bottomEdge - corner && xc < leftEdge + corner) zone = 'bottom-left';
+    else if (yc > bottomEdge - corner && xc > rightEdge - corner) zone = 'bottom-right';
+    else if (yc < topEdge + edge) zone = 'top';
+    else if (yc > bottomEdge - edge) zone = 'bottom';
+    else if (xc < leftEdge + edge) zone = 'left';
+    else if (xc > rightEdge - edge) zone = 'right';
 
     if (!zone) {
       snapPreviewEl.removeAttribute('data-snap');
