@@ -797,6 +797,136 @@
       ],
       "type": "object",
       "version": 0
+    },
+    "ctox_task_approval_requests": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms",
+        [
+          "is_deleted",
+          "updated_at_ms"
+        ],
+        "status",
+        "requester_user_id",
+        "reviewer_user_id",
+        "thread_id",
+        [
+          "reviewer_user_id",
+          "status",
+          "updated_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "approval_request_id": {
+          "type": "string"
+        },
+        "approved_command_id": {
+          "type": "string"
+        },
+        "approved_task_id": {
+          "type": "string"
+        },
+        "client_context": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "decided_at_ms": {
+          "type": "number"
+        },
+        "decision_by_id": {
+          "type": "string"
+        },
+        "decision_note": {
+          "type": "string"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "instruction": {
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "requested_at_ms": {
+          "type": "number"
+        },
+        "requester_display_name": {
+          "type": "string"
+        },
+        "requester_user_id": {
+          "type": "string"
+        },
+        "reviewer_display_name": {
+          "type": "string"
+        },
+        "reviewer_user_id": {
+          "type": "string"
+        },
+        "source_context": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "source_deep_link": {
+          "type": "string"
+        },
+        "source_label": {
+          "type": "string"
+        },
+        "source_module": {
+          "type": "string"
+        },
+        "source_record_id": {
+          "type": "string"
+        },
+        "source_record_type": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "target_command_type": {
+          "type": "string"
+        },
+        "target_module": {
+          "type": "string"
+        },
+        "target_payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "target_record_id": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms",
+        "thread_id",
+        "status",
+        "requester_user_id",
+        "reviewer_user_id",
+        "prompt"
+      ],
+      "type": "object",
+      "version": 0
     }
   },
   "migration_strategies": {

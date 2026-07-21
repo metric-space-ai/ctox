@@ -8,6 +8,8 @@ const REPORT_COLLECTIONS = [
   'business_module_releases',
   'business_commands',
   'ctox_queue_tasks',
+  'ctox_task_approval_requests',
+  'business_users',
 ];
 const REPORT_DATA_COLLECTIONS = ['business_module_reports', 'ctox_bug_reports'];
 
@@ -22,6 +24,9 @@ const state = {
   search: '',
   kind: 'all',
   status: 'all',
+  viewMode: 'cards',
+  approvals: [],
+  users: [],
   cleanup: null,
   contextMenu: null,
   contextMenuCleanup: null,
@@ -165,11 +170,37 @@ function wireUi() {
   root.querySelector('[data-refresh-reports]')?.addEventListener('click', () => refreshReports({ restartSync: true, manual: true }));
   root.querySelector('[data-report-search]')?.addEventListener('input', (event) => {
     state.search = event.target.value || '';
+    syncReportFilterIndicator(root);
     syncSelectionToVisibleItems();
     render();
   });
+  const filterToggle = root.querySelector('[data-toggle-report-filters]');
+  const filterTray = root.querySelector('[data-report-filter-advanced]');
+  filterToggle?.addEventListener('click', () => {
+    if (!filterTray) return;
+    const open = filterTray.hidden;
+    filterTray.hidden = !open;
+    filterToggle.setAttribute('aria-expanded', String(open));
+  });
+  root.querySelector('[data-reset-report-filters]')?.addEventListener('click', () => {
+    state.status = 'all';
+    state.search = '';
+    const search = root.querySelector('[data-report-search]');
+    const status = root.querySelector('[data-report-status]');
+    if (search) search.value = '';
+    if (status) status.value = 'all';
+    syncReportFilterIndicator(root);
+    syncSelectionToVisibleItems();
+    render();
+  });
+  root.querySelectorAll('[data-report-view]').forEach((button) => button.addEventListener('click', () => {
+    state.viewMode = button.dataset.reportView;
+    root.querySelectorAll('[data-report-view]').forEach((other) => other.setAttribute('aria-pressed', String(other === button)));
+    render();
+  }));
   root.querySelector('[data-report-status]')?.addEventListener('change', (event) => {
     state.status = event.target.value || 'all';
+    syncReportFilterIndicator(root);
     syncSelectionToVisibleItems();
     render();
   });
@@ -182,6 +213,7 @@ function wireUi() {
       state.kind = next;
       root.querySelectorAll('[data-report-kind-chips] [data-report-kind]').forEach((node) => {
         node.classList.toggle('is-active', node === chip);
+        node.setAttribute('aria-selected', String(node === chip));
       });
       syncSelectionToVisibleItems();
       render();
@@ -210,6 +242,11 @@ function wireUi() {
     if (target?.closest('[data-rollback-module]')) {
       const report = currentReportForActions();
       if (report) rollbackSelectedRelease(report);
+      return;
+    }
+    if (target?.closest('[data-delegate-coding]') && !target.closest('[data-delegate-coding]').disabled) {
+      const report = currentReportForActions();
+      if (report) openDelegateDialog(report);
     }
   });
   // Use event delegation on the list container so the click handler survives
@@ -277,6 +314,8 @@ async function refreshReports(options = {}) {
   const releases = byName.business_module_releases?.items || [];
   const commands = byName.business_commands?.items || [];
   const queue = byName.ctox_queue_tasks?.items || [];
+  state.approvals = byName.ctox_task_approval_requests?.items || [];
+  state.users = (byName.business_users?.items || []).filter((user) => user && user.active !== false);
   const nextRenderKey = buildRenderKey({ reports, bugs, releases, commands, queue });
   const hadSameData = nextRenderKey === state.renderKey;
   state.reports = reports;
@@ -341,6 +380,7 @@ function buildRenderKey(collections) {
     summarize(collections.releases, ['id', 'version_id', 'module_id', 'version', 'status', 'updated_at_ms']),
     summarize(collections.commands, ['id', 'command_id', 'status', 'updated_at_ms']),
     summarize(collections.queue, ['id', 'task_id', 'status', 'route_status', 'updated_at_ms']),
+    summarize(state.approvals || [], ['id', 'approval_request_id', 'status', 'updated_at_ms']),
   ].join('\n');
 }
 
@@ -403,13 +443,171 @@ function rememberDetailScroll() {
   state.detailScrollByReport[state.renderedDetailId] = scroller.scrollTop;
 }
 
+function syncReportFilterIndicator(root) {
+  const active = Boolean(state.search) || state.status !== 'all';
+  root?.querySelector('[data-toggle-report-filters]')?.classList.toggle('has-active-filters', active);
+}
+
+// ---------------------------------------------------------------------------
+// Coding-agent delegation: a report is handed to the pi coding agent through
+// a Threads approval (threads.ctox_approval.request with a target command).
+// On approve the native side enqueues ctox.coding.turn for the target module.
+// ---------------------------------------------------------------------------
+function delegationInfoFor(report) {
+  const approval = (state.approvals || []).find((item) => {
+    const source = item?.source_context || {};
+    return item?.target_record_id === report.id || source.record_id === report.id;
+  }) || null;
+  const command = (state.commands || []).find((item) => {
+    if (String(item?.command_type || item?.type || '') !== 'ctox.coding.turn') return false;
+    const context = item?.payload?.context || {};
+    return context.record_id === report.id;
+  }) || null;
+  return { approval, command };
+}
+
+function delegationStatusHtml(report) {
+  const { approval, command } = delegationInfoFor(report);
+  if (command) {
+    const status = String(command.status || command.task_status || 'running');
+    const badge = status === 'completed' ? 'is-success' : status === 'failed' ? 'is-danger' : 'is-warning';
+    return `<p class="reports-delegation-status"><span class="ctox-badge ${badge}">Coding Agent · ${escapeHtml(displayStatus(status))}</span> <a href="#coding-agents" class="reports-delegation-link">Im Coding-Agents-Log öffnen</a></p>`;
+  }
+  if (approval) {
+    const status = String(approval.status || 'pending');
+    const badge = status === 'approved' ? 'is-success' : status === 'rejected' ? 'is-danger' : 'is-warning';
+    const label = status === 'pending' ? `Freigabe offen · ${escapeHtml(approval.reviewer_display_name || approval.reviewer_user_id || '')}`
+      : status === 'approved' ? 'Freigegeben' : status === 'rejected' ? 'Abgelehnt' : escapeHtml(status);
+    return `<p class="reports-delegation-status"><span class="ctox-badge ${badge}">${label}</span> <a href="#threads" class="reports-delegation-link">In Threads öffnen</a></p>`;
+  }
+  return '';
+}
+
+function editableTargetModules() {
+  const modules = Array.isArray(state.ctx?.modules) ? state.ctx.modules : [];
+  const seen = new Set();
+  return modules
+    .filter((mod) => mod && typeof mod.id === 'string' && mod.id.trim() && mod.hidden !== true && mod.editable !== false)
+    .map((mod) => ({ id: mod.id.trim(), title: String(mod.title || mod.id).trim() }))
+    .filter((mod) => (seen.has(mod.id) ? false : (seen.add(mod.id), true)))
+    .sort((left, right) => left.title.localeCompare(right.title, undefined, { sensitivity: 'base' }));
+}
+
+function delegationPromptFor(report) {
+  const lines = [
+    `Bug/Feature-Report aus der Reports-App (${report.kindLabel || report.kind || 'Report'} · ${report.id}):`,
+    '',
+    `Titel: ${report.title || ''}`,
+  ];
+  if (report.summary) lines.push('', `Beschreibung: ${report.summary}`);
+  if (report.expected) lines.push('', `Erwartet: ${report.expected}`);
+  if (report.moduleId) lines.push('', `Betroffenes Modul: ${report.moduleId}`);
+  lines.push('', 'Behebe das Problem in einem begrenzten Coding-Turn und halte die Änderung klein.');
+  return lines.join('\n');
+}
+
+function openDelegateDialog(report) {
+  const host = state.ctx.host;
+  host.querySelector('[data-delegate-modal]')?.remove();
+  const actorId = state.ctx.session?.user_id || state.ctx.session?.userId || '';
+  const reviewers = (state.users || []).filter((user) => (user.id || user.user_id) !== actorId);
+  const targets = editableTargetModules();
+  const preferred = targets.some((mod) => mod.id === report.moduleId) ? report.moduleId : (targets[0]?.id || '');
+  const wrap = document.createElement('div');
+  wrap.className = 'ctox-modal';
+  wrap.setAttribute('data-delegate-modal', '');
+  wrap.innerHTML = `
+    <div class="ctox-modal-card">
+      <header class="ctox-modal-header"><h3 class="ctox-modal-title">An Coding Agent übergeben</h3></header>
+      <div class="ctox-modal-body reports-delegate-body">
+        <label class="ctox-field-label" for="delegate-target">Ziel-App</label>
+        <select class="ctox-select" id="delegate-target">${targets.map((mod) => `<option value="${escapeAttr(mod.id)}" ${mod.id === preferred ? 'selected' : ''}>${escapeHtml(mod.title)} (${escapeHtml(mod.id)})</option>`).join('')}</select>
+        <label class="ctox-field-label" for="delegate-reviewer">Freigabe durch</label>
+        ${reviewers.length
+          ? `<select class="ctox-select" id="delegate-reviewer">${reviewers.map((user) => `<option value="${escapeAttr(user.id || user.user_id)}">${escapeHtml(user.display_name || user.name || user.id || user.user_id)}</option>`).join('')}</select>`
+          : `<input class="ctox-input" id="delegate-reviewer" type="text" placeholder="Reviewer-User-ID (z. B. alice)" aria-label="Reviewer-User-ID">`}
+        <label class="ctox-field-label" for="delegate-prompt">Auftrag an den Agenten</label>
+        <textarea class="ctox-textarea" id="delegate-prompt" rows="8"></textarea>
+        <p class="reports-delegate-hint">Die Delegation läuft als Freigabe über Threads; erst nach der Freigabe startet der Coding-Turn.</p>
+      </div>
+      <footer class="ctox-modal-footer">
+        <button type="button" class="ctox-button" data-delegate-cancel>Abbrechen</button>
+        <button type="button" class="ctox-button is-primary" data-delegate-submit ${targets.length ? '' : 'disabled'}>Zur Freigabe einreichen</button>
+      </footer>
+    </div>
+  `;
+  host.appendChild(wrap);
+  const promptInput = wrap.querySelector('#delegate-prompt');
+  promptInput.value = delegationPromptFor(report);
+  wrap.querySelector('[data-delegate-cancel]').addEventListener('click', () => wrap.remove());
+  wrap.addEventListener('click', (event) => { if (event.target === wrap) wrap.remove(); });
+  wrap.querySelector('[data-delegate-submit]').addEventListener('click', async () => {
+    const target = wrap.querySelector('#delegate-target').value;
+    const reviewer = wrap.querySelector('#delegate-reviewer').value.trim();
+    const prompt = promptInput.value.trim();
+    if (!target || !reviewer || prompt.length < 20) {
+      state.ctx.notifications?.notify?.({ title: 'Delegation unvollständig', body: 'Ziel-App, Reviewer und ein aussagekräftiger Auftrag sind nötig.' });
+      return;
+    }
+    try {
+      await dispatchModuleCommand({
+        commandType: 'threads.ctox_approval.request',
+        module: 'threads',
+        moduleId: target,
+        recordId: report.id,
+        source: 'reports-coding-delegation',
+        payload: {
+          approval_request_id: `approval_${newId()}`,
+          title: `Coding-Delegation: ${report.title || report.id}`,
+          prompt,
+          reviewer_user_id: reviewer,
+          target_module: target,
+          target_record_id: report.id,
+          target_command_type: 'ctox.coding.turn',
+          target_payload: { module_id: target, prompt },
+          source_context: {
+            module: 'reports',
+            record_type: report.kind === 'bug' ? 'bug_report' : 'feature_request',
+            record_id: report.id,
+            label: report.title || report.id,
+          },
+        },
+      });
+      wrap.remove();
+      state.ctx.notifications?.notify?.({ title: 'Zur Freigabe eingereicht', body: `Der Auftrag wartet in Threads auf die Freigabe.` });
+      await refreshReports({});
+    } catch (error) {
+      state.ctx.notifications?.notify?.({ title: 'Delegation fehlgeschlagen', body: safeErrorMessage(error) });
+    }
+  });
+}
+
 function renderList() {
   const list = state.ctx.host.querySelector('[data-reports-list]');
   if (!list) return;
   const items = filteredReports();
   const allItems = normalizedReports();
+  const root = state.ctx.host.querySelector('[data-reports-root]');
+  // Counted view band (zeros included) + one-line footer.
+  const searched = filterReportItems(normalizedReports(), { search: state.search, kind: 'all', status: state.status });
+  const setCount = (kind, value) => { const node = root?.querySelector(`[data-count-kind-${kind}]`); if (node) node.textContent = ` (${value})`; };
+  setCount('all', searched.length);
+  setCount('bug', searched.filter((item) => item.kind === 'bug').length);
+  setCount('feature', searched.filter((item) => item.kind !== 'bug').length);
+  const footer = root?.querySelector('[data-reports-footer]');
+  if (footer) footer.textContent = `${allItems.length} Meldungen`;
+  list.classList.toggle('is-list-view', state.viewMode === 'list');
   if (!items.length) {
     list.innerHTML = renderListEmptyState(allItems);
+    return;
+  }
+  if (state.viewMode === 'list') {
+    list.innerHTML = items.map((report) => `
+      <button type="button" class="ctox-list-item report-row-compact ${report.id === state.selectedId ? 'is-selected' : ''}" data-report-id="${escapeAttr(report.id)}" data-context-record-id="${escapeAttr(report.id)}" data-context-record-type="business_report" data-context-label="${escapeAttr(report.title || report.id)}">
+        <span class="reports-compact-title">${escapeHtml(report.title)}</span>
+        <span class="ctox-badge${statusBadgeClass(report.status)}">${escapeHtml(displayStatus(report.status))}</span>
+      </button>
+    `).join('');
     return;
   }
   list.innerHTML = items.map((report) => `
@@ -427,6 +625,16 @@ function renderList() {
   // per-button on every renderList() is no longer needed.
 }
 
+function renderDetailFooter(report) {
+  const node = state.ctx.host.querySelector('[data-report-detail-footer]');
+  if (!node) return;
+  if (!report) { node.textContent = ''; return; }
+  const { approval, command } = delegationInfoFor(report);
+  const delegated = command ? `Coding Agent: ${displayStatus(String(command.status || 'running'))}`
+    : approval ? `Freigabe: ${String(approval.status || 'pending')}` : '';
+  node.textContent = [report.moduleId, displayStatus(report.status), delegated].filter(Boolean).join(' · ');
+}
+
 function renderDetail() {
   const detail = state.ctx.host?.querySelector('[data-reports-detail]');
   if (!detail) {
@@ -439,6 +647,7 @@ function renderDetail() {
   const normalized = normalizedReports();
   const filtered = filteredReports();
   const report = filtered.find((item) => item.id === state.selectedId) || null;
+  renderDetailFooter(report);
   const kindLabelNode = detail.querySelector('[data-report-kind-label]');
   const titleNode = detail.querySelector('[data-report-title]');
   if (!report) {
@@ -538,6 +747,8 @@ function renderActions() {
   }
   const releases = releasesForModule(report.moduleId);
   const hasCtoxTask = Boolean(report.commandId || report.taskId);
+  const delegation = delegationInfoFor(report);
+  const delegationOpen = Boolean(delegation.approval && String(delegation.approval.status || 'pending') === 'pending') || Boolean(delegation.command && !['completed', 'failed'].includes(String(delegation.command.status || '')));
   actions.innerHTML = `
     <div class="ctox-pane-scroll reports-actions-scroll">
       <section class="ctox-card">
@@ -546,6 +757,15 @@ function renderActions() {
           <button type="button" class="ctox-button is-primary reports-actions-task" data-focus-task ${hasCtoxTask ? '' : 'disabled'}>
             ${escapeHtml(state.t('showCtoxTask', 'CTOX Task zeigen'))}
           </button>
+        </div>
+      </section>
+      <section class="ctox-card">
+        <header>${escapeHtml(state.t('codingAgent', 'Coding Agent'))}</header>
+        <div class="ctox-card-body">
+          <button type="button" class="ctox-button is-primary" data-delegate-coding ${delegationOpen ? 'disabled' : ''}>
+            ${escapeHtml(state.t('delegateCoding', 'An Coding Agent übergeben'))}
+          </button>
+          ${delegationStatusHtml(report) || `<p class="reports-delegation-status reports-delegation-empty">${escapeHtml(state.t('delegationNone', 'Noch nicht delegiert. Die Übergabe läuft als Freigabe über Threads.'))}</p>`}
         </div>
       </section>
       <section class="ctox-card">
@@ -835,6 +1055,7 @@ async function dispatchModuleCommand({
   recordId,
   payload,
   source,
+  module = 'ctox',
 }) {
   if (!state.ctx.commandBus?.dispatch || !state.ctx.db?.collection?.('business_commands')) {
     throw new Error(state.t('commandsUnavailable', 'Aktionen sind gerade nicht verfügbar.'));
@@ -846,7 +1067,7 @@ async function dispatchModuleCommand({
   const commandId = `cmd_${newId()}`;
   return state.ctx.commandBus.dispatch({
     id: commandId,
-    module: 'ctox',
+    module,
     type: commandType,
     record_id: recordId || moduleId,
     inbound_channel: moduleId,

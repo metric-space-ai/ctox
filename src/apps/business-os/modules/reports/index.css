@@ -191,3 +191,93 @@
     grid-template-rows: minmax(220px, 38vh) minmax(420px, 1fr) minmax(260px, 42vh);
   }
 }
+/* ============================================================================
+   Canonical grammar rows (filterbar, tray, counted band, well, footers) +
+   coding-agent delegation status. Same vocabulary as knowledge/threads.
+   ========================================================================== */
+.reports-filterbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px 8px;
+}
+.reports-filterbar .ctox-pane-search { flex: 1 1 auto; min-width: 0; }
+.reports-view-toggle { display: flex; gap: 2px; flex: 0 0 auto; }
+.reports-view-toggle .ctox-pane-icon[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.reports-filter-toggle { position: relative; flex: 0 0 auto; }
+.reports-filter-toggle.has-active-filters::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.reports-filter-advanced { padding: 0 12px 8px; }
+.reports-filter-advanced[hidden] { display: none !important; }
+.reports-filter-row { display: flex; align-items: center; gap: 6px; }
+.reports-select { flex: 1 1 auto; min-width: 0; height: 28px; font-size: 12px; }
+.reports-sort-dir {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+}
+.reports-sort-dir:hover { color: var(--text); background: var(--surface-2); }
+.reports-sort-dir svg { width: 14px; height: 14px; }
+.reports-view-switch { padding: 0 12px 8px; border-bottom: 1px solid var(--line); }
+.reports-view-switch .view-count { color: var(--muted); font-weight: 500; }
+.reports-well {
+  min-height: 0;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--text) 6%, var(--surface));
+}
+.reports-footer {
+  padding: 6px 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10px;
+}
+.reports-rail { grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.reports-detail { grid-template-rows: auto minmax(0, 1fr) auto; }
+/* Compact list rendering (canonical counterpart of the shard rows). */
+.report-row-compact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 12px;
+}
+.reports-compact-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+/* Delegation status line + dialog body. */
+.reports-delegation-status {
+  margin: 8px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.reports-delegation-empty { color: var(--muted); }
+.reports-delegation-link { color: var(--accent); text-decoration: none; }
+.reports-delegation-link:hover { text-decoration: underline; }
+.reports-delegate-body { display: flex; flex-direction: column; gap: 6px; }
+.reports-delegate-hint { margin: 4px 0 0; color: var(--muted); font-size: 11px; }

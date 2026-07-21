@@ -8,7 +8,9 @@
     "ctox_bug_reports",
     "business_module_releases",
     "business_commands",
-    "ctox_queue_tasks"
+    "ctox_queue_tasks",
+    "ctox_task_approval_requests",
+    "business_users"
   ],
   "layout": {
     "shell": "windowed",

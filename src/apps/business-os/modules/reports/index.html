@@ -6,32 +6,46 @@
           <span class="ctox-pane-kicker">CTOX Intake</span>
           <h2 class="ctox-pane-title">Bugs &amp; Features</h2>
         </div>
-        <div class="ctox-pane-actions">
-          <button type="button" class="ctox-pane-icon reports-refresh-button" data-refresh-reports title="Aktualisieren" aria-label="Aktualisieren">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4"/></svg>
-          </button>
+        <div class="ctox-pane-actions"></div>
+      </div>
+      <!-- Row 2: filter section — search + shard/list toggle + collapsed tray.
+           No refresh button: the module keeps itself current (reactive). -->
+      <div class="reports-filterbar">
+        <input class="ctox-pane-search" type="search" data-report-search placeholder="Suchen..." aria-label="Bugs und Features suchen" />
+        <div class="reports-view-toggle" role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-report-view="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-report-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
+        <button type="button" class="ctox-pane-icon reports-filter-toggle" data-toggle-report-filters aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="reports-filter-advanced" data-report-filter-advanced hidden>
+        <div class="reports-filter-row">
+          <select class="ctox-select reports-select" data-report-status aria-label="Status filtern">
+            <option value="all">Alle Status</option>
+            <option value="open">Offen</option>
+            <option value="running">In Arbeit</option>
+            <option value="completed">Erledigt</option>
+            <option value="blocked">Blockiert</option>
+          </select>
+          <button type="button" class="reports-sort-dir reports-filter-reset" data-reset-report-filters aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
         </div>
       </div>
-      <div class="ctox-pane-tools">
-        <input class="ctox-pane-search" type="search" data-report-search placeholder="Suchen..." aria-label="Bugs und Features suchen" />
-        <select class="ctox-pane-filter" data-report-status aria-label="Status filtern">
-          <option value="all">Alle Status</option>
-          <option value="open">Offen</option>
-          <option value="running">In Arbeit</option>
-          <option value="completed">Erledigt</option>
-          <option value="blocked">Blockiert</option>
-        </select>
-      </div>
     </header>
-    <nav class="reports-kind-chips" data-report-kind-chips aria-label="Typ filtern">
-      <button type="button" class="ctox-chip is-active" data-report-kind="all">Alle</button>
-      <button type="button" class="ctox-chip" data-report-kind="bug">Bugs</button>
-      <button type="button" class="ctox-chip" data-report-kind="feature">Features</button>
+    <!-- Row 3: counted view band. -->
+    <nav class="reports-view-switch" data-report-kind-chips aria-label="Typ Ansichten">
+      <div class="ctox-pane-tabs">
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-report-kind="all" aria-selected="true">Alle<span class="view-count" data-count-kind-all></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-report-kind="bug" aria-selected="false">Bugs<span class="view-count" data-count-kind-bug></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-report-kind="feature" aria-selected="false">Features<span class="view-count" data-count-kind-feature></span></button>
+      </div>
     </nav>
-    <div class="ctox-list" data-reports-list></div>
+    <div class="ctox-pane-body reports-well">
+      <div class="ctox-list" data-reports-list></div>
+    </div>
+    <footer class="reports-footer"><span data-reports-footer></span></footer>
   </aside>
   <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="260" data-resizer-max="500" aria-label="Spaltenbreite anpassen"></button>
-  <section class="ctox-pane reports-detail" aria-label="Report Details">
+  <section class="ctox-pane reports-detail" data-reports-detail aria-label="Report Details">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
@@ -46,6 +60,7 @@
       </div>
     </header>
     <div class="ctox-pane-scroll reports-detail-scroll" data-reports-detail-scroll></div>
+    <footer class="reports-footer"><span data-report-detail-footer></span></footer>
   </section>
   <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="280" data-resizer-max="440" aria-label="Spaltenbreite anpassen"></button>
   <aside class="ctox-pane reports-actions" aria-label="Report Aktionen" data-reports-actions></aside>
