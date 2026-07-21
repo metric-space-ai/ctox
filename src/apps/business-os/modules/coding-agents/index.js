@@ -17,10 +17,13 @@ const RECENT_TURNS_LIMIT = 8;
 // runs on the SAME model/provider as CTOX (the gateway). Only an explicit
 // non-default pick sends a pi-ai provider model.
 const MODEL_PRESETS = [
-  // Honest list: only what the pi sidecar actually runs today. Anything else
-  // must come from real model discovery (provider registry / llm gateway),
-  // never from invented labels.
-  { id: 'ctox', label: 'CTOX (Standard)', model: null },
+  // Honest list: exactly what the native sidecar contract serves today
+  // (pi_sidecar.rs): the gateway default resolves to Kimi K3; explicit picks
+  // ride the same gateway by public model id. True dynamic discovery needs a
+  // typed `ctox.coding.models` command — never invented labels.
+  { id: 'ctox', label: 'CTOX (Standard · Kimi K3)', model: null },
+  { id: 'kimi-k3', label: 'Kimi K3 (Gateway)', model: { provider: 'ctox-gateway', api: 'openai-responses', id: 'kimi-k3', name: 'Kimi K3 (CTOX gateway)' } },
+  { id: 'minimax-m3', label: 'MiniMax M3 (Gateway)', model: { provider: 'ctox-gateway', api: 'openai-responses', id: 'minimax-m3', name: 'MiniMax M3 (CTOX gateway)' } },
 ];
 const DEFAULT_MODEL_PRESET = MODEL_PRESETS[0].id;
 
