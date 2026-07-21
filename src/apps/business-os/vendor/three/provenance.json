@@ -1,0 +1,9 @@
+{
+  "name": "three",
+  "version": "0.185.1",
+  "source": "https://github.com/mrdoob/three.js (npm `three` 0.185.1: build/three.module.min.js, build/three.core.min.js, examples/jsm/geometries/RoundedBoxGeometry.js)",
+  "license": "MIT",
+  "vendored_at": "2026-07-21",
+  "purpose": "WebGL renderer for the App Store retail-box shelf (press.stripe.com-style browse surface, adapted from the ctox-dev marketing showcase).",
+  "modifications": "RoundedBoxGeometry.js: bare `three` import rewritten to the relative vendored module. No other changes."
+}
