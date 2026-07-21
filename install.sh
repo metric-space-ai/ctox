@@ -1870,6 +1870,12 @@ build_ctox() {
   fi
   clean_stale_cmake_cache_dirs "$main_target_dir" "$source_root"
 
+  local pi_sidecar_dir="$source_root/src/core/coding_agents/pi-sidecar"
+  if [[ -f "$pi_sidecar_dir/package.json" ]]; then
+    run_build_module "ctox pi coding sidecar deps" "$pi_sidecar_dir" npm ci --ignore-scripts
+    run_build_module "ctox pi coding sidecar bundle" "$pi_sidecar_dir" npm run build
+  fi
+
   # 1. Build main CTOX binary
   if [[ "$managed_release_build" -eq 1 ]]; then
     run_build_module "ctox CLI" "$source_root" "$cargo" build --release --bin ctox
