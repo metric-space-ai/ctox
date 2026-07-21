@@ -1,39 +1,57 @@
 /* CTOX Business OS — IoT module (delegation app, RFC 0011).
-   2-pane: LEFT = assets & signals · CENTER = dashboards of automation widgets.
-   Frame (.ctox-workspace--two-pane[data-resize-frame]), panes, the declarative
-   column resizer (.ctox-column-resizer[data-resizer-var]), pane headers,
-   buttons, icon buttons, chips, badges, tabs, table, inputs, cards, callouts,
-   list items and empty states all come from shared/base.css (+ app.css
-   pane-header typography). This file only holds what the kit does not
-   express: the nested asset/signal tree, the status dots, the dashboard
-   widget grid and the automation widget itself. */
+   IA-Karte: LEFT = asset/signal tree selector (canonical column grammar) ·
+   MAIN = dashboard of automation widgets for the selection. NO third column.
+   The workspace frame, panes, canonical column grammar (filterbar, view toggle,
+   filter tray, counted band, .ctox-well, .ctox-pane-footer), list rows, cards,
+   badges, buttons, table, inputs and empty states all come from shared/base.css
+   and are wired by the shell. This file only pins the pane grid tracks and the
+   genuinely iot-specific bits the kit does not express: the nested asset/signal
+   tree, the status dots, the dashboard widget grid and the automation widget. */
 
-/* custom: content padding for the left pane scroll area. */
-.iot-scroll { padding: 8px 10px 18px; }
+.iot-module {
+  --ctox-left-width: 340px;
+}
 
-/* custom: section spacing for the field labels that split the left pane
-   into "Bereich" / "Struktur" groups. */
-.iot-section-label { margin: 14px 4px 6px; }
+/* Explicit column pins so the center pane never slides onto a resizer track
+   when the kit hides resizers on narrow windows. Primary (center) keeps a hard
+   minimum. The left grammar pane carries all four grid rows (header · band ·
+   well · footer). */
+.iot-module {
+  grid-template-columns: var(--ctox-left-width, 340px) 12px minmax(300px, 1fr);
+}
+.iot-left { grid-column: 1; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.iot-module > [data-resizer="left"] { grid-column: 2; }
+.iot-center { grid-column: 3; grid-template-rows: auto minmax(0, 1fr); }
 
-/* custom: realm rows are kit list items laid out as name + count. */
-.iot-realm-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* Empty/loading states injected as a pane's only child span all pane rows. */
+.iot-pane > .ctox-empty { grid-row: 1 / -1; }
+
+/* MAIN header second row: the dashboard view toggle lives in a tools row, not
+   in the top-right element-action cluster. */
+.iot-main-tools { justify-content: flex-end; }
 
 /* custom: nested asset/signal tree — indentation per depth, twisties,
    hover-reveal add buttons and bindable signal rows have no kit component. */
-.iot-tree { display: flex; flex-direction: column; gap: 2px; }
+.iot-tree { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px 18px; }
 .iot-node { display: flex; align-items: center; gap: 8px; border-radius: var(--control-radius);
   padding: 7px 8px; cursor: pointer; border: 1px solid transparent; }
 .iot-node:hover { background: var(--kit-hover); }
-.iot-node[aria-selected="true"] { background: var(--accent-soft); }
-.iot-node .iot-twisty { width: 16px; text-align: center; color: var(--muted); font-size: 11px; flex: none; }
+.iot-node.is-selected, .iot-node[aria-selected="true"] { background: var(--accent-soft); }
+.iot-node .iot-twisty { width: 16px; text-align: center; color: var(--muted); font-size: 11px; flex: none; cursor: pointer; }
 .iot-node-name { flex: 1; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .iot-node-add { opacity: 0; }
-.iot-node:hover .iot-node-add { opacity: 1; }
+.iot-node:hover .iot-node-add, .iot-node-add:focus-visible { opacity: 1; }
 
-/* signals (bindable) under an asset — right-click = Auftrag */
+/* flat (list-view) selector rows — kit list item stacked as name + meta. */
+.iot-flat-row { display: grid; gap: 3px; cursor: pointer; }
+.iot-flat-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.iot-flat-meta { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* signals (bindable) under an asset — a selector row, scopes the MAIN dashboard. */
 .iot-signal { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--control-radius);
-  cursor: context-menu; font-size: 12px; color: var(--muted); }
-.iot-signal:hover { background: var(--accent-soft); color: var(--accent); }
+  cursor: pointer; font-size: 12px; color: var(--muted); }
+.iot-signal:hover { background: var(--kit-hover); }
+.iot-signal.is-selected, .iot-signal[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); }
 .iot-signal-glyph { color: var(--accent); opacity: .75; flex: none; }
 .iot-signal-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .iot-signal-val { font-variant-numeric: tabular-nums; }
@@ -53,9 +71,9 @@
 .iot-form-body { display: grid; gap: 10px; }
 .iot-form-actions { display: flex; gap: 8px; justify-content: flex-end; }
 
-/* custom: dashboard chip row wraps when many dashboards exist. */
-.iot-dash-tabs { flex-wrap: wrap; gap: 6px; }
-.iot-dash-sub { color: var(--muted); }
+/* The one elevated, domain-named automation action: create a standing order. */
+.iot-order-action.is-primary { color: var(--accent-foreground); background: var(--accent); }
+.iot-order-action.is-primary:hover { background: color-mix(in srgb, var(--accent) 88%, var(--text)); }
 
 /* custom: the dashboard itself — a grid (or list) of automation widgets.
    No kit component covers draggable, rearrangeable widget cards. */
@@ -108,18 +126,20 @@
 .iot-ed-area.code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; line-height: 1.5; }
 .iot-ed-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; }
 
-/* custom: medium widths stack the left pane above the dashboards (the kit
-   grid collapse only goes single-column); hides the resizer like the kit. */
+/* custom: narrow windows stack the left pane above the dashboard (the kit grid
+   collapse only goes single-column); hides the resizer like the kit. */
 @container business-app-window (max-width: 760px) {
   .iot-module {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(360px, 1fr);
+    grid-template-rows: minmax(240px, 40vh) minmax(360px, 1fr);
     height: auto;
     min-height: 100%;
     overflow-y: auto;
     gap: 8px;
-    padding: 8px;
   }
+
+  .iot-left { grid-column: 1; }
+  .iot-center { grid-column: 1; }
 
   .iot-module > .ctox-column-resizer {
     display: none !important;

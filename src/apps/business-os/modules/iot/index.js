@@ -1,14 +1,19 @@
 // CTOX Business OS — IoT module (delegation app, RFC 0011).
-// 2-pane: LEFT = assets & signals (the vocabulary you delegate over) ·
-// CENTER = dashboards of AUTOMATION widgets. A widget is one standing order to
-// CTOX, programmed in three parts: ① Trigger-Logik (Rhai watcher, backend) ·
-// ② Widget-Code (render_code, sandboxed) · ③ Auftrags-Prompt (action_prompt →
-// chat spawn on fire). The human writes prompts (Wenn/Dann + signal); CTOX
-// programs the watcher. No JSON fields, no fake chat, no monitoring framing.
+// IA-Karte: LEFT = asset/signal tree, the SELECTOR column with the canonical
+// shell-wired column grammar (search · view-toggle · collapsed filter tray with
+// realm scope + reset · counted band [Alle/Signale/Alarme] · recessed well ·
+// one-line footer). MAIN = the dashboard of AUTOMATION widgets for the selected
+// asset/signal — the unique work surface. NO third column.
+//
+// A widget is one standing order to CTOX, programmed in three parts: ①
+// Trigger-Logik (Rhai watcher, backend) · ② Widget-Code (render_code,
+// sandboxed) · ③ Auftrags-Prompt (action_prompt → chat spawn on fire). The
+// human writes prompts (Wenn/Dann + signal); CTOX programs the watcher. All
+// command flows and collection schemas are unchanged from the previous IA.
 import { createContextMenu } from '../../shared/context-menu.js';
 import { showBusinessPrompt, showBusinessConfirm, showBusinessAlert } from '../../shared/dialogs.js';
 
-const BUILD = '20260711-iot-context-compact-v2';
+const BUILD = '20260721-iot-ia-karte-v1';
 const COLLECTIONS = [
   'iot_realms', 'iot_assets', 'iot_attributes', 'iot_datapoints', 'iot_alarms',
   'iot_dashboards', 'iot_widgets',
@@ -20,11 +25,16 @@ const state = {
   menu: null,
   collections: empty(),
   realm: 'all',
-  selectedAssetId: '',
+  band: 'all',            // 'all' | 'signals' | 'alarms'
+  view: 'cards',          // LEFT tree view: 'cards' (tree) | 'list' (flat)
+  search: '',
   expanded: new Set(),
-  creating: null,        // { parentId } | null — asset create
-  dashboardId: '',       // selected dashboard
-  viewMode: 'cards',     // 'cards' | 'list'
+  selection: { kind: '', assetId: '', attr: '' }, // '' | 'asset' | 'signal'
+  creating: null,         // { parentId } | null — asset create
+  dashboardId: '',        // implicit persistence dashboard
+  mainView: 'cards',      // MAIN dashboard: 'cards' | 'list'
+  dragId: null,
+  loading: true,
 };
 
 function empty() { return Object.fromEntries(COLLECTIONS.map((c) => [c, []])); }
@@ -42,6 +52,60 @@ function col(name) {
   return db?.collection?.(name) || null;
 }
 
+// ---------------------------------------------------------------------------
+// Pure helpers (exported for tests — no DOM, no RxDB). Asset rows are annotated
+// { id, name, realm, parent_id, signalCount, alarmOpen }.
+// ---------------------------------------------------------------------------
+
+// Band membership is a filter, not a partition: an asset can be in several.
+export function assetMatchesBand(row, band) {
+  if (band === 'signals') return Number(row?.signalCount || 0) > 0;
+  if (band === 'alarms') return Boolean(row?.alarmOpen);
+  return true;
+}
+
+export function filterAssetRows(rows, { realm = 'all', band = 'all', search = '' } = {}) {
+  const needle = String(search || '').trim().toLowerCase();
+  return (Array.isArray(rows) ? rows : []).filter((row) => {
+    if (realm !== 'all' && String(row.realm || 'master') !== realm) return false;
+    if (!assetMatchesBand(row, band)) return false;
+    if (!needle) return true;
+    return String(row.name || row.id || '').toLowerCase().includes(needle);
+  });
+}
+
+// Counted band tallies (zeros included) over an already realm/search-scoped row
+// set — the band itself is NOT applied here.
+export function countsForAssets(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  return {
+    all: list.length,
+    signals: list.filter((row) => Number(row.signalCount || 0) > 0).length,
+    alarms: list.filter((row) => Boolean(row.alarmOpen)).length,
+  };
+}
+
+// The MAIN dashboard is revealed by selection: no selection → the "select an
+// asset" empty state; a selection → the dashboard. (2-pane auto-reveal analog:
+// visible = hasSelection; there is no collapsible detail pane to userCollapse.)
+export function resolveMainState(hasSelection) {
+  return hasSelection ? 'dashboard' : 'select';
+}
+
+// Which widgets the MAIN dashboard shows for the current selection. A signal
+// selection filters to that exact signal; an asset selection rolls up the asset
+// and its descendants. Self-contained signal parse keeps this DOM/collection-free.
+export function widgetsForSelection(widgets, selection = {}) {
+  const list = Array.isArray(widgets) ? widgets : [];
+  const assetOf = (ref) => { const i = String(ref || '').indexOf('::'); return i < 0 ? String(ref || '') : String(ref).slice(0, i); };
+  if (selection.signalRef) return list.filter((w) => w.signal_ref === selection.signalRef);
+  if (Array.isArray(selection.assetIds)) {
+    const set = new Set(selection.assetIds);
+    return list.filter((w) => set.has(assetOf(w.signal_ref)));
+  }
+  return [];
+}
+
 // Monochrome stroke icons for header/close buttons. Delegates to the shell's
 // getActionIcon (shared/icons.js via mount ctx); inline paths mirror
 // actionIconPaths as a fallback for older shells.
@@ -55,6 +119,13 @@ function icon(name) {
   const path = ACTION_ICON_FALLBACK_PATHS[name] || ACTION_ICON_FALLBACK_PATHS.add;
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${path}"></path></svg>`;
 }
+function iconSvg(paths) {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+}
+const ICON = {
+  spark: '<path d="M13 2L3 14h7l-1 8 10-12h-7z"/>',
+  webhook: '<circle cx="12" cy="5" r="2.4"/><path d="M12 7.4v4l-3.4 5.9"/><circle cx="6.2" cy="19" r="2.4"/><path d="M8.6 19h6.8"/><circle cx="17.8" cy="19" r="2.4"/><path d="M15.4 17.7L12 11.4"/>',
+};
 
 // Map a widget status-dot key onto the base.css badge states.
 function statusBadgeClass(dot) {
@@ -66,6 +137,9 @@ function statusBadgeClass(dot) {
 
 export async function mount(ctx) {
   state.ctx = ctx;
+  state.lang = ctx.locale === 'en' ? 'en' : 'de';
+  state.selection = { kind: '', assetId: '', attr: '' };
+  state.loading = true;
   // Cache-bust the shared i18n module like CSS/HTML below (?v=BUILD), then load
   // this module's locale messages (German is the inline fallback in t()).
   try {
@@ -79,16 +153,21 @@ export async function mount(ctx) {
   state.menu = createContextMenu({ host: document.body, viewportEl: document.documentElement });
 
   const root = ctx.host.querySelector('[data-iot-root]');
+  applyStaticLabels();
+  seedGrammarState();
   // The left column resizer is wired declaratively by the shell from the
-  // `.ctox-column-resizer[data-resizer-var]` handle inside the
-  // `[data-resize-frame]` root — no module JS needed here.
-
+  // `.ctox-column-resizer[data-resizer-var]` handle; the canonical column
+  // grammar (search/tray/reset/active-dot/view-toggle/band) is auto-wired by
+  // the shell from the data-pg-* markup — no module chrome JS here.
   root?.addEventListener('click', onClick);
   root?.addEventListener('submit', onSubmit);
   root?.addEventListener('dragstart', onDragStart);
   root?.addEventListener('dragover', onDragOver);
   root?.addEventListener('drop', onDrop);
   root?.addEventListener('dragend', () => { state.dragId = null; clearDragMarks(); });
+  // The shell reports search / view / tray / band changes on this bubbling
+  // event; those are intentional resets (the tree rebuilds).
+  root?.addEventListener('ctox-pane-grammar-change', onGrammarChange);
 
   // Paint the frame from the empty state immediately. Cold native projections
   // must not hold the window lifecycle open while seven collections hydrate.
@@ -140,6 +219,41 @@ async function loadMarkup() {
   return doc.body.innerHTML;
 }
 
+function rootEl() { return state.ctx?.host?.querySelector('[data-iot-root]'); }
+
+// Translate the static data-copy labels + search placeholder once on mount.
+function applyStaticLabels() {
+  const el = rootEl();
+  if (!el) return;
+  el.querySelectorAll('[data-copy]').forEach((node) => {
+    const value = t(node.dataset.copy, node.textContent);
+    if (value) node.textContent = value;
+  });
+  const search = el.querySelector('[data-pg-search]');
+  if (search) search.placeholder = t('search', 'Suchen...');
+}
+
+// Seed the cached grammar state from the DOM before the shell fires its first
+// change event (the shell wires the pane asynchronously after mount).
+function seedGrammarState() {
+  const el = rootEl();
+  if (!el) return;
+  state.search = (el.querySelector('[data-pg-search]')?.value || '').trim().toLowerCase();
+  state.view = el.querySelector('[data-pg-view][aria-pressed="true"]')?.dataset.pgView || 'cards';
+  state.band = el.querySelector('[data-pg-band][aria-selected="true"]')?.dataset.pgBand || 'all';
+  state.realm = el.querySelector('[data-pg-filter][data-pg-name="realm"]')?.value || 'all';
+}
+
+function onGrammarChange(event) {
+  const detail = event?.detail || {};
+  state.search = String(detail.search ?? state.search ?? '').trim().toLowerCase();
+  state.view = detail.view || state.view || 'cards';
+  state.band = detail.band || 'all';
+  state.realm = (detail.filters && detail.filters.realm) || 'all';
+  syncSelectionToVisible();
+  render();
+}
+
 async function reload(isActive = () => true) {
   const next = empty();
   for (const n of COLLECTIONS) {
@@ -148,32 +262,63 @@ async function reload(isActive = () => true) {
   }
   if (!isActive()) return;
   state.collections = next;
-  // Default selections.
+  state.loading = false;
+  // Keep an implicit persistence dashboard current for widget writes.
   if (!state.dashboardId) { const d = dashboards()[0]; if (d) state.dashboardId = d.id; }
   if (state.dashboardId && !dashboards().some((d) => d.id === state.dashboardId)) state.dashboardId = dashboards()[0]?.id || '';
+  syncSelectionToVisible();
   render();
 }
 
 /* ---------- data helpers ---------- */
 function realms() { return state.collections.iot_realms || []; }
 function allAssets() { return state.collections.iot_assets || []; }
-function assetsInRealm() { return state.realm === 'all' ? allAssets() : allAssets().filter((a) => a.realm === state.realm); }
-function childrenOf(id) { return assetsInRealm().filter((a) => (a.parent_id || null) === (id || null)); }
 function assetById(id) { return allAssets().find((a) => a.id === id) || null; }
 function attrsOf(id) { return (state.collections.iot_attributes || []).filter((a) => a.asset_id === id); }
 function numericAttrs(id) { return attrsOf(id).filter((a) => typeof a.value === 'number' || a.value_type === 'Number'); }
-function descendants(id) { const out = []; const walk = (p) => childrenOf(p).forEach((c) => { out.push(c); walk(c.id); }); walk(id); return out; }
+function childrenAll(id) { return allAssets().filter((a) => (a.parent_id || null) === (id || null)); }
+function descendantIdsAll(id) { const out = []; const walk = (p) => childrenAll(p).forEach((c) => { out.push(c.id); walk(c.id); }); walk(id); return out; }
+function ancestorIdsAll(id) { const out = []; const seen = new Set([id]); let cur = assetById(id); while (cur && cur.parent_id && !seen.has(cur.parent_id)) { out.push(cur.parent_id); seen.add(cur.parent_id); cur = assetById(cur.parent_id); } return out; }
+function hasOpenAlarm(id) { return (state.collections.iot_alarms || []).some((al) => (al.asset_id === id || (al.asset_ids || []).includes(id)) && al.status !== 'Closed' && al.status !== 'Resolved'); }
 
 function currentRealm() { return state.realm === 'all' ? 'master' : state.realm; }
 function dashboards() {
   const all = state.collections.iot_dashboards || [];
   return state.realm === 'all' ? all : all.filter((d) => (d.realm || 'master') === state.realm);
 }
-function dashboardById(id) { return (state.collections.iot_dashboards || []).find((d) => d.id === id) || null; }
 function widgetsOf(dashId) {
   return (state.collections.iot_widgets || [])
     .filter((w) => w.dashboard_id === dashId)
     .sort((a, b) => Number(a.sort_index || 0) - Number(b.sort_index || 0));
+}
+
+// Annotated asset rows for the selector + band tallies.
+function assetRows() {
+  return allAssets().map((a) => ({
+    id: a.id,
+    name: a.name || a.id,
+    realm: a.realm || 'master',
+    parent_id: a.parent_id || null,
+    signalCount: numericAttrs(a.id).length,
+    alarmOpen: hasOpenAlarm(a.id),
+  }));
+}
+function scopedAssetRows() { return filterAssetRows(assetRows(), { realm: state.realm, band: 'all', search: state.search }); }
+function visibleAssetRows() { return filterAssetRows(assetRows(), { realm: state.realm, band: state.band, search: state.search }); }
+
+// Selection helpers ---------------------------------------------------------
+function selectionKey(sel = state.selection) {
+  if (sel.kind === 'signal') return `${sel.assetId}::${sel.attr}`;
+  if (sel.kind === 'asset') return sel.assetId;
+  return '';
+}
+function hasSelection() { return Boolean(state.selection.kind); }
+function syncSelectionToVisible() {
+  const visibleIds = new Set(visibleAssetRows().map((r) => r.id));
+  if (state.selection.kind === 'signal' && assetById(state.selection.assetId)) return;
+  if (state.selection.kind === 'asset' && visibleIds.has(state.selection.assetId)) return;
+  const first = visibleAssetRows()[0];
+  state.selection = first ? { kind: 'asset', assetId: first.id, attr: '' } : { kind: '', assetId: '', attr: '' };
 }
 
 // signal_ref canonical form is "<asset_id>::<attribute_name>".
@@ -183,6 +328,10 @@ function signalLabel(ref) {
   const [aid, attr] = parseSignal(ref);
   const a = assetById(aid);
   return `${a ? a.name : aid} · ${attr}`;
+}
+function assetPath(id) {
+  const names = [...ancestorIdsAll(id)].reverse().map((pid) => assetById(pid)?.name).filter(Boolean);
+  return names.join(' / ');
 }
 
 function datapointSeries(assetId, attrName) {
@@ -210,73 +359,138 @@ function statusOf(w) { return statusInfo(w.trigger_status) || (w.trigger_code ? 
 
 /* ---------- render ---------- */
 function render() {
-  const left = state.ctx.host.querySelector('[data-iot-left]');
-  const center = state.ctx.host.querySelector('[data-iot-center]');
-  if (left) left.innerHTML = renderLeft();
-  if (center) { center.innerHTML = renderCenter(); mountRenderIframes(center); }
+  renderTree();
+  renderCountsAndFooter();
+  renderMain();
 }
 
-function renderLeft() {
-  const rs = realms();
-  const realmRows = [`<button class="ctox-list-item iot-realm-row" data-act="realm" data-realm="all" aria-selected="${state.realm === 'all'}"><span>${esc(t('realm.all', 'Alle Bereiche'))}</span><span class="ctox-chip-count">${allAssets().length}</span></button>`]
-    .concat(rs.map((r) => {
-      const key = r.realm || r.id;
-      const n = allAssets().filter((a) => a.realm === key).length;
-      return `<button class="ctox-list-item iot-realm-row" data-act="realm" data-realm="${esc(key)}" aria-selected="${state.realm === key}"><span>${esc(r.name || key)}</span><span class="ctox-chip-count">${n}</span></button>`;
-    }));
-
-  const tree = childrenOf(null).map((a) => renderNode(a, 0)).join('') ||
-    `<div class="ctox-empty">${esc(t('tree.empty', 'Noch keine Assets. Lege oben links eins an.'))}</div>`;
-
-  const createForm = state.creating ? renderCreateForm() : '';
-
-  return `
-    <header class="ctox-pane-header ctox-pane-band">
-      <div class="ctox-pane-title-row">
-        <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">CTOX IoT</span>
-          <h2 class="ctox-pane-title">${esc(t('left.title', 'Assets & Signale'))}</h2>
-        </div>
-        <div class="ctox-pane-actions">
-          <button class="ctox-pane-icon" type="button" data-act="new-asset" data-parent="" aria-label="${esc(t('left.newAssetLabel', 'Asset anlegen'))}" title="${esc(t('left.newAssetLabel', 'Asset anlegen'))}">${icon('add')}</button>
-        </div>
-      </div>
-    </header>
-    <div class="ctox-pane-scroll iot-scroll">
-      <div class="ctox-field-label iot-section-label">${esc(t('left.realmSection', 'Bereich'))}</div>
-      ${realmRows.join('')}
-      ${createForm && !state.creating.parentId ? createForm : ''}
-      <div class="ctox-field-label iot-section-label">${esc(t('left.structSection', 'Struktur'))}</div>
-      <div class="iot-tree">${tree}</div>
-    </div>`;
+function renderCountsAndFooter() {
+  const el = rootEl();
+  const counts = countsForAssets(scopedAssetRows());
+  const pane = el?.querySelector('.iot-left');
+  const pg = pane?.__ctoxPaneGrammar;
+  if (pg && typeof pg.setCounts === 'function') pg.setCounts(counts);
+  else for (const [key, value] of Object.entries(counts)) {
+    const node = el?.querySelector(`[data-pg-count="${key}"]`);
+    if (node) node.textContent = ` (${value})`;
+  }
+  const realmLabel = state.realm === 'all'
+    ? t('allRealms', 'Alle Bereiche')
+    : (realms().find((r) => (r.realm || r.id) === state.realm)?.name || state.realm);
+  const bandLabel = { all: t('bandAll', 'Alle'), signals: t('bandSignals', 'Signale'), alarms: t('bandAlarms', 'Alarme') }[state.band] || t('bandAll', 'Alle');
+  const footerText = `${visibleAssetRows().length} ${t('assetsWord', 'Assets')} · ${realmLabel} · ${bandLabel}`;
+  if (pg && typeof pg.setFooter === 'function') pg.setFooter(footerText);
+  else { const node = el?.querySelector('[data-pg-footer]'); if (node) node.textContent = footerText; }
+  // Keep the realm tray options current (preserve the live value).
+  applyRealmOptions(el);
 }
 
-function renderNode(asset, depth) {
-  const kids = childrenOf(asset.id);
+function applyRealmOptions(el) {
+  const select = el?.querySelector('[data-pg-filter][data-pg-name="realm"]');
+  if (!select) return;
+  const options = [`<option value="all">${esc(t('allRealms', 'Alle Bereiche'))}</option>`]
+    .concat(realms().map((r) => { const key = r.realm || r.id; return `<option value="${esc(key)}">${esc(r.name || key)}</option>`; }));
+  const next = options.join('');
+  if (select.innerHTML !== next) select.innerHTML = next;
+  select.value = state.realm;
+}
+
+// The tree/list SELECTOR. Rebuilt only on data / grammar changes; selection is
+// an in-place class flip (applyTreeSelection), never a rebuild.
+function renderTree() {
+  const host = state.ctx?.host?.querySelector('[data-iot-tree]');
+  if (!host) return;
+  if (!allAssets().length) {
+    host.innerHTML = `<div class="ctox-empty"><strong>${esc(t('tree.emptyTitle', 'Noch keine Assets'))}</strong><span>${esc(t('tree.emptyBody', 'Lege oben links eins an.'))}</span></div>`;
+    return;
+  }
+  const visible = visibleAssetRows();
+  if (!visible.length) {
+    host.innerHTML = `<div class="ctox-empty"><span>${esc(t('tree.noMatch', 'Kein Asset passt zum Filter.'))}</span></div>`;
+    return;
+  }
+  if (state.view === 'list') {
+    host.innerHTML = visible
+      .slice()
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)))
+      .map((row) => flatRowHtml(row)).join('');
+    // The create form (root-level) still needs a home in list view.
+    if (state.creating && !state.creating.parentId) host.insertAdjacentHTML('afterbegin', renderCreateForm());
+    return;
+  }
+  // Cards (tree) view: render the hierarchy, restricted to matching assets plus
+  // the ancestors needed to reach them so the tree stays navigable.
+  const keep = new Set(visible.map((r) => r.id));
+  for (const row of visible) for (const anc of ancestorIdsAll(row.id)) keep.add(anc);
+  const createRoot = state.creating && !state.creating.parentId ? renderCreateForm() : '';
+  host.innerHTML = createRoot + (childrenAll(null).map((a) => renderNode(a, 0, keep)).join('') || '');
+}
+
+function renderNode(asset, depth, keep) {
+  if (!keep.has(asset.id)) return '';
+  const kids = childrenAll(asset.id).filter((k) => keep.has(k.id));
   const open = state.expanded.has(asset.id);
   const signals = numericAttrs(asset.id);
-  const warn = (state.collections.iot_alarms || []).some((a) => (a.asset_id === asset.id || (a.asset_ids || []).includes(asset.id)) && a.status !== 'Closed' && a.status !== 'Resolved');
+  const warn = hasOpenAlarm(asset.id);
   const dot = warn ? 'warn' : signals.length ? 'ok' : '';
   const twisty = (kids.length || signals.length) ? (open ? '▾' : '▸') : '';
-  const sel = state.selectedAssetId === asset.id;
+  const sel = state.selection.kind === 'asset' && state.selection.assetId === asset.id;
   const childForm = state.creating && state.creating.parentId === asset.id ? renderCreateForm() : '';
   const signalRows = open ? signals.map((s) => {
     const name = s.attribute_name || s.name;
+    const key = signalRef(asset.id, name);
     const val = (typeof s.value === 'number') ? `${s.value}${unitOf(s)}` : '';
-    return `<div class="iot-signal" data-id="${esc(asset.id)}" data-act="signal" data-asset="${esc(asset.id)}" data-attr="${esc(name)}" data-context-record-id="${esc(`${asset.id}:${name}`)}" data-context-record-type="iot_signal" data-context-label="${esc(`${asset.name || asset.id} · ${name}`)}" style="padding-left:${8 + (depth + 1) * 16}px" title="${esc(t('signal.hint', 'Signal auswählen; weitere Aktionen über das Aktionsmenü'))}">
+    const ssel = state.selection.kind === 'signal' && selectionKey() === key;
+    return `<div class="iot-signal${ssel ? ' is-selected' : ''}" role="button" tabindex="0" aria-selected="${ssel}" data-sel-kind="signal" data-sel-key="${esc(key)}" data-asset-id="${esc(asset.id)}" data-attr="${esc(name)}" data-context-record-id="${esc(key)}" data-context-record-type="iot_signal" data-context-label="${esc(`${asset.name || asset.id} · ${name}`)}" style="padding-left:${8 + (depth + 1) * 16}px">
       <span class="iot-signal-glyph">∿</span><span class="iot-signal-name">${esc(name)}</span><span class="iot-signal-val">${esc(val)}</span></div>`;
   }).join('') : '';
   return `
-    <div class="iot-node" data-act="select" data-id="${esc(asset.id)}" aria-selected="${sel}" style="padding-left:${8 + depth * 16}px">
-      <span class="iot-twisty" data-act="toggle" data-id="${esc(asset.id)}">${twisty}</span>
+    <div class="iot-node${sel ? ' is-selected' : ''}" role="button" tabindex="0" data-sel-kind="asset" data-sel-key="${esc(asset.id)}" data-asset-id="${esc(asset.id)}" aria-selected="${sel}" data-context-record-id="${esc(asset.id)}" data-context-record-type="iot_asset" data-context-label="${esc(asset.name || asset.id)}" style="padding-left:${8 + depth * 16}px">
+      <span class="iot-twisty" data-act="toggle" data-asset-id="${esc(asset.id)}">${twisty}</span>
       <span class="iot-status-dot ${dot}"></span>
       <span class="iot-node-name">${esc(asset.name)}</span>
       <span class="ctox-badge">${esc(asset.asset_type)}</span>
-      <button class="ctox-icon-button ctox-icon-button--sm iot-node-add" title="${esc(t('node.addChild', 'Untergeordnetes Asset'))}" aria-label="${esc(t('node.addChild', 'Untergeordnetes Asset'))}" data-act="new-asset" data-parent="${esc(asset.id)}">+</button>
+      <button class="ctox-icon-button ctox-icon-button--sm iot-node-add" type="button" title="${esc(t('node.addChild', 'Untergeordnetes Asset'))}" aria-label="${esc(t('node.addChild', 'Untergeordnetes Asset'))}" data-act="new-asset" data-parent="${esc(asset.id)}">+</button>
     </div>
     ${childForm}
     ${signalRows}
-    ${open ? kids.map((k) => renderNode(k, depth + 1)).join('') : ''}`;
+    ${open ? kids.map((k) => renderNode(k, depth + 1, keep)).join('') : ''}`;
+}
+
+function flatRowHtml(row) {
+  const sel = state.selection.kind === 'asset' && state.selection.assetId === row.id;
+  const asset = assetById(row.id);
+  const path = assetPath(row.id);
+  const dot = row.alarmOpen ? 'warn' : row.signalCount ? 'ok' : '';
+  const meta = [path, row.signalCount ? `${row.signalCount} ${t('signalsWord', 'Signale')}` : ''].filter(Boolean).join(' · ');
+  return `<div class="ctox-list-item iot-flat-row${sel ? ' is-selected' : ''}" role="button" tabindex="0" aria-selected="${sel}" data-sel-kind="asset" data-sel-key="${esc(row.id)}" data-asset-id="${esc(row.id)}" data-context-record-id="${esc(row.id)}" data-context-record-type="iot_asset" data-context-label="${esc(row.name)}">
+    <div class="iot-flat-head"><span class="iot-status-dot ${dot}"></span><span class="iot-node-name">${esc(row.name)}</span><span class="ctox-badge">${esc(asset?.asset_type || '')}</span></div>
+    ${meta ? `<div class="iot-flat-meta">${esc(meta)}</div>` : ''}
+  </div>`;
+}
+
+// In-place selection flip across existing rows — NO tree rebuild (scroll stays).
+function applyTreeSelection() {
+  const host = state.ctx?.host?.querySelector('[data-iot-tree]');
+  const key = selectionKey();
+  host?.querySelectorAll('[data-sel-kind]').forEach((rowEl) => {
+    const on = (rowEl.getAttribute('data-sel-key') || '') === key;
+    rowEl.classList.toggle('is-selected', on);
+    rowEl.setAttribute('aria-selected', String(on));
+  });
+}
+
+function selectAsset(id) {
+  if (!id) return;
+  state.selection = { kind: 'asset', assetId: id, attr: '' };
+  applyTreeSelection();
+  renderMain();
+}
+function selectSignal(assetId, attr) {
+  if (!assetId || !attr) return;
+  state.selection = { kind: 'signal', assetId, attr };
+  applyTreeSelection();
+  renderMain();
 }
 
 function renderCreateForm() {
@@ -297,54 +511,74 @@ function renderCreateForm() {
     </form>`;
 }
 
-/* ---------- center: dashboards of automation widgets ---------- */
-function renderCenter() {
-  const ds = dashboards();
-  const tabs = ds.map((d) => `<button class="ctox-chip ${d.id === state.dashboardId ? 'is-active' : ''}" type="button" data-act="select-dash" data-id="${esc(d.id)}">${esc(d.name)}</button>`).join('');
-  const toolbar = `
+/* ---------- MAIN: dashboard of automation widgets for the selection ---------- */
+function displayedWidgets() {
+  const sel = state.selection;
+  if (sel.kind === 'signal') return widgetsForSelection(state.collections.iot_widgets, { signalRef: signalRef(sel.assetId, sel.attr) })
+    .sort((a, b) => Number(a.sort_index || 0) - Number(b.sort_index || 0));
+  if (sel.kind === 'asset') return widgetsForSelection(state.collections.iot_widgets, { assetIds: [sel.assetId, ...descendantIdsAll(sel.assetId)] })
+    .sort((a, b) => Number(a.sort_index || 0) - Number(b.sort_index || 0));
+  return [];
+}
+
+function renderMain() {
+  const center = state.ctx?.host?.querySelector('[data-iot-center]');
+  if (!center) return;
+  if (resolveMainState(hasSelection()) === 'select' || !allAssets().length) {
+    center.innerHTML = mainEmptyState();
+    return;
+  }
+  const widgets = displayedWidgets();
+  center.innerHTML = mainHeader() + (state.mainView === 'list' ? renderList(widgets) : renderCards(widgets));
+  mountRenderIframes(center);
+}
+
+function mainEmptyState() {
+  return `<div class="ctox-empty">
+    <strong>${esc(t('main.selectTitle', 'Wähle links ein Asset oder Signal'))}</strong>
+    <span>${esc(t('main.selectBody', 'Das Dashboard mit den CTOX-Aufträgen erscheint dann hier.'))}</span>
+  </div>`;
+}
+
+function mainHeader() {
+  const sel = state.selection;
+  const title = sel.kind === 'signal' ? signalLabel(signalRef(sel.assetId, sel.attr)) : (assetById(sel.assetId)?.name || sel.assetId);
+  const path = sel.kind === 'signal' ? (assetById(sel.assetId)?.name || '') : (assetPath(sel.assetId) || t('main.kicker', 'CTOX IoT'));
+  const webhookBtn = sel.kind === 'signal'
+    ? `<button class="ctox-pane-icon" type="button" data-act="signal-webhook" aria-label="${esc(t('menu.asWebhook', 'Als Webhook-Quelle einrichten'))}" title="${esc(t('menu.asWebhook', 'Als Webhook-Quelle einrichten'))}">${iconSvg(ICON.webhook)}</button>`
+    : '';
+  return `
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">CTOX IoT</span>
-          <h2 class="ctox-pane-title">${esc(t('center.title', 'Dashboards'))}</h2>
+          <span class="ctox-pane-kicker">${esc(path || t('main.kicker', 'CTOX IoT'))}</span>
+          <h2 class="ctox-pane-title">${esc(title)}</h2>
         </div>
         <div class="ctox-pane-actions">
-          <div class="ctox-pane-tabs" role="tablist" aria-label="${esc(t('center.viewLabel', 'Ansicht'))}">
-            <button class="ctox-pane-tab ${state.viewMode === 'cards' ? 'active' : ''}" type="button" role="tab" aria-selected="${state.viewMode === 'cards'}" data-act="view" data-view="cards">${esc(t('view.cards', 'Karten'))}</button>
-            <button class="ctox-pane-tab ${state.viewMode === 'list' ? 'active' : ''}" type="button" role="tab" aria-selected="${state.viewMode === 'list'}" data-act="view" data-view="list">${esc(t('view.list', 'Liste'))}</button>
-          </div>
+          ${webhookBtn}
+          <button class="ctox-pane-icon is-primary iot-order-action" type="button" data-act="new-auftrag" aria-label="${esc(t('cards.newAuftrag', 'Auftrag anlegen'))}" title="${esc(t('cards.newAuftrag', 'Auftrag anlegen'))}">${iconSvg(ICON.spark)}</button>
         </div>
       </div>
-      <div class="ctox-pane-tools iot-dash-tabs">
-        ${tabs || `<span class="iot-dash-sub">${esc(t('dash.none', 'Noch kein Dashboard'))}</span>`}
-        <button class="ctox-pane-icon" type="button" data-act="new-dash" aria-label="${esc(t('dash.new', 'Neues Dashboard'))}" title="${esc(t('dash.new', 'Neues Dashboard'))}">${icon('add')}</button>
+      <div class="ctox-filterbar iot-main-tools">
+        <div class="ctox-view-toggle" role="group" aria-label="${esc(t('center.viewLabel', 'Ansicht'))}">
+          <button type="button" class="ctox-pane-icon" data-act="view" data-view="cards" aria-pressed="${state.mainView === 'cards'}" aria-label="${esc(t('view.cards', 'Karten'))}" title="${esc(t('view.cards', 'Karten'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-act="view" data-view="list" aria-pressed="${state.mainView === 'list'}" aria-label="${esc(t('view.list', 'Liste'))}" title="${esc(t('view.list', 'Liste'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
       </div>
     </header>`;
-
-  if (!ds.length) {
-    return toolbar + `<div class="ctox-empty">
-      <strong>${esc(t('empty.title', 'Beauftrage CTOX, auf deine Signale aufzupassen'))}</strong>
-      <p>${t('empty.body', 'Ein Dashboard bündelt <b>Aufträge</b>: pro Auftrag schreibst du <b>Wenn</b> &amp; <b>Dann</b> — CTOX programmiert den Wächter und handelt.')}</p>
-      <div><button class="ctox-button" data-act="new-dash">${esc(t('empty.newDash', 'Dashboard anlegen'))}</button></div>
-    </div>`;
-  }
-
-  const widgets = widgetsOf(state.dashboardId);
-  const body = state.viewMode === 'list' ? renderList(widgets) : renderCards(widgets);
-  return toolbar + body;
 }
 
 function renderCards(widgets) {
   if (!widgets.length) {
     return `<div class="ctox-empty">
       <strong>${esc(t('cards.emptyTitle', 'Noch keine Aufträge'))}</strong>
-      <p>${t('cards.emptyBody', 'Rechtsklick auf ein Signal links → <b>„Auftrag von diesem Signal"</b>, oder:')}</p>
+      <p>${t('cards.emptyBody', 'Auftrag anlegen — schreibe <b>Wenn</b> &amp; <b>Dann</b>, CTOX programmiert den Wächter:')}</p>
       <div><button class="ctox-button" data-act="new-auftrag">${esc(t('cards.newAuftrag', 'Auftrag anlegen'))}</button></div>
     </div>`;
   }
   const cards = widgets.map(renderWidgetCard).join('');
   return `<div class="iot-dash-grid">${cards}
-    <button class="iot-widget iot-add-card" data-act="new-auftrag"><span class="iot-add-plus">+</span><span>${esc(t('cards.addAuftrag', 'Auftrag hinzufügen'))}</span></button>
+    <button class="iot-widget iot-add-card" type="button" data-act="new-auftrag"><span class="iot-add-plus">+</span><span>${esc(t('cards.addAuftrag', 'Auftrag hinzufügen'))}</span></button>
   </div>`;
 }
 
@@ -359,7 +593,7 @@ function renderWidgetCard(w) {
       <div class="iot-widget-head">
         <span class="iot-status-dot ${st.dot}" title="${esc(st.label)}"></span>
         <span class="iot-widget-title">${esc(signalLabel(w.signal_ref))}</span>
-        <button class="ctox-pane-icon iot-widget-more" data-act="widget-menu" data-id="${esc(w.id)}" aria-label="${esc(t('card.actions', 'Aktionen'))}" title="${esc(t('card.actions', 'Aktionen'))}">⋯</button>
+        <button class="ctox-pane-icon iot-widget-more" type="button" data-act="widget-menu" data-id="${esc(w.id)}" aria-label="${esc(t('card.actions', 'Aktionen'))}" title="${esc(t('card.actions', 'Aktionen'))}">⋯</button>
       </div>
       <div class="iot-widget-viz">
         <div class="iot-render-host" data-render-widget="${esc(w.id)}">${w.render_code ? '' : (series.length > 1 ? sparkSvg(series, 'iot-spark') : `<div class="iot-viz-empty">${esc(t('card.noData', 'noch keine Messwerte'))}</div>`)}</div>
@@ -368,8 +602,8 @@ function renderWidgetCard(w) {
       <div class="iot-when"><span class="iot-tag">${esc(t('tag.when', 'Wenn'))}</span><span class="iot-when-text">${esc(w.cond_text || t('card.condPlaceholder', 'Bedingung wird mit CTOX festgelegt'))}</span></div>
       <div class="iot-then"><span class="iot-tag then">${esc(t('tag.then', 'Dann'))}</span><span class="iot-then-text">${esc(w.action_prompt || t('card.actionPlaceholder', 'Aktion wird mit CTOX festgelegt'))}</span></div>
       <div class="iot-widget-foot">
-        <button class="ctox-button ctox-button--ghost ctox-button--sm" data-act="edit-cond" data-id="${esc(w.id)}" aria-label="${esc(t('tag.when', 'Wenn'))}">${esc(t('tag.when', 'Wenn'))} ✎</button>
-        <button class="ctox-button ctox-button--ghost ctox-button--sm" data-act="edit-action" data-id="${esc(w.id)}" aria-label="${esc(t('tag.then', 'Dann'))}">${esc(t('tag.then', 'Dann'))} ✎</button>
+        <button class="ctox-button ctox-button--ghost ctox-button--sm" type="button" data-act="edit-cond" data-id="${esc(w.id)}" aria-label="${esc(t('tag.when', 'Wenn'))}">${esc(t('tag.when', 'Wenn'))} ✎</button>
+        <button class="ctox-button ctox-button--ghost ctox-button--sm" type="button" data-act="edit-action" data-id="${esc(w.id)}" aria-label="${esc(t('tag.then', 'Dann'))}">${esc(t('tag.then', 'Dann'))} ✎</button>
       </div>
     </div>`;
 }
@@ -383,13 +617,13 @@ function renderList(widgets) {
       <td>${esc(w.cond_text || '—')}</td>
       <td>${esc(w.action_prompt || '—')}</td>
       <td><span class="ctox-badge${statusBadgeClass(st.dot)} iot-widget-status">${esc(st.label)}</span></td>
-      <td class="is-num"><button class="ctox-pane-icon iot-widget-more" data-act="widget-menu" data-id="${esc(w.id)}" aria-label="${esc(t('card.actions', 'Aktionen'))}">⋯</button></td>
+      <td class="is-num"><button class="ctox-pane-icon iot-widget-more" type="button" data-act="widget-menu" data-id="${esc(w.id)}" aria-label="${esc(t('card.actions', 'Aktionen'))}">⋯</button></td>
     </tr>`;
   }).join('');
   return `<div class="iot-dash-grid list"><table class="ctox-table">
     <thead><tr><th>${esc(t('list.colAuftrag', 'Auftrag · Signal'))}</th><th>${esc(t('tag.when', 'Wenn'))}</th><th>${esc(t('tag.then', 'Dann'))}</th><th>${esc(t('list.colStatus', 'Status'))}</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table>
-    <div class="iot-list-foot"><button class="ctox-button" data-act="new-auftrag">${esc(t('cards.newAuftrag', 'Auftrag anlegen'))}</button></div>
+    <div class="iot-list-foot"><button class="ctox-button" type="button" data-act="new-auftrag">${esc(t('cards.newAuftrag', 'Auftrag anlegen'))}</button></div>
   </div>`;
 }
 
@@ -432,7 +666,7 @@ function mountRenderIframes(center) {
     const w = (state.collections.iot_widgets || []).find((x) => x.id === slot.dataset.renderWidget);
     if (!w || !w.render_code || !w.render_code.trim()) return; // sparkline fallback stays
     if (RENDER_FORBIDDEN.test(w.render_code)) {
-      slot.innerHTML = '<div class="iot-viz-empty">Render-Code abgelehnt (Sandbox)</div>';
+      slot.innerHTML = `<div class="iot-viz-empty">${esc(t('card.renderRejected', 'Render-Code abgelehnt (Sandbox)'))}</div>`;
       return;
     }
     const [aid, attr] = parseSignal(w.signal_ref);
@@ -449,10 +683,10 @@ function mountRenderIframes(center) {
 function buildRenderSrcdoc(code, series, theme) {
   const safe = String(code).replace(/<\/(script|iframe|html|body)/gi, '<\\/$1');
   const data = JSON.stringify(series.map((p) => ({ t: p.t, v: p.v })));
-  const t = theme || { bg: '#171d20', text: '#cfe6e2', accent: '#6cb8aa', danger: '#e06b60' };
+  const th = theme || { bg: '#171d20', text: '#cfe6e2', accent: '#6cb8aa', danger: '#e06b60' };
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
-<style>html,body{margin:0;height:100%;overflow:hidden;background:${t.bg};font:13px system-ui,sans-serif;color:${t.text}}.val{font-size:26px;font-weight:680;line-height:1}.unit{font-size:14px;opacity:.7;margin-left:3px}svg{width:100%;height:38px;color:${t.accent}}.err{color:${t.danger || '#e06b60'};font-size:12px}</style></head>
+<style>html,body{margin:0;height:100%;overflow:hidden;background:${th.bg};font:13px system-ui,sans-serif;color:${th.text}}.val{font-size:26px;font-weight:680;line-height:1}.unit{font-size:14px;opacity:.7;margin-left:3px}svg{width:100%;height:38px;color:${th.accent}}.err{color:${th.danger || '#e06b60'};font-size:12px}</style></head>
 <body><div id="h"></div><script>
 (function(){
   var series=${data},vals=series.map(function(p){return p.v});
@@ -470,21 +704,37 @@ function buildRenderSrcdoc(code, series, theme) {
 
 /* ---------- events ---------- */
 function onClick(e) {
-  const el = e.target.closest('[data-act]'); if (!el) return;
-  const act = el.dataset.act;
-  if (act === 'realm') { state.realm = el.dataset.realm; state.selectedAssetId = ''; state.dashboardId = ''; reload(); return; }
-  if (act === 'toggle') { e.stopPropagation(); const id = el.dataset.id; state.expanded.has(id) ? state.expanded.delete(id) : state.expanded.add(id); render(); return; }
-  if (act === 'select') { state.selectedAssetId = el.dataset.id; render(); return; }
-  if (act === 'new-asset') { e.stopPropagation(); const p = el.dataset.parent || null; state.creating = { parentId: p }; if (p) state.expanded.add(p); render(); return; }
-  if (act === 'cancel-create') { state.creating = null; render(); return; }
-  if (act === 'select-dash') { state.dashboardId = el.dataset.id; render(); return; }
-  if (act === 'view') { state.viewMode = el.dataset.view; render(); return; }
-  if (act === 'new-dash') { newDashboard(); return; }
-  if (act === 'new-auftrag') { newAuftrag(null); return; }
-  if (act === 'widget-menu') { e.preventDefault(); openWidgetMenu(el.dataset.id, e); return; }
-  if (act === 'edit-cond') { editField(el.dataset.id, 'cond'); return; }
-  if (act === 'edit-action') { editField(el.dataset.id, 'action'); return; }
-  if (act === 'signal') { state.selectedAssetId = el.dataset.asset; render(); return; }
+  // Standing header actions from index.html (data-action="new|import|export").
+  const headerAction = e.target.closest('[data-action]');
+  if (headerAction && rootEl()?.contains(headerAction)) { onHeaderAction(headerAction.dataset.action); return; }
+
+  const el = e.target.closest('[data-act]');
+  if (el) {
+    const act = el.dataset.act;
+    if (act === 'toggle') { e.stopPropagation(); const id = el.dataset.assetId; state.expanded.has(id) ? state.expanded.delete(id) : state.expanded.add(id); renderTree(); return; }
+    if (act === 'new-asset') { e.stopPropagation(); const p = el.dataset.parent || null; state.creating = { parentId: p }; if (p) state.expanded.add(p); renderTree(); return; }
+    if (act === 'cancel-create') { state.creating = null; renderTree(); return; }
+    if (act === 'view') { state.mainView = el.dataset.view; renderMain(); return; }
+    if (act === 'new-auftrag') { mainNewAuftrag(); return; }
+    if (act === 'signal-webhook') { if (state.selection.kind === 'signal') registerWebhook(signalRef(state.selection.assetId, state.selection.attr)); return; }
+    if (act === 'widget-menu') { e.preventDefault(); openWidgetMenu(el.dataset.id, e); return; }
+    if (act === 'edit-cond') { editField(el.dataset.id, 'cond'); return; }
+    if (act === 'edit-action') { editField(el.dataset.id, 'action'); return; }
+  }
+
+  // Selection is an in-place flip — never a tree rebuild.
+  const tree = state.ctx?.host?.querySelector('[data-iot-tree]');
+  const row = e.target.closest('[data-sel-kind]');
+  if (row && tree && tree.contains(row)) {
+    if (row.dataset.selKind === 'signal') selectSignal(row.dataset.assetId, row.dataset.attr);
+    else selectAsset(row.dataset.assetId);
+  }
+}
+
+function onHeaderAction(action) {
+  if (action === 'new') { state.creating = { parentId: null }; renderTree(); }
+  else if (action === 'import') { importAssets(); }
+  else if (action === 'export') { exportAssets(); }
 }
 
 /* ---------- drag-to-reorder the widget grid (persisted via sort_index) ---------- */
@@ -513,11 +763,11 @@ function onDrop(e) {
   state.dragId = null;
 }
 
-// Move the dragged widget before the target in the current dashboard and persist
-// the new order: reassign sort_index 0..n and upsert every widget whose index
-// changed (the desktop "drag → persist position" pattern, by sort order).
+// Move the dragged widget before the target within the currently displayed set
+// and persist the new order: reassign sort_index 0..n and upsert every widget
+// whose index changed (the desktop "drag → persist position" pattern).
 function reorderWidget(draggedId, targetId) {
-  const ws = widgetsOf(state.dashboardId);
+  const ws = displayedWidgets();
   const from = ws.findIndex((w) => w.id === draggedId);
   const to = ws.findIndex((w) => w.id === targetId);
   if (from < 0 || to < 0 || from === to) return;
@@ -533,16 +783,7 @@ function reorderWidget(draggedId, targetId) {
       });
     }
   });
-  render();
-}
-
-function openSignalMenu(assetId, attr, event) {
-  state.menu?.show(event, [
-    { label: t('menu.auftragFromSignal', 'Auftrag von diesem Signal'), icon: '✦', action: () => newAuftrag(signalRef(assetId, attr)) },
-    { label: t('menu.openHistory', 'Verlauf öffnen'), icon: '∿', action: () => { state.selectedAssetId = assetId; render(); } },
-    { type: 'separator' },
-    { label: t('menu.asWebhook', 'Als Webhook-Quelle einrichten'), icon: '↘', action: () => registerWebhook(signalRef(assetId, attr)) },
-  ]);
+  renderMain();
 }
 
 // Mint a token-gated inbound webhook bound to this signal and show the operator
@@ -630,10 +871,10 @@ function openWidgetEditor(widgetId) {
 
   host.addEventListener('click', async (e) => {
     if (e.target === host) return close();
-    const t = e.target.closest('[data-ed],[data-ed-tab]');
-    if (!t) return;
-    if (t.dataset.edTab) { tab = t.dataset.edTab; draw(); return; }
-    switch (t.dataset.ed) {
+    const target = e.target.closest('[data-ed],[data-ed-tab]');
+    if (!target) return;
+    if (target.dataset.edTab) { tab = target.dataset.edTab; draw(); return; }
+    switch (target.dataset.ed) {
       case 'close': return close();
       case 'save-auftrag':
         await dispatch('ctox.iot.widget.upsert', { ...base(), cond_text: field('cond_text').trim(), action_prompt: field('action_prompt').trim() });
@@ -658,12 +899,6 @@ function openWidgetEditor(widgetId) {
 }
 
 /* ---------- mutations (all real commands; CTOX programs the watcher) ---------- */
-async function newDashboard() {
-  const name = await showBusinessPrompt(t('dash.namePrompt', 'Wie soll das Dashboard heißen?'), { title: t('dash.new', 'Neues Dashboard'), confirmLabel: t('btn.create', 'Anlegen'), defaultValue: t('dash.defaultName', 'Mein Dashboard') });
-  if (!name) return;
-  await dispatch('ctox.iot.dashboard.upsert', { realm: currentRealm(), name: String(name).trim() });
-}
-
 function genId(prefix) { return `${prefix}_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e9).toString(36)}`; }
 
 // Return a usable dashboard id. If none exists we mint the id CLIENT-SIDE and
@@ -679,18 +914,27 @@ async function ensureDashboard() {
   return id;
 }
 
+// From the MAIN "Neu Auftrag" action: a signal selection preselects the signal;
+// an asset selection scopes the picker to that asset + descendants.
+function mainNewAuftrag() {
+  if (state.selection.kind === 'signal') return newAuftrag(signalRef(state.selection.assetId, state.selection.attr));
+  return newAuftrag(null, state.selection.kind === 'asset' ? state.selection.assetId : null);
+}
+
 // Create an order: pick signal (or use the passed ref), then Wenn + Dann as
 // prompts. CTOX compiles the watcher (trigger_code) backend-side; until a model
 // is wired the widget persists with status idle ("Wächter wird programmiert").
-async function newAuftrag(presetSignal) {
+async function newAuftrag(presetSignal, scopeAssetId) {
   let ref = presetSignal;
   if (!ref) {
-    const opts = assetsInRealm().flatMap((a) => numericAttrs(a.id).map((s) => ({ ref: signalRef(a.id, s.attribute_name || s.name), label: `${a.name} · ${s.attribute_name || s.name}` })));
-    if (!opts.length) { await showBusinessPrompt(t('auftrag.noSignal', 'Lege zuerst ein Asset mit einem numerischen Signal an.'), { title: t('auftrag.noSignalTitle', 'Kein Signal'), confirmLabel: t('btn.ok', 'OK') }); return; }
+    const scopeIds = scopeAssetId ? new Set([scopeAssetId, ...descendantIdsAll(scopeAssetId)]) : null;
+    const pool = scopeIds ? allAssets().filter((a) => scopeIds.has(a.id)) : (state.realm === 'all' ? allAssets() : allAssets().filter((a) => (a.realm || 'master') === state.realm));
+    const opts = pool.flatMap((a) => numericAttrs(a.id).map((s) => ({ ref: signalRef(a.id, s.attribute_name || s.name), label: `${a.name} · ${s.attribute_name || s.name}` })));
+    if (!opts.length) { await showBusinessAlert(t('auftrag.noSignal', 'Lege zuerst ein Asset mit einem numerischen Signal an.'), { title: t('auftrag.noSignalTitle', 'Kein Signal'), confirmLabel: t('btn.ok', 'OK') }); return; }
     const picked = await showBusinessPrompt(t('auftrag.pickSignal', 'Welches Signal? Schreibe den Namen:') + '\n' + opts.map((o) => '• ' + o.label).join('\n'), { title: t('auftrag.pickTitle', 'Signal wählen'), confirmLabel: t('btn.next', 'Weiter'), defaultValue: opts[0].label });
     if (!picked) return;
     const hit = opts.find((o) => o.label.toLowerCase() === String(picked).trim().toLowerCase()) || opts.find((o) => o.label.toLowerCase().includes(String(picked).trim().toLowerCase()));
-    if (!hit) { await showBusinessPrompt(t('auftrag.signalUnknown', 'Signal nicht erkannt — Auftrag abgebrochen.'), { title: t('auftrag.cancelled', 'Abgebrochen'), confirmLabel: t('btn.ok', 'OK') }); return; }
+    if (!hit) { await showBusinessAlert(t('auftrag.signalUnknown', 'Signal nicht erkannt — Auftrag abgebrochen.'), { title: t('auftrag.cancelled', 'Abgebrochen'), confirmLabel: t('btn.ok', 'OK') }); return; }
     ref = hit.ref;
   }
   const cond = await showBusinessPrompt(t('auftrag.whenPrompt', 'Wann soll CTOX handeln? (frei formuliert)'), { title: t('dlg.when', 'Wenn …'), message: signalLabel(ref), confirmLabel: t('btn.next', 'Weiter'), defaultValue: '' });
@@ -705,6 +949,9 @@ async function newAuftrag(presetSignal) {
   await dispatch('ctox.iot.widget.upsert', payload);
   // Ask CTOX to program the watcher (durable agent-turn task; waits for a model).
   await dispatch('ctox.iot.widget.compile_trigger', { widget_id: wid }, true);
+  // Focus the new order's signal so it shows in the dashboard immediately.
+  const [aid, attr] = parseSignal(ref);
+  state.selection = { kind: 'asset', assetId: aid, attr: '' };
 }
 
 async function editField(widgetId, which) {
@@ -727,13 +974,77 @@ async function deleteWidget(w) {
   await dispatch('ctox.iot.widget.delete', { widget_id: w.id });
 }
 
+/* ---------- import / export (honest, small — JSON via Blob / file input) ---------- */
+// Export the assets currently visible in the selector as a JSON download.
+function exportAssets() {
+  const rows = visibleAssetRows().map((r) => {
+    const a = assetById(r.id) || {};
+    return { name: r.name, asset_type: a.asset_type || '', realm: r.realm, parent_id: r.parent_id || null };
+  });
+  let url = '';
+  try {
+    const blob = new Blob([JSON.stringify(rows, null, 2)], { type: 'application/json' });
+    url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'iot-assets.json';
+    anchor.rel = 'noopener';
+    rootEl()?.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } catch (error) {
+    console.error('[iot] export failed', error);
+  } finally {
+    if (url) window.setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 4000);
+  }
+}
+
+// Import creates assets from a JSON array of { name, asset_type } via the
+// existing ctox.iot.asset.upsert command — projections stay server-owned.
+function importAssets() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/json,.json';
+  input.addEventListener('change', async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    let parsed;
+    try { parsed = JSON.parse(await file.text()); } catch {
+      await showBusinessAlert(t('importInvalid', 'Ungültige JSON-Datei.'), { title: t('import.title', 'Import'), confirmLabel: t('btn.ok', 'OK') });
+      return;
+    }
+    const items = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : []);
+    const candidates = items.filter((item) => item && typeof item === 'object' && String(item.name || '').trim());
+    if (!candidates.length) {
+      await showBusinessAlert(t('importEmpty', 'Keine Datensätze in der Datei.'), { title: t('import.title', 'Import'), confirmLabel: t('btn.ok', 'OK') });
+      return;
+    }
+    let count = 0;
+    for (const item of candidates) {
+      try {
+        await dispatch('ctox.iot.asset.upsert', {
+          realm: currentRealm(),
+          name: String(item.name).trim(),
+          asset_type: String(item.asset_type || item.type || 'Sensor'),
+          parent_id: item.parent_id || null,
+        });
+        count += 1;
+      } catch (error) {
+        console.error('[iot] import failed', error);
+      }
+    }
+    await showBusinessAlert(`${t('imported', 'Importiert')}: ${count}`, { title: t('import.title', 'Import'), confirmLabel: t('btn.ok', 'OK') });
+  });
+  input.click();
+}
+
 function onSubmit(e) {
   const form = e.target.closest('[data-form]'); if (!form) return;
   e.preventDefault();
   const data = Object.fromEntries(new FormData(form).entries());
   if (form.dataset.form === 'create') {
     dispatch('ctox.iot.asset.upsert', { realm: currentRealm(), name: data.name, asset_type: data.type, parent_id: state.creating?.parentId || null });
-    state.creating = null; render();
+    state.creating = null; renderTree();
   }
 }
 
