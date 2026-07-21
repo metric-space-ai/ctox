@@ -8,12 +8,19 @@ Use this before claiming a Business OS app is done.
   view-switcher band (`Name (n)`, zeros included) → recessed element well
   under a divider → one-line footer.
 - Every element-listing view (left column AND main view) has the cards ↔
-  compact-list toggle; shards are pure selectors (no inline expansion).
+  compact-list toggle; the toggle sits IN the filterbar row between search and
+  the filter-tray toggle, using only the canonical glyphs (stacked rects /
+  three lines); shards are pure selectors (no inline expansion).
+- Every view band offers at least two real views; a band with a single counted
+  tab is a stray chip — a lone count belongs in the pane footer
+  (module_static_check enforces this).
 - Element actions are collected top-right icons (pencil/trash/✓/✗/▶); no
   text buttons in the content flow; no manual refresh button; no standing
   status badges; sync notices float as toasts.
-- Module CSS is loaded with the module's own cache-buster and the module
-  version is three-part semver.
+- Module CSS AND module markup are fetched with the module's own JS
+  cache-buster and the module version is three-part semver.
+- Any sandboxed `srcdoc` iframe assigns only on content change and re-applies
+  once via a load watchdog (first assignment can be swallowed at mount).
 
 - The target directory is correct for runtime or source mode.
 - Three relevant shipped Business OS apps were chosen and inspected.
