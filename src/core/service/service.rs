@@ -2447,6 +2447,7 @@ pub fn stop_background(root: &Path) -> Result<String> {
         .err()
         .map(|err| err.to_string());
     let had_service_processes = !matching_service_processes(root, None)?.is_empty();
+    let had_business_os_surfaces = !matching_business_os_surface_processes(root)?.is_empty();
     let had_live_service_pid = read_pid_file(root).map(process_is_running).unwrap_or(false);
     let had_backends = !supervisor::persistent_backends_idle(root)?;
     if let Some(systemd) = systemd_unit_status(root)? {
@@ -2465,6 +2466,7 @@ pub fn stop_background(root: &Path) -> Result<String> {
             eprintln!("ctox preflight backend shutdown reported residue: {err}");
         }
         let cleaned = cleanup_orphan_service_processes(root, None)?;
+        let cleaned_surfaces = cleanup_orphan_business_os_surface_processes(root)?;
         if wait_for_service_shutdown(root, Duration::from_secs(SERVICE_SHUTDOWN_TIMEOUT_SECS))? {
             if !supervisor::persistent_backends_idle(root)? {
                 anyhow::bail!(
@@ -2472,7 +2474,11 @@ pub fn stop_background(root: &Path) -> Result<String> {
                     supervisor::persistent_backend_alerts(root)?.join("; ")
                 );
             }
-            if had_systemd_service || had_service_processes || had_live_service_pid || had_backends
+            if had_systemd_service
+                || had_service_processes
+                || had_business_os_surfaces
+                || had_live_service_pid
+                || had_backends
             {
                 return Ok("CTOX service stopped and disabled.".to_string());
             }
@@ -2485,6 +2491,11 @@ pub fn stop_background(root: &Path) -> Result<String> {
         if cleaned > 0 {
             systemd_failures.push(format!(
                 "service fallback signaled {cleaned} foreground process(es)"
+            ));
+        }
+        if cleaned_surfaces > 0 {
+            systemd_failures.push(format!(
+                "service fallback signaled {cleaned_surfaces} standalone Business OS surface process(es)"
             ));
         }
         systemd_failures.append(&mut residue);
@@ -2509,6 +2520,7 @@ pub fn stop_background(root: &Path) -> Result<String> {
             eprintln!("ctox preflight backend shutdown reported residue: {err}");
         }
         let cleaned = cleanup_orphan_service_processes(root, None)?;
+        let cleaned_surfaces = cleanup_orphan_business_os_surface_processes(root)?;
         if wait_for_service_shutdown(root, Duration::from_secs(SERVICE_SHUTDOWN_TIMEOUT_SECS))? {
             if !supervisor::persistent_backends_idle(root)? {
                 anyhow::bail!(
@@ -2516,7 +2528,11 @@ pub fn stop_background(root: &Path) -> Result<String> {
                     supervisor::persistent_backend_alerts(root)?.join("; ")
                 );
             }
-            if had_launchd_service || had_service_processes || had_live_service_pid || had_backends
+            if had_launchd_service
+                || had_service_processes
+                || had_business_os_surfaces
+                || had_live_service_pid
+                || had_backends
             {
                 return Ok("CTOX service stopped and disabled.".to_string());
             }
@@ -2529,6 +2545,11 @@ pub fn stop_background(root: &Path) -> Result<String> {
         if cleaned > 0 {
             launchd_failures.push(format!(
                 "service fallback signaled {cleaned} foreground process(es)"
+            ));
+        }
+        if cleaned_surfaces > 0 {
+            launchd_failures.push(format!(
+                "service fallback signaled {cleaned_surfaces} standalone Business OS surface process(es)"
             ));
         }
         launchd_failures.append(&mut residue);
@@ -2566,6 +2587,7 @@ pub fn stop_background(root: &Path) -> Result<String> {
         let _ = std::fs::remove_file(service_pid_path(root));
     }
     let cleaned = cleanup_orphan_service_processes(root, None)?;
+    let cleaned_surfaces = cleanup_orphan_business_os_surface_processes(root)?;
     if let Some(err) = preflight_backend_shutdown_error.as_ref() {
         eprintln!("ctox preflight backend shutdown reported residue: {err}");
     }
@@ -2576,10 +2598,16 @@ pub fn stop_background(root: &Path) -> Result<String> {
                 supervisor::persistent_backend_alerts(root)?.join("; ")
             );
         }
-        if had_service_processes || had_live_service_pid || cleaned > 0 || had_backends {
-            if cleaned > 0 {
+        if had_service_processes
+            || had_business_os_surfaces
+            || had_live_service_pid
+            || cleaned > 0
+            || cleaned_surfaces > 0
+            || had_backends
+        {
+            if cleaned > 0 || cleaned_surfaces > 0 {
                 return Ok(format!(
-                    "CTOX service pid file was missing, but {cleaned} orphaned service process(es) were signaled for shutdown."
+                    "CTOX service pid file was missing, but {cleaned} orphaned service process(es) and {cleaned_surfaces} standalone Business OS surface process(es) were signaled for shutdown."
                 ));
             }
             return Ok("CTOX service stopped.".to_string());
@@ -4952,6 +4980,7 @@ fn cleanup_stale_service_runtime(root: &Path) -> Result<()> {
         let _ = std::fs::remove_file(service_socket_path(root));
     }
     cleanup_orphan_service_processes(root, None)?;
+    cleanup_orphan_business_os_surface_processes(root)?;
     supervisor::shutdown_persistent_backends(root)?;
     Ok(())
 }
@@ -5029,6 +5058,52 @@ fn matching_service_processes(root: &Path, keep_pid: Option<u32>) -> Result<Vec<
     Ok(matches)
 }
 
+fn matching_business_os_surface_processes(root: &Path) -> Result<Vec<u32>> {
+    let exe_displays = known_ctox_executable_displays(root);
+    let output = Command::new("ps")
+        .args(["-axo", "pid=,command="])
+        .output()
+        .context("failed to inspect running Business OS surface processes")?;
+    if !output.status.success() {
+        anyhow::bail!("failed to inspect running Business OS surface processes");
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut matches = Vec::new();
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut parts = trimmed.splitn(2, char::is_whitespace);
+        let Some(pid_raw) = parts.next() else {
+            continue;
+        };
+        let Some(command) = parts.next() else {
+            continue;
+        };
+        let Ok(pid) = pid_raw.trim().parse::<u32>() else {
+            continue;
+        };
+        if pid == std::process::id()
+            || !exe_displays
+                .iter()
+                .any(|exe_display| command.contains(exe_display))
+            || !(command.contains(" business-os serve")
+                || command.contains(" business-os mcp serve"))
+        {
+            continue;
+        }
+        #[cfg(unix)]
+        if !service_process_matches_root(pid, root) {
+            continue;
+        }
+        matches.push(pid);
+    }
+    matches.sort_unstable();
+    matches.dedup();
+    Ok(matches)
+}
+
 type ServiceProcessCache = Mutex<Option<(Instant, PathBuf, Option<u32>, Vec<u32>)>>;
 
 fn matching_service_processes_cache() -> &'static ServiceProcessCache {
@@ -5082,6 +5157,31 @@ fn cleanup_orphan_service_processes(root: &Path, keep_pid: Option<u32>) -> Resul
     Ok(signaled)
 }
 
+fn cleanup_orphan_business_os_surface_processes(root: &Path) -> Result<usize> {
+    let mut signaled = 0usize;
+    for pid in matching_business_os_surface_processes(root)? {
+        let status = Command::new("kill")
+            .arg("-TERM")
+            .arg(pid.to_string())
+            .status()
+            .with_context(|| {
+                format!("failed to signal standalone Business OS surface pid {pid}")
+            })?;
+        if !status.success() {
+            continue;
+        }
+        signaled += 1;
+        thread::sleep(Duration::from_millis(200));
+        if process_is_running(pid) {
+            let _ = Command::new("kill")
+                .arg("-KILL")
+                .arg(pid.to_string())
+                .status();
+        }
+    }
+    Ok(signaled)
+}
+
 fn service_runtime_idle(root: &Path) -> Result<bool> {
     let pid_idle = read_pid_file(root)
         .map(|pid| !process_is_running(pid))
@@ -5089,7 +5189,10 @@ fn service_runtime_idle(root: &Path) -> Result<bool> {
     let systemd_idle = systemd_unit_status(root)?
         .map(|status| !status.active)
         .unwrap_or(true);
-    Ok(pid_idle && systemd_idle && matching_service_processes(root, None)?.is_empty())
+    Ok(pid_idle
+        && systemd_idle
+        && matching_service_processes(root, None)?.is_empty()
+        && matching_business_os_surface_processes(root)?.is_empty())
 }
 
 fn service_shutdown_residue(root: &Path) -> Result<Vec<String>> {
@@ -5113,6 +5216,12 @@ fn service_shutdown_residue(root: &Path) -> Result<Vec<String>> {
     if !service_processes.is_empty() {
         residue.push(format!(
             "service foreground processes still alive {service_processes:?}"
+        ));
+    }
+    let business_os_surfaces = matching_business_os_surface_processes(root)?;
+    if !business_os_surfaces.is_empty() {
+        residue.push(format!(
+            "standalone Business OS surface processes still alive {business_os_surfaces:?}"
         ));
     }
     #[cfg(unix)]
