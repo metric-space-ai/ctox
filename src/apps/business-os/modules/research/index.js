@@ -3664,6 +3664,11 @@ async function runSelectedResearch() {
   const tableContract = task.payload?.table_contract || RESEARCH_TABLE_CONTRACT;
   const existingTables = new Set((base?.tables || []).map((table) => table.table_key));
   const missingTables = Object.keys(tableContract).filter((key) => !existingTables.has(key));
+  const requireMeasuredLoadPoints = task.measurements_table_key === 'measured_load_points'
+    || existingTables.has('measured_load_points')
+    || Object.hasOwn(tableContract, 'measured_load_points');
+  const requireDerivedBearingLoads = existingTables.has('derived_bearing_loads')
+    || Object.hasOwn(tableContract, 'derived_bearing_loads');
   const candidateTable = tableForKey(base, task.candidate_catalog_key || 'source_candidates');
   const candidateRows = candidateTable ? await fetchTableRows(candidateTable.id) : [];
   const knowledgeTableRefs = compactKnowledgeTableReferences(base?.tables || []);
@@ -3685,6 +3690,8 @@ async function runSelectedResearch() {
     `Evaluation matrix: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.curated_table_key || 'evaluation_matrix'}`,
     `Evidence points: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.measurements_table_key || 'evidence_points'}`,
     missingTables.length ? `Missing tables to create first: ${missingTables.join(', ')}` : 'Required Knowledge tables already exist in the catalog.',
+    requireMeasuredLoadPoints ? 'Required direct-measurement output: measured_load_points.csv with row-level RPM, propeller size, diameter, pitch, axial force and torque provenance.' : null,
+    requireDerivedBearingLoads ? 'Required derived-load output: derived_bearing_loads.csv with physical load or moment values, units, source-row lineage, method and assumptions.' : null,
     '',
     'Auftrag:',
     task.prompt || defaultPromptForKnowledgeBase(base),
@@ -3749,9 +3756,11 @@ async function runSelectedResearch() {
         source_candidates: task.candidate_catalog_key || 'source_candidates',
         source_catalog: task.source_catalog_key || 'source_catalog',
         evaluation_matrix: task.curated_table_key || 'evaluation_matrix',
-        evidence_points: task.measurements_table_key || 'evidence_points',
+        evidence_points: 'evidence_points',
         semantic_graph_nodes: 'semantic_graph_nodes',
         semantic_graph_edges: 'semantic_graph_edges',
+        ...(requireMeasuredLoadPoints ? { measured_load_points: 'measured_load_points' } : {}),
+        ...(requireDerivedBearingLoads ? { derived_bearing_loads: 'derived_bearing_loads' } : {}),
       },
     },
   };
