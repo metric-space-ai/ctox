@@ -316,6 +316,7 @@ async function refreshReports(options = {}) {
   const queue = byName.ctox_queue_tasks?.items || [];
   state.approvals = byName.ctox_task_approval_requests?.items || [];
   state.users = (byName.business_users?.items || []).filter((user) => user && user.active !== false);
+  reconcileDelegationBackfill(reports, commands);
   const nextRenderKey = buildRenderKey({ reports, bugs, releases, commands, queue });
   const hadSameData = nextRenderKey === state.renderKey;
   state.reports = reports;
@@ -453,6 +454,39 @@ function syncReportFilterIndicator(root) {
 // a Threads approval (threads.ctox_approval.request with a target command).
 // On approve the native side enqueues ctox.coding.turn for the target module.
 // ---------------------------------------------------------------------------
+// Durable Rückweg: once the approved coding turn exists, stamp its command/
+// task ids (and a running/blocked status while the report is still open) back
+// onto the report record so every surface — not just this app — sees the
+// linkage. Idempotent: only writes when a field actually changes.
+async function reconcileDelegationBackfill(reports, commands) {
+  try {
+    const collection = reportCollection('business_module_reports');
+    if (!collection) return;
+    for (const report of reports || []) {
+      const reportId = report?.id || report?.report_id;
+      if (!reportId) continue;
+      const turn = (commands || []).find((item) => String(item?.command_type || item?.type || '') === 'ctox.coding.turn'
+        && item?.payload?.context?.record_id === reportId);
+      if (!turn) continue;
+      const commandId = String(turn.command_id || turn.id || '');
+      const taskId = String(turn.task_id || '');
+      const turnStatus = String(turn.status || turn.task_status || '');
+      const nextStatus = turnStatus === 'completed' ? 'completed'
+        : turnStatus === 'failed' ? 'blocked'
+          : 'running';
+      const statusChangeAllowed = ['open', 'running'].includes(String(report.status || 'open'));
+      const patch = {};
+      if (commandId && report.ctox_command_id !== commandId) patch.ctox_command_id = commandId;
+      if (taskId && report.task_id !== taskId) patch.task_id = taskId;
+      if (statusChangeAllowed && report.status !== nextStatus) patch.status = nextStatus;
+      if (!Object.keys(patch).length) continue;
+      await collection.upsert({ ...report, ...patch, updated_at_ms: Date.now() });
+    }
+  } catch (error) {
+    console.warn('[reports] delegation backfill skipped', error);
+  }
+}
+
 function delegationInfoFor(report) {
   const approval = (state.approvals || []).find((item) => {
     const source = item?.source_context || {};
