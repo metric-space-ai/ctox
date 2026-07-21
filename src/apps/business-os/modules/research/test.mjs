@@ -101,6 +101,32 @@ test('evidence gate accepts verified CSV boolean fields from knowledge imports',
   assert.equal(gate.status, 'verified');
 });
 
+test('evidence gate accepts receipt-bound original data files', () => {
+  const gate = hooks.evidenceGate({
+    source_id: 'src-data-file-1',
+    verification_status: 'verified',
+    transport_verified: true,
+    content_extracted: true,
+    actual_full_text_or_data: true,
+    evidence_eligible: true,
+    http_status: 200,
+    snapshot_hash: `sha256:${'b'.repeat(64)}`,
+    snapshot_id: 'snap-data-file-1',
+    snapshot_path: '/snapshots/source-1/data.csv',
+    evidence_id: 'ev-data-file-1',
+    retrieved_at: '2026-07-21T04:00:00Z',
+    url_role: 'original_data',
+    content_scope: 'data_file',
+    canonical_url: 'https://example.test/primary-data.csv',
+    evidence_relevance_score: 8,
+    source_tier: 'primary_dataset',
+    source_type: 'dataset',
+  });
+
+  assert.equal(gate.eligible, true);
+  assert.equal(gate.status, 'verified');
+});
+
 test('create task preserves selected local knowledge domain ids', () => {
   const knowledgeBases = [{ domain: 'drone_bearing_design', title: 'Drone Bearing Design' }];
 
