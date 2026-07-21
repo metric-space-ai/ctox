@@ -12647,6 +12647,23 @@ fn queue_task_from_message(message: ChannelMessageView) -> Result<QueueTaskView>
         .unwrap_or_else(|| message.external_created_at.clone());
     let prompt = message.body_text;
     let workspace_root = workspace_root_from_queue_metadata_or_prompt(&message.metadata, &prompt);
+    let route_status = message.routing.route_status.clone();
+    let metadata_status_note = || {
+        message
+            .metadata
+            .get("status_note")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+    };
+    let status_note = if route_status == "failed" {
+        message
+            .routing
+            .last_error
+            .clone()
+            .or_else(metadata_status_note)
+    } else {
+        metadata_status_note()
+    };
     Ok(QueueTaskView {
         message_key: message.message_key,
         thread_key: message.thread_key,
@@ -12669,18 +12686,8 @@ fn queue_task_from_message(message: ChannelMessageView) -> Result<QueueTaskView>
             .get("parent_message_key")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-        route_status: message.routing.route_status,
-        status_note: message
-            .routing
-            .last_error
-            .filter(|_| message.routing.route_status == "failed")
-            .or_else(|| {
-                message
-                    .metadata
-                    .get("status_note")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned)
-            }),
+        route_status,
+        status_note,
         lease_owner: message.routing.lease_owner,
         leased_at: message.routing.leased_at,
         acked_at: message.routing.acked_at,
