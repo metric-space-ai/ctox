@@ -1,5 +1,19 @@
 const DEFAULT_TIME_MS = 4500;
 const MAX_TOASTS = 5;
+// Keep in sync with the .shell-toast fade in app.css (transition: opacity/
+// transform var(--motion-base) = 160ms) plus a small buffer so the element
+// is only removed after the transition has actually finished.
+const TOAST_FADE_MS = 200;
+
+// Same matchMedia guard pattern as shared/window-manager.js.
+function prefersReducedMotion() {
+  try {
+    return typeof globalThis.matchMedia === 'function'
+      && globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  } catch {
+    return false;
+  }
+}
 
 const DEFAULT_ICONS = {
   info: 'ℹ',
@@ -77,9 +91,12 @@ export function createNotifications({ container, t }) {
     const toast = container.querySelector(`#${cssEscape(id)}`) || document.getElementById(id);
     if (!toast || toast.classList.contains('is-fading')) return;
     toast.classList.add('is-fading');
+    // The global reduced-motion block nukes the CSS fade to ~0ms; skip the
+    // wait instead of leaving an invisible toast in the DOM for 200ms.
+    const fadeMs = prefersReducedMotion() ? 0 : TOAST_FADE_MS;
     setTimeout(() => {
       if (toast.isConnected) toast.remove();
-    }, 360);
+    }, fadeMs);
   }
 
   function clearAll() {
