@@ -1264,12 +1264,12 @@ body.is-resizing * {
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--hairline, var(--line));
-  border-radius: var(--panel-radius, 16px);
+  border-radius: var(--panel-radius);
   background: var(--glass-bg, var(--surface));
   color: var(--text);
   box-shadow: var(--shadow-lg, var(--shadow));
-  backdrop-filter: var(--glass-blur, blur(20px) saturate(160%));
-  -webkit-backdrop-filter: var(--glass-blur, blur(20px) saturate(160%));
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   opacity: 0;
   pointer-events: none;
   transform: translateY(-10px) scale(0.98);
@@ -1300,7 +1300,7 @@ body.is-resizing * {
   height: 36px;
   padding: 0 var(--space-3) 0 34px;
   border: 1px solid var(--line);
-  border-radius: var(--control-radius, 12px);
+  border-radius: var(--control-radius);
   background: color-mix(in srgb, var(--surface-2) 40%, transparent);
   color: var(--text-strong, var(--text));
   outline: none;
@@ -1369,7 +1369,7 @@ body.is-resizing * {
   justify-content: space-between;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  border-radius: var(--control-radius, 12px);
+  border-radius: var(--control-radius);
   background: transparent;
   cursor: pointer;
   user-select: none;
@@ -1503,7 +1503,7 @@ body.is-resizing * {
   min-height: 34px;
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--line);
-  border-radius: var(--control-radius, 12px);
+  border-radius: var(--control-radius);
   background: color-mix(in srgb, var(--surface-2) 30%, transparent);
   color: var(--text);
   font-size: var(--fs-sm);
@@ -1535,7 +1535,7 @@ body.is-resizing * {
   overflow: auto;
   background: var(--surface);
   border: 1px solid var(--hairline, var(--line));
-  border-radius: var(--panel-radius, 16px);
+  border-radius: var(--panel-radius);
   box-shadow: var(--shadow-sm);
 }
 
@@ -1543,8 +1543,8 @@ body.is-resizing * {
 .workspace-pane-right {
   padding: var(--space-4);
   background: var(--glass-bg, var(--surface));
-  backdrop-filter: var(--glass-blur, blur(20px) saturate(160%));
-  -webkit-backdrop-filter: var(--glass-blur, blur(20px) saturate(160%));
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
 }
 
 .workspace-pane-left {
@@ -4799,7 +4799,7 @@ body[data-auth-state="locked"] .topbar {
   color: var(--text);
   border: 1px solid var(--line);
   border-left: 3px solid var(--accent);
-  border-radius: var(--panel-radius, 16px);
+  border-radius: var(--panel-radius);
   box-shadow: var(--panel-shadow);
   transition: opacity var(--motion-base) var(--ease-standard), transform var(--motion-base) var(--ease-standard);
 }
@@ -4825,7 +4825,7 @@ body[data-auth-state="locked"] .topbar {
   background: var(--surface-2);
   border: 1px solid var(--line);
   color: var(--text);
-  border-radius: var(--control-radius, 12px);
+  border-radius: var(--control-radius);
   padding: var(--space-1) var(--space-2);
   font-size: var(--fs-sm);
   cursor: pointer;
@@ -4845,7 +4845,7 @@ body[data-auth-state="locked"] .topbar {
   background: color-mix(in srgb, var(--surface) 94%, var(--accent) 6%);
   border: 1px solid color-mix(in srgb, var(--line) 74%, var(--accent) 26%);
   border-left: 3px solid var(--accent);
-  border-radius: var(--panel-radius, 14px);
+  border-radius: var(--panel-radius);
   box-shadow: var(--panel-shadow);
 }
 .sync-toast[hidden] { display: none; }
@@ -4888,7 +4888,7 @@ body[data-auth-state="locked"] .topbar {
   width: 24px;
   height: 24px;
   border: 1px solid transparent;
-  border-radius: var(--control-radius, 10px);
+  border-radius: var(--control-radius);
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -4924,7 +4924,7 @@ body[data-auth-state="locked"] .topbar {
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--line);
-  border-radius: var(--control-radius, 12px);
+  border-radius: var(--control-radius);
   box-shadow: var(--panel-shadow);
   padding: var(--space-2);
   z-index: 300;
@@ -4995,7 +4995,7 @@ body[data-auth-state="locked"] .topbar {
   box-sizing: border-box;
   padding: var(--space-3);
   border: 1px solid var(--line);
-  border-radius: var(--control-radius, 12px);
+  border-radius: var(--control-radius);
   background: var(--surface);
   color: var(--text);
   box-shadow: var(--panel-shadow);
@@ -6403,7 +6403,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
 .module-loading-shadow :is(h1, h2, h3, h4, h5, p, span, a, b, strong, li, button,
   label, td, th, input, textarea, select, img, svg, .mls-head, .mls-row, .mls-icon, .mls-icon-label) {
   background-color: color-mix(in srgb, var(--surface-2) 78%, var(--text) 7%) !important;
-  border-radius: 6px !important;
+  border-radius: var(--panel-radius) !important;
   position: relative;
   overflow: hidden;
 }
@@ -6430,7 +6430,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
 }
 .module-loading-shadow-pane {
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: var(--panel-radius);
   background: var(--surface);
   padding: var(--space-4);
   min-height: 0;
@@ -6457,6 +6457,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   align-items: center;
   gap: var(--space-2);
 }
+/* 16px matches the real desktop icon tiles (modules/desktop/index.css). */
 .mls-icon { width: 60px; height: 60px; border-radius: 16px !important; }
 .mls-icon-label { width: 68px; height: 10px; }
 
@@ -6804,8 +6805,7 @@ button.shell-window-header-meta:focus-visible,
 }
 
 .startup-error-card,
-.module-loading-shadow-panel,
-.mls-icon {
+.module-loading-shadow-pane {
   border-radius: var(--panel-radius) !important;
 }
 
