@@ -1,10 +1,70 @@
-<main class="ctox-workspace ctox-workspace--single ats-consent is-rights-hidden" data-ats-root>
-  <section class="ctox-pane ctox-record-workbench">
-    <header class="ctox-pane-header ctox-pane-band ctox-record-workbench__header">
+<main class="ctox-workspace ctox-workspace--two-pane ats-consent consent-module is-rights-hidden" data-ats-root data-resize-frame>
+  <!-- LEFT: consent record list — canonical column grammar. All chrome
+       behaviour (search / view-toggle / tray / reset / active-dot / band) is
+       SHELL-wired from the data-pg-* attributes; this module writes no chrome
+       JS/CSS. Pane grid rows: auto auto minmax(0,1fr) auto. -->
+  <aside class="ctox-pane consent-rail" aria-label="Einwilligungen" data-left-content>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-i18n="kicker">ATS</span>
+          <h2 class="ctox-pane-title" data-i18n="listTitle">Einwilligungen</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon is-primary" data-action="new" data-i18n-title="newAction" aria-label="Neue Prüfung" title="Neue Prüfung"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-action="import" data-i18n-title="importAction" aria-label="Importieren" title="Importieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-action="export" data-i18n-title="exportAction" aria-label="Exportieren" title="Exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21V9M12 9l-4 4M12 9l4 4M5 3h14"/></svg></button>
+        </div>
+      </div>
+      <div class="ctox-filterbar">
+        <input class="ctox-pane-search" type="search" data-pg-search placeholder="Suchen..." data-i18n-placeholder="searchPlaceholder" aria-label="Einwilligungen suchen" />
+        <div class="ctox-view-toggle" role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
+        <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="ctox-filter-tray" data-pg-tray hidden>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" data-pg-filter data-pg-name="status" data-pg-default="all" aria-label="Status filtern">
+            <option value="all" data-i18n="statusAll">Alle Status</option>
+            <option value="active" data-i18n="valid">gültig</option>
+            <option value="pending" data-i18n="open">offen</option>
+            <option value="withdrawn" data-i18n="withdrawn">widerrufen</option>
+            <option value="expired" data-i18n="expired">abgelaufen</option>
+          </select>
+          <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+        </div>
+      </div>
+    </header>
+    <nav class="ctox-view-switch" aria-label="Ansichten">
+      <div class="ctox-pane-tabs">
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="all" aria-selected="true"><span data-i18n="bandAll">Alle</span><span class="view-count" data-pg-count="all"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="valid" aria-selected="false"><span data-i18n="bandValid">Gültig</span><span class="view-count" data-pg-count="valid"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="open" aria-selected="false"><span data-i18n="bandOpen">Offen</span><span class="view-count" data-pg-count="open"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="ended" aria-selected="false"><span data-i18n="bandEnded">Erloschen</span><span class="view-count" data-pg-count="ended"></span></button>
+      </div>
+    </nav>
+    <div class="ctox-pane-body ctox-well">
+      <div class="ctox-record-list" data-ats-list></div>
+    </div>
+    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
+  </aside>
+
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="260" data-resizer-max="480" aria-label="Spaltenbreite anpassen"></button>
+
+  <!-- MAIN: consent workbench, record-bound. Selecting a record fills the check
+       form (subject + purpose) and auto-reveals a read-only detail card
+       (visible = hasSelection && !userCollapsed). "Neu" clears to a fresh check.
+       The ats.consent.check form and the Betroffenenrechte (Art. 15/17) command
+       forms stay EXACTLY as they were; rights stay hidden behind the header
+       toggle. -->
+  <section class="ctox-pane consent-main" aria-label="Einwilligungsprüfung" data-ats-main>
+    <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker" data-ats-sub></span>
-          <h2 class="ctox-pane-title" data-ats-title></h2>
+          <h1 class="ctox-pane-title" data-ats-title>Einwilligungen</h1>
         </div>
         <div class="ctox-pane-actions">
           <button type="button" class="ctox-pane-icon" data-toggle-rights data-i18n-title="rightsLabel" title="Betroffenenrechte" aria-label="Betroffenenrechte" aria-pressed="false">
@@ -13,7 +73,9 @@
         </div>
       </div>
     </header>
-    <div class="ctox-record-workbench__body">
+    <div class="ctox-pane-scroll consent-workbench">
+      <article class="ctox-card consent-detail" data-ats-detail hidden></article>
+
       <form class="ctox-compact-form" data-ats-form>
         <div class="ctox-compact-form__fields">
           <label class="ctox-compact-field"><span data-i18n="subjectLabel">Subjekt</span><input class="ctox-input" type="text" name="subject_id" placeholder="Subjekt-ID" data-i18n-placeholder="subjectPlaceholder" required data-f /></label>
@@ -33,8 +95,6 @@
       </form>
 
       <div class="ctox-callout" data-ats-gate></div>
-      <div class="ctox-record-workbench__status" data-ats-count></div>
-      <div class="ctox-record-list" data-ats-list></div>
     </div>
   </section>
 </main>

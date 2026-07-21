@@ -1,6 +1,10 @@
 {
-  "title": "Einwilligungen",
+  "title": "Consent",
   "subtitle": "Generisches DSGVO-Einwilligungs-/Rechtsgrundlagen-Register mit Zweck und Löschfrist.",
   "add": "Create",
-  "empty": "No entries yet."
+  "empty": "No entries yet.",
+  "listTitle": "Consent",
+  "newAction": "New check",
+  "importAction": "Import",
+  "exportAction": "Export"
 }
