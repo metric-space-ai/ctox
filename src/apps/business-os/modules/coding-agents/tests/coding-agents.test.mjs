@@ -46,6 +46,26 @@ test('presentation layer stays compact and shell-native', () => {
   assert.match(js, /coding-agents-app-icon/);
   assert.match(js, /coding-agents-app-monogram/);
   assert.match(js, /coding-agents-rail-chip/);
+  // Canonical column grammar (design-guide): every column carries header row →
+  // filter section (search + collapsed tray with reset + active-dot) →
+  // counted view band → recessed well → one-line footer; the main view offers
+  // cards AND compact list renderings.
+  assert.match(html, /data-app-search/);
+  assert.match(html, /data-app-filter-advanced[^>]*hidden/);
+  assert.match(html, /data-count-apps/);
+  assert.match(html, /data-chat-search/);
+  assert.match(html, /data-chat-filter-advanced[^>]*hidden/);
+  assert.match(html, /data-chat-role-filter/);
+  assert.match(html, /data-reset-chat-filters/);
+  assert.match(html, /data-count-events/);
+  assert.match(html, /data-count-turns/);
+  assert.match(html, /data-chat-view="cards"/);
+  assert.match(html, /data-chat-view="list"/);
+  assert.match(html, /id="ca-center-footer"/);
+  assert.match(html, /id="ca-artifact-footer"/);
+  assert.match(css, /\.coding-agents-filter-toggle\.has-active-filters::after/);
+  assert.match(css, /\.coding-agents-chat-well/);
+  assert.match(js, /renderTranscriptList/);
 });
 
 test('task validation requires a meaningful instruction', () => {

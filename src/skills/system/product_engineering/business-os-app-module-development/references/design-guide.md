@@ -256,9 +256,11 @@ Rules that go with it:
   track a real minimum (`minmax(300px, 1fr)`) and add a
   `@container business-app-window (max-width: …)` rule that hides the least
   important pane (e.g. an artifact/detail pane) so the primary surface wins.
-- Module CSS must carry the module JS cache-buster
-  (`index.css?v=` from `import.meta.url`); fresh JS over a stale cached
-  sheet produces phantom layout bugs.
+- Module CSS AND module markup must carry the module JS cache-buster
+  (`index.css?v=` / `index.html?v=` derived from `import.meta.url`). Fresh JS
+  over a stale cached sheet produces phantom layout bugs; fresh JS binding
+  against stale cached markup silently loses every new control (a
+  `loadModuleMarkup()` fetch without the buster is the same bug).
 - Module version is always three-part semver (`1.2.3`) in `module.json`.
 
 ## Anti-Patterns

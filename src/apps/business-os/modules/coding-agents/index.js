@@ -33,6 +33,15 @@ const state = {
   recentTurns: [],
   activeSession: null,
   projectionTimers: {},
+  // Canonical column grammar state: search + collapsed tray per column,
+  // counted view band and cards/list toggle in the main view.
+  appSearch: '',
+  appSort: 'title',
+  appSortDir: 'asc',
+  chatSearch: '',
+  chatRoleFilter: 'all',
+  chatViewMode: 'cards',
+  centerTab: 'chat',
 };
 
 const labels = {
@@ -178,7 +187,11 @@ async function initChatView() {
 }
 
 async function loadModuleMarkup() {
-  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  // Markup inherits the JS cache-buster — like the stylesheet, a deploy must
+  // never leave fresh JS binding against stale cached markup.
+  const version = String(import.meta.url).split('?v=')[1] || '';
+  const markupHref = new URL('./index.html', import.meta.url).pathname + (version ? `?v=${version}` : '');
+  const html = await fetch(markupHref).then((res) => res.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
   return doc.body.innerHTML;
@@ -201,6 +214,25 @@ function bindElements(root) {
   els.resultBadge = root.querySelector('#ca-result-badge');
   els.resultBody = root.querySelector('#ca-result-body');
   els.recentList = root.querySelector('#ca-recent-list');
+  els.turnsList = root.querySelector('#ca-turns-list');
+  els.appSearch = root.querySelector('[data-app-search]');
+  els.appFilterToggle = root.querySelector('[data-toggle-app-filters]');
+  els.appFilterTray = root.querySelector('[data-app-filter-advanced]');
+  els.appSort = root.querySelector('[data-app-sort]');
+  els.appSortDir = root.querySelector('[data-app-sort-dir]');
+  els.appFilterReset = root.querySelector('[data-reset-app-filters]');
+  els.countApps = root.querySelector('[data-count-apps]');
+  els.chatSearch = root.querySelector('[data-chat-search]');
+  els.chatFilterToggle = root.querySelector('[data-toggle-chat-filters]');
+  els.chatFilterTray = root.querySelector('[data-chat-filter-advanced]');
+  els.chatRoleFilter = root.querySelector('[data-chat-role-filter]');
+  els.chatFilterReset = root.querySelector('[data-reset-chat-filters]');
+  els.chatViewButtons = [...root.querySelectorAll('[data-chat-view]')];
+  els.centerTabs = [...root.querySelectorAll('[data-center-tab]')];
+  els.countEvents = root.querySelector('[data-count-events]');
+  els.countTurns = root.querySelector('[data-count-turns]');
+  els.centerFooter = root.querySelector('#ca-center-footer');
+  els.artifactFooter = root.querySelector('#ca-artifact-footer');
   if (els.root) els.root.className = ROOT_CLASSES;
 }
 
@@ -250,6 +282,77 @@ function wireEvents() {
       state.ctx?.openDesktopApp?.('code-editor', { args: { moduleId: mod.id, moduleTitle: mod.title } });
     });
   }
+
+  // Left column: search + collapsed tray (sort select, direction, reset).
+  els.appSearch?.addEventListener('input', () => {
+    state.appSearch = els.appSearch.value.trim().toLowerCase();
+    syncFilterIndicators();
+    renderAppList();
+  });
+  els.appFilterToggle?.addEventListener('click', () => toggleTray(els.appFilterToggle, els.appFilterTray));
+  els.appSort?.addEventListener('change', () => { state.appSort = els.appSort.value; syncFilterIndicators(); renderAppList(); });
+  els.appSortDir?.addEventListener('click', () => {
+    state.appSortDir = state.appSortDir === 'asc' ? 'desc' : 'asc';
+    els.appSortDir.dataset.dir = state.appSortDir;
+    els.appSortDir.title = state.appSortDir === 'asc' ? 'Aufsteigend' : 'Absteigend';
+    els.appSortDir.style.transform = state.appSortDir === 'asc' ? '' : 'scaleY(-1)';
+    syncFilterIndicators();
+    renderAppList();
+  });
+  els.appFilterReset?.addEventListener('click', () => {
+    state.appSearch = ''; state.appSort = 'title'; state.appSortDir = 'asc';
+    if (els.appSearch) els.appSearch.value = '';
+    if (els.appSort) els.appSort.value = 'title';
+    if (els.appSortDir) { els.appSortDir.dataset.dir = 'asc'; els.appSortDir.style.transform = ''; }
+    syncFilterIndicators();
+    renderAppList();
+  });
+
+  // Main view: transcript search + role tray + cards/list toggle + view band.
+  els.chatSearch?.addEventListener('input', () => {
+    state.chatSearch = els.chatSearch.value.trim().toLowerCase();
+    syncFilterIndicators();
+    renderRecentTurns();
+  });
+  els.chatFilterToggle?.addEventListener('click', () => toggleTray(els.chatFilterToggle, els.chatFilterTray));
+  els.chatRoleFilter?.addEventListener('change', () => {
+    state.chatRoleFilter = els.chatRoleFilter.value;
+    syncFilterIndicators();
+    renderRecentTurns();
+  });
+  els.chatFilterReset?.addEventListener('click', () => {
+    state.chatSearch = ''; state.chatRoleFilter = 'all';
+    if (els.chatSearch) els.chatSearch.value = '';
+    if (els.chatRoleFilter) els.chatRoleFilter.value = 'all';
+    syncFilterIndicators();
+    renderRecentTurns();
+  });
+  els.chatViewButtons.forEach((button) => button.addEventListener('click', () => {
+    state.chatViewMode = button.dataset.chatView;
+    els.chatViewButtons.forEach((other) => other.setAttribute('aria-pressed', String(other === button)));
+    renderRecentTurns();
+  }));
+  els.centerTabs.forEach((tab) => tab.addEventListener('click', () => {
+    state.centerTab = tab.dataset.centerTab;
+    els.centerTabs.forEach((other) => other.setAttribute('aria-selected', String(other === tab)));
+    renderRecentTurns();
+  }));
+}
+
+function toggleTray(toggle, tray) {
+  if (!toggle || !tray) return;
+  const open = tray.hidden;
+  tray.hidden = !open;
+  toggle.setAttribute('aria-expanded', String(open));
+}
+
+// Active-filter dot on the tray toggles: visible whenever a non-default
+// filter is set, so a collapsed tray never hides active filtering.
+function syncFilterIndicators() {
+  const appActive = Boolean(state.appSearch) || state.appSort !== 'title' || state.appSortDir !== 'asc';
+  els.appFilterToggle?.classList.toggle('has-active-filters', appActive);
+  const chatActive = Boolean(state.chatSearch) || state.chatRoleFilter !== 'all';
+  els.chatFilterToggle?.classList.toggle('has-active-filters', chatActive);
 }
 
 /* App/Module picker */
@@ -314,11 +417,24 @@ function renderAppList() {
     return;
   }
   if (state.listState === 'error' || state.modules.length === 0) {
+    if (els.countApps) els.countApps.textContent = ' (0)';
     box.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(t('emptyApps'))}</strong><span>${escapeHtml(t('emptyAppsHint'))}</span></div>`;
     return;
   }
 
-  state.modules.forEach((mod) => {
+  const query = state.appSearch;
+  const direction = state.appSortDir === 'desc' ? -1 : 1;
+  const key = state.appSort === 'id' ? 'id' : 'title';
+  const visible = state.modules
+    .filter((mod) => !query || mod.title.toLowerCase().includes(query) || mod.id.toLowerCase().includes(query))
+    .sort((left, right) => direction * left[key].localeCompare(right[key], undefined, { sensitivity: 'base' }));
+  if (els.countApps) els.countApps.textContent = ` (${visible.length})`;
+  if (!visible.length) {
+    box.innerHTML = `<div class="ctox-empty"><strong>Keine Treffer.</strong></div>`;
+    return;
+  }
+
+  visible.forEach((mod) => {
     const item = document.createElement('button');
     item.type = 'button';
     // Kit list row; `is-selected` drives the kit selection styling. The rail
@@ -690,20 +806,95 @@ function renderRecentTurns() {
   }
 
   // The chat: native session events (the sidecar transcript) when present,
-  // otherwise the turn log as user-bubble + status-line pairs.
-  const events = buildTranscriptEvents();
+  // otherwise the turn log as user-bubble + status-line pairs. Search + role
+  // tray filter the transcript; the band counts BOTH views (zeros included).
+  const allEvents = buildTranscriptEvents();
+  const events = allEvents.filter((event) => {
+    if (state.chatRoleFilter !== 'all') {
+      const role = event.role === 'agent' ? 'assistant' : event.role;
+      if (state.chatRoleFilter === 'system' ? (role === 'user' || role === 'assistant') : role !== state.chatRoleFilter) return false;
+    }
+    return !state.chatSearch || String(event.text || '').toLowerCase().includes(state.chatSearch);
+  });
   const running = state.activeSession?.status === 'running';
-  const emptyText = t('recentEmpty');
+  const filtered = events.length !== allEvents.length;
+  const emptyText = filtered ? 'Keine Treffer im Verlauf.' : t('recentEmpty');
 
-  if (chatView) {
-    chatView.update({ events, running, emptyText });
+  if (els.countEvents) els.countEvents.textContent = ` (${events.length})`;
+  if (els.countTurns) els.countTurns.textContent = ` (${state.recentTurns.length})`;
+
+  const showTurns = state.centerTab === 'turns';
+  if (els.turnsList) els.turnsList.hidden = !showTurns;
+  box.hidden = showTurns;
+  if (showTurns) {
+    renderTurnsList();
+  } else if (chatView && state.chatViewMode === 'cards') {
+    chatView.update({ events, running: running && !filtered, emptyText });
   } else {
-    renderTranscriptInline(box, events, emptyText);
+    renderTranscriptList(box, events, emptyText);
   }
 
   const footer = els.root?.querySelector('#ca-footer');
-  if (footer) footer.textContent = `${state.recentTurns.length} Turns · ${state.activeModuleId || '—'}`;
+  if (footer) footer.textContent = `${state.modules.length} Apps`;
+  if (els.centerFooter) {
+    els.centerFooter.textContent = state.activeModuleId
+      ? `${state.recentTurns.length} Delegationen · ${state.activeModuleId}${running ? ' · Agent arbeitet' : ''}`
+      : '';
+  }
   renderArtifact();
+}
+
+// Compact list rendering (the counterpart to the bubble cards): one protocol
+// row per event — role, one-line preview, status.
+function renderTranscriptList(box, events, emptyText) {
+  box.innerHTML = '';
+  if (!events.length) {
+    box.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(emptyText)}</strong></div>`;
+    return;
+  }
+  const roleLabel = { user: 'Auftrag', assistant: 'Agent', agent: 'Agent' };
+  for (const event of events) {
+    const label = roleLabel[event.role] || 'System';
+    box.insertAdjacentHTML('beforeend', `
+      <div class="coding-agents-proto-row" data-role="${escapeHtml(event.role)}">
+        <span class="coding-agents-proto-role">${escapeHtml(label)}</span>
+        <span class="coding-agents-proto-text">${escapeHtml(String(event.text || '').replace(/\s+/g, ' ').slice(0, 160))}</span>
+        ${event.status ? `<span class="coding-agents-proto-status">${escapeHtml(event.status)}</span>` : ''}
+      </div>
+    `);
+  }
+}
+
+// The "Delegationen" band view: the turn log for the active app as kit rows.
+function renderTurnsList() {
+  const box = els.turnsList;
+  if (!box) return;
+  box.innerHTML = '';
+  if (!state.recentTurns.length) {
+    box.innerHTML = `<div class="ctox-empty"><strong>Noch keine Delegationen.</strong></div>`;
+    return;
+  }
+  for (const turn of state.recentTurns) {
+    box.insertAdjacentHTML('beforeend', `
+      <div class="ctox-list-item coding-agents-turn-row">
+        <span class="coding-agents-app-row">
+          <span class="coding-agents-app-title">${escapeHtml(String(turn.prompt || '').replace(/\s+/g, ' ').slice(0, 120) || '—')}</span>
+          <span class="coding-agents-app-id">${escapeHtml(turn.status || '')}${turn.timeMs ? ` · ${escapeHtml(relativeTime(turn.timeMs))}` : ''}</span>
+        </span>
+      </div>
+    `);
+  }
+}
+
+function relativeTime(timeMs) {
+  const delta = Date.now() - Number(timeMs || 0);
+  if (!Number.isFinite(delta) || delta < 0) return '';
+  const minutes = Math.round(delta / 60000);
+  if (minutes < 1) return 'gerade eben';
+  if (minutes < 60) return `vor ${minutes} min`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `vor ${hours} h`;
+  return `vor ${Math.round(hours / 24)} d`;
 }
 
 // The canonical transcript for the active app: native sidecar events when we
@@ -781,6 +972,10 @@ function renderArtifact() {
   } else {
     frame.hidden = true;
     empty.hidden = false;
+  }
+  if (els.artifactFooter) {
+    const updatedMs = Number(state.activeSession?.updated_at_ms || 0);
+    els.artifactFooter.textContent = html.trim() && updatedMs ? `Aktualisiert ${relativeTime(updatedMs)}` : '';
   }
 }
 

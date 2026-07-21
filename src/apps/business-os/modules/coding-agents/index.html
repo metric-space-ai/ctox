@@ -15,7 +15,28 @@
         </div>
         <div class="ctox-pane-actions"></div>
       </div>
+      <!-- Row 2 (wide rail only): filter section — search + collapsed tray. -->
+      <div class="coding-agents-filterbar" data-rail-wide>
+        <input class="ctox-pane-search" type="search" data-app-search placeholder="Apps suchen" aria-label="Apps suchen">
+        <button type="button" class="ctox-pane-icon coding-agents-filter-toggle" data-toggle-app-filters aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="coding-agents-filter-advanced" data-app-filter-advanced hidden>
+        <div class="coding-agents-filter-row">
+          <select class="ctox-select coding-agents-select" data-app-sort aria-label="Sortieren nach">
+            <option value="title">Name</option>
+            <option value="id">Modul-ID</option>
+          </select>
+          <button type="button" class="coding-agents-sort-dir" data-app-sort-dir data-dir="asc" aria-label="Sortierrichtung umkehren" title="Aufsteigend"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="6 11 12 5 18 11"/></svg></button>
+          <button type="button" class="coding-agents-sort-dir coding-agents-filter-reset" data-reset-app-filters aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+        </div>
+      </div>
     </header>
+    <!-- Row 3 (wide rail only): counted view band. -->
+    <nav class="coding-agents-view-switch" data-rail-wide aria-label="App Ansichten">
+      <div class="ctox-pane-tabs">
+        <button type="button" class="ctox-pane-tab" role="tab" aria-selected="true">Apps<span class="view-count" data-count-apps></span></button>
+      </div>
+    </nav>
     <div class="ctox-pane-body coding-agents-well">
       <div class="ctox-list" id="ca-app-list">
         <div class="ctox-empty"><strong>Apps werden geladen…</strong></div>
@@ -35,13 +56,45 @@
           <h2 class="ctox-pane-title" id="ca-active-app-title">Kein Projekt gewählt</h2>
         </div>
         <div class="ctox-pane-actions">
+          <!-- View toggle: chat bubbles vs. compact protocol list — every main
+               view that lists elements offers both renderings. -->
+          <div class="coding-agents-view-toggle" role="group" aria-label="Verlauf-Darstellung">
+            <button type="button" class="ctox-pane-icon" data-chat-view="cards" aria-pressed="true" aria-label="Chat-Ansicht" title="Chat-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/></svg></button>
+            <button type="button" class="ctox-pane-icon" data-chat-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+          </div>
           <button type="button" class="ctox-pane-icon" id="ca-open-editor" title="Im Source-Editor öffnen" aria-label="Im Source-Editor öffnen" disabled>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M9 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3"/></svg>
           </button>
         </div>
       </div>
+      <!-- Row 2: filter section — transcript search + collapsed tray. -->
+      <div class="coding-agents-filterbar">
+        <input class="ctox-pane-search" type="search" data-chat-search placeholder="Im Verlauf suchen" aria-label="Im Verlauf suchen">
+        <button type="button" class="ctox-pane-icon coding-agents-filter-toggle" data-toggle-chat-filters aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="coding-agents-filter-advanced" data-chat-filter-advanced hidden>
+        <div class="coding-agents-filter-row">
+          <select class="ctox-select coding-agents-select" data-chat-role-filter aria-label="Ereignisse">
+            <option value="all">Alle Ereignisse</option>
+            <option value="user">Nur Aufträge</option>
+            <option value="assistant">Nur Agent</option>
+            <option value="system">Nur Protokoll</option>
+          </select>
+          <button type="button" class="coding-agents-sort-dir coding-agents-filter-reset" data-reset-chat-filters aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+        </div>
+      </div>
     </header>
-    <div class="coding-agents-chat" id="ca-recent-list" aria-live="polite"></div>
+    <!-- Row 3: counted view band — transcript vs. delegation log. -->
+    <nav class="coding-agents-view-switch" aria-label="Chat Ansichten">
+      <div class="ctox-pane-tabs">
+        <button type="button" class="ctox-pane-tab" role="tab" data-center-tab="chat" aria-selected="true">Verlauf<span class="view-count" data-count-events></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-center-tab="turns" aria-selected="false">Delegationen<span class="view-count" data-count-turns></span></button>
+      </div>
+    </nav>
+    <div class="ctox-pane-body coding-agents-chat-well">
+      <div class="coding-agents-chat" id="ca-recent-list" aria-live="polite"></div>
+      <div class="ctox-list coding-agents-turns" id="ca-turns-list" hidden></div>
+    </div>
     <div id="ca-result" hidden><span id="ca-result-badge"></span><span id="ca-result-body"></span></div>
     <form class="coding-agents-composer" id="ca-turn-form">
       <textarea id="ca-task-input" class="ctox-textarea" rows="2" placeholder="Beschreibe, was der Agent an diesem Projekt tun soll…" required disabled></textarea>
@@ -51,6 +104,7 @@
       </div>
       <p class="coding-agents-hint" id="ca-hint" aria-live="polite"></p>
     </form>
+    <footer class="coding-agents-footer"><span id="ca-center-footer"></span></footer>
   </section>
 
   <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="260" data-resizer-max="560" aria-label="Artefakt-Spalte anpassen"></button>
@@ -66,10 +120,11 @@
         <div class="ctox-pane-actions"></div>
       </div>
     </header>
-    <div class="coding-agents-artifact-host">
+    <div class="ctox-pane-body coding-agents-artifact-host">
       <iframe id="ca-artifact" class="coding-agents-artifact" sandbox="" title="Task-Artefakt" hidden></iframe>
       <div class="ctox-empty" id="ca-artifact-empty"><strong>Noch kein Artefakt.</strong><br>Der Agent veröffentlicht hier eine Live-Seite zu seinem Task (session.metadata.artifact_html).</div>
     </div>
+    <footer class="coding-agents-footer"><span id="ca-artifact-footer"></span></footer>
   </aside>
 
 </main>

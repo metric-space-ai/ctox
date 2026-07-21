@@ -109,6 +109,19 @@
   .coding-agents-app-item { justify-content: flex-start; }
   .coding-agents-app-row { display: flex; }
 }
+/* hidden must always win — the chat/turns/tray classes set display values. */
+.coding-agents-chat[hidden],
+.coding-agents-turns[hidden],
+.coding-agents-filter-advanced[hidden] { display: none !important; }
+/* Narrow rail: search row + view band collapse with the labels; the full
+   column grammar (search, tray, counted band, footer) returns when wide. */
+.coding-agents-left [data-rail-wide],
+.coding-agents-left .coding-agents-filter-advanced { display: none; }
+@container coding-agents-rail (min-width: 150px) {
+  .coding-agents-left .coding-agents-filterbar[data-rail-wide] { display: flex; }
+  .coding-agents-left .coding-agents-view-switch[data-rail-wide] { display: block; }
+  .coding-agents-left .coding-agents-filter-advanced { display: block; }
+}
 /* Rail header: only the glyph fits at 56px; kicker/title return when wide. */
 .coding-agents-rail-mark {
   display: flex;
@@ -200,11 +213,75 @@
   .coding-agents-right,
   .coding-agents-module > [data-resizer="right"] { display: none; }
 }
-.coding-agents-left { grid-column: 1; grid-row: 1; grid-template-rows: auto minmax(0, 1fr) auto; }
+.coding-agents-left { grid-column: 1; grid-row: 1; grid-template-rows: auto auto minmax(0, 1fr) auto; }
 .coding-agents-module > [data-resizer="left"] { grid-column: 2; grid-row: 1; }
-.coding-agents-center { grid-column: 3; grid-row: 1; grid-template-rows: auto minmax(0, 1fr) auto; }
+.coding-agents-center { grid-column: 3; grid-row: 1; grid-template-rows: auto auto minmax(0, 1fr) auto auto auto; }
 .coding-agents-module > [data-resizer="right"] { grid-column: 4; grid-row: 1; }
-.coding-agents-right { grid-column: 5; grid-row: 1; grid-template-rows: auto minmax(0, 1fr); }
+.coding-agents-right { grid-column: 5; grid-row: 1; grid-template-rows: auto minmax(0, 1fr) auto; }
+
+/* Canonical grammar rows: filter section under the title row, counted view
+   band, then the recessed element well and the one-line footer. */
+.coding-agents-filterbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px 8px;
+}
+.coding-agents-filterbar .ctox-pane-search { flex: 1 1 auto; min-width: 0; }
+.coding-agents-filter-toggle { position: relative; flex: 0 0 auto; }
+.coding-agents-filter-toggle.has-active-filters::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.coding-agents-filter-advanced { padding: 0 12px 8px; }
+.coding-agents-filter-row { display: flex; align-items: center; gap: 6px; }
+.coding-agents-select { flex: 1 1 auto; min-width: 0; height: 28px; font-size: 12px; }
+.coding-agents-sort-dir {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+}
+.coding-agents-sort-dir:hover { color: var(--text); background: var(--surface-2); }
+.coding-agents-sort-dir svg { width: 14px; height: 14px; }
+.coding-agents-view-switch {
+  padding: 0 12px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.coding-agents-view-switch .view-count { color: var(--muted); font-weight: 500; }
+.coding-agents-chat-well {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  background: color-mix(in srgb, var(--text) 6%, var(--surface));
+}
+.coding-agents-turns { overflow: auto; min-height: 0; }
+.coding-agents-proto-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+  font-size: 12px;
+}
+.coding-agents-proto-role { flex: 0 0 56px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
+.coding-agents-proto-row[data-role="user"] .coding-agents-proto-role { color: var(--accent); }
+.coding-agents-proto-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.coding-agents-proto-status { flex: 0 0 auto; color: var(--muted); font-family: var(--font-mono); font-size: 10px; }
 /* Left: element well + footer (canonical grammar). */
 .coding-agents-well {
   background: color-mix(in srgb, var(--text) 6%, var(--surface));
