@@ -154,6 +154,14 @@ code,
   user-select: text;
 }
 
+/* Selection follows the accent in both themes. Only the opt-in selectable
+   surfaces above can actually select, so one global rule is enough and
+   never fights window chrome. */
+::selection {
+  background: color-mix(in oklab, var(--accent) 24%, transparent);
+  color: inherit;
+}
+
 button,
 input,
 select,
@@ -361,7 +369,7 @@ body[data-maintenance-status="stale"] .ctox-maintenance-banner {
 }
 
 .topbar-triad-button[disabled] {
-  opacity: 0.3;
+  opacity: 0.55;
   pointer-events: none;
   cursor: default;
 }
@@ -490,7 +498,7 @@ body[data-maintenance-status="stale"] .ctox-maintenance-banner {
 
 .ctox-update-button:disabled {
   cursor: default;
-  opacity: 0.58;
+  opacity: 0.55;
 }
 
 .topbar-status-bar .ctox-shell-warning {
@@ -1353,7 +1361,7 @@ body.is-resizing * {
 }
 
 .start-menu-item:hover {
-  background: color-mix(in srgb, var(--surface-2) 65%, transparent);
+  background: var(--kit-hover);
   transform: translateX(2px);
 }
 
@@ -1766,7 +1774,7 @@ body.is-resizing * {
 
 .module-lifecycle-version:disabled {
   cursor: not-allowed;
-  opacity: 0.58;
+  opacity: 0.55;
 }
 
 .module-lifecycle-version b {
@@ -2722,7 +2730,7 @@ body[data-auth-state="locked"] .topbar {
 }
 
 .auth-gate-external:hover {
-  background: color-mix(in srgb, var(--text) 4%, transparent);
+  background: var(--kit-hover);
   border-color: color-mix(in srgb, var(--line) 50%, transparent);
 }
 
@@ -3554,7 +3562,7 @@ body[data-auth-state="locked"] .topbar {
 
 .module-admin-actions .text-button:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  opacity: 0.55;
 }
 
 .module-admin-release-diagnostics {
@@ -4607,7 +4615,7 @@ body[data-auth-state="locked"] .topbar {
   font-size: var(--fs-sm);
   transition: background-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
 }
-.shell-window-control:hover { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
+.shell-window-control:hover { color: var(--text); background: var(--kit-fill-strong); }
 .shell-window-control:active { transform: scale(0.95); }
 .shell-window-control--close:hover { background: var(--danger); color: var(--bg); border-color: var(--danger); }
 
@@ -5238,7 +5246,7 @@ body[data-auth-state="locked"] .topbar {
 
 .ctox-context-textarea:focus {
   border-color: var(--accent) !important;
-  box-shadow: var(--shell-focus-ring);
+  box-shadow: var(--focus-ring);
 }
 
 .ctox-context-footer {
@@ -5633,8 +5641,8 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
 }
 
 .os-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 /* Primary Accent Variant */
@@ -6145,16 +6153,14 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
 /* Shared UI safety and consistency pass. Keep this low-specificity so module
    CSS can opt into stronger local behavior without fighting the shell. */
 :root {
-  --shell-focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent);
   --shell-danger-soft: color-mix(in srgb, var(--danger) 12%, var(--surface));
   --shell-danger-line: color-mix(in srgb, var(--danger) 48%, var(--line));
 }
 
 :where(button, [role="button"], input, select, textarea):focus-visible,
 :where(.module-tab, .shell-window-control, .shell-context-menu-item):focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  box-shadow: var(--shell-focus-ring);
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 :where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]), select, textarea) {
@@ -6178,8 +6184,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
 :where(button, input, select, textarea)[aria-disabled="true"],
 :where([role="button"])[aria-disabled="true"] {
   cursor: not-allowed !important;
-  opacity: 0.48;
-  filter: grayscale(0.22);
+  opacity: 0.55;
   box-shadow: none !important;
 }
 
@@ -6268,8 +6273,8 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   .ctox-task-delete,
   .is-delete
 ):focus-visible {
-  outline-color: var(--danger);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent);
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 42%, transparent);
 }
 
 .empty-state {
@@ -6303,7 +6308,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
 [data-resizer]:focus-visible::before {
   opacity: 1;
   background: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: var(--focus-ring);
 }
 
 /* ───────────────────────────────────────────────────────────────────────────
@@ -6524,10 +6529,10 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
 .ctox-column-resizer:hover::before,
 .ctox-column-resizer:focus-visible::before,
 .ctox-column-resizer.is-active::before {
-  background: var(--accent, #6cb8aa);
+  background: var(--accent);
   width: 4px;
 }
-.ctox-column-resizer:focus-visible { outline: 2px solid var(--accent, #6cb8aa); outline-offset: -2px; }
+.ctox-column-resizer:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .ctox-row-resizer {
   align-self: stretch;
   justify-self: stretch;
@@ -6559,10 +6564,10 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
 .ctox-row-resizer:hover::before,
 .ctox-row-resizer:focus-visible::before,
 .ctox-row-resizer.is-active::before {
-  background: var(--accent, #6cb8aa);
+  background: var(--accent);
   height: 4px;
 }
-.ctox-row-resizer:focus-visible { outline: 2px solid var(--accent, #6cb8aa); outline-offset: -2px; }
+.ctox-row-resizer:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 body.is-resizing { cursor: col-resize; user-select: none; }
 body.is-resizing * { cursor: col-resize !important; }
 body.is-resizing-horizontal,
@@ -7528,7 +7533,7 @@ button.shell-window-header-meta:focus-visible,
 }
 
 :root[data-shell-style="ctox"] .shell-window-control:hover {
-  background: color-mix(in srgb, var(--text) 8%, transparent);
+  background: var(--kit-fill-strong);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent);
   color: var(--text);
 }
