@@ -1,50 +1,45 @@
 /* ==========================================================================
    Notes — module CSS on top of the shared kit (shared/base.css + app.css).
 
-   Frame, panes, resizers, pane headers, search, list rows, badges, buttons
-   and empty states all come from the kit:
-     .ctox-workspace[data-resize-frame] + .ctox-pane
-     .ctox-column-resizer[data-resizer-var]  (shell-wired, persistent)
-     .ctox-pane-header/.ctox-pane-band/.ctox-pane-kicker/.ctox-pane-title
-     .ctox-pane-search, .ctox-pane-icon, .ctox-icon-button--sm
-     .ctox-list-item(.is-selected), .ctox-badge, .ctox-button(--sm),
-     .ctox-input, .ctox-callout, .ctox-empty
-
-   What remains here is only what the kit cannot express:
-   brand row, sidebar nav structure, module dropdown menus, the paper-sheet
-   WYSIWYG editor with its content typography, the format toolbar, the sync
-   status footer, and the zero-knowledge PIN/decrypt overlays.
+   IA: a JUSTIFIED two-column editor. LEFT is ONE canonical grammar column
+   (books/tags/categories nav folded into the counted band + filter tray, note
+   list in the recessed well); MAIN is the rich-text editor — the unique work
+   surface. All repeating chrome (filterbar, view toggle, filter tray, counted
+   band, .ctox-well, .ctox-pane-footer, resizer, list rows, badges, buttons,
+   empty states) comes from the kit and is wired by the shell. This file only
+   pins the pane grid tracks and the genuinely notes-specific bits: the paper
+   sheet WYSIWYG editor with its content typography, the format toolbar, the
+   sync status footer, and the zero-knowledge PIN/decrypt overlays.
    ========================================================================== */
 
-.notes-module,
-.notes-context-menu {
+.notes-module {
   /* Module aliases kept deliberately tiny; everything else uses shell tokens
      directly. Shadows stay flat per the module design contract. */
   --nn-shadow: none;
   --nn-paper-shadow: none;
-  /* Workspace column defaults; the shell resizer persists overrides inline. */
-  --ctox-left-width: 240px;
-  --ctox-right-width: 300px;
+  /* Workspace column default; the shell resizer persists overrides inline. */
+  --ctox-left-width: 300px;
 }
 
-/* Pane internals: sidebar and editor have more than header+body, so they lay
-   out as flex columns inside the kit .ctox-pane chrome. */
-.ctox-pane.notes-sidebar-pane,
+/* Explicit column pins so the editor never slides onto the resizer track when
+   the kit hides resizers on narrow windows. The editor (primary) keeps a hard
+   minimum; the grammar column is the fixed side track. */
+.notes-module {
+  grid-template-columns: var(--ctox-left-width, 300px) 12px minmax(320px, 1fr);
+}
+
+.notes-left { grid-column: 1; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.notes-module > [data-resizer="left"] { grid-column: 2; }
+.notes-center { grid-column: 3; }
+
+/* The editor pane has more than header + body, so it lays out as a flex column
+   inside the kit .ctox-pane chrome. */
 .ctox-pane.notes-center {
   display: flex;
   flex-direction: column;
 }
 
-/* --- Brand Header (Left Sidebar) ---
-   The header band itself comes from .ctox-pane-band; only the brand row
-   (logo chip next to the title) is module-specific. */
-.nn-brand-head .ctox-pane-titles {
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-  padding-top: 0;
-}
-
+/* Brand logo chip next to the grammar column title. */
 .nn-logo-container {
   width: 20px;
   height: 20px;
@@ -62,269 +57,64 @@
   height: 12px;
 }
 
-/* --- Left Sidebar nav structure (custom: collapsible Notebook/Tag-Nav,
-   kein Kit-Pendant) — rows themselves are kit .ctox-list-item. --- */
-.nn-nav-list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 8px 6px;
-  display: flex;
-  flex-direction: column;
+/* Keep the logo + titles inline within the kit title row. */
+.notes-left .ctox-pane-title-row > .ctox-pane-titles {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
 }
 
-.nn-sidebar-divider {
-  height: 1px;
-  background: var(--hairline, var(--line));
-  margin: 7px 8px;
-}
-
-/* Group labels (nav sections + date buckets in the note list). */
-.nn-nav-header,
+/* Date-bucket group labels inside the note list well. */
 .notes-group-header {
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted);
+  margin: 10px 4px 5px 4px;
 }
 
-.nn-nav-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 8px 3px 6px;
-  margin-top: 8px;
+.notes-group-header:first-child {
+  margin-top: 2px;
 }
 
-.nn-nav-header-left {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-}
-
-.nn-nav-arrow {
-  width: 12px;
-  height: 12px;
-  transition: transform 0.2s ease;
-}
-
-.nn-nav-arrow.active {
-  transform: rotate(90deg);
-}
-
-.nn-nav-header .ctox-icon-button svg {
-  width: 12px;
-  height: 12px;
-}
-
-.nn-sidebar-sublist {
+.nn-cards-scroll {
+  padding: 4px;
   display: flex;
   flex-direction: column;
-  padding-left: 10px;
+  gap: 4px;
 }
 
-/* Folder/nav rows: interaction visuals (hover, hairline, .is-selected) come
-   from .ctox-list-item; this is only the inner two-column layout. */
-.notes-folder-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.notes-folder-item-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.notes-folder-icon,
-.notes-folder-item-left .ctox-action-icon {
-  width: 16px;
-  height: 16px;
-  color: var(--muted);
-  flex-shrink: 0;
-}
-
-.notes-folder-item.is-selected .notes-folder-icon,
-.notes-folder-item.is-selected .notes-folder-item-left .ctox-action-icon {
-  color: var(--accent);
-}
-
-/* Focus ring for the div-based interactive rows (kit styles cover buttons). */
-.notes-folder-item:focus-visible,
+/* Focus ring for the div-based interactive note rows. */
 .notes-card:focus-visible,
-.nn-nav-header:focus-visible,
 .nn-pin-pad button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
 
-/* --- Middle Pane (Notes List) ---
-   Header band, kicker/title, filter icon button and search all come from the
-   kit. The head needs visible overflow so the sort popover can escape it. */
-.nn-list-head {
-  position: relative;
-  overflow: visible;
-}
-
-.nn-list-head .ctox-pane-actions {
-  position: relative;
-}
-
-.nn-cards-scroll {
-  padding: 6px;
-}
-
-.notes-group-header {
-  margin: 10px 4px 5px 4px;
-}
-
-/* custom: Modul-Menüs (Sortier-Popover, Notizbuch-/Tag-Zuweisung,
-   Format-Dropdowns) — das Kit hat keine Popover-Menü-Komponente. */
-.nn-filter-popover,
-.nn-dropdown-menu,
-.nn-toolbar-dropdown {
-  position: absolute;
-  background: var(--surface);
-  border: 1px solid var(--hairline, var(--line));
-  border-radius: var(--control-radius);
-  box-shadow: var(--nn-shadow);
-  z-index: 100;
-  padding: 5px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  animation: popIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.nn-filter-popover {
-  top: calc(100% + 4px);
-  right: 0;
-  width: 210px;
-  padding: 8px;
-  gap: 8px;
-}
-
-.nn-dropdown-menu {
-  top: calc(100% + 4px);
-  left: 0;
-  min-width: 180px;
-  max-height: 240px;
-  overflow-y: auto;
-}
-
-.nn-toolbar-dropdown {
-  bottom: calc(100% + 4px);
-  left: 0;
-  width: 180px;
-}
-
-.nn-popover-section h4 {
-  font-size: 9.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--muted);
-  margin: 0 0 6px 4px;
-}
-
-.nn-popover-item,
-.nn-dropdown-item {
-  width: 100%;
-  text-align: left;
-  border: 0;
-  background: transparent;
-  padding: 5px 8px;
-  border-radius: var(--control-radius);
-  font: inherit;
-  font-size: 12px;
-  color: var(--text);
-  cursor: pointer;
-  font-weight: 500;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.nn-popover-item:hover,
-.nn-dropdown-item:hover {
-  background: var(--kit-hover);
-  color: var(--text-strong, var(--text));
-}
-
-.nn-popover-item.active,
-.nn-dropdown-item.active {
-  background: var(--accent-soft);
-  color: color-mix(in srgb, var(--accent) 78%, var(--text));
-  font-weight: 600;
-}
-
-.nn-dropdown-item.is-danger {
-  color: var(--danger);
-}
-.nn-dropdown-item.is-danger svg {
-  color: var(--danger);
-}
-.nn-dropdown-item.is-danger:hover {
-  background: var(--danger-soft);
-}
-
-.nn-popover-divider {
-  height: 1px;
-  background: var(--hairline, var(--line));
-  margin: 2px 0;
-}
-
-.nn-dropdown-item-check {
-  width: 12px;
-  height: 12px;
-  color: var(--accent);
-}
-
-/* Tags management dropdown */
-.nn-tags-dropdown {
-  padding: 8px;
-  gap: 5px;
-}
-
-.nn-tag-select-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: var(--control-radius);
-}
-
-.nn-tag-select-item:hover {
-  background: var(--kit-hover);
-}
-
-.nn-tag-select-item input {
-  accent-color: var(--accent);
-  cursor: pointer;
-  margin: 0;
-}
-
-.nn-dropdown-empty {
-  padding: 10px 14px;
-  font-size: 11.5px;
-  color: var(--muted);
-}
-
-/* --- Note Cards (Middle Pane) ---
+/* --- Note Cards / rows (list well) ---
    Rows are kit .ctox-list-item (padding, hover, .is-selected incl. accent
    bar); this is only the card content layout. */
 .notes-card {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* Compact list view: one dense line per note. */
+.nn-cards-scroll.is-list .notes-card {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.nn-cards-scroll.is-list .notes-card-meta,
+.nn-cards-scroll.is-list .nn-card-badges {
+  display: none;
+}
+
+.nn-cards-scroll.is-list .nn-card-row {
+  flex: 1;
 }
 
 .nn-card-row {
@@ -398,7 +188,7 @@
   color: var(--accent);
 }
 
-/* --- Right Editor Header ---
+/* --- Editor Header ---
    Band + icon buttons are kit; layout of meta selectors vs. actions is
    module-specific. */
 .nn-editor-head {
@@ -416,6 +206,11 @@
   gap: 8px;
   flex-wrap: wrap;
   min-width: 0;
+}
+
+/* The back-to-list return path only exists in the stacked (narrow) layout. */
+.nn-back-to-list {
+  display: none;
 }
 
 .nn-meta-select-wrap {
@@ -458,7 +253,116 @@
   fill: var(--warning);
 }
 
-/* Toolbar group separators (previously unstyled). */
+/* custom: Modul-Menüs (Notizbuch-/Tag-Zuweisung, Format-Dropdowns) — das Kit
+   hat keine Popover-Menü-Komponente. */
+.nn-dropdown-menu,
+.nn-toolbar-dropdown {
+  position: absolute;
+  background: var(--surface);
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--control-radius);
+  box-shadow: var(--nn-shadow);
+  z-index: 100;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  animation: popIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.nn-dropdown-menu {
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 180px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.nn-toolbar-dropdown {
+  bottom: calc(100% + 4px);
+  left: 0;
+  width: 180px;
+}
+
+.nn-dropdown-item {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 5px 8px;
+  border-radius: var(--control-radius);
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.nn-dropdown-item:hover {
+  background: var(--kit-hover);
+  color: var(--text-strong, var(--text));
+}
+
+.nn-dropdown-item.active {
+  background: var(--accent-soft);
+  color: color-mix(in srgb, var(--accent) 78%, var(--text));
+  font-weight: 600;
+}
+
+.nn-dropdown-item.is-danger {
+  color: var(--danger);
+}
+.nn-dropdown-item.is-danger svg {
+  color: var(--danger);
+}
+.nn-dropdown-item.is-danger:hover {
+  background: var(--danger-soft);
+}
+
+.nn-popover-divider {
+  height: 1px;
+  background: var(--hairline, var(--line));
+  margin: 2px 0;
+}
+
+/* Tags management dropdown */
+.nn-tags-dropdown {
+  padding: 8px;
+  gap: 5px;
+}
+
+.nn-tag-select-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: var(--control-radius);
+}
+
+.nn-tag-select-item:hover {
+  background: var(--kit-hover);
+}
+
+.nn-tag-select-item input {
+  accent-color: var(--accent);
+  cursor: pointer;
+  margin: 0;
+}
+
+.nn-dropdown-empty {
+  padding: 10px 14px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* Toolbar group separators. */
 .toolbar-separator {
   width: 1px;
   height: 18px;
@@ -1138,10 +1042,38 @@
   100% { transform: translateX(0); }
 }
 
+/* --- Narrow / mobile stack ---
+   The two columns collapse into a single scroll owner. The note list owns the
+   stack until a note is selected (auto-reveal); then the editor owns it and the
+   back button returns to the list. */
 @container business-app-window (max-width: 760px) {
-  /* Frame collapse (single column, hidden resizers) comes from the kit. */
-  .nn-nav-list {
-    padding: 8px;
+  .notes-module {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .notes-module > [data-resizer] {
+    display: none;
+  }
+
+  .notes-left,
+  .notes-center {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  /* Auto-reveal: editor visible only with a selection (root drops
+     .is-editor-hidden); otherwise the list owns the stack. */
+  .notes-module:not(.is-editor-hidden) .notes-left {
+    display: none;
+  }
+
+  .notes-module.is-editor-hidden .notes-center {
+    display: none;
+  }
+
+  .nn-back-to-list {
+    display: inline-flex;
   }
 
   .nn-editor-head {

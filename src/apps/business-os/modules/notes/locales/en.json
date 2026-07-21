@@ -33,5 +33,17 @@
   "syncDescription": "Notes are automatically synchronized in the background as Markdown files:",
   "syncHint": "Manually created .md files in this folder are automatically imported.",
   "noNotes": "No notes",
-  "presenceEditing": "is editing right now"
+  "presenceEditing": "is editing right now",
+  "kicker": "Notesnook",
+  "favorites": "Favorites",
+  "trash": "Trash",
+  "notebook": "Notebook",
+  "entries": "entries",
+  "allNotebooks": "All Notebooks",
+  "allTags": "All Tags",
+  "newNotebookPrompt": "Name for the new notebook:",
+  "newTagPrompt": "Name for the new tag:",
+  "importInvalid": "Invalid JSON file.",
+  "importEmpty": "No notes in the file.",
+  "imported": "{n} notes imported."
 }

@@ -141,7 +141,10 @@ test('notes presentation follows compact Business OS editor contract', async () 
   assert.match(html, /ctox-workspace[^"]*notes-module/);
   assert.match(html, /data-resize-frame/);
   assert.match(html, /ctox-column-resizer[^>]*data-resizer-var="--ctox-left-width"/);
-  assert.match(html, /ctox-column-resizer[^>]*data-resizer-var="--ctox-right-width"/);
+  // Two-pane IA (grammar column + editor): exactly ONE shell resizer, and no
+  // module-built resizer.
+  assert.equal((html.match(/ctox-column-resizer/g) || []).length, 1);
+  assert.doesNotMatch(html, /data-resizer-var="--ctox-right-width"/);
   assert.doesNotMatch(css, /\.notes-resizer/);
   assert.doesNotMatch(css, /--notes-left-width|--notes-right-width/);
   // List rows and status pills use the kit; the module keeps only content
@@ -150,4 +153,112 @@ test('notes presentation follows compact Business OS editor contract', async () 
   assert.doesNotMatch(css, /notebook-badge|tag-badge|presence-badge/);
   assert.match(css, /\.nn-paper-sheet\s*\{[\s\S]*?border-radius:\s*var\(--control-radius\)/);
   assert.match(css, /\.nn-pin-container\s*\{[\s\S]*?border-radius:\s*var\(--control-radius\)/);
+});
+
+// --- Canonical column grammar / IA (books/tags nav + note list + editor) ---
+
+const notesHtml = await readFile(fileURLToPath(new URL('./index.html', import.meta.url)), 'utf8');
+const notesCss = await readFile(fileURLToPath(new URL('./index.css', import.meta.url)), 'utf8');
+const notesJs = await readFile(fileURLToPath(new URL('./index.js', import.meta.url)), 'utf8');
+
+test('left column carries the full shell-wired grammar (data-pg-*)', () => {
+  // Row 1: header actions collected top-right — Neu + Import + Export are standing.
+  assert.match(notesHtml, /data-action="create-note"/);
+  assert.match(notesHtml, /data-action="import"/);
+  assert.match(notesHtml, /data-action="export"/);
+  // Row 2: search + shard/list toggle + collapsed tray with reset.
+  assert.match(notesHtml, /class="ctox-filterbar"/);
+  assert.match(notesHtml, /data-pg-search/);
+  assert.match(notesHtml, /data-pg-view="cards"/);
+  assert.match(notesHtml, /data-pg-view="list"/);
+  assert.match(notesHtml, /data-pg-tray-toggle/);
+  assert.match(notesHtml, /data-pg-tray\b/);
+  assert.match(notesHtml, /data-pg-reset/);
+  // Book/tag scopes and sort live in the tray as dropdowns (never standing rows).
+  assert.match(notesHtml, /data-pg-filter[^>]*data-pg-name="notebook"/);
+  assert.match(notesHtml, /data-pg-filter[^>]*data-pg-name="tag"/);
+  assert.match(notesHtml, /data-pg-filter[^>]*data-pg-name="sort"/);
+  // Recessed well + one-line footer.
+  assert.match(notesHtml, /ctox-pane-body ctox-well/);
+  assert.match(notesHtml, /class="ctox-pane-footer"[^>]*>\s*<span data-pg-footer>/);
+  // Module writes NO chrome CSS: no per-app filterbar/tray/band/well/footer rules.
+  assert.doesNotMatch(notesCss, /\.ctox-filterbar\s*\{/);
+  assert.doesNotMatch(notesCss, /\.ctox-filter-tray\s*\{/);
+  assert.doesNotMatch(notesCss, /\.ctox-view-switch\s*\{/);
+  assert.doesNotMatch(notesCss, /\.ctox-pane-tabs\s*\{/);
+  assert.doesNotMatch(notesCss, /\.ctox-well\s*\{/);
+});
+
+test('the counted band has >= 2 real views with counts (zeros included)', () => {
+  const band = notesHtml.match(/class="[^"]*ctox-pane-tabs[^"]*"[\s\S]*?<\/div>/);
+  assert.ok(band, 'ctox-pane-tabs band present');
+  const tabs = band[0].match(/class="[^"]*ctox-pane-tab[^"]*"/g) || [];
+  assert.ok(tabs.length >= 2, `band needs >= 2 tabs, found ${tabs.length}`);
+  for (const key of ['notes', 'favorites', 'trash']) {
+    assert.match(notesHtml, new RegExp(`data-pg-band="${key}"`));
+    assert.match(notesHtml, new RegExp(`data-pg-count="${key}"`));
+  }
+});
+
+test('band counts include zeros and honour the trashed/favorite predicates', () => {
+  const notes = [
+    { id: 'a', is_trashed: false, is_favorite: true },
+    { id: 'b', is_trashed: false, is_favorite: false },
+    { id: 'c', is_trashed: true, is_favorite: false },
+  ];
+  assert.deepEqual(hooks.bandCountsFor(notes), { notes: 2, favorites: 1, trash: 1 });
+  // Zeros are rendered, never hidden.
+  assert.deepEqual(hooks.bandCountsFor([]), { notes: 0, favorites: 0, trash: 0 });
+});
+
+test('export is honest JSON and never leaks draft or decrypted content', () => {
+  const rows = hooks.buildNotesExport([
+    { id: 'n1', title: 'Visible', content: '<p>body</p>', notebook: 'Ops', tags: 'x', is_favorite: true, updated_at_ms: 5 },
+    { id: 'draft', title: 'Draft', [hooks.DRAFT_NOTE_MARKER]: true },
+    { id: 'locked', title: 'Gesperrte Notiz', content: '{"cipherText":"..."}', is_locked: true },
+  ]);
+  assert.equal(rows.length, 2, 'drafts are excluded from export');
+  assert.equal(rows.find(r => r.id === 'draft'), undefined);
+  const locked = rows.find(r => r.id === 'locked');
+  assert.equal(locked.is_locked, true);
+  // Only the stored ciphertext content ships — the export never invents plaintext.
+  assert.equal(locked.content, '{"cipherText":"..."}');
+});
+
+test('import parses arrays or a single object and never trusts a lock flag', () => {
+  const parsed = hooks.parseNotesImport([
+    { title: 'One', content: '<p>a</p>', notebook: 'Ops', tags: 'x', is_favorite: true, is_locked: true, lock_passcode: 'hunter2' },
+    { title: '   ' },              // dropped: no title and no content
+    { notebook: 'only-meta' },     // dropped: no title and no content
+    { content: '<p>only content</p>' },
+  ]);
+  assert.equal(parsed.length, 2);
+  assert.equal(parsed[0].title, 'One');
+  assert.equal('is_locked' in parsed[0], false, 'imported notes never carry a lock flag');
+  assert.equal('lock_passcode' in parsed[0], false);
+  // A single object is accepted too.
+  assert.equal(hooks.parseNotesImport({ title: 'solo' }).length, 1);
+  assert.deepEqual(hooks.parseNotesImport('nonsense'), []);
+});
+
+test('selecting a note is an in-place flip, never a list rebuild', () => {
+  const selectNote = notesJs.match(/function selectNote\(id\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(selectNote, 'selectNote present');
+  const body = selectNote[0];
+  // Flip + editor only — no list innerHTML rebuild and no full scheduleRender.
+  assert.match(body, /applyListSelection\(\)/);
+  assert.match(body, /renderEditor\(\)/);
+  assert.doesNotMatch(body, /renderNotesList\(\)/);
+  assert.doesNotMatch(body, /scheduleRender\(\)/);
+  // applyListSelection toggles the class across existing rows in place.
+  const flip = notesJs.match(/function applyListSelection\(\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(flip, 'applyListSelection present');
+  assert.match(flip[0], /classList\.toggle\('is-selected'/);
+  assert.doesNotMatch(flip[0], /innerHTML/);
+});
+
+test('auto-reveal: editor visible only with a selection that is not collapsed', () => {
+  assert.equal(hooks.computeEditorVisible({ hasSelection: true, userCollapsed: false }), true);
+  assert.equal(hooks.computeEditorVisible({ hasSelection: false, userCollapsed: false }), false);
+  assert.equal(hooks.computeEditorVisible({ hasSelection: true, userCollapsed: true }), false);
 });

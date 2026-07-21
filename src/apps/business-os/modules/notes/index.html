@@ -38,9 +38,15 @@
     </div>
   </div>
 
-  <!-- Spalte 1: Linke Sidebar (Notesnook Navigation) -->
-  <aside class="ctox-pane notes-sidebar-pane" aria-label="Notesnook Sidebar" data-left-content>
-    <header class="ctox-pane-header ctox-pane-band nn-brand-head">
+  <!-- LEFT: books/tags nav + note list — ONE canonical column grammar column.
+       Categories (Notizen/Favoriten/Papierkorb) are the counted view band; the
+       book + tag scopes and the sort live in the collapsed filter tray. All
+       chrome behaviour (search / view-toggle / tray / reset / active-dot /
+       counted band / footer) is SHELL-wired from the data-pg-* attributes; this
+       module writes NO chrome JS/CSS. Header collects the standing Neu / Neues
+       Notizbuch / Neuer Tag / Import / Export / Sperren icon actions. -->
+  <aside class="ctox-pane notes-left" aria-label="Notizen" data-left-content>
+    <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="nn-logo-container" aria-hidden="true">
@@ -49,140 +55,76 @@
               <polyline points="9 11 11 13 15 9"></polyline>
             </svg>
           </span>
-          <h2 class="ctox-pane-title">Notesnook</h2>
-        </div>
-        <div class="ctox-pane-actions">
-          <button class="ctox-pane-icon" type="button" data-action="lock-app" title="Sperren" aria-label="Sperren">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-            </svg>
-          </button>
-        </div>
-      </div>
-    </header>
-
-    <div class="nn-nav-list">
-      <!-- Kategorie: Alle Notizen -->
-      <div class="ctox-list-item notes-folder-item is-selected" data-nav-category="notes">
-        <div class="notes-folder-item-left">
-          <svg class="notes-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M7 3h7l4 4v14H7V3ZM14 3v4h4"></path>
-          </svg>
-          <span class="notes-folder-name" data-t="notes">Notizen</span>
-        </div>
-        <span class="ctox-badge notes-folder-count" data-count="notes">0</span>
-      </div>
-
-      <!-- Kategorie: Notizbücher (Notebooks) -->
-      <div class="nn-nav-header" data-toggle-nav="notebooks">
-        <div class="nn-nav-header-left">
-          <svg class="nn-nav-arrow active" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
-          <span>Notizbücher</span>
-        </div>
-        <button class="ctox-icon-button ctox-icon-button--sm" type="button" data-action="create-notebook" title="Neues Notizbuch" aria-label="Neues Notizbuch">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
-        </button>
-      </div>
-      <div class="nn-sidebar-sublist" data-notebooks-list>
-        <!-- Wird via JS befüllt -->
-      </div>
-
-      <!-- Kategorie: Tags -->
-      <div class="nn-nav-header" data-toggle-nav="tags">
-        <div class="nn-nav-header-left">
-          <svg class="nn-nav-arrow active" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
-          <span>Tags</span>
-        </div>
-        <button class="ctox-icon-button ctox-icon-button--sm" type="button" data-action="create-tag" title="Neuer Tag" aria-label="Neuer Tag">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
-        </button>
-      </div>
-      <div class="nn-sidebar-sublist" data-tags-list>
-        <!-- Wird via JS befüllt -->
-      </div>
-
-      <!-- Trenner -->
-      <div class="nn-sidebar-divider"></div>
-
-      <!-- Kategorie: Favoriten -->
-      <div class="ctox-list-item notes-folder-item" data-nav-category="favorites">
-        <div class="notes-folder-item-left">
-          <svg class="notes-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M12 4l2.35 4.9 5.4.7-4 3.75 1 5.35L12 16.1l-4.75 2.6 1-5.35-4-3.75 5.4-.7L12 4Z"></path>
-          </svg>
-          <span>Favoriten</span>
-        </div>
-        <span class="ctox-badge notes-folder-count" data-count="favorites">0</span>
-      </div>
-
-      <!-- Kategorie: Papierkorb -->
-      <div class="ctox-list-item notes-folder-item" data-nav-category="trash">
-        <div class="notes-folder-item-left">
-          <svg class="notes-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M5 7h14M10 7V5h4v2M8 7l1 13h6l1-13M10.5 11v5M13.5 11v5"></path>
-          </svg>
-          <span>Papierkorb</span>
-        </div>
-        <span class="ctox-badge notes-folder-count" data-count="trash">0</span>
-      </div>
-    </div>
-  </aside>
-
-  <!-- Resizer Links -->
-  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="180" data-resizer-max="380" aria-label="Sidebar-Breite anpassen"></button>
-
-  <!-- Spalte 2: Mittlere Notizliste -->
-  <section class="ctox-pane notes-list-pane" aria-label="Notes List">
-    <header class="ctox-pane-header ctox-pane-band nn-list-head">
-      <div class="ctox-pane-title-row">
-        <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-list-kicker>Notesnook</span>
-          <h2 class="ctox-pane-title" data-notes-count-label>Alle Notizen</h2>
-        </div>
-        <div class="ctox-pane-actions">
-          <!-- Sort/Filter Auslöser -->
-          <button class="ctox-pane-icon nn-filter-trigger" type="button" data-action="toggle-filter" title="Sortieren & Filtern" aria-label="Sortieren & Filtern">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M4 6h16M7 12h10M10 18h4"></path>
-            </svg>
-          </button>
-
-          <!-- Sort/Filter Popover -->
-          <div class="nn-filter-popover" data-filter-popover hidden>
-            <div class="nn-popover-section">
-              <h4>Sortierung</h4>
-              <button class="nn-popover-item active" data-sort="updated">Zuletzt aktualisiert</button>
-              <button class="nn-popover-item" data-sort="created">Erstellungsdatum</button>
-              <button class="nn-popover-item" data-sort="title">Alphabetisch (Titel)</button>
-            </div>
-            <div class="nn-popover-divider"></div>
-            <div class="nn-popover-section">
-              <h4>Ansicht</h4>
-              <button class="nn-popover-item active" data-view-mode="list">Listen-Modus (Details)</button>
-              <button class="nn-popover-item" data-view-mode="compact">Kompakt-Modus (Kacheln)</button>
-            </div>
+          <div class="ctox-pane-titles">
+            <span class="ctox-pane-kicker" data-t-kicker>Notesnook</span>
+            <h2 class="ctox-pane-title" data-t-list-title>Notizen</h2>
           </div>
         </div>
+        <div class="ctox-pane-actions">
+          <button class="ctox-pane-icon is-primary" type="button" data-action="create-note" title="Neue Notiz" aria-label="Neue Notiz"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+          <button class="ctox-pane-icon" type="button" data-action="create-notebook" title="Neues Notizbuch" aria-label="Neues Notizbuch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 3H20v18H6.5A2.5 2.5 0 0 1 4 18.5v-13A2.5 2.5 0 0 1 6.5 3z"/><path d="M14 3v18"/></svg></button>
+          <button class="ctox-pane-icon" type="button" data-action="create-tag" title="Neuer Tag" aria-label="Neuer Tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h7l9 9-7 7-9-9V4Z"/><circle cx="8.5" cy="8.5" r="1.2" fill="currentColor" stroke="none"/></svg></button>
+          <button class="ctox-pane-icon" type="button" data-action="import" title="Importieren" aria-label="Importieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg></button>
+          <button class="ctox-pane-icon" type="button" data-action="export" title="Exportieren" aria-label="Exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21V9M12 9l-4 4M12 9l4 4M5 3h14"/></svg></button>
+          <button class="ctox-pane-icon" type="button" data-action="lock-app" title="Sperren" aria-label="Sperren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg></button>
+        </div>
       </div>
-      <div class="ctox-pane-tools">
-        <input class="ctox-pane-search" data-search type="search" placeholder="Durchsuche Notizen..." />
+      <div class="ctox-filterbar">
+        <input class="ctox-pane-search" type="search" data-pg-search placeholder="Notizen durchsuchen..." aria-label="Notizen durchsuchen" />
+        <div class="ctox-view-toggle" role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
+        <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="ctox-filter-tray" data-pg-tray hidden>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" data-pg-filter data-pg-name="notebook" data-pg-default="all" aria-label="Notizbuch filtern" data-notebook-filter>
+            <option value="all">Alle Notizbücher</option>
+          </select>
+          <select class="ctox-select" data-pg-filter data-pg-name="tag" data-pg-default="all" aria-label="Tag filtern" data-tag-filter>
+            <option value="all">Alle Tags</option>
+          </select>
+        </div>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" data-pg-filter data-pg-name="sort" data-pg-default="updated" aria-label="Sortierung">
+            <option value="updated">Zuletzt aktualisiert</option>
+            <option value="created">Erstellungsdatum</option>
+            <option value="title">Alphabetisch (Titel)</option>
+          </select>
+          <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+        </div>
       </div>
     </header>
-
-    <div class="ctox-pane-scroll nn-cards-scroll" data-notes-list>
-      <!-- Dynamische Notizkarten -->
+    <nav class="ctox-view-switch" aria-label="Ansichten">
+      <div class="ctox-pane-tabs">
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="notes" aria-selected="true"><span data-t-band-notes>Notizen</span><span class="view-count" data-pg-count="notes"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="favorites" aria-selected="false"><span data-t-band-favorites>Favoriten</span><span class="view-count" data-pg-count="favorites"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="trash" aria-selected="false"><span data-t-band-trash>Papierkorb</span><span class="view-count" data-pg-count="trash"></span></button>
+      </div>
+    </nav>
+    <div class="ctox-pane-body ctox-well">
+      <div class="ctox-list nn-cards-scroll" data-notes-list>
+        <!-- Dynamische Notizkarten -->
+      </div>
     </div>
-  </section>
+    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
+  </aside>
 
-  <!-- Resizer Rechts -->
-  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="240" data-resizer-max="480" aria-label="Listenbreite anpassen"></button>
+  <!-- Resizer Links (shell-owned) -->
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="220" data-resizer-max="420" aria-label="Spaltenbreite anpassen"></button>
 
-  <!-- Spalte 3: Rechter Editor-Bereich -->
+  <!-- MAIN: the rich-text editor — the unique work surface. Editor engine and
+       save path are unchanged; the header keeps the note's meta controls. -->
   <section class="ctox-pane notes-center" aria-label="Note Editor" data-right-content>
     <!-- Editor Header: Notesnook Meta-Kopfzeile -->
     <header class="ctox-pane-header ctox-pane-band nn-editor-head">
       <div class="nn-note-meta-left">
+        <!-- Back to list (mobile return path when the editor owns the stack) -->
+        <button class="ctox-pane-icon nn-back-to-list" type="button" data-action="back-to-list" title="Zurück zur Liste" aria-label="Zurück zur Liste">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg>
+        </button>
+
         <!-- Notizbuch Zuweisung -->
         <div class="nn-meta-select-wrap">
           <button class="ctox-button ctox-button--sm nn-meta-btn nn-notebook-select-btn" type="button">
@@ -234,12 +176,6 @@
             </button>
           </div>
         </div>
-
-        <button class="ctox-pane-icon" type="button" data-action="create-note" title="Neuen Entwurf starten" aria-label="Neuen Entwurf starten">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M12 5v14M5 12h14"></path>
-          </svg>
-        </button>
       </div>
     </header>
 

@@ -33,5 +33,17 @@
   "syncDescription": "Notizen werden automatisch im Hintergrund als Markdown-Dateien synchronisiert:",
   "syncHint": "Manuell erstellte .md-Dateien in diesem Ordner werden automatisch importiert.",
   "noNotes": "Keine Notizen",
-  "presenceEditing": "bearbeitet gerade"
+  "presenceEditing": "bearbeitet gerade",
+  "kicker": "Notesnook",
+  "favorites": "Favoriten",
+  "trash": "Papierkorb",
+  "notebook": "Notizbuch",
+  "entries": "Einträge",
+  "allNotebooks": "Alle Notizbücher",
+  "allTags": "Alle Tags",
+  "newNotebookPrompt": "Name für das neue Notizbuch:",
+  "newTagPrompt": "Name für den neuen Tag:",
+  "importInvalid": "Ungültige JSON-Datei.",
+  "importEmpty": "Keine Notizen in der Datei.",
+  "imported": "{n} Notizen importiert."
 }

@@ -171,7 +171,9 @@ const state = {
   activeNoteId: '',
   searchQuery: '',
   sortMode: 'updated', // 'updated', 'created', 'title'
-  viewMode: 'list', // 'list', 'compact'
+  viewMode: 'cards', // 'cards' (shards) | 'list' (compact rows)
+  editorCollapsed: false, // narrow-stack: user tapped back while a note is selected
+  seededThisSession: false,
   appLocked: false,
   pinBuffer: '',
   activeNoteDecrypted: {}, // noteId -> passcode (string)
@@ -180,10 +182,10 @@ const state = {
   localSubscriptionCleanup: null,
   renderTimer: null,
   t: (key, fallback) => fallback ?? key,
-  contextMenu: null,
-  contextMenuCleanup: null,
   dataDiagnostics: { kind: 'starting', message: '' },
   toastTimer: null,
+  renderedNotebooks: '',
+  renderedTags: '',
   lexicalEditor: null,
   lexicalRichTextCleanup: null,
   lexicalUpdateListenerCleanup: null,
@@ -339,15 +341,15 @@ export async function mount(ctx) {
   // handles inside [data-resize-frame] are wired by the shell (app.js
   // setupModuleResizers), including width persistence.
 
-  // Setup App Lock on startup if cached as locked
-  const cachePrefix = state.ctx.module?.id === 'notizen' ? 'ctox.notizen' : 'ctox.notes';
-  if (localStorage.getItem(`${cachePrefix}.appLocked`) === 'true') {
-    state.appLocked = true;
-    if (els.clientLockScreen) {
-      els.clientLockScreen.removeAttribute('hidden');
-    }
-  }
-  
+  // The canonical column grammar (search / view toggle / filter tray / reset /
+  // active-dot / counted band / footer) is SHELL-wired from the data-pg-*
+  // markup; seed the module's mirror of that state from the DOM defaults before
+  // the shell fires its first ctox-pane-grammar-change event.
+  seedGrammarState();
+
+  // App lock is an in-session zero-knowledge overlay (no browser storage): it
+  // starts unlocked on every mount.
+
   // Load notes and wire up database merge sync
   await loadNotesFromLocal();
   state.localSubscriptionCleanup = wireLocalRealtime();
@@ -369,6 +371,7 @@ export async function mount(ctx) {
     selectNote(initialNotes[0].id);
   } else {
     renderEditor();
+    applyEditorVisibility();
   }
 
   return () => {
@@ -390,10 +393,7 @@ export async function mount(ctx) {
 
     state.localSubscriptionCleanup?.();
     state.localSubscriptionCleanup = null;
-    
-    state.contextMenuCleanup?.();
-    state.contextMenu?.remove();
-    state.contextMenu = null;
+
     state.ctx.host?.querySelector('.nn-action-toast')?.remove();
 
     unbindEvents();
@@ -408,6 +408,17 @@ function applyStaticLabels(root, t) {
   root.querySelectorAll('[data-t-title]').forEach(el => el.title = t(el.dataset.tTitle));
   root.querySelectorAll('[data-t-aria]').forEach(el => el.setAttribute('aria-label', t(el.dataset.tAria)));
   root.querySelectorAll('[data-t-placeholder]').forEach(el => el.placeholder = t(el.dataset.tPlaceholder));
+  // Canonical grammar labels: kicker, list title, and the counted band tabs.
+  const labelMap = {
+    'data-t-kicker': ['kicker', 'Notesnook'],
+    'data-t-list-title': ['notes', 'Notizen'],
+    'data-t-band-notes': ['notes', 'Notizen'],
+    'data-t-band-favorites': ['favorites', 'Favoriten'],
+    'data-t-band-trash': ['trash', 'Papierkorb'],
+  };
+  for (const [attr, [key, fallback]] of Object.entries(labelMap)) {
+    root.querySelectorAll(`[${attr}]`).forEach(el => { el.textContent = t(key, fallback); });
+  }
 }
 
 async function loadModuleMarkup() {
@@ -419,26 +430,26 @@ async function loadModuleMarkup() {
 
 function bindElements(host) {
   els.root = host.querySelector('[data-notes-root]');
-  
+
   // Keypads & Zero-Knowledge client Lock Screens
   els.clientLockScreen = host.querySelector('[data-client-lock-screen]');
   els.pinDots = host.querySelectorAll('.nn-pin-dot');
   els.pinPad = host.querySelector('.nn-pin-pad');
   els.lockAppBtn = host.querySelector('[data-action="lock-app"]');
-  
-  // Sidebar Panes & list components
-  els.folderList = host.querySelector('.nn-nav-list');
-  els.notebooksList = host.querySelector('[data-notebooks-list]');
-  els.tagsList = host.querySelector('[data-tags-list]');
-  
-  // List Pane
+
+  // LEFT grammar column: header actions + list well. Chrome (search / view
+  // toggle / tray / band / footer) is shell-wired from data-pg-*; the module
+  // only binds its own header actions, the tray scope selects, and the list.
+  els.leftPane = host.querySelector('.notes-left');
   els.notesList = host.querySelector('[data-notes-list]');
-  els.notesCountLabel = host.querySelector('[data-notes-count-label]');
-  els.listKicker = host.querySelector('[data-list-kicker]');
-  els.search = host.querySelector('[data-search]');
-  els.filterTrigger = host.querySelector('[data-action="toggle-filter"]');
-  els.filterPopover = host.querySelector('[data-filter-popover]');
-  
+  els.createNotebookBtn = host.querySelector('[data-action="create-notebook"]');
+  els.createTagBtn = host.querySelector('[data-action="create-tag"]');
+  els.importBtn = host.querySelector('[data-action="import"]');
+  els.exportBtn = host.querySelector('[data-action="export"]');
+  els.notebookFilter = host.querySelector('[data-notebook-filter]');
+  els.tagFilter = host.querySelector('[data-tag-filter]');
+  els.backToListBtn = host.querySelector('[data-action="back-to-list"]');
+
   // Editor Meta Controls
   els.notebookSelectBtn = host.querySelector('.nn-notebook-select-btn');
   els.noteNotebookLabel = host.querySelector('[data-note-notebook-label]');
@@ -487,27 +498,23 @@ function wireEvents() {
   // App PIN lock pad
   els.pinPad?.addEventListener('click', handlePinPadClick);
   els.lockAppBtn?.addEventListener('click', handleLockAppClick);
-  
-  // Sidebar items togglers and creations
-  els.root?.querySelectorAll('[data-toggle-nav]').forEach(el => {
-    el.addEventListener('click', handleToggleNavClick);
-  });
-  els.folderList?.querySelectorAll('[data-nav-category]').forEach(el => {
-    el.addEventListener('click', handleCategoryClick);
-  });
-  els.root?.querySelector('[data-action="create-notebook"]')?.addEventListener('click', handleCreateNotebookClick);
-  els.root?.querySelector('[data-action="create-tag"]')?.addEventListener('click', handleCreateTagClick);
-  
-  // Search and Sort Filters
-  els.search?.addEventListener('input', handleSearch);
-  els.filterTrigger?.addEventListener('click', handleFilterTriggerClick);
-  els.filterPopover?.querySelectorAll('[data-sort]').forEach(el => {
-    el.addEventListener('click', handleSortClick);
-  });
-  els.filterPopover?.querySelectorAll('[data-view-mode]').forEach(el => {
-    el.addEventListener('click', handleViewModeClick);
-  });
-  
+
+  // LEFT grammar column header actions.
+  els.createNotebookBtn?.addEventListener('click', handleCreateNotebookClick);
+  els.createTagBtn?.addEventListener('click', handleCreateTagClick);
+  els.importBtn?.addEventListener('click', handleImportClick);
+  els.exportBtn?.addEventListener('click', handleExportClick);
+  els.backToListBtn?.addEventListener('click', handleBackToListClick);
+
+  // The shell reports search / view / tray / band changes on this bubbling
+  // event; re-render (with a list rebuild — an intentional reset).
+  els.leftPane?.addEventListener('ctox-pane-grammar-change', handleGrammarChange);
+
+  // Note selection is delegated on the list so a re-render never re-binds rows;
+  // selection is an in-place class flip (see selectNote / applyListSelection).
+  els.notesList?.addEventListener('click', handleNoteListClick);
+  els.notesList?.addEventListener('keydown', handleNoteListKeydown);
+
   // Editor Meta controls clicks
   els.notebookSelectBtn?.addEventListener('click', handleNotebookSelectBtnClick);
   els.tagsSelectBtn?.addEventListener('click', handleTagsSelectBtnClick);
@@ -552,18 +559,20 @@ function wireEvents() {
   // Global closes and custom circular checklist toggles
   document.addEventListener('click', handleGlobalClick);
   document.addEventListener('keydown', handleDocumentKeydown);
-  els.folderList?.addEventListener('keydown', handleSidebarKeydown);
   els.editor?.addEventListener('click', handleEditorCheckboxClick);
 }
 
 function unbindEvents() {
   els.pinPad?.removeEventListener('click', handlePinPadClick);
   els.lockAppBtn?.removeEventListener('click', handleLockAppClick);
-  els.folderList?.querySelectorAll('[data-nav-category]').forEach(el => {
-    el.removeEventListener('click', handleCategoryClick);
-  });
-  els.search?.removeEventListener('input', handleSearch);
-  els.filterTrigger?.removeEventListener('click', handleFilterTriggerClick);
+  els.createNotebookBtn?.removeEventListener('click', handleCreateNotebookClick);
+  els.createTagBtn?.removeEventListener('click', handleCreateTagClick);
+  els.importBtn?.removeEventListener('click', handleImportClick);
+  els.exportBtn?.removeEventListener('click', handleExportClick);
+  els.backToListBtn?.removeEventListener('click', handleBackToListClick);
+  els.leftPane?.removeEventListener('ctox-pane-grammar-change', handleGrammarChange);
+  els.notesList?.removeEventListener('click', handleNoteListClick);
+  els.notesList?.removeEventListener('keydown', handleNoteListKeydown);
   els.notebookSelectBtn?.removeEventListener('click', handleNotebookSelectBtnClick);
   els.tagsSelectBtn?.removeEventListener('click', handleTagsSelectBtnClick);
   els.starBtn?.removeEventListener('click', handleStarNoteClick);
@@ -584,7 +593,6 @@ function unbindEvents() {
   
   document.removeEventListener('click', handleGlobalClick);
   document.removeEventListener('keydown', handleDocumentKeydown);
-  els.folderList?.removeEventListener('keydown', handleSidebarKeydown);
   els.editor?.removeEventListener('click', handleEditorCheckboxClick);
 }
 
@@ -592,22 +600,14 @@ function normalizeInteractiveLabels(root) {
   root.querySelectorAll('button[title]:not([aria-label])').forEach((button) => {
     button.setAttribute('aria-label', button.getAttribute('title'));
   });
-  root.querySelectorAll('.notes-folder-item, [data-toggle-nav]').forEach((item) => {
-    item.setAttribute('role', 'button');
-    if (!item.hasAttribute('tabindex')) item.setAttribute('tabindex', '0');
-  });
-  if (els.search && !els.search.getAttribute('aria-label')) {
-    els.search.setAttribute('aria-label', state.t('search', 'Durchsuche Notizen...'));
-  }
 }
 
-// Local Cache Persistence
-function saveToLocalCache() {
-  const cachePrefix = getCachePrefix();
-  localStorage.setItem(`${cachePrefix}.local_records`, JSON.stringify(state.notes.filter(note => !note[DRAFT_NOTE_MARKER])));
-  localStorage.setItem(`${cachePrefix}.local_notebooks`, JSON.stringify(state.notebooks));
-  localStorage.setItem(`${cachePrefix}.local_tags`, JSON.stringify(state.tags));
-}
+// Persistence is the shell-provided CTOX Sync Engine / RxDB collection handle
+// (ctx.db) only — no browser storage data path. saveToLocalCache is kept as a
+// no-op so the many call sites stay untouched; the RxDB collection is the
+// single source of truth and the subscription in wireLocalRealtime keeps the UI
+// current.
+function saveToLocalCache() {}
 
 async function decryptLockedNotesInMemory() {
   for (const note of state.notes) {
@@ -646,7 +646,7 @@ async function loadNotesFromLocal() {
     const serverNotes = docs.map(d => d.toJSON()).filter(n => n.id);
 
     if (serverNotes.length === 0) {
-      if (canWriteNotesCollection() && localStorage.getItem(`${getCachePrefix()}.defaultSeeded`) !== 'true') {
+      if (canWriteNotesCollection() && !state.seededThisSession) {
         const seedNotes = createDefaultNotes();
         state.notes = seedNotes.sort((a, b) => b.updated_at_ms - a.updated_at_ms);
         state.dataDiagnostics = { kind: 'seeded', message: state.t('seededNotes') };
@@ -660,7 +660,7 @@ async function loadNotesFromLocal() {
           }
         }
         if (seededCount > 0) {
-          localStorage.setItem(`${getCachePrefix()}.defaultSeeded`, 'true');
+          state.seededThisSession = true;
         }
       } else {
         state.notes = [];
@@ -736,134 +736,144 @@ function scheduleRender() {
 }
 
 function renderAll() {
-  renderSidebar();
+  renderTrayScopeOptions();
   renderNotesList();
+  renderBandCountsAndFooter();
   renderEditor();
+  applyEditorVisibility();
 }
 
-function renderSidebar() {
-  // Bind category selection styles
-  els.folderList?.querySelectorAll('[data-nav-category]').forEach(el => {
-    const category = el.getAttribute('data-nav-category');
-    const active = state.activeCategory === category && !state.activeNotebook && !state.activeTag;
-    el.classList.toggle('is-selected', active);
-    
-    // Set Count Badge
-    const countEl = el.querySelector('.notes-folder-count');
-    if (countEl) {
-      if (category === 'notes') {
-        countEl.textContent = state.notes.filter(n => !n.is_trashed).length;
-      } else if (category === 'favorites') {
-        countEl.textContent = state.notes.filter(n => n.is_favorite && !n.is_trashed).length;
-      } else if (category === 'trash') {
-        countEl.textContent = state.notes.filter(n => n.is_trashed).length;
-      }
+// The book/tag scopes are filter-tray dropdowns; keep their option sets current
+// with the collections without ever replacing the shell-wired <select> element
+// (only its <option> children change), preserving the selected value.
+function renderTrayScopeOptions() {
+  const notebooksKey = state.notebooks.join('');
+  const tagsKey = state.tags.join('');
+  if (els.notebookFilter && state.renderedNotebooks !== notebooksKey) {
+    const current = els.notebookFilter.value;
+    let html = `<option value="all">${escapeHtml(state.t('allNotebooks', 'Alle Notizbücher'))}</option>`;
+    state.notebooks.forEach(nb => { html += `<option value="${escapeHtml(nb)}">${escapeHtml(nb)}</option>`; });
+    els.notebookFilter.innerHTML = html;
+    els.notebookFilter.value = state.notebooks.includes(current) ? current : 'all';
+    state.renderedNotebooks = notebooksKey;
+  }
+  if (els.tagFilter && state.renderedTags !== tagsKey) {
+    const current = els.tagFilter.value;
+    let html = `<option value="all">${escapeHtml(state.t('allTags', 'Alle Tags'))}</option>`;
+    state.tags.forEach(tg => { html += `<option value="${escapeHtml(tg)}">#${escapeHtml(tg)}</option>`; });
+    els.tagFilter.innerHTML = html;
+    els.tagFilter.value = state.tags.includes(current) ? current : 'all';
+    state.renderedTags = tagsKey;
+  }
+}
+
+// Counted band (Notizen/Favoriten/Papierkorb) + one-line footer. Counts reflect
+// the current book/tag/search scope; zeros are rendered, never hidden. Written
+// via the shell-provided pane grammar handle when present, else plain
+// textContent — the module owns rendering, never chrome wiring.
+function categoryBaseNotes() {
+  // The note set within the active book/tag/search scope, before the band's
+  // trashed / favorite predicate is applied.
+  let list = state.notes.slice();
+  if (state.activeNotebook) list = list.filter(n => n.notebook === state.activeNotebook);
+  if (state.activeTag) list = list.filter(n => (n.tags || '').split(',').map(x => x.trim()).includes(state.activeTag));
+  const query = state.searchQuery.toLowerCase().trim();
+  if (query) list = list.filter(n => noteMatchesSearch(n, query));
+  return list;
+}
+
+// Pure band-count helper (zeros included) so the counted band can be verified
+// without a DOM.
+function bandCountsFor(notes) {
+  const list = notes || [];
+  return {
+    notes: list.filter(n => !n.is_trashed).length,
+    favorites: list.filter(n => n.is_favorite && !n.is_trashed).length,
+    trash: list.filter(n => n.is_trashed).length,
+  };
+}
+
+function bandCounts() {
+  return bandCountsFor(categoryBaseNotes());
+}
+
+function renderBandCountsAndFooter() {
+  const counts = bandCounts();
+  const pg = els.leftPane?.__ctoxPaneGrammar;
+  if (pg && typeof pg.setCounts === 'function') {
+    pg.setCounts(counts);
+  } else {
+    for (const [key, value] of Object.entries(counts)) {
+      const node = els.leftPane?.querySelector(`[data-pg-count="${key}"]`);
+      if (node) node.textContent = ` (${value})`;
     }
-  });
-  
-  // Render Notebooks sublist
-  if (els.notebooksList) {
-    let html = '';
-    state.notebooks.forEach(nb => {
-      const active = state.activeNotebook === nb && !state.activeCategory && !state.activeTag;
-      const count = state.notes.filter(n => n.notebook === nb && !n.is_trashed).length;
-      html += `
-        <div class="ctox-list-item notes-folder-item ${active ? 'is-selected' : ''}" data-nav-notebook="${escapeHtml(nb)}">
-          <div class="notes-folder-item-left">
-            <svg class="notes-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-            </svg>
-            <span class="notes-folder-name">${escapeHtml(nb)}</span>
-          </div>
-          <span class="ctox-badge notes-folder-count">${count}</span>
-        </div>
-      `;
-    });
-    els.notebooksList.innerHTML = html;
-    normalizeInteractiveLabels(els.notebooksList);
-    
-    els.notebooksList.querySelectorAll('[data-nav-notebook]').forEach(el => {
-      el.addEventListener('click', () => {
-        const nb = el.getAttribute('data-nav-notebook');
-        state.activeCategory = '';
-        state.activeTag = '';
-        state.activeNotebook = nb;
-        
-        const filtered = getFilteredNotes();
-        if (filtered.length > 0) selectNote(filtered[0].id);
-        else selectNote('');
-        scheduleRender();
-      });
-    });
   }
-  
-  // Render Tags sublist
-  if (els.tagsList) {
-    let html = '';
-    state.tags.forEach(tg => {
-      const active = state.activeTag === tg && !state.activeCategory && !state.activeNotebook;
-      const count = state.notes.filter(n => {
-        return (n.tags || '').split(',').map(x => x.trim()).includes(tg) && !n.is_trashed;
-      }).length;
-      html += `
-        <div class="ctox-list-item notes-folder-item ${active ? 'is-selected' : ''}" data-nav-tag="${escapeHtml(tg)}">
-          <div class="notes-folder-item-left">
-            ${state.ctx?.getActionIcon?.('tag') || ''}
-            <span class="notes-folder-name">${escapeHtml(tg)}</span>
-          </div>
-          <span class="ctox-badge notes-folder-count">${count}</span>
-        </div>
-      `;
-    });
-    els.tagsList.innerHTML = html;
-    normalizeInteractiveLabels(els.tagsList);
-    
-    els.tagsList.querySelectorAll('[data-nav-tag]').forEach(el => {
-      el.addEventListener('click', () => {
-        const tg = el.getAttribute('data-nav-tag');
-        state.activeCategory = '';
-        state.activeNotebook = '';
-        state.activeTag = tg;
-        
-        const filtered = getFilteredNotes();
-        if (filtered.length > 0) selectNote(filtered[0].id);
-        else selectNote('');
-        scheduleRender();
-      });
-    });
+  const visible = getFilteredNotes().length;
+  const footerText = `${visible} ${state.t('entries', 'Einträge')} · ${getActiveListLabel()}`;
+  if (pg && typeof pg.setFooter === 'function') {
+    pg.setFooter(footerText);
+  } else {
+    const node = els.leftPane?.querySelector('[data-pg-footer]');
+    if (node) node.textContent = footerText;
   }
 }
 
+// Auto-reveal: the editor (main surface) is visible whenever a note is selected
+// and the operator has not collapsed it. On wide layouts both columns render;
+// the narrow-stack CSS uses this flag to hand the single column to the editor.
+function computeEditorVisible({ hasSelection, userCollapsed }) {
+  return Boolean(hasSelection) && !userCollapsed;
+}
+
+function applyEditorVisibility() {
+  const visible = computeEditorVisible({
+    hasSelection: Boolean(state.activeNoteId),
+    userCollapsed: state.editorCollapsed,
+  });
+  els.root?.classList.toggle('is-editor-hidden', !visible);
+}
+
+function noteMatchesSearch(n, query) {
+  let textToSearch = n.content || '';
+  if (n.is_locked) {
+    textToSearch = state.activeNoteDecryptedContent[n.id] || '';
+  }
+  const titleMatch = (n.title || '').toLowerCase().includes(query);
+  const textMatch = getPlainText(textToSearch).toLowerCase().includes(query);
+  return titleMatch || textMatch;
+}
+
+// Composable scope: the counted band selects the base set
+// (notes/favorites/trash); the book + tag tray filters narrow it further; search
+// and sort apply last. Band and scope are independent axes, not mutually
+// exclusive like the old nav rows.
 function getFilteredNotes({ includeSearch = true } = {}) {
   let list = state.notes.slice();
-  
+
+  // Band predicate.
   if (state.activeCategory === 'favorites') {
     list = list.filter(n => n.is_favorite && !n.is_trashed);
   } else if (state.activeCategory === 'trash') {
     list = list.filter(n => n.is_trashed);
-  } else if (state.activeCategory === 'notes') {
+  } else {
     list = list.filter(n => !n.is_trashed);
-  } else if (state.activeNotebook) {
-    list = list.filter(n => n.notebook === state.activeNotebook && !n.is_trashed);
-  } else if (state.activeTag) {
-    list = list.filter(n => (n.tags || '').split(',').map(x => x.trim()).includes(state.activeTag) && !n.is_trashed);
   }
-  
-  // Search query filter
+
+  // Book / tag scope (filter tray).
+  if (state.activeNotebook) {
+    list = list.filter(n => n.notebook === state.activeNotebook);
+  }
+  if (state.activeTag) {
+    list = list.filter(n => (n.tags || '').split(',').map(x => x.trim()).includes(state.activeTag));
+  }
+
+  // Search query filter.
   const query = state.searchQuery.toLowerCase().trim();
   if (includeSearch && query) {
-    list = list.filter(n => {
-      let textToSearch = n.content || '';
-      if (n.is_locked) {
-        textToSearch = state.activeNoteDecryptedContent[n.id] || '';
-      }
-      const titleMatch = (n.title || '').toLowerCase().includes(query);
-      const textMatch = getPlainText(textToSearch).toLowerCase().includes(query);
-      return titleMatch || textMatch;
-    });
+    list = list.filter(n => noteMatchesSearch(n, query));
   }
-  // Sort
+
+  // Sort.
   if (state.sortMode === 'title') {
     list.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
   } else if (state.sortMode === 'created') {
@@ -871,7 +881,7 @@ function getFilteredNotes({ includeSearch = true } = {}) {
   } else {
     list.sort((a, b) => b.updated_at_ms - a.updated_at_ms);
   }
-  
+
   return list;
 }
 
@@ -913,39 +923,25 @@ function buildNotesEmptyState({ totalNotes, scopedNotes, hasSearch, activeLabel,
   };
 }
 
+function bandLabel() {
+  if (state.activeCategory === 'favorites') return state.t('favorites', 'Favoriten');
+  if (state.activeCategory === 'trash') return state.t('trash', 'Papierkorb');
+  return state.t('notes', 'Notizen');
+}
+
 function getActiveListLabel() {
-  if (state.activeNotebook) return state.activeNotebook;
+  if (state.activeNotebook) return `${state.t('notebook', 'Notizbuch')}: ${state.activeNotebook}`;
   if (state.activeTag) return `#${state.activeTag}`;
-  if (state.activeCategory === 'favorites') return 'Favoriten';
-  if (state.activeCategory === 'trash') return 'Papierkorb';
-  return state.t('allNotes');
+  return bandLabel();
 }
 
 function renderNotesList() {
   if (!els.notesList) return;
-  
+
+  els.notesList.classList.toggle('is-list', state.viewMode === 'list');
+
   const list = getFilteredNotes();
-  
-  // Update header titles and list count label kicker
-  if (els.listKicker) {
-    if (state.activeNotebook) {
-      els.listKicker.textContent = 'Notizbuch';
-      els.notesCountLabel.textContent = state.activeNotebook;
-    } else if (state.activeTag) {
-      els.listKicker.textContent = 'Tag';
-      els.notesCountLabel.textContent = '#' + state.activeTag;
-    } else {
-      els.listKicker.textContent = 'Notesnook';
-      if (state.activeCategory === 'favorites') {
-        els.notesCountLabel.textContent = 'Favoriten';
-      } else if (state.activeCategory === 'trash') {
-        els.notesCountLabel.textContent = 'Papierkorb';
-      } else {
-        els.notesCountLabel.textContent = state.t('allNotes');
-      }
-    }
-  }
-  
+
   if (list.length === 0) {
     const scopedNotes = getFilteredNotes({ includeSearch: false }).length;
     const emptyState = buildNotesEmptyState({
@@ -1010,8 +1006,9 @@ function renderNotesList() {
       });
     }
 
+    const titleText = note.title || state.t('untitled');
     return `
-      <div class="ctox-list-item notes-card ${active ? 'is-selected' : ''}" data-note-id="${escapeHtml(note.id)}" data-context-record-id="${escapeHtml(note.id)}" data-context-record-type="note" data-context-label="${escapeHtml(note.title || note.id)}">
+      <div class="ctox-list-item notes-card ${active ? 'is-selected' : ''}" role="button" tabindex="0" aria-selected="${active ? 'true' : 'false'}" aria-label="${escapeHtml(titleText)}" data-note-id="${escapeHtml(note.id)}" data-context-record-id="${escapeHtml(note.id)}" data-context-record-type="note" data-context-label="${escapeHtml(titleText)}">
         <div class="nn-card-row">
           <div class="notes-card-title">${escapeHtml(note.title || state.t('untitled'))}</div>
           <div class="nn-card-icons">
@@ -1043,23 +1040,31 @@ function renderNotesList() {
   }
 
   els.notesList.innerHTML = html;
-  
-  // Bind note card clicks
-  els.notesList.querySelectorAll('[data-note-id]').forEach(el => {
-    el.setAttribute('role', 'button');
-    el.setAttribute('tabindex', '0');
-    el.setAttribute('aria-label', el.querySelector('.notes-card-title')?.textContent?.trim() || state.t('notes', 'Notizen'));
-    el.addEventListener('click', () => {
-      const id = el.getAttribute('data-note-id');
-      selectNote(id);
-    });
-    el.addEventListener('keydown', (event) => {
-      if (event.key !== 'Enter' && event.key !== ' ') return;
-      event.preventDefault();
-      const id = el.getAttribute('data-note-id');
-      selectNote(id);
-    });
+}
+
+// Selection is an in-place class flip across the EXISTING rows — never a list
+// rebuild — so a click never resets the scroll position (design-guide
+// "Re-renders never move the operator").
+function applyListSelection() {
+  els.notesList?.querySelectorAll('[data-note-id]').forEach(rowEl => {
+    const on = (rowEl.getAttribute('data-note-id') || '') === String(state.activeNoteId || '');
+    rowEl.classList.toggle('is-selected', on);
+    rowEl.setAttribute('aria-selected', String(on));
   });
+}
+
+function handleNoteListClick(event) {
+  const row = event.target?.closest?.('[data-note-id]');
+  if (!row || !els.notesList?.contains(row)) return;
+  selectNote(row.getAttribute('data-note-id') || '');
+}
+
+function handleNoteListKeydown(event) {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  const row = event.target?.closest?.('[data-note-id]');
+  if (!row || !els.notesList?.contains(row)) return;
+  event.preventDefault();
+  selectNote(row.getAttribute('data-note-id') || '');
 }
 
 function renderEditor() {
@@ -1241,12 +1246,56 @@ function setToolbarDisabled(disabled, reason = '') {
 
 function selectNote(id) {
   state.activeNoteId = id;
+  state.editorCollapsed = false;
+  // In-place selection: flip the row classes and update the editor only. The
+  // list is NOT rebuilt, so the operator's scroll position is preserved.
+  applyListSelection();
+  renderEditor();
+  applyEditorVisibility();
+}
+
+// The shell reports search / view / tray / band changes on the bubbling
+// ctox-pane-grammar-change event; map them onto module state and re-render the
+// list (an intentional reset — the scroll guard clears its offsets first).
+function handleGrammarChange(event) {
+  const detail = event?.detail || {};
+  state.searchQuery = String(detail.search ?? state.searchQuery ?? '');
+  state.viewMode = detail.view || state.viewMode || 'cards';
+  state.activeCategory = detail.band || 'notes';
+  const filters = detail.filters || {};
+  state.activeNotebook = filters.notebook && filters.notebook !== 'all' ? filters.notebook : '';
+  state.activeTag = filters.tag && filters.tag !== 'all' ? filters.tag : '';
+  state.sortMode = filters.sort || 'updated';
+
+  // Keep the selection valid within the new scope; auto-select the first note so
+  // the editor never strands on an out-of-scope note.
+  const visible = getFilteredNotes();
+  if (!visible.some(n => n.id === state.activeNoteId)) {
+    state.activeNoteId = visible[0]?.id || '';
+  }
   scheduleRender();
 }
 
-function handleSearch(e) {
-  state.searchQuery = e.target.value;
-  scheduleRender();
+// Seed the module's mirror of the grammar state from the DOM defaults before the
+// shell fires its first change event (the shell wires the pane asynchronously).
+function seedGrammarState() {
+  const pane = els.leftPane;
+  if (!pane) return;
+  state.searchQuery = pane.querySelector('[data-pg-search]')?.value || '';
+  state.viewMode = pane.querySelector('[data-pg-view][aria-pressed="true"]')?.dataset.pgView || 'cards';
+  state.activeCategory = pane.querySelector('[data-pg-band][aria-selected="true"]')?.dataset.pgBand || 'notes';
+  const nb = els.notebookFilter?.value || 'all';
+  const tg = els.tagFilter?.value || 'all';
+  state.activeNotebook = nb !== 'all' ? nb : '';
+  state.activeTag = tg !== 'all' ? tg : '';
+  state.sortMode = pane.querySelector('[data-pg-filter][data-pg-name="sort"]')?.value || 'updated';
+}
+
+function handleBackToListClick() {
+  // Narrow-stack return path: collapse the editor back to the list without
+  // dropping the selection.
+  state.editorCollapsed = true;
+  applyEditorVisibility();
 }
 
 function handleEditorInput(e) {
@@ -1574,66 +1623,151 @@ async function handleRestoreNoteClick() {
   }
 }
 
-// Sidebars & Expander navigations
-function handleToggleNavClick(e) {
-  const header = e.currentTarget;
-  const list = header.nextElementSibling;
-  const arrow = header.querySelector('.nn-nav-arrow');
-  if (list) {
-    const isHidden = list.style.display === 'none';
-    list.style.display = isHidden ? 'flex' : 'none';
-    if (arrow) {
-      arrow.classList.toggle('active', isHidden);
-    }
-  }
-}
-
 async function handleCreateNotebookClick(e) {
   e.stopPropagation();
-  const name = prompt(state.t('newNotebookPrompt'));
+  const name = prompt(state.t('newNotebookPrompt', 'Name für das neue Notizbuch:'));
   if (!name || !name.trim()) return;
-  
+
   const nb = name.trim();
   if (!state.notebooks.includes(nb)) {
     state.notebooks.push(nb);
     syncNotebooksAndTags();
-    saveToLocalCache();
+    renderTrayScopeOptions();
   }
-  
-  state.activeCategory = '';
-  state.activeTag = '';
+
+  // Scope the tray to the new notebook (the select is shell-wired; setting its
+  // value programmatically does not fire a change, so mirror it in state too).
+  if (els.notebookFilter) els.notebookFilter.value = nb;
   state.activeNotebook = nb;
+  state.activeTag = '';
+  if (els.tagFilter) els.tagFilter.value = 'all';
   await handleCreateNote();
 }
 
 async function handleCreateTagClick(e) {
   e.stopPropagation();
-  const name = prompt(state.t('newTagPrompt'));
+  const name = prompt(state.t('newTagPrompt', 'Name für den neuen Tag:'));
   if (!name || !name.trim()) return;
-  
+
   const tg = name.trim();
   if (!state.tags.includes(tg)) {
     state.tags.push(tg);
     syncNotebooksAndTags();
-    saveToLocalCache();
+    renderTrayScopeOptions();
   }
-  
-  state.activeCategory = '';
-  state.activeNotebook = '';
+
+  if (els.tagFilter) els.tagFilter.value = tg;
   state.activeTag = tg;
+  state.activeNotebook = '';
+  if (els.notebookFilter) els.notebookFilter.value = 'all';
   await handleCreateNote();
 }
 
-function handleCategoryClick(e) {
-  const cat = e.currentTarget.getAttribute('data-nav-category');
-  state.activeCategory = cat;
-  state.activeNotebook = '';
-  state.activeTag = '';
-  
-  const list = getFilteredNotes();
-  if (list.length > 0) selectNote(list[0].id);
-  else selectNote('');
-  scheduleRender();
+// Export the visible notes as JSON via a Blob download — honest and small, the
+// column's own records only. Locked notes export as stored (ciphertext content +
+// placeholder title); the in-memory decrypted plaintext never leaves the app.
+function buildNotesExport(notes) {
+  return (notes || [])
+    .filter(note => note && !note[DRAFT_NOTE_MARKER])
+    .map(note => ({
+      id: note.id,
+      title: note.title || '',
+      content: note.content || '',
+      notebook: note.notebook || '',
+      tags: note.tags || '',
+      is_favorite: !!note.is_favorite,
+      is_trashed: !!note.is_trashed,
+      is_locked: !!note.is_locked,
+      updated_at_ms: Number(note.updated_at_ms) || 0,
+    }));
+}
+
+function handleExportClick() {
+  const rows = buildNotesExport(getFilteredNotes());
+  let url = '';
+  try {
+    const blob = new Blob([JSON.stringify(rows, null, 2)], { type: 'application/json' });
+    url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'notes.json';
+    anchor.rel = 'noopener';
+    els.root?.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } catch (error) {
+    console.error('[notes] export failed', error);
+  } finally {
+    if (url) window.setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 4000);
+  }
+}
+
+// Parse an imported JSON payload into note records. Accepts an array or a single
+// object; keeps only entries that carry a title or content; never trusts an
+// imported lock/passcode — imported notes land as plain, un-trashed drafts of
+// real notes.
+function parseNotesImport(parsed) {
+  const items = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : []);
+  return items
+    .filter(item => item && typeof item === 'object' && (String(item.title || '').trim() || String(item.content || '').trim()))
+    .map(item => ({
+      title: String(item.title || '').trim(),
+      content: String(item.content || ''),
+      notebook: String(item.notebook || '').trim(),
+      tags: String(item.tags || '').trim(),
+      is_favorite: !!item.is_favorite,
+    }));
+}
+
+function handleImportClick() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/json,.json';
+  input.addEventListener('change', async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    let parsed;
+    try { parsed = JSON.parse(await file.text()); } catch {
+      showActionToast(state.t('importInvalid', 'Ungültige JSON-Datei.'));
+      return;
+    }
+    const candidates = parseNotesImport(parsed);
+    if (!candidates.length) {
+      showActionToast(state.t('importEmpty', 'Keine Notizen in der Datei.'));
+      return;
+    }
+    const collection = getCollection();
+    let count = 0;
+    let lastId = '';
+    for (const item of candidates) {
+      const record = {
+        id: generateUUID(),
+        title: item.title || deriveTitleFromPlainText(getPlainText(item.content)),
+        content: item.content || `<p>${escapeHtml(item.title || '')}</p>`,
+        folder: 'Notes',
+        notebook: item.notebook,
+        tags: item.tags,
+        is_favorite: item.is_favorite,
+        is_trashed: false,
+        is_locked: false,
+        lock_passcode: '',
+        updated_at_ms: Date.now(),
+      };
+      state.notes.unshift(record);
+      lastId = record.id;
+      count += 1;
+      if (collection) {
+        try { await collection.insert(record); } catch (error) {
+          console.warn('[notes] import insert failed', error);
+        }
+      }
+    }
+    syncNotebooksAndTags();
+    if (lastId) state.activeNoteId = lastId;
+    scheduleRender();
+    showActionToast(state.t('imported', 'Notizen importiert.').replace('{n}', String(count)));
+  }, { once: true });
+  input.click();
 }
 
 // Keypads and Zero-Knowledge Lock overlays
@@ -1662,10 +1796,8 @@ function handlePinPadClick(e) {
 }
 
 function submitPin() {
-  const cachePrefix = state.ctx.module?.id === 'notizen' ? 'ctox.notizen' : 'ctox.notes';
   if (state.pinBuffer === '1234') {
     state.appLocked = false;
-    localStorage.setItem(`${cachePrefix}.appLocked`, 'false');
     els.clientLockScreen?.setAttribute('hidden', '');
     state.pinBuffer = '';
     els.pinDots?.forEach(dot => dot.classList.remove('filled', 'error'));
@@ -1681,9 +1813,7 @@ function submitPin() {
 }
 
 function handleLockAppClick() {
-  const cachePrefix = state.ctx.module?.id === 'notizen' ? 'ctox.notizen' : 'ctox.notes';
   state.appLocked = true;
-  localStorage.setItem(`${cachePrefix}.appLocked`, 'true');
   state.pinBuffer = '';
   els.pinDots?.forEach(dot => dot.classList.remove('filled', 'error'));
   els.clientLockScreen?.removeAttribute('hidden');
@@ -1904,30 +2034,6 @@ function handleTagsSelectBtnClick(e) {
 }
 
 // Popover sort & filters
-function handleFilterTriggerClick(e) {
-  e.stopPropagation();
-  const wasHidden = els.filterPopover.hidden;
-  closeAllDropdowns();
-  els.filterPopover.hidden = !wasHidden;
-}
-
-function handleSortClick(e) {
-  state.sortMode = e.currentTarget.getAttribute('data-sort');
-  els.filterPopover.querySelectorAll('[data-sort]').forEach(el => {
-    el.classList.toggle('active', el.getAttribute('data-sort') === state.sortMode);
-  });
-  scheduleRender();
-}
-
-function handleViewModeClick(e) {
-  state.viewMode = e.currentTarget.getAttribute('data-view-mode');
-  els.filterPopover.querySelectorAll('[data-view-mode]').forEach(el => {
-    el.classList.toggle('active', el.getAttribute('data-view-mode') === state.viewMode);
-  });
-  els.notesList?.classList.toggle('nn-compact-view', state.viewMode === 'compact');
-  closeAllDropdowns();
-}
-
 // Rich Text format dropdown
 function handleFormatBtnClick(e) {
   e.stopPropagation();
@@ -2192,8 +2298,6 @@ function handleTimestampBtnClick() {
 function handleGlobalClick(e) {
   if (e.target.closest('.nn-meta-select-wrap') ||
       e.target.closest('.nn-format-wrapper') ||
-      e.target.closest('.nn-filter-trigger') ||
-      e.target.closest('[data-action="toggle-filter"]') ||
       e.target.closest('[data-action="toggle-note-meta"]')) {
     return;
   }
@@ -2206,18 +2310,9 @@ function handleDocumentKeydown(e) {
   }
 }
 
-function handleSidebarKeydown(e) {
-  if (e.key !== 'Enter' && e.key !== ' ') return;
-  const target = e.target?.closest?.('.notes-folder-item, [data-toggle-nav]');
-  if (!target || !els.folderList?.contains(target)) return;
-  e.preventDefault();
-  target.click();
-}
-
 function closeAllDropdowns() {
   if (els.notebookDropdown) els.notebookDropdown.hidden = true;
   if (els.tagsDropdown) els.tagsDropdown.hidden = true;
-  if (els.filterPopover) els.filterPopover.hidden = true;
   if (els.headersDropdown) els.headersDropdown.hidden = true;
   if (els.calloutsDropdown) els.calloutsDropdown.hidden = true;
   if (els.noteMetaMenu) els.noteMetaMenu.hidden = true;
@@ -2678,175 +2773,6 @@ function escapeHtml(value) {
   })[char]);
 }
 
-function initNotesContextMenu(state) {
-  state.contextMenu?.remove();
-  const menu = document.createElement('div');
-  menu.className = 'ctox-context-menu notes-context-menu';
-  menu.hidden = true;
-  document.body.append(menu);
-  state.contextMenu = menu;
-
-  const handleContextMenu = (event) => {
-    if (state.ctx.module?.id !== (state.ctx.module?.id === 'notizen' ? 'notizen' : 'notes')) return;
-    const context = noteCommandContextFromElement(state, event.target);
-    event.preventDefault();
-    event.stopPropagation();
-    renderNotesContextMenu(state, context, event.clientX, event.clientY);
-  };
-  const handleOutsideClick = (event) => {
-    if (state.contextMenu?.contains(event.target)) return;
-    hideNotesContextMenu(state);
-  };
-  const handleEscape = (event) => {
-    if (event.key === 'Escape') hideNotesContextMenu(state);
-  };
-
-  window.addEventListener('click', handleOutsideClick, { capture: true });
-  window.addEventListener('keydown', handleEscape);
-
-  return () => {
-    window.removeEventListener('click', handleOutsideClick, { capture: true });
-    window.removeEventListener('keydown', handleEscape);
-    hideNotesContextMenu(state);
-  };
-}
-
-function hideNotesContextMenu(state) {
-  if (state.contextMenu) state.contextMenu.hidden = true;
-}
-
-function canModifyNotesApp(state) {
-  if (typeof state.ctx.canModifyModule === 'function' && state.ctx.canModifyModule()) return true;
-  const user = state.ctx.session?.user || {};
-  const role = String(user.role || (user.is_admin ? 'admin' : 'user')).trim().toLowerCase().replace(/^business_os_/, '');
-  return ['admin', 'chef'].includes(role);
-}
-
-function noteCommandContextFromElement(state, target) {
-  const element = target?.nodeType === Node.ELEMENT_NODE ? target : target?.parentElement;
-  const activeNote = state.notes.find((item) => item.id === state.activeNoteId) || null;
-  const bodyText = activeNote?.content || '';
-  const bodySnippet = bodyText.slice(0, 500);
-
-  return {
-    module: state.ctx.module?.id || 'notizen',
-    column: state.ctx.left?.contains?.(element) ? 'folders' : (els.notesList?.contains?.(element) ? 'list' : 'editor'),
-    record_type: activeNote ? 'notes' : 'module',
-    record_id: activeNote?.id || '',
-    label: activeNote?.title || '',
-    body_snippet: bodySnippet,
-    selected_text: String(window.getSelection?.()?.toString?.() || '').trim().slice(0, 1000),
-    clicked_text: String(element?.innerText || element?.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 500),
-  };
-}
-
-function renderNotesContextMenu(state, context, x, y) {
-  const canModifyApp = canModifyNotesApp(state);
-  const titleLabel = state.ctx.module?.id === 'notizen' ? 'Notizen' : 'Notes';
-  state.contextMenu.innerHTML = `
-    <form class="notes-context-chat" data-notes-context-chat-form>
-      <header>
-        <div>
-          <strong>${escapeHtml(state.t('chatToCtox', 'Chat to CTOX'))}</strong>
-          <span>${escapeHtml(context.label || titleLabel)}</span>
-        </div>
-        <button type="button" data-notes-context-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
-      </header>
-      <div class="ctox-context-mode" role="radiogroup" aria-label="${escapeHtml(state.t('chatActionLabel', 'CTOX Aufgabe'))}">
-        <label><input type="radio" name="contextMode" value="data" checked /> ${escapeHtml(state.t('chatWorkDataLabel', 'Mit Daten arbeiten'))}</label>
-        <label><input type="radio" name="contextMode" value="ask" /> ${escapeHtml(state.t('chatAnswerLabel', 'Frage beantworten'))}</label>
-        ${canModifyApp ? `<label><input type="radio" name="contextMode" value="app" /> ${escapeHtml(state.t('chatModifyAppLabel', 'App modifizieren'))}</label>` : ''}
-      </div>
-      <textarea data-notes-context-message placeholder="${escapeHtml(state.t('chatPlaceholder', 'Was soll CTOX hier tun oder prüfen?'))}"></textarea>
-      <footer>
-        <span data-notes-context-status></span>
-        <button type="submit">${escapeHtml(state.t('send', 'Senden'))}</button>
-      </footer>
-    </form>
-  `;
-  state.contextMenu.hidden = false;
-  state.contextMenu.style.left = '0px';
-  state.contextMenu.style.top = '0px';
-  const rect = state.contextMenu.getBoundingClientRect();
-  const clampNumber = (val, min, max) => Math.min(max, Math.max(min, val));
-  const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
-  const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
-  state.contextMenu.style.left = `${clampNumber(x, 8, maxLeft)}px`;
-  state.contextMenu.style.top = `${clampNumber(y, 8, maxTop)}px`;
-
-  const form = state.contextMenu.querySelector('[data-notes-context-chat-form]');
-  const textarea = state.contextMenu.querySelector('[data-notes-context-message]');
-  state.contextMenu.querySelector('[data-notes-context-close]')?.addEventListener('click', () => hideNotesContextMenu(state));
-  form?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const mode = new FormData(form).get('contextMode') || 'data';
-    await dispatchNotesContextChat(state, context, textarea?.value || '', mode);
-  });
-  requestAnimationFrame(() => textarea?.focus());
-}
-
-async function dispatchNotesContextChat(state, context, message, mode = 'data') {
-  const trimmed = String(message || '').trim();
-  const status = state.contextMenu?.querySelector('[data-notes-context-status]');
-  if (!trimmed) {
-    if (status) status.textContent = state.t('chatMissingMessage', 'Nachricht fehlt.');
-    return;
-  }
-
-  const activeModuleId = state.ctx.module?.id || 'notizen';
-  const safeMode = mode === 'app' && canModifyNotesApp(state) ? 'app' : (mode === 'ask' ? 'ask' : 'data');
-  const activeNote = state.notes.find((item) => item.id === state.activeNoteId) || null;
-  if (!document.querySelector('[data-ctox-chat-root]')) {
-    if (status) status.textContent = state.t('chatNotReady', 'Chat ist noch nicht bereit.');
-    return;
-  }
-  if (status) status.textContent = state.t('chatOpening', 'Oeffne Chat...');
-  
-  const titlePrefix = safeMode === 'app'
-    ? (activeModuleId === 'notizen' ? 'Notizen App modifizieren' : 'Notes App modifizieren')
-    : safeMode === 'ask'
-      ? state.t('chatAnswerLabel', 'Frage beantworten')
-      : (activeModuleId === 'notizen' ? 'Notiz bearbeiten' : 'Note edit');
-  const title = `${titlePrefix} · ${context.label || (activeModuleId === 'notizen' ? 'Notizen' : 'Notes')}`;
-  const instruction = safeMode === 'app'
-    ? `Modifiziere die ${activeModuleId === 'notizen' ? 'Notizen' : 'Notes'}-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, Notizdaten selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
-    : safeMode === 'ask'
-      ? `Beantworte die folgende Frage ausschließlich lesend. Nutze nur vorhandene Daten und Kontext; führe keine Änderungen an Daten, Records, Dateien oder der App aus. Antworte knapp und direkt.\n\n${trimmed}`
-      : trimmed;
-
-  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
-    detail: {
-      text: trimmed,
-      module: activeModuleId,
-      source_title: activeModuleId === 'notizen' ? 'Notizen' : 'Notes',
-      command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
-      record_id: safeMode === 'app' ? activeModuleId : (activeNote?.id || activeModuleId),
-      title,
-      instruction,
-      payload: {
-        title,
-        instruction,
-        prompt: trimmed,
-        user_message: trimmed,
-        mode: safeMode,
-        target: safeMode === 'app' ? 'app' : (safeMode === 'ask' ? 'read' : 'data'),
-        selected_note: activeNote,
-        context,
-        thread_key: `business-os/${activeModuleId}`,
-      },
-      client_context: {
-        action: 'context-chat',
-        mode: safeMode,
-        column: context.column,
-        record_type: context.record_type,
-        note_id: activeNote?.id || '',
-        note_title: activeNote?.title || '',
-      },
-    },
-  }));
-  hideNotesContextMenu(state);
-}
-
 function noteActionAvailability(note) {
   if (!note) {
     return {
@@ -2884,5 +2810,9 @@ export const __notesTestHooks = {
   noteActionAvailability,
   buildNotePersistPayload,
   deriveTitleFromPlainText,
-  lockedPlaceholderTitle
+  lockedPlaceholderTitle,
+  bandCountsFor,
+  computeEditorVisible,
+  buildNotesExport,
+  parseNotesImport
 };
