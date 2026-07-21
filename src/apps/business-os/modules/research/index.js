@@ -1557,7 +1557,7 @@ function evidenceGate(row) {
   const rejectionReason = firstString(row, ['evidence_rejection_reason']);
   const relevanceScore = Number(row?.evidence_relevance_score);
   const validSnapshotHash = /^sha256:[0-9a-f]{64}$/i.test(snapshotHash);
-  const actualSourceContent = row?.actual_full_text_or_data === true;
+  const actualSourceContent = booleanField(row, 'actual_full_text_or_data');
   const relevant = Number.isInteger(relevanceScore) && relevanceScore >= 8;
   const canonicalIsMetadata = isMetadataCanonicalUrl(canonicalUrl);
   const metadataOnly = row?.metadata_only === true
@@ -1570,8 +1570,8 @@ function evidenceGate(row) {
     || sourceType === 'aggregator';
   const eligible = verificationStatus === 'verified'
     && Boolean(sourceIdValue)
-    && row?.transport_verified === true
-    && row?.content_extracted === true
+    && booleanField(row, 'transport_verified')
+    && booleanField(row, 'content_extracted')
     && Number.isInteger(httpStatus)
     && httpStatus >= 200
     && httpStatus < 300
@@ -1585,7 +1585,7 @@ function evidenceGate(row) {
     && RECEIPT_CONTENT_SCOPES.has(contentScope)
     && Boolean(canonicalUrl)
     && !canonicalIsMetadata
-    && row?.evidence_eligible === true
+    && booleanField(row, 'evidence_eligible')
     && actualSourceContent
     && relevant
     && !rejectionReason
@@ -1604,8 +1604,8 @@ function evidenceGate(row) {
   if (canonicalIsMetadata) return { eligible: false, status: 'metadata_url', label: 'Metadata URL only' };
   if (verificationStatus !== 'verified') return { eligible: false, status: 'unverified', label: 'Not verified' };
   if (!sourceIdValue) return { eligible: false, status: 'missing_source_id', label: 'Source ID missing' };
-  if (row?.transport_verified !== true) return { eligible: false, status: 'transport_unverified', label: 'Transport not verified' };
-  if (row?.content_extracted !== true) return { eligible: false, status: 'empty_content', label: 'No source content extracted' };
+  if (!booleanField(row, 'transport_verified')) return { eligible: false, status: 'transport_unverified', label: 'Transport not verified' };
+  if (!booleanField(row, 'content_extracted')) return { eligible: false, status: 'empty_content', label: 'No source content extracted' };
   if (!validSnapshotHash) return { eligible: false, status: 'missing_snapshot', label: 'Valid snapshot missing' };
   if (!snapshotId) return { eligible: false, status: 'missing_snapshot_id', label: 'Snapshot ID missing' };
   if (!snapshotPath) return { eligible: false, status: 'missing_snapshot_path', label: 'Snapshot path missing' };
@@ -1617,7 +1617,7 @@ function evidenceGate(row) {
   if (!actualSourceContent) return { eligible: false, status: 'no_primary_content', label: 'No full text or original data' };
   if (!relevant) return { eligible: false, status: 'insufficient_relevance', label: 'Relevance not verified' };
   if (rejectionReason) return { eligible: false, status: 'rejected', label: 'Evidence rejected' };
-  if (row?.evidence_eligible !== true) return { eligible: false, status: 'not_eligible', label: 'Evidence not eligible' };
+  if (!booleanField(row, 'evidence_eligible')) return { eligible: false, status: 'not_eligible', label: 'Evidence not eligible' };
   if (!sourceTier) return { eligible: false, status: 'legacy', label: 'Legacy / not verified' };
   return { eligible: false, status: 'not_eligible', label: 'Evidence not eligible' };
 }
@@ -4827,6 +4827,15 @@ function parseObject(value) {
 
 function sourceId(row) {
   return firstString(row, ['source_id', 'id', 'record_id', 'source_key']);
+}
+
+function booleanField(row, key) {
+  const value = row?.[key];
+  if (value === true) return true;
+  if (value === false || value === null || value === undefined) return false;
+  if (typeof value === 'number') return value === 1;
+  const normalized = String(value).trim().toLowerCase();
+  return normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'ja';
 }
 
 function firstString(row, keys) {

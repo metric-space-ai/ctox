@@ -75,6 +75,32 @@ test('measurement rows require individually matching source snapshot lineage', (
   assert.equal(hooks.aggregateMeasurements(rows, [source]).get('source-1').count, 1);
 });
 
+test('evidence gate accepts verified CSV boolean fields from knowledge imports', () => {
+  const gate = hooks.evidenceGate({
+    source_id: 'src-dataset-1',
+    verification_status: 'verified',
+    transport_verified: 'true',
+    content_extracted: 'true',
+    actual_full_text_or_data: 'true',
+    evidence_eligible: 'true',
+    http_status: '200',
+    snapshot_hash: `sha256:${'a'.repeat(64)}`,
+    snapshot_id: 'snap-dataset-1',
+    snapshot_path: '/snapshots/source-1/source.zip',
+    evidence_id: 'ev-dataset-1',
+    retrieved_at: '2026-07-21T04:00:00Z',
+    url_role: 'dataset_archive',
+    content_scope: 'full_dataset',
+    canonical_url: 'https://zenodo.org/api/records/20111572/files/Propeller_Database.zip/content',
+    evidence_relevance_score: '9',
+    source_tier: 'primary_dataset',
+    source_type: 'dataset',
+  });
+
+  assert.equal(gate.eligible, true);
+  assert.equal(gate.status, 'verified');
+});
+
 test('create task preserves selected local knowledge domain ids', () => {
   const knowledgeBases = [{ domain: 'drone_bearing_design', title: 'Drone Bearing Design' }];
 
