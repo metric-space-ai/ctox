@@ -2,8 +2,8 @@
    The frame (.ctox-workspace/.ctox-pane/.ctox-column-resizer), pane headers,
    chips, badges, list items, buttons, inputs, callouts, cards, fields and the
    context menu all come from shared/base.css + app.css. This file only carries
-   what the kit cannot express: the workflow canvas/SVG state machine, the live
-   metric strip, the timeline scrubber, task-group accordions and the drawer
+   what the kit cannot express: the compact per-task pipeline, workflow
+   canvas/SVG state machine, live metric strip, timeline scrubber and drawer
    stepper. */
 
 .ctox-harness-app {
@@ -22,22 +22,20 @@
   padding-bottom: 84px;
 }
 
-:root[data-theme="dark"] .ctox-harness-app {
-  /* Dark-only canvas specials; everything else derives from shell tokens. */
-  --ctox-canvas: #0f1419;
-  --ctox-flow-lane-fill: rgba(255, 255, 255, 0.012);
-  --ctox-flow-lane-stroke: rgba(255, 255, 255, 0.045);
-  --ctox-flow-edge: color-mix(in srgb, var(--muted) 22%, transparent);
-  --ctox-flow-node-fill: color-mix(in srgb, var(--surface) 78%, transparent);
-  --ctox-flow-node-stroke: var(--line);
-  --ctox-flow-channel-fill: color-mix(in srgb, var(--surface) 72%, transparent);
-  --ctox-flow-channel-open-fill: color-mix(in srgb, var(--surface) 62%, transparent);
-  --ctox-flow-muted-fill: color-mix(in srgb, var(--muted) 44%, transparent);
+/* The kit owns the tracks and resizer behavior; the module only pins panes to
+   their explicit tracks so narrow auto-flow can never place the main pane on
+   the resizer column. */
+.ctox-harness-left {
+  grid-column: 1;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
-/* custom: left pane stacks band header, scrollable task board, aux panels */
-.ctox-harness-left {
-  grid-template-rows: auto minmax(0, 1fr) auto;
+.ctox-harness-app > [data-resizer="left"] {
+  grid-column: 2;
+}
+
+.ctox-harness-main {
+  grid-column: 3;
 }
 
 .ctox-harness-aux {
@@ -52,10 +50,20 @@
   display: none;
 }
 
-/* custom: flow console layout — band header, metric strip, canvas, timeline */
+/* Flow console layout — header, metrics, recessed canvas, timeline, footer. */
 .ctox-harness-main {
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
 }
+
+.ctox-harness-left > .ctox-pane-header { grid-row: 1; }
+.ctox-harness-left > .ctox-task-view-switch { grid-row: 2; }
+.ctox-harness-left > .ctox-task-well { grid-row: 3; }
+.ctox-harness-left > .ctox-harness-footer { grid-row: 4; }
+.ctox-harness-main > .ctox-pane-header { grid-row: 1; }
+.ctox-harness-main > .ctox-metrics-strip { grid-row: 2; }
+.ctox-harness-main > .ctox-flow-well { grid-row: 3; }
+.ctox-harness-main > .ctox-timeline-panel { grid-row: 4; }
+.ctox-harness-main > .ctox-harness-footer { grid-row: 5; }
 
 /* Loading empty state spans the whole console grid. */
 .ctox-harness-main > .ctox-empty {
@@ -98,7 +106,271 @@
   height: 6px;
 }
 
-/* custom: horizontally scrolling chip row inside the pane header tools */
+/* Canonical task-column grammar: filterbar → tray → counted views → well → footer. */
+.ctox-task-filterbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+}
+
+.ctox-task-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ctox-task-filter-toggle {
+  position: relative;
+}
+
+.ctox-task-filter-toggle.has-active-filter::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.ctox-task-filter-tray {
+  margin-top: 6px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+  padding: 6px;
+}
+
+.ctox-task-filter-tray[hidden] {
+  display: none;
+}
+
+.ctox-task-filter-row {
+  display: grid;
+  grid-template-columns: minmax(112px, 1fr) minmax(96px, 0.8fr) minmax(104px, 0.9fr) auto auto;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.ctox-task-filter-row .ctox-select {
+  min-width: 0;
+}
+
+.ctox-task-view-switch {
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.ctox-task-view-switch .ctox-pane-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.ctox-task-view-switch .ctox-pane-tab {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctox-task-well,
+.ctox-flow-well {
+  min-height: 0;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.ctox-task-well {
+  padding: 6px;
+}
+
+.ctox-harness-footer {
+  min-width: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  padding: 5px 10px;
+  font-size: 10.5px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctox-task-list {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+}
+
+.ctox-task-card,
+.ctox-task-flow-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-width: 0;
+  overflow: hidden;
+  border: 0;
+  background: var(--surface);
+  padding: 0;
+}
+
+.ctox-task-card::before,
+.ctox-task-flow-row::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: transparent;
+}
+
+.ctox-task-card.is-selected,
+.ctox-task-flow-row.is-selected {
+  background: var(--accent-soft);
+}
+
+.ctox-task-card.is-selected::before,
+.ctox-task-flow-row.is-selected::before {
+  background: var(--accent);
+}
+
+.ctox-task-card.is-pinned:not(.is-selected),
+.ctox-task-flow-row.is-pinned:not(.is-selected) {
+  background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface));
+}
+
+.ctox-task-selector {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 9px 38px 9px 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ctox-task-selector:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.ctox-task-selector > strong,
+.ctox-task-selector > small,
+.ctox-task-flow-copy > strong,
+.ctox-task-flow-copy > small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctox-task-selector > strong,
+.ctox-task-flow-copy > strong {
+  color: var(--text-strong);
+  font-size: 12.5px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.ctox-task-selector > small,
+.ctox-task-flow-copy > small {
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.2;
+}
+
+.ctox-task-actions {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  z-index: 2;
+}
+
+.ctox-task-actions .ctox-pane-icon.is-active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.ctox-task-pipeline {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
+  min-width: 0;
+  margin-top: 2px;
+}
+
+.ctox-task-pipeline > span {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 3px;
+  min-width: 0;
+}
+
+.ctox-task-pipeline i {
+  display: block;
+  height: 3px;
+  background: color-mix(in srgb, var(--line) 74%, transparent);
+}
+
+.ctox-task-pipeline em {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  font-style: normal;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctox-task-pipeline .is-complete i {
+  background: color-mix(in srgb, var(--success) 72%, var(--line));
+}
+
+.ctox-task-pipeline .is-current i {
+  background: var(--accent);
+}
+
+.ctox-task-pipeline .is-current em {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.ctox-task-pipeline.is-problem .is-current i {
+  background: var(--danger);
+}
+
+.ctox-task-flow-row .ctox-task-selector {
+  grid-template-columns: minmax(110px, 0.9fr) minmax(180px, 1.4fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 38px;
+  padding-block: 5px;
+}
+
+.ctox-task-flow-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ctox-task-pipeline.is-compact {
+  margin: 0;
+}
+
+.ctox-task-pipeline.is-compact em {
+  font-size: 8.5px;
+}
+
+/* Legacy task-chip rules remain below for the drawer and compatibility paths;
+   the live task column uses the canonical controls above. */
 .ctox-task-filter-chips {
   flex-wrap: nowrap;
   overflow-x: auto;
@@ -844,14 +1116,12 @@
   fill: color-mix(in srgb, var(--accent) 18%, var(--surface));
   stroke: color-mix(in srgb, var(--accent) 80%, transparent);
   stroke-width: 2;
-  filter: drop-shadow(0 2px 10px color-mix(in srgb, var(--accent) 40%, transparent));
 }
 
 .ctox-flow-node-g:hover .ctox-flow-node-box,
 .ctox-flow-node-g:hover .ctox-flow-node-diamond {
   stroke: color-mix(in srgb, var(--accent) 80%, transparent);
   stroke-width: 1.8;
-  filter: drop-shadow(0 2px 8px color-mix(in srgb, var(--accent) 30%, transparent));
 }
 
 .ctox-flow-node-g.is-blocked .ctox-flow-node-box,
@@ -1105,6 +1375,24 @@
 }
 
 /* custom: task edit form layout inside the kit card */
+.ctox-task-edit > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ctox-task-edit-heading {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ctox-task-edit-heading small {
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
 .ctox-task-edit .ctox-card-body {
   display: grid;
   gap: 10px;
@@ -1275,13 +1563,6 @@
   white-space: nowrap;
 }
 
-/* custom: module JS positions the context menu with viewport clientX/clientY,
-   so it stays viewport-fixed (shared/base.css positions it absolute inside the
-   module host). All other menu chrome comes from .ctox-context-menu. */
-.ctox-harness-context-menu {
-  position: fixed;
-}
-
 @keyframes ctox-flow-node-pulse {
   0% {
     opacity: 0.74;
@@ -1340,6 +1621,36 @@
 
   .ctox-harness-left,
   .ctox-harness-main {
+    grid-column: 1;
     min-height: 360px;
+  }
+}
+
+@container business-app-window (max-width: 560px) {
+  .ctox-task-flow-row .ctox-task-selector {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  .ctox-metrics-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ctox-metric-card:nth-child(3) {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .ctox-metric-card:nth-child(4) {
+    border-top: 1px solid var(--line);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ctox-status-pulse,
+  .ctox-live-chip i,
+  .ctox-flow-edge.is-active-edge,
+  .ctox-flow-node-live-ring {
+    animation: none;
   }
 }

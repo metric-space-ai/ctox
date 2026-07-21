@@ -1,5 +1,51 @@
 <main class="ctox-workspace ctox-workspace--two-pane ctox-harness-app" data-ctox-harness data-resize-frame>
-  <aside class="ctox-pane ctox-harness-left" data-ctox-left aria-label="CTOX Tasks"></aside>
+  <aside class="ctox-pane ctox-harness-left" data-ctox-left aria-label="CTOX Tasks">
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">Harness</span>
+          <h2 class="ctox-pane-title">Tasks</h2>
+        </div>
+        <div class="ctox-pane-actions"></div>
+      </div>
+      <div class="ctox-task-filterbar">
+        <input class="ctox-pane-search" type="search" data-task-search placeholder="Tasks suchen" aria-label="Tasks suchen">
+        <div class="ctox-task-view-toggle" role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-task-view-mode="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-task-view-mode="list" aria-pressed="false" aria-label="Flow-Liste" title="Flow-Liste"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
+        <button type="button" class="ctox-pane-icon ctox-task-filter-toggle" data-toggle-task-filters aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="ctox-task-filter-tray" data-task-filter-tray hidden>
+        <div class="ctox-task-filter-row">
+          <select class="ctox-select" data-task-source-filter aria-label="Quelle filtern"><option value="all">Alle Quellen</option></select>
+          <select class="ctox-select" data-task-pin-filter aria-label="Pins filtern"><option value="all">Alle Tasks</option><option value="pinned">Nur Pins</option></select>
+          <select class="ctox-select" data-task-sort aria-label="Tasks sortieren"><option value="updated">Aktualisiert</option><option value="title">Titel</option><option value="source">Quelle</option><option value="status">Status</option></select>
+          <button type="button" class="ctox-pane-icon" data-task-sort-direction aria-label="Sortierrichtung" title="Sortierrichtung"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5v14M8 5 5 8M8 5l3 3M16 19V5M16 19l-3-3M16 19l3-3"/></svg></button>
+          <button type="button" class="ctox-pane-icon ctox-task-filter-reset" data-reset-task-filters aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+        </div>
+      </div>
+    </header>
+    <nav class="ctox-task-view-switch" aria-label="Task Ansichten">
+      <div class="ctox-pane-tabs" role="tablist">
+        <button type="button" class="ctox-pane-tab" role="tab" aria-selected="true">Alle (0)</button>
+        <button type="button" class="ctox-pane-tab" role="tab" aria-selected="false">Arbeitet (0)</button>
+        <button type="button" class="ctox-pane-tab" role="tab" aria-selected="false">Wartet (0)</button>
+        <button type="button" class="ctox-pane-tab" role="tab" aria-selected="false">Erledigt (0)</button>
+      </div>
+    </nav>
+    <div class="ctox-pane-body ctox-task-well"><div class="ctox-list" data-task-list></div></div>
+    <footer class="ctox-harness-footer">0 Einträge · Alle</footer>
+  </aside>
   <button class="ctox-column-resizer" type="button" data-ctox-column-resizer data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="220" data-resizer-max="560" aria-label="Task-Spalte verbreitern oder verkleinern"></button>
-  <section class="ctox-pane ctox-harness-main" data-ctox-main aria-label="CTOX Live Flow"></section>
+  <section class="ctox-pane ctox-harness-main" data-ctox-main aria-label="CTOX Live Flow">
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles"><span class="ctox-pane-kicker">CTOX Live Flow</span><h2 class="ctox-pane-title">Was CTOX gerade tut</h2></div>
+        <div class="ctox-pane-actions"></div>
+      </div>
+    </header>
+    <div class="ctox-pane-body ctox-flow-well"><div class="ctox-empty">Live Flow wird geladen.</div></div>
+    <footer class="ctox-harness-footer">CTOX Core · nicht live</footer>
+  </section>
 </main>

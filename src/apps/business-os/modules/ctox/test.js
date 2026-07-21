@@ -23,6 +23,7 @@ const { __ctoxTestHooks: hooks } = await importBrowserBundle('./index.js');
 const {
   aggregateFlowMetrics,
   clampMetric,
+  compactTaskFlowRow,
   deriveHarnessHealth,
   eventToNodeId,
   flowSourceView,
@@ -35,6 +36,8 @@ const {
   resolveSelectedTaskId,
   safeTaskDisplayText,
   setFlowZoom,
+  taskColumnMarkup,
+  taskPipelineStage,
   taskSteps,
   timelinePanel,
   webStackStateFromRefreshResult,
@@ -81,6 +84,76 @@ test('Presentation layer stays compact and shell-native', () => {
   assert.doesNotMatch(css, /\.ctox-column-resizer\s*\{/);
   assert.doesNotMatch(css, /grid-template-columns:\s*var\(--ctox-left-width\)/);
   assert.match(manifest, /currentColor/);
+});
+
+test('Task column pins the complete canonical grammar contract', () => {
+  const js = readFileSync(new URL('./index.js', import.meta.url), 'utf8');
+  const state = {
+    ctx: { getActionIcon: (name) => `<svg data-icon="${name}"></svg>` },
+    lang: 'en',
+    selectedTaskId: 'task-working',
+    taskSearch: '',
+    taskViewMode: 'cards',
+    taskPrimaryView: 'all',
+    taskFiltersOpen: false,
+    taskSourceFilter: 'all',
+    taskPinFilter: 'all',
+    taskSort: 'updated',
+    taskSortDirection: 'desc',
+    pinnedTaskIds: new Set(),
+  };
+  const tasks = [
+    { id: 'task-working', title: 'Working task', status: 'running', source: 'ctox', updatedAt: '2026-07-21T10:00:00Z' },
+    { id: 'task-done', title: 'Done task', status: 'completed', source: 'threads', updatedAt: '2026-07-21T09:00:00Z' },
+  ];
+  const markup = taskColumnMarkup(tasks, state);
+
+  assert.match(markup, /class="ctox-task-filterbar"[\s\S]*data-task-search[\s\S]*data-task-view-mode="cards"[\s\S]*data-task-view-mode="list"[\s\S]*data-toggle-task-filters/);
+  assert.match(markup, /class="ctox-task-filter-tray"[\s\S]*data-task-source-filter[\s\S]*data-task-pin-filter[\s\S]*data-task-sort[\s\S]*data-reset-task-filters/);
+  const tabs = markup.match(/class="ctox-pane-tab[^\"]*"/g) || [];
+  assert.ok(tabs.length >= 2, 'counted view band must have at least two real views');
+  assert.match(markup, /All \(2\)/);
+  assert.match(markup, /Working \(1\)/);
+  assert.match(markup, /Waiting \(0\)/);
+  assert.match(markup, /Done \(1\)/);
+  assert.match(markup, /class="ctox-pane-body ctox-task-well"/);
+  assert.match(markup, /<footer class="ctox-harness-footer">2 entries · All<\/footer>/);
+  assert.doesNotMatch(markup, /data-[^=\s]*refresh|>\s*(?:Refresh|Aktualisieren)\s*</i);
+  assert.doesNotMatch(markup, /ctox-badge/);
+  assert.doesNotMatch(js, /data-webstack-refresh/);
+  assert.doesNotMatch(js, /localStorage/);
+  assert.match(js, /moduleAssetUrl\('\.\/index\.html'\)/);
+  assert.match(js, /moduleAssetUrl\('\.\/index\.css'\)/);
+});
+
+test('Compact task rendering shows the four-stage live flow and session pins', () => {
+  const state = {
+    ctx: { getActionIcon: (name) => `<svg data-icon="${name}"></svg>` },
+    lang: 'en',
+    selectedTaskId: 'task-review',
+    pinnedTaskIds: new Set(['task-review']),
+  };
+  const task = {
+    id: 'task-review',
+    title: 'Reference-grade CTOX console',
+    status: 'review',
+    source: 'ctox',
+    updatedAt: '2026-07-21T10:00:00Z',
+  };
+  const markup = compactTaskFlowRow(task, state);
+
+  assert.equal(taskPipelineStage({ status: 'queued' }), 0);
+  assert.equal(taskPipelineStage({ status: 'running' }), 1);
+  assert.equal(taskPipelineStage({ status: 'review' }), 2);
+  assert.equal(taskPipelineStage({ status: 'completed' }), 3);
+  assert.match(markup, /data-compact-flow/);
+  assert.match(markup, /Queued[\s\S]*Working[\s\S]*Review[\s\S]*Done/);
+  assert.match(markup, /data-flow-stage="2"/);
+  assert.match(markup, /data-pin-task-id="task-review"[^>]*aria-pressed="true"/);
+  assert.match(markup, /data-context-record-id="task-review"/);
+  assert.match(markup, /data-context-record-type="ctox_task"/);
+  assert.match(markup, /data-context-label="Reference grade CTOX console"/);
+  assert.equal(state.pinnedTaskIds.has('task-review'), true);
 });
 
 test('Task focus normalizes launch args and shell events consistently', () => {
