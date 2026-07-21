@@ -308,6 +308,10 @@ test('rendered shell stamps data-context-* attributes on root, list, and center 
     assert.ok(centerPane, 'center pane must exist');
     assert.equal(listPane.dataset.contextRecordType, 'accounting_invoices');
     assert.equal(centerPane.dataset.contextRecordType, 'accounting_invoices');
+    // IA-Karte: exactly a 2-pane workspace — list + single resizer + main.
+    // No third (inspector) column.
+    assert.equal(grid.children.length, 3, 'workspace must be two panes and one resizer (no third column)');
+    assert.ok(!grid.children.some((c) => c.dataset?.rightContent !== undefined), 'no right/inspector pane');
     unmount();
   } finally {
     if (originalWindow === undefined) delete globalThis.window; else globalThis.window = originalWindow;

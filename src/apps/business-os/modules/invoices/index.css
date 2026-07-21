@@ -1,8 +1,10 @@
-/* invoices/index.css — module-specific styling on top of shared/base.css.
-   Kit classes (.ctox-workspace, .ctox-pane-*, .ctox-column-resizer, .ctox-list,
-   .ctox-chip, .ctox-table, .ctox-badge, .ctox-button, .ctox-fields, .ctox-card,
-   .ctox-empty, .ctox-callout, .ctox-pre, .ctox-compact-field) come from the
-   shell; only genuinely invoice-specific layout lives here. */
+/* invoices/index.css — module-specific layer on top of shared/base.css.
+   The workspace frame, panes, canonical column grammar (filterbar, view
+   toggle, filter tray, counted band, .ctox-well, .ctox-pane-footer), record
+   list, tables, badges, form controls, callout and empty state all come from
+   the kit (base.css) and are wired by the shell. This file only pins the pane
+   grid tracks/rows and styles the genuinely invoice-specific bits: the shard
+   selector rows, the editable line grid, the totals strip and the error strip. */
 
 /* Root: the kit workspace fills the module window; an optional module-global
    error strip sits in the second row (toggled via [hidden]). */
@@ -13,38 +15,41 @@
   min-height: 0;
 }
 
-/* --------------------------------------------------------------------------
-   Inspector pane is collapsible — hidden by default so the center workbench
-   (editor / detail / tabs) gets the full width. Toggled from the center
-   pane header (data-toggle-actions). Mirrors the threads / conversations /
-   buchhaltung collapse pattern.
-   -------------------------------------------------------------------------- */
-.invoices-module.is-actions-hidden {
-  grid-template-columns: var(--ctox-left-width, 320px) 12px minmax(0, 1fr);
-}
+.invoices-module { --ctox-left-width: 320px; }
 
-.invoices-module.is-actions-hidden > [data-resizer="right"],
-.invoices-module.is-actions-hidden > .ctox-pane[data-rightContent] {
-  display: none;
-}
+/* Explicit column pins so the main pane never slides onto the resizer track
+   when the kit hides resizers on narrow windows. Left rail rows:
+   auto [band] minmax(0,1fr) [well] auto [footer]. */
+.invoices-rail { grid-column: 1; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.invoices-module > [data-resizer="left"] { grid-column: 2; }
+.invoices-main { grid-column: 3; grid-template-rows: auto minmax(0, 1fr); }
 
-.invoices-toggle-actions[aria-pressed="true"] {
-  background: var(--accent-soft);
-  color: color-mix(in srgb, var(--accent) 78%, var(--text));
+/* Shard / compact selector rows (both are the kit .ctox-list-item). Selection
+   is an in-place is-selected flip — the kit paints the accent fill + bar. */
+.invoices-row { display: grid; gap: 4px; cursor: pointer; }
+.invoices-row--list {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 6px;
+  padding-bottom: 6px;
 }
-
-/* Filter chips may wrap onto a second row in narrow left columns. */
-.invoices-filter-row {
-  flex-wrap: wrap;
+.invoices-row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.invoices-row-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
 }
+.invoices-row-meta { color: var(--muted); font-size: 11px; }
 
 /* custom: padded content body — kit .ctox-pane-scroll is intentionally
-   unpadded so panes can choose their own content rhythm. */
-.invoices-pane-scroll {
-  padding: 14px;
-}
+   unpadded so panes choose their own content rhythm. */
+.invoices-pane-scroll { padding: 14px; }
 
-/* Vertical content stack for editor / detail / inspector bodies. */
+/* Vertical content stack for editor / detail bodies. */
 .invoices-stack {
   display: flex;
   flex-direction: column;
@@ -52,27 +57,20 @@
   min-width: 0;
 }
 
-/* List row typography: invoice number line plus two muted meta lines. */
-.invoices-list-item small {
-  display: block;
-  color: var(--muted);
-}
-
-/* custom: dense inline-editing grid — cell inputs sit tighter than
-   standalone kit inputs so a full invoice line fits the center pane. */
+/* custom: dense inline-editing grid — cell inputs sit tighter than standalone
+   kit inputs so a full invoice line fits the main pane. */
 .invoices-lines-table .ctox-input {
   min-height: 28px;
   font-size: 12.5px;
 }
-
 .invoices-lines-table td.is-num .ctox-input {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
-/* custom: totals strip under the editable lines grid. The class is also a
-   JS hook: totals are recomputed in place via
-   document.querySelector('.invoices-totals') without a full re-render. */
+/* custom: totals strip under the editable lines grid. The class is also a JS
+   hook: totals are recomputed in place via document.querySelector on line
+   edits without a full re-render. */
 .invoices-totals {
   display: flex;
   flex-wrap: wrap;
@@ -80,30 +78,20 @@
   color: var(--muted);
   font-size: 13px;
 }
-
 .invoices-totals strong {
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 
-/* Editor action row (save draft / delete draft / post). */
+/* Editor action row (save draft / post + validation callout). */
 .invoices-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
-
-/* The validation callout takes its own row under the action buttons. */
-.invoices-actions .ctox-callout {
-  flex-basis: 100%;
-}
-
-/* Validation-issue bullets inside the .ctox-callout.is-danger box. */
-.invoices-issues {
-  margin: 0;
-  padding-left: 18px;
-}
+.invoices-actions .ctox-callout { flex-basis: 100%; }
+.invoices-issues { margin: 0; padding-left: 18px; }
 
 /* Detail tab panels (journal / XRechnung / payments / dunning). */
 .invoices-tab {
@@ -112,7 +100,6 @@
   align-items: flex-start;
   gap: 10px;
 }
-
 .invoices-tab .ctox-table-wrap,
 .invoices-tab .ctox-pre,
 .invoices-detail .ctox-table-wrap {
@@ -126,19 +113,33 @@
   gap: 8px;
   max-width: 320px;
 }
-
 .invoices-hint {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
 }
 
-/* custom: module-global command-error strip pinned under the workspace —
-   not tied to one pane, so the kit's pane-level surfaces do not apply. */
+/* custom: module-global command-error strip pinned under the workspace — not
+   tied to one pane, so the kit's pane-level surfaces do not apply. */
 .invoices-error-banner {
   padding: 8px 14px;
   border-top: 1px solid color-mix(in srgb, var(--danger) 45%, var(--line));
-  background: var(--danger-soft);
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
   color: var(--danger);
   font-size: 12px;
+}
+
+/* Narrow windows: stack the two panes and drop the resizer. */
+@container business-app-window (max-width: 760px) {
+  .invoices-module {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(200px, 40vh) minmax(320px, 1fr);
+    height: auto;
+    min-height: 100%;
+    overflow-y: auto;
+    gap: 8px;
+  }
+  .invoices-module > [data-resizer] { display: none !important; }
+  .invoices-rail { grid-column: 1; }
+  .invoices-main { grid-column: 1; }
 }
