@@ -39,7 +39,8 @@ impl ToolHandler for Handler {
             .as_deref()
             .map(str::trim)
             .filter(|role| !role.is_empty());
-        let input_items = parse_collab_input(args.message, args.items)?;
+        let input_items =
+            load_spawn_input(args.message, args.items, args.task_file, turn.cwd.as_path()).await?;
         let prompt = input_preview(&input_items);
         let session_source = turn.session_source.clone();
         let child_depth = next_thread_spawn_depth(&session_source);
@@ -171,11 +172,84 @@ impl ToolHandler for Handler {
 struct SpawnAgentArgs {
     message: Option<String>,
     items: Option<Vec<UserInput>>,
+    task_file: Option<String>,
     agent_type: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
     #[serde(default)]
     fork_context: bool,
+}
+
+const MAX_INLINE_SPAWN_MESSAGE_CHARS: usize = 1_200;
+const MAX_SPAWN_TASK_FILE_BYTES: u64 = 64 * 1024;
+
+async fn load_spawn_input(
+    message: Option<String>,
+    items: Option<Vec<UserInput>>,
+    task_file: Option<String>,
+    cwd: &std::path::Path,
+) -> Result<Vec<UserInput>, FunctionCallError> {
+    let supplied = usize::from(message.is_some())
+        + usize::from(items.is_some())
+        + usize::from(task_file.is_some());
+    if supplied != 1 {
+        return Err(FunctionCallError::RespondToModel(
+            "Provide exactly one of: message, items, or task_file".to_string(),
+        ));
+    }
+
+    if let Some(message) = message {
+        if message.chars().count() > MAX_INLINE_SPAWN_MESSAGE_CHARS {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "spawn_agent message exceeds {MAX_INLINE_SPAWN_MESSAGE_CHARS} characters; write the brief inside the current workspace and use task_file"
+            )));
+        }
+        return parse_collab_input(Some(message), None);
+    }
+    if let Some(items) = items {
+        return parse_collab_input(None, Some(items));
+    }
+
+    let task_file = task_file.unwrap_or_default();
+    if task_file.trim().is_empty() {
+        return Err(FunctionCallError::RespondToModel(
+            "task_file can't be empty".to_string(),
+        ));
+    }
+    let cwd = tokio::fs::canonicalize(cwd).await.map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to resolve current workspace: {err}"))
+    })?;
+    let requested = std::path::Path::new(&task_file);
+    let requested = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        cwd.join(requested)
+    };
+    let resolved = tokio::fs::canonicalize(&requested).await.map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to resolve task_file: {err}"))
+    })?;
+    if !resolved.starts_with(&cwd) {
+        return Err(FunctionCallError::RespondToModel(
+            "task_file must resolve inside the current workspace".to_string(),
+        ));
+    }
+    let metadata = tokio::fs::metadata(&resolved).await.map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to inspect task_file: {err}"))
+    })?;
+    if !metadata.is_file() {
+        return Err(FunctionCallError::RespondToModel(
+            "task_file must reference a regular file".to_string(),
+        ));
+    }
+    if metadata.len() > MAX_SPAWN_TASK_FILE_BYTES {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "task_file exceeds the {MAX_SPAWN_TASK_FILE_BYTES}-byte limit"
+        )));
+    }
+    let brief = tokio::fs::read_to_string(&resolved).await.map_err(|err| {
+        FunctionCallError::RespondToModel(format!("task_file must be valid UTF-8: {err}"))
+    })?;
+    parse_collab_input(Some(brief), None)
 }
 
 #[derive(Debug, Serialize)]

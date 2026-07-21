@@ -11,8 +11,10 @@ cluster: research
 You are the harness LLM. This skill is the **single entry point for all
 durable research work in CTOX**. It orchestrates a common discovery phase
 and one or two output modes depending on what the deliverable actually is.
-Never write workspace markdown, CSV, or JSON files as the deliverable for
-durable research — those vanish after the turn.
+Workspace markdown, CSV, JSON, and Parquet files may be deterministic build
+receipts or import inputs, but they are not the durable research deliverable by
+themselves. Register or import accepted outputs into CTOX Knowledge, Documents,
+Spreadsheets, or Files before claiming completion.
 
 ## CTOX Runtime Contract
 
@@ -33,6 +35,36 @@ durable research — those vanish after the turn.
   list/describe/select` and use them as evidence; if nothing relevant is
   found, state that the local CTOX Knowledge lookup returned no applicable
   prior knowledge.
+
+## Evidence boundary (fail closed)
+
+Discovery and Evidence are different states. Search/deep-research results,
+source catalogs, titles, snippets, DOI strings, abstracts, resolver metadata,
+rankings, and landing pages are **candidates only**. They may locate a source,
+but they may never be cited, imported, used in calculations, or promoted into
+Knowledge/Reports. Read [evidence_integrity.md](references/evidence_integrity.md)
+for the manifest contract and run `scripts/evidence_guard.py` before every
+promotion or publication.
+
+Evidence exists only when the original canonical non-metadata URL returned a
+current 2xx response and the downloaded original content/data is present in a
+SHA-256-verified snapshot. Require actual full text or original data content,
+`relevance_score >= 8`, and the immutable
+`claim_id -> evidence_id -> snapshot_id -> source_id -> canonical_url` chain.
+Copy `relevance_score` exactly from the current typed `ctox_web_read`
+`evidence_relevance_score` field. Never estimate, rescale, round, or replace
+that machine-computed 0–10 value in the evidence manifest.
+For prose, use the server-written `workspace_evidence` / deep-research
+snapshot receipt and its full extracted-text artifact. Every claim must carry
+a verbatim `evidence_quote` (at least six words and 40 characters) that occurs
+in that extracted text; a title, abstract, snippet, model paraphrase, or a
+quote copied from another URL is not evidence. Claims over original data have
+the same quote minimum and must use a hash-bound `data_excerpt`; for nested
+archives, list and hash every ZIP member in order so the guard can read the
+final source bytes itself. Do not cite model-generated CSV/XLSX extracts.
+404, login/cookie walls, JavaScript shells, snippets, aggregators, mirrors,
+DOI resolver/landing URLs, and metadata are permanent rejection states. Never
+fill them from memory or a second-hand summary.
 
 ## Choosing the output mode
 
@@ -89,11 +121,23 @@ the same regardless of which output mode you pick.
 2. **External source mining**: do NOT default to plain `ctox web search`.
    That ranks SEO-optimized consumer/marketing pages above primary research
    data. Use the source-class priority below.
-3. **Source-catalog table**: open a `source_catalog` table in
-   `ctox knowledge data` (one row per candidate source, with provenance,
-   source-class tag, and a one-line note on what it contributes). Library
-   and decision-report mode both read from it. Build it up before drafting
-   the actual library schema or report blueprint.
+3. **Candidate and verified-source tables**: open a `source_candidates`
+   table in `ctox knowledge data` for every discovered source, including
+   rejected and unresolved rows with provenance, source-class tag,
+   verification state, snapshot hash, directness status, and a one-line note
+   on what it contributes. Candidate rows are discovery receipts, not
+   evidence. Open `source_catalog` as a separate verified-source registry and
+   copy a source there only after `scripts/evidence_guard.py` passes for its
+   current original-content snapshot. Library and decision-report mode may
+   read evidence only from `source_catalog`; a row remaining solely in
+   `source_candidates` is never citable. Build and verify both tables before
+   drafting the actual library schema or report blueprint.
+   For a Business OS research command, copy the exact `Research Run ID` and
+   `Research Command ID` from the task into `research_run_id` and
+   `research_command_id` on every row created or updated in `source_catalog`,
+   `evidence_points`, `evaluation_matrix`, and semantic-graph tables. Never
+   substitute a previous run's IDs or omit them. Native completion hashes and
+   admits only the rows bound to that exact run/command pair.
 4. **Schema/blueprint inference**: only after the source set is solid,
    decide what columns the library row needs (or which report-type
    blueprint fits). The schema is shaped by what the sources actually
@@ -110,11 +154,13 @@ for what the higher classes did not cover, not a starting point.
 - government technical-report repositories: NASA NTRS (ntrs.nasa.gov),
   DoD Defense Technical Information Center (apps.dtic.mil), DOE OSTI
   (osti.gov), national lab repositories, agency-hosted PDFs
-- scholarly literature: Google Scholar (scholar.google.com), Semantic
-  Scholar, OpenAlex, arXiv, ResearchGate, IEEE Xplore, SAE Mobilus, ACM
+- scholarly literature: Google Scholar (discovery only), Semantic Scholar
+  and OpenAlex (metadata discovery), arXiv, IEEE Xplore, SAE Mobilus, ACM
   Digital Library, Elsevier/Springer/Wiley DOIs
 - public dataset repositories: Zenodo, Figshare, Dataverse, HuggingFace
-  Datasets, Open Science Framework (OSF), Kaggle
+  Datasets, Open Science Framework (OSF). Kaggle is discovery-only unless
+  the record is demonstrably uploaded by the original data owner and its
+  files/checksums match the canonical source.
 - domain-specific reference databases (examples — adapt per topic):
   - aerospace/UAV: UIUC Propeller Database (m-selig.ae.illinois.edu),
     NASA MTB2 (rotorcraft.arc.nasa.gov), DARPA briefings, AIAA papers
@@ -146,31 +192,88 @@ Industry datasheets give you MTOW and headline specs; they do not give
 you measured rotor loads, fatigue curves, vibration spectra, or
 qualification-test reports.
 
-### Discovery tools — strict ordering
+**Discovery-only aggregators — never cite as primary evidence**:
 
-For technical/engineering/scientific topics, use the CTOX web stack in
-this **exact order**. The first move is always `ctox web deep-research`;
-the lower-level surfaces are only for follow-up extraction once the
-catalog has its first entries.
+- ResearchGate, Academia.edu, Google Scholar result pages, Semantic Scholar
+  and OpenAlex metadata pages, DOI resolver pages without extracted source
+  content, Kaggle reuploads, GitHub link/resource lists, and search snippets
+- use these only to locate the publisher, institutional repository, original
+  dataset owner, DOI, lawful open-access full text, or canonical data archive
+- a reachable aggregator does not inherit the authority of the source it
+  links to
 
-1. **`ctox web deep-research`** — mandatory first move for any technical
-   library construction:
+### Discovery tools — adaptive iterative loop
+
+Systematic Research owns the research strategy. No individual Web Stack tool
+owns the workflow and no tool has a mandatory fixed position. Select the next
+tool from the current evidence gap, exactly as in an agentic benchmark run:
+
+- use `ctox_scholarly_search` for papers, DOI resolution, open-access copies,
+  authors and bibliographic seed records
+- use `ctox_web_search` for a focused query, Google-style discovery, official
+  portals and source-specific lookup
+- use `ctox_deep_research` for one broad, multi-provider candidate sweep; its
+  result is one discovery round, never the completed research
+- use `ctox_web_read` for the canonical original page, paper, PDF or data file
+- use browser/scrape tools when a source requires interaction or structured
+  extraction
+
+Plan, execute, inspect, persist and then reformulate. Repeat with different
+facets and the complete canonical exclusion list until the source space
+saturates. A single static envelope is not Systematic Research.
+
+For scientific work, the first scholarly response is a seed ledger, not a
+reason to start another broad sweep immediately. Select the relevant DOI/OA
+records, call `ctox_web_read` on at least the three strongest canonical
+original/full-text URLs, and record accepted or rejected read receipts before
+calling `ctox_deep_research`. If a provider reports CAPTCHA or HTTP 429, do not
+repeat the same provider/query in the next facet. Continue from admitted seeds,
+their references, repository links, and an orthogonal provider after its
+cooldown.
+
+In a managed Harness run, invoke the directly exposed typed tools
+`ctox_deep_research`, `ctox_scholarly_search`, and `ctox_web_read`. Do not run
+their `ctox web ...` CLI equivalents through `exec_command`: the shell sandbox
+cannot write the server-owned receipt cache, so shell output is discovery-only
+and cannot satisfy the evidence guard. The CLI examples below are for an
+operator shell. If the typed tools are absent in a managed run, stop
+fail-closed and report the platform defect instead of substituting shell
+output, native web search, or memory.
+
+Every typed `ctox_web_read` that may become evidence must include a precise
+`query` describing the factual or engineering reading intent. URL-only reads
+intentionally receive no server-owned relevance score and must remain
+discovery-only. If a typed read is rejected, record that rejection; never
+download the same URL with `curl`, Python, shell, browser automation, or another
+unbound fallback for evidence.
+
+1. **Broad candidate sweep (`ctox web deep-research`)** — optional when a
+   multi-provider orientation round is useful:
 
    ```
-   ctox web deep-research --query "<topic>" --depth standard --max-sources 24
+   ctox web deep-research --query "<topic>" --depth standard --max-sources 24 --workspace "$PWD/research/deep-research-$(date +%s)"
    ```
 
    This call internally combines scholarly + agency + standards +
    dataset + industry buckets into one ranked envelope. Use `--depth
    exhaustive --max-sources 40` when the catalog needs to be
    near-complete. The output JSON carries one entry per source with
-   `url`, `title`, `bucket`, `summary` — feed those directly into the
-   source-catalog. Do not invent URLs from training-data memory; only
-   record what this call (or the follow-up reads) returned.
+   `url`, `title`, `source_type`, `source_tier`, `verification_status`,
+   `canonical_url`, `transport_verified`, `content_extracted`,
+   `evidence_eligible`, `evidence_rejection_reason`, `http_status`, and
+   `snapshot_hash`. Feed `source_candidates` directly into the
+   `source_candidates` table. Feed `sources` into `source_catalog` only after
+   the full manifest passes `scripts/evidence_guard.py`; the tool-level
+   eligibility flag alone does not replace claim, data, and independent-review
+   validation. Do not invent URLs from training-data memory; only record what
+   this call (or the follow-up reads) returned.
 
-2. **`ctox web scholarly search`** — for second-pass DOI / open-access
-   PDF enrichment of specific entries that `deep-research` flagged but
-   did not resolve:
+   Always use a unique writable folder inside the current task workspace for
+   shell invocations. The typed `ctox_deep_research` tool supplies such a
+   call-specific workspace automatically when `workspace` is omitted.
+
+2. **Scientific discovery (`ctox web scholarly search`)** — use directly
+   whenever papers are expected; do not wait for another tool to flag them:
 
    ```
    ctox web scholarly search --query "<refined topic>" [--with-oa-pdf] [--only-doi]
@@ -180,9 +283,24 @@ catalog has its first entries.
    page when you need to extract the actual dataset / file URLs hosted
    on it (e.g. an agency programme page that lists XLSX downloads).
 
-4. **`ctox web search` and `ctox web sources info`** — only as fallback
-   for obviously non-technical lookups (CRM entity, vendor matrix,
-   regulatory page lookup) where the upper layers returned nothing.
+4. **`ctox web search` and `ctox web sources info`** — for focused discovery,
+   Google/provider diagnostics, official domains and queries that need a
+   smaller result envelope than the broad sweep.
+
+For scientific topics, follow the literature graph rather than stopping at
+keyword search:
+
+1. Find relevant seed papers through Scholar/OpenAlex/Crossref/Semantic
+   Scholar and resolve DOI records to lawful original or open-access full text.
+2. Read the seed paper and collect its cited references, datasets and
+   supplementary files.
+3. Resolve relevant backward references and forward citations, then read their
+   original full text.
+4. Persist parent-paper, cited-paper and relation provenance. Metadata records
+   remain candidates; only read, hash-bound original content can become
+   evidence.
+5. Continue breadth-first across relevant references until two consecutive
+   citation/facet rounds add no new eligible source.
 
 **Forbidden during source discovery:**
 
@@ -201,12 +319,62 @@ catalog has its first entries.
   exists. For incremental procedural-knowledge writes, use
   `ctox knowledge skill new / add-skillbook / add-runbook / add-item`.
 
-Skipping the deep-research/scholarly surfaces and going straight to
-`ctox web search`, the OpenAI native `web_search` tool, or a plain
-`cat > workspace_file.md` is a discovery failure: the source ranking
-will skew toward Tier 3, the catalog will miss the Tier 1 measurement
-data the deliverable actually needs, and the result will not be
-durable.
+Using only one search surface is a discovery failure. The parent must combine
+the adapters required by the evidence space and persist every round before
+continuing.
+
+### Evidence promotion - mandatory fail-closed gate
+
+Discovery results are candidates. Promote a candidate to evidence only after
+the evidence manifest passes the deterministic guard and all checks below pass:
+Before creating or repairing that manifest, read
+`references/evidence_integrity.md` and use its exact
+`ctox.research.evidence.v2` schema. Do not infer a schema name or invent a
+reduced manifest shape from table rows.
+
+1. **Transport/freshness**: the canonical non-metadata URL returned 2xx and
+   the snapshot is current, downloaded bytes, and SHA-256 verified.
+   HTTP 204 is not content evidence. Every admitted item must include the
+   immutable `ctox_web_read` or `ctox_deep_research` retrieval receipt with
+   request/final URL, status, `checked_at_epoch`, byte count, content kind,
+   body hash, and a hashed v2 receipt artifact inside the current workspace.
+   Copy those fields exactly from the artifact: never rewrite redirects,
+   interstitial URLs, timestamps, or response metadata. The evidence
+   `canonical_url` must equal the persisted final URL.
+2. **Content**: the snapshot contains actual full text or original data. A
+   title, abstract, metadata card, cookie/login wall, empty shell, snippet,
+   DOI landing page, mirror, or aggregator is never evidence.
+3. **Relevance/directness**: the original owner URL directly supports the
+   facet and has an explicit relevance score of at least 8/10.
+4. **Data integrity**: every original data file was downloaded and passed the
+   deterministic hash/schema/row/unit/null check; failures are quarantined,
+   not guessed or imputed.
+5. **Claim trace**: every factual or numerical claim records the exact file,
+   table/figure, row/range, column, unit, conversion, derivation, and the
+   immutable Claim -> Evidence -> Snapshot -> Source lineage.
+
+The evidence manifest must copy the task's exact `Research Run ID` and
+`Research Command ID` into `research_run_id` and `research_command_id`.
+It must also copy the server-injected `Research Attempt ID` into
+`research_attempt_id`; `run_id` must equal `research_run_id`. The only accepted
+manifest path is `validation/evidence-manifest.json`. Every admitted Web Stack
+receipt must belong to the same durable research run, command, and workspace.
+Immutable retrieval receipts may be reused across bounded correction attempts
+of that run; the manifest itself and the completion result must always carry
+the current server attempt ID.
+All artifact paths are workspace-relative; absolute paths, `..` escapes, and
+symlink escapes are rejected. Free subagents are not part of CTOX research:
+never call `spawn_agent`, `spawn_agents_on_csv`, or related collaboration
+tools. The deterministic evidence guard verifies every original-content
+receipt, content hash, data artifact, row/schema/unit constraint, and
+Claim -> Evidence -> Snapshot -> Source lineage. After that gate passes, the
+CTOX service runs its independent completion review outside the parent tool
+surface. Living Knowledge and Report versions include hashed artifacts plus
+the exact claim IDs they consume.
+
+Retain rejected candidates with their rejection reason for auditability, but
+exclude them from knowledge construction, calculations, and report evidence
+registers. Never fill a failed or missing read from model memory.
 
 ### Breadth before depth — facet the query, never settle for one pull
 
@@ -215,23 +383,21 @@ envelope. Ranking favors well-cited, canonical sources, so a single broad
 query converges on the obvious references and leaves the long tail of
 niche Tier-1 sources below the `--max-sources` cutoff — they never surface.
 One pull is a starting point, not a complete discovery. Treat discovery as
-a serial sweep, not a single call:
+a controlled facet sweep, not a single call:
 
 1. **Facet the topic into orthogonal sub-queries.** Decompose the topic
    into independent angles that each surface a different ranked list —
    e.g. by source-class, by sub-phenomenon, by data type, by methodology,
    or by regime/region. Each facet is its own `ctox web deep-research`
-   call. Run them **one after another in the same turn** — CTOX has no
-   parallel sub-agents; decomposition is serial. If the sweep needs to
-   span turns, persist a internal work item and resume. Vary the query string
-   between calls; re-issuing the same query just returns the same top hits.
+   call. Run facets serially in the parent. If the sweep needs to span turns,
+   persist an internal work item and resume. Vary the query string between
+   calls; re-issuing the same query just returns the same top hits.
 
 2. **Exclude what you already hold.** The source-catalog table you are
-   appending to *is* your exclusion list. Before each new facet, steer the
-   wording away from the source-classes and specific sources already
-   captured, so ranking is pushed off the canonical hits and into
-   unexplored niches. A query that does not steer away from what you
-   already have will re-return the same top entries.
+   appending to *is* your exclusion list. Pass every canonical URL already
+   present through `exclude_urls` on each later `ctox_deep_research` call,
+   in addition to reformulating the facet. Existing sources must not consume
+   discovery or read budget.
 
 3. **Stop on saturation, not on first results.** Discovery is done when
    consecutive new facets return only sources already in the catalog — not
@@ -248,8 +414,9 @@ just below the cutoff.
 
 Write each `ctox web deep-research` / `ctox web scholarly search`
 result batch into `ctox knowledge data append --domain <d> --key
-source_catalog --rows '[…]'` **before** issuing the next discovery
-call. Reasons:
+source_candidates --rows '[…]'` **before** issuing the next discovery call.
+Promote only the rows whose original-content receipts pass the evidence guard
+into `source_catalog`. Reasons:
 
 - Native API-tool responses are large; without incremental persistence
   the agent's per-turn context fills with raw search envelopes, those
@@ -261,6 +428,32 @@ call. Reasons:
 - Provenance is preserved at row level: each row records `source_url`,
   `extracted_at`, the discovery query that found it, and the bucket
   the upstream tool assigned (`scholarly`, `agency`, `dataset`, …).
+
+After persisting a candidate batch, read each new canonical source and update
+its verification fields before another phase consumes it. A batch is not
+complete while any candidate lacks an explicit `eligible` or `rejected`
+decision.
+
+Before claiming the Business OS task complete, re-read every output table and
+verify that all rows attributed to this run carry the exact immutable
+`research_run_id` and `research_command_id` from the command. Missing or mixed
+lineage is a failed run, not a partial success.
+
+Before closing discovery, the parent must complete all three audit passes over
+the persisted material:
+
+- **Source integrity**: reopen every eligible canonical URL and confirm
+  authority, full-content extraction, topical relevance, status, and snapshot
+  hash through CTOX Web Stack receipts.
+- **Data integrity**: reproduce every imported numeric field from the original
+  archive/table and verify units, parsing, conversions, nulls, and row counts.
+- **Claim integrity**: bind every knowledge statement and report claim to the
+  exact eligible source/data receipt and reject unsupported strength or scope.
+
+These are deterministic build checks, not model-authored review labels. Run
+`scripts/evidence_guard.py` after the passes. A failed check blocks library
+import, Knowledge promotion, and report publication. The independent
+service-owned completion review runs only after this guard succeeds.
 
 ## Phase 2A — Library mode
 
@@ -310,6 +503,11 @@ Curation discipline (non-negotiable):
   list across two tables. Use `--tag` or a dedicated column for subsets.
 - **Cite the table back**: when you report numbers in chat, name `domain`,
   `table_key`, and the snapshot timestamp.
+- **Locale-safe numeric storage**: store machine-readable numbers with `.` as
+  decimal separator and no thousands separator. Keep units in typed columns or
+  column metadata, never in numeric cells. German `,` formatting is a display
+  or explicitly declared export presentation only; CSV exports must declare
+  delimiter, encoding, decimal convention, and preserve Excel-safe columns.
 
 When the library work crosses into analysis that exceeds counts and simple
 group-bys (clustering, modeling, hypothesis tests, complex joins, custom
@@ -336,6 +534,41 @@ Then `ctox knowledge search --query "<topic>" --with-references` reveals
 the procedure ↔ data relationship for any hit, instead of leaving it
 buried in free-text comments. Use `ctox knowledge kinds` to see the
 canonical relation labels.
+
+### Knowledge promotion — required for reusable or living research
+
+When the operator expects later questions, reports, or periodic research
+updates, the verified source catalog and data tables are inputs, not the end of
+the chain. Promote them into procedural Knowledge before drafting documents:
+
+1. Create or update one topic-scoped main skill with `ctox knowledge skill`.
+   Record the source-catalog table, promoted data-table versions, research run,
+   schema version, and freshness timestamp.
+2. Use skillbooks to organize stable interpretation knowledge and runbooks for
+   repeatable procedures, calculations, refreshes, audits, and report creation.
+   Do not paste a report into a skillbook and call it knowledge.
+3. Keep each knowledge item concise and executable. Link it to exact verified
+   source IDs, snapshot IDs/content hashes, data-table rows or ranges, units,
+   derivations, and caveats. The source snapshot remains the place to read the
+   underlying evidence.
+4. Require the trace `knowledge_version -> claim_id -> evidence_id ->
+   snapshot_id -> source_id -> canonical_url` for every factual or numerical
+   statement, including the claim lineage hash. Missing,
+   unreachable, rejected, or hash-invalid evidence invalidates the dependent
+   claim; it must not silently fall back to model memory.
+5. Preserve conflicts as contested claims with both evidence paths. Do not
+   collapse disagreement into a fabricated consensus.
+6. Link the main skill, skillbooks, runbooks, source catalog, data tables, and
+   research run through `ctox knowledge link`. A UI consumer must be able to
+   traverse Research → Knowledge → source snapshot and Knowledge → Documents.
+
+Knowledge is living state. On refresh, use this order as one append-only
+promotion workflow: discover candidates -> verify new snapshots -> download
+and deterministically check original data -> build a new data/Knowledge version
+-> rerun independent Source/Data/Claim reviews -> record invalidations for
+dependent claims and reports -> regenerate or explicitly revalidate reports.
+Never mutate an old source hash, claim, table, Knowledge version, or report in
+place merely to keep it appearing current.
 
 ## Phase 2B — Decision-report mode
 
@@ -377,13 +610,17 @@ the operator asked for multiple report types, open separate runs.
 For deliverables that are both a durable data collection and a written
 synthesis:
 
-1. Run library mode first. Persist the records into
-   `ctox knowledge data`.
-2. Run decision-report mode with the library as the primary evidence
-   source — the report's evidence-register entries point at the library
-   table by `domain/table_key`, and key claims cite specific rows.
-3. The report mentions the library by name so future readers can re-open
-   the source.
+1. Run library mode first. Persist the records into `ctox knowledge data`.
+2. Run Knowledge promotion. Build or update the topic skill, skillbooks, and
+   runbooks, then link them to the verified catalog and versioned tables.
+3. Run decision-report mode from the promoted Knowledge version. The report's
+   evidence register points at Knowledge claim IDs and the underlying table
+   rows/source snapshots. Automatically selected skills must still be recorded
+   in the document lineage; a user-selected skill must be validated for topic,
+   freshness, and evidence health.
+4. Publish the document and export files only after the Knowledge and claim
+   audits pass. Return the document/spreadsheet/file IDs and locations so the
+   user can open or download every artifact.
 
 Combined mode is the default when the operator's wording uses both data
 and judgement verbs ("compare X and recommend which to use", "build a

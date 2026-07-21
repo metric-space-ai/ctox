@@ -2892,6 +2892,7 @@ fn op_kind_distinguishes_turn_ops() {
         Op::UserInput {
             items: vec![],
             final_output_json_schema: None,
+            required_initial_tool: None,
         }
         .kind(),
         "user_input"

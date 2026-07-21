@@ -209,6 +209,35 @@ Never pass free SQL, shell commands, arbitrary file paths or executable
 browser code as a supposed declarative action. The native side remains the
 authorization boundary.
 
+## External SQL projections
+
+Private local apps may project records from SQL Server into Business OS
+collections through the built-in external SQL adapter. This is a privileged
+server capability, not an app-side data path:
+
+- declarations are loaded only from operator-owned
+  `runtime/business-os/local-modules/` packages;
+- packaged, installed and marketplace apps cannot register executable SQL;
+- credentials are resolved by name from the CTOX secret store;
+- SQL is validated and parameterized by the native adapter;
+- projected collections remain server-owned and do not receive legacy browser
+  write grants;
+- browser apps consume the resulting records through their normal
+  shell-provided collection handles and WebRTC synchronization.
+
+Declare mappings inline with `external_data_sources`, or point
+`external_data_sources_file` at a JSON file inside the same local module. The
+mapping path cannot be absolute or escape the module directory. Invalid
+mappings fail startup grant reconciliation instead of silently widening
+collection access.
+
+Writes back to SQL Server require all of the following: `allow_writes: true`,
+a declared operation with parameter bindings, an authenticated Business OS
+command, and an allowed native `data.write` policy decision for the module.
+CTOX persists write receipts and rejects reuse of a command id for a different
+intent. Use version checks or a transactional source receipt where a remote
+write must be conflict-safe and idempotent across retries.
+
 Declare these actions in `module.json` and call them through `ctx.actions`.
 There is only one compiled native command type (`ctox.app.action.run`); the
 module/action name is resolved from the validated runtime registry.

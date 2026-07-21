@@ -692,7 +692,7 @@ async function refreshKnowledge(state) {
   [state.knowledgeItems, state.knowledgeRunbooks, state.knowledgeTables] = await Promise.all([
     read('knowledge_items'),
     read('knowledge_runbooks'),
-    read('knowledge_tables'),
+    read('knowledge_tables').then(mergeKnowledgeTableReferences),
   ]);
 }
 
@@ -1791,10 +1791,220 @@ function normalizeKnowledgeRecord(record = {}) {
   };
 }
 
+function firstArray(...values) {
+  return values.find(Array.isArray) || [];
+}
+
+function tableRows(table, payload) {
+  return firstArray(
+    payload.rows,
+    payload.records,
+    payload.data,
+    payload.dataframe?.rows,
+    payload.dataframe?.records,
+    payload.dataframe?.data,
+    table.rows,
+    table.records,
+    table.data,
+    table.dataframe?.rows,
+    table.dataframe?.records,
+    table.dataframe?.data,
+  );
+}
+
+function nonNegativeInteger(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 0 ? number : null;
+}
+
+function declaredTableNumber(table, payload, names) {
+  for (const name of names) {
+    if (table[name] !== undefined && table[name] !== null && table[name] !== '') {
+      return { value: Number(table[name]), present: true };
+    }
+    if (payload[name] !== undefined && payload[name] !== null && payload[name] !== '') {
+      return { value: Number(payload[name]), present: true };
+    }
+  }
+  return { value: null, present: false };
+}
+
+function mergeKnowledgeTableReferences(tables = []) {
+  const groups = new Map();
+  for (const table of Array.isArray(tables) ? tables : []) {
+    if (!table || typeof table !== 'object') continue;
+    const payload = table.payload && typeof table.payload === 'object' && !Array.isArray(table.payload)
+      ? table.payload
+      : table;
+    const logicalId = String(
+      payload.logical_table_id
+      || table.logical_table_id
+      || payload.id
+      || table.id
+      || '',
+    ).trim();
+    if (!logicalId) continue;
+    const chunkIndexValue = declaredTableNumber(table, payload, ['chunk_index', 'chunkIndex']);
+    const chunkIndex = chunkIndexValue.present ? nonNegativeInteger(chunkIndexValue.value) : 0;
+    const entry = {
+      table,
+      payload,
+      id: String(table.id || payload.id || logicalId).trim(),
+      rows: tableRows(table, payload),
+      chunkIndex,
+      chunkCount: declaredTableNumber(table, payload, ['chunk_count', 'chunkCount']),
+      rowOffset: declaredTableNumber(table, payload, ['chunk_row_offset', 'chunkRowOffset', 'row_offset', 'rowOffset']),
+      rowCount: declaredTableNumber(table, payload, ['chunk_row_count', 'chunkRowCount']),
+      totalRows: declaredTableNumber(table, payload, ['total_rows', 'totalRows', 'row_count', 'rowCount']),
+      projectedRows: declaredTableNumber(table, payload, ['projected_row_count', 'projectedRowCount']),
+      rowsComplete: table.rows_complete ?? payload.rows_complete,
+    };
+    if (!groups.has(logicalId)) groups.set(logicalId, []);
+    groups.get(logicalId).push(entry);
+  }
+
+  return [...groups.entries()].map(([logicalId, parts]) => {
+    const sorted = [...parts].sort((left, right) => (
+      (left.chunkIndex ?? Number.MAX_SAFE_INTEGER) - (right.chunkIndex ?? Number.MAX_SAFE_INTEGER)
+      || left.id.localeCompare(right.id)
+    ));
+    const first = sorted[0];
+    const errors = [];
+    const chunkCounts = [...new Set(sorted
+      .map((part) => part.chunkCount.present ? part.chunkCount.value : null)
+      .filter((value) => value !== null))];
+    const declaredChunkCount = chunkCounts[0] ?? Math.max(sorted.length, 1);
+    if (!Number.isInteger(declaredChunkCount) || declaredChunkCount < 1) {
+      errors.push('invalid_chunk_count');
+    }
+    if (chunkCounts.length > 1 || sorted.some((part) => (
+      part.chunkCount.present && part.chunkCount.value !== declaredChunkCount
+    ))) {
+      errors.push('inconsistent_chunk_count');
+    }
+
+    const indexSet = new Set();
+    for (const part of sorted) {
+      if (part.chunkIndex === null) {
+        errors.push('invalid_chunk_index');
+        continue;
+      }
+      if (part.chunkIndex >= declaredChunkCount) errors.push('chunk_index_out_of_range');
+      if (indexSet.has(part.chunkIndex)) errors.push('duplicate_chunk_index');
+      indexSet.add(part.chunkIndex);
+    }
+    for (let index = 0; index < declaredChunkCount; index += 1) {
+      if (!indexSet.has(index)) errors.push(`missing_chunk_index:${index}`);
+    }
+
+    const hasExplicitOffset = sorted.some((part) => part.rowOffset.present);
+    const hasMissingOffset = sorted.some((part) => !part.rowOffset.present);
+    if (hasExplicitOffset && hasMissingOffset && sorted.length > 1) errors.push('missing_chunk_offset');
+
+    const rows = [];
+    const lineage = [];
+    let derivedOffset = 0;
+    let offsetBase = null;
+    for (const part of sorted) {
+      const rowCount = part.rows.length;
+      const declaredRowCount = part.rowCount.present ? part.rowCount.value : null;
+      if (declaredRowCount !== null && (!Number.isInteger(declaredRowCount) || declaredRowCount !== rowCount)) {
+        errors.push('inconsistent_chunk_row_count');
+      }
+      const offset = part.rowOffset.present ? nonNegativeInteger(part.rowOffset.value) : derivedOffset;
+      if (offset === null) {
+        errors.push('invalid_chunk_offset');
+      } else {
+        if (offsetBase === null) offsetBase = offset;
+        if (offset !== derivedOffset && (!hasExplicitOffset || part.rowOffset.present)) {
+          errors.push('inconsistent_chunk_offset');
+        }
+      }
+      rows.push(...part.rows);
+      lineage.push({
+        id: part.id,
+        logical_table_id: logicalId,
+        chunk_index: part.chunkIndex,
+        chunk_count: declaredChunkCount,
+        row_offset: offset,
+        chunk_row_offset: offset,
+        row_count: rowCount,
+        chunk_row_count: rowCount,
+        total_rows: part.totalRows.value,
+        projected_row_count: part.projectedRows.value,
+        rows_complete: part.rowsComplete !== false,
+      });
+      derivedOffset += rowCount;
+      if (part.rowsComplete === false || part.rowsComplete === 'false') errors.push('source_rows_incomplete');
+    }
+    if (offsetBase !== null && offsetBase !== 0) errors.push('non_zero_initial_chunk_offset');
+
+    const totalRows = consistentDeclaredValue(sorted, 'totalRows', errors, 'inconsistent_total_rows');
+    const projectedRows = consistentDeclaredValue(sorted, 'projectedRows', errors, 'inconsistent_projected_row_count');
+    if (projectedRows !== null && projectedRows !== rows.length) errors.push('projected_row_count_mismatch');
+    else if (projectedRows === null && totalRows !== null && totalRows !== rows.length) errors.push('total_rows_mismatch');
+    if (totalRows !== null && projectedRows !== null && totalRows !== projectedRows) {
+      errors.push('total_rows_mismatch');
+    }
+
+    const uniqueErrors = [...new Set(errors)];
+    const complete = uniqueErrors.length === 0;
+    const chunkIds = lineage.map((entry) => entry.id);
+    const mergedPayload = {
+      ...first.payload,
+      id: logicalId,
+      logical_table_id: logicalId,
+      chunk_index: 0,
+      chunk_count: declaredChunkCount,
+      chunk_row_offset: 0,
+      chunk_row_count: rows.length,
+      row_count: totalRows ?? first.payload.row_count ?? rows.length,
+      projected_row_count: projectedRows ?? rows.length,
+      rows_complete: complete,
+      chunk_status: complete ? 'complete' : 'incomplete',
+      chunk_validation_errors: uniqueErrors,
+      chunk_ids: chunkIds,
+      chunk_lineage: lineage,
+      lineage,
+      rows,
+    };
+    return normalizeKnowledgeRecord({
+      ...first.table,
+      ...mergedPayload,
+      id: logicalId,
+      logical_table_id: logicalId,
+      chunk_status: complete ? 'complete' : 'incomplete',
+      chunk_validation_errors: uniqueErrors,
+      chunk_ids: chunkIds,
+      chunk_lineage: lineage,
+      lineage,
+      payload: mergedPayload,
+    });
+  });
+}
+
+function consistentDeclaredValue(parts, field, errors, errorCode) {
+  const values = [...new Set(parts
+    .map((part) => part[field].present ? part[field].value : null)
+    .filter((value) => value !== null))];
+  if (values.length > 1) errors.push(errorCode);
+  return values[0] ?? null;
+}
+
 function knowledgeCandidates(state) {
-  const active = state.knowledgeItems.filter((item) => item.id && item.is_deleted !== true && item._deleted !== true);
+  const active = (state.knowledgeItems || []).filter((item) => item.id && item.is_deleted !== true && item._deleted !== true);
   const preferred = active.filter((item) => ['skillbook', 'skill'].includes(item.kind));
-  return preferred.length ? preferred : active.filter((item) => item.kind !== 'dataframe');
+  const fallback = preferred.length ? preferred : active.filter((item) => item.kind !== 'dataframe');
+  const tables = (state.knowledgeTables || [])
+    .filter((table) => table.id && table.is_deleted !== true && table._deleted !== true)
+    .map((table) => ({
+      ...table,
+      kind: 'dataframe',
+      selection_type: 'table',
+      is_procedural_skill: false,
+    }));
+  const ids = new Set(fallback.map((item) => item.id));
+  return [...fallback, ...tables.filter((table) => !ids.has(table.id))];
 }
 
 function knowledgeSearchTokens(value) {
@@ -1826,8 +2036,9 @@ function resolveKnowledgeContext(state, requestedId = '', query = '') {
       || right.updated_at_ms - left.updated_at_ms)[0] || null;
   if (!selected) return null;
   const domain = selected.domain;
-  const relatedTables = state.knowledgeTables.filter((table) => (
-    domain && [table.domain, table.payload?.domain, table.knowledge_domain, table.payload?.knowledge_domain].includes(domain)
+  const relatedTables = (state.knowledgeTables || []).filter((table) => (
+    table.id === selected.id
+    || (domain && [table.domain, table.payload?.domain, table.knowledge_domain, table.payload?.knowledge_domain].includes(domain))
   ));
   const linkedRunbookIds = new Set([
     ...(Array.isArray(selected.linked_runbook_ids) ? selected.linked_runbook_ids : []),
@@ -1843,6 +2054,8 @@ function resolveKnowledgeContext(state, requestedId = '', query = '') {
     selection_mode: manual ? 'manual' : 'auto',
     id: selected.id,
     kind: selected.kind || 'skill',
+    selection_type: selected.kind === 'dataframe' ? 'table' : 'skill',
+    is_procedural_skill: ['skill', 'skillbook'].includes(selected.kind),
     title: selected.title,
     summary: selected.summary,
     domain,
@@ -1850,15 +2063,33 @@ function resolveKnowledgeContext(state, requestedId = '', query = '') {
     updated_at_ms: selected.updated_at_ms,
     linked_runbook_ids: relatedRunbooks.map((runbook) => runbook.id),
     table_ids: relatedTables.map((table) => table.id),
+    table_lineage: relatedTables.map((table) => ({
+      id: table.id,
+      chunk_status: table.chunk_status || table.payload?.chunk_status || 'complete',
+      rows_complete: table.rows_complete ?? table.payload?.rows_complete ?? true,
+      chunk_ids: table.chunk_ids || table.payload?.chunk_ids || [table.id],
+      chunk_lineage: table.chunk_lineage || table.payload?.chunk_lineage || table.lineage || table.payload?.lineage || [],
+      projected_row_count: table.projected_row_count ?? table.payload?.projected_row_count ?? null,
+    })),
     source_references: sourceReferences.slice(0, 200),
   };
+}
+
+function knowledgeContextInstruction(knowledgeContext) {
+  if (!knowledgeContext) {
+    return 'Waehle automatisch den fachlich passendsten aktuellen Skill oder Skillbook aus CTOX Knowledge.';
+  }
+  if (knowledgeContext.is_procedural_skill) {
+    return `Verwende als Knowledge-Hub ${knowledgeContext.kind} "${knowledgeContext.title}" (ID ${knowledgeContext.id}, Domain ${knowledgeContext.domain || 'ohne Domain'}). Lies den aktuellen Skill-Inhalt und seine verknuepften Ressourcen/Tabellen.`;
+  }
+  return `Verwende die ausgewählte Knowledge-Tabelle "${knowledgeContext.title}" (ID ${knowledgeContext.id}, Domain ${knowledgeContext.domain || 'ohne Domain'}) als Datenbasis. Diese Auswahl ist eine Tabelle und kein prozeduraler Skill; beachte ihren Vollständigkeitsstatus und ihre Tabellen-Lineage.`;
 }
 
 function knowledgeOptions(state, selectedId = 'auto') {
   const candidates = knowledgeCandidates(state);
   const automatic = `<option value="auto" ${!selectedId || selectedId === 'auto' ? 'selected' : ''}>${escapeHtml(state.t('knowledgeAuto', 'Automatisch passend wählen'))}</option>`;
   return automatic + candidates.map((item) => (
-    `<option value="${escapeHtml(item.id)}" ${item.id === selectedId ? 'selected' : ''}>${escapeHtml(item.title)}${item.domain ? ` · ${escapeHtml(item.domain)}` : ''}</option>`
+    `<option value="${escapeHtml(item.id)}" ${item.id === selectedId ? 'selected' : ''}>${item.selection_type === 'table' ? `${escapeHtml(state.t('knowledgeTable', 'Tabelle'))}: ` : ''}${escapeHtml(item.title)}${item.domain ? ` · ${escapeHtml(item.domain)}` : ''}</option>`
   )).join('');
 }
 
@@ -2481,9 +2712,7 @@ async function dispatchNewDocumentReport(state, input = {}) {
     `Nutzerauftrag: ${prompt}`,
     '',
     'Nutze den systematic-research Skill, die CTOX Report-Pipeline und den doc/Documents Word-Produktionsskill.',
-    knowledgeContext
-      ? `Verwende als Knowledge-Hub ${knowledgeContext.kind} "${knowledgeContext.title}" (ID ${knowledgeContext.id}, Domain ${knowledgeContext.domain || 'ohne Domain'}). Lies den aktuellen Skill-Inhalt und seine verknuepften Ressourcen/Tabellen.`
-      : 'Waehle automatisch den fachlich passendsten aktuellen Skill oder Skillbook aus CTOX Knowledge.',
+    knowledgeContextInstruction(knowledgeContext),
     'Der Skill strukturiert die Ableitung, ist aber keine Primaerquelle. Lies fuer faktische Aussagen die darin referenzierten Originalquellen und zitiere diese, nicht den Skill als Ersatzquelle.',
     'Halte die Knowledge-Lookup-Pflicht aus dem systematic-research Skill ein und verwende immer den neuesten verfuegbaren Knowledge-Stand.',
     reportType && reportType !== 'auto'
@@ -3575,6 +3804,7 @@ export const __documentsTestHooks = {
   isDocumentKnowledgeStale,
   isActiveDocumentRecord,
   knowledgeCandidates,
+  mergeKnowledgeTableReferences,
   normalizeDocumentRecord,
   normalizeKnowledgeRecord,
   resolveKnowledgeContext,
@@ -3585,6 +3815,7 @@ export const __documentsTestHooks = {
   documentSourceIdentity,
   documentFilterCount,
   isDocxDocumentRecord,
+  knowledgeContextInstruction,
   validateImportInput,
   validateNewDocumentInput,
   visibleDocuments,

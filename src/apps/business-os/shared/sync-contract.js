@@ -21,6 +21,10 @@ export function batchSizeFor(collection) {
   // pull drain is truncation-aware (loops until an EMPTY answer — see
   // pullFromPeer in the rxdb runtime).
   if (collection === 'desktop_file_chunks') return 6;
+  // Knowledge table documents embed row data at the root and in `payload`.
+  // Even byte-bounded chunks can be hundreds of KiB, so a regular batch of 20
+  // can exceed the framed WebRTC transfer ceiling and strand later documents.
+  if (collection === 'knowledge_tables') return 1;
   if (collection.includes('attachment') || collection.includes('chunk')) return 8;
   // Regular business docs are small (≤ ~2 KB); 20 per round-trip halves the
   // initial catch-up round-trips without approaching frame limits (the

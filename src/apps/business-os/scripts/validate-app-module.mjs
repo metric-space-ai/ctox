@@ -8,7 +8,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 
 function usage() {
   return [
-    'Usage: node src/apps/business-os/scripts/validate-app-module.mjs <module> [--source|--installed|--local] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]',
+    'Usage: node src/apps/business-os/scripts/validate-app-module.mjs <module> [--source|--installed|--catalog-installed|--local] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]',
     '',
     'Validates a CTOX Business OS app module artifact in source, installed, or local mode.',
     'Local mode targets runtime/business-os/local-modules/<module> (git-ignored dev/customer apps).',
@@ -30,6 +30,8 @@ function parseArgs(argv) {
       result.mode = 'source';
     } else if (arg === '--installed') {
       result.mode = 'installed';
+    } else if (arg === '--catalog-installed') {
+      result.mode = 'catalog-installed';
     } else if (arg === '--local') {
       result.mode = 'local';
     } else if (arg === '--workspace') {
@@ -93,7 +95,7 @@ function installedAppRootFor(workspace) {
 }
 
 function moduleDirFor(workspace, moduleId, mode) {
-  if (mode === 'installed') {
+  if (mode === 'installed' || mode === 'catalog-installed') {
     return join(installedAppRootFor(workspace), 'installed-modules', moduleId);
   }
   if (mode === 'local') {
@@ -313,6 +315,7 @@ function validate(options) {
   } else {
     const args = [staticChecker, options.moduleId];
     if (mode === 'installed') args.push('--installed');
+    if (mode === 'catalog-installed') args.push('--catalog-installed');
     if (mode === 'local') args.push('--local');
     const run = runNode(args, options.workspace);
     const ok = run.status === 0;

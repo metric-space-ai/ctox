@@ -7,10 +7,10 @@ const moduleId = process.argv[2];
 const modeArg = process.argv[3] || '';
 
 if (!moduleId || moduleId.includes('/') || moduleId.includes('\\') || moduleId === '.' || moduleId === '..') {
-  console.error('Usage: node src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs <module> [--installed|--local]');
+  console.error('Usage: node src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs <module> [--installed|--catalog-installed|--local]');
   process.exit(2);
 }
-if (modeArg && modeArg !== '--installed' && modeArg !== '--local') {
+if (modeArg && modeArg !== '--installed' && modeArg !== '--catalog-installed' && modeArg !== '--local') {
   console.error(`Unknown option: ${modeArg}`);
   process.exit(2);
 }
@@ -26,7 +26,9 @@ function installedAppRootFor(workspace) {
 
 const installedDir = join(installedAppRootFor(root), 'installed-modules', moduleId);
 const localDir = join(installedAppRootFor(root), 'local-modules', moduleId);
+const catalogInstalledMode = modeArg === '--catalog-installed';
 const installedMode = modeArg === '--installed'
+  || catalogInstalledMode
   || (!modeArg && !existsSync(sourceDir) && existsSync(installedDir));
 // Local mode: git-ignored, operator-placed dev/customer modules under
 // runtime/business-os/local-modules/. Structural, data-boundary, and design
@@ -446,16 +448,100 @@ function containsIdentifierCall(source, name) {
   return false;
 }
 
+// Real scanner instead of a quote regex: comments, escapes and nested
+// template-literal `${}` expressions all kept the naive matcher permanently
+// out of sync (an apostrophe inside a comment opened a phantom string and
+// every later literal paired off wrongly — dozens of false "no visible
+// handler" failures on real modules).
 function jsQuotedLiterals(source) {
+  const text = String(source || '');
   const literals = [];
-  for (const match of String(source || '').matchAll(/(['"`])((?:\\.|(?!\1)[\s\S])*?)\1/g)) {
-    literals.push({
-      value: match[2] || '',
-      start: match.index || 0,
-      end: (match.index || 0) + match[0].length,
-    });
+  // Stack of template nesting: each entry counts open braces inside a `${}`.
+  const templateStack = [];
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (ch === '/' && next === '/') {
+      const nl = text.indexOf('\n', i);
+      i = nl === -1 ? text.length : nl + 1;
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      const close = text.indexOf('*/', i + 2);
+      i = close === -1 ? text.length : close + 2;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      const start = i;
+      i += 1;
+      let value = '';
+      while (i < text.length && text[i] !== ch && text[i] !== '\n') {
+        if (text[i] === '\\') { value += text.slice(i, i + 2); i += 2; continue; }
+        value += text[i];
+        i += 1;
+      }
+      i += 1; // closing quote (or past the newline of an unterminated literal)
+      literals.push({ value, start, end: i });
+      continue;
+    }
+    if (ch === '`') {
+      const start = i;
+      i += 1;
+      let value = '';
+      while (i < text.length) {
+        if (text[i] === '\\') { value += text.slice(i, i + 2); i += 2; continue; }
+        if (text[i] === '`') { i += 1; break; }
+        if (text[i] === '$' && text[i + 1] === '{') {
+          // Scan the interpolation as regular code so literals inside it are
+          // collected on their own; its raw text still joins the template value.
+          value += '${';
+          i += 2;
+          let depth = 1;
+          const exprStart = i;
+          while (i < text.length && depth > 0) {
+            const c = text[i];
+            const n = text[i + 1];
+            if (c === '/' && n === '/') { const nl = text.indexOf('\n', i); i = nl === -1 ? text.length : nl; continue; }
+            if (c === '/' && n === '*') { const close = text.indexOf('*/', i + 2); i = close === -1 ? text.length : close + 2; continue; }
+            if (c === "'" || c === '"' || c === '`') {
+              const inner = jsQuotedLiteralAt(text, i);
+              literals.push({ value: inner.value, start: inner.start, end: inner.end });
+              i = inner.end;
+              continue;
+            }
+            if (c === '{') depth += 1;
+            if (c === '}') depth -= 1;
+            i += 1;
+          }
+          value += text.slice(exprStart, i);
+          continue;
+        }
+        value += text[i];
+        i += 1;
+      }
+      literals.push({ value, start, end: i });
+      continue;
+    }
+    i += 1;
   }
   return literals;
+}
+
+// Scan exactly one quoted/template literal starting at `start` and return its
+// value and end offset (templates keep their raw inner text, escapes intact).
+function jsQuotedLiteralAt(text, start) {
+  const quote = text[start];
+  let i = start + 1;
+  let value = '';
+  while (i < text.length) {
+    if (text[i] === '\\') { value += text.slice(i, i + 2); i += 2; continue; }
+    if (text[i] === quote) { i += 1; break; }
+    if (quote !== '`' && text[i] === '\n') break;
+    value += text[i];
+    i += 1;
+  }
+  return { value, start, end: i };
 }
 
 function stripJsComments(text) {
@@ -559,10 +645,9 @@ function collectEsmImportExportFailures(files) {
 
 function collectStringLiterals(text) {
   const values = [];
-  const pattern = /(['"`])((?:\\[\s\S]|(?!\1)[\s\S])*?)\1/g;
-  for (const match of String(text || '').matchAll(pattern)) {
-    if (match[1] === '`' && match[2].includes('${')) continue;
-    values.push(match[2]);
+  for (const literal of jsQuotedLiterals(text)) {
+    if (literal.value.includes('${')) continue;
+    values.push(literal.value);
   }
   return values;
 }
@@ -971,14 +1056,14 @@ const requiredFiles = [
   'icon.svg',
   'locales/de.json',
   'locales/en.json',
-  ...(installedMode ? ['core/automation.mjs', 'core/records.mjs'] : []),
+  ...(installedMode && !catalogInstalledMode ? ['core/automation.mjs', 'core/records.mjs'] : []),
 ];
 
 for (const file of requiredFiles) {
   if (!existsSync(join(moduleDir, file))) fail(`missing ${rel(join(moduleDir, file))}`);
 }
 
-if (runtimeModuleMode && existsSync(moduleDir)) {
+if (runtimeModuleMode && !catalogInstalledMode && existsSync(moduleDir)) {
   for (const name of readdirSync(moduleDir)) {
     const path = join(moduleDir, name);
     const stats = statSync(path);
@@ -994,8 +1079,8 @@ const schemaDoc = existsSync(join(moduleDir, 'collections.schema.json'))
   ? readJson(join(moduleDir, 'collections.schema.json'))
   : null;
 const sourceInstallScope = String(manifest?.install_scope || '').trim().toLowerCase();
-const sourceShellModuleMode = !runtimeModuleMode
-  && ['core', 'internal', 'local', 'starter'].includes(sourceInstallScope);
+const sourceShellModuleMode = catalogInstalledMode || (!runtimeModuleMode
+  && ['core', 'internal', 'local', 'starter'].includes(sourceInstallScope));
 
 if (manifest) {
   if (manifest.id !== moduleId) fail(`module.json id must be ${moduleId}`);
@@ -1004,7 +1089,7 @@ if (manifest) {
     fail(`module.json install_scope must be ${expectedInstallScope}`);
   }
   if (!Array.isArray(manifest.collections)) fail('module.json collections must be an array');
-  if (runtimeModuleMode && Array.isArray(manifest.collections)) {
+  if (runtimeModuleMode && !catalogInstalledMode && Array.isArray(manifest.collections)) {
     for (const name of manifest.collections) {
       if (shellCollections.has(name)) continue;
       if (!isModuleScopedCollectionName(name, moduleId)) {
@@ -1098,7 +1183,7 @@ if (schemaDoc) {
   if (!schemaDoc.collections || typeof schemaDoc.collections !== 'object' || Array.isArray(schemaDoc.collections)) {
     fail('collections.schema.json collections must be an object');
   }
-  if (runtimeModuleMode && schemaDoc.collections && typeof schemaDoc.collections === 'object' && !Array.isArray(schemaDoc.collections)) {
+  if (runtimeModuleMode && !catalogInstalledMode && schemaDoc.collections && typeof schemaDoc.collections === 'object' && !Array.isArray(schemaDoc.collections)) {
     for (const name of Object.keys(schemaDoc.collections)) {
       if (!isModuleScopedCollectionName(name, moduleId)) {
         fail(`collections.schema.json collection ${name} must be scoped to module id ${moduleId}; use ${normalizedModuleCollectionPrefix(moduleId)}_<name>`);
@@ -1128,7 +1213,7 @@ if (existsSync(schemaJsPath)) {
     const pattern = new RegExp(String.raw`(?:^|[,{]\s*)(?:['"]${collection}['"]|${collection})\s*:`, 'm');
     if (!sourceShellModuleMode && pattern.test(schemaJs)) fail(`schema.js exports shell-registered collection key ${collection}`);
   }
-  if (runtimeModuleMode && schemaDoc?.collections) {
+  if (runtimeModuleMode && !catalogInstalledMode && schemaDoc?.collections) {
     schemaJsCollections = await loadSchemaJsCollections(schemaJsPath);
     if (schemaJsCollections) {
       for (const message of collectSchemaJsParityFailures(schemaDoc, schemaJsCollections)) fail(message);
@@ -1136,7 +1221,7 @@ if (existsSync(schemaJsPath)) {
   }
 }
 
-if (runtimeModuleMode && schemaDoc?.collections) {
+if (runtimeModuleMode && !catalogInstalledMode && schemaDoc?.collections) {
   for (const message of await collectRecordHelperSchemaFailures(moduleDir, schemaDoc)) fail(message);
 }
 
@@ -1187,7 +1272,7 @@ for (const path of files) {
 for (const path of jsFiles) {
   const text = readText(path);
   for (const specifier of extractStaticImportSpecs(text)) {
-    if (!relativeImportExists(path, specifier)) {
+    if (!relativeImportExists(path, specifier) && !catalogInstalledMode) {
       fail(`${rel(path)} relative import ${specifier} does not exist`);
     }
     if (!specifier.startsWith('.') && !isTestFile(path)) {
@@ -1217,13 +1302,13 @@ if (!/\bctx\.host\b|\bhost\.innerHTML\b|\bhost\.append/.test(indexJs)) {
   fail('index.js must render into ctx.host');
 }
 
-if (runtimeModuleMode) {
+if (runtimeModuleMode && !catalogInstalledMode) {
   for (const message of collectThemeTokenFailures(indexCss)) fail(message);
   for (const message of collectHardcodedColorFailures(indexCss)) fail(message);
   for (const message of collectKitUsageFailures(runtimeText)) fail(message);
 }
 
-if (installedMode) {
+if (installedMode && !catalogInstalledMode) {
   if (!/\bctx\??\.db\b|\bstate\.ctx\??\.db\b/.test(runtimeText)) {
     fail('installed module must persist records through the shell-provided ctx.db collection handle');
   }
@@ -1274,7 +1359,7 @@ for (const path of runtimeFiles) {
       if (matched) fail(`${rel(path)} contains forbidden runtime pattern: ${label}`);
     }
   }
-  if (runtimeModuleMode && /\.(?:js|mjs)$/.test(path)) {
+  if (runtimeModuleMode && !catalogInstalledMode && /\.(?:js|mjs)$/.test(path)) {
     for (const message of collectLegacyDbFacadeFailures(path, text)) fail(message);
   }
   if (/\.(?:js|mjs)$/.test(path)) {
@@ -1298,7 +1383,7 @@ for (const action of htmlDataActions(indexHtml)) {
   }
 }
 
-if (manifest && runtimeModuleMode) {
+if (manifest && runtimeModuleMode && !catalogInstalledMode) {
   const declaredCollections = new Set(Array.isArray(manifest.collections) ? manifest.collections : []);
   const schemaCollections = new Set(Object.keys(schemaDoc?.collections || {}));
   for (const path of runtimeFiles.filter((file) => /\.(?:js|mjs)$/.test(file))) {
@@ -1328,4 +1413,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log(`Business OS module static check OK: ${moduleId} (${localMode ? 'local' : installedMode ? 'installed' : 'source'} mode)`);
+console.log(`Business OS module static check OK: ${moduleId} (${localMode ? 'local' : catalogInstalledMode ? 'catalog-installed' : installedMode ? 'installed' : 'source'} mode)`);

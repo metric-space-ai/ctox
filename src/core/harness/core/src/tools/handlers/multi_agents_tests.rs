@@ -178,7 +178,84 @@ async fn spawn_agent_rejects_when_message_and_items_are_both_set() {
     assert_eq!(
         err,
         FunctionCallError::RespondToModel(
-            "Provide either message or items, but not both".to_string()
+            "Provide exactly one of: message, items, or task_file".to_string()
+        )
+    );
+}
+
+#[tokio::test]
+async fn spawn_agent_rejects_oversized_inline_message() {
+    let (session, turn) = make_session_and_context().await;
+    let invocation = invocation(
+        Arc::new(session),
+        Arc::new(turn),
+        "spawn_agent",
+        function_payload(json!({"message": "x".repeat(1_201)})),
+    );
+    let Err(err) = SpawnAgentHandler.handle(invocation).await else {
+        panic!("oversized inline message should be rejected");
+    };
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "spawn_agent message exceeds 1200 characters; write the brief inside the current workspace and use task_file".to_string()
+        )
+    );
+}
+
+#[tokio::test]
+async fn spawn_agent_loads_task_file_from_current_workspace() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        agent_id: String,
+    }
+
+    let temp = tempfile::tempdir().expect("temp workspace");
+    let brief = "Inspect the source independently and report exact observed evidence.";
+    std::fs::write(temp.path().join("luna-review.md"), brief).expect("write task brief");
+    let (mut session, mut turn) = make_session_and_context().await;
+    turn.cwd = temp.path().to_path_buf();
+    turn.config = Arc::new(Config {
+        cwd: temp.path().to_path_buf(),
+        ..(*turn.config).clone()
+    });
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+    let invocation = invocation(
+        Arc::new(session),
+        Arc::new(turn),
+        "spawn_agent",
+        function_payload(json!({"task_file": "luna-review.md", "agent_type": "worker"})),
+    );
+    let output = SpawnAgentHandler
+        .handle(invocation)
+        .await
+        .expect("task_file spawn should succeed");
+    let (content, success) = expect_text_output(output);
+    let result: SpawnAgentResult = serde_json::from_str(&content).expect("spawn result json");
+    assert_eq!(success, Some(true));
+    assert!(!result.agent_id.is_empty());
+}
+
+#[tokio::test]
+async fn spawn_agent_rejects_task_file_outside_current_workspace() {
+    let temp = tempfile::tempdir().expect("temp workspace");
+    let outside = tempfile::NamedTempFile::new().expect("outside task file");
+    let (session, mut turn) = make_session_and_context().await;
+    turn.cwd = temp.path().to_path_buf();
+    let invocation = invocation(
+        Arc::new(session),
+        Arc::new(turn),
+        "spawn_agent",
+        function_payload(json!({"task_file": outside.path()})),
+    );
+    let Err(err) = SpawnAgentHandler.handle(invocation).await else {
+        panic!("outside task file should be rejected");
+    };
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "task_file must resolve inside the current workspace".to_string()
         )
     );
 }
@@ -304,6 +381,8 @@ async fn spawn_agent_does_not_inherit_parent_context_prompts() {
         .expect("child should use the sub-agent developer profile");
     assert!(developer_instructions.contains("stateless Codex sub-agent"));
     assert!(developer_instructions.contains("Do not spawn additional sub-agents"));
+    assert!(developer_instructions.contains("CODEX_AGENT_ID"));
+    assert!(developer_instructions.contains("exact unmodified value"));
     assert!(!developer_instructions.contains("parent developer prompt"));
     let compact_prompt = child_turn
         .compact_prompt
@@ -778,6 +857,7 @@ async fn send_input_accepts_structured_items() {
             },
         ],
         final_output_json_schema: None,
+        required_initial_tool: None,
     };
     let captured = manager
         .captured_ops()
@@ -1351,6 +1431,8 @@ async fn apply_subagent_context_profile_wraps_role_instructions() {
         .as_deref()
         .expect("developer profile should be set");
     assert!(developer_instructions.contains("stateless Codex sub-agent"));
+    assert!(developer_instructions.contains("CODEX_AGENT_ID"));
+    assert!(developer_instructions.contains("Never invent, decorate, prefix, or infer"));
     assert!(developer_instructions.contains("role-specific guidance"));
     assert!(developer_instructions.contains("subordinate to the sub-agent context strategy"));
     let compact_prompt = config

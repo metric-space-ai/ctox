@@ -45,6 +45,12 @@ const {
 const { installNativeFileDragBridge } = require("./file-drag.cjs");
 const { buildApplicationMenuTemplate } = require("./app-menu.cjs");
 
+// Chromium's macOS compositor can keep a full GPU core busy for otherwise
+// idle shell views when several infinite CSS animations are present. Desktop
+// is a long-running client, so render the shell in its existing reduced-motion
+// mode. The Browser Business OS remains unchanged.
+app.commandLine.appendSwitch("force-prefers-reduced-motion");
+
 let mainWindow;
 let sourceManager;
 let registryPath;

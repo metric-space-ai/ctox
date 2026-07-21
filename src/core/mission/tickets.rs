@@ -465,6 +465,24 @@ struct TicketSourceRunbookRecord {
     item_labels: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum TicketSourceRunbookBundle {
+    Single(TicketSourceRunbookRecord),
+    Catalog {
+        runbooks: Vec<TicketSourceRunbookRecord>,
+    },
+}
+
+impl TicketSourceRunbookBundle {
+    fn into_runbooks(self) -> Vec<TicketSourceRunbookRecord> {
+        match self {
+            Self::Single(runbook) => vec![runbook],
+            Self::Catalog { runbooks } => runbooks,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TicketSourceRunbookItemRecord {
     item_id: String,
@@ -494,6 +512,28 @@ struct TicketSourceRunbookItemRecord {
     #[serde(default)]
     pages: Vec<String>,
     chunk_text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TicketSourceKnowledgeResourceRecord {
+    resource_id: String,
+    title: String,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    source_id: String,
+    #[serde(default)]
+    role: String,
+    #[serde(default)]
+    canonical_url: String,
+    #[serde(default)]
+    snapshot_hash: String,
+    #[serde(default)]
+    evidence_eligible: bool,
+    #[serde(default)]
+    linked_runbook_items: Vec<String>,
+    #[serde(flatten)]
+    metadata: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2029,6 +2069,47 @@ pub(crate) fn put_ticket_source_skill_binding(
     }
     let conn = open_ticket_db(root)?;
     let now = now_iso_string();
+    put_ticket_source_skill_binding_with_conn(
+        &conn,
+        system,
+        skill_name,
+        archetype,
+        status,
+        origin,
+        normalized_artifact_path.as_deref(),
+        notes,
+        &now,
+    )
+}
+
+fn put_ticket_source_skill_binding_with_conn(
+    conn: &Connection,
+    system: &str,
+    skill_name: &str,
+    archetype: &str,
+    status: &str,
+    origin: &str,
+    artifact_path: Option<&str>,
+    notes: Option<&str>,
+    now: &str,
+) -> Result<TicketSourceSkillBindingView> {
+    anyhow::ensure!(!system.trim().is_empty(), "source system must not be empty");
+    anyhow::ensure!(
+        !skill_name.trim().is_empty(),
+        "skill name must not be empty"
+    );
+    anyhow::ensure!(
+        !archetype.trim().is_empty(),
+        "skill archetype must not be empty"
+    );
+    anyhow::ensure!(
+        matches!(status.trim(), "active" | "inactive"),
+        "unsupported source skill status: {status}"
+    );
+    anyhow::ensure!(
+        !origin.trim().is_empty(),
+        "source skill origin must not be empty"
+    );
     conn.execute(
         r#"
         INSERT INTO ticket_source_skill_bindings (
@@ -2049,7 +2130,7 @@ pub(crate) fn put_ticket_source_skill_binding(
             archetype,
             status,
             origin,
-            normalized_artifact_path.as_deref(),
+            artifact_path,
             notes.map(str::trim).filter(|value| !value.is_empty()),
             now,
             now,
@@ -5962,14 +6043,33 @@ pub(crate) fn import_ticket_source_skill_bundle(
         read_json_file(&bundle_path.join("main_skill.json"))?;
     let skillbook: TicketSourceSkillbookRecord =
         read_json_file(&bundle_path.join("skillbook.json"))?;
-    let runbook: TicketSourceRunbookRecord = read_json_file(&bundle_path.join("runbook.json"))?;
+    let runbooks = read_json_file::<TicketSourceRunbookBundle>(&bundle_path.join("runbook.json"))?
+        .into_runbooks();
     let items: Vec<TicketSourceRunbookItemRecord> =
         read_jsonl_file(&bundle_path.join("runbook_items.jsonl"))?;
+    let resources_path = bundle_path.join("resources.jsonl");
+    let resources: Option<Vec<TicketSourceKnowledgeResourceRecord>> = if resources_path.is_file() {
+        Some(read_jsonl_file(&resources_path)?)
+    } else {
+        None
+    };
+    anyhow::ensure!(
+        !runbooks.is_empty(),
+        "bundle {} does not contain runbooks",
+        bundle_path.display()
+    );
     anyhow::ensure!(
         !items.is_empty(),
         "bundle {} does not contain runbook items",
         bundle_path.display()
     );
+    validate_ticket_source_skill_bundle(
+        &main_skill,
+        &skillbook,
+        &runbooks,
+        &items,
+        resources.as_deref().unwrap_or_default(),
+    )?;
 
     let now = now_iso_string();
     let embedding_model = embedding_model_override
@@ -5988,61 +6088,302 @@ pub(crate) fn import_ticket_source_skill_bundle(
         embed_texts_for_ticket_skills(root, &inputs, &embedding_model)?
     };
 
+    let runbooks_by_id = runbooks
+        .iter()
+        .map(|runbook| (runbook.runbook_id.as_str(), runbook))
+        .collect::<BTreeMap<_, _>>();
+    let runbook_ids = runbooks
+        .iter()
+        .map(|runbook| runbook.runbook_id.clone())
+        .collect::<Vec<_>>();
     let mut conn = open_ticket_db(root)?;
-    upsert_ticket_source_main_skill(&conn, &main_skill, &now)?;
-    upsert_ticket_source_skillbook(&conn, &skillbook, &now)?;
-    upsert_ticket_source_runbook(&conn, &runbook, &now)?;
-    for (index, item) in items.iter().enumerate() {
-        upsert_ticket_source_runbook_item(&conn, item, &runbook.version, &runbook.status, &now)?;
-        if let Some(vector) = embeddings.get(index) {
-            upsert_ticket_source_embedding(&conn, &item.item_id, &embedding_model, vector, &now)?;
+    let binding;
+    {
+        let tx = conn.transaction()?;
+        validate_ticket_source_skill_id_ownership(
+            &tx,
+            &skillbook.skillbook_id,
+            &runbooks,
+            &items,
+            resources.as_deref(),
+        )?;
+        let incoming_item_ids = items
+            .iter()
+            .map(|item| item.item_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let mut existing_items =
+            tx.prepare("SELECT item_id FROM knowledge_runbook_items WHERE skillbook_id = ?1")?;
+        let old_item_ids = existing_items
+            .query_map(params![skillbook.skillbook_id], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(existing_items);
+        for old_item_id in old_item_ids {
+            if !incoming_item_ids.contains(old_item_id.as_str()) {
+                tx.execute(
+                    "DELETE FROM knowledge_embeddings WHERE item_id = ?1",
+                    params![old_item_id],
+                )?;
+            }
         }
+        tx.execute(
+            "DELETE FROM knowledge_runbook_items WHERE skillbook_id = ?1",
+            params![skillbook.skillbook_id],
+        )?;
+        tx.execute(
+            "DELETE FROM knowledge_runbooks WHERE skillbook_id = ?1",
+            params![skillbook.skillbook_id],
+        )?;
+        if resources.is_some() {
+            tx.execute(
+                "DELETE FROM knowledge_resources WHERE skillbook_id = ?1",
+                params![skillbook.skillbook_id],
+            )?;
+        }
+        upsert_ticket_source_main_skill(&tx, &main_skill, &now)?;
+        upsert_ticket_source_skillbook(&tx, &skillbook, &now)?;
+        for runbook in &runbooks {
+            upsert_ticket_source_runbook(&tx, runbook, &now)?;
+        }
+        for (index, item) in items.iter().enumerate() {
+            let runbook = runbooks_by_id
+                .get(item.runbook_id.as_str())
+                .context("validated runbook parent missing during import")?;
+            upsert_ticket_source_runbook_item(&tx, item, &runbook.version, &runbook.status, &now)?;
+            if let Some(vector) = embeddings.get(index) {
+                upsert_ticket_source_embedding(&tx, &item.item_id, &embedding_model, vector, &now)?;
+            }
+        }
+        if let Some(resources) = &resources {
+            for resource in resources {
+                upsert_ticket_source_knowledge_resource(
+                    &tx,
+                    &skillbook.skillbook_id,
+                    resource,
+                    &now,
+                )?;
+            }
+        }
+        binding = put_ticket_source_skill_binding_with_conn(
+            &tx,
+            system,
+            &main_skill.main_skill_id,
+            "skillbook-runbook",
+            "active",
+            "bundle-import",
+            Some(bundle_dir),
+            Some(&format!(
+                "Imported main skill {}, skillbook {}, {} runbooks",
+                main_skill.main_skill_id,
+                skillbook.skillbook_id,
+                runbooks.len()
+            )),
+            &now,
+        )?;
+        record_audit(
+            &tx,
+            AuditRequest {
+                ticket_key: &format!("*ticket-source:{}*", system),
+                case_id: None,
+                actor_type: "knowledge_importer",
+                action_type: "source_skill_bundle_import",
+                label: None,
+                bundle_label: None,
+                bundle_version: None,
+                details: json!({
+                    "system": system,
+                    "main_skill_id": main_skill.main_skill_id,
+                    "skillbook_id": skillbook.skillbook_id,
+                    "runbook_ids": runbook_ids.clone(),
+                    "runbook_count": runbooks.len(),
+                    "item_count": items.len(),
+                    "resource_count": resources.as_ref().map(Vec::len),
+                    "embedding_model": if skip_embeddings { None::<String> } else { Some(embedding_model.clone()) },
+                    "bundle_dir": bundle_path.display().to_string(),
+                }),
+            },
+        )?;
+        tx.commit()?;
     }
-    let binding = put_ticket_source_skill_binding(
-        root,
-        system,
-        &main_skill.main_skill_id,
-        "skillbook-runbook",
-        "active",
-        "bundle-import",
-        Some(bundle_dir),
-        Some(&format!(
-            "Imported main skill {}, skillbook {}, runbook {}",
-            main_skill.main_skill_id, skillbook.skillbook_id, runbook.runbook_id
-        )),
-    )?;
-    record_audit(
-        &mut conn,
-        AuditRequest {
-            ticket_key: &format!("*ticket-source:{}*", system),
-            case_id: None,
-            actor_type: "knowledge_importer",
-            action_type: "source_skill_bundle_import",
-            label: None,
-            bundle_label: None,
-            bundle_version: None,
-            details: json!({
-                "system": system,
-                "main_skill_id": main_skill.main_skill_id,
-                "skillbook_id": skillbook.skillbook_id,
-                "runbook_id": runbook.runbook_id,
-                "item_count": items.len(),
-                "embedding_model": if skip_embeddings { None::<String> } else { Some(embedding_model.clone()) },
-                "bundle_dir": bundle_path.display().to_string(),
-            }),
-        },
-    )?;
     Ok(json!({
         "ok": true,
         "binding": binding,
         "bundle_dir": bundle_path.display().to_string(),
         "main_skill_id": main_skill.main_skill_id,
         "skillbook_id": skillbook.skillbook_id,
-        "runbook_id": runbook.runbook_id,
+        "runbook_ids": runbook_ids,
+        "runbook_count": runbooks.len(),
         "item_count": items.len(),
+        "resource_count": resources.as_ref().map(Vec::len),
         "embedding_model": if skip_embeddings { Value::Null } else { json!(embedding_model) },
         "embeddings_indexed": !skip_embeddings,
     }))
+}
+
+fn validate_ticket_source_skill_bundle(
+    main_skill: &TicketSourceMainSkillRecord,
+    skillbook: &TicketSourceSkillbookRecord,
+    runbooks: &[TicketSourceRunbookRecord],
+    items: &[TicketSourceRunbookItemRecord],
+    resources: &[TicketSourceKnowledgeResourceRecord],
+) -> Result<()> {
+    anyhow::ensure!(
+        main_skill
+            .linked_skillbooks
+            .iter()
+            .any(|id| id == &skillbook.skillbook_id),
+        "main skill {} does not link skillbook {}",
+        main_skill.main_skill_id,
+        skillbook.skillbook_id
+    );
+
+    let mut runbook_ids = BTreeSet::new();
+    for runbook in runbooks {
+        anyhow::ensure!(
+            !runbook.runbook_id.trim().is_empty(),
+            "bundle contains a runbook with an empty runbook_id"
+        );
+        anyhow::ensure!(
+            runbook.skillbook_id == skillbook.skillbook_id,
+            "runbook {} links skillbook {}, expected {}",
+            runbook.runbook_id,
+            runbook.skillbook_id,
+            skillbook.skillbook_id
+        );
+        anyhow::ensure!(
+            runbook_ids.insert(runbook.runbook_id.as_str()),
+            "bundle contains duplicate runbook {}",
+            runbook.runbook_id
+        );
+    }
+
+    let linked_runbooks = skillbook
+        .linked_runbooks
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    anyhow::ensure!(
+        linked_runbooks == runbook_ids,
+        "skillbook linked_runbooks do not match the runbook catalog"
+    );
+    let main_linked_runbooks = main_skill
+        .linked_runbooks
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    anyhow::ensure!(
+        runbook_ids.is_subset(&main_linked_runbooks),
+        "main skill linked_runbooks omit runbooks from the catalog"
+    );
+
+    let mut item_ids = BTreeSet::new();
+    for item in items {
+        anyhow::ensure!(
+            item_ids.insert(item.item_id.as_str()),
+            "bundle contains duplicate runbook item {}",
+            item.item_id
+        );
+        anyhow::ensure!(
+            runbook_ids.contains(item.runbook_id.as_str()),
+            "runbook item {} references missing runbook {}",
+            item.item_id,
+            item.runbook_id
+        );
+        anyhow::ensure!(
+            item.skillbook_id == skillbook.skillbook_id,
+            "runbook item {} links skillbook {}, expected {}",
+            item.item_id,
+            item.skillbook_id,
+            skillbook.skillbook_id
+        );
+    }
+
+    let known_item_ids = items
+        .iter()
+        .map(|item| item.item_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut resource_ids = BTreeSet::new();
+    for resource in resources {
+        anyhow::ensure!(
+            !resource.resource_id.trim().is_empty(),
+            "bundle contains a resource with an empty resource_id"
+        );
+        anyhow::ensure!(
+            !resource.title.trim().is_empty(),
+            "resource {} has an empty title",
+            resource.resource_id
+        );
+        anyhow::ensure!(
+            resource_ids.insert(resource.resource_id.as_str()),
+            "bundle contains duplicate resource {}",
+            resource.resource_id
+        );
+        for item_id in &resource.linked_runbook_items {
+            anyhow::ensure!(
+                known_item_ids.contains(item_id.as_str()),
+                "resource {} references missing runbook item {}",
+                resource.resource_id,
+                item_id
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_ticket_source_skill_id_ownership(
+    conn: &Connection,
+    skillbook_id: &str,
+    runbooks: &[TicketSourceRunbookRecord],
+    items: &[TicketSourceRunbookItemRecord],
+    resources: Option<&[TicketSourceKnowledgeResourceRecord]>,
+) -> Result<()> {
+    for runbook in runbooks {
+        let owner = conn
+            .query_row(
+                "SELECT skillbook_id FROM knowledge_runbooks WHERE runbook_id = ?1",
+                params![runbook.runbook_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        anyhow::ensure!(
+            owner.as_deref().is_none_or(|owner| owner == skillbook_id),
+            "runbook {} is already owned by skillbook {}",
+            runbook.runbook_id,
+            owner.unwrap_or_default()
+        );
+    }
+    for item in items {
+        let owner = conn
+            .query_row(
+                "SELECT skillbook_id FROM knowledge_runbook_items WHERE item_id = ?1",
+                params![item.item_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        anyhow::ensure!(
+            owner.as_deref().is_none_or(|owner| owner == skillbook_id),
+            "runbook item {} is already owned by skillbook {}",
+            item.item_id,
+            owner.unwrap_or_default()
+        );
+    }
+    for resource in resources.unwrap_or_default() {
+        let owner = conn
+            .query_row(
+                "SELECT skillbook_id FROM knowledge_resources WHERE resource_id = ?1",
+                params![resource.resource_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        anyhow::ensure!(
+            owner.as_deref().is_none_or(|owner| owner == skillbook_id),
+            "resource {} is already owned by skillbook {}",
+            resource.resource_id,
+            owner.unwrap_or_default()
+        );
+    }
+    Ok(())
 }
 
 pub(crate) fn resolve_ticket_source_skill_for_target(
@@ -6669,6 +7010,50 @@ fn upsert_ticket_source_runbook_item(
             serde_json::to_string(record)?,
             status,
             version,
+            now,
+        ],
+    )?;
+    Ok(())
+}
+
+fn upsert_ticket_source_knowledge_resource(
+    conn: &Connection,
+    skillbook_id: &str,
+    record: &TicketSourceKnowledgeResourceRecord,
+    now: &str,
+) -> Result<()> {
+    conn.execute(
+        r#"
+        INSERT INTO knowledge_resources (
+            resource_id, skillbook_id, title, kind, source_id, role, canonical_url,
+            snapshot_hash, evidence_eligible, linked_runbook_items_json, metadata_json,
+            created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)
+        ON CONFLICT(resource_id) DO UPDATE SET
+            skillbook_id=excluded.skillbook_id,
+            title=excluded.title,
+            kind=excluded.kind,
+            source_id=excluded.source_id,
+            role=excluded.role,
+            canonical_url=excluded.canonical_url,
+            snapshot_hash=excluded.snapshot_hash,
+            evidence_eligible=excluded.evidence_eligible,
+            linked_runbook_items_json=excluded.linked_runbook_items_json,
+            metadata_json=excluded.metadata_json,
+            updated_at=excluded.updated_at
+        "#,
+        params![
+            record.resource_id,
+            skillbook_id,
+            record.title,
+            record.kind,
+            record.source_id,
+            record.role,
+            record.canonical_url,
+            record.snapshot_hash,
+            i64::from(record.evidence_eligible),
+            serde_json::to_string(&record.linked_runbook_items)?,
+            serde_json::to_string(record)?,
             now,
         ],
     )?;
@@ -10651,7 +11036,7 @@ struct AuditRequest<'a> {
     details: Value,
 }
 
-fn record_audit(conn: &mut Connection, request: AuditRequest<'_>) -> Result<()> {
+fn record_audit(conn: &Connection, request: AuditRequest<'_>) -> Result<()> {
     let now = now_iso_string();
     let audit_id = format!(
         "audit:{}:{}:{}",
@@ -11211,6 +11596,25 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_knowledge_runbook_items_lookup
             ON knowledge_runbook_items(runbook_id, label, updated_at DESC);
 
+        CREATE TABLE IF NOT EXISTS knowledge_resources (
+            resource_id TEXT PRIMARY KEY,
+            skillbook_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            canonical_url TEXT NOT NULL,
+            snapshot_hash TEXT NOT NULL,
+            evidence_eligible INTEGER NOT NULL DEFAULT 0,
+            linked_runbook_items_json TEXT NOT NULL,
+            metadata_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_knowledge_resources_skillbook
+            ON knowledge_resources(skillbook_id, updated_at DESC);
+
         CREATE TABLE IF NOT EXISTS knowledge_data_tables (
             table_id      TEXT PRIMARY KEY,
             domain        TEXT NOT NULL,
@@ -11700,6 +12104,10 @@ fn schema_state(conn: &Connection) -> Result<Value> {
         conn.query_row("SELECT COUNT(*) FROM knowledge_runbook_items", [], |row| {
             row.get(0)
         })?;
+    let knowledge_resource_count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM knowledge_resources", [], |row| {
+            row.get(0)
+        })?;
     let knowledge_embedding_count: i64 =
         conn.query_row("SELECT COUNT(*) FROM knowledge_embeddings", [], |row| {
             row.get(0)
@@ -11743,6 +12151,7 @@ fn schema_state(conn: &Connection) -> Result<Value> {
         "knowledge_skillbooks": knowledge_skillbook_count,
         "knowledge_runbooks": knowledge_runbook_count,
         "knowledge_runbook_items": knowledge_runbook_item_count,
+        "knowledge_resources": knowledge_resource_count,
         "knowledge_embeddings": knowledge_embedding_count,
         "knowledge_entries": knowledge_entry_count,
         "knowledge_loads": knowledge_load_count,
@@ -12866,6 +13275,272 @@ mod tests {
             jsonl.push('\n');
         }
         std::fs::write(bundle_dir.join("runbook_items.jsonl"), jsonl)?;
+        Ok(())
+    }
+
+    #[test]
+    fn source_skill_bundle_imports_every_catalog_runbook_without_orphans() -> Result<()> {
+        let root = temp_root("source-skill-runbook-catalog");
+        let bundle_dir = root.join("runtime/generated-skills/catalog");
+        std::fs::create_dir_all(&bundle_dir)?;
+        let runbook_ids = ["catalog.runbook.one.v1", "catalog.runbook.two.v1"];
+        std::fs::write(
+            bundle_dir.join("main_skill.json"),
+            serde_json::to_string_pretty(&json!({
+                "main_skill_id": "catalog.main.v1",
+                "title": "Catalog Main",
+                "primary_channel": "research",
+                "entry_action": "resolve_runbook_item",
+                "linked_skillbooks": ["catalog.skillbook.v1"],
+                "linked_runbooks": runbook_ids,
+            }))?,
+        )?;
+        std::fs::write(
+            bundle_dir.join("skillbook.json"),
+            serde_json::to_string_pretty(&json!({
+                "skillbook_id": "catalog.skillbook.v1",
+                "title": "Catalog Skillbook",
+                "version": "v1",
+                "mission": "Test complete catalog imports.",
+                "runtime_policy": "Resolve a runbook item.",
+                "answer_contract": "Use cited facts only.",
+                "linked_runbooks": runbook_ids,
+            }))?,
+        )?;
+        std::fs::write(
+            bundle_dir.join("runbook.json"),
+            serde_json::to_string_pretty(&json!({
+                "schema": "ctox.knowledge.runbook_catalog.v2",
+                "primary_runbook": runbook_ids[0],
+                "runbooks": [
+                    {
+                        "runbook_id": runbook_ids[0],
+                        "skillbook_id": "catalog.skillbook.v1",
+                        "title": "First",
+                        "version": "v1",
+                        "status": "active",
+                        "problem_domain": "first",
+                        "item_labels": ["ONE"],
+                    },
+                    {
+                        "runbook_id": runbook_ids[1],
+                        "skillbook_id": "catalog.skillbook.v1",
+                        "title": "Second",
+                        "version": "v1",
+                        "status": "active",
+                        "problem_domain": "second",
+                        "item_labels": ["TWO"],
+                    }
+                ],
+            }))?,
+        )?;
+        let items = [
+            json!({
+                "item_id": "catalog.item.one.v1",
+                "runbook_id": runbook_ids[0],
+                "skillbook_id": "catalog.skillbook.v1",
+                "label": "ONE",
+                "title": "First item",
+                "problem_class": "first",
+                "chunk_text": "first cited fact",
+            }),
+            json!({
+                "item_id": "catalog.item.two.v1",
+                "runbook_id": runbook_ids[1],
+                "skillbook_id": "catalog.skillbook.v1",
+                "label": "TWO",
+                "title": "Second item",
+                "problem_class": "second",
+                "chunk_text": "second cited fact",
+            }),
+        ];
+        let jsonl = items
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .join("\n");
+        std::fs::write(bundle_dir.join("runbook_items.jsonl"), format!("{jsonl}\n"))?;
+        std::fs::write(
+            bundle_dir.join("resources.jsonl"),
+            format!(
+                "{}\n",
+                serde_json::to_string(&json!({
+                    "resource_id": "catalog.resource.one",
+                    "title": "Source receipt",
+                    "kind": "evidence_receipt",
+                    "source_id": "SRC-001",
+                    "role": "evidence",
+                    "canonical_url": "https://example.com/source",
+                    "snapshot_hash": "abc123",
+                    "evidence_eligible": true,
+                    "linked_runbook_items": ["catalog.item.one.v1"],
+                }))?
+            ),
+        )?;
+
+        let imported = import_ticket_source_skill_bundle(
+            &root,
+            "catalog-test",
+            bundle_dir.to_str().context("bundle path utf-8")?,
+            None,
+            true,
+        )?;
+        assert_eq!(
+            imported.get("runbook_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            imported.get("resource_count").and_then(Value::as_u64),
+            Some(1)
+        );
+
+        let conn = open_ticket_db(&root)?;
+        let runbook_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM knowledge_runbooks WHERE skillbook_id = 'catalog.skillbook.v1'",
+            [],
+            |row| row.get(0),
+        )?;
+        let orphan_count: i64 = conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM knowledge_runbook_items AS item
+            LEFT JOIN knowledge_runbooks AS runbook ON runbook.runbook_id = item.runbook_id
+            WHERE item.skillbook_id = 'catalog.skillbook.v1' AND runbook.runbook_id IS NULL
+            "#,
+            [],
+            |row| row.get(0),
+        )?;
+        let resource_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM knowledge_resources WHERE skillbook_id = 'catalog.skillbook.v1'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(runbook_count, 2);
+        assert_eq!(orphan_count, 0);
+        assert_eq!(resource_count, 1);
+        conn.execute(
+            "INSERT INTO knowledge_embeddings (item_id, embedding_model, embedding_json, updated_at)
+             VALUES ('catalog.item.one.v1', 'test-model', '[0.5]', '2026-01-01T00:00:00Z')",
+            [],
+        )?;
+        drop(conn);
+
+        std::fs::remove_file(bundle_dir.join("resources.jsonl"))?;
+        let legacy_reimport = import_ticket_source_skill_bundle(
+            &root,
+            "catalog-test",
+            bundle_dir.to_str().context("bundle path utf-8")?,
+            None,
+            true,
+        )?;
+        assert!(legacy_reimport
+            .get("resource_count")
+            .is_some_and(Value::is_null));
+        let conn = open_ticket_db(&root)?;
+        let preserved_embedding_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM knowledge_embeddings
+              WHERE item_id = 'catalog.item.one.v1' AND embedding_model = 'test-model'",
+            [],
+            |row| row.get(0),
+        )?;
+        let preserved_resource_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM knowledge_resources
+              WHERE resource_id = 'catalog.resource.one'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(preserved_embedding_count, 1);
+        assert_eq!(preserved_resource_count, 1);
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn source_skill_bundle_rejects_missing_runbook_parent_before_writes() -> Result<()> {
+        let root = temp_root("source-skill-runbook-missing-parent");
+        let bundle_dir = root.join("runtime/generated-skills/missing-parent");
+        write_reply_bundle(
+            &bundle_dir,
+            &[json!({
+                "item_id": "orphan.item.v1",
+                "runbook_id": "missing.runbook.v1",
+                "skillbook_id": "eventus.email.support.v1",
+                "label": "ORPHAN",
+                "title": "Orphan item",
+                "problem_class": "invalid",
+                "chunk_text": "must not be imported",
+            })],
+        )?;
+
+        let error = import_ticket_source_skill_bundle(
+            &root,
+            "invalid-test",
+            bundle_dir.to_str().context("bundle path utf-8")?,
+            None,
+            true,
+        )
+        .expect_err("missing runbook parent must fail");
+        assert!(error.to_string().contains("references missing runbook"));
+
+        let conn = open_ticket_db(&root)?;
+        let main_skill_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM knowledge_main_skills", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(main_skill_count, 0);
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn source_skill_bundle_rejects_ids_owned_by_another_skillbook() -> Result<()> {
+        let root = temp_root("source-skill-foreign-owner");
+        create_or_update_runbook(
+            &root,
+            "eventus.runbook.registration.v1",
+            "foreign.skillbook.v1",
+            "Foreign runbook",
+            "v1",
+            "active",
+            "foreign",
+            Vec::new(),
+        )?;
+        let bundle_dir = root.join("runtime/generated-skills/foreign-owner");
+        write_reply_bundle(
+            &bundle_dir,
+            &[json!({
+                "item_id": "eventus.registration.v1",
+                "runbook_id": "eventus.runbook.registration.v1",
+                "skillbook_id": "eventus.email.support.v1",
+                "label": "REG-01",
+                "title": "Registration",
+                "problem_class": "registration",
+                "chunk_text": "source-backed guidance",
+            })],
+        )?;
+
+        let error = import_ticket_source_skill_bundle(
+            &root,
+            "eventus",
+            bundle_dir.to_str().context("bundle path utf-8")?,
+            None,
+            true,
+        )
+        .expect_err("foreign runbook ownership must fail");
+        assert!(error.to_string().contains("already owned by skillbook"));
+
+        let conn = open_ticket_db(&root)?;
+        let owner: String = conn.query_row(
+            "SELECT skillbook_id FROM knowledge_runbooks
+              WHERE runbook_id = 'eventus.runbook.registration.v1'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(owner, "foreign.skillbook.v1");
+
+        let _ = std::fs::remove_dir_all(&root);
         Ok(())
     }
 

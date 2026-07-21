@@ -264,6 +264,7 @@ fn record_browser_detection_signal(root: &Path, payload: &Value) {
         return;
     }
     let probe_url = detection.get("url").and_then(Value::as_str);
+    #[cfg(feature = "full")]
     crate::unlock::record_signal_lossy(
         root,
         "browser_automation",
@@ -275,6 +276,8 @@ fn record_browser_detection_signal(root: &Path, payload: &Value) {
             "automation_ok": payload.get("ok").cloned().unwrap_or(Value::Null),
         }),
     );
+    #[cfg(not(feature = "full"))]
+    let _ = (root, probe_url, markers);
 }
 
 pub fn capture_browser_transport(root: &Path, request: &BrowserCaptureRequest) -> Result<Value> {
@@ -821,14 +824,19 @@ fn run_command_with_env(
     envs: &[(&str, &Path)],
     error_message: &str,
 ) -> Result<()> {
-    let mut command = Command::new(program);
+    let resolved_program = find_command_on_path(program)
+        .with_context(|| format!("{error_message}: `{program}` was not found on PATH"))?;
+    let mut command = Command::new(&resolved_program);
     command.current_dir(cwd).args(args);
     for (key, value) in envs {
         command.env(key, value);
     }
-    let output = command
-        .output()
-        .with_context(|| format!("{error_message}: failed to launch `{program}`"))?;
+    let output = command.output().with_context(|| {
+        format!(
+            "{error_message}: failed to launch `{}`",
+            resolved_program.display()
+        )
+    })?;
     if output.status.success() {
         return Ok(());
     }
@@ -905,14 +913,42 @@ fn ensure_node_runtime_compatible() -> Result<()> {
 }
 
 pub(crate) fn find_command_on_path(program: &str) -> Option<PathBuf> {
-    if program.contains('/') {
-        let path = PathBuf::from(program);
-        return path.is_file().then_some(path);
+    let command_names = command_file_names(program);
+    if program.contains('/') || program.contains('\\') {
+        return command_names
+            .into_iter()
+            .map(PathBuf::from)
+            .find(|candidate| candidate.is_file());
     }
     let path_env = std::env::var_os("PATH")?;
     std::env::split_paths(&path_env)
-        .map(|dir| dir.join(program))
+        .flat_map(|dir| command_names.iter().map(move |name| dir.join(name)))
         .find(|candidate| candidate.is_file())
+}
+
+fn command_file_names(program: &str) -> Vec<String> {
+    #[cfg(windows)]
+    {
+        if Path::new(program).extension().is_some() {
+            return vec![program.to_string()];
+        }
+        let mut names = Vec::new();
+        let path_extensions =
+            std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+        names.extend(
+            path_extensions
+                .split(';')
+                .map(str::trim)
+                .filter(|extension| !extension.is_empty())
+                .map(|extension| format!("{program}{extension}")),
+        );
+        // Git-for-Windows also ships extensionless POSIX shims such as `npm`.
+        // Prefer native PATHEXT launchers (`npm.cmd`) before that fallback.
+        names.push(program.to_string());
+        names
+    }
+    #[cfg(not(windows))]
+    vec![program.to_string()]
 }
 
 fn resolve_reference_dir(root: &Path, args: &[String]) -> PathBuf {
@@ -1001,9 +1037,11 @@ fn find_playwright_chromium_executable_in(cache_root: &Path) -> Option<PathBuf> 
         }
         for relative in [
             "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+            "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
             "chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
             "chrome-linux64/chrome",
             "chrome-linux/chrome",
+            "chrome-win64/chrome.exe",
             "chrome-win/chrome.exe",
         ] {
             let candidate = path.join(relative);
@@ -2937,6 +2975,34 @@ mod tests {
             Some(executable)
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn finds_playwright_chromium_win64_executable() {
+        let dir = temp_path("win64-cache");
+        let executable = dir.join("chromium-1217/chrome-win64/chrome.exe");
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&executable, b"").unwrap();
+        assert_eq!(
+            find_playwright_chromium_executable_in(&dir),
+            Some(executable)
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn finds_playwright_chromium_macos_x64_executable() {
+        let dir = temp_path("macos-x64-cache");
+        let executable = dir.join(
+            "chromium-1217/chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+        );
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&executable, b"").unwrap();
+        assert_eq!(
+            find_playwright_chromium_executable_in(&dir),
+            Some(executable)
+        );
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -28,6 +28,12 @@ async function buildPairingLaunchConfig(instance, secretStore, options = {}) {
     signaling_urls: instance.pairing.signalingUrls,
     signaling_room_password: roomPassword,
     http_bridge_available: false,
+    desktop_instance: {
+      id: String(instance.id || ""),
+      source: String(instance.source || ""),
+      display_name: String(instance.displayName || instance.instanceId || "CTOX"),
+      domain: String(instance.domain || ""),
+    },
     ...(capabilityToken
       ? {
           session: {

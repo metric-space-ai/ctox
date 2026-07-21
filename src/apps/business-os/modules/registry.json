@@ -20,7 +20,7 @@
         "right": "agent context"
       },
       "category": "Workspace",
-      "version": "v1",
+      "version": "1.0.0",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
       "tags": [
@@ -1790,8 +1790,8 @@
         "editable_after_install": true,
         "distribution": "catalog-module"
       },
-      "install_scope": "store",
-      "default_installed": false,
+      "install_scope": "internal",
+      "default_installed": true,
       "launch_kind": "desktop-app",
       "presentation": {
         "default_mode": "window",
@@ -1811,7 +1811,7 @@
         "multi_instance": false,
         "auto_restore": false
       },
-      "source": "catalog",
+      "source": "internal",
       "core": false,
       "editable": true,
       "deletable": true

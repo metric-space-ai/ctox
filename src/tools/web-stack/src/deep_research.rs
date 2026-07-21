@@ -5,8 +5,8 @@ use serde_json::json;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::VecDeque;
 use std::fs;
-use std::io::Read;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -15,7 +15,10 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use url::Url;
 
+use crate::scholarly_search::crossref_work_by_doi;
 use crate::scholarly_search::execute_scholarly_search;
+use crate::scholarly_search::openalex_work_by_doi;
+use crate::scholarly_search::openalex_work_by_id;
 use crate::scholarly_search::run_ctox_scholarly_search_tool;
 use crate::scholarly_search::ScholarlyResult;
 use crate::scholarly_search::ScholarlySearchProvider;
@@ -63,6 +66,7 @@ pub struct DeepResearchRequest {
     pub focus: Option<String>,
     pub depth: DeepResearchDepth,
     pub max_sources: usize,
+    pub exclude_urls: Vec<String>,
     pub include_annas_archive: bool,
     pub include_papers: bool,
     pub workspace: Option<PathBuf>,
@@ -110,19 +114,11 @@ impl DeepResearchDepth {
         }
     }
 
-    fn read_budget(self) -> usize {
-        match self {
-            Self::Quick => 8,
-            Self::Standard => 80,
-            Self::Exhaustive => 260,
-        }
-    }
-
     fn database_query_budget(self) -> usize {
         match self {
-            Self::Quick => 3,
-            Self::Standard => 12,
-            Self::Exhaustive => 40,
+            Self::Quick => 2,
+            Self::Standard => 4,
+            Self::Exhaustive => 8,
         }
     }
 
@@ -153,7 +149,10 @@ struct ResearchSearchPlan {
 pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -> Result<Value> {
     let query_text = normalize_required_query(&request.query)?;
     let profile = ResearchProfile::resolve(root);
-    let search_query = derive_research_search_query(&query_text, request.focus.as_deref(), profile);
+    // Keep the topical core independent from the optional focus. The focus is
+    // represented by its own plan below; appending it here made every facet
+    // inherit the same long query and defeated systematic diversification.
+    let search_query = derive_research_search_query(&query_text, None, profile);
     let max_sources = request.max_sources.clamp(3, 300);
     let plans = build_research_search_plan(&search_query, request, profile)
         .into_iter()
@@ -161,8 +160,47 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
         .collect::<Vec<_>>();
 
     let mut sources = Vec::new();
-    let mut seen_urls = BTreeSet::new();
+    let excluded_urls = normalized_excluded_urls(&request.exclude_urls);
+    let mut seen_urls = excluded_urls.clone();
     let mut search_runs = Vec::new();
+    seed_explicit_identifier_sources(&query_text, &mut seen_urls, &mut sources);
+
+    let web_plans = plans
+        .iter()
+        .filter(|plan| plan.label != "annas_archive_metadata")
+        .collect::<Vec<_>>();
+    let mut web_plan_results = Vec::with_capacity(web_plans.len());
+    for chunk in web_plans.chunks(4) {
+        web_plan_results.extend(std::thread::scope(|scope| {
+            let handles = chunk
+                .iter()
+                .map(|plan| {
+                    scope.spawn(move || {
+                        (
+                            *plan,
+                            run_ctox_web_search_tool(
+                                root,
+                                &CanonicalWebSearchRequest {
+                                    query: plan.query.clone(),
+                                    external_web_access: None,
+                                    allowed_domains: plan.domains.clone(),
+                                    user_location: SearchUserLocation::default(),
+                                    search_context_size: Some(request.depth.context_size()),
+                                    search_content_types: Vec::new(),
+                                    include_sources: true,
+                                    pinned_sources: Vec::new(),
+                                },
+                            ),
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("web search worker panicked"))
+                .collect::<Vec<_>>()
+        }));
+    }
 
     for plan in &plans {
         if plan.label == "annas_archive_metadata" {
@@ -176,19 +214,12 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
             );
             continue;
         }
-        let payload = match run_ctox_web_search_tool(
-            root,
-            &CanonicalWebSearchRequest {
-                query: plan.query.clone(),
-                external_web_access: None,
-                allowed_domains: plan.domains.clone(),
-                user_location: SearchUserLocation::default(),
-                search_context_size: Some(request.depth.context_size()),
-                search_content_types: Vec::new(),
-                include_sources: true,
-                pinned_sources: Vec::new(),
-            },
-        ) {
+        let payload = match web_plan_results
+            .iter()
+            .find(|(candidate, _)| candidate.label == plan.label)
+            .map(|(_, result)| result)
+            .expect("every non-archive research plan has a worker result")
+        {
             Ok(payload) => payload,
             Err(err) => {
                 search_runs.push(json!({
@@ -212,43 +243,123 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
             "metadata_only": plan.metadata_only,
             "ok": payload.get("ok").and_then(Value::as_bool).unwrap_or(false),
             "provider": payload.get("provider").cloned().unwrap_or(Value::Null),
+            "executed_queries": payload.get("executed_queries").cloned().unwrap_or_else(|| json!([])),
+            "source_failures": payload.get("source_failures").cloned().unwrap_or_else(|| json!([])),
             "result_count": payload.get("results").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
         }));
         collect_search_sources(&payload, plan, &mut seen_urls, &mut sources);
     }
-    let database_runs =
-        collect_scholarly_database_sources(root, &plans, request, &mut seen_urls, &mut sources);
+    let database_runs = collect_scholarly_database_sources(
+        root,
+        &search_query,
+        &plans,
+        request,
+        &mut seen_urls,
+        &mut sources,
+    );
 
-    let read_budget = request.depth.read_budget().min(max_sources);
-    let selected_sources = select_balanced_sources(sources, max_sources);
-    let mut enriched = Vec::with_capacity(selected_sources.len());
-    for mut source in selected_sources {
+    let discovered_candidate_count = sources.len();
+    // `max_sources` is the final evidence target, not a pre-read candidate
+    // cap. A failed first page must cause the next ranked candidate to be
+    // tried rather than ending discovery prematurely.
+    let read_budget = research_read_budget(request.depth, max_sources);
+    let followup_read_budget = max_sources.min(16);
+    let candidate_pool_limit = research_candidate_pool_limit(request.depth, max_sources);
+    let expanded_candidate_pool_limit = candidate_pool_limit.saturating_add(followup_read_budget);
+    let selected_sources = select_balanced_sources(sources, candidate_pool_limit);
+    let mut read_queue = VecDeque::from(selected_sources);
+    let mut queued_urls = read_queue
+        .iter()
+        .filter_map(|source| source.get("url").and_then(Value::as_str))
+        .map(normalize_url_key)
+        .collect::<BTreeSet<_>>();
+    let mut enriched = Vec::with_capacity(read_queue.len());
+    let mut read_attempts = 0usize;
+    let mut admitted_sources = 0usize;
+    let mut followed_data_links = 0usize;
+    while let Some(mut source) = read_queue.pop_front() {
         let read_url = source_read_url(&source);
-        let should_read = enriched.len() < read_budget && should_attempt_source_read(&source);
+        let is_original_file_followup =
+            source.get("search_label").and_then(Value::as_str) == Some("repository_file_followup");
+        let within_read_budget = read_attempts < read_budget
+            || (is_original_file_followup
+                && read_attempts < read_budget.saturating_add(followup_read_budget));
+        let should_read = within_read_budget
+            && admitted_sources < max_sources
+            && should_attempt_source_read(&source);
         if should_read {
+            read_attempts += 1;
             if let Some(url) = read_url {
+                let relevance_query = source_relevance_query(&source, &search_query);
                 match run_ctox_web_read_tool(
                     root,
                     &DirectWebReadRequest {
                         url: url.clone(),
-                        query: Some(search_query.clone()),
-                        find: build_find_terms(&search_query),
+                        query: Some(relevance_query.clone()),
+                        find: build_find_terms(&relevance_query),
+                        workspace: None,
+                        include_full_text: true,
+                        timeout_cap_ms: Some(research_read_timeout_cap_ms(request.depth)),
+                        max_artifact_bytes: Some(research_max_artifact_bytes(request.depth)),
                         country: None,
                     },
                 ) {
                     Ok(read_payload) => {
-                        source["canonical_url"] = read_payload
-                            .get("canonical_url")
-                            .cloned()
-                            .unwrap_or_else(|| Value::String(url.clone()));
+                        let transport_verified = read_transport_verified(&read_payload);
+                        let content_extracted = read_has_meaningful_evidence(&read_payload);
+                        let evidence_relevance_score = read_payload
+                            .get("evidence_relevance_score")
+                            .and_then(Value::as_i64)
+                            .or_else(|| {
+                                score_read_evidence_relevance(&read_payload, &relevance_query)
+                            });
+                        let actual_full_text_or_data =
+                            read_has_actual_full_text_or_data(&source, &read_payload);
+                        if transport_verified {
+                            source["canonical_url"] = read_payload
+                                .get("canonical_url")
+                                .cloned()
+                                .unwrap_or_else(|| Value::String(url.clone()));
+                        } else {
+                            source["read_response_url"] = read_payload
+                                .get("final_url")
+                                .cloned()
+                                .unwrap_or(Value::Null);
+                        }
                         source["verification_status"] = read_payload
                             .get("verification_status")
                             .cloned()
                             .unwrap_or_else(|| Value::String("unverified".to_string()));
-                        source["evidence_eligible"] = read_payload
-                            .get("evidence_eligible")
-                            .cloned()
-                            .unwrap_or(Value::Bool(false));
+                        source["transport_verified"] = Value::Bool(transport_verified);
+                        source["content_extracted"] = Value::Bool(content_extracted);
+                        source["evidence_relevance_score"] = evidence_relevance_score
+                            .map(|score| Value::Number(score.into()))
+                            .unwrap_or(Value::Null);
+                        source["actual_full_text_or_data"] = Value::Bool(actual_full_text_or_data);
+                        if let Some(receipt) = zenodo_archive_receipt(&source, &read_payload) {
+                            source["archive_receipt"] = receipt;
+                        }
+                        let (evidence_eligible, assessed_rejection_reason) =
+                            assess_evidence_promotion(
+                                &source,
+                                transport_verified,
+                                content_extracted,
+                            );
+                        let upstream_rejection_reason = read_payload
+                            .get("admission_rejection_reason")
+                            .and_then(Value::as_str);
+                        let rejection_reason =
+                            upstream_rejection_reason.or(assessed_rejection_reason);
+                        if evidence_eligible {
+                            admitted_sources += 1;
+                        }
+                        source["evidence_eligible"] = Value::Bool(evidence_eligible);
+                        if let Some(reason) = rejection_reason {
+                            source["evidence_rejection_reason"] = Value::String(reason.to_string());
+                            if reason == "bot_or_captcha_wall" {
+                                source["unblocking_required"] = Value::Bool(true);
+                            }
+                        }
                         source["checked_at"] = read_payload
                             .get("checked_at")
                             .cloned()
@@ -261,6 +372,36 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             .get("snapshot_hash")
                             .cloned()
                             .unwrap_or(Value::Null);
+                        source["response_metadata"] = read_payload
+                            .get("response_metadata")
+                            .cloned()
+                            .unwrap_or(Value::Null);
+                        source["response_content_kind"] = read_payload
+                            .get("response_content_kind")
+                            .cloned()
+                            .unwrap_or(Value::Null);
+                        source["response_artifact_path"] = read_payload
+                            .get("response_artifact_path")
+                            .cloned()
+                            .unwrap_or(Value::Null);
+                        source["response_archive_manifest"] = read_payload
+                            .get("response_archive_manifest")
+                            .cloned()
+                            .unwrap_or(Value::Null);
+                        if read_payload
+                            .get("response_content_kind")
+                            .and_then(Value::as_str)
+                            .is_some_and(|kind| kind.starts_with("data_"))
+                        {
+                            source["source_type"] = Value::String("data_file".to_string());
+                            source["data_validation_status"] =
+                                Value::String("validated_from_response_content".to_string());
+                        } else if source.get("source_type").and_then(Value::as_str)
+                            == Some("data_file")
+                        {
+                            source["data_validation_status"] =
+                                Value::String("rejected_response_content_mismatch".to_string());
+                        }
                         source["read"] = json!({
                             "ok": read_payload.get("ok").and_then(Value::as_bool).unwrap_or(false),
                             "url": url,
@@ -268,6 +409,8 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             "summary": read_payload.get("summary").cloned().unwrap_or(Value::Null),
                             "excerpts": read_payload.get("excerpts").cloned().unwrap_or_else(|| json!([])),
                             "find_results": read_payload.get("find_results").cloned().unwrap_or_else(|| json!([])),
+                            "page_sections": read_payload.get("page_sections").cloned().unwrap_or_else(|| json!([])),
+                            "page_text_excerpt": read_payload.get("page_text_excerpt").cloned().unwrap_or(Value::Null),
                             "is_pdf": read_payload.get("is_pdf").cloned().unwrap_or(Value::Bool(false)),
                             "pdf_total_pages": read_payload.get("pdf_total_pages").cloned().unwrap_or(Value::Null),
                             "canonical_url": read_payload.get("canonical_url").cloned().unwrap_or_else(|| Value::String(url.clone())),
@@ -275,11 +418,35 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             "checked_at": read_payload.get("checked_at").cloned().unwrap_or(Value::Null),
                             "http_status": read_payload.get("http_status").cloned().unwrap_or(Value::Null),
                             "snapshot_hash": read_payload.get("snapshot_hash").cloned().unwrap_or(Value::Null),
+                            "response_metadata": read_payload.get("response_metadata").cloned().unwrap_or(Value::Null),
+                            "response_content_kind": read_payload.get("response_content_kind").cloned().unwrap_or(Value::Null),
+                            "response_artifact_path": read_payload.get("response_artifact_path").cloned().unwrap_or(Value::Null),
+                            "response_archive_manifest": read_payload.get("response_archive_manifest").cloned().unwrap_or(Value::Null),
+                            "admission_rejection_reason": read_payload.get("admission_rejection_reason").cloned().unwrap_or(Value::Null),
                             "source_tier": read_payload.get("source_tier").cloned().unwrap_or(Value::Null),
+                            "transport_evidence_eligible": read_payload.get("transport_evidence_eligible").cloned().unwrap_or(Value::Bool(false)),
                             "evidence_eligible": read_payload.get("evidence_eligible").cloned().unwrap_or(Value::Bool(false)),
                         });
+                        for followup in followup_data_sources(&source, &read_payload)
+                            .into_iter()
+                            .take(followup_read_budget)
+                        {
+                            let normalized = followup
+                                .get("url")
+                                .and_then(Value::as_str)
+                                .map(normalize_url_key)
+                                .unwrap_or_default();
+                            if !normalized.is_empty()
+                                && queued_urls.insert(normalized)
+                                && read_queue.len() + enriched.len() < expanded_candidate_pool_limit
+                            {
+                                read_queue.push_front(followup);
+                                followed_data_links += 1;
+                            }
+                        }
                     }
                     Err(err) => {
+                        mark_source_read_failure(&mut source, "transport_not_verified");
                         source["read"] = json!({
                             "ok": false,
                             "url": url,
@@ -290,13 +457,19 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                     }
                 }
             }
+        } else {
+            let reason = if is_non_scoreable_source(&source) {
+                "metadata_or_aggregator"
+            } else {
+                "read_not_attempted"
+            };
+            mark_source_not_read(&mut source, reason);
         }
         enriched.push(source);
     }
 
     let source_mix = summarize_source_mix(&enriched);
     let figure_candidates = collect_figure_candidates(&enriched);
-    let data_links = collect_data_links(&enriched);
     let sources_with_read = enriched
         .iter()
         .filter(|source| source.get("read").is_some())
@@ -312,6 +485,44 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
         })
         .count();
     let failed_page_reads = sources_with_read.saturating_sub(successful_page_reads);
+    let blocked_sources = enriched
+        .iter()
+        .filter(|source| {
+            source
+                .get("unblocking_required")
+                .and_then(Value::as_bool)
+                == Some(true)
+        })
+        .map(|source| {
+            json!({
+                "title": source.get("title").cloned().unwrap_or(Value::Null),
+                "canonical_url": source.get("url").cloned().unwrap_or(Value::Null),
+                "blocked_response_url": source.get("read_response_url").cloned().unwrap_or(Value::Null),
+                "reason": source.get("evidence_rejection_reason").cloned().unwrap_or(Value::Null),
+                "doi": source
+                    .get("scholarly_metadata")
+                    .and_then(|metadata| metadata.get("doi"))
+                    .cloned()
+                    .or_else(|| source.get("doi").cloned())
+                    .unwrap_or(Value::Null),
+                "next_action": "Use browser/scrape or resolve an alternate lawful repository/full-text location; do not retry the same blocked URL unchanged."
+            })
+        })
+        .collect::<Vec<_>>();
+    let verified_sources = enriched
+        .iter()
+        .filter(|source| source.get("evidence_eligible").and_then(Value::as_bool) == Some(true))
+        .cloned()
+        .collect::<Vec<_>>();
+    let data_links = collect_data_links(&verified_sources);
+    let rejected_source_count = enriched.len().saturating_sub(verified_sources.len());
+    let evidence_status = if verified_sources.is_empty() {
+        "no_verified_sources"
+    } else {
+        "verified_sources_available"
+    };
+    let systematic_coverage =
+        build_systematic_coverage(&plans, &search_runs, &verified_sources, excluded_urls.len());
     let mut payload = json!({
         "ok": true,
         "tool": "ctox_deep_research",
@@ -320,6 +531,8 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
         "focus": request.focus,
         "depth": request.depth.as_str(),
         "max_sources": max_sources,
+        "excluded_urls": excluded_urls,
+        "excluded_url_count": excluded_urls.len(),
         "source_policy": {
             "annas_archive": if request.include_annas_archive {
                 "metadata-only discovery. Do not download or reproduce copyrighted full text from unauthorized mirrors; use DOI, publisher, author metadata, abstracts, and lawful open-access copies."
@@ -329,6 +542,16 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
             "paper_full_text": "Prefer publisher abstracts, DOI landing pages, PubMed/PMC, arXiv, institutional repositories, and other lawful open-access sources.",
             "synthesis": "Treat this payload as an evidence bundle; the agent must still weigh credibility, conflict, recency, feasibility, and uncertainty before writing a report."
         },
+        "research_protocol": [
+            "scope_and_exclusions",
+            "primary_data_discovery",
+            "measurement_field_coverage",
+            "scholarly_and_technical_corroboration",
+            "original_artifact_and_hash_validation",
+            "candidate_rejection_audit",
+            "remaining_gap_declaration"
+        ],
+        "systematic_coverage": systematic_coverage,
         "search_plan": plans.iter().map(|plan| json!({
             "label": plan.label,
             "query": plan.query,
@@ -343,7 +566,15 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
             "planned_search_queries": plans.len(),
             "executed_search_queries": search_runs.len(),
             "database_queries": database_runs.len(),
+            "discovered_source_candidates": discovered_candidate_count,
+            "candidate_pool_limit": candidate_pool_limit,
             "deduplicated_sources": enriched.len(),
+            "verified_sources": verified_sources.len(),
+            "rejected_source_candidates": rejected_source_count,
+            "read_budget": read_budget,
+            "followup_read_budget": followup_read_budget,
+            "read_attempts": read_attempts,
+            "followed_data_links": followed_data_links,
             "sources_with_page_read_attempts": sources_with_read,
             "successful_page_reads": successful_page_reads,
             "failed_page_reads": failed_page_reads,
@@ -354,8 +585,11 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                 + enriched.iter().take(24).count(),
         },
         "data_links": data_links,
+        "blocked_sources": blocked_sources,
         "figure_candidates": figure_candidates,
-        "sources": enriched,
+        "source_candidates": enriched,
+        "sources": verified_sources,
+        "evidence_status": evidence_status,
         "report_scaffold": report_scaffold(&query_text, profile),
     });
 
@@ -373,25 +607,150 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
     Ok(payload)
 }
 
-fn select_balanced_sources(sources: Vec<Value>, max_sources: usize) -> Vec<Value> {
-    let mut selected = Vec::new();
-    let mut buckets = BTreeMap::<String, Vec<Value>>::new();
-    let relevant_count = sources
+fn normalized_excluded_urls(urls: &[String]) -> BTreeSet<String> {
+    urls.iter()
+        .filter_map(|url| {
+            let normalized = normalize_url_key(url);
+            (!normalized.is_empty()).then_some(normalized)
+        })
+        .collect()
+}
+
+fn build_systematic_coverage(
+    plans: &[ResearchSearchPlan],
+    search_runs: &[Value],
+    verified_sources: &[Value],
+    excluded_url_count: usize,
+) -> Value {
+    let successful_plan_labels = search_runs
+        .iter()
+        .filter(|run| {
+            run.get("ok").and_then(Value::as_bool) == Some(true)
+                && run
+                    .get("result_count")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|count| count > 0)
+        })
+        .filter_map(|run| run.get("label").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>();
+    let planned_labels = plans
+        .iter()
+        .map(|plan| plan.label.to_string())
+        .collect::<BTreeSet<_>>();
+    let uncovered_plan_labels = planned_labels
+        .difference(&successful_plan_labels)
+        .cloned()
+        .collect::<Vec<_>>();
+    let primary_data_sources = verified_sources
         .iter()
         .filter(|source| {
             source
-                .get("discovery_score")
-                .and_then(Value::as_i64)
-                .is_some_and(|score| score >= 0)
+                .get("response_content_kind")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind.starts_with("data_"))
         })
         .count();
-    let filter_low_relevance = relevant_count >= max_sources.min(8);
+    let scholarly_full_text_sources = verified_sources
+        .iter()
+        .filter(|source| {
+            matches!(
+                source.get("source_type").and_then(Value::as_str),
+                Some("scholarly" | "open_access_paper")
+            ) && source
+                .get("actual_full_text_or_data")
+                .and_then(Value::as_bool)
+                == Some(true)
+        })
+        .count();
+    let hash_bound_sources = verified_sources
+        .iter()
+        .filter(|source| {
+            source
+                .get("snapshot_hash")
+                .and_then(Value::as_str)
+                .is_some_and(|hash| hash.starts_with("sha256:") && hash.len() == 71)
+        })
+        .count();
+    let distinct_domains = verified_sources
+        .iter()
+        .filter_map(|source| source.get("domain").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>();
+    let mut gaps = Vec::new();
+    if primary_data_sources == 0 {
+        gaps.push("no_verified_primary_data");
+    }
+    if scholarly_full_text_sources == 0 {
+        gaps.push("no_verified_scholarly_full_text");
+    }
+    if distinct_domains.len() < 2 {
+        gaps.push("insufficient_independent_domains");
+    }
+    if !uncovered_plan_labels.is_empty() {
+        gaps.push("search_facets_without_results");
+    }
+    let complete = gaps.is_empty();
+    json!({
+        "planned_facets": planned_labels,
+        "successful_facets": successful_plan_labels,
+        "uncovered_facets": uncovered_plan_labels,
+        "excluded_existing_url_count": excluded_url_count,
+        "verified_primary_data_sources": primary_data_sources,
+        "verified_scholarly_full_text_sources": scholarly_full_text_sources,
+        "hash_bound_verified_sources": hash_bound_sources,
+        "independent_verified_domains": distinct_domains,
+        "remaining_gaps": gaps,
+        "complete": complete,
+    })
+}
+
+fn research_read_budget(depth: DeepResearchDepth, max_sources: usize) -> usize {
+    let round_cap = match depth {
+        DeepResearchDepth::Quick => 16,
+        DeepResearchDepth::Standard => 32,
+        DeepResearchDepth::Exhaustive => 64,
+    };
+    max_sources
+        .saturating_mul(2)
+        .min(round_cap.max(max_sources))
+        .min(300)
+}
+
+fn research_read_timeout_cap_ms(depth: DeepResearchDepth) -> u64 {
+    match depth {
+        DeepResearchDepth::Quick => 30_000,
+        DeepResearchDepth::Standard => 60_000,
+        DeepResearchDepth::Exhaustive => 180_000,
+    }
+}
+
+fn research_max_artifact_bytes(depth: DeepResearchDepth) -> usize {
+    match depth {
+        DeepResearchDepth::Quick => 16_000_000,
+        DeepResearchDepth::Standard => 64_000_000,
+        DeepResearchDepth::Exhaustive => 256_000_000,
+    }
+}
+
+fn research_candidate_pool_limit(depth: DeepResearchDepth, max_sources: usize) -> usize {
+    research_read_budget(depth, max_sources)
+        .max(max_sources.saturating_mul(4))
+        .min(300)
+}
+
+fn select_balanced_sources(sources: Vec<Value>, max_sources: usize) -> Vec<Value> {
+    let mut selected = Vec::new();
+    let mut buckets = BTreeMap::<String, Vec<Value>>::new();
     for source in sources {
-        if filter_low_relevance
-            && source
-                .get("discovery_score")
-                .and_then(Value::as_i64)
-                .is_some_and(|score| score < 0)
+        // Negative discovery scores are an explicit off-topic decision. Keep
+        // those rows in source_candidates for the rejection audit, but never
+        // spend the bounded full-text budget on them merely because a weak
+        // provider returned too few relevant alternatives.
+        if source
+            .get("discovery_score")
+            .and_then(Value::as_i64)
+            .is_some_and(|score| score < 0)
         {
             continue;
         }
@@ -417,6 +776,8 @@ fn select_balanced_sources(sources: Vec<Value>, max_sources: usize) -> Vec<Value
     }
 
     let preferred = [
+        "data_file",
+        "archive_metadata",
         "open_access_paper",
         "scholarly",
         "patent",
@@ -443,6 +804,76 @@ fn select_balanced_sources(sources: Vec<Value>, max_sources: usize) -> Vec<Value
         }
     }
     selected
+}
+
+fn seed_explicit_identifier_sources(
+    query: &str,
+    seen_urls: &mut BTreeSet<String>,
+    sources: &mut Vec<Value>,
+) {
+    for doi in extract_explicit_dois(query) {
+        let (url, source_type) = doi
+            .strip_prefix("10.5281/zenodo.")
+            .filter(|record_id| record_id.chars().all(|ch| ch.is_ascii_digit()))
+            .map(|record_id| {
+                (
+                    format!("https://zenodo.org/records/{record_id}"),
+                    "archive_metadata",
+                )
+            })
+            .unwrap_or_else(|| (format!("https://doi.org/{doi}"), "paper_metadata"));
+        if !seen_urls.insert(normalize_url_key(&url)) {
+            continue;
+        }
+        sources.push(json!({
+            "title": format!("Explicit DOI {doi}"),
+            "url": url,
+            "canonical_url": url,
+            "domain": domain_for_url(&url),
+            "snippet": format!("Exact identifier supplied by the research request: {doi}"),
+            "rank": 0,
+            "source": "explicit_identifier",
+            "source_type": source_type,
+            "source_tier": source_tier_for_source(source_type),
+            "verification_status": "unverified",
+            "discovery_status": "explicit_identifier",
+            "evidence_eligible": false,
+            "search_label": "explicit_identifier",
+            "scholarly": true,
+            "metadata_only": true,
+            "doi": doi,
+        }));
+    }
+}
+
+fn extract_explicit_dois(text: &str) -> Vec<String> {
+    let mut dois = Vec::new();
+    let mut seen = BTreeSet::new();
+    for token in text.split_whitespace() {
+        let candidate = token
+            .trim_end_matches(['.', ':', ',', ';'])
+            .trim_matches(|ch: char| {
+                matches!(
+                    ch,
+                    '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | ',' | ';' | '"' | '\''
+                )
+            })
+            .trim_end_matches(['.', ':'])
+            .trim_start_matches("https://doi.org/")
+            .trim_start_matches("http://doi.org/")
+            .trim_start_matches("doi:")
+            .to_ascii_lowercase();
+        if candidate.starts_with("10.")
+            && candidate.contains('/')
+            && candidate
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ".-_/()".contains(ch))
+            && seen.insert(candidate.clone())
+        {
+            dois.push(candidate);
+        }
+    }
+    dois
 }
 
 fn normalize_required_query(raw: &str) -> Result<String> {
@@ -541,12 +972,16 @@ fn append_focus(mut query: String, focus: Option<&str>) -> String {
         query.push(' ');
         query.push_str(focus);
     }
-    query.chars().take(260).collect()
+    truncate_query_at_word_boundary(&query, 180)
 }
 
 fn derive_measurement_data_query(raw: &str) -> String {
     let lowered = raw.to_ascii_lowercase();
-    let mut terms = important_query_terms(raw);
+    let mut terms = topical_query_terms(raw)
+        .into_iter()
+        .filter(|term| !term.chars().any(|ch| ch.is_ascii_digit()))
+        .take(16)
+        .collect::<Vec<_>>();
     if lowered.contains("load") || lowered.contains("last") {
         terms.extend([
             "load".to_string(),
@@ -572,7 +1007,46 @@ fn derive_measurement_data_query(raw: &str) -> String {
             unique.push(term);
         }
     }
-    unique.join(" ").chars().take(220).collect()
+    truncate_query_at_word_boundary(&unique.join(" "), 150)
+}
+
+fn truncate_query_at_word_boundary(query: &str, max_chars: usize) -> String {
+    let compact = query.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() <= max_chars {
+        return compact;
+    }
+    let mut out = String::new();
+    for term in compact.split_whitespace() {
+        let next_len = out.chars().count() + usize::from(!out.is_empty()) + term.chars().count();
+        if next_len > max_chars {
+            break;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(term);
+    }
+    out
+}
+
+fn compose_search_query(core: &str, suffix: &str) -> String {
+    const MAX_QUERY_CHARS: usize = 150;
+    const MAX_CORE_CHARS: usize = 96;
+
+    let suffix = truncate_query_at_word_boundary(suffix, MAX_QUERY_CHARS);
+    if suffix.is_empty() {
+        return truncate_query_at_word_boundary(core, MAX_QUERY_CHARS);
+    }
+    let reserved_core_chars = MAX_QUERY_CHARS
+        .saturating_sub(suffix.chars().count())
+        .saturating_sub(1)
+        .min(MAX_CORE_CHARS);
+    let core = truncate_query_at_word_boundary(core, reserved_core_chars);
+    if core.is_empty() {
+        suffix
+    } else {
+        format!("{core} {suffix}")
+    }
 }
 
 fn build_research_search_plan(
@@ -583,21 +1057,21 @@ fn build_research_search_plan(
     let mut plans = vec![
         ResearchSearchPlan {
             label: "broad_web",
-            query: query.to_string(),
+            query: truncate_query_at_word_boundary(query, 120),
             domains: Vec::new(),
             scholarly: false,
             metadata_only: false,
         },
         ResearchSearchPlan {
             label: "scholarly_general",
-            query: format!("{query} review state of the art feasibility limitations"),
+            query: compose_search_query(query, "review feasibility limitations"),
             domains: Vec::new(),
             scholarly: true,
             metadata_only: false,
         },
         ResearchSearchPlan {
             label: "open_access",
-            query: format!("{query} PDF open access preprint DOI"),
+            query: compose_search_query(query, "PDF open access DOI"),
             domains: vec![
                 "arxiv.org".to_string(),
                 "pmc.ncbi.nlm.nih.gov".to_string(),
@@ -610,14 +1084,14 @@ fn build_research_search_plan(
         },
         ResearchSearchPlan {
             label: "semantic_scholar",
-            query: format!("{query} site:semanticscholar.org"),
+            query: compose_search_query(query, "site:semanticscholar.org"),
             domains: vec!["semanticscholar.org".to_string()],
             scholarly: true,
             metadata_only: true,
         },
         ResearchSearchPlan {
             label: "crossref_doi",
-            query: format!("{query} DOI Crossref"),
+            query: compose_search_query(query, "DOI Crossref"),
             domains: vec!["crossref.org".to_string(), "doi.org".to_string()],
             scholarly: true,
             metadata_only: true,
@@ -628,23 +1102,24 @@ fn build_research_search_plan(
         plans.extend([
             ResearchSearchPlan {
                 label: "measured_data_sources",
-                query: format!("{query} measured experimental dataset benchmark data tables"),
-                domains: Vec::new(),
-                scholarly: true,
-                metadata_only: false,
-            },
-            ResearchSearchPlan {
-                label: "load_and_operating_fields",
-                query: format!(
-                    "{query} force moment load thrust torque RPM current voltage power vibration IMU"
+                query: compose_search_query(
+                    query,
+                    "measured experimental dataset benchmark tables",
                 ),
                 domains: Vec::new(),
                 scholarly: true,
                 metadata_only: false,
             },
             ResearchSearchPlan {
+                label: "load_and_operating_fields",
+                query: compose_search_query(query, "force moment thrust torque RPM vibration"),
+                domains: Vec::new(),
+                scholarly: true,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
                 label: "data_repositories",
-                query: format!("{query} dataset csv xlsx github zenodo figshare mendeley dataverse"),
+                query: compose_search_query(query, "dataset csv github zenodo figshare dataverse"),
                 domains: vec![
                     "github.com".to_string(),
                     "zenodo.org".to_string(),
@@ -657,7 +1132,7 @@ fn build_research_search_plan(
             },
             ResearchSearchPlan {
                 label: "technical_reports_data",
-                query: format!("{query} technical report data report test bed raw data"),
+                query: compose_search_query(query, "technical report test bed raw data"),
                 domains: vec![
                     "nasa.gov".to_string(),
                     "osti.gov".to_string(),
@@ -665,6 +1140,46 @@ fn build_research_search_plan(
                     "faa.gov".to_string(),
                 ],
                 scholarly: false,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "named_benchmark_databases",
+                query: compose_search_query(
+                    query,
+                    "UIUC Tyto APC propeller database original measured data",
+                ),
+                domains: Vec::new(),
+                scholarly: false,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "original_data_files",
+                query: compose_search_query(
+                    query,
+                    "original file CSV TXT XLSX ZIP supplementary data download",
+                ),
+                domains: Vec::new(),
+                scholarly: false,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "measurement_validation",
+                query: compose_search_query(
+                    query,
+                    "load cell calibration uncertainty validation repeatability",
+                ),
+                domains: Vec::new(),
+                scholarly: true,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "bearing_load_transfer",
+                query: compose_search_query(
+                    query,
+                    "motor shaft bearing radial axial load thrust torque measured",
+                ),
+                domains: Vec::new(),
+                scholarly: true,
                 metadata_only: false,
             },
         ]);
@@ -677,7 +1192,7 @@ fn build_research_search_plan(
     {
         plans.push(ResearchSearchPlan {
             label: "user_focus",
-            query: format!("{query} {}", focus.trim()),
+            query: compose_search_query(query, focus.trim()),
             domains: Vec::new(),
             scholarly: false,
             metadata_only: false,
@@ -744,8 +1259,9 @@ fn build_research_search_plan(
             },
             ResearchSearchPlan {
                 label: "aircraft_composites_ndt",
-                query: format!(
-                    "{query} aircraft composite non destructive testing terahertz eddy current thermography"
+                query: compose_search_query(
+                    query,
+                    "aircraft composite non destructive testing terahertz eddy current thermography",
                 ),
                 domains: vec![
                     "sciencedirect.com".to_string(),
@@ -759,7 +1275,7 @@ fn build_research_search_plan(
             },
             ResearchSearchPlan {
                 label: "patents_and_industry",
-                query: format!("{query} patent industrial inspection system"),
+                query: compose_search_query(query, "patent industrial inspection system"),
                 domains: vec![
                     "patents.google.com".to_string(),
                     "comsol.com".to_string(),
@@ -770,7 +1286,10 @@ fn build_research_search_plan(
             },
             ResearchSearchPlan {
                 label: "failure_modes",
-                query: format!("{query} anomaly defect delamination corrosion broken mesh hidden metal"),
+                query: compose_search_query(
+                    query,
+                    "anomaly defect delamination corrosion broken mesh hidden metal",
+                ),
                 domains: Vec::new(),
                 scholarly: false,
                 metadata_only: false,
@@ -780,21 +1299,21 @@ fn build_research_search_plan(
         plans.extend([
             ResearchSearchPlan {
                 label: "topic_literature",
-                query: format!("{query} literature review technical report dataset"),
+                query: compose_search_query(query, "literature review technical report dataset"),
                 domains: Vec::new(),
                 scholarly: true,
                 metadata_only: false,
             },
             ResearchSearchPlan {
                 label: "topic_measurement_data",
-                query: format!("{query} measured data experimental dataset benchmark"),
+                query: compose_search_query(query, "measured data experimental dataset benchmark"),
                 domains: Vec::new(),
                 scholarly: true,
                 metadata_only: false,
             },
             ResearchSearchPlan {
                 label: "topic_open_access",
-                query: format!("{query} open access PDF data repository"),
+                query: compose_search_query(query, "open access PDF data repository"),
                 domains: vec![
                     "arxiv.org".to_string(),
                     "zenodo.org".to_string(),
@@ -808,14 +1327,17 @@ fn build_research_search_plan(
             },
             ResearchSearchPlan {
                 label: "topic_patents_industry",
-                query: format!("{query} patent manufacturer datasheet manual specification"),
+                query: compose_search_query(
+                    query,
+                    "patent manufacturer datasheet manual specification",
+                ),
                 domains: vec!["patents.google.com".to_string(), "github.com".to_string()],
                 scholarly: false,
                 metadata_only: false,
             },
             ResearchSearchPlan {
                 label: "topic_reports_standards",
-                query: format!("{query} government technical report standard guidance"),
+                query: compose_search_query(query, "government technical report standard guidance"),
                 domains: Vec::new(),
                 scholarly: false,
                 metadata_only: false,
@@ -833,7 +1355,37 @@ fn build_research_search_plan(
         });
     }
 
+    if is_measurement_or_source_review_query(query) {
+        plans.sort_by_key(|plan| measurement_plan_priority(plan.label));
+    }
+
     plans
+}
+
+fn measurement_plan_priority(label: &str) -> usize {
+    match label {
+        "broad_web" => 0,
+        "scholarly_general" => 1,
+        "measured_data_sources" => 2,
+        "open_access" => 3,
+        "data_repositories" => 4,
+        "named_benchmark_databases" => 5,
+        "measurement_validation" => 6,
+        "original_data_files" => 7,
+        "load_and_operating_fields" => 8,
+        "bearing_load_transfer" => 9,
+        "technical_reports_data" => 10,
+        "topic_measurement_data" => 11,
+        "topic_open_access" => 12,
+        "topic_literature" => 13,
+        "crossref_doi" => 14,
+        "semantic_scholar" => 15,
+        "topic_reports_standards" => 16,
+        "topic_patents_industry" => 17,
+        "user_focus" => 18,
+        "annas_archive_metadata" => 19,
+        _ => 20,
+    }
 }
 
 fn is_lsp_composite_topic(query: &str) -> bool {
@@ -963,7 +1515,7 @@ fn score_source_discovery(source: &Value, query: &str) -> i64 {
         }
     }
 
-    let mut score = topic_score * 8;
+    let mut score = topic_score * 10;
     for term in important_query_terms(query) {
         if haystack.contains(&term) {
             score += if topical_query_stopwords().contains(term.as_str()) {
@@ -1102,10 +1654,361 @@ fn is_non_scoreable_source(source: &Value) -> bool {
         .unwrap_or_default()
         .to_ascii_lowercase();
     source.get("metadata_only").and_then(Value::as_bool) == Some(true)
+        || is_discovery_only_source(source)
         || source_type.contains("metadata")
         || source_type == "aggregator"
         || source_tier == "metadata"
         || source_tier == "aggregator"
+        || is_likely_reference_collection(source)
+}
+
+fn is_discovery_only_source(source: &Value) -> bool {
+    let url = source
+        .get("canonical_url")
+        .and_then(Value::as_str)
+        .or_else(|| source.get("url").and_then(Value::as_str))
+        .unwrap_or_default();
+    let title = source
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let snippet = source
+        .get("snippet")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    is_low_value_generic_source(url, title, snippet)
+}
+
+fn assess_evidence_promotion(
+    source: &Value,
+    transport_verified: bool,
+    content_extracted: bool,
+) -> (bool, Option<&'static str>) {
+    if !transport_verified {
+        return (false, Some("transport_not_verified"));
+    }
+    if !content_extracted {
+        return (false, Some("no_extracted_evidence"));
+    }
+    if is_zenodo_record_metadata_source(source) {
+        return (false, Some("archive_metadata_requires_original_file_parse"));
+    }
+    if is_discovery_only_source(source) {
+        return (false, Some("discovery_only_source"));
+    }
+    let metadata_source_with_actual_file = source
+        .get("actual_full_text_or_data")
+        .and_then(Value::as_bool)
+        == Some(true)
+        && is_metadata_source_kind(source);
+    if is_non_scoreable_source(source) && !metadata_source_with_actual_file {
+        return (false, Some("metadata_or_aggregator"));
+    }
+    if source
+        .get("actual_full_text_or_data")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return (false, Some("no_full_text_or_data_file"));
+    }
+    match source
+        .get("evidence_relevance_score")
+        .and_then(Value::as_i64)
+    {
+        Some(score) if score >= 8 => {}
+        Some(_) => return (false, Some("extracted_evidence_off_topic")),
+        None => return (false, Some("extracted_evidence_relevance_not_scored")),
+    }
+    match source.get("discovery_score").and_then(Value::as_i64) {
+        Some(score) if score >= 16 => (true, None),
+        Some(_) => (false, Some("low_topic_relevance")),
+        None => (false, Some("topic_relevance_not_scored")),
+    }
+}
+
+fn score_read_evidence_relevance(read: &Value, query: &str) -> Option<i64> {
+    let evidence_text = read_body_evidence_text(read);
+    if !is_meaningful_evidence_text(&evidence_text) {
+        return None;
+    }
+
+    // Score only retrieved body evidence. Search titles, snippets and URLs are
+    // discovery hints and must not make an unrelated fetched page scoreable.
+    let body = evidence_text.to_ascii_lowercase();
+    let topical_terms = topical_query_terms(query);
+    if topical_terms.is_empty() {
+        return None;
+    }
+    let matched_terms = topical_terms
+        .iter()
+        .filter(|term| body.contains(term.as_str()))
+        .count();
+    Some(normalized_relevance_score(
+        matched_terms,
+        topical_terms.len(),
+    ))
+}
+
+fn normalized_relevance_score(matched_terms: usize, total_terms: usize) -> i64 {
+    if total_terms == 0 {
+        return 0;
+    }
+    i64::try_from((matched_terms * 10 + total_terms / 2) / total_terms).unwrap_or(10)
+}
+
+fn read_body_evidence_text(read: &Value) -> String {
+    let mut evidence_text = String::new();
+    append_json_text(&mut evidence_text, read.get("page_text_excerpt"));
+    append_json_text(&mut evidence_text, read.get("page_sections"));
+    if evidence_text.trim().is_empty() {
+        // Older cached reads do not carry page_text_excerpt/page_sections.
+        // Their excerpts and find matches are still extracted body evidence,
+        // but summary alone is deliberately not trusted for promotion.
+        append_json_text(&mut evidence_text, read.get("excerpts"));
+        append_json_text(&mut evidence_text, read.get("find_results"));
+    }
+    evidence_text
+}
+
+fn read_has_actual_full_text_or_data(source: &Value, read: &Value) -> bool {
+    if read
+        .get("response_content_kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind.starts_with("data_"))
+        && read_transport_verified(read)
+    {
+        return true;
+    }
+    let evidence_text = read_body_evidence_text(read);
+    if !is_meaningful_evidence_text(&evidence_text) {
+        return false;
+    }
+
+    let read_url = read
+        .get("url")
+        .and_then(Value::as_str)
+        .or_else(|| source.get("url").and_then(Value::as_str))
+        .unwrap_or_default();
+    let canonical_url = read
+        .get("canonical_url")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if read.get("is_pdf").and_then(Value::as_bool) == Some(true)
+        && read
+            .get("pdf_total_pages")
+            .and_then(Value::as_u64)
+            .is_some_and(|pages| pages > 0)
+    {
+        return true;
+    }
+    if read
+        .get("response_content_kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind.starts_with("data_"))
+    {
+        return true;
+    }
+    if is_data_file_url(read_url) || is_data_file_url(canonical_url) {
+        // A filename is only a discovery hint. The response must be classified
+        // and validated by its bytes before it can become data evidence.
+        return false;
+    }
+    if is_metadata_landing_source(source, read_url, canonical_url) {
+        return false;
+    }
+
+    // HTML extractors do not consistently preserve paragraph separators. A
+    // canonical, non-metadata page with substantial immutable body text is
+    // still actual source content even when it arrives as one text block.
+    evidence_text.chars().count() >= 800
+}
+
+fn read_transport_verified(read: &Value) -> bool {
+    read.get("transport_evidence_eligible")
+        .and_then(Value::as_bool)
+        // Cached payloads from before the transport/relevance split only
+        // contain evidence_eligible. Keep those fail-closed unless they were
+        // already fully admitted.
+        .or_else(|| read.get("evidence_eligible").and_then(Value::as_bool))
+        .unwrap_or(false)
+}
+
+fn is_metadata_landing_source(source: &Value, read_url: &str, canonical_url: &str) -> bool {
+    let doi_resolver_did_not_reach_content = is_doi_resolver_url(canonical_url)
+        || (is_doi_resolver_url(read_url)
+            && (canonical_url.trim().is_empty()
+                || normalize_url_key(read_url) == normalize_url_key(canonical_url)));
+    is_metadata_source_kind(source)
+        || doi_resolver_did_not_reach_content
+        || is_zenodo_record_metadata_url(read_url)
+        || is_zenodo_record_metadata_url(canonical_url)
+        || is_github_repository_root_url(read_url)
+        || is_github_repository_root_url(canonical_url)
+}
+
+fn is_github_repository_root_url(raw: &str) -> bool {
+    let Ok(url) = Url::parse(raw) else {
+        return false;
+    };
+    if !url
+        .host_str()
+        .is_some_and(|host| host.eq_ignore_ascii_case("github.com"))
+    {
+        return false;
+    }
+    url.path_segments()
+        .map(|segments| {
+            segments
+                .filter(|segment| !segment.trim().is_empty())
+                .count()
+                == 2
+        })
+        .unwrap_or(false)
+}
+
+fn is_metadata_source_kind(source: &Value) -> bool {
+    let source_type = source
+        .get("source_type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    source.get("metadata_only").and_then(Value::as_bool) == Some(true)
+        || source_type.contains("metadata")
+        || source
+            .get("source_tier")
+            .and_then(Value::as_str)
+            .is_some_and(|tier| tier.eq_ignore_ascii_case("metadata"))
+}
+
+fn is_data_file_url(raw: &str) -> bool {
+    let Some(path) = Url::parse(raw)
+        .ok()
+        .map(|url| url.path().to_ascii_lowercase())
+    else {
+        return false;
+    };
+    [
+        ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".xlsx", ".xls", ".parquet", ".txt", ".zip",
+        ".gz", ".tgz", ".h5", ".hdf5",
+    ]
+    .iter()
+    .any(|suffix| {
+        path.ends_with(suffix) || path.split('/').any(|segment| segment.ends_with(suffix))
+    })
+}
+
+fn read_has_meaningful_evidence(read: &Value) -> bool {
+    read_has_validated_data_evidence(read)
+        || read
+            .get("summary")
+            .and_then(Value::as_str)
+            .is_some_and(is_meaningful_evidence_text)
+        || read
+            .get("excerpts")
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(is_meaningful_evidence_text)
+            })
+        || read
+            .get("find_results")
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items.iter().any(|item| {
+                    item.get("matches")
+                        .and_then(Value::as_array)
+                        .is_some_and(|matches| {
+                            matches
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .any(is_meaningful_evidence_text)
+                        })
+                })
+            })
+}
+
+fn read_has_validated_data_evidence(read: &Value) -> bool {
+    let Some(content_kind) = read.get("response_content_kind").and_then(Value::as_str) else {
+        return false;
+    };
+    if !content_kind.starts_with("data_")
+        || read.get("evidence_eligible").and_then(Value::as_bool) != Some(true)
+        || !read_transport_verified(read)
+        || !read
+            .get("snapshot_hash")
+            .and_then(Value::as_str)
+            .is_some_and(|hash| hash.starts_with("sha256:") && hash.len() == 71)
+        || !read
+            .get("response_artifact_path")
+            .and_then(Value::as_str)
+            .is_some_and(|path| !path.trim().is_empty())
+    {
+        return false;
+    }
+    if content_kind != "data_zip" {
+        return true;
+    }
+    let Some(manifest) = read.get("response_archive_manifest") else {
+        return false;
+    };
+    manifest.get("archive_sha256").and_then(Value::as_str)
+        == read.get("snapshot_hash").and_then(Value::as_str)
+        && manifest
+            .get("member_count")
+            .and_then(Value::as_u64)
+            .is_some_and(|count| count > 0)
+        && manifest
+            .get("data_member_count")
+            .and_then(Value::as_u64)
+            .is_some_and(|count| count > 0)
+}
+
+fn mark_source_read_failure(source: &mut Value, reason: &str) {
+    source["verification_status"] = Value::String("failed".to_string());
+    source["transport_verified"] = Value::Bool(false);
+    source["content_extracted"] = Value::Bool(false);
+    source["evidence_eligible"] = Value::Bool(false);
+    source["evidence_rejection_reason"] = Value::String(reason.to_string());
+}
+
+fn mark_source_not_read(source: &mut Value, reason: &str) {
+    source["verification_status"] = Value::String("unverified".to_string());
+    source["transport_verified"] = Value::Bool(false);
+    source["content_extracted"] = Value::Bool(false);
+    source["evidence_eligible"] = Value::Bool(false);
+    source["evidence_rejection_reason"] = Value::String(reason.to_string());
+}
+
+fn is_meaningful_evidence_text(text: &str) -> bool {
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    normalized.chars().count() >= 32
+        && normalized.chars().filter(|ch| ch.is_alphabetic()).count() >= 16
+}
+
+fn is_likely_reference_collection(source: &Value) -> bool {
+    let domain = source
+        .get("domain")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let title = source
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let url = source
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    domain == "kaggle.com"
+        || domain.ends_with(".kaggle.com")
+        || ((domain == "github.com" || domain.ends_with(".github.com"))
+            && ["awesome", "resource", "link-list", "curated-list"]
+                .iter()
+                .any(|marker| title.contains(marker) || url.contains(marker)))
 }
 
 fn source_tier_for_source(source_type: &str) -> String {
@@ -1154,24 +2057,19 @@ fn topical_query_stopwords() -> BTreeSet<&'static str> {
         "current",
         "data",
         "dataset",
-        "force",
-        "load",
-        "loads",
-        "measured",
-        "measurement",
-        "moment",
-        "performance",
-        "power",
-        "rpm",
+        "find",
+        "information",
+        "official",
+        "original",
+        "real",
+        "report",
+        "research",
+        "review",
+        "small",
         "source",
         "sources",
-        "stand",
-        "takeoff",
-        "test",
-        "thrust",
-        "torque",
-        "voltage",
-        "weight",
+        "study",
+        "technical",
     ])
 }
 
@@ -1185,7 +2083,11 @@ fn is_low_value_generic_source(url: &str, _title: &str, _snippet: &str) -> bool 
         "wikipedia.org",
         "wiktionary.org",
         "researchgate.net",
-        "scholar.google.com",
+        "scholar.google.",
+        "academia.edu",
+        "semanticscholar.org",
+        "openalex.org",
+        "crossref.org",
     ]
     .iter()
     .any(|needle| domain.contains(needle));
@@ -1219,7 +2121,10 @@ fn important_query_terms(query: &str) -> Vec<String> {
     query
         .split(|ch: char| !ch.is_ascii_alphanumeric())
         .map(|part| part.trim().to_ascii_lowercase())
-        .filter(|part| part.len() >= 4 && !stopwords.contains(part.as_str()))
+        // Three-letter engineering acronyms such as UAV, UAS and RPM carry
+        // more scope than many longer generic words. Dropping them here
+        // silently broadens scientific searches into unrelated domains.
+        .filter(|part| part.len() >= 3 && !stopwords.contains(part.as_str()))
         .take(24)
         .collect()
 }
@@ -1367,6 +2272,9 @@ fn collect_scholarly_search_sources(
                 entry["open_access_license"] = license;
             }
         }
+        if let Some(score) = source_discovery_score(&entry, &plan.query) {
+            entry["discovery_score"] = Value::Number(score.into());
+        }
         sources.push(entry);
     }
 }
@@ -1412,7 +2320,13 @@ fn should_attempt_source_read(source: &Value) -> bool {
         .get("source_type")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if source_type == "annas_archive_metadata" {
+    if source_type == "annas_archive_metadata"
+        || (source_type == "paper_metadata"
+            && source
+                .get("open_access_pdf")
+                .and_then(Value::as_str)
+                .is_none())
+    {
         return false;
     }
     source_read_url(source).is_some()
@@ -1443,8 +2357,166 @@ fn source_read_url(source: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn source_relevance_query(source: &Value, research_query: &str) -> String {
+    let is_data_file = source.get("source_type").and_then(Value::as_str) == Some("data_file");
+    if is_data_file {
+        let mut identity_text = String::new();
+        append_json_text(&mut identity_text, source.get("title"));
+        append_json_text(&mut identity_text, source.get("url"));
+        let terms = important_query_terms(&identity_text)
+            .into_iter()
+            .filter(|term| !term.chars().any(|ch| ch.is_ascii_digit()))
+            .take(6)
+            .collect::<Vec<_>>();
+        if !terms.is_empty() {
+            return truncate_query_at_word_boundary(&terms.join(" "), 96);
+        }
+    }
+
+    let mut source_text = String::new();
+    append_json_text(&mut source_text, source.get("title"));
+    append_json_text(&mut source_text, source.get("parent_title"));
+    let mut terms = important_query_terms(&source_text)
+        .into_iter()
+        .take(5)
+        .collect::<Vec<_>>();
+    if terms.is_empty() {
+        append_json_text(&mut source_text, source.get("snippet"));
+        terms = important_query_terms(&source_text)
+            .into_iter()
+            .take(5)
+            .collect();
+    }
+    let source_has_numeric_identifier = source_text.chars().any(|ch| ch.is_ascii_digit());
+    let mut supporting_text = source_text.to_ascii_lowercase();
+    append_json_text(&mut supporting_text, source.get("snippet"));
+    let research_terms = topical_query_terms(research_query);
+    for term in research_terms
+        .iter()
+        .filter(|term| supporting_text.contains(term.as_str()))
+        .chain(
+            research_terms
+                .iter()
+                .filter(|term| !supporting_text.contains(term.as_str())),
+        )
+    {
+        if terms.len() >= 6 {
+            break;
+        }
+        if !source_has_numeric_identifier && term.chars().any(|ch| ch.is_ascii_digit()) {
+            continue;
+        }
+        if !terms
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(&term))
+        {
+            terms.push(term.clone());
+        }
+    }
+    if terms.is_empty() {
+        return truncate_query_at_word_boundary(research_query, 140);
+    }
+    truncate_query_at_word_boundary(&terms.join(" "), 96)
+}
+
+fn followup_data_sources(parent: &Value, read: &Value) -> Vec<Value> {
+    let mut text = String::new();
+    append_json_text(&mut text, read.get("page_text"));
+    append_json_text(&mut text, read.get("page_text_excerpt"));
+    append_json_text(&mut text, read.get("page_sections"));
+    append_json_text(&mut text, read.get("excerpts"));
+    append_json_text(&mut text, read.get("find_results"));
+    let parent_title = parent
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("repository source");
+    let parent_url = parent
+        .get("canonical_url")
+        .and_then(Value::as_str)
+        .or_else(|| parent.get("url").and_then(Value::as_str))
+        .unwrap_or_default();
+    let mut seen = BTreeSet::new();
+    let mut candidates = extract_urls(&text);
+    if let Some(raw_html) = read.get("raw_html").and_then(Value::as_str) {
+        candidates.extend(extract_html_data_links(raw_html, parent_url));
+    } else if read.get("response_content_kind").and_then(Value::as_str) == Some("html") {
+        if let Some(snapshot_path) = read
+            .get("response_artifact_path")
+            .and_then(Value::as_str)
+            .filter(|path| !path.trim().is_empty())
+        {
+            if let Ok(raw_html) = fs::read_to_string(snapshot_path) {
+                candidates.extend(extract_html_data_links(&raw_html, parent_url));
+            }
+        }
+    }
+    candidates
+        .into_iter()
+        .filter(|url| {
+            is_data_file_url(url)
+                || Url::parse(url).ok().is_some_and(|parsed| {
+                    let path = parsed.path().to_ascii_lowercase();
+                    path.contains("/files/") && path.ends_with("/content")
+                })
+        })
+        .filter(|url| seen.insert(normalize_url_key(url)))
+        .map(|url| {
+            let title = Url::parse(&url)
+                .ok()
+                .and_then(|parsed| {
+                    parsed.path_segments().and_then(|segments| {
+                        segments
+                            .filter(|segment| !segment.eq_ignore_ascii_case("content"))
+                            .next_back()
+                            .map(ToOwned::to_owned)
+                    })
+                })
+                .unwrap_or_else(|| "original data file".to_string());
+            json!({
+                "title": title,
+                "url": url,
+                "canonical_url": url,
+                "domain": domain_for_url(&url),
+                "snippet": format!("Original data file linked by {parent_title}"),
+                "source": "repository_followup",
+                "source_type": "data_file",
+                "source_tier": "primary",
+                "verification_status": "unverified",
+                "discovery_status": "linked_from_verified_repository_metadata",
+                "evidence_eligible": false,
+                "search_label": "repository_file_followup",
+                "scholarly": false,
+                "metadata_only": false,
+                "discovery_score": 100,
+                "parent_title": parent_title,
+                "parent_url": parent_url,
+            })
+        })
+        .collect()
+}
+
+fn extract_html_data_links(raw_html: &str, base_url: &str) -> Vec<String> {
+    let document = Html::parse_document(raw_html);
+    let Ok(selector) = Selector::parse("a[href]") else {
+        return Vec::new();
+    };
+    let base = Url::parse(base_url).ok();
+    document
+        .select(&selector)
+        .filter_map(|anchor| anchor.value().attr("href"))
+        .filter_map(|href| {
+            Url::parse(href)
+                .ok()
+                .or_else(|| base.as_ref().and_then(|base| base.join(href).ok()))
+        })
+        .map(|url| url.to_string())
+        .filter(|url| is_data_file_url(url))
+        .collect()
+}
+
 fn collect_scholarly_database_sources(
     root: &Path,
+    research_query: &str,
     plans: &[ResearchSearchPlan],
     request: &DeepResearchRequest,
     seen_urls: &mut BTreeSet<String>,
@@ -1455,12 +2527,63 @@ fn collect_scholarly_database_sources(
     }
 
     let mut runs = Vec::new();
-    let queries = plans
-        .iter()
-        .filter(|plan| plan.scholarly)
-        .map(|plan| plan.query.clone())
-        .take(request.depth.database_query_budget())
-        .collect::<Vec<_>>();
+    let mut citation_queue = VecDeque::<(String, usize, String)>::new();
+    let mut queued_references = BTreeSet::new();
+    let seed_query = compose_search_query(
+        &topical_query_terms(research_query)
+            .into_iter()
+            .take(8)
+            .collect::<Vec<_>>()
+            .join(" "),
+        "experimental measurement",
+    );
+    if !seed_query.is_empty() {
+        let seed_request = ScholarlySearchRequest {
+            query: seed_query.clone(),
+            provider: Some(ScholarlySearchProvider::Auto),
+            max_results: Some(scholarly_seed_results(request.depth)),
+            with_oa_pdf: true,
+            ..Default::default()
+        };
+        runs.push(match execute_scholarly_search(root, &seed_request) {
+            Ok(response) => {
+                queue_scholarly_references(
+                    &response.results,
+                    research_query,
+                    1,
+                    &mut citation_queue,
+                    &mut queued_references,
+                );
+                let values = response
+                    .results
+                    .into_iter()
+                    .map(scholarly_result_to_db_value)
+                    .collect();
+                let count = push_database_sources(
+                    "scholarly_auto_seed",
+                    &seed_query,
+                    values,
+                    seen_urls,
+                    sources,
+                );
+                json!({
+                    "database": "scholarly_auto_seed",
+                    "query": seed_query,
+                    "ok": true,
+                    "result_count": count,
+                })
+            }
+            Err(err) => json!({
+                "database": "scholarly_auto_seed",
+                "query": seed_query,
+                "ok": false,
+                "rate_limited": is_rate_limit_error(&err),
+                "error": err.to_string(),
+            }),
+        });
+    }
+    let queries =
+        scholarly_database_queries(research_query, plans, request.depth.database_query_budget());
     // The academic metadata clients now live behind `ScholarlySearchProvider`
     // in `crate::scholarly_search`; this loop drives them and keeps the
     // `paper_metadata` source-type stamping + relevance scoring in
@@ -1474,11 +2597,61 @@ fn collect_scholarly_database_sources(
             12usize,
         ),
     ];
+    let mut rate_limited = BTreeSet::new();
     for query in queries {
-        for (label, provider, limit) in databases {
-            runs.push(match scholarly_db_query(root, &query, provider, limit) {
+        let provider_results = std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for (label, provider, limit) in databases {
+                if rate_limited.contains(label) {
+                    continue;
+                }
+                let query = query.clone();
+                handles.push(scope.spawn(move || {
+                    (
+                        label,
+                        provider,
+                        scholarly_db_query(root, &query, provider, limit),
+                    )
+                }));
+            }
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("scholarly database worker panicked"))
+                .collect::<Vec<_>>()
+        });
+        for (label, provider, _) in databases {
+            if rate_limited.contains(label) {
+                runs.push(json!({
+                    "database": label,
+                    "query": query,
+                    "ok": false,
+                    "skipped": true,
+                    "error": "provider skipped after rate limit in this research run",
+                }));
+                continue;
+            }
+            let result = provider_results
+                .iter()
+                .find(|(candidate, _, _)| *candidate == label)
+                .map(|(_, _, result)| result)
+                .expect("every active scholarly provider has a worker result");
+            runs.push(match result {
                 Ok(items) => {
-                    let count = push_database_sources(label, &query, items, seen_urls, sources);
+                    if provider == ScholarlySearchProvider::OpenAlex {
+                        queue_scholarly_references(
+                            &items,
+                            research_query,
+                            1,
+                            &mut citation_queue,
+                            &mut queued_references,
+                        );
+                    }
+                    let values = items
+                        .iter()
+                        .cloned()
+                        .map(scholarly_result_to_db_value)
+                        .collect();
+                    let count = push_database_sources(label, &query, values, seen_urls, sources);
                     json!({
                         "database": label,
                         "query": query,
@@ -1486,16 +2659,82 @@ fn collect_scholarly_database_sources(
                         "result_count": count,
                     })
                 }
-                Err(err) => json!({
-                    "database": label,
-                    "query": query,
-                    "ok": false,
-                    "error": err.to_string(),
-                }),
+                Err(err) => {
+                    let rate_limit = is_rate_limit_error(&err);
+                    if rate_limit {
+                        rate_limited.insert(label);
+                    }
+                    json!({
+                        "database": label,
+                        "query": query,
+                        "ok": false,
+                        "rate_limited": rate_limit,
+                        "error": err.to_string(),
+                    })
+                }
             });
         }
     }
+    if request.include_papers {
+        runs.push(follow_scholarly_reference_chain(
+            root,
+            research_query,
+            request.depth,
+            &mut citation_queue,
+            &mut queued_references,
+            seen_urls,
+            sources,
+        ));
+    }
     runs
+}
+
+fn scholarly_database_queries(
+    research_query: &str,
+    plans: &[ResearchSearchPlan],
+    budget: usize,
+) -> Vec<String> {
+    let core = topical_query_terms(research_query)
+        .into_iter()
+        .take(8)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut seen = BTreeSet::new();
+    let mut queries = Vec::new();
+    for plan in plans.iter().filter(|plan| plan.scholarly) {
+        let facet = match plan.label {
+            "scholarly_general" | "topic_literature" => "literature review",
+            "open_access" | "topic_open_access" => "open access",
+            "measured_data_sources" | "topic_measurement_data" => {
+                "experimental measurement dataset"
+            }
+            "load_and_operating_fields" => "force thrust torque RPM vibration",
+            "measurement_validation" => "calibration uncertainty repeatability",
+            "bearing_load_transfer" => "bearing radial axial load shaft",
+            "crossref_doi" => "DOI",
+            _ => "scholarly source",
+        };
+        let query = truncate_query_at_word_boundary(&format!("{core} {facet}"), 140);
+        let key = query.to_ascii_lowercase();
+        if !query.is_empty() && seen.insert(key) {
+            queries.push(query);
+            if queries.len() >= budget.max(1) {
+                break;
+            }
+        }
+    }
+    if queries.is_empty() {
+        queries.push(truncate_query_at_word_boundary(research_query, 140));
+    }
+    queries
+}
+
+fn scholarly_seed_results(depth: DeepResearchDepth) -> usize {
+    match depth {
+        DeepResearchDepth::Quick => 8,
+        DeepResearchDepth::Standard => 12,
+        DeepResearchDepth::Exhaustive => 16,
+    }
 }
 
 fn scholarly_db_query(
@@ -1503,7 +2742,7 @@ fn scholarly_db_query(
     query: &str,
     provider: ScholarlySearchProvider,
     limit: usize,
-) -> Result<Vec<Value>> {
+) -> Result<Vec<ScholarlyResult>> {
     let response = execute_scholarly_search(
         root,
         &ScholarlySearchRequest {
@@ -1513,11 +2752,222 @@ fn scholarly_db_query(
             ..Default::default()
         },
     )?;
-    Ok(response
-        .results
-        .into_iter()
-        .map(scholarly_result_to_db_value)
-        .collect())
+    Ok(response.results)
+}
+
+fn citation_chain_depth(depth: DeepResearchDepth) -> usize {
+    match depth {
+        DeepResearchDepth::Quick => 1,
+        DeepResearchDepth::Standard => 2,
+        DeepResearchDepth::Exhaustive => 3,
+    }
+}
+
+fn citation_lookup_budget(depth: DeepResearchDepth) -> usize {
+    match depth {
+        DeepResearchDepth::Quick => 12,
+        DeepResearchDepth::Standard => 48,
+        DeepResearchDepth::Exhaustive => 120,
+    }
+}
+
+fn queue_scholarly_references(
+    results: &[ScholarlyResult],
+    research_query: &str,
+    depth: usize,
+    queue: &mut VecDeque<(String, usize, String)>,
+    seen: &mut BTreeSet<String>,
+) {
+    for result in results {
+        if !scholarly_result_is_relevant(result, research_query) {
+            continue;
+        }
+        for reference_id in &result.reference_ids {
+            let key = reference_id.trim().to_ascii_lowercase();
+            if !key.is_empty() && seen.insert(key) {
+                queue.push_back((reference_id.clone(), depth, result.source_id.clone()));
+            }
+        }
+    }
+}
+
+fn scholarly_result_is_relevant(result: &ScholarlyResult, research_query: &str) -> bool {
+    let query_terms = topical_query_terms(research_query);
+    if query_terms.is_empty() {
+        return true;
+    }
+    let mut corpus = result.title.to_ascii_lowercase();
+    if let Some(snippet) = &result.snippet {
+        corpus.push(' ');
+        corpus.push_str(&snippet.to_ascii_lowercase());
+    }
+    let mut matched = BTreeSet::new();
+    for term in query_terms {
+        let aliases: &[&str] = match term.as_str() {
+            "uav" | "uas" => &[
+                "uav",
+                "uas",
+                "unmanned aerial",
+                "unmanned aircraft",
+                "drone",
+            ],
+            "propeller" => &["propeller", "propulsion", "rotor"],
+            "bearing" => &["bearing", "shaft support"],
+            _ => &[],
+        };
+        if corpus.contains(&term) || aliases.iter().any(|alias| corpus.contains(alias)) {
+            matched.insert(term);
+        }
+    }
+    matched.len() >= 2
+}
+
+fn supported_scholarly_reference_id(reference_id: &str) -> bool {
+    let value = reference_id.trim().to_ascii_lowercase();
+    value.contains("openalex.org/w") || (value.starts_with("10.") && value.contains('/'))
+}
+
+fn resolve_scholarly_reference(root: &Path, reference_id: &str) -> Result<ScholarlyResult> {
+    if reference_id.to_ascii_lowercase().contains("openalex.org/w") {
+        return openalex_work_by_id(root, reference_id);
+    }
+
+    let doi = reference_id
+        .trim()
+        .trim_start_matches("https://doi.org/")
+        .trim_start_matches("http://doi.org/")
+        .trim_start_matches("doi:")
+        .trim();
+    if !doi.to_ascii_lowercase().starts_with("10.") || !doi.contains('/') {
+        anyhow::bail!("unsupported scholarly reference id");
+    }
+    let mut result = crossref_work_by_doi(root, doi, true)?;
+    if let Ok(openalex) = openalex_work_by_doi(root, doi) {
+        if result.open_access_pdf.is_none() {
+            result.open_access_pdf = openalex.open_access_pdf;
+            result.open_access_license = openalex.open_access_license;
+        }
+        result
+            .reference_ids
+            .extend(openalex.reference_ids.into_iter());
+        result.reference_ids.sort();
+        result.reference_ids.dedup();
+        if result.snippet.is_none() {
+            result.snippet = openalex.snippet;
+        }
+        result.provider = "crossref+openalex".to_string();
+    }
+    Ok(result)
+}
+
+fn follow_scholarly_reference_chain(
+    root: &Path,
+    research_query: &str,
+    research_depth: DeepResearchDepth,
+    queue: &mut VecDeque<(String, usize, String)>,
+    queued_references: &mut BTreeSet<String>,
+    seen_urls: &mut BTreeSet<String>,
+    sources: &mut Vec<Value>,
+) -> Value {
+    let max_depth = citation_chain_depth(research_depth);
+    let budget = citation_lookup_budget(research_depth);
+    let mut lookups = 0usize;
+    let mut resolved = 0usize;
+    let mut relevant = 0usize;
+    let mut added = 0usize;
+    let mut failures = Vec::new();
+    while lookups < budget {
+        let mut batch = Vec::new();
+        while batch.len() < 4 && lookups + batch.len() < budget {
+            let Some((reference_id, depth, parent_id)) = queue.pop_front() else {
+                break;
+            };
+            if depth <= max_depth && supported_scholarly_reference_id(&reference_id) {
+                batch.push((reference_id, depth, parent_id));
+            }
+        }
+        if batch.is_empty() {
+            break;
+        }
+        lookups += batch.len();
+        let batch_results = std::thread::scope(|scope| {
+            let handles = batch
+                .iter()
+                .map(|(reference_id, depth, parent_id)| {
+                    scope.spawn(move || {
+                        (
+                            reference_id,
+                            *depth,
+                            parent_id,
+                            resolve_scholarly_reference(root, reference_id),
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("scholarly reference worker panicked"))
+                .collect::<Vec<_>>()
+        });
+        for (reference_id, depth, parent_id, result) in batch_results {
+            match result {
+                Ok(result) => {
+                    resolved += 1;
+                    if !scholarly_result_is_relevant(&result, research_query) {
+                        continue;
+                    }
+                    relevant += 1;
+                    if depth < max_depth {
+                        queue_scholarly_references(
+                            std::slice::from_ref(&result),
+                            research_query,
+                            depth + 1,
+                            queue,
+                            queued_references,
+                        );
+                    }
+                    let mut value = scholarly_result_to_db_value(result);
+                    value["citation_parent_id"] = Value::String(parent_id.clone());
+                    value["citation_depth"] = Value::Number((depth as u64).into());
+                    value["discovery_method"] =
+                        Value::String("scholarly_reference_chain".to_string());
+                    added += push_database_sources(
+                        "scholarly_reference",
+                        research_query,
+                        vec![value],
+                        seen_urls,
+                        sources,
+                    );
+                }
+                Err(error) => {
+                    if failures.len() < 12 {
+                        failures.push(json!({
+                            "reference_id": reference_id,
+                            "depth": depth,
+                            "error": error.to_string(),
+                        }));
+                    }
+                }
+            }
+        }
+    }
+    json!({
+        "database": "scholarly_reference_chain",
+        "ok": failures.is_empty() || resolved > 0,
+        "max_depth": max_depth,
+        "lookup_budget": budget,
+        "lookups": lookups,
+        "resolved_works": resolved,
+        "relevant_works": relevant,
+        "added_candidates": added,
+        "remaining_queue": queue.len(),
+        "failures": failures,
+    })
+}
+
+fn is_rate_limit_error(err: &anyhow::Error) -> bool {
+    let text = format!("{err:#}").to_ascii_lowercase();
+    text.contains("429") || text.contains("too many requests") || text.contains("rate limit")
 }
 
 /// Map a typed `ScholarlyResult` into the loose `Value` shape that
@@ -1540,6 +2990,7 @@ fn scholarly_result_to_db_value(result: ScholarlyResult) -> Value {
         // reads stays as rich as before the consolidation.
         "authors": result.authors,
         "venue": result.publisher,
+        "reference_ids": result.reference_ids,
     });
     if let Some(pdf) = result.open_access_pdf {
         value["open_access_pdf"] = Value::String(pdf);
@@ -1556,25 +3007,55 @@ fn push_database_sources(
 ) -> usize {
     let mut pushed = 0;
     for mut item in items {
-        let Some(url) = item
+        let Some(detail_url) = item
             .get("url")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
         else {
             continue;
         };
+        let open_access_pdf = item
+            .get("open_access_pdf")
+            .and_then(Value::as_str)
+            .filter(|url| !url.trim().is_empty())
+            .map(ToOwned::to_owned);
+        let url = open_access_pdf
+            .clone()
+            .unwrap_or_else(|| detail_url.clone());
         let normalized = normalize_url_key(&url);
         if normalized.is_empty() || !seen_urls.insert(normalized) {
             continue;
         }
         item["source"] = Value::String(database.to_string());
-        item["source_type"] = Value::String("paper_metadata".to_string());
+        item["source_type"] = Value::String(
+            if open_access_pdf.is_some() {
+                "open_access_paper"
+            } else {
+                "paper_metadata"
+            }
+            .to_string(),
+        );
+        item["url"] = Value::String(url.clone());
         item["canonical_url"] = Value::String(url.clone());
         item["search_label"] = Value::String(database.to_string());
         item["scholarly"] = Value::Bool(true);
-        item["metadata_only"] = Value::Bool(true);
+        item["metadata_only"] = Value::Bool(open_access_pdf.is_none());
         item["domain"] = Value::String(domain_for_url(&url));
-        item["source_tier"] = Value::String("metadata".to_string());
+        item["source_tier"] = Value::String(
+            if open_access_pdf.is_some() {
+                "scholarly"
+            } else {
+                "metadata"
+            }
+            .to_string(),
+        );
+        item["scholarly_metadata"] = json!({
+            "detail_url": detail_url,
+            "doi": item.get("doi").cloned().unwrap_or(Value::Null),
+            "authors": item.get("authors").cloned().unwrap_or(Value::Null),
+            "venue": item.get("venue").cloned().unwrap_or(Value::Null),
+            "reference_ids": item.get("reference_ids").cloned().unwrap_or_else(|| json!([])),
+        });
         item["verification_status"] = Value::String("unverified".to_string());
         item["discovery_status"] = Value::String("discovered".to_string());
         item["evidence_eligible"] = Value::Bool(false);
@@ -1589,6 +3070,18 @@ fn persist_research_workspace(
     request: &DeepResearchRequest,
     payload: &Value,
 ) -> Result<Value> {
+    let verified_sources = payload
+        .get("sources")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|source| source.get("evidence_eligible").and_then(Value::as_bool) == Some(true))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut persisted_payload = payload.clone();
+    persisted_payload["sources"] = Value::Array(verified_sources.clone());
+    persisted_payload["data_links"] = Value::Array(collect_data_links(&verified_sources));
+    let payload = &persisted_payload;
     let workspace = request
         .workspace
         .clone()
@@ -1605,10 +3098,30 @@ fn persist_research_workspace(
         continuation_markdown(payload),
     )?;
 
-    if let Some(items) = payload.get("sources").and_then(Value::as_array) {
+    if let Some(items) = payload
+        .get("source_candidates")
+        .or_else(|| payload.get("sources"))
+        .and_then(Value::as_array)
+    {
+        let mut candidates_jsonl = fs::File::create(workspace.join("source_candidates.jsonl"))?;
+        let mut rejected_jsonl = fs::File::create(workspace.join("rejected_sources.jsonl"))?;
+        for source in items {
+            writeln!(candidates_jsonl, "{}", serde_json::to_string(source)?)?;
+            if source.get("evidence_eligible").and_then(Value::as_bool) != Some(true) {
+                writeln!(rejected_jsonl, "{}", serde_json::to_string(source)?)?;
+            }
+        }
+
         let mut sources_jsonl = fs::File::create(workspace.join("sources.jsonl"))?;
-        for (index, source) in items.iter().enumerate() {
+        for source in payload
+            .get("sources")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
             writeln!(sources_jsonl, "{}", serde_json::to_string(source)?)?;
+        }
+        for (index, source) in items.iter().enumerate() {
             if let Some(read) = source.get("read") {
                 write_json_pretty(
                     &workspace
@@ -1630,7 +3143,9 @@ fn persist_research_workspace(
             "search_query": payload.get("search_query").cloned().unwrap_or(Value::Null),
             "depth": payload.get("depth").cloned().unwrap_or(Value::Null),
             "research_call_counts": payload.get("research_call_counts").cloned().unwrap_or(Value::Null),
-            "source_count": items.len(),
+            "candidate_source_count": items.len(),
+            "source_count": payload.get("sources").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
+            "rejected_source_count": items.iter().filter(|source| source.get("evidence_eligible").and_then(Value::as_bool) != Some(true)).count(),
             "read_artifact_count": items.iter().filter(|source| source.get("read").is_some()).count(),
             "snapshot_count": snapshot_count,
             "data_link_count": payload.get("data_links").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
@@ -1638,6 +3153,8 @@ fn persist_research_workspace(
             "files": {
                 "evidence_bundle": "evidence_bundle.json",
                 "sources_jsonl": "sources.jsonl",
+                "source_candidates_jsonl": "source_candidates.jsonl",
+                "rejected_sources_jsonl": "rejected_sources.jsonl",
                 "continuation": "CONTINUE.md",
                 "reads_dir": "reads/",
                 "snapshots_dir": "snapshots/",
@@ -1671,6 +3188,8 @@ fn persist_research_workspace(
         "continuation": workspace.join("CONTINUE.md"),
         "evidence_bundle": workspace.join("evidence_bundle.json"),
         "sources_jsonl": workspace.join("sources.jsonl"),
+        "source_candidates_jsonl": workspace.join("source_candidates.jsonl"),
+        "rejected_sources_jsonl": workspace.join("rejected_sources.jsonl"),
     }))
 }
 
@@ -1733,10 +3252,12 @@ fn continuation_markdown(payload: &Value) -> String {
         "# Continue Deep Research\n\n\
          Resume from this folder after context compaction or handoff.\n\n\
          1. Read `manifest.json` and `evidence_bundle.json`.\n\
-         2. Inspect `sources.jsonl`, `reads/`, and `snapshots/` before synthesis.\n\
-         3. Inspect `data_links.json`; follow GitHub/data links when relevant and build diagrams/tables from data if useful.\n\
-         4. Write intermediate notes into `synthesis/` before producing the final report.\n\
-         5. Keep source-backed claims linked to `sources.jsonl` records or DOI/URL references.\n\n\
+         2. Treat only `sources.jsonl` as admissible evidence. It contains sources that passed the fail-closed evidence gate.\n\
+         3. Inspect `source_candidates.jsonl` and `rejected_sources.jsonl` only for discovery/audit context; never cite them as evidence.\n\
+         4. Inspect `reads/` and `snapshots/` before synthesis.\n\
+         5. Inspect `data_links.json`; follow GitHub/data links when relevant and build diagrams/tables from data if useful.\n\
+         6. Write intermediate notes into `synthesis/` before producing the final report.\n\
+         7. Keep every factual claim linked to a `sources.jsonl` record and its persisted snapshot. A DOI/URL alone is not evidence.\n\n\
          Research call counts:\n\n```json\n{}\n```\n",
         serde_json::to_string_pretty(&counts).unwrap_or_else(|_| "null".to_string())
     )
@@ -1758,21 +3279,70 @@ fn persist_source_snapshots(snapshot_dir: &Path, sources: &[Value], limit: usize
         if source.get("evidence_eligible").and_then(Value::as_bool) != Some(true) {
             continue;
         }
-        let Some(url) = source_read_url(source) else {
+        let Some(read) = source.get("read") else {
             continue;
         };
-        let Ok(snapshot) = fetch_limited_snapshot(&url, 5_000_000) else {
+        let Some(url) = read
+            .get("url")
+            .and_then(Value::as_str)
+            .or_else(|| source.get("url").and_then(Value::as_str))
+        else {
             continue;
         };
-        let extension = snapshot_extension(&url, snapshot.content_type.as_deref());
+        let Some(bytes) = response_body_bytes(read) else {
+            continue;
+        };
+        if !response_receipt_matches_bytes(read, &bytes) {
+            continue;
+        }
+        let content_type = read
+            .pointer("/response_metadata/content_type")
+            .and_then(Value::as_str);
+        let content_kind = read
+            .pointer("/response_metadata/content_kind")
+            .and_then(Value::as_str);
+        if content_kind == Some("malformed_data") {
+            continue;
+        }
+        let extension = snapshot_extension(content_kind, content_type, &bytes);
         let target = snapshot_dir.join(format!("source-{index:04}.{extension}"));
-        if fs::write(&target, &snapshot.bytes).is_ok() {
+        if fs::write(&target, &bytes).is_ok() {
+            let extracted_text = read
+                .get("page_text")
+                .and_then(Value::as_str)
+                .filter(|text| !text.trim().is_empty());
+            let extracted_text_target =
+                snapshot_dir.join(format!("source-{index:04}.extracted.txt"));
+            let extracted_text_receipt = extracted_text.and_then(|text| {
+                fs::write(&extracted_text_target, text.as_bytes())
+                    .ok()
+                    .map(|_| {
+                        json!({
+                            "file": extracted_text_target.file_name().and_then(|name| name.to_str()).unwrap_or_default(),
+                            "sha256": crate::web_search::snapshot_hash(text.as_bytes()),
+                            "bytes": text.len(),
+                        })
+                    })
+            });
+            let receipt = read
+                .get("response_metadata")
+                .cloned()
+                .unwrap_or(Value::Null);
             let meta = json!({
                 "source_index": index,
                 "url": url,
-                "content_type": snapshot.content_type,
-                "bytes": snapshot.bytes.len(),
+                "requested_url": receipt.get("requested_url").cloned().unwrap_or(Value::Null),
+                "final_url": receipt.get("final_url").cloned().unwrap_or(Value::Null),
+                "status": receipt.get("status").cloned().unwrap_or(Value::Null),
+                "redirected": receipt.get("redirected").cloned().unwrap_or(Value::Bool(false)),
+                "redirect_chain": receipt.get("redirect_chain").cloned().unwrap_or_else(|| json!([])),
+                "content_type": content_type,
+                "content_kind": content_kind,
+                "sha256": receipt.get("sha256").cloned().unwrap_or(Value::Null),
+                "bytes": bytes.len(),
+                "lineage": receipt.get("lineage").cloned().unwrap_or(Value::Null),
                 "file": target.file_name().and_then(|name| name.to_str()).unwrap_or_default(),
+                "extracted_text": extracted_text_receipt,
             });
             let _ = write_json_pretty(
                 &snapshot_dir.join(format!("source-{index:04}.metadata.json")),
@@ -1784,52 +3354,63 @@ fn persist_source_snapshots(snapshot_dir: &Path, sources: &[Value], limit: usize
     saved
 }
 
-struct Snapshot {
-    content_type: Option<String>,
-    bytes: Vec<u8>,
-}
-
-fn fetch_limited_snapshot(url: &str, max_bytes: usize) -> Result<Snapshot> {
-    // SSRF guard: snapshot/text fetchers pull caller- and third-party-supplied
-    // source URLs (incl. open-access PDF URLs resolved from external APIs).
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(8))
-        .resolver(crate::egress::SsrfResolver::new(Vec::new()))
-        .build();
-    let response = agent
-        .get(url)
-        .set("User-Agent", "ctox-deep-research/0.1")
-        .call()
-        .map_err(anyhow::Error::from)?;
-    let content_type = response.header("content-type").map(|value| {
-        value
-            .split(';')
-            .next()
-            .unwrap_or(value)
-            .trim()
-            .to_ascii_lowercase()
-    });
-    let mut reader = response.into_reader().take(max_bytes as u64 + 1);
-    let mut bytes = Vec::new();
-    reader.read_to_end(&mut bytes)?;
-    if bytes.len() > max_bytes {
-        bytes.truncate(max_bytes);
+fn response_body_bytes(read: &Value) -> Option<Vec<u8>> {
+    if let Some(bytes) = read.get("response_body").and_then(Value::as_array) {
+        return bytes
+            .iter()
+            .map(|byte| byte.as_u64().and_then(|value| u8::try_from(value).ok()))
+            .collect();
     }
-    Ok(Snapshot {
-        content_type,
-        bytes,
-    })
+    let path = read.get("response_artifact_path").and_then(Value::as_str)?;
+    fs::read(path).ok()
 }
 
-fn snapshot_extension(url: &str, content_type: Option<&str>) -> &'static str {
-    if content_type.is_some_and(|value| value.contains("pdf"))
-        || url.to_ascii_lowercase().contains(".pdf")
-    {
+fn response_receipt_matches_bytes(read: &Value, bytes: &[u8]) -> bool {
+    let receipt = read.get("response_metadata");
+    receipt
+        .and_then(|value| value.get("byte_count"))
+        .and_then(Value::as_u64)
+        .is_some_and(|count| count == bytes.len() as u64)
+        && receipt
+            .and_then(|value| value.get("sha256"))
+            .and_then(Value::as_str)
+            .is_some_and(|hash| {
+                read.get("snapshot_hash").and_then(Value::as_str) == Some(hash)
+                    && crate::web_search::snapshot_hash(bytes) == hash
+            })
+}
+
+fn snapshot_extension(
+    content_kind: Option<&str>,
+    content_type: Option<&str>,
+    _bytes: &[u8],
+) -> &'static str {
+    if content_kind == Some("pdf") || content_type.is_some_and(|value| value.contains("pdf")) {
         "pdf"
-    } else if content_type.is_some_and(|value| value.contains("html")) {
+    } else if content_kind == Some("html")
+        || content_type.is_some_and(|value| value.contains("html"))
+    {
         "html"
-    } else if content_type.is_some_and(|value| value.contains("json")) {
+    } else if content_kind == Some("data_json")
+        || content_type.is_some_and(|value| value.contains("json"))
+    {
         "json"
+    } else if content_kind == Some("data_delimited")
+        || content_type.is_some_and(|value| value.contains("csv") || value.contains("tab"))
+    {
+        "csv"
+    } else if content_kind == Some("data_table_text") {
+        "txt"
+    } else if content_kind == Some("data_zip") {
+        "zip"
+    } else if content_kind == Some("data_gzip") {
+        "gz"
+    } else if content_kind == Some("data_parquet") {
+        "parquet"
+    } else if content_kind == Some("data_xlsx") {
+        "xlsx"
+    } else if content_kind == Some("data_hdf5") {
+        "h5"
     } else if content_type.is_some_and(|value| value.starts_with("text/")) {
         "txt"
     } else {
@@ -1855,9 +3436,21 @@ fn fetch_text(url: &str) -> Result<String> {
 
 fn classify_source(url: &str, scholarly: bool, metadata_only: bool) -> &'static str {
     let domain = domain_for_url(url);
-    if domain.contains("annas-archive.org") {
+    let scholarly_document = scholarly
+        && Url::parse(url)
+            .ok()
+            .is_some_and(|parsed| parsed.path().to_ascii_lowercase().ends_with(".pdf"));
+    if is_data_file_url(url) {
+        "data_file"
+    } else if is_zenodo_record_metadata_url(url) {
+        "archive_metadata"
+    } else if domain.contains("annas-archive.org") {
         "annas_archive_metadata"
-    } else if domain.contains("semanticscholar.org") || domain.contains("crossref.org") {
+    } else if domain == "doi.org"
+        || domain.ends_with(".doi.org")
+        || domain.contains("semanticscholar.org")
+        || domain.contains("crossref.org")
+    {
         "paper_metadata"
     } else if domain.contains("arxiv.org")
         || domain.contains("pmc.ncbi.nlm.nih.gov")
@@ -1871,7 +3464,7 @@ fn classify_source(url: &str, scholarly: bool, metadata_only: bool) -> &'static 
         || domain.contains("academia.edu")
     {
         "aggregator"
-    } else if scholarly
+    } else if scholarly_document
         || domain.contains("sciencedirect.com")
         || domain.contains("springer.com")
         || domain.contains("nature.com")
@@ -1883,6 +3476,68 @@ fn classify_source(url: &str, scholarly: bool, metadata_only: bool) -> &'static 
     } else {
         "web"
     }
+}
+
+fn is_doi_resolver_url(raw: &str) -> bool {
+    let Ok(url) = Url::parse(raw) else {
+        return false;
+    };
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    (host == "doi.org" || host == "dx.doi.org")
+        && url.path().trim_start_matches('/').starts_with("10.")
+}
+
+fn is_zenodo_record_metadata_url(raw: &str) -> bool {
+    let Ok(url) = Url::parse(raw) else {
+        return false;
+    };
+    let host = url
+        .host_str()
+        .unwrap_or_default()
+        .trim_start_matches("www.")
+        .to_ascii_lowercase();
+    if host != "zenodo.org" {
+        return false;
+    }
+    let path = url.path().to_ascii_lowercase();
+    (path.starts_with("/records/")
+        || path.starts_with("/record/")
+        || path.starts_with("/api/records/"))
+        && !path.contains("/files/")
+}
+
+fn is_zenodo_record_metadata_source(source: &Value) -> bool {
+    source
+        .get("source_type")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind == "archive_metadata")
+        || source
+            .get("url")
+            .and_then(Value::as_str)
+            .is_some_and(is_zenodo_record_metadata_url)
+}
+
+fn zenodo_archive_receipt(source: &Value, read: &Value) -> Option<Value> {
+    let record_url = source.get("url").and_then(Value::as_str)?;
+    if !is_zenodo_record_metadata_url(record_url) {
+        return None;
+    }
+    let verified = read.get("verification_status").and_then(Value::as_str) == Some("verified")
+        && read
+            .get("snapshot_hash")
+            .and_then(Value::as_str)
+            .is_some_and(|hash| !hash.trim().is_empty());
+    Some(json!({
+        "kind": "zenodo_archive_metadata",
+        "record_url": record_url,
+        "canonical_url": read.get("canonical_url").cloned().unwrap_or_else(|| Value::String(record_url.to_string())),
+        "verified": verified,
+        "verification_status": read.get("verification_status").cloned().unwrap_or(Value::Null),
+        "checked_at": read.get("checked_at").cloned().unwrap_or(Value::Null),
+        "snapshot_hash": read.get("snapshot_hash").cloned().unwrap_or(Value::Null),
+        "file_manifest": read.get("extracted_fields").cloned().unwrap_or(Value::Null),
+        "use": "archive receipt only; parse the original file before using factual dataset rows",
+    }))
 }
 
 fn summarize_source_mix(sources: &[Value]) -> Value {
@@ -2230,12 +3885,139 @@ mod tests {
     }
 
     #[test]
+    fn exclude_urls_are_canonicalized_and_deduplicated_before_discovery() {
+        let excluded = normalized_excluded_urls(&[
+            "https://Example.com/data.csv#section".to_string(),
+            "https://example.com/data.csv".to_string(),
+            "https://example.com/other.csv".to_string(),
+        ]);
+        assert_eq!(excluded.len(), 2);
+        assert!(excluded.contains("https://example.com/data.csv"));
+        assert!(excluded.contains("https://example.com/other.csv"));
+    }
+
+    #[test]
+    fn exact_zenodo_doi_seeds_the_canonical_record() {
+        let mut seen = BTreeSet::new();
+        let mut sources = Vec::new();
+        seed_explicit_identifier_sources(
+            "Verify DOI 10.5281/zenodo.20111572 and its original archive",
+            &mut seen,
+            &mut sources,
+        );
+
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0]["url"], "https://zenodo.org/records/20111572");
+        assert_eq!(sources[0]["source_type"], "archive_metadata");
+        assert_eq!(sources[0]["discovery_status"], "explicit_identifier");
+        assert_eq!(sources[0]["evidence_eligible"], false);
+    }
+
+    #[test]
+    fn original_data_and_archive_receipts_are_selected_before_generic_web_hits() {
+        let selected = select_balanced_sources(
+            vec![
+                json!({
+                    "url": "https://irrelevant.example/article",
+                    "source_type": "web",
+                    "discovery_score": 99,
+                }),
+                json!({
+                    "url": "https://zenodo.org/records/20111572",
+                    "source_type": "archive_metadata",
+                    "discovery_status": "explicit_identifier",
+                }),
+                json!({
+                    "url": "https://zenodo.org/records/20111572/files/data.csv",
+                    "source_type": "data_file",
+                    "discovery_score": 30,
+                }),
+            ],
+            2,
+        );
+
+        let urls = selected
+            .iter()
+            .filter_map(|source| source.get("url").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            urls,
+            vec![
+                "https://zenodo.org/records/20111572/files/data.csv",
+                "https://zenodo.org/records/20111572",
+            ]
+        );
+    }
+
+    #[test]
+    fn negative_discovery_scores_never_consume_the_read_budget() {
+        let selected = select_balanced_sources(
+            vec![
+                json!({
+                    "url": "https://example.org/relevant",
+                    "source_type": "web",
+                    "discovery_score": 30,
+                }),
+                json!({
+                    "url": "https://example.org/off-topic",
+                    "source_type": "web",
+                    "discovery_score": -1,
+                }),
+            ],
+            10,
+        );
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0]["url"], "https://example.org/relevant");
+    }
+
+    #[test]
+    fn facet_queries_reserve_space_for_the_facet() {
+        let core = "small uav propeller test bench measured thrust torque rpm vibration bearing loads datasets primary measurements original datasets scientific papers";
+        let query = compose_search_query(
+            core,
+            "original file CSV TXT XLSX ZIP supplementary data download",
+        );
+
+        assert!(query.chars().count() <= 150);
+        assert!(query.contains("small uav propeller"));
+        assert!(query.ends_with("original file CSV TXT XLSX ZIP supplementary data download"));
+    }
+
+    #[test]
+    fn metadata_only_doi_pages_do_not_consume_the_read_budget() {
+        assert!(!should_attempt_source_read(&json!({
+            "source_type": "paper_metadata",
+            "url": "https://doi.org/10.1234/example",
+        })));
+        assert!(should_attempt_source_read(&json!({
+            "source_type": "open_access_paper",
+            "url": "https://repository.example/paper.pdf",
+        })));
+    }
+
+    #[test]
+    fn explicit_doi_parser_rejects_unrelated_numbers() {
+        assert_eq!(
+            extract_explicit_dois(
+                "size 223601320 md5 245267e590546f160f3b971d7f8e05fb https://doi.org/10.1234/ABC.9"
+            ),
+            vec!["10.1234/abc.9"]
+        );
+        assert_eq!(
+            extract_explicit_dois("Verify (DOI 10.5281/zenodo.20111572)."),
+            vec!["10.5281/zenodo.20111572"]
+        );
+    }
+
+    #[test]
     fn plan_can_include_annas_archive_as_metadata_only() {
         let request = DeepResearchRequest {
             query: "terahertz copper mesh CFRP".to_string(),
             focus: None,
             depth: DeepResearchDepth::Exhaustive,
             max_sources: 20,
+            exclude_urls: Vec::new(),
             include_annas_archive: true,
             include_papers: true,
             workspace: None,
@@ -2257,6 +4039,7 @@ mod tests {
             focus: Some("scope_terms".to_string()),
             depth: DeepResearchDepth::Standard,
             max_sources: 20,
+            exclude_urls: Vec::new(),
             include_annas_archive: false,
             include_papers: true,
             workspace: None,
@@ -2276,6 +4059,7 @@ mod tests {
             focus: None,
             depth: DeepResearchDepth::Standard,
             max_sources: 20,
+            exclude_urls: Vec::new(),
             include_annas_archive: false,
             include_papers: true,
             workspace: None,
@@ -2287,6 +4071,23 @@ mod tests {
         assert!(labels.contains(&"load_and_operating_fields"));
         assert!(labels.contains(&"data_repositories"));
         assert!(labels.contains(&"technical_reports_data"));
+        assert!(labels.contains(&"named_benchmark_databases"));
+        assert!(labels.contains(&"original_data_files"));
+        assert!(labels.contains(&"measurement_validation"));
+        assert!(labels.contains(&"bearing_load_transfer"));
+        assert_eq!(
+            &labels[..8],
+            &[
+                "broad_web",
+                "scholarly_general",
+                "measured_data_sources",
+                "open_access",
+                "data_repositories",
+                "named_benchmark_databases",
+                "measurement_validation",
+                "original_data_files",
+            ]
+        );
     }
 
     #[test]
@@ -2296,6 +4097,7 @@ mod tests {
             focus: None,
             depth: DeepResearchDepth::Exhaustive,
             max_sources: 20,
+            exclude_urls: Vec::new(),
             include_annas_archive: false,
             include_papers: true,
             workspace: None,
@@ -2338,6 +4140,7 @@ mod tests {
             thumbnail_url: None,
             snippet: None,
             tags: Vec::new(),
+            reference_ids: Vec::new(),
             rank: 1,
         };
         let value = scholarly_result_to_db_value(base.clone());
@@ -2393,6 +4196,308 @@ mod tests {
         });
         assert!(source_discovery_score(&metadata, query).is_none());
         assert!(source_discovery_score(&aggregator, query).is_none());
+    }
+
+    #[test]
+    fn evidence_promotion_separates_transport_from_source_quality() {
+        let primary = json!({
+            "source_type": "scholarly",
+            "source_tier": "scholarly",
+            "domain": "example.edu",
+            "title": "Measured propeller thrust and torque dataset",
+            "url": "https://example.edu/propeller-data",
+            "discovery_score": 42,
+            "evidence_relevance_score": 42,
+            "actual_full_text_or_data": true,
+        });
+        assert_eq!(
+            assess_evidence_promotion(&primary, true, true),
+            (true, None)
+        );
+        assert_eq!(
+            assess_evidence_promotion(&primary, false, true),
+            (false, Some("transport_not_verified"))
+        );
+        assert_eq!(
+            assess_evidence_promotion(&primary, true, false),
+            (false, Some("no_extracted_evidence"))
+        );
+
+        let metadata = json!({
+            "source_type": "paper_metadata",
+            "source_tier": "metadata",
+            "domain": "doi.org",
+            "title": "Metadata landing page",
+            "url": "https://doi.org/10.1234/example",
+        });
+        assert_eq!(
+            assess_evidence_promotion(&metadata, true, true),
+            (false, Some("metadata_or_aggregator"))
+        );
+
+        assert!(!read_has_meaningful_evidence(&json!({
+            "summary": "",
+            "excerpts": [],
+            "find_results": [],
+        })));
+        assert!(!read_has_meaningful_evidence(&json!({
+            "summary": "OK",
+            "excerpts": ["ready"],
+            "find_results": [],
+        })));
+        assert!(read_has_meaningful_evidence(&json!({
+            "summary": "Measured torque and radial load data",
+            "excerpts": [],
+            "find_results": [],
+        })));
+        let archive_hash =
+            "sha256:c9e92c5e5be0aeadab0d42e2ded5d85822f3e8b8e00029d434a68822e108ca98";
+        let archive_read = json!({
+            "verification_status": "verified",
+            "http_status": 200,
+            "snapshot_hash": archive_hash,
+            "response_content_kind": "data_zip",
+            "response_artifact_path": "/tmp/original.zip",
+            "response_archive_manifest": {
+                "archive_sha256": archive_hash,
+                "member_count": 221,
+                "data_member_count": 171,
+            },
+            "transport_evidence_eligible": true,
+            "evidence_eligible": true,
+            "summary": "",
+            "excerpts": [],
+            "find_results": [],
+        });
+        assert!(read_has_validated_data_evidence(&archive_read));
+        assert!(read_has_meaningful_evidence(&archive_read));
+        let mut missing_manifest = archive_read.clone();
+        missing_manifest["response_archive_manifest"] = Value::Null;
+        assert!(!read_has_validated_data_evidence(&missing_manifest));
+        assert!(!read_has_meaningful_evidence(&missing_manifest));
+    }
+
+    #[test]
+    fn evidence_promotion_rejects_reuploads_and_reference_lists() {
+        let kaggle_reupload = json!({
+            "source_type": "web",
+            "source_tier": "web",
+            "domain": "www.kaggle.com",
+            "title": "UIUC Propeller Database",
+            "url": "https://www.kaggle.com/datasets/example/uiuc-propeller-database",
+            "discovery_score": 53,
+            "evidence_relevance_score": 53,
+        });
+        assert_eq!(
+            assess_evidence_promotion(&kaggle_reupload, true, true),
+            (false, Some("metadata_or_aggregator"))
+        );
+
+        let github_resources = json!({
+            "source_type": "web",
+            "source_tier": "web",
+            "domain": "github.com",
+            "title": "Predictive Maintenance and Vibration Resources",
+            "url": "https://github.com/example/vibration-resources",
+            "discovery_score": 44,
+            "evidence_relevance_score": 44,
+        });
+        assert_eq!(
+            assess_evidence_promotion(&github_resources, true, true),
+            (false, Some("metadata_or_aggregator"))
+        );
+    }
+
+    #[test]
+    fn evidence_promotion_rejects_unscored_or_negative_relevance() {
+        let mut source = json!({
+            "source_type": "scholarly",
+            "source_tier": "scholarly",
+            "domain": "example.org",
+            "title": "Unrelated reachable paper",
+            "url": "https://example.org/paper",
+            "evidence_relevance_score": 24,
+            "actual_full_text_or_data": true,
+        });
+        assert_eq!(
+            assess_evidence_promotion(&source, true, true),
+            (false, Some("topic_relevance_not_scored"))
+        );
+        source["discovery_score"] = Value::Number((-1).into());
+        assert_eq!(
+            assess_evidence_promotion(&source, true, true),
+            (false, Some("low_topic_relevance"))
+        );
+        source["discovery_score"] = Value::Number(15.into());
+        assert_eq!(
+            assess_evidence_promotion(&source, true, true),
+            (false, Some("low_topic_relevance"))
+        );
+        source["discovery_score"] = Value::Number(16.into());
+        assert_eq!(assess_evidence_promotion(&source, true, true), (true, None));
+    }
+
+    #[test]
+    fn evidence_promotion_requires_relevance_in_retrieved_content() {
+        let query = "small UAV propeller thrust torque measured dataset";
+        let stuffed_discovery = json!({
+            "source_type": "scholarly",
+            "source_tier": "scholarly",
+            "title": "Small UAV propeller thrust torque measured dataset",
+            "url": "https://example.org/seo-result",
+            "discovery_score": 90,
+            "actual_full_text_or_data": true,
+        });
+        let unrelated_read = json!({
+            "summary": "Small UAV propeller thrust torque measured dataset (metadata title only).",
+            "excerpts": ["The record advertises a measured propeller dataset."],
+            "page_text_excerpt": "This article discusses tomato cultivation and home garden irrigation techniques. Seasonal planting schedules improve vegetable yields in temperate gardens. The body reports vegetable yields and soil moisture observations, unrelated to aircraft propulsion.",
+            "find_results": [],
+        });
+        let relevant_read = json!({
+            "summary": "Measured propeller thrust and torque values are reported for small UAV operating points.",
+            "excerpts": ["The dataset contains RPM, thrust, torque, and propeller diameter measurements."],
+            "page_text_excerpt": "The small UAV propeller was tested at multiple RPM operating points.\n\nMeasured thrust and torque were recorded for each propeller diameter, with the resulting dataset used to compare propulsion performance.",
+            "find_results": [],
+        });
+
+        let mut source = stuffed_discovery.clone();
+        source["evidence_relevance_score"] = score_read_evidence_relevance(&unrelated_read, query)
+            .map(|score| Value::Number(score.into()))
+            .unwrap_or(Value::Null);
+        assert_eq!(
+            assess_evidence_promotion(&source, true, true),
+            (false, Some("extracted_evidence_off_topic"))
+        );
+
+        let mut source = stuffed_discovery;
+        source["evidence_relevance_score"] = score_read_evidence_relevance(&relevant_read, query)
+            .map(|score| Value::Number(score.into()))
+            .unwrap_or(Value::Null);
+        assert_eq!(assess_evidence_promotion(&source, true, true), (true, None));
+    }
+
+    #[test]
+    fn canonical_original_html_is_full_text_without_preserved_paragraph_breaks() {
+        let source = json!({
+            "source_type": "web",
+            "source_tier": "primary",
+            "url": "https://example.edu/propeller-database",
+        });
+        let read = json!({
+            "url": "https://example.edu/propeller-database",
+            "canonical_url": "https://example.edu/propeller-database",
+            "response_content_kind": "html",
+            "page_text_excerpt": "Measured small UAV propeller thrust torque RPM and aerodynamic coefficients. ".repeat(16),
+            "is_pdf": false,
+        });
+        assert!(read_has_actual_full_text_or_data(&source, &read));
+    }
+
+    #[test]
+    fn data_file_relevance_query_uses_file_identity_not_the_entire_research_scope() {
+        let source = json!({
+            "source_type": "data_file",
+            "title": "UIUC-propDB.zip",
+            "url": "https://m-selig.ae.illinois.edu/props/download/UIUC-propDB.zip",
+            "parent_title": "UIUC Propeller Data Site",
+        });
+        let query = source_relevance_query(
+            &source,
+            "small UAV propeller test bench measured thrust torque RPM vibration bearing loads datasets",
+        );
+        assert_eq!(query, "uiuc propdb zip https selig illinois");
+    }
+
+    #[test]
+    fn doi_landing_pages_are_metadata_not_promotable_full_text() {
+        let doi_url = "https://doi.org/10.1234/bearing-load-data";
+        assert_eq!(classify_source(doi_url, true, false), "paper_metadata");
+        let source = json!({
+            "source_type": "paper_metadata",
+            "source_tier": "metadata",
+            "metadata_only": true,
+            "url": doi_url,
+            "discovery_score": 90,
+            "evidence_relevance_score": 32,
+            "actual_full_text_or_data": false,
+        });
+        let landing_read = json!({
+            "url": doi_url,
+            "canonical_url": "https://publisher.example/article/bearing-load-data",
+            "summary": "Bearing load data abstract and citation metadata.",
+            "excerpts": ["Bearing load data abstract and citation metadata."],
+            "page_text_excerpt": "Title: Bearing load data. Abstract: This landing page provides citation metadata and an abstract, but no full text or downloadable data file.",
+            "is_pdf": false,
+            "find_results": [],
+        });
+        assert!(!read_has_actual_full_text_or_data(&source, &landing_read));
+        assert_eq!(
+            assess_evidence_promotion(&source, true, true),
+            (false, Some("metadata_or_aggregator"))
+        );
+    }
+
+    #[test]
+    fn zenodo_metadata_receipt_is_auditable_but_not_dataset_evidence() {
+        let record_url = "https://zenodo.org/records/123456";
+        assert_eq!(
+            classify_source(record_url, false, false),
+            "archive_metadata"
+        );
+        assert_eq!(
+            classify_source(
+                "https://zenodo.org/records/123456/files/bearing-load.csv",
+                false,
+                false
+            ),
+            "data_file"
+        );
+        let source = json!({
+            "source_type": "archive_metadata",
+            "source_tier": "metadata",
+            "url": record_url,
+            "discovery_score": 90,
+            "evidence_relevance_score": 32,
+            "actual_full_text_or_data": false,
+        });
+        let read = json!({
+            "canonical_url": "https://zenodo.org/api/records/123456",
+            "verification_status": "verified",
+            "checked_at": 123,
+            "snapshot_hash": "sha256:record-metadata",
+            "extracted_fields": {"files": [{"key": "bearing-load.csv", "size": 42}]},
+            "page_text_excerpt": "Bearing load dataset archive record.\n\nFile: bearing-load.csv; size_bytes: 42; checksum: sha256:file",
+            "is_pdf": false,
+        });
+        let receipt = zenodo_archive_receipt(&source, &read).expect("Zenodo receipt");
+        assert_eq!(receipt["kind"], "zenodo_archive_metadata");
+        assert_eq!(receipt["verified"], true);
+        assert_eq!(receipt["snapshot_hash"], "sha256:record-metadata");
+        assert!(!read_has_actual_full_text_or_data(&source, &read));
+        let mut source_with_receipt = source;
+        source_with_receipt["archive_receipt"] = receipt;
+        assert_eq!(
+            assess_evidence_promotion(&source_with_receipt, true, true),
+            (false, Some("archive_metadata_requires_original_file_parse"))
+        );
+    }
+
+    #[test]
+    fn read_failures_are_explicit_on_the_source_envelope() {
+        let mut source = json!({
+            "verification_status": "unverified",
+            "evidence_eligible": true,
+        });
+        mark_source_read_failure(&mut source, "transport_not_verified");
+        assert_eq!(source["verification_status"], "failed");
+        assert_eq!(source["transport_verified"], false);
+        assert_eq!(source["content_extracted"], false);
+        assert_eq!(source["evidence_eligible"], false);
+        assert_eq!(
+            source["evidence_rejection_reason"],
+            "transport_not_verified"
+        );
     }
 
     #[test]
@@ -2502,6 +4607,10 @@ mod tests {
             "annas_archive_metadata"
         );
         assert_eq!(
+            classify_source("https://doi.org/10.1234/example", true, false),
+            "paper_metadata"
+        );
+        assert_eq!(
             classify_source("https://patents.google.com/patent/US123", false, false),
             "patent"
         );
@@ -2530,7 +4639,118 @@ mod tests {
     }
 
     #[test]
-    fn scholarly_metadata_sources_are_read_but_annas_archive_is_not() {
+    fn long_measurement_prompt_produces_complete_bounded_search_queries() {
+        let prompt = "ENOLA Zenodo record 20111572 Propeller_Database.zip original downloadable artifact, propeller diameter pitch RPM thrust torque vibration measurements, SKF drone bearing recovery, bearing radial axial load from propeller drivetrain inputs";
+        let query = derive_research_search_query(prompt, None, ResearchProfile::Generic);
+        assert!(query.chars().count() <= 180);
+        assert!(!query.ends_with("re"));
+        assert!(query.contains("propeller"));
+        assert!(query.contains("torque"));
+        assert!(!query.contains("20111572"));
+
+        let request = DeepResearchRequest {
+            query: prompt.to_string(),
+            focus: None,
+            depth: DeepResearchDepth::Standard,
+            max_sources: 8,
+            exclude_urls: Vec::new(),
+            include_annas_archive: false,
+            include_papers: true,
+            workspace: None,
+            persist_workspace: false,
+        };
+        assert!(
+            build_research_search_plan(&query, &request, ResearchProfile::Generic)
+                .iter()
+                .all(|plan| plan.query.chars().count() <= 180)
+        );
+    }
+
+    #[test]
+    fn source_relevance_does_not_leak_unrelated_numeric_identifier() {
+        let independent = json!({
+            "title": "UIUC Propeller Data Site",
+            "snippet": "Experimental propeller thrust and torque measurements",
+        });
+        let query = source_relevance_query(
+            &independent,
+            "enola zenodo 20111572 propeller thrust torque bearing",
+        );
+        assert!(!query.contains("20111572"));
+        assert!(query.contains("propeller"));
+        assert!(query.contains("torque"));
+
+        let exact_record = json!({
+            "title": "ENOLA Zenodo record 20111572",
+            "snippet": "Official Propeller Database archive",
+        });
+        assert!(source_relevance_query(&exact_record, "propeller data").contains("20111572"));
+
+        let linked_file = json!({
+            "title": "Propeller_Database.zip",
+            "snippet": "Original data file linked by Explicit DOI 10.5281/zenodo.20111572",
+            "parent_title": "Explicit DOI 10.5281/zenodo.20111572",
+            "source_type": "data_file",
+        });
+        let query = source_relevance_query(&linked_file, "propeller thrust torque dataset");
+        assert!(!query.chars().any(|ch| ch.is_ascii_digit()));
+        assert!(query.contains("propeller"));
+        assert!(query.contains("data"));
+    }
+
+    #[test]
+    fn repository_read_enqueues_linked_content_route_as_data_file() {
+        let parent = json!({
+            "title": "ENOLA",
+            "url": "https://zenodo.org/records/20111572",
+            "canonical_url": "https://zenodo.org/api/records/20111572",
+        });
+        let read = json!({
+            "page_text": "File: Propeller_Database.zip; content_url: https://zenodo.org/api/records/20111572/files/Propeller_Database.zip/content"
+        });
+        let followups = followup_data_sources(&parent, &read);
+        assert_eq!(followups.len(), 1);
+        assert_eq!(followups[0]["source_type"], "data_file");
+        assert_eq!(
+            followups[0]["url"],
+            "https://zenodo.org/api/records/20111572/files/Propeller_Database.zip/content"
+        );
+        assert!(is_data_file_url(followups[0]["url"].as_str().unwrap()));
+    }
+
+    #[test]
+    fn repository_read_resolves_relative_html_data_links() {
+        let parent = json!({
+            "title": "UIUC Propeller Data Site",
+            "url": "https://m-selig.ae.illinois.edu/props/propDB.html",
+            "canonical_url": "https://m-selig.ae.illinois.edu/props/propDB.html",
+        });
+        let read = json!({
+            "raw_html": r#"<a href="volume-1/data/prop_10x5_static.txt">Static data</a>"#
+        });
+        let followups = followup_data_sources(&parent, &read);
+        assert_eq!(followups.len(), 1);
+        assert_eq!(
+            followups[0]["url"],
+            "https://m-selig.ae.illinois.edu/props/volume-1/data/prop_10x5_static.txt"
+        );
+    }
+
+    #[test]
+    fn final_source_target_keeps_a_larger_refill_pool() {
+        assert_eq!(
+            research_candidate_pool_limit(DeepResearchDepth::Quick, 3),
+            12
+        );
+        assert_eq!(
+            research_candidate_pool_limit(DeepResearchDepth::Standard, 8),
+            32
+        );
+        assert_eq!(research_read_budget(DeepResearchDepth::Standard, 8), 16);
+    }
+
+    #[test]
+    fn metadata_only_scholarly_sources_do_not_consume_the_read_budget() {
         let paper = json!({
             "source_type": "paper_metadata",
             "url": "https://doi.org/10.1234/example",
@@ -2541,7 +4761,7 @@ mod tests {
             "url": "https://annas-archive.org/search?q=example",
             "metadata_only": true,
         });
-        assert!(should_attempt_source_read(&paper));
+        assert!(!should_attempt_source_read(&paper));
         assert!(!should_attempt_source_read(&annas));
     }
 
@@ -2625,6 +4845,10 @@ mod tests {
             Some(false)
         );
         assert_eq!(paper.get("is_pdf").and_then(Value::as_bool), Some(true));
+        assert!(paper
+            .get("discovery_score")
+            .and_then(Value::as_i64)
+            .is_some());
         assert_eq!(
             paper
                 .pointer("/scholarly_metadata/doi")
@@ -2687,6 +4911,163 @@ mod tests {
     }
 
     #[test]
+    fn persists_the_admitted_response_body_and_receipt_without_refetching() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox_snapshot_receipt_test_{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let snapshot_dir = root.join("snapshots");
+        fs::create_dir_all(&snapshot_dir).expect("snapshot directory");
+        let body = b"name,value\nalpha,42\n".to_vec();
+        let body_json = Value::Array(
+            body.iter()
+                .map(|byte| Value::Number((*byte).into()))
+                .collect(),
+        );
+        let body_hash = crate::web_search::snapshot_hash(&body);
+        let source = json!({
+            "source_type": "data_file",
+            "evidence_eligible": true,
+            "read": {
+                "url": "http://127.0.0.1:1/data.csv",
+                "snapshot_hash": body_hash,
+                "response_body": body_json,
+                "response_metadata": {
+                    "requested_url": "http://127.0.0.1:1/data.csv",
+                    "final_url": "http://127.0.0.1:1/data.csv",
+                    "status": 200,
+                    "content_type": "text/csv",
+                    "content_kind": "data_delimited",
+                    "byte_count": body.len(),
+                    "sha256": body_hash,
+                    "lineage": "web_search.evidence_fetch",
+                    "redirected": false,
+                    "redirect_chain": ["http://127.0.0.1:1/data.csv"]
+                }
+            }
+        });
+        assert_eq!(persist_source_snapshots(&snapshot_dir, &[source], 1), 1);
+        assert_eq!(
+            fs::read(snapshot_dir.join("source-0000.csv")).expect("snapshot"),
+            body
+        );
+        let metadata: Value = serde_json::from_slice(
+            &fs::read(snapshot_dir.join("source-0000.metadata.json")).expect("metadata"),
+        )
+        .expect("metadata JSON");
+        assert_eq!(metadata["content_kind"], "data_delimited");
+        assert_eq!(metadata["bytes"], 20);
+        assert_eq!(metadata["lineage"], "web_search.evidence_fetch");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn persists_admitted_html_and_its_extracted_full_text() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox_html_snapshot_test_{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let snapshot_dir = root.join("snapshots");
+        fs::create_dir_all(&snapshot_dir).expect("snapshot directory");
+        let body = b"<html><body>Measured propeller thrust is 42 N.</body></html>".to_vec();
+        let hash = crate::web_search::snapshot_hash(&body);
+        let source = json!({
+            "evidence_eligible": true,
+            "read": {
+                "url": "https://example.edu/full-text",
+                "page_text": "Measured propeller thrust is 42 N.",
+                "snapshot_hash": hash,
+                "response_body": body.iter().map(|byte| Value::Number((*byte).into())).collect::<Vec<_>>(),
+                "response_metadata": {
+                    "requested_url": "https://example.edu/full-text",
+                    "final_url": "https://example.edu/full-text",
+                    "status": 200,
+                    "content_type": "text/html",
+                    "content_kind": "html",
+                    "byte_count": body.len(),
+                    "sha256": hash,
+                    "lineage": "web_search.evidence_fetch",
+                    "redirected": false,
+                    "redirect_chain": ["https://example.edu/full-text"]
+                }
+            }
+        });
+        assert_eq!(persist_source_snapshots(&snapshot_dir, &[source], 1), 1);
+        assert_eq!(
+            fs::read(snapshot_dir.join("source-0000.html")).expect("HTML snapshot"),
+            body
+        );
+        assert_eq!(
+            fs::read_to_string(snapshot_dir.join("source-0000.extracted.txt"))
+                .expect("extracted text"),
+            "Measured propeller thrust is 42 N."
+        );
+        let metadata: Value = serde_json::from_slice(
+            &fs::read(snapshot_dir.join("source-0000.metadata.json")).expect("metadata"),
+        )
+        .expect("metadata JSON");
+        assert_eq!(metadata["content_kind"], "html");
+        assert_eq!(
+            metadata["extracted_text"]["sha256"],
+            crate::web_search::snapshot_hash(b"Measured propeller thrust is 42 N.")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn data_file_hint_does_not_admit_html_response_content() {
+        let source = json!({
+            "source_type": "data_file",
+            "url": "https://example.test/data.csv",
+        });
+        let read = json!({
+            "url": "https://example.test/data.csv",
+            "canonical_url": "https://example.test/data.csv",
+            "response_content_kind": "html",
+            "page_text_excerpt": "The login page returned instead of the requested data file.",
+        });
+        assert!(!read_has_actual_full_text_or_data(&source, &read));
+    }
+
+    #[test]
+    fn admitted_data_response_does_not_require_invented_page_text() {
+        let source = json!({
+            "source_type": "data_file",
+            "url": "https://example.test/original-data.zip",
+        });
+        let read = json!({
+            "url": "https://example.test/original-data.zip",
+            "canonical_url": "https://example.test/original-data.zip",
+            "response_content_kind": "data_zip",
+            "transport_evidence_eligible": true,
+            "evidence_eligible": true,
+            "page_text_excerpt": "",
+        });
+        assert!(read_has_actual_full_text_or_data(&source, &read));
+
+        let mut relevance_rejected = read.clone();
+        relevance_rejected["evidence_eligible"] = Value::Bool(false);
+        assert!(read_has_actual_full_text_or_data(
+            &source,
+            &relevance_rejected
+        ));
+
+        let mut transport_rejected = read;
+        transport_rejected["transport_evidence_eligible"] = Value::Bool(false);
+        transport_rejected["evidence_eligible"] = Value::Bool(false);
+        assert!(!read_has_actual_full_text_or_data(
+            &source,
+            &transport_rejected
+        ));
+    }
+
+    #[test]
     fn persists_research_workspace_manifest_and_continuation() {
         let root = std::env::temp_dir().join(format!(
             "ctox_deep_research_workspace_test_{}",
@@ -2701,6 +5082,7 @@ mod tests {
             focus: None,
             depth: DeepResearchDepth::Quick,
             max_sources: 3,
+            exclude_urls: Vec::new(),
             include_annas_archive: false,
             include_papers: true,
             workspace: Some(workspace.clone()),
@@ -2710,17 +5092,59 @@ mod tests {
             "query": "test query",
             "search_query": "test query",
             "depth": "quick",
-            "research_call_counts": {"deduplicated_sources": 0},
-            "sources": [],
+            "research_call_counts": {
+                "deduplicated_sources": 2,
+                "verified_sources": 1,
+                "rejected_source_candidates": 1
+            },
+            "source_candidates": [
+                {
+                    "source_id": "accepted",
+                    "url": "https://example.test/evidence",
+                    "snippet": "Verified data at https://github.com/example/verified",
+                    "evidence_eligible": true
+                },
+                {
+                    "source_id": "rejected-404",
+                    "url": "https://example.test/missing",
+                    "snippet": "Unverified data at https://github.com/example/rejected",
+                    "http_status": 404,
+                    "evidence_eligible": false,
+                    "evidence_rejection_reason": "http_status_not_success"
+                }
+            ],
+            "sources": [
+                {
+                    "source_id": "accepted",
+                    "url": "https://example.test/evidence",
+                    "snippet": "Verified data at https://github.com/example/verified",
+                    "evidence_eligible": true
+                }
+            ],
             "search_runs": [],
             "database_runs": [],
             "figure_candidates": [],
-            "data_links": [],
+            "data_links": [{"url": "https://github.com/example/rejected"}],
         });
         let summary = persist_research_workspace(&root, &request, &payload).unwrap();
         assert!(workspace.join("manifest.json").is_file());
         assert!(workspace.join("CONTINUE.md").is_file());
+        assert!(workspace.join("source_candidates.jsonl").is_file());
+        assert!(workspace.join("rejected_sources.jsonl").is_file());
         assert!(workspace.join("synthesis").is_dir());
+        let sources = fs::read_to_string(workspace.join("sources.jsonl")).unwrap();
+        let candidates = fs::read_to_string(workspace.join("source_candidates.jsonl")).unwrap();
+        let rejected = fs::read_to_string(workspace.join("rejected_sources.jsonl")).unwrap();
+        assert!(sources.contains("\"source_id\":\"accepted\""));
+        assert!(!sources.contains("rejected-404"));
+        assert!(candidates.contains("rejected-404"));
+        assert!(rejected.contains("rejected-404"));
+        let data_links = fs::read_to_string(workspace.join("data_links.json")).unwrap();
+        assert!(data_links.contains("https://github.com/example/verified"));
+        assert!(!data_links.contains("https://github.com/example/rejected"));
+        let continuation = fs::read_to_string(workspace.join("CONTINUE.md")).unwrap();
+        assert!(continuation.contains("Treat only `sources.jsonl` as admissible evidence"));
+        assert!(continuation.contains("never cite them as evidence"));
         assert_eq!(
             summary.get("path").and_then(Value::as_str),
             Some(workspace.to_str().unwrap())

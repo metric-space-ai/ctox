@@ -33,6 +33,15 @@ CTOX-specific response-item type. Resume and compaction continue to use the
 fork's existing thread, rollout, `TurnContextItem`, and `ContextManager`
 contracts.
 
+Systematic-research attempts are a deliberate service-owned exception to normal
+worker continuity. Each attempt uses a fresh non-persistent standard worker
+session so the built-in typed CTOX Web tools remain available. Completion
+validation reads the durable rollout and requires a persisted
+`ctox_deep_research` receipt from the current attempt. The full Web Stack stays
+visible from the first turn so the Systematic Research skill can inventory
+Knowledge, choose focused scholarly/search/read tools, and use deep-research as
+one adaptive discovery round rather than as a static workflow owner.
+
 The structured compaction controller treats provider formatting failures as a
 recoverable model-surface limitation. If a provider returns prose or an empty
 payload instead of the requested JSON schema, the fork does not fail or replay
@@ -47,72 +56,28 @@ Compaction model tiers are diagnostic only. They never switch the model of an
 already negotiated session: the global model catalog is not evidence that a
 candidate is reachable through the active provider contract.
 
-## Backport Notes
+## 2026-07 Free Subagents Removed
 
-### 2026-04 Subagents Backport
+The April subagent backport is not part of the CTOX execution contract.
+CTOX-managed sessions force `multi_agent=false`, `enable_fanout=false`, and
+`memories=false`. Tool construction and routing independently remove and reject
+all free child-agent controls, including `spawn_agent`.
 
-This backport imports the useful shape of Codex subagents without letting them
-become independent CTOX runtime owners.
+Work decomposition is owned by CTOX durable queue/work-item state. The Coding
+Agents module is the sole external-agent exception and remains a distinct
+policy-checked Business OS provider channel. Server-owned completion review is
+an isolated read-only `Exec` gate, not a child session or parent capability.
 
-Runtime invariants:
-
-- Subagents are parallel work leaves. The parent agent owns review, rework,
-  completion, and owner-visible claims.
-- Subagents do not receive the full parent context by default. The parent must
-  pass a task-specific prompt; subagents use the vanilla subagent profile plus
-  local tools/skills to discover additional context.
-- Thread-spawn subagents cannot recursively use collaboration-mode escalation
-  or spawn further subagents.
-- Local model providers run subagent work serially. API-backed providers may run
-  parallel subagent work.
-- The review state machine must see one parent result, not one independent
-  review gate per subagent.
-- Agent-job leaves expose workspace tools plus `report_agent_job_result`; they
-  do not expose recursive spawn, channels, meetings, acknowledgement, or
-  control-plane mutations. “Report-only” is not the fork contract.
-- Session metadata records the typed capability profile. Explicit
-  `dynamic_tools: []` is an authoritative no-tools contract and must not be
-  repopulated from persisted thread state.
-- Reviewer sessions are tagged `SubAgentSource::Review`. Their authoritative
-  workspace/runtime stays read-only while a disposable scratch CWD can host
-  copied inputs for write-producing checks; the reviewer tag keeps mutating
-  tools unavailable even though that scratch CWD is writable.
-- CTOX shell calls from subagents must carry thread/agent/turn identifiers so
-  forensics can attribute nested CLI activity.
-
-State and forensic fields:
-
-- `threads.subagent_parent_thread_id`
-- `threads.subagent_depth`
-- `threads.agent_path`
-- existing `threads.agent_nickname`
-- existing `threads.agent_role`
-
-When pulling future Codex changes:
-
-1. Re-check `core/src/tools/handlers/multi_agents*` for protocol or lifecycle
-   changes.
-2. Re-check `core/src/agent/control*` for scheduling semantics, especially
-   local-provider serialization.
-3. Re-check `core/src/tools/spec.rs` for subagent prompt text and exposed
-   model/reasoning options.
-4. Re-check app-server thread summaries and state extraction before changing
-   source metadata.
-5. Preserve customized CTOX skill prompts; do not wholesale replace local
-   skills with upstream Codex skills.
+When pulling future Codex changes, re-check `core/src/tools/spec.rs`,
+`core/src/tools/router.rs`, and managed direct-session overrides. Any change
+that makes a collaboration tool model-visible is a release-blocking regression.
 
 Verification commands used for this slice:
 
 ```bash
-cargo check --manifest-path src/harness/Cargo.toml -p ctox-state --tests
-cargo test --manifest-path src/harness/Cargo.toml -p ctox-state --lib --quiet
-cargo check --manifest-path src/harness/Cargo.toml -p ctox-core --tests
-cargo test --manifest-path src/harness/Cargo.toml -p ctox-core exec_env -- --nocapture
-cargo test --manifest-path src/harness/Cargo.toml -p ctox-core multi_agents::tests -- --nocapture
-cargo test --manifest-path src/harness/Cargo.toml -p ctox-core subagent -- --nocapture
-cargo check --manifest-path src/harness/Cargo.toml -p ctox-app-server --tests
-cargo test --manifest-path src/harness/Cargo.toml -p ctox-app-server --lib --quiet
-cargo check --manifest-path src/harness/Cargo.toml -p ctox-app-server-client --lib
-cargo fmt --manifest-path src/harness/Cargo.toml --all --check
+cargo check --manifest-path src/core/harness/Cargo.toml -p ctox-core --tests
+cargo test --manifest-path src/core/harness/Cargo.toml -p ctox-core removed_free_subagent -- --nocapture
+cargo test --manifest-path src/core/harness/Cargo.toml -p ctox-core harness_subagent_spawn_model_forbids_free_subagents -- --nocapture
+cargo fmt --manifest-path src/core/harness/Cargo.toml --all --check
 git diff --check
 ```

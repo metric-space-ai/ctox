@@ -7,15 +7,15 @@ There are three related layers:
    runs one bounded worker slice, reviews the result, records state, and then
    releases or requeues the durable item.
 2. The forked Codex runtime under `src/core/harness/` provides the in-process agent
-   runtime, tools, thread control, subagents, state store, hooks, policy checks,
-   and API/client crates.
+   runtime, tools, thread control, state store, hooks, policy checks, and
+   API/client crates. CTOX-managed sessions do not expose free subagents.
 3. The harness-flow feature in `src/core/service/harness_flow.rs` is an
    observability renderer. It does not execute work. It reads runtime evidence
    and renders the current work path as JSON or ASCII for CLI, TUI, desktop, and
    web surfaces.
 
 The core design rule is still durable-state first: prompts may describe work,
-but completion, review, retries, subagent activity, spawn edges, and outcome
+but completion, review, retries, durable spawn edges, and outcome
 evidence must be explainable from persisted state, not from assistant prose.
 
 ## Runtime State
@@ -139,6 +139,10 @@ is resumed after a service restart. Jobs with a replacement base prompt or a
 narrow no-MCP profile remain deliberately isolated sessions because they have a
 different capability/instruction contract. A queue job's workspace is applied
 as the typed per-turn cwd rather than encoded only in prompt prose.
+Systematic-research jobs are also isolated: each attempt starts a fresh
+non-persistent session with the typed CTOX Web tools. This prevents prior
+research history from influencing a new evidence run while preserving the
+server-authoritative research toolchain.
 Before reuse, the worker compares the current composed base instructions and
 model with the live session contract. A mismatch rebuilds the process-local
 client and resumes the durable thread with the new contract.
@@ -172,6 +176,15 @@ one-hour local-inference timeout.
 Direct-session model events write token and timing forensics to
 `runtime/context-log.jsonl`. Worker failures are persisted as structured
 `messages.agent_outcome` values rather than by scraping assistant text.
+
+On Linux, CTOX-managed in-process sessions select the stable Landlock backend
+for root workers and reviewers. Normal workers can read and write their current
+workspace plus the minimal system paths required to execute commands; sibling
+workspaces, runtime databases, and quarantined run artifacts are not readable.
+Reviewers keep their separate read-only policy. This avoids a runtime dependency
+on system `bwrap` and user namespaces, which are commonly absent on managed
+container hosts, while retaining helper-enforced filesystem and seccomp policy.
+Standalone harness clients keep their configured Linux sandbox backend.
 
 ## Context Protection
 
@@ -290,6 +303,12 @@ staged while the command is `validating`, but active Business OS command/queue
 compatibility projections are published only after the terminal owner commits
 `validating -> terminal` and `queue=handled`. A native peer can therefore not
 replay a stale leased projection as an illegal `validating -> leased` edge.
+The reviewer must not require that terminal queue transition as evidence for
+its own PASS decision: the reviewed row is expected to remain leased, running,
+or awaiting review until PASS. The service, not the worker or reviewer, owns
+the subsequent acknowledgement. Review handoffs and format retries receive the
+original task contract, artifact, required deliverables, and deterministic
+evidence again because each review leg runs in a fresh isolated session.
 
 The router's one-hour unchanged-source idle gate has a separate, cheap durable
 queue safety poll every 30 seconds. This uncached count is the WAL-safe wakeup
@@ -322,6 +341,30 @@ retry feedback have been added. If no durable text contract exists, the task
 falls back to full evidence review. If the task or answer claims a side effect,
 the semantic reviewer must fail it; action-mode commands remain on the full
 evidence path.
+
+Tasks bound to `systematic-research` are never answer-only work. Before the
+completion reviewer runs, the service executes the repository's
+`evidence_guard.py` against every evidence manifest in the typed task
+workspace. A missing manifest, unreachable/non-original source, stale or
+mismatched snapshot, incomplete claim lineage, unverified data file, or
+incomplete independent source/data/claim review sends the same queue item back
+to rework. A passing guard writes a content-hash-bound validation receipt under
+`<workspace>/.ctox/`; that receipt is a required outcome artifact, so
+`validation-not-required` cannot close research work.
+
+The service also verifies the parent worker's durable rollout before accepting
+systematic research. It requires a successful typed `ctox_deep_research` call
+from the same durable research run and command, at the depth declared by the
+server-bound task, and a persisted research workspace inside the task
+workspace. Immutable Web Stack and deep-research receipts may span bounded
+rework attempts of that same run, command, and workspace; the evidence manifest
+and completion result remain bound to the current attempt. Shallower calls and
+`no_workspace` discovery runs cannot satisfy completion. The complete Web Stack
+remains visible from the first model turn so Systematic Research can iterate
+scholarly search, focused web search, direct reads, browser work, and broad
+deep-research rounds. Agent prose, externally imported SQLite rows, and files
+written after the fact are not substitutes for tool receipts or independently
+persisted reviewer provenance.
 
 Rejected or incomplete work is fed back into the same durable queue item or
 internal work item where possible. The review path has finite retry budgets and eventually
@@ -384,30 +427,23 @@ Current contract families:
 Unregistered, unstable, cyclic-without-budget, over-budget, and exhausted-budget
 spawns are rejected and recorded as evidence.
 
-## Subagents
+## No Free Subagents
 
-Subagents are implemented in the forked Codex runtime under `src/core/harness/core`.
-The CTOX fork record is `src/core/harness/FORK.md`.
+CTOX-managed harness sessions never expose `spawn_agent`,
+`spawn_agents_on_csv`, or the related child-control tools. The parent model
+cannot choose a child model, create a child thread, or delegate completion.
+Work decomposition belongs to the durable CTOX state machine and therefore
+uses registered queue/work-item spawn contracts with finite budgets.
 
-Subagents are leaf workers:
+The only external agent exception is the Coding Agents module. It is a
+separate Business OS provider channel under `src/core/coding_agents/`: commands,
+workspace grants, sessions, events, and outcomes are persisted and policy
+checked. It is not a Harness child-agent capability.
 
-- The parent owns the user-visible task, review, rework, completion, and
-  owner-visible claims.
-- Subagent sessions do not get recursive collaboration/spawn tools.
-- `spawn_agents_on_csv` is removed from subagent sessions.
-- Agent-job workers keep workspace tools plus `report_agent_job_result`; they
-  do not receive spawn, channel, meeting, acknowledgement, or control-plane
-  mutation tools.
-- Thread-spawn subagents are bounded by `agents.max_depth` and
-  `agents.max_threads`.
-- Local model providers serialize subagent work; API-backed providers may run
-  parallel work.
-
-The static liveness analyzer in
-`src/core/harness/core/src/harness_spawn_liveness.rs` checks thread-spawn,
-agent-job-worker, and internal-subagent contracts. Its ranking functions are
-`max_depth - child_depth`, `pending_agent_job_items`, and single internal task
-invocation respectively.
+Completion review is also server-owned. CTOX starts a bounded read-only
+`Exec` session after deterministic validation; it is never represented as a
+child or subagent session. The parent cannot invoke, configure, message, or
+reuse it, and its tool surface contains no collaboration or mutation tools.
 
 ## Session Capability Profiles
 
@@ -417,10 +453,9 @@ session metadata. The enforced surfaces are:
 | Profile | Effective boundary |
 | --- | --- |
 | `WorkspaceWorker` | workspace write, network as configured; `runtime/`, `.ctox`, `.codex`, `.agents`, and Git metadata are read-only sandbox subpaths |
-| `Reviewer` | authoritative workspace/runtime read-only; a disposable scratch CWD is writable for copied build/check inputs; no patch, channel, meeting, artifact, collaboration, or mutating MCP surface |
+| `Reviewer` | full filesystem read-only; no patch, channel, meeting, artifact, collaboration, or mutating MCP surface |
 | `Planner` | read-only planning surface; no active mutation tools |
 | `Summarizer` | explicit `Some([])` dynamic-tool contract and no active tools |
-| `AgentJobLeaf` | workspace tools plus `report_agent_job_result`; no spawn/channel/meeting/control-plane mutation |
 
 An explicitly persisted empty dynamic-tool list is authoritative and deletes
 older restored dynamic-tool state; it never means “restore defaults”. Durable
@@ -512,8 +547,8 @@ ctox process-mining prune --sqlite-access-window 200000
 ```
 
 `spawn-liveness` combines the core durable-spawn analyzer with the forked
-Codex subagent analyzer and exits non-zero when either layer is not provably
-bounded.
+Harness no-subagent conformance analyzer. It exits non-zero if durable spawning
+is not bounded or if any free child-agent capability becomes reachable.
 
 ## Business OS Acceptance Bench
 

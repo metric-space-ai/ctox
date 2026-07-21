@@ -12,6 +12,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from source_review_reading import load_manifest_bindings, validate_reading_artifacts
+
 
 def load_csv(path: Path) -> list[dict[str, str]]:
     if not path.exists():
@@ -41,10 +43,14 @@ def int_or_zero(value: Any) -> int:
         return 0
 
 
+DOI_PATTERN = re.compile(r"^10\.\d{4,9}/\S+$", re.IGNORECASE)
+
+
 def normalize_doi(value: str) -> str:
     value = clean(value)
     value = re.sub(r"^https?://(dx\.)?doi\.org/", "", value, flags=re.IGNORECASE)
-    return value
+    value = re.sub(r"^doi:\s*", "", value, flags=re.IGNORECASE).rstrip(".,;)")
+    return value if DOI_PATTERN.fullmatch(value) else ""
 
 
 def source_key(row: dict[str, str]) -> str:
@@ -163,9 +169,9 @@ def source_identifier(row: dict[str, str]) -> str:
 
 def plain_status(status: str) -> str:
     return {
-        "extracted": "read and extracted",
-        "readable_no_measurements": "readable, no numeric extraction yet",
-        "metadata_only": "metadata only",
+        "evidence": "eligible evidence",
+        "evidence_no_measurements": "eligible full text, no numeric extraction",
+        "rejected": "rejected by evidence gate",
         "blocked": "blocked",
         "not_read_in_pass": "not read in current pass",
     }.get(status or "", status or "not read in current pass")
@@ -173,9 +179,9 @@ def plain_status(status: str) -> str:
 
 def evidence_grade(status: str) -> str:
     return {
-        "extracted": "A - direct evidence extracted",
-        "readable_no_measurements": "B - readable follow-up source",
-        "metadata_only": "C - metadata only",
+        "evidence": "A - eligible evidence extracted",
+        "evidence_no_measurements": "B - eligible full text, no numeric extraction",
+        "rejected": "D - rejected by evidence gate",
         "blocked": "D - access blocked",
     }.get(status or "", "C - not read in pass")
 
@@ -197,8 +203,8 @@ def why_source_matters(row: dict[str, str], status: dict[str, str] | None = None
         lead = "Useful for load-cell, balance, structural or test-instrumentation context."
     else:
         lead = "Useful as supporting UAV load-data literature."
-    if status and status.get("status") == "metadata_only":
-        lead += " Full-text access still needs follow-up."
+    if status and status.get("status") == "rejected":
+        lead += " The source did not pass the evidence gate."
     if status and status.get("status") == "blocked":
         lead += " Access was blocked in this run."
     return f"{lead} {snippet}".strip()
@@ -217,7 +223,7 @@ def indexed_reading_status(reading_rows: list[dict[str, str]], row: dict[str, st
 def recommended_sources(candidates: list[dict[str, str]], reading_rows: list[dict[str, str]], limit: int = 24) -> list[dict[str, str]]:
     def rank(row: dict[str, str]) -> tuple[int, int]:
         status = indexed_reading_status(reading_rows, row).get("status", "")
-        status_weight = {"extracted": 40, "readable_no_measurements": 25, "metadata_only": 5, "blocked": -15}.get(status, 0)
+        status_weight = {"evidence": 40, "evidence_no_measurements": 25, "rejected": -10, "blocked": -15}.get(status, 0)
         return (status_weight + int_or_zero(row.get("relevance_score")), int_or_zero(row.get("relevance_score")))
 
     rows = sorted(candidates, key=rank, reverse=True)
@@ -319,13 +325,9 @@ def build_docx(
     discovery_dir: Path,
     reading_dir: Path,
     out_path: Path,
+    manifest: dict[str, Any] | None = None,
+    manifest_base_dir: Path | None = None,
 ) -> dict[str, Any]:
-    try:
-        from docx import Document
-        from docx.shared import Inches
-    except Exception as exc:
-        raise SystemExit("python-docx is required. Use the bundled Codex workspace Python runtime.") from exc
-
     candidates = load_csv(discovery_dir / "candidate_sources.csv")
     screened = load_csv(discovery_dir / "screened_sources.csv")
     rejected = load_csv(discovery_dir / "rejected_sources.csv")
@@ -333,6 +335,12 @@ def build_docx(
     discovery_graph = load_json(discovery_dir / "discovery_graph.json")
     reading_rows = load_csv(reading_dir / "reading_status.csv")
     measurements = load_csv(reading_dir / "extracted_measurements.csv")
+    bindings = (
+        load_manifest_bindings(manifest, manifest_base_dir or Path.cwd())
+        if manifest is not None
+        else {}
+    )
+    eligible_reading_rows, measurements = validate_reading_artifacts(reading_rows, measurements, bindings)
     discovery_summary = load_json(discovery_dir / "summary.json")
     reading_summary = load_json(reading_dir / "reading_summary.json")
     mass_limit_kg = infer_mass_limit_kg(topic)
@@ -342,6 +350,12 @@ def build_docx(
     off_scope_measurements = [
         row for row in measurements if measurement_scope(row, mass_limit_kg) in {"outside_mass_scope", "invalid_or_context"}
     ]
+
+    try:
+        from docx import Document
+        from docx.shared import Inches
+    except Exception as exc:
+        raise SystemExit("python-docx is required. Use the bundled Codex workspace Python runtime.") from exc
 
     doc = Document()
     set_doc_style(doc)
@@ -360,10 +374,10 @@ def build_docx(
     reviewed_result_records = int_or_zero(discovery_summary.get("reviewed_results"))
     screened_unique_count = int_or_zero(discovery_summary.get("screened_unique_sources")) or len(screened) or len(candidates) + len(rejected)
     rejected_count = len(rejected)
-    readable = int_or_zero(reading_summary.get("readable_sources"))
+    readable = len(eligible_reading_rows)
     metadata_only = int_or_zero(reading_summary.get("metadata_only_sources"))
     blocked = int_or_zero(reading_summary.get("blocked_sources"))
-    extracted_sources = int_or_zero(reading_summary.get("extracted_sources"))
+    extracted_sources = len(eligible_reading_rows)
     measurement_count = len(scoped_measurements)
     add_bullets(
         doc,
@@ -412,9 +426,9 @@ def build_docx(
         doc,
         ["Reading status", "Count", "Meaning"],
         [
-            ["extracted", str(statuses.get("extracted", 0)), "Readable and numeric evidence extracted"],
-            ["readable_no_measurements", str(statuses.get("readable_no_measurements", 0)), "Readable but no numeric evidence found in current pass"],
-            ["metadata_only", str(statuses.get("metadata_only", 0)), "Only abstract/metadata used"],
+            ["evidence", str(statuses.get("evidence", 0)), "Eligible and numeric evidence extracted"],
+            ["evidence_no_measurements", str(statuses.get("evidence_no_measurements", 0)), "Eligible full text but no numeric extraction"],
+            ["rejected", str(statuses.get("rejected", 0)), "Failed the evidence gate"],
             ["blocked", str(statuses.get("blocked", 0)), "No readable source text available from attempted URLs"],
         ],
     )
@@ -459,7 +473,7 @@ def build_docx(
         )
 
     doc.add_heading("Priority Source Catalog", level=1)
-    index = status_index(reading_rows)
+    index = status_index(eligible_reading_rows)
     top_sources: list[list[str]] = []
     for row in sorted(candidates, key=lambda item: int_or_zero(item.get("relevance_score")), reverse=True)[:40]:
         status = index.get(row.get("openalex_id", "")) or index.get(normalize_doi(row.get("doi", ""))) or {}
@@ -521,7 +535,13 @@ def autosize_sheet(sheet: Any) -> None:
         sheet.column_dimensions[col_letter].width = width
 
 
-def build_xlsx(discovery_dir: Path, reading_dir: Path, out_path: Path) -> None:
+def build_xlsx(
+    discovery_dir: Path,
+    reading_dir: Path,
+    out_path: Path,
+    manifest: dict[str, Any] | None = None,
+    manifest_base_dir: Path | None = None,
+) -> None:
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Font
@@ -531,10 +551,18 @@ def build_xlsx(discovery_dir: Path, reading_dir: Path, out_path: Path) -> None:
     wb = Workbook()
     default = wb.active
     wb.remove(default)
+    reading_rows = load_csv(reading_dir / "reading_status.csv")
+    measurements = load_csv(reading_dir / "extracted_measurements.csv")
+    bindings = (
+        load_manifest_bindings(manifest, manifest_base_dir or Path.cwd())
+        if manifest is not None
+        else {}
+    )
+    _, measurements = validate_reading_artifacts(reading_rows, measurements, bindings)
     datasets = [
         ("accepted_sources", load_csv(discovery_dir / "candidate_sources.csv")),
-        ("reading_status", load_csv(reading_dir / "reading_status.csv")),
-        ("measurements", load_csv(reading_dir / "extracted_measurements.csv")),
+        ("reading_status", reading_rows),
+        ("measurements", measurements),
         ("rejected_sources", load_csv(discovery_dir / "rejected_sources.csv")),
     ]
     for name, rows in datasets:
@@ -562,11 +590,29 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--reading-dir", type=Path, required=True)
     parser.add_argument("--out-docx", type=Path, required=True)
     parser.add_argument("--out-xlsx", type=Path)
+    parser.add_argument("--evidence-manifest", type=Path, required=True)
     args = parser.parse_args(argv)
 
-    summary = build_docx(args.title, args.topic, args.discovery_dir, args.reading_dir, args.out_docx)
+    manifest = json.loads(args.evidence_manifest.read_text(encoding="utf-8"))
+    load_manifest_bindings(manifest, args.evidence_manifest.parent)
+
+    summary = build_docx(
+        args.title,
+        args.topic,
+        args.discovery_dir,
+        args.reading_dir,
+        args.out_docx,
+        manifest=manifest,
+        manifest_base_dir=args.evidence_manifest.parent,
+    )
     if args.out_xlsx:
-        build_xlsx(args.discovery_dir, args.reading_dir, args.out_xlsx)
+        build_xlsx(
+            args.discovery_dir,
+            args.reading_dir,
+            args.out_xlsx,
+            manifest=manifest,
+            manifest_base_dir=args.evidence_manifest.parent,
+        )
         summary["xlsx"] = str(args.out_xlsx)
     print(json.dumps(summary, indent=2, ensure_ascii=False))
     return 0

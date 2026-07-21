@@ -5849,6 +5849,35 @@ pub fn update_queue_task(root: &Path, request: QueueTaskUpdateRequest) -> Result
     ensure_queue_account(&mut conn)?;
     let current = load_queue_message_from_conn(&conn, &request.message_key)?
         .context("queue task not found")?;
+    if request
+        .route_status
+        .as_deref()
+        .is_some_and(|status| status.eq_ignore_ascii_case("pending"))
+    {
+        let command_state = conn
+            .query_row(
+                "SELECT aggregate.execution_phase, aggregate.terminal_status
+                 FROM business_command_task_links link
+                 JOIN business_command_aggregates aggregate
+                   ON aggregate.command_id = link.command_id
+                 WHERE link.task_id = ?1",
+                params![request.message_key],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        if let Some((phase, terminal_status)) = command_state {
+            anyhow::ensure!(
+                phase != "validating",
+                "cannot release queue task `{}` while its Business OS command is validating; terminalization or an atomic completion hold must resolve it",
+                request.message_key
+            );
+            anyhow::ensure!(
+                phase != "terminal",
+                "cannot release queue task `{}` for terminal Business OS command status `{terminal_status}`; submit a new command to retry",
+                request.message_key
+            );
+        }
+    }
     let current_metadata = queue_metadata_object(&current.metadata);
     let title = request
         .title

@@ -3139,6 +3139,13 @@
           ],
           "description": "Override the personality for this turn and subsequent turns."
         },
+        "requiredInitialTool": {
+          "description": "Require this model-visible tool as the first external action of the turn. Normal tool selection resumes after that call is in turn history.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "sandboxPolicy": {
           "anyOf": [
             {

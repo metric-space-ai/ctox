@@ -428,8 +428,12 @@ impl Features {
     }
 
     pub(crate) fn normalize_dependencies(&mut self) {
-        if self.enabled(Feature::SpawnCsv) && !self.enabled(Feature::Collab) {
-            self.enable(Feature::Collab);
+        if self.enabled(Feature::Collab) || self.enabled(Feature::SpawnCsv) {
+            tracing::warn!(
+                "free subagents are removed from CTOX; disabling multi_agent and enable_fanout"
+            );
+            self.disable(Feature::Collab);
+            self.disable(Feature::SpawnCsv);
         }
         if self.enabled(Feature::CodeModeOnly) && !self.enabled(Feature::CodeMode) {
             self.enable(Feature::CodeMode);
@@ -716,13 +720,13 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Collab,
         key: "multi_agent",
-        stage: Stage::Stable,
-        default_enabled: true,
+        stage: Stage::Removed,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::SpawnCsv,
         key: "enable_fanout",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {

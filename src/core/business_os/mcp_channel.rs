@@ -9750,10 +9750,27 @@ mod tests {
     }
 
     #[test]
-    fn local_external_sql_module_actions_expose_typed_sync_commands() -> anyhow::Result<()> {
+    fn module_without_external_sql_does_not_expose_sql_actions() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
-        write_module(root, "inventory", "Inventory", &["inventory_items"])?;
+        let source_app_root = root.join("business-os");
+        let module_root = root.join("runtime/business-os/local-modules/inventory");
+        std::fs::create_dir_all(&module_root)?;
+        std::fs::create_dir_all(&source_app_root)?;
+        std::fs::write(source_app_root.join("index.html"), "")?;
+        std::fs::write(
+            module_root.join("module.json"),
+            serde_json::to_string(&serde_json::json!({
+                "id": "inventory",
+                "title": "Inventory",
+                "description": "Private inventory module",
+                "version": "1.0.0",
+                "install_scope": "local",
+                "source": "local",
+                "entry": "local-modules/inventory/index.html",
+                "collections": ["inventory_items"]
+            }))?,
+        )?;
         seed_default_mcp_admin(root)?;
 
         let actions = list_module_actions(
@@ -9840,6 +9857,21 @@ mod tests {
             serde_json::json!({ "source_id": "warehouse-db" })
         );
         assert!(proposal.payload.get("input").is_none());
+        assert!(!proposal.confirmation_required);
+
+        let write_proposal = propose_action(
+            root,
+            &test_context("business_os.propose_action"),
+            "inventory",
+            "external_sql.write",
+            &serde_json::json!({
+                "payload": {
+                    "source_id": "warehouse-db",
+                    "operation_id": "update-item"
+                }
+            }),
+        )?;
+        assert!(write_proposal.confirmation_required);
         Ok(())
     }
 

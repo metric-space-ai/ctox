@@ -68,12 +68,11 @@ fn production_reviewers_are_read_only_and_workers_protect_runtime_state() {
     assert!(
         production.contains("start_review_with_read_only_tools")
             && production.contains("start_review_without_tools")
-            && production.contains("create_reviewer_scratch_workspace")
-            && production.contains("SessionSource::SubAgent(SubAgentSource::Review)")
-            && production.contains("SandboxMode::WorkspaceWrite")
-            && production.contains("SandboxPolicy::WorkspaceWrite")
-            && production.contains("exclude_slash_tmp: read_only_sandbox")
+            && production.contains("let session_source = SessionSource::Exec")
+            && production.contains("SandboxMode::ReadOnly")
+            && production.contains("SandboxPolicy::new_read_only_policy()")
+            && !production.contains("SessionSource::SubAgent")
             && production.contains("dynamic_tools: disable_active_tools.then(Vec::new)"),
-        "reviewers must write only in disposable scratch while authoritative workspace/runtime stay read-only"
+        "completion reviewers must be server-owned read-only sessions, never child agents"
     );
 }

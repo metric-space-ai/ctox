@@ -2,9 +2,9 @@
 //! binary via `include_str!` so a release build always carries the full set
 //! shipped with that build.
 
+use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::bail;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 

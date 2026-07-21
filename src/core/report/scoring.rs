@@ -6,12 +6,12 @@
 //! `rubric:<axis_code>:<level_code>` so a validator can check the cell value
 //! against the run's own rubric definition.
 
+use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::bail;
+use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
-use rusqlite::params;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -158,9 +158,7 @@ pub fn upsert_cell(conn: &Connection, run_id: &str, input: &CellInput) -> Result
     if let Some(anchor) = rubric_anchor.as_deref() {
         let parts: Vec<&str> = anchor.split(':').collect();
         if parts.len() != 3 || parts[0] != "rubric" {
-            bail!(
-                "rubric_anchor must be 'rubric:<axis_code>:<level_code>', got '{anchor}'"
-            );
+            bail!("rubric_anchor must be 'rubric:<axis_code>:<level_code>', got '{anchor}'");
         }
         let axis = parts[1];
         let level = parts[2];

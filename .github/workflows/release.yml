@@ -573,6 +573,7 @@ jobs:
 
       - name: Build packaged app
         working-directory: src/apps/business-os-desktop
+        shell: bash
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
@@ -583,7 +584,20 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.builderPlatform == 'win' && 'false' || 'true' }}
           CTOX_WINDOWS_STORE_RELEASE: ${{ matrix.builderPlatform == 'win' && '1' || '0' }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run dist -- --${{ matrix.builderPlatform }} --${{ matrix.arch }} --publish never
+        run: |
+          max_attempts=1
+          if [ "${{ matrix.builderPlatform }}" = "mac" ]; then
+            max_attempts=2
+          fi
+          attempt=1
+          until npm run dist -- --${{ matrix.builderPlatform }} --${{ matrix.arch }} --publish never; do
+            if [ "$attempt" -ge "$max_attempts" ]; then
+              exit 1
+            fi
+            echo "::warning::macOS package build failed on attempt ${attempt}; retrying once for transient hdiutil detach failures"
+            attempt=$((attempt + 1))
+            sleep 15
+          done
 
       - name: Release artifact smoke
         working-directory: src/apps/business-os-desktop

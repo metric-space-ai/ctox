@@ -409,6 +409,7 @@ pub fn append(root: &Path, args: &[String]) -> Result<()> {
     } else {
         df_new
     };
+    let df = normalize_evidence_dataframe(root, &table_key, df)?;
 
     commit_parquet(&path, df.clone())?;
     let now = now_rfc3339();
@@ -469,6 +470,7 @@ pub fn update(root: &Path, args: &[String]) -> Result<()> {
         .with_columns(exprs)
         .collect()
         .context("apply --set assignments")?;
+    let df = normalize_evidence_dataframe(root, &table_key, df)?;
 
     commit_parquet(&path, df.clone())?;
     let now = now_rfc3339();
@@ -510,6 +512,7 @@ pub fn delete_rows(root: &Path, args: &[String]) -> Result<()> {
         .filter(cond.not())
         .collect()
         .context("apply delete-rows filter")?;
+    let df = normalize_evidence_dataframe(root, &table_key, df)?;
     let after_n = df.height() as i64;
     let rows_deleted = before_n - after_n;
 
@@ -569,6 +572,7 @@ pub fn add_column(root: &Path, args: &[String]) -> Result<()> {
         .with_column(value_expr.alias(column.as_str()))
         .collect()
         .context("add-column collect")?;
+    let df = normalize_evidence_dataframe(root, &table_key, df)?;
 
     commit_parquet(&path, df.clone())?;
     let now = now_rfc3339();
@@ -605,6 +609,7 @@ pub fn drop_column(root: &Path, args: &[String]) -> Result<()> {
         .drop(selector)
         .collect()
         .context("drop-column collect")?;
+    let df = normalize_evidence_dataframe(root, &table_key, df)?;
 
     commit_parquet(&path, df.clone())?;
     let now = now_rfc3339();
@@ -697,6 +702,7 @@ pub fn import(root: &Path, args: &[String]) -> Result<()> {
     } else {
         df_new
     };
+    let df = normalize_evidence_dataframe(root, &table_key, df)?;
 
     commit_parquet(&path, df.clone())?;
     let now = now_rfc3339();
@@ -793,6 +799,16 @@ pub fn export(root: &Path, args: &[String]) -> Result<()> {
     }))
 }
 
+fn normalize_evidence_dataframe(root: &Path, table_key: &str, df: DataFrame) -> Result<DataFrame> {
+    if !super::data::is_evidence_table(table_key) || df.height() == 0 {
+        return Ok(df);
+    }
+    let rows = df_to_rows(&df)?;
+    let normalized =
+        super::data::normalize_evidence_rows_with_server_receipts(root, table_key, rows)?;
+    rows_to_df(&normalized)
+}
+
 // ----- internal -----------------------------------------------------------
 
 /// Convert a `Scalar` aggregate result (min/max/mean) to a JSON value
@@ -826,5 +842,111 @@ fn any_value_to_json(av: &AnyValue<'_>) -> Value {
             .unwrap_or(Value::Null),
         // Fallback: use the Debug representation rather than crash.
         other => Value::String(format!("{other:?}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn append_recomputes_evidence_eligibility_instead_of_trusting_input() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        super::super::data::handle_data_command(
+            root,
+            &[
+                "create".to_string(),
+                "--domain".to_string(),
+                "research".to_string(),
+                "--key".to_string(),
+                "source_catalog".to_string(),
+            ],
+        )?;
+        let cache_path = root.join("runtime/web_search_page_cache.json");
+        std::fs::create_dir_all(cache_path.parent().expect("cache parent"))?;
+        std::fs::write(
+            cache_path,
+            serde_json::to_vec(&json!({
+                "entries": {
+                    "valid": {
+                        "created_at_epoch": 1,
+                        "checked_at": 1,
+                        "original_url": "https://publisher.example/source",
+                        "final_url": "https://publisher.example/source",
+                        "canonical_url": "https://publisher.example/source",
+                        "evidence_eligible": true,
+                        "http_status": 200,
+                        "snapshot_hash": format!("sha256:{}", "c".repeat(64)),
+                        "doc": {
+                            "url": "https://publisher.example/source",
+                            "canonical_url": "https://publisher.example/source",
+                            "evidence_eligible": true,
+                            "response_receipt": {
+                                "requested_url": "https://publisher.example/source",
+                                "final_url": "https://publisher.example/source",
+                                "status": 200,
+                                "sha256": format!("sha256:{}", "c".repeat(64))
+                            }
+                        }
+                    }
+                }
+            }))?,
+        )?;
+
+        let rows = json!([
+            {
+                "source_id": "src-valid",
+                "canonical_url": "https://publisher.example/source",
+                "source_type": "web",
+                "verification_status": "verified",
+                "transport_verified": true,
+                "content_extracted": true,
+                "actual_full_text_or_data": true,
+                "evidence_relevance_score": 32,
+                "http_status": 200,
+                "snapshot_hash": format!("sha256:{}", "c".repeat(64)),
+                "source_tier": "primary",
+                "provenance": "research-run-2",
+                "evidence_eligible": false
+            },
+            {
+                "source_id": "src-forged",
+                "canonical_url": "https://publisher.example/forged",
+                "source_type": "web",
+                "verification_status": "verified",
+                "transport_verified": true,
+                "content_extracted": true,
+                "actual_full_text_or_data": true,
+                "evidence_relevance_score": 32,
+                "http_status": 200,
+                "snapshot_hash": "sha256:not-a-digest",
+                "source_tier": "primary",
+                "provenance": "research-run-2",
+                "evidence_eligible": true
+            }
+        ])
+        .to_string();
+        super::append(
+            root,
+            &[
+                "--domain".to_string(),
+                "research".to_string(),
+                "--key".to_string(),
+                "source_catalog".to_string(),
+                "--rows".to_string(),
+                rows,
+            ],
+        )?;
+
+        let path = super::super::data::compute_parquet_path(root, "research", "source_catalog");
+        let (rows, _) = super::super::parquet_io::read_rows_capped(&path, 10)?;
+        assert_eq!(rows[0]["evidence_eligible"], json!(true));
+        assert_eq!(rows[1]["evidence_eligible"], json!(false));
+        assert!(rows[1]["evidence_rejection_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("invalid_snapshot_hash")));
+        Ok(())
     }
 }

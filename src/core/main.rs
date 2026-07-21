@@ -269,6 +269,11 @@ fn raise_open_file_limit() {
 fn raise_open_file_limit() {}
 
 fn main() -> anyhow::Result<()> {
+    // Keep the generated argv0 aliases alive for the process lifetime. On
+    // Linux, child tool executions re-enter this binary as
+    // `ctox-linux-sandbox`; arg0_dispatch performs that dispatch before the
+    // regular CTOX startup path runs.
+    let _arg0_dispatch = ctox_arg0::arg0_dispatch();
     raise_open_file_limit();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let root = resolve_workspace_root()?;
@@ -331,6 +336,15 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
             "upgrade" | "update" | "version" | "status" | "doctor" | "mailserver" | "appsec" => {
                 return true;
             }
+            // Agent-facing web-stack calls persist their evidence in the
+            // declared research workspace. Opening the global CLI ledger
+            // first is both unnecessary and forbidden from a worker sandbox.
+            "web" => return true,
+            // Knowledge commands are routed to the daemon-owned IPC handler
+            // when the service is active. The daemon owns policy, persistence,
+            // and audit evidence; the sandboxed caller must not open the
+            // runtime SQLite database for a second CLI ledger write.
+            "knowledge" => return true,
             "business-os" | "business"
                 if matches!(args.get(1).map(String::as_str), Some("serve" | "status")) =>
             {
@@ -2727,6 +2741,7 @@ fn appsec_output_session_id(output: &Value) -> Option<String> {
         "/session_id",
         "/browser_session/session_id",
         "/result/session_id",
+        "/result/result/session_id",
         "/output/session_id",
     ]
     .into_iter()
@@ -4975,9 +4990,10 @@ mod tests {
         find_ctox_root_from_ancestors, handle_appsec_pipeline_work, handle_continuity_update,
         looks_like_ctox_root, openrouter_tool_smoke_summary,
         persist_appsec_command_expected_artifact, persist_runtime_turn_timeout,
-        record_appsec_stage_artifact_bindings, resolve_appsec_stage_command_placeholders,
-        resolve_chat_attachment_paths, resolve_runtime_ctox_root, run_projected_appsec_command,
-        validated_workspace_root_override, AppsecStageExecutionContext,
+        record_appsec_stage_artifact_bindings, record_appsec_stage_session_bindings,
+        resolve_appsec_stage_command_placeholders, resolve_chat_attachment_paths,
+        resolve_runtime_ctox_root, run_projected_appsec_command, validated_workspace_root_override,
+        AppsecStageExecutionContext,
     };
     use crate::execution::models::runtime_env;
     use std::fs;
@@ -4997,6 +5013,21 @@ mod tests {
             .map(str::to_string)
             .collect::<Vec<_>>();
         assert!(!super::skips_cli_turn_ledger(&inspect));
+    }
+
+    #[test]
+    fn agent_research_commands_skip_caller_side_turn_ledger() {
+        for args in [
+            vec!["web", "deep-research", "--query", "bearing loads"],
+            vec!["knowledge", "search", "--query", "bearing loads"],
+            vec!["knowledge", "data", "list"],
+        ] {
+            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+            assert!(
+                super::skips_cli_turn_ledger(&args),
+                "agent-facing command must not open the caller-side ledger: {args:?}"
+            );
+        }
     }
 
     #[test]
@@ -6649,6 +6680,47 @@ mod tests {
                 })
                 .count(),
             2
+        );
+    }
+
+    #[test]
+    fn appsec_worker_recovers_session_binding_from_reused_redacted_artifact() {
+        let mut context = AppsecStageExecutionContext::default();
+        let command = serde_json::json!({
+            "kind": "ctox-cli",
+            "tool": "ctox_web_auth_assist_login",
+            "subject_id": "user-a",
+            "produces": {
+                "session_id": {
+                    "placeholder": "${session_id:user-a}"
+                }
+            }
+        });
+        let reused_output = serde_json::json!({
+            "ok": true,
+            "status": "completed",
+            "reused_existing_artifact": true,
+            "result": {
+                "version": "ctox.appsec_pentest.web_stack_evidence.v1",
+                "status": "completed",
+                "result": {
+                    "session_id": "browser_session_web_stack_auth_user_a"
+                }
+            }
+        });
+
+        let bindings = record_appsec_stage_session_bindings(&mut context, &command, &reused_output);
+
+        assert_eq!(
+            context.session_ids.get("user-a").map(String::as_str),
+            Some("browser_session_web_stack_auth_user_a")
+        );
+        assert_eq!(
+            bindings
+                .first()
+                .and_then(|binding| binding.get("session_id"))
+                .and_then(serde_json::Value::as_str),
+            Some("browser_session_web_stack_auth_user_a")
         );
     }
 

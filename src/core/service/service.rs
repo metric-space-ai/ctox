@@ -607,9 +607,11 @@ struct LcmLastAgentOutcomeStamp {
 
 #[derive(Debug, Clone)]
 struct LiveServiceSettingsCacheState {
+    loaded_at: Instant,
     root: PathBuf,
     db_path: PathBuf,
     stamp: CoreDbChangeStamp,
+    runtime_config_stamp: CoreDbChangeStamp,
     env_overlay: BTreeMap<String, String>,
     settings: BTreeMap<String, String>,
 }
@@ -3316,10 +3318,26 @@ fn handle_service_ipc_request(
             // connection — not by a sandboxed CLI subprocess that may have
             // its writes silently discarded on sandbox teardown.
             match crate::knowledge::dispatch_capturing(root, &argv) {
-                Ok(payload) => Ok(ServiceIpcResponse::Json {
-                    status: 200,
-                    payload,
-                }),
+                Ok(mut payload) => {
+                    if knowledge_data_command_mutates_tables(&argv) {
+                        attach_knowledge_projection_status(
+                            &mut payload,
+                            crate::business_os::sync_knowledge_tables(root),
+                            "knowledge_tables",
+                        );
+                    }
+                    if knowledge_skill_command_mutates_records(&argv) {
+                        attach_knowledge_projection_status(
+                            &mut payload,
+                            crate::business_os::sync_business_record_projections(root),
+                            "business_records",
+                        );
+                    }
+                    Ok(ServiceIpcResponse::Json {
+                        status: 200,
+                        payload,
+                    })
+                }
                 Err(err) => Ok(ServiceIpcResponse::Error {
                     message: err.to_string(),
                 }),
@@ -3349,6 +3367,72 @@ fn handle_service_ipc_request(
             }
         }
     }
+}
+
+fn knowledge_data_command_mutates_tables(argv: &[String]) -> bool {
+    matches!(
+        argv,
+        [form, verb, ..]
+            if form == "data"
+                && matches!(
+                    verb.as_str(),
+                    "create"
+                        | "clone"
+                        | "rename"
+                        | "archive"
+                        | "restore"
+                        | "delete"
+                        | "tag"
+                        | "untag"
+                        | "append"
+                        | "update"
+                        | "delete-rows"
+                        | "add-column"
+                        | "drop-column"
+                        | "import"
+                )
+    )
+}
+
+fn knowledge_skill_command_mutates_records(argv: &[String]) -> bool {
+    matches!(
+        argv,
+        [form, verb, ..]
+            if matches!(form.as_str(), "skill" | "skills")
+                && matches!(
+                    verb.as_str(),
+                    "set"
+                        | "import-bundle"
+                        | "new"
+                        | "add-skillbook"
+                        | "add-runbook"
+                        | "add-item"
+                        | "refresh-item-embedding"
+                )
+    )
+}
+
+fn attach_knowledge_projection_status(
+    payload: &mut serde_json::Value,
+    result: anyhow::Result<usize>,
+    projection: &str,
+) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    let status = match result {
+        Ok(updated) => serde_json::json!({
+            "ok": true,
+            "projection": projection,
+            "updated": updated,
+        }),
+        Err(error) => serde_json::json!({
+            "ok": false,
+            "projection": projection,
+            "error": error.to_string(),
+        }),
+    };
+    object.insert("business_os_projection".to_string(), status);
 }
 
 #[cfg(not(unix))]
@@ -5910,6 +5994,7 @@ fn start_prompt_worker(
             let conversation_id =
                 turn_loop::conversation_id_for_thread_key(conversation_thread_key.as_deref());
             let command_turn_id = format!("business-command-turn:{}", uuid::Uuid::new_v4());
+            let research_attempt_started_at = current_epoch_secs();
             // Plan-step messages force a continuity refresh directly.
             // Internal-work closures (which the service performs after the
             // turn, post completion review) are picked up by the turn
@@ -5942,14 +6027,36 @@ fn start_prompt_worker(
             } else {
                 artifact_first_execution_prompt(&job)
             };
-            let execution_prompt = attach_typed_business_command_context(
-                &root,
-                &job,
-                base_execution_prompt,
-                &command_turn_id,
-                conversation_thread_key.as_deref(),
-            )
-            .map(|prompt| outbound_email_first_execution_prompt(&job, prompt));
+            let execution_prompt = materialize_systematic_research_skill(&root, &job).and_then(
+                |systematic_research_skill_dir| {
+                    attach_typed_business_command_context(
+                        &root,
+                        &job,
+                        base_execution_prompt,
+                        &command_turn_id,
+                        conversation_thread_key.as_deref(),
+                    )
+                    .map(|mut prompt| {
+                        if is_systematic_research_job(&job) {
+                            let required_depth =
+                                required_systematic_research_depth(&job).as_str();
+                            let skill_dir = systematic_research_skill_dir
+                                .as_ref()
+                                .expect("systematic research skill must be materialized");
+                            let evidence_contract =
+                                skill_dir.join("references/evidence_integrity.md");
+                            let evidence_guard = skill_dir.join("scripts/evidence_guard.py");
+                            prompt.push_str(&format!(
+                                "\n\nServer-bound research attempt:\nResearch Attempt ID: {command_turn_id}\nRequired Deep Research Depth: {required_depth}\nThe complete read-only Systematic Research skill package is materialized inside this task workspace at {}.\nBefore creating or repairing validation/evidence-manifest.json, read the exact contract at {}. Run `python3 {} validation/evidence-manifest.json` yourself before completion. The manifest must use top-level `schema_version: \"ctox.research.evidence.v2\"`, `run_id`, `research_run_id`, `research_command_id`, the exact current `research_attempt_id`, `as_of`, and non-empty `sources` and `evidence` arrays plus `claims`, `data_files`, and `knowledge` exactly as that contract defines. A top-level `schema` or `manifest_version` is not a substitute for `schema_version`.\nWrite the exact attempt ID to research_attempt_id in validation/evidence-manifest.json. Ensure this durable research run contains a successful typed ctox_deep_research call at the required depth with a persisted research workspace inside the task workspace. Reuse immutable receipts already produced by the same Research Run ID, Research Command ID, and workspace across bounded correction attempts; do not repeat discovery solely because the reviewer requested a manifest repair.\nBefore completion, create these exact native-writeback files inside the task workspace: `dashboard/knowledge/source_candidates.csv`, `dashboard/knowledge/source_catalog.csv`, `dashboard/knowledge/evidence_points.csv`, `dashboard/knowledge/evaluation_matrix.csv`, `dashboard/knowledge/semantic_graph_nodes.csv`, and `dashboard/knowledge/semantic_graph_edges.csv`. Also create `dashboard/knowledge/<table_key>.csv` for every additional table named by `writeback_contract.dashboard_tables` in the Business OS command, including `measured_load_points.csv` and `derived_bearing_loads.csv` when requested. Every required CSV must contain at least one data row and the exact `research_run_id` and `research_command_id` columns on every row. Source-catalog and measured/derived rows must carry `source_id`, `canonical_url`, and `snapshot_hash` matching admitted manifest evidence; evidence-point rows must additionally carry the exact validated `claim_id`, `evidence_id`, `snapshot_id`, and `quote`. Header-only placeholders are invalid. Verify that all required paths exist before reporting completion.\nDo not call the sandboxed `ctox` CLI for Knowledge writeback. After the evidence guard and independent review pass, the native research.systematic.run command imports the validated dashboard/knowledge CSV outputs into Knowledge and projects them over RxDB/WebRTC. Do not spawn or delegate to child agents. CTOX validates original-content receipts, hashes, data integrity, claim lineage, and every required CSV before its independent service-owned completion-review gate. Completion rejects any other attempt ID, manifest path or schema, shallower depth, no-workspace run, missing evidence, missing CSV, header-only CSV, or mismatched row lineage.",
+                                skill_dir.display(),
+                                evidence_contract.display(),
+                                evidence_guard.display(),
+                            ));
+                        }
+                        outbound_email_first_execution_prompt(&job, prompt)
+                    })
+                },
+            );
             let session_options = chat_turn_session_options_for_queue_job(&job);
             let result = execution_prompt.and_then(|execution_prompt| {
                 if queue_job_reuses_persistent_session(&session_options) {
@@ -6242,8 +6349,48 @@ fn start_prompt_worker(
                 }
             }
             let app_validation_precompleted = false;
+            let systematic_research = is_systematic_research_job(&job);
+            let research_validation_failure = if result.is_ok() && systematic_research {
+                let research_started_at =
+                    systematic_research_started_at(&root, &job, research_attempt_started_at);
+                match validate_systematic_research_workspace(
+                    &root,
+                    &job,
+                    &command_turn_id,
+                    research_started_at,
+                ) {
+                    Ok(receipt) => {
+                        push_event(
+                            &state,
+                            format!(
+                                "Systematic research evidence guard passed for {} with receipt {}",
+                                job.source_label,
+                                receipt.display()
+                            ),
+                        );
+                        None
+                    }
+                    Err(err) => {
+                        let feedback = format!(
+                            "Systematic research evidence validation failed closed: {}",
+                            clip_text(&err.to_string(), 1600)
+                        );
+                        push_event(
+                            &state,
+                            format!(
+                                "Systematic research evidence guard rejected {} before completion review: {}",
+                                job.source_label,
+                                clip_text(&err.to_string(), 220)
+                            ),
+                        );
+                        Some(feedback)
+                    }
+                }
+            } else {
+                None
+            };
             let app_validation_before_review = if result.is_ok()
-                && business_os_app_module_target_from_prompt(&job.prompt).is_some()
+                && business_os_app_validation_may_own_completion(&job)
             {
                 match business_os_app_module_validation_feedback(&root, &job) {
                     Ok(Some(feedback)) => {
@@ -6283,12 +6430,12 @@ fn start_prompt_worker(
                 None
             };
             // Completion review gate: when the executor's slice succeeded,
-            // hand the slice to a separate, skeptical reviewer agent (a fresh
-            // PersistentSession with its own clean context — no executor turn
-            // history). The reviewer either ratifies the result (PASS) or
-            // CTOX enqueues a rework slice with the reviewer's report as
-            // input. Reviewer errors/timeouts hold terminal completion; they
-            // must not silently complete the worker slice.
+            // hand the slice to the server-owned skeptical evaluator (a fresh
+            // read-only Exec session with clean context and no executor turn
+            // history). The evaluator either ratifies the result (PASS) or
+            // CTOX enqueues a rework slice with its report as input. Evaluator
+            // errors/timeouts hold terminal completion; they must not silently
+            // complete the worker slice.
             let typed_result = result
                 .as_ref()
                 .ok()
@@ -6325,6 +6472,18 @@ fn start_prompt_worker(
                     ),
                 );
                 CompletionReviewDisposition::None
+            } else if let Some(feedback) = research_validation_failure {
+                match systematic_research_validation_feedback_disposition(
+                    &root, &job, &feedback,
+                ) {
+                    Ok(disposition) => disposition,
+                    Err(error) => CompletionReviewDisposition::Hold {
+                        reason: review::HoldReason::MissingReviewEvidence,
+                        summary: format!(
+                            "{feedback}\n\nCTOX could not persist the required systematic-research validation checkpoint through the core state machine: {error}"
+                        ),
+                    },
+                }
             } else if completion_review_should_skip_feedback_turn(&root, &job) {
                 push_event(
                     &state,
@@ -6428,7 +6587,7 @@ fn start_prompt_worker(
                                 CompletionReviewDisposition::NoSend { .. }
                                     | CompletionReviewDisposition::TerminalQueueFailure { .. }
                             )
-                            && business_os_app_module_target_from_prompt(&job.prompt).is_some();
+                            && business_os_app_validation_may_own_completion(&job);
                         app_validation_rework = false;
                         app_validation_terminal_failure = false;
                         let expected_artifact_refs = expected_outcome_artifacts_for_job(&job);
@@ -6965,6 +7124,24 @@ fn start_prompt_worker(
                                 &job.leased_message_keys,
                             );
                         } else if !job.leased_message_keys.is_empty() {
+                            let approved_completion_hold = matches!(
+                                &review_disposition,
+                                CompletionReviewDisposition::Approved { .. }
+                            )
+                            .then(|| {
+                                let reason = if outcome_witness_error.is_some() {
+                                    review::HoldReason::MissingArtifact
+                                } else {
+                                    review::HoldReason::Technical {
+                                        policy_id: "post-review-terminalization".to_string(),
+                                    }
+                                };
+                                let summary = founder_send_error.clone().unwrap_or_else(|| {
+                                    "Reviewed work could not be committed to its terminal Business OS state."
+                                        .to_string()
+                                });
+                                (reason, summary)
+                            });
                             let terminal_queue_failure = matches!(
                                 &review_disposition,
                                 CompletionReviewDisposition::TerminalQueueFailure { .. }
@@ -6988,51 +7165,64 @@ fn start_prompt_worker(
                                 } else {
                                     "pending"
                                 };
-                            let (ack_result, ack_label) =
-                                if let CompletionReviewDisposition::Hold { reason, summary } =
-                                    &review_disposition
-                                {
-                                    (
+                            let (ack_result, ack_label) = if let Some((reason, summary)) =
+                                &approved_completion_hold
+                            {
+                                (
                                         channels::hold_leased_messages(
                                             &root,
                                             &job.leased_message_keys,
                                             reason,
                                             summary,
                                         ),
-                                        format!("queue lease(s) held ({reason:?})"),
-                                    )
-                                } else if retry_status == "failed" {
-                                    let failure_reason = if app_validation_terminal_failure {
-                                        founder_send_error.as_deref().unwrap_or(
-                                            "Business OS app validation repair attempts exhausted",
-                                        )
-                                    } else {
-                                        match &review_disposition {
-                                            CompletionReviewDisposition::TerminalQueueFailure {
-                                                summary,
-                                            } => summary.as_str(),
-                                            _ => "terminal queue failure",
-                                        }
-                                    };
-                                    (
-                                        channels::ack_leased_messages_with_failure_reason(
-                                            &root,
-                                            &job.leased_message_keys,
-                                            retry_status,
-                                            failure_reason,
+                                        format!(
+                                            "approved queue lease(s) held after terminalization failure ({reason:?})"
                                         ),
-                                        format!("queue lease(s) ({retry_status})"),
+                                    )
+                            } else if let CompletionReviewDisposition::Hold { reason, summary } =
+                                &review_disposition
+                            {
+                                (
+                                    channels::hold_leased_messages(
+                                        &root,
+                                        &job.leased_message_keys,
+                                        reason,
+                                        summary,
+                                    ),
+                                    format!("queue lease(s) held ({reason:?})"),
+                                )
+                            } else if retry_status == "failed" {
+                                let failure_reason = if app_validation_terminal_failure {
+                                    founder_send_error.as_deref().unwrap_or(
+                                        "Business OS app validation repair attempts exhausted",
                                     )
                                 } else {
-                                    (
-                                        channels::ack_leased_messages(
-                                            &root,
-                                            &job.leased_message_keys,
-                                            retry_status,
-                                        ),
-                                        format!("queue lease(s) ({retry_status})"),
-                                    )
+                                    match &review_disposition {
+                                        CompletionReviewDisposition::TerminalQueueFailure {
+                                            summary,
+                                        } => summary.as_str(),
+                                        _ => "terminal queue failure",
+                                    }
                                 };
+                                (
+                                    channels::ack_leased_messages_with_failure_reason(
+                                        &root,
+                                        &job.leased_message_keys,
+                                        retry_status,
+                                        failure_reason,
+                                    ),
+                                    format!("queue lease(s) ({retry_status})"),
+                                )
+                            } else {
+                                (
+                                    channels::ack_leased_messages(
+                                        &root,
+                                        &job.leased_message_keys,
+                                        retry_status,
+                                    ),
+                                    format!("queue lease(s) ({retry_status})"),
+                                )
+                            };
                             record_queue_ack_and_refresh_business_os_projections_locked(
                                 &root,
                                 &mut shared,
@@ -7278,7 +7468,7 @@ fn start_prompt_worker(
                         let mut app_validation_worker_failure_reason: Option<String> = None;
                         let mut app_validation_verified_after_worker_error = false;
                         if !job.leased_message_keys.is_empty()
-                            && business_os_app_module_target_from_prompt(&job.prompt).is_some()
+                            && business_os_app_validation_may_own_completion(&job)
                         {
                             match business_os_app_module_validation_feedback(&root, &job) {
                                 Ok(Some(feedback))
@@ -7970,14 +8160,24 @@ fn start_prompt_worker(
                 }
             }
             let queued_outcome_recovery = outcome_recovery_prompt.is_some();
-            if let Some(queued) = outcome_recovery_prompt {
+            if let Some(mut queued) = outcome_recovery_prompt {
                 worker_activity.set_phase(&job.source_label, "queueing-recovery");
-                enqueue_prompt(
-                    &root,
-                    &state,
-                    queued,
-                    "Queued outcome-witness recovery for reviewed send".to_string(),
-                );
+                match preserve_systematic_research_binding(&job, &mut queued) {
+                    Ok(()) => enqueue_prompt(
+                        &root,
+                        &state,
+                        queued,
+                        "Queued outcome-witness recovery for reviewed send".to_string(),
+                    ),
+                    Err(err) => push_event(
+                        &state,
+                        format!(
+                            "Refused malformed systematic-research recovery for {}: {}",
+                            job.source_label,
+                            clip_text(&err.to_string(), 180)
+                        ),
+                    ),
+                }
             }
             if !queued_outcome_recovery {
                 if let Some(queued) = next_prompt {
@@ -8104,14 +8304,14 @@ fn start_prompt_worker(
     });
 }
 
-/// Hand the just-completed slice to a separate completion-reviewer agent.
+/// Hand the just-completed slice to the server-owned completion evaluator.
 ///
-/// The reviewer runs in a fresh `PersistentSession` (its own clean codex-core
-/// thread, no executor turn history) with a skeptical, scope-bound system
-/// prompt. It either ratifies the slice (PASS) or surfaces concrete
+/// The evaluator runs in a fresh read-only `Exec` session (its own clean
+/// codex-core thread, no executor turn history) with a skeptical, scope-bound
+/// system prompt. It either ratifies the slice (PASS) or surfaces concrete
 /// objections (FAIL/PARTIAL). On rejection, the sanitized feedback is fed back
-/// to the same main-agent work item; the raw reviewer report remains audit
-/// evidence and must not become a new review-owned worker task.
+/// to the same main work item; the raw report remains audit evidence and must
+/// not become evaluator-owned work.
 ///
 /// Failures inside the review path (session start errors, gateway timeouts) are
 /// fail-closed for review-required work. A missing reviewer verdict is not a
@@ -10112,19 +10312,34 @@ fn cv_print_clean_detail_line(value: &str) -> String {
 fn chat_turn_session_options_for_queue_job(
     job: &QueuedPrompt,
 ) -> turn_loop::ChatTurnSessionOptions {
+    if is_systematic_research_job(job) {
+        return turn_loop::ChatTurnSessionOptions {
+            disable_mcp_servers: false,
+            force_isolated_session: true,
+            base_instructions: None,
+            plain_prompt: false,
+            turn_timeout_secs_override: None,
+            required_initial_tool: None,
+        };
+    }
     if business_os_app_module_target_from_prompt(&job.prompt).is_some() {
         return turn_loop::ChatTurnSessionOptions {
             disable_mcp_servers: true,
+            force_isolated_session: false,
             base_instructions: Some(BUSINESS_OS_APP_AUTHORING_BASE_INSTRUCTIONS.to_string()),
             plain_prompt: true,
             turn_timeout_secs_override: Some(BUSINESS_OS_APP_AUTHORING_TURN_TIMEOUT_SECS),
+            required_initial_tool: None,
         };
     }
     turn_loop::ChatTurnSessionOptions::default()
 }
 
 fn queue_job_reuses_persistent_session(options: &turn_loop::ChatTurnSessionOptions) -> bool {
-    !options.disable_mcp_servers && options.base_instructions.is_none() && !options.plain_prompt
+    !options.force_isolated_session
+        && !options.disable_mcp_servers
+        && options.base_instructions.is_none()
+        && !options.plain_prompt
 }
 
 fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
@@ -10808,10 +11023,795 @@ fn is_business_os_chat_queue_job(root: &Path, job: &QueuedPrompt) -> bool {
     })
 }
 
+fn is_systematic_research_job(job: &QueuedPrompt) -> bool {
+    job.suggested_skill.as_deref() == Some("systematic-research")
+        || job.prompt.contains("research.systematic.run")
+        || job.prompt.contains("research.systematic.report.create")
+        || job.prompt.contains("research.knowledge.refresh")
+}
+
+fn materialize_systematic_research_skill(
+    root: &Path,
+    job: &QueuedPrompt,
+) -> Result<Option<PathBuf>> {
+    if !is_systematic_research_job(job) {
+        return Ok(None);
+    }
+    let workspace = job
+        .workspace_root
+        .as_deref()
+        .map(Path::new)
+        .context("systematic research requires a typed workspace root")?;
+    std::fs::create_dir_all(workspace).with_context(|| {
+        format!(
+            "create systematic research task workspace {}",
+            workspace.display()
+        )
+    })?;
+    let export_root = workspace.join(".ctox/system-skills");
+    let skill_dir =
+        crate::skill_store::export_system_skill(root, "systematic-research", &export_root)
+            .context("materialize systematic-research skill inside task workspace")?;
+    Ok(Some(skill_dir))
+}
+
+fn business_os_app_validation_may_own_completion(job: &QueuedPrompt) -> bool {
+    !is_systematic_research_job(job)
+        && business_os_app_module_target_from_prompt(&job.prompt).is_some()
+}
+
+fn systematic_research_binding_from_prompt(prompt: &str) -> Result<(&str, &str)> {
+    fn prompt_value<'a>(prompt: &'a str, label: &str) -> Option<&'a str> {
+        prompt.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix(label)
+                .map(str::trim)
+                .filter(|value| !value.is_empty() && *value != "latest")
+        })
+    }
+
+    let run_id = prompt_value(prompt, "Research Run ID:")
+        .context("systematic research task is missing an explicit Research Run ID")?;
+    let command_id = prompt_value(prompt, "Research Command ID:")
+        .context("systematic research task is missing an explicit Research Command ID")?;
+    Ok((run_id, command_id))
+}
+
+fn systematic_research_binding(job: &QueuedPrompt) -> Result<(&str, &str)> {
+    systematic_research_binding_from_prompt(&job.prompt)
+}
+
+fn preserve_systematic_research_binding(
+    original: &QueuedPrompt,
+    recovery: &mut QueuedPrompt,
+) -> Result<()> {
+    if !is_systematic_research_job(original) {
+        return Ok(());
+    }
+
+    let (run_id, command_id) = systematic_research_binding(original)?;
+    if let Ok((recovery_run_id, recovery_command_id)) =
+        systematic_research_binding_from_prompt(&recovery.prompt)
+    {
+        anyhow::ensure!(
+            recovery_run_id == run_id && recovery_command_id == command_id,
+            "systematic research recovery attempted to change its immutable run binding"
+        );
+        return Ok(());
+    }
+
+    recovery.prompt = format!(
+        "{}\n\nImmutable systematic research binding:\nResearch Run ID: {}\nResearch Command ID: {}",
+        recovery.prompt.trim_end(),
+        run_id,
+        command_id
+    );
+    recovery.preview = clip_text(&recovery.prompt, 180);
+    Ok(())
+}
+
+fn systematic_research_started_at(
+    root: &Path,
+    job: &QueuedPrompt,
+    fallback_started_at: u64,
+) -> u64 {
+    let db_path = crate::paths::core_db(root);
+    let Ok(conn) = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return fallback_started_at;
+    };
+    let mut earliest = None;
+    for message_key in &job.leased_message_keys {
+        let created_at = conn
+            .query_row(
+                "SELECT MIN(created_at)
+                 FROM ctox_harness_flow_events
+                 WHERE message_key = ?1
+                   AND event_kind = 'business_command_context_loaded'",
+                params![message_key],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten();
+        let Some(epoch) = created_at
+            .as_deref()
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .and_then(|value| u64::try_from(value.timestamp()).ok())
+            .filter(|epoch| *epoch <= fallback_started_at)
+        else {
+            continue;
+        };
+        earliest = Some(earliest.map_or(epoch, |current: u64| current.min(epoch)));
+    }
+    earliest.unwrap_or(fallback_started_at)
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum SystematicResearchDepth {
+    Quick,
+    Standard,
+    Exhaustive,
+}
+
+impl SystematicResearchDepth {
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "quick" => Some(Self::Quick),
+            "standard" => Some(Self::Standard),
+            "exhaustive" => Some(Self::Exhaustive),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Quick => "quick",
+            Self::Standard => "standard",
+            Self::Exhaustive => "exhaustive",
+        }
+    }
+}
+
+fn required_systematic_research_depth(job: &QueuedPrompt) -> SystematicResearchDepth {
+    let prompt = job.prompt.to_ascii_lowercase();
+    if [
+        "deep research depth: exhaustive",
+        "required deep research depth: exhaustive",
+        "--depth exhaustive",
+        "\"depth\":\"exhaustive\"",
+        "\"depth\": \"exhaustive\"",
+        "with exhaustive depth",
+        "exhaustive depth",
+    ]
+    .iter()
+    .any(|marker| prompt.contains(marker))
+    {
+        SystematicResearchDepth::Exhaustive
+    } else {
+        SystematicResearchDepth::Standard
+    }
+}
+
+fn validate_systematic_research_deep_research_receipt(
+    job: &QueuedPrompt,
+    workspace: &Path,
+    research_started_at: u64,
+) -> Result<Value> {
+    let (expected_run_id, expected_command_id) = systematic_research_binding(job)?;
+    let codex_home =
+        ctox_core::config::find_codex_home().context("resolve harness state directory")?;
+    let state_db = [
+        codex_home.join("state_5.sqlite"),
+        codex_home.join("sqlite/state_5.sqlite"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+    .context("systematic research requires the durable harness state database")?;
+    let conn = Connection::open_with_flags(
+        &state_db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("open harness state database {}", state_db.display()))?;
+    validate_systematic_research_deep_research_receipt_from_conn(
+        &conn,
+        &codex_home,
+        workspace,
+        &expected_run_id,
+        &expected_command_id,
+        research_started_at,
+        required_systematic_research_depth(job),
+    )
+}
+
+fn validate_systematic_research_deep_research_receipt_from_conn(
+    conn: &Connection,
+    codex_home: &Path,
+    workspace: &Path,
+    expected_run_id: &str,
+    expected_command_id: &str,
+    research_started_at: u64,
+    required_depth: SystematicResearchDepth,
+) -> Result<Value> {
+    let workspace = workspace
+        .canonicalize()
+        .with_context(|| format!("canonicalize research workspace {}", workspace.display()))?;
+    let codex_home = codex_home.canonicalize().with_context(|| {
+        format!(
+            "canonicalize harness state directory {}",
+            codex_home.display()
+        )
+    })?;
+    let mut stmt = conn.prepare(
+        "SELECT id, rollout_path
+         FROM threads
+         WHERE subagent_parent_thread_id IS NULL",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+
+    let mut observed_depths = Vec::new();
+    for row in rows {
+        let (thread_id, rollout_path) = row?;
+        let rollout_path = PathBuf::from(rollout_path);
+        let Ok(rollout_path) = rollout_path.canonicalize() else {
+            continue;
+        };
+        if !rollout_path.starts_with(&codex_home) {
+            continue;
+        }
+        let file = std::fs::File::open(&rollout_path)
+            .with_context(|| format!("open harness rollout {}", rollout_path.display()))?;
+        let mut calls = BTreeMap::<String, (SystematicResearchDepth, u64)>::new();
+        let mut run_bound = false;
+        let mut command_bound = false;
+        let mut workspace_bound = false;
+        for line in BufReader::new(file).lines() {
+            let line = line?;
+            let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            let Some(timestamp) = value
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .and_then(|timestamp| DateTime::parse_from_rfc3339(timestamp).ok())
+                .and_then(|timestamp| u64::try_from(timestamp.timestamp()).ok())
+            else {
+                continue;
+            };
+            if timestamp < research_started_at {
+                continue;
+            }
+            let payload = value.get("payload").unwrap_or(&Value::Null);
+            if payload.get("type").and_then(Value::as_str) == Some("task_started") {
+                run_bound = false;
+                command_bound = false;
+                workspace_bound = false;
+                calls.clear();
+            }
+            if line.contains(expected_run_id) {
+                run_bound = true;
+            }
+            if line.contains(expected_command_id) {
+                command_bound = true;
+            }
+            if value.get("type").and_then(Value::as_str) == Some("turn_context") {
+                workspace_bound = payload
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .and_then(|cwd| Path::new(cwd).canonicalize().ok())
+                    .is_some_and(|cwd| cwd == workspace);
+            }
+            match payload.get("type").and_then(Value::as_str) {
+                Some("function_call")
+                    if payload.get("name").and_then(Value::as_str)
+                        == Some("ctox_deep_research") =>
+                {
+                    if !run_bound || !command_bound || !workspace_bound {
+                        continue;
+                    }
+                    let Some(call_id) = payload.get("call_id").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let Some(arguments) = payload.get("arguments").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let Ok(arguments_value) = serde_json::from_str::<Value>(arguments) else {
+                        continue;
+                    };
+                    let depth = arguments_value
+                        .get("depth")
+                        .and_then(Value::as_str)
+                        .and_then(SystematicResearchDepth::parse)
+                        .unwrap_or(SystematicResearchDepth::Standard);
+                    if arguments_value.get("no_workspace").and_then(Value::as_bool) == Some(true) {
+                        observed_depths.push(format!("{} (no_workspace)", depth.as_str()));
+                        continue;
+                    }
+                    calls.insert(call_id.to_string(), (depth, timestamp));
+                }
+                Some("function_call_output") => {
+                    let Some(call_id) = payload.get("call_id").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let Some((depth, called_at)) = calls.get(call_id) else {
+                        continue;
+                    };
+                    let Some(output) = payload.get("output").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let Ok(output) = serde_json::from_str::<Value>(output) else {
+                        observed_depths.push(format!("{} (invalid output)", depth.as_str()));
+                        continue;
+                    };
+                    let research_workspace = output.get("research_workspace");
+                    let research_workspace_path = research_workspace
+                        .and_then(|receipt| {
+                            receipt
+                                .as_str()
+                                .or_else(|| receipt.get("path").and_then(Value::as_str))
+                        })
+                        .map(PathBuf::from);
+                    let persisted_workspace = research_workspace_path
+                        .as_deref()
+                        .and_then(|path| path.canonicalize().ok())
+                        .is_some_and(|path| path.starts_with(&workspace));
+                    let persisted_receipt_artifacts = research_workspace
+                        .filter(|receipt| receipt.is_object())
+                        .is_none_or(|receipt| {
+                            ["manifest", "evidence_bundle"].into_iter().all(|field| {
+                                receipt
+                                    .get(field)
+                                    .and_then(Value::as_str)
+                                    .map(Path::new)
+                                    .filter(|path| path.is_file())
+                                    .and_then(|path| path.canonicalize().ok())
+                                    .is_some_and(|path| path.starts_with(&workspace))
+                            })
+                        });
+                    if output.get("ok").and_then(Value::as_bool) != Some(true)
+                        || !persisted_workspace
+                        || !persisted_receipt_artifacts
+                    {
+                        observed_depths.push(format!("{} (not persisted)", depth.as_str()));
+                        continue;
+                    }
+                    if *depth >= required_depth {
+                        observed_depths.push(depth.as_str().to_string());
+                        return Ok(serde_json::json!({
+                            "tool": "ctox_deep_research",
+                            "depth": depth.as_str(),
+                            "required_depth": required_depth.as_str(),
+                            "thread_id": thread_id,
+                            "call_id": call_id,
+                            "called_at_epoch": called_at,
+                            "research_run_id": expected_run_id,
+                            "research_command_id": expected_command_id,
+                            "research_workspace": research_workspace.cloned(),
+                            "rollout_path": rollout_path,
+                        }));
+                    }
+                    observed_depths.push(depth.as_str().to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    anyhow::bail!(
+        "systematic research requires a successful persisted typed ctox_deep_research call at depth {} in the current durable research run; observed calls: {}",
+        required_depth.as_str(),
+        if observed_depths.is_empty() {
+            "none".to_string()
+        } else {
+            observed_depths.join(", ")
+        }
+    )
+}
+
+fn systematic_research_validation_receipt_path(job: &QueuedPrompt) -> Option<PathBuf> {
+    job.workspace_root
+        .as_deref()
+        .map(PathBuf::from)
+        .map(|workspace| {
+            workspace
+                .join(".ctox")
+                .join("systematic-research-validation.json")
+        })
+}
+
+fn validate_systematic_research_web_receipts(
+    root: &Path,
+    manifest: &Value,
+    research_started_at: u64,
+) -> Result<()> {
+    fn normalized_sha256(value: &str) -> Option<&str> {
+        let digest = value.strip_prefix("sha256:").unwrap_or(value);
+        (digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            .then_some(digest)
+    }
+    fn sha256_matches(left: Option<&str>, right: &str) -> bool {
+        left.and_then(normalized_sha256)
+            .is_some_and(|digest| digest.eq_ignore_ascii_case(right))
+    }
+    fn data_artifact_matches(root: &Path, doc: &Value, receipt: &Value, expected: &str) -> bool {
+        use sha2::Digest;
+
+        let is_data_file = receipt
+            .get("content_kind")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind.starts_with("data_"));
+        if !is_data_file {
+            return true;
+        }
+        let Some(raw_path) = doc.get("response_artifact_path").and_then(Value::as_str) else {
+            return false;
+        };
+        let Ok(cache_root) = root.join("runtime/web_search_data_cache").canonicalize() else {
+            return false;
+        };
+        let Ok(path) = Path::new(raw_path).canonicalize() else {
+            return false;
+        };
+        if !path.starts_with(cache_root) {
+            return false;
+        }
+        let Ok(bytes) = std::fs::read(&path) else {
+            return false;
+        };
+        if receipt.get("byte_count").and_then(Value::as_u64) != Some(bytes.len() as u64) {
+            return false;
+        }
+        let actual = format!("{:x}", sha2::Sha256::digest(&bytes));
+        actual.eq_ignore_ascii_case(expected)
+    }
+    fn extracted_text_matches(doc: &Value, expected: Option<&str>) -> bool {
+        use sha2::Digest;
+
+        let Some(expected) = expected else {
+            return true;
+        };
+        if let Some(actual) = doc
+            .get("extracted_text_sha256")
+            .and_then(Value::as_str)
+            .and_then(normalized_sha256)
+        {
+            return actual.eq_ignore_ascii_case(expected);
+        }
+        let Some(page_text) = doc.get("page_text").and_then(Value::as_str) else {
+            return false;
+        };
+        let actual = format!("{:x}", sha2::Sha256::digest(page_text.as_bytes()));
+        actual.eq_ignore_ascii_case(expected)
+    }
+
+    const MAX_WEB_RECEIPT_AGE_SECS: u64 = 7 * 24 * 60 * 60;
+    let now = current_epoch_secs();
+    let cache_path = root.join("runtime/web_search_page_cache.json");
+    let cache_bytes = std::fs::read(&cache_path).with_context(|| {
+        format!(
+            "systematic research requires the server-owned CTOX Web Stack cache: {}",
+            cache_path.display()
+        )
+    })?;
+    let cache: Value = serde_json::from_slice(&cache_bytes)
+        .with_context(|| format!("parse CTOX Web Stack cache {}", cache_path.display()))?;
+    let entries = cache
+        .get("entries")
+        .and_then(Value::as_object)
+        .context("CTOX Web Stack cache has no entries")?;
+    let receipt_history = cache
+        .get("receipt_history")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let evidence = manifest
+        .get("evidence")
+        .and_then(Value::as_array)
+        .context("evidence manifest has no evidence array")?;
+
+    for item in evidence {
+        let evidence_id = item
+            .get("evidence_id")
+            .and_then(Value::as_str)
+            .unwrap_or("<unknown>");
+        let canonical_url = item
+            .get("canonical_url")
+            .and_then(Value::as_str)
+            .with_context(|| format!("evidence {evidence_id} has no canonical_url"))?;
+        let snapshot_hash = item
+            .get("snapshot_sha256")
+            .and_then(Value::as_str)
+            .with_context(|| format!("evidence {evidence_id} has no snapshot_sha256"))?;
+        let normalized_snapshot_hash = normalized_sha256(snapshot_hash)
+            .with_context(|| format!("evidence {evidence_id} has an invalid snapshot_sha256"))?;
+        let http_status = item
+            .get("http_status")
+            .and_then(Value::as_u64)
+            .with_context(|| format!("evidence {evidence_id} has no http_status"))?;
+        let content_kind = item
+            .get("content_kind")
+            .and_then(Value::as_str)
+            .with_context(|| format!("evidence {evidence_id} has no content_kind"))?;
+        let content_scope = item
+            .get("content_scope")
+            .and_then(Value::as_str)
+            .with_context(|| format!("evidence {evidence_id} has no content_scope"))?;
+        let relevance_score = item
+            .get("relevance_score")
+            .and_then(Value::as_i64)
+            .with_context(|| format!("evidence {evidence_id} has no relevance_score"))?;
+        let manifest_receipt = item
+            .get("retrieval_receipt")
+            .and_then(Value::as_object)
+            .with_context(|| format!("evidence {evidence_id} has no retrieval_receipt"))?;
+        let manifest_request_url = manifest_receipt
+            .get("request_url")
+            .and_then(Value::as_str)
+            .with_context(|| {
+                format!("evidence {evidence_id} has no retrieval_receipt.request_url")
+            })?;
+        let manifest_final_url = manifest_receipt
+            .get("final_url")
+            .and_then(Value::as_str)
+            .with_context(|| {
+                format!("evidence {evidence_id} has no retrieval_receipt.final_url")
+            })?;
+        let manifest_checked_at = manifest_receipt
+            .get("checked_at_epoch")
+            .and_then(Value::as_u64)
+            .with_context(|| {
+                format!("evidence {evidence_id} has no retrieval_receipt.checked_at_epoch")
+            })?;
+        let manifest_byte_count = manifest_receipt
+            .get("byte_count")
+            .and_then(Value::as_u64)
+            .with_context(|| {
+                format!("evidence {evidence_id} has no retrieval_receipt.byte_count")
+            })?;
+        let manifest_content_kind = manifest_receipt
+            .get("content_kind")
+            .and_then(Value::as_str)
+            .with_context(|| {
+                format!("evidence {evidence_id} has no retrieval_receipt.content_kind")
+            })?;
+        let manifest_body_hash = manifest_receipt
+            .get("body_sha256")
+            .and_then(Value::as_str)
+            .and_then(normalized_sha256)
+            .with_context(|| {
+                format!("evidence {evidence_id} has an invalid retrieval_receipt.body_sha256")
+            })?;
+        if manifest_final_url != canonical_url {
+            anyhow::bail!(
+                "evidence {evidence_id} canonical_url does not equal the immutable retrieval final_url"
+            );
+        }
+        let extracted_text_sha256 = if content_kind == "data_file" {
+            None
+        } else {
+            let raw = item
+                .pointer("/extracted_text/sha256")
+                .and_then(Value::as_str)
+                .with_context(|| format!("evidence {evidence_id} has no extracted_text.sha256"))?;
+            Some(normalized_sha256(raw).with_context(|| {
+                format!("evidence {evidence_id} has an invalid extracted_text.sha256")
+            })?)
+        };
+
+        let matching_entry = entries
+            .values()
+            .chain(receipt_history.iter())
+            .find(|entry| {
+                let doc = entry.get("doc").unwrap_or(&Value::Null);
+                let receipt = doc.get("response_receipt").unwrap_or(&Value::Null);
+                let response_kind = receipt
+                    .get("content_kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let response_is_data = response_kind.starts_with("data_");
+                let manifest_kind_matches = if response_is_data {
+                    content_kind == "data_file"
+                } else {
+                    content_kind != "data_file" && content_scope == "full_text"
+                };
+                let url_matches = receipt.get("requested_url").and_then(Value::as_str)
+                    == Some(manifest_request_url)
+                    && receipt.get("final_url").and_then(Value::as_str) == Some(manifest_final_url)
+                    && entry.get("final_url").and_then(Value::as_str) == Some(canonical_url);
+                let created_at = entry
+                    .get("created_at_epoch")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                let checked_at = entry
+                    .get("checked_at")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                url_matches
+                    && created_at > 0
+                    && checked_at > 0
+                    && created_at >= research_started_at
+                    && now.saturating_sub(created_at) <= MAX_WEB_RECEIPT_AGE_SECS
+                    && checked_at == manifest_checked_at
+                    && entry.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
+                    && doc.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
+                    && manifest_kind_matches
+                    && (8..=10).contains(&relevance_score)
+                    && entry
+                        .get("evidence_relevance_score")
+                        .and_then(Value::as_i64)
+                        == Some(relevance_score)
+                    && entry.get("http_status").and_then(Value::as_u64) == Some(http_status)
+                    && sha256_matches(
+                        entry.get("snapshot_hash").and_then(Value::as_str),
+                        normalized_snapshot_hash,
+                    )
+                    && receipt.get("status").and_then(Value::as_u64) == Some(http_status)
+                    && receipt.get("byte_count").and_then(Value::as_u64)
+                        == Some(manifest_byte_count)
+                    && receipt.get("content_kind").and_then(Value::as_str)
+                        == Some(manifest_content_kind)
+                    && sha256_matches(
+                        receipt.get("sha256").and_then(Value::as_str),
+                        normalized_snapshot_hash,
+                    )
+                    && sha256_matches(
+                        receipt.get("sha256").and_then(Value::as_str),
+                        manifest_body_hash,
+                    )
+                    && data_artifact_matches(root, doc, receipt, normalized_snapshot_hash)
+                    && extracted_text_matches(doc, extracted_text_sha256)
+            });
+        if matching_entry.is_none() {
+            anyhow::bail!(
+                "evidence {evidence_id} is not bound to a matching admitted CTOX Web Stack retrieval for {canonical_url}"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_systematic_research_workspace(
+    root: &Path,
+    job: &QueuedPrompt,
+    expected_attempt_id: &str,
+    research_started_at: u64,
+) -> Result<PathBuf> {
+    use sha2::Digest;
+
+    let (expected_run_id, expected_command_id) = systematic_research_binding(job)?;
+    let workspace = job
+        .workspace_root
+        .as_deref()
+        .map(PathBuf::from)
+        .context("systematic research requires a typed workspace root")?;
+    if !workspace.is_dir() {
+        anyhow::bail!(
+            "systematic research workspace does not exist: {}",
+            workspace.display()
+        );
+    }
+    let manifest = workspace.join("validation/evidence-manifest.json");
+    if !manifest.is_file() {
+        anyhow::bail!(
+            "no evidence manifest found at {}; systematic research accepts only this server-defined path",
+            manifest.display()
+        );
+    }
+
+    let validator =
+        root.join("src/skills/system/research/systematic-research/scripts/evidence_guard.py");
+    if !validator.is_file() {
+        anyhow::bail!(
+            "systematic research evidence guard is missing: {}",
+            validator.display()
+        );
+    }
+
+    let mut checked = Vec::new();
+    {
+        let manifest_bytes = std::fs::read(&manifest)?;
+        let manifest_value: Value = serde_json::from_slice(&manifest_bytes)
+            .with_context(|| format!("parse evidence manifest {}", manifest.display()))?;
+        let actual_run_id = manifest_value
+            .get("research_run_id")
+            .and_then(Value::as_str)
+            .context("evidence manifest is missing research_run_id")?;
+        let actual_command_id = manifest_value
+            .get("research_command_id")
+            .and_then(Value::as_str)
+            .context("evidence manifest is missing research_command_id")?;
+        let actual_attempt_id = manifest_value
+            .get("research_attempt_id")
+            .and_then(Value::as_str)
+            .context("evidence manifest is missing research_attempt_id")?;
+        let manifest_run_id = manifest_value
+            .get("run_id")
+            .and_then(Value::as_str)
+            .context("evidence manifest is missing run_id")?;
+        if actual_run_id != expected_run_id
+            || manifest_run_id != expected_run_id
+            || actual_command_id != expected_command_id
+            || actual_attempt_id != expected_attempt_id
+        {
+            anyhow::bail!(
+                "stale or foreign evidence manifest {}: expected run/command/attempt {expected_run_id}/{expected_command_id}/{expected_attempt_id}, found {actual_run_id}/{actual_command_id}/{actual_attempt_id}",
+                manifest.display()
+            );
+        }
+        let deep_research_receipt = validate_systematic_research_deep_research_receipt(
+            job,
+            &workspace,
+            research_started_at,
+        )?;
+        validate_systematic_research_web_receipts(root, &manifest_value, research_started_at)?;
+        let output = Command::new("python3")
+            .arg(&validator)
+            .arg(&manifest)
+            .arg("--base-dir")
+            .arg(&workspace)
+            .output()
+            .with_context(|| {
+                format!(
+                    "execute systematic research evidence guard for {}",
+                    manifest.display()
+                )
+            })?;
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if !output.status.success() {
+            anyhow::bail!(
+                "evidence guard rejected {}: {}{}",
+                manifest.display(),
+                stdout,
+                if stderr.is_empty() {
+                    String::new()
+                } else {
+                    format!("; stderr={}", clip_text(&stderr, 500))
+                }
+            );
+        }
+        checked.push(serde_json::json!({
+            "manifest_path": manifest,
+            "manifest_sha256": format!("{:x}", sha2::Sha256::digest(&manifest_bytes)),
+            "validator_output": stdout,
+            "deep_research_receipt": deep_research_receipt,
+        }));
+    }
+
+    let receipt_path = systematic_research_validation_receipt_path(job)
+        .context("systematic research validation receipt requires a workspace root")?;
+    let parent = receipt_path
+        .parent()
+        .context("systematic research validation receipt has no parent")?;
+    std::fs::create_dir_all(parent)?;
+    let receipt = serde_json::json!({
+        "schema_version": "ctox.systematic-research.validation.v1",
+        "status": "pass",
+        "checked_at": now_iso_string(),
+        "research_run_id": expected_run_id,
+        "research_command_id": expected_command_id,
+        "research_attempt_id": expected_attempt_id,
+        "validator_path": validator,
+        "manifests": checked,
+    });
+    std::fs::write(&receipt_path, serde_json::to_vec_pretty(&receipt)?)?;
+    Ok(receipt_path)
+}
+
 fn completion_review_contract_for_job(
     root: &Path,
     job: &QueuedPrompt,
 ) -> (review::ReviewScope, String, String) {
+    if is_systematic_research_job(job) {
+        return (
+            review::ReviewScope::FullEvidence,
+            job.goal.clone(),
+            job.prompt.clone(),
+        );
+    }
     for message_key in &job.leased_message_keys {
         let Ok(Some(context)) = channels::inspect_business_command_for_task(root, message_key)
         else {
@@ -10965,6 +11965,37 @@ fn collect_review_evidence_summaries(
     artifact_attachments: &[String],
 ) -> Vec<String> {
     let mut evidence = Vec::new();
+    if is_systematic_research_job(job) {
+        match systematic_research_validation_receipt_path(job) {
+            Some(path) => match std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            {
+                Some(receipt) => evidence.push(format!(
+                    "Systematic research validator receipt: path={} status={} checked_at={} manifests={}",
+                    path.display(),
+                    receipt.get("status").and_then(Value::as_str).unwrap_or("missing"),
+                    receipt
+                        .get("checked_at")
+                        .and_then(Value::as_str)
+                        .unwrap_or("missing"),
+                    receipt
+                        .get("manifests")
+                        .and_then(Value::as_array)
+                        .map(Vec::len)
+                        .unwrap_or(0),
+                )),
+                None => evidence.push(format!(
+                    "Systematic research validator receipt is missing or malformed at {}.",
+                    path.display()
+                )),
+            },
+            None => evidence.push(
+                "Systematic research validator receipt path is unavailable because the task has no typed workspace root."
+                    .to_string(),
+            ),
+        }
+    }
     evidence.extend(attachment_evidence_summaries(artifact_attachments));
     evidence.extend(review_delivery_evidence_summaries(root, job));
     evidence.extend(review_thread_evidence_summaries(root, job));
@@ -11930,10 +12961,19 @@ fn xlsx_cell_text(cell: roxmltree::Node<'_, '_>, shared_strings: &[String]) -> S
 }
 
 fn expected_outcome_artifacts_for_job(job: &QueuedPrompt) -> Vec<ArtifactRef> {
-    if job.prompt.contains("business_os.chat.task") {
-        return Vec::new();
-    }
     let mut refs = Vec::new();
+    if is_systematic_research_job(job) {
+        if let Some(path) = systematic_research_validation_receipt_path(job) {
+            refs.push(ArtifactRef {
+                kind: ArtifactKind::WorkspaceFile,
+                primary_key: path.to_string_lossy().into_owned(),
+                expected_terminal_state: "fresh".to_string(),
+            });
+        }
+    }
+    if job.prompt.contains("business_os.chat.task") {
+        return refs;
+    }
     let workspace_terminal_state = if workspace_file_artifacts_require_fresh_write(job) {
         "fresh"
     } else {
@@ -13097,7 +14137,33 @@ fn outcome_witness_rejection_count(root: &Path, job: &QueuedPrompt) -> Result<us
     Ok(count.max(0) as usize)
 }
 
-fn queue_review_checkpoint_attempt_count(root: &Path, message_key: &str) -> Result<usize> {
+fn queue_manual_retry_floor(root: &Path, message_key: &str) -> Result<Option<String>> {
+    let db_path = crate::paths::core_db(root);
+    let conn = channels::open_channel_db(&db_path)?;
+    ensure_core_transition_guard_schema(&conn)?;
+    conn.query_row(
+        r#"
+        SELECT MAX(updated_at)
+        FROM ctox_core_transition_proofs
+        WHERE entity_type = 'QueueItem'
+          AND entity_id = ?1
+          AND from_state = 'Failed'
+          AND to_state = 'Pending'
+          AND core_event = 'Release'
+          AND actor = 'ctox-queue-update'
+          AND accepted = 1
+        "#,
+        params![message_key],
+        |row| row.get(0),
+    )
+    .map_err(anyhow::Error::from)
+}
+
+fn queue_review_checkpoint_attempt_count(
+    root: &Path,
+    message_key: &str,
+    retry_floor: Option<&str>,
+) -> Result<usize> {
     let db_path = crate::paths::core_db(root);
     let conn = channels::open_channel_db(&db_path)?;
     ensure_core_transition_guard_schema(&conn)?;
@@ -13111,14 +14177,19 @@ fn queue_review_checkpoint_attempt_count(root: &Path, message_key: &str) -> Resu
           AND accepted = 1
           AND request_json LIKE '%"review_checkpoint":"true"%'
           AND request_json LIKE '%"feedback_owner":"main_agent"%'
+          AND (?2 IS NULL OR julianday(updated_at) > julianday(?2))
         "#,
-        params![message_key],
+        params![message_key, retry_floor],
         |row| row.get(0),
     )?;
     Ok(count.max(0) as usize)
 }
 
-fn queue_review_unavailable_attempt_count(root: &Path, message_key: &str) -> Result<usize> {
+fn queue_review_unavailable_attempt_count(
+    root: &Path,
+    message_key: &str,
+    retry_floor: Option<&str>,
+) -> Result<usize> {
     let db_path = crate::paths::core_db(root);
     let conn = channels::open_channel_db(&db_path)?;
     ensure_core_transition_guard_schema(&conn)?;
@@ -13130,8 +14201,9 @@ fn queue_review_unavailable_attempt_count(root: &Path, message_key: &str) -> Res
           AND entity_id = ?1
           AND accepted = 1
           AND request_json LIKE '%"review_unavailable_retry":"true"%'
+          AND (?2 IS NULL OR julianday(updated_at) > julianday(?2))
         "#,
-        params![message_key],
+        params![message_key, retry_floor],
         |row| row.get(0),
     )?;
     Ok(count.max(0) as usize)
@@ -13185,6 +14257,7 @@ fn queue_legacy_verification_review_attempt_count(
     root: &Path,
     job: &QueuedPrompt,
     message_key: &str,
+    retry_floor: Option<&str>,
 ) -> Result<usize> {
     let db_path = root.join("runtime/ctox.sqlite3");
     if !db_path.exists() {
@@ -13195,9 +14268,12 @@ fn queue_legacy_verification_review_attempt_count(
     {
         return Ok(0);
     }
-    let Some(floor_ms) = queue_message_review_floor_millis(&conn, message_key)? else {
+    let Some(mut floor_ms) = queue_message_review_floor_millis(&conn, message_key)? else {
         return Ok(0);
     };
+    if let Some(retry_floor_ms) = retry_floor.and_then(parse_rfc3339_millis) {
+        floor_ms = floor_ms.max(retry_floor_ms);
+    }
     if let Some(workspace_root) = job
         .workspace_root
         .as_deref()
@@ -13246,9 +14322,17 @@ fn queue_review_budget_attempt_count(
     job: &QueuedPrompt,
     message_key: &str,
 ) -> Result<usize> {
-    let checkpoint_count = queue_review_checkpoint_attempt_count(root, message_key)?;
-    let unavailable_count = queue_review_unavailable_attempt_count(root, message_key)?;
-    let legacy_count = queue_legacy_verification_review_attempt_count(root, job, message_key)?;
+    let retry_floor = queue_manual_retry_floor(root, message_key)?;
+    let checkpoint_count =
+        queue_review_checkpoint_attempt_count(root, message_key, retry_floor.as_deref())?;
+    let unavailable_count =
+        queue_review_unavailable_attempt_count(root, message_key, retry_floor.as_deref())?;
+    let legacy_count = queue_legacy_verification_review_attempt_count(
+        root,
+        job,
+        message_key,
+        retry_floor.as_deref(),
+    )?;
     Ok(checkpoint_count.max(unavailable_count).max(legacy_count))
 }
 
@@ -13458,6 +14542,117 @@ fn enforce_queue_review_checkpoint_feedback_transition(
         },
     )?;
     Ok(proof.proof_id)
+}
+
+fn systematic_research_validation_audit_key(
+    message_key: &str,
+    feedback: &str,
+    attempt: usize,
+) -> String {
+    use sha2::Digest;
+
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"ctox-systematic-research-validation-checkpoint-v1");
+    hasher.update(message_key.as_bytes());
+    hasher.update(feedback.as_bytes());
+    hasher.update(attempt.to_string().as_bytes());
+    format!(
+        "systematic-research-validation-checkpoint-{:x}",
+        hasher.finalize()
+    )
+}
+
+fn enforce_systematic_research_validation_feedback_transition(
+    root: &Path,
+    message_key: &str,
+    feedback: &str,
+    attempt: usize,
+) -> Result<String> {
+    let db_path = crate::paths::core_db(root);
+    let conn = channels::open_channel_db(&db_path)?;
+    let route_status = channels::current_queue_route_status(&conn, message_key)
+        .unwrap_or_else(|_| "leased".to_string());
+    let from_state = queue_core_state_for_service(&route_status);
+    let mut metadata = BTreeMap::new();
+    metadata.insert("review_checkpoint".to_string(), "true".to_string());
+    metadata.insert(
+        "validation_gate".to_string(),
+        "systematic_research_evidence".to_string(),
+    );
+    metadata.insert("feedback_owner".to_string(), "main_agent".to_string());
+    metadata.insert(
+        "feedback_target_entity_id".to_string(),
+        message_key.to_string(),
+    );
+    metadata.insert("spawns_review_owned_work".to_string(), "false".to_string());
+    metadata.insert("review_verdict".to_string(), "fail".to_string());
+    metadata.insert("review_checkpoint_attempt".to_string(), attempt.to_string());
+
+    let proof = enforce_core_transition(
+        &conn,
+        &CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: message_key.to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state,
+            to_state: CoreState::ReworkRequired,
+            event: CoreEvent::RequireRework,
+            actor: "ctox-systematic-research-validator".to_string(),
+            evidence: CoreEvidenceRefs {
+                review_audit_key: Some(systematic_research_validation_audit_key(
+                    message_key,
+                    feedback,
+                    attempt,
+                )),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata,
+        },
+    )?;
+    Ok(proof.proof_id)
+}
+
+fn systematic_research_validation_feedback_disposition(
+    root: &Path,
+    job: &QueuedPrompt,
+    feedback: &str,
+) -> Result<CompletionReviewDisposition> {
+    let threshold = review_checkpoint_requeue_block_threshold(root);
+    let mut exhausted = Vec::new();
+    let mut proof_ids = Vec::new();
+    for message_key in &job.leased_message_keys {
+        let attempt = queue_review_budget_attempt_count(root, job, message_key)?.saturating_add(1);
+        let proof_id = enforce_systematic_research_validation_feedback_transition(
+            root,
+            message_key,
+            feedback,
+            attempt,
+        )?;
+        proof_ids.push(proof_id);
+        if attempt >= threshold {
+            exhausted.push((message_key.clone(), attempt));
+        }
+    }
+    if !exhausted.is_empty() {
+        let attempts = exhausted
+            .iter()
+            .map(|(message_key, attempt)| format!("{message_key}:{attempt}/{threshold}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Ok(CompletionReviewDisposition::TerminalQueueFailure {
+            summary: format!(
+                "{feedback}\n\nFinite systematic-research validation budget exhausted for queue item(s) {attempts}. Core validation checkpoint proof(s): {}.",
+                proof_ids.join(", ")
+            ),
+        });
+    }
+    Ok(CompletionReviewDisposition::FeedbackRetry {
+        feedback_prompt: format!(
+            "{feedback}\n\nRepair the existing research workspace in place. Re-fetch rejected evidence through the typed CTOX Web Stack in this attempt and rebuild every dependent receipt, review, Knowledge artifact, and report. Do not claim completion until the server-side evidence guard passes."
+        ),
+        review_summary: feedback.to_string(),
+        persist_on_leased_queue: !job.leased_message_keys.is_empty(),
+    })
 }
 
 fn enforce_queue_review_requeue_same_main_work_transition(
@@ -14245,9 +15440,11 @@ fn auto_close_pending_approval_gates(root: &Path) -> Result<usize> {
 }
 
 fn live_service_settings(root: &Path) -> BTreeMap<String, String> {
+    const OWNER_PROFILE_RELOAD_INTERVAL: Duration = Duration::from_secs(60);
     let root_path = root.to_path_buf();
     let db_path = crate::paths::core_db(root);
     let stamp = core_db_change_stamp(&db_path);
+    let runtime_config_stamp = core_db_change_stamp(&runtime_env::runtime_config_path(root));
     let env_overlay = live_service_env_overlay();
     let cache = LIVE_SERVICE_SETTINGS_CACHE.get_or_init(|| Mutex::new(None));
     {
@@ -14257,8 +15454,10 @@ fn live_service_settings(root: &Path) -> BTreeMap<String, String> {
         if let Some(cached) = guard.as_ref() {
             if cached.root == root_path
                 && cached.db_path == db_path
-                && cached.stamp == stamp
+                && cached.runtime_config_stamp == runtime_config_stamp
                 && cached.env_overlay == env_overlay
+                && (cached.stamp == stamp
+                    || cached.loaded_at.elapsed() < OWNER_PROFILE_RELOAD_INTERVAL)
             {
                 return cached.settings.clone();
             }
@@ -14273,9 +15472,11 @@ fn live_service_settings(root: &Path) -> BTreeMap<String, String> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *guard = Some(LiveServiceSettingsCacheState {
+        loaded_at: Instant::now(),
         root: root_path,
         db_path,
         stamp,
+        runtime_config_stamp,
         env_overlay,
         settings: settings.clone(),
     });
@@ -15408,14 +16609,6 @@ fn should_skip_idle_durable_queue_empty_probe(root: &Path) -> bool {
         };
         previous.last_empty_probe.elapsed() < backoff
     };
-    if should_skip
-        && channels::pending_queue_task_count_uncached(root)
-            .map(|count| count > 0)
-            .unwrap_or(false)
-    {
-        clear_idle_durable_queue_empty_gate(root);
-        return false;
-    }
     should_skip
 }
 
@@ -17719,8 +18912,11 @@ fn communication_review_budget_exhausted_for_message_key(
     message_key: &str,
 ) -> Result<bool> {
     let threshold = review_checkpoint_requeue_block_threshold(root);
-    let attempts = queue_review_checkpoint_attempt_count(root, message_key)?
-        .max(queue_review_unavailable_attempt_count(root, message_key)?);
+    let retry_floor = queue_manual_retry_floor(root, message_key)?;
+    let attempts =
+        queue_review_checkpoint_attempt_count(root, message_key, retry_floor.as_deref())?.max(
+            queue_review_unavailable_attempt_count(root, message_key, retry_floor.as_deref())?,
+        );
     Ok(attempts >= threshold)
 }
 
@@ -22766,11 +23962,12 @@ fn render_runtime_retry_prompt_with_original_task(
 fn runtime_retry_current_task(job: &QueuedPrompt) -> String {
     let prompt = strip_harness_feedback_wrappers(&job.prompt);
     let goal = strip_harness_feedback_wrappers(&job.goal);
-    if !prompt.trim().is_empty() {
-        prompt.trim().to_string()
+    let candidate = if !prompt.trim().is_empty() {
+        prompt
     } else {
-        goal.trim().to_string()
-    }
+        goal
+    };
+    candidate.trim().to_string()
 }
 
 fn strip_harness_feedback_wrappers(value: &str) -> &str {
@@ -23485,6 +24682,56 @@ mod tests {
     static DURABLE_STATUS_SNAPSHOT_CACHE_TEST_LOCK: std::sync::Mutex<()> =
         std::sync::Mutex::new(());
 
+    #[test]
+    fn knowledge_projection_classifies_mutations_without_refreshing_reads() {
+        let args = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>()
+        };
+
+        assert!(knowledge_data_command_mutates_tables(&args(&[
+            "data", "import", "--domain", "verified"
+        ])));
+        assert!(knowledge_data_command_mutates_tables(&args(&[
+            "data", "tag", "--domain", "verified"
+        ])));
+        assert!(!knowledge_data_command_mutates_tables(&args(&[
+            "data", "select", "--domain", "verified"
+        ])));
+        assert!(knowledge_skill_command_mutates_records(&args(&[
+            "skill",
+            "add-runbook",
+            "--id",
+            "rb-1"
+        ])));
+        assert!(!knowledge_skill_command_mutates_records(&args(&[
+            "skill",
+            "show",
+            "--system",
+            "web-research"
+        ])));
+    }
+
+    #[test]
+    fn knowledge_projection_status_preserves_canonical_command_result() {
+        let mut payload = json!({"ok": true, "rows_imported": 4876});
+        attach_knowledge_projection_status(
+            &mut payload,
+            Err(anyhow::anyhow!("replication unavailable")),
+            "knowledge_tables",
+        );
+
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["rows_imported"], 4876);
+        assert_eq!(payload["business_os_projection"]["ok"], false);
+        assert_eq!(
+            payload["business_os_projection"]["error"],
+            "replication unavailable"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn business_command_ipc_timeout_covers_long_running_commands() {
@@ -23528,6 +24775,679 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    fn systematic_research_test_job(workspace: &Path) -> QueuedPrompt {
+        QueuedPrompt {
+            prompt: "business_os.chat.task\nresearch.systematic.run\nResearch Run ID: run-1\nResearch Command ID: command-1\nBusiness OS app task metadata:\n- module_id: research\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/research".to_string(),
+            goal: "Build verified research".to_string(),
+            preview: "Build verified research".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("systematic-research".to_string()),
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("business-os/research/test".to_string()),
+            workspace_root: Some(workspace.to_string_lossy().into_owned()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        }
+    }
+
+    #[test]
+    fn systematic_research_never_uses_semantic_answer_only_review() {
+        let root = temp_root("research-full-review");
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let job = systematic_research_test_job(&workspace);
+
+        let (scope, _, _) = completion_review_contract_for_job(&root, &job);
+        assert!(matches!(scope, review::ReviewScope::FullEvidence));
+        assert!(business_os_app_module_target_from_prompt(&job.prompt).is_some());
+        assert!(!business_os_app_validation_may_own_completion(&job));
+        let expected = expected_outcome_artifacts_for_job(&job);
+        assert_eq!(expected.len(), 1);
+        assert_eq!(expected[0].kind, ArtifactKind::WorkspaceFile);
+        assert!(expected[0]
+            .primary_key
+            .ends_with(".ctox/systematic-research-validation.json"));
+        let receipt = PathBuf::from(&expected[0].primary_key);
+        std::fs::create_dir_all(receipt.parent().unwrap()).unwrap();
+        std::fs::write(
+            &receipt,
+            r#"{"status":"pass","checked_at":"2026-07-18T00:00:00Z","manifests":[{"manifest_sha256":"abc"}]}"#,
+        )
+        .unwrap();
+        let evidence = collect_review_evidence_summaries(&root, &job, 1, &[]);
+        assert!(evidence.iter().any(
+            |line| line.contains("Systematic research validator receipt")
+                && line.contains("status=pass")
+                && line.contains("manifests=1")
+        ));
+    }
+
+    #[test]
+    fn systematic_research_recovery_preserves_immutable_run_binding() {
+        let root = temp_root("research-recovery-binding");
+        let original = systematic_research_test_job(&root);
+        let mut recovery = original.clone();
+        recovery.prompt = "Create the remaining reviewed artifacts.".to_string();
+        recovery.preview = recovery.prompt.clone();
+
+        preserve_systematic_research_binding(&original, &mut recovery).unwrap();
+
+        assert_eq!(
+            systematic_research_binding(&recovery).unwrap(),
+            ("run-1", "command-1")
+        );
+        assert!(recovery
+            .prompt
+            .contains("Immutable systematic research binding:"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn systematic_research_recovery_rejects_changed_run_binding() {
+        let root = temp_root("research-recovery-binding-conflict");
+        let original = systematic_research_test_job(&root);
+        let mut recovery = original.clone();
+        recovery.prompt = "Research Run ID: run-2\nResearch Command ID: command-2".to_string();
+
+        let error = preserve_systematic_research_binding(&original, &mut recovery).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("attempted to change its immutable run binding"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn systematic_research_fails_closed_without_evidence_manifest() {
+        let root = temp_root("research-missing-manifest");
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let job = systematic_research_test_job(&workspace);
+
+        let error =
+            validate_systematic_research_workspace(&root, &job, "attempt-1", current_epoch_secs())
+                .unwrap_err();
+        assert!(error.to_string().contains("no evidence manifest found"));
+        assert!(!workspace
+            .join(".ctox/systematic-research-validation.json")
+            .exists());
+    }
+
+    #[test]
+    fn systematic_research_rejects_foreign_manifest_binding() {
+        let root = temp_root("research-foreign-manifest");
+        let validator =
+            root.join("src/skills/system/research/systematic-research/scripts/evidence_guard.py");
+        std::fs::create_dir_all(validator.parent().unwrap()).unwrap();
+        std::fs::write(&validator, "#!/usr/bin/env python3\n").unwrap();
+        let workspace = root.join("workspace");
+        let validation = workspace.join("validation");
+        std::fs::create_dir_all(&validation).unwrap();
+        std::fs::write(
+            validation.join("evidence-manifest.json"),
+            r#"{"schema_version":"ctox.research.evidence.v1","run_id":"old-run","research_run_id":"old-run","research_command_id":"old-command","research_attempt_id":"old-attempt","evidence":[]}"#,
+        )
+        .unwrap();
+        let job = systematic_research_test_job(&workspace);
+
+        let error =
+            validate_systematic_research_workspace(&root, &job, "attempt-1", current_epoch_secs())
+                .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("stale or foreign evidence manifest"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn systematic_research_requires_contract_depth_in_persisted_parent_rollout() {
+        let workspace = temp_root("research-depth-workspace");
+        let research_workspace = workspace.join("research/deep-research/call-1");
+        std::fs::create_dir_all(&research_workspace).unwrap();
+        std::fs::write(research_workspace.join("manifest.json"), "{}").unwrap();
+        std::fs::write(research_workspace.join("evidence_bundle.json"), "{}").unwrap();
+        let codex_home = temp_root("research-depth-codex-home");
+        let rollout = codex_home.join("sessions/rollout-parent.jsonl");
+        std::fs::create_dir_all(rollout.parent().unwrap()).unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                subagent_parent_thread_id TEXT
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads (id, rollout_path, cwd, subagent_parent_thread_id)
+             VALUES ('parent-thread', ?1, ?2, NULL)",
+            params![rollout.to_string_lossy(), codex_home.to_string_lossy()],
+        )
+        .unwrap();
+        let timestamp = now_iso_string();
+        let expected_run_id = "run-1";
+        let expected_command_id = "command-1";
+        let research_started_at = current_epoch_secs().saturating_sub(1);
+        let write_rollout = |depth: &str,
+                             no_workspace: bool,
+                             run_id: &str,
+                             command_id: &str,
+                             turn_workspace: &Path,
+                             preceding_tool: Option<&str>| {
+            let arguments = serde_json::json!({
+                "query": "verified bearing research",
+                "depth": depth,
+                "no_workspace": no_workspace,
+            });
+            let output = serde_json::json!({
+                "ok": true,
+                "depth": depth,
+                "research_workspace": {
+                    "path": research_workspace,
+                    "manifest": research_workspace.join("manifest.json"),
+                    "evidence_bundle": research_workspace.join("evidence_bundle.json"),
+                },
+            });
+            let mut items = vec![
+                serde_json::json!({
+                    "timestamp": timestamp,
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "task_started",
+                        "turn_id": "turn-1",
+                    }
+                })
+                .to_string(),
+                serde_json::json!({
+                    "timestamp": timestamp,
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{
+                            "type": "input_text",
+                            "text": format!(
+                                "Research Run ID: {run_id}\nResearch Command ID: {command_id}"
+                            ),
+                        }],
+                    }
+                })
+                .to_string(),
+                serde_json::json!({
+                    "timestamp": timestamp,
+                    "type": "turn_context",
+                    "payload": {
+                        "turn_id": "turn-1",
+                        "cwd": turn_workspace,
+                    }
+                })
+                .to_string(),
+            ];
+            if let Some(name) = preceding_tool {
+                items.push(
+                    serde_json::json!({
+                        "timestamp": timestamp,
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "name": name,
+                            "call_id": "call-before-research",
+                            "arguments": "{}",
+                        }
+                    })
+                    .to_string(),
+                );
+            }
+            items.extend([
+                serde_json::json!({
+                    "timestamp": timestamp,
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "ctox_deep_research",
+                        "call_id": "call-1",
+                        "arguments": arguments.to_string(),
+                    }
+                })
+                .to_string(),
+                serde_json::json!({
+                    "timestamp": timestamp,
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "call-1",
+                        "output": output.to_string(),
+                    }
+                })
+                .to_string(),
+            ]);
+            std::fs::write(&rollout, items.join("\n")).unwrap();
+        };
+
+        write_rollout(
+            "exhaustive",
+            false,
+            "foreign-run",
+            "foreign-command",
+            &workspace,
+            None,
+        );
+        let foreign_binding = validate_systematic_research_deep_research_receipt_from_conn(
+            &conn,
+            &codex_home,
+            &workspace,
+            expected_run_id,
+            expected_command_id,
+            research_started_at,
+            SystematicResearchDepth::Exhaustive,
+        )
+        .unwrap_err();
+        assert!(foreign_binding.to_string().contains("observed calls: none"));
+
+        write_rollout(
+            "exhaustive",
+            false,
+            expected_run_id,
+            expected_command_id,
+            &codex_home,
+            None,
+        );
+        let foreign_workspace = validate_systematic_research_deep_research_receipt_from_conn(
+            &conn,
+            &codex_home,
+            &workspace,
+            expected_run_id,
+            expected_command_id,
+            research_started_at,
+            SystematicResearchDepth::Exhaustive,
+        )
+        .unwrap_err();
+        assert!(foreign_workspace
+            .to_string()
+            .contains("observed calls: none"));
+
+        write_rollout(
+            "standard",
+            false,
+            expected_run_id,
+            expected_command_id,
+            &workspace,
+            None,
+        );
+        let shallow = validate_systematic_research_deep_research_receipt_from_conn(
+            &conn,
+            &codex_home,
+            &workspace,
+            expected_run_id,
+            expected_command_id,
+            research_started_at,
+            SystematicResearchDepth::Exhaustive,
+        )
+        .unwrap_err();
+        assert!(shallow.to_string().contains("observed calls: standard"));
+
+        write_rollout(
+            "exhaustive",
+            true,
+            expected_run_id,
+            expected_command_id,
+            &workspace,
+            None,
+        );
+        let unpersisted = validate_systematic_research_deep_research_receipt_from_conn(
+            &conn,
+            &codex_home,
+            &workspace,
+            expected_run_id,
+            expected_command_id,
+            research_started_at,
+            SystematicResearchDepth::Exhaustive,
+        )
+        .unwrap_err();
+        assert!(unpersisted
+            .to_string()
+            .contains("exhaustive (no_workspace)"));
+
+        write_rollout(
+            "exhaustive",
+            false,
+            expected_run_id,
+            expected_command_id,
+            &workspace,
+            Some("exec_command"),
+        );
+        let receipt_after_inventory = validate_systematic_research_deep_research_receipt_from_conn(
+            &conn,
+            &codex_home,
+            &workspace,
+            expected_run_id,
+            expected_command_id,
+            research_started_at,
+            SystematicResearchDepth::Exhaustive,
+        )
+        .unwrap();
+        assert_eq!(receipt_after_inventory["depth"], "exhaustive");
+
+        write_rollout(
+            "exhaustive",
+            false,
+            expected_run_id,
+            expected_command_id,
+            &workspace,
+            None,
+        );
+        let receipt = validate_systematic_research_deep_research_receipt_from_conn(
+            &conn,
+            &codex_home,
+            &workspace,
+            expected_run_id,
+            expected_command_id,
+            research_started_at,
+            SystematicResearchDepth::Exhaustive,
+        )
+        .unwrap();
+        assert_eq!(receipt["depth"], "exhaustive");
+        assert_eq!(receipt["required_depth"], "exhaustive");
+        assert_eq!(receipt["thread_id"], "parent-thread");
+        assert_eq!(
+            receipt["research_workspace"]["path"],
+            research_workspace.to_string_lossy().as_ref()
+        );
+
+        std::fs::remove_file(research_workspace.join("manifest.json")).unwrap();
+        let missing_persisted_artifact =
+            validate_systematic_research_deep_research_receipt_from_conn(
+                &conn,
+                &codex_home,
+                &workspace,
+                expected_run_id,
+                expected_command_id,
+                research_started_at,
+                SystematicResearchDepth::Exhaustive,
+            )
+            .unwrap_err();
+        assert!(missing_persisted_artifact
+            .to_string()
+            .contains("exhaustive (not persisted)"));
+    }
+
+    #[test]
+    fn systematic_research_depth_contract_defaults_to_standard_and_honors_exhaustive() {
+        let workspace = temp_root("research-depth-contract");
+        let mut job = systematic_research_test_job(&workspace);
+        assert_eq!(
+            required_systematic_research_depth(&job),
+            SystematicResearchDepth::Standard
+        );
+        job.prompt
+            .push_str("\nRequired Deep Research Depth: exhaustive");
+        assert_eq!(
+            required_systematic_research_depth(&job),
+            SystematicResearchDepth::Exhaustive
+        );
+    }
+
+    #[test]
+    fn systematic_research_web_receipts_require_server_cache_binding() {
+        use sha2::Digest;
+
+        let root = temp_root("research-web-receipt");
+        let cache_path = root.join("runtime/web_search_page_cache.json");
+        std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        let page_text = "Verified full source text with measured propeller thrust and torque.";
+        let page_text_sha256 = format!("{:x}", sha2::Sha256::digest(page_text.as_bytes()));
+        let checked_at = current_epoch_secs();
+        std::fs::write(
+            &cache_path,
+            serde_json::to_vec(&serde_json::json!({
+                "entries": {
+                    "https://example.edu/paper": {
+                        "created_at_epoch": current_epoch_secs(),
+                        "checked_at": checked_at,
+                        "original_url": "https://example.edu/paper",
+                        "final_url": "https://example.edu/paper",
+                        "canonical_url": "https://example.edu/paper",
+                        "evidence_eligible": true,
+                        "evidence_relevance_score": 9,
+                        "http_status": 200,
+                        "snapshot_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        "doc": {
+                            "url": "https://example.edu/paper",
+                            "canonical_url": "https://example.edu/paper",
+                            "evidence_eligible": true,
+                            "page_text": page_text,
+                            "response_receipt": {
+                                "requested_url": "https://example.edu/paper",
+                                "final_url": "https://example.edu/paper",
+                                "status": 200,
+                                "byte_count": 64,
+                                "sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                                "content_kind": "html"
+                            }
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut manifest = serde_json::json!({
+            "evidence": [{
+                "evidence_id": "ev-1",
+                "canonical_url": "https://example.edu/paper",
+                "http_status": 200,
+                "snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "content_kind": "article",
+                "content_scope": "full_text",
+                "relevance_score": 9,
+                "retrieval_receipt": {
+                    "request_url": "https://example.edu/paper",
+                    "final_url": "https://example.edu/paper",
+                    "http_status": 200,
+                    "checked_at_epoch": checked_at,
+                    "byte_count": 64,
+                    "body_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "content_kind": "html"
+                },
+                "extracted_text": {
+                    "sha256": page_text_sha256
+                }
+            }]
+        });
+        let attempt_started_at = current_epoch_secs().saturating_sub(1);
+        validate_systematic_research_web_receipts(&root, &manifest, attempt_started_at).unwrap();
+        manifest["evidence"][0]["snapshot_sha256"] = Value::String(
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+        );
+        let error = validate_systematic_research_web_receipts(&root, &manifest, attempt_started_at)
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("not bound to a matching admitted"));
+
+        manifest["evidence"][0]["extracted_text"]["sha256"] = Value::String(page_text_sha256);
+        manifest["evidence"][0]["retrieval_receipt"]["final_url"] =
+            Value::String("https://example.edu/rewritten".to_string());
+        let error = validate_systematic_research_web_receipts(&root, &manifest, attempt_started_at)
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("canonical_url does not equal the immutable retrieval final_url"));
+
+        manifest["evidence"][0]["retrieval_receipt"]["final_url"] =
+            Value::String("https://example.edu/paper".to_string());
+        manifest["evidence"][0]["snapshot_sha256"] = Value::String(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+        );
+        manifest["evidence"][0]["relevance_score"] = Value::from(99);
+        let error = validate_systematic_research_web_receipts(&root, &manifest, attempt_started_at)
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("not bound to a matching admitted"));
+
+        manifest["evidence"][0]["relevance_score"] = Value::from(9);
+        manifest["evidence"][0]["extracted_text"]["sha256"] = Value::String(
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_string(),
+        );
+        let error = validate_systematic_research_web_receipts(&root, &manifest, attempt_started_at)
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("not bound to a matching admitted"));
+    }
+
+    #[test]
+    fn systematic_research_data_receipt_requires_untampered_server_artifact() {
+        use sha2::Digest;
+
+        let root = temp_root("research-data-receipt");
+        let artifact_dir = root.join("runtime/web_search_data_cache");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        let body = b"PK\x03\x04verified-original-data";
+        let digest = format!("{:x}", sha2::Sha256::digest(body));
+        let artifact = artifact_dir.join(format!("{digest}.zip"));
+        std::fs::write(&artifact, body).unwrap();
+        let checked_at = current_epoch_secs();
+        let cache_path = root.join("runtime/web_search_page_cache.json");
+        std::fs::write(
+            &cache_path,
+            serde_json::to_vec(&serde_json::json!({
+                "entries": {
+                    "https://example.edu/data.zip": {
+                        "created_at_epoch": current_epoch_secs(),
+                        "checked_at": checked_at,
+                        "original_url": "https://example.edu/data.zip",
+                        "final_url": "https://example.edu/data.zip",
+                        "canonical_url": "https://example.edu/data.zip",
+                        "evidence_eligible": true,
+                        "evidence_relevance_score": 9,
+                        "http_status": 200,
+                        "snapshot_hash": format!("sha256:{digest}"),
+                        "doc": {
+                            "url": "https://example.edu/data.zip",
+                            "canonical_url": "https://example.edu/data.zip",
+                            "evidence_eligible": true,
+                            "response_artifact_path": artifact,
+                            "response_receipt": {
+                                "requested_url": "https://example.edu/data.zip",
+                                "final_url": "https://example.edu/data.zip",
+                                "status": 200,
+                                "byte_count": body.len(),
+                                "sha256": format!("sha256:{digest}"),
+                                "content_kind": "data_zip"
+                            }
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let manifest = serde_json::json!({
+            "evidence": [{
+                "evidence_id": "data-1",
+                "canonical_url": "https://example.edu/data.zip",
+                "http_status": 200,
+                "snapshot_sha256": digest,
+                "content_kind": "data_file",
+                "content_scope": "full_text",
+                "relevance_score": 9,
+                "retrieval_receipt": {
+                    "request_url": "https://example.edu/data.zip",
+                    "final_url": "https://example.edu/data.zip",
+                    "http_status": 200,
+                    "checked_at_epoch": checked_at,
+                    "byte_count": body.len(),
+                    "body_sha256": digest,
+                    "content_kind": "data_zip"
+                }
+            }]
+        });
+        let attempt_started_at = current_epoch_secs().saturating_sub(1);
+        validate_systematic_research_web_receipts(&root, &manifest, attempt_started_at).unwrap();
+
+        std::fs::write(&artifact, b"tampered").unwrap();
+        let error = validate_systematic_research_web_receipts(&root, &manifest, attempt_started_at)
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("not bound to a matching admitted"));
+    }
+
+    #[test]
+    fn systematic_research_validation_failure_requeues_through_core_review_path() {
+        let root = temp_root("research-validation-rework");
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Research evidence validation".to_string(),
+                prompt: "research.systematic.run".to_string(),
+                thread_key: "queue/research-validation-rework".to_string(),
+                workspace_root: Some(workspace.to_string_lossy().into_owned()),
+                priority: "urgent".to_string(),
+                suggested_skill: Some("systematic-research".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .unwrap();
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test").unwrap();
+        let mut job = systematic_research_test_job(&workspace);
+        job.leased_message_keys = vec![task.message_key.clone()];
+
+        let disposition = systematic_research_validation_feedback_disposition(
+            &root,
+            &job,
+            "evidence ev-1 is not bound to the CTOX Web Stack",
+        )
+        .unwrap();
+        assert!(matches!(
+            disposition,
+            CompletionReviewDisposition::FeedbackRetry {
+                persist_on_leased_queue: true,
+                ..
+            }
+        ));
+
+        channels::ack_leased_messages(
+            &root,
+            std::slice::from_ref(&task.message_key),
+            "review_rework",
+        )
+        .unwrap();
+        assert_eq!(
+            channels::load_queue_task(&root, &task.message_key)
+                .unwrap()
+                .unwrap()
+                .route_status,
+            "review_rework"
+        );
+        assert_eq!(
+            queue_review_budget_attempt_count(&root, &job, &task.message_key).unwrap(),
+            1
+        );
+        enforce_queue_review_requeue_same_main_work_transition(&root, &task.message_key, 1)
+            .unwrap();
+        assert!(
+            channels::set_queue_task_route_status(&root, &task.message_key, "pending").unwrap()
+        );
+        assert_eq!(
+            channels::load_queue_task(&root, &task.message_key)
+                .unwrap()
+                .unwrap()
+                .route_status,
+            "pending"
+        );
     }
 
     #[test]
@@ -28902,6 +30822,22 @@ Business OS command:
     }
 
     #[test]
+    fn systematic_research_queue_jobs_use_isolated_standard_session() {
+        let workspace = temp_root("systematic-research-session-options");
+        let job = systematic_research_test_job(&workspace);
+
+        let options = chat_turn_session_options_for_queue_job(&job);
+
+        assert!(!options.disable_mcp_servers);
+        assert!(options.force_isolated_session);
+        assert!(!options.plain_prompt);
+        assert!(options.base_instructions.is_none());
+        assert_eq!(options.turn_timeout_secs_override, None);
+        assert!(options.required_initial_tool.is_none());
+        assert!(!queue_job_reuses_persistent_session(&options));
+    }
+
+    #[test]
     fn business_os_app_queue_jobs_use_lean_mcp_free_session() {
         let mut job = QueuedPrompt {
             prompt: "Business OS app task metadata:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
@@ -28920,7 +30856,9 @@ Business OS command:
 
         let options = chat_turn_session_options_for_queue_job(&job);
         assert!(options.disable_mcp_servers);
+        assert!(!options.force_isolated_session);
         assert!(options.plain_prompt);
+        assert!(options.required_initial_tool.is_none());
         assert!(!queue_job_reuses_persistent_session(&options));
         let base_instructions = options
             .base_instructions
@@ -28937,8 +30875,10 @@ Business OS command:
         job.prompt = "Write a short implementation note.".to_string();
         let options = chat_turn_session_options_for_queue_job(&job);
         assert!(!options.disable_mcp_servers);
+        assert!(!options.force_isolated_session);
         assert!(!options.plain_prompt);
         assert!(options.base_instructions.is_none());
+        assert!(options.required_initial_tool.is_none());
         assert!(queue_job_reuses_persistent_session(&options));
         assert_eq!(options.turn_timeout_secs_override, None);
     }
@@ -32450,6 +34390,33 @@ Business OS command:
             )
             .expect("failed to count pre-dispatch terminal proof");
         assert_eq!(proof_count, 1);
+
+        drop(conn);
+        channels::update_queue_task(
+            &root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task.message_key.clone(),
+                route_status: Some("pending".to_string()),
+                status_note: Some("operator-authorized bounded retry".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("operator should be able to release terminally failed work");
+        assert_eq!(
+            queue_review_budget_attempt_count(&root, &job, &task.message_key)
+                .expect("manual retry budget should be readable"),
+            0,
+            "an explicit Failed -> Pending operator release starts a new finite review cycle"
+        );
+
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease manually retried queue task");
+        assert!(
+            terminalize_exhausted_queue_review_budget_before_run(&root, &job)
+                .expect("manual retry budget check should not fail")
+                .is_none(),
+            "manual retry must reach the worker instead of immediately re-terminalizing"
+        );
     }
 
     #[test]
@@ -35155,6 +37122,32 @@ Use shell tools to create or update these files."
     }
 
     #[test]
+    fn runtime_retry_prompt_preserves_complete_systematic_research_contract() {
+        let original = "Research Run ID: skf-run-001\nResearch Command ID: skf-command-001\n\n1. Fetch sources through the typed CTOX Web Stack.\n2. Persist hash-bound receipts.\n3. Run independent reviews.\n4. Build Knowledge and reports only after review.";
+        let job = QueuedPrompt {
+            prompt: original.to_string(),
+            goal: "SKF verified legacy source re-research".to_string(),
+            preview: "SKF verified legacy source re-research".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("systematic-research".to_string()),
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/skf-research".to_string()),
+            workspace_root: Some("/tmp/workspace".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let prompt = render_runtime_retry_prompt(&job, "429 Too Many Requests");
+
+        assert!(prompt.contains("Research Run ID: skf-run-001"));
+        assert!(prompt.contains("Research Command ID: skf-command-001"));
+        assert!(prompt.contains("4. Build Knowledge and reports only after review."));
+        assert!(!prompt.contains("CURRENT TASK\nSKF verified legacy source re-research"));
+    }
+
+    #[test]
     fn runtime_rate_limit_suppresses_standalone_retry_with_outbound_metadata() {
         let root = temp_root("runtime-rate-limit-retry");
         let outbound = channels::FounderOutboundAction {
@@ -35809,8 +37802,14 @@ Use shell tools to create or update these files."
     }
 
     #[test]
-    fn idle_empty_gate_never_masks_pending_durable_queue_task() {
-        let root = temp_root("ctox-idle-empty-gate-pending-queue");
+    fn idle_empty_gate_reopens_when_durable_queue_source_changes() {
+        let root = temp_root("ctox-idle-empty-gate-source-change");
+        mark_idle_durable_queue_empty_probe(&root);
+        assert!(
+            should_skip_idle_durable_queue_empty_probe(&root),
+            "an unchanged empty queue source should stay behind the idle gate"
+        );
+
         let queue_task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
@@ -35826,10 +37825,9 @@ Use shell tools to create or update these files."
         )
         .expect("failed to seed durable queue task");
 
-        mark_idle_durable_queue_empty_probe(&root);
         assert!(
             !should_skip_idle_durable_queue_empty_probe(&root),
-            "empty-probe backoff must not hide a pending durable queue task"
+            "a queue write must reopen the idle gate through the durable source stamp"
         );
 
         let state = Arc::new(Mutex::new(SharedState::default()));

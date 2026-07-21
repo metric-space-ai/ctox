@@ -31,6 +31,19 @@ use seccompiler::SeccompRule;
 use seccompiler::TargetArch;
 use seccompiler::apply_filter;
 
+const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
+    "/bin",
+    "/sbin",
+    "/usr",
+    "/etc",
+    "/lib",
+    "/lib64",
+    "/nix/store",
+    "/run/current-system/sw",
+    "/dev",
+    "/proc",
+];
+
 /// Apply sandbox policies inside this thread so only the child inherits
 /// them, not the entire CLI process.
 ///
@@ -68,19 +81,25 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
     }
 
     if apply_landlock_fs && !sandbox_policy.has_full_disk_write_access() {
-        if !sandbox_policy.has_full_disk_read_access() {
-            return Err(CodexErr::UnsupportedOperation(
-                "Restricted read-only access is not supported by the legacy Linux Landlock filesystem backend."
-                    .to_string(),
-            ));
+        let mut readable_roots = if sandbox_policy.has_full_disk_read_access() {
+            vec![AbsolutePathBuf::from_absolute_path("/").expect("root path is absolute")]
+        } else {
+            sandbox_policy.get_readable_roots_with_cwd(cwd)
+        };
+        if sandbox_policy.include_platform_defaults() {
+            readable_roots.extend(
+                LINUX_PLATFORM_DEFAULT_READ_ROOTS
+                    .iter()
+                    .filter(|path| Path::new(path).exists())
+                    .filter_map(|path| AbsolutePathBuf::from_absolute_path(path).ok()),
+            );
         }
-
         let writable_roots = sandbox_policy
             .get_writable_roots_with_cwd(cwd)
             .into_iter()
             .map(|writable_root| writable_root.root)
             .collect();
-        install_filesystem_landlock_rules_on_current_thread(writable_roots)?;
+        install_filesystem_landlock_rules_on_current_thread(readable_roots, writable_roots)?;
     }
 
     Ok(())
@@ -124,16 +143,16 @@ fn set_no_new_privs() -> Result<()> {
     Ok(())
 }
 
-/// Installs Landlock file-system rules on the current thread allowing read
-/// access to the entire file-system while restricting write access to
-/// `/dev/null` and the provided list of `writable_roots`.
+/// Installs Landlock file-system rules on the current thread with explicit
+/// readable and writable roots.
 ///
 /// # Errors
 /// Returns [`CodexErr::Sandbox`] variants when the ruleset fails to apply.
 ///
-/// Note: this is currently unused because filesystem sandboxing is performed
-/// via bubblewrap. It is kept for reference and potential fallback use.
+/// CTOX-managed sessions use this path on Linux; standalone sessions normally
+/// use bubblewrap.
 fn install_filesystem_landlock_rules_on_current_thread(
+    readable_roots: Vec<AbsolutePathBuf>,
     writable_roots: Vec<AbsolutePathBuf>,
 ) -> Result<()> {
     let abi = ABI::V5;
@@ -144,10 +163,12 @@ fn install_filesystem_landlock_rules_on_current_thread(
         .set_compatibility(CompatLevel::BestEffort)
         .handle_access(access_rw)?
         .create()?
-        .add_rules(landlock::path_beneath_rules(&["/"], access_ro))?
         .add_rules(landlock::path_beneath_rules(&["/dev/null"], access_rw))?
         .set_no_new_privs(true);
 
+    if !readable_roots.is_empty() {
+        ruleset = ruleset.add_rules(landlock::path_beneath_rules(&readable_roots, access_ro))?;
+    }
     if !writable_roots.is_empty() {
         ruleset = ruleset.add_rules(landlock::path_beneath_rules(&writable_roots, access_rw))?;
     }

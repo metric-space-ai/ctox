@@ -7417,13 +7417,26 @@ pub fn update_module_to_catalog(
         source_dir.join("module.json").is_file(),
         "catalog source `{source_module}` is missing"
     );
+    validate_catalog_source_module(root, &source_module)?;
 
-    let current_sha = compute_module_bundle(installed_app_root, &module_id)
+    // Both roots were resolved above from the installed manifest. Hash those
+    // exact directories; resolving again from an app root can select a
+    // same-named source module and make an old install look current.
+    let current_sha = compute_module_bundle_at(&installed_dir, &module_id)
         .map(|bundle| bundle.sha256)
         .unwrap_or_default();
-    let catalog_sha = compute_module_bundle(source_app_root, &source_module)
+    let catalog_sha = compute_module_bundle_at(&source_dir, &source_module)
         .map(|bundle| bundle.sha256)
         .unwrap_or_default();
+    let installed_version = installed_manifest
+        .get("version")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let catalog_version = catalog_module_version(source_app_root, &source_module);
+    let manifest_versions_match = !installed_version.is_empty()
+        && !catalog_version.is_empty()
+        && installed_version == catalog_version;
     let installed_from = installed_baseline_bundle_sha(root, &module_id)?;
     let mode = request.mode.trim();
     let is_customized = !installed_from.is_empty() && current_sha != installed_from;
@@ -7438,12 +7451,13 @@ pub fn update_module_to_catalog(
             "module `{module_id}` has local changes; pass mode=discard to overwrite (a recovery version is saved first)"
         );
     }
-    if !catalog_sha.is_empty() && catalog_sha == current_sha {
+    if !catalog_sha.is_empty() && catalog_sha == current_sha && manifest_versions_match {
         return Ok(serde_json::json!({
             "ok": true,
             "module_id": module_id,
             "updated": false,
             "reason": "already_current",
+            "catalog_version": catalog_version,
         }));
     }
 
@@ -7473,9 +7487,6 @@ pub fn update_module_to_catalog(
     {
         staged["title"] = title.clone();
     }
-    staged["entry"] = Value::String(format!("installed-modules/{module_id}/index.html"));
-    staged["install_scope"] = Value::String("installed".to_owned());
-    staged["default_installed"] = Value::Bool(false);
     if let Some(template_id) = installed_manifest
         .get("template_id")
         .filter(|value| value.is_string())
@@ -7489,14 +7500,13 @@ pub fn update_module_to_catalog(
         "verified": true,
         "trust_model": "ctox-first-party-source"
     });
-    ensure_local_icon_manifest_value(&mut staged, &staging);
+    normalize_catalog_installed_manifest(&mut staged, &module_id, &staging)?;
     fs::write(&staged_manifest_path, serde_json::to_vec_pretty(&staged)?)?;
-    validate_staged_installed_module(root, &module_id, &staging)?;
+    validate_staged_catalog_module(root, &module_id, &staging)?;
 
     let backup = installed_app_root.join(format!(".module-backup-{module_id}-{}", Uuid::new_v4()));
     activate_staged_module_directory(&staging, &installed_dir, &backup)?;
 
-    let catalog_version = catalog_module_version(source_app_root, &source_module);
     record_module_version(
         root,
         installed_app_root,
@@ -10002,14 +10012,11 @@ fn load_module_manifests(
     Ok(manifests)
 }
 
-/// Load server-only external data-source declarations from local Business OS
-/// apps. Marketplace and normally installed apps are deliberately excluded:
-/// executable SQL mappings require an operator-controlled local deployment.
+/// Load server-only external data-source declarations from operator-owned
+/// local Business OS apps. Packaged and marketplace apps cannot supply
+/// executable SQL mappings.
 pub(crate) fn local_external_data_source_declarations(root: &Path) -> anyhow::Result<Vec<Value>> {
     let installed_app_root = resolve_business_os_installed_app_root(root);
-    // External SQL declarations are accepted only from operator-owned local
-    // modules. Loading the full catalog here needlessly hashes every packaged
-    // app and makes capability issuance contend with peer startup.
     let manifests = load_local_module_manifests(&installed_app_root)?;
     let mut declarations = Vec::new();
     for manifest in manifests {
@@ -10167,6 +10174,74 @@ fn ensure_local_icon_manifest_value(manifest: &mut Value, module_dir: &Path) {
     if existing_icon.is_empty() && module_dir.join("icon.svg").is_file() {
         manifest["icon"] = Value::String("icon.svg".to_owned());
     }
+}
+
+fn normalize_catalog_installed_manifest(
+    manifest: &mut Value,
+    module_id: &str,
+    module_dir: &Path,
+) -> anyhow::Result<()> {
+    let raw_version = manifest
+        .get("version")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .trim_start_matches('v');
+    let mut parts = raw_version.split('.');
+    let major = parts.next().and_then(|part| part.parse::<u64>().ok());
+    let minor = parts
+        .next()
+        .map(|part| part.parse::<u64>().ok())
+        .unwrap_or(Some(0));
+    let patch = parts
+        .next()
+        .map(|part| part.parse::<u64>().ok())
+        .unwrap_or(Some(0));
+    anyhow::ensure!(
+        parts.next().is_none() && major.is_some() && minor.is_some() && patch.is_some(),
+        "catalog module `{module_id}` has invalid version `{raw_version}`"
+    );
+    let version = format!(
+        "{}.{}.{}",
+        major.unwrap_or(0),
+        minor.unwrap_or(0),
+        patch.unwrap_or(0)
+    );
+    anyhow::ensure!(
+        version != "0.0.0",
+        "catalog module `{module_id}` must not use version 0.0.0"
+    );
+
+    manifest["version"] = Value::String(version);
+    manifest["entry"] = Value::String(format!("installed-modules/{module_id}/index.html"));
+    manifest["install_scope"] = Value::String("installed".to_owned());
+    manifest["default_installed"] = Value::Bool(false);
+    if !manifest.get("store").is_some_and(Value::is_object) {
+        manifest["store"] = serde_json::json!({});
+    }
+    manifest["store"]["source_path"] = Value::String(format!("installed-modules/{module_id}"));
+    manifest["store"]["distribution"] = Value::String("ctox-runtime-installed-module".to_owned());
+    manifest["store"]["installable"] = Value::Bool(false);
+    ensure_local_icon_manifest_value(manifest, module_dir);
+    if let Some(layout) = manifest.get_mut("layout").and_then(Value::as_object_mut) {
+        layout.remove("icon_svg");
+    }
+    if let Some(object) = manifest.as_object_mut() {
+        for key in [
+            "icon_svg",
+            "iconSvg",
+            "icon_path",
+            "iconPath",
+            "icon_url",
+            "iconUrl",
+        ] {
+            object.remove(key);
+        }
+        if object.get("source").and_then(Value::as_str) == Some("local") {
+            object.remove("source");
+        }
+    }
+    Ok(())
 }
 
 fn load_marketplace_module_manifests(app_root: &Path) -> anyhow::Result<Vec<Value>> {
@@ -10368,9 +10443,6 @@ fn install_template_module(
     )?;
     manifest_value["id"] = Value::String(module_id.clone());
     manifest_value["title"] = Value::String(module_title);
-    manifest_value["entry"] = Value::String(format!("installed-modules/{module_id}/index.html"));
-    manifest_value["install_scope"] = Value::String("installed".to_owned());
-    manifest_value["default_installed"] = Value::Bool(false);
     manifest_value["template_id"] = Value::String(template.id);
     // Link the installed instance back to the catalog module it was copied from
     // so the catalog/update diff can detect a newer upstream bundle later.
@@ -10382,16 +10454,21 @@ fn install_template_module(
             "verified": true,
             "trust_model": "ctox-first-party-source"
         });
+        normalize_catalog_installed_manifest(&mut manifest_value, &module_id, &staging)?;
     } else {
         manifest_value["archetype"] = Value::String(starter_archetype.clone());
         manifest_value["source_module_id"] = Value::String(String::new());
+        ensure_local_icon_manifest_value(&mut manifest_value, &staging);
     }
-    ensure_local_icon_manifest_value(&mut manifest_value, &staging);
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest_value)?)
         .with_context(|| format!("failed to write {}", manifest_path.display()))?;
 
     let activation = (|| -> anyhow::Result<()> {
-        validate_staged_installed_module(root, &module_id, &staging)?;
+        // CTOX Marketplace apps are authored against the catalog contract and
+        // then rewritten to an installed runtime path. Validate them with the
+        // dedicated catalog-installed profile; the stricter generated-app
+        // profile intentionally rejects shared first-party app structures.
+        validate_staged_catalog_module(root, &module_id, &staging)?;
         let backup =
             installed_app_root.join(format!(".module-backup-{module_id}-{}", Uuid::new_v4()));
         activate_staged_module_directory(&staging, &target, &backup)
@@ -11226,13 +11303,17 @@ fn sync_module_commit_records(
     drop(stmt);
 
     let mut parent_id = String::new();
-    for (version_id, seq, origin, label, bundle_sha256, files_json, created_by, created_at_ms) in rows
+    for (version_id, seq, origin, label, bundle_sha256, files_json, created_by, created_at_ms) in
+        rows
     {
         let files: Vec<Value> = serde_json::from_str(&files_json).unwrap_or_default();
         let file_manifest: Vec<Value> = files
             .iter()
             .map(|file| {
-                let sha = file.get("sha256").and_then(Value::as_str).unwrap_or_default();
+                let sha = file
+                    .get("sha256")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 serde_json::json!({
                     "path": file.get("path").and_then(Value::as_str).unwrap_or_default(),
                     "sha256": sha,
@@ -11284,7 +11365,13 @@ fn sync_module_commit_records(
             "created_at_ms": created_at_ms,
             "updated_at_ms": rec_updated,
         });
-        upsert_business_record(conn, "business_module_commits", &commit_id, rec_updated, doc)?;
+        upsert_business_record(
+            conn,
+            "business_module_commits",
+            &commit_id,
+            rec_updated,
+            doc,
+        )?;
         parent_id = commit_id;
     }
     Ok(())
@@ -11604,24 +11691,48 @@ fn module_catalog_source_id(app_root: &Path, module: &Value) -> Option<String> {
         .get("template_id")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let template_path = app_root
-        .join("template-store")
-        .join(template_id)
-        .join("template.json");
-    let text = fs::read_to_string(&template_path).ok()?;
-    let template: TemplateManifest = serde_json::from_str(&text).ok()?;
-    let source = if template.source_module.trim().is_empty() {
-        template.id
-    } else {
-        template.source_module
-    };
-    let source = source.trim();
-    if source.is_empty() {
-        None
-    } else {
-        Some(source.to_owned())
+        .filter(|value| !value.is_empty());
+    if let Some(template_id) = template_id {
+        let template_path = app_root
+            .join("template-store")
+            .join(template_id)
+            .join("template.json");
+        let text = fs::read_to_string(&template_path).ok()?;
+        let template: TemplateManifest = serde_json::from_str(&text).ok()?;
+        let source = if template.source_module.trim().is_empty() {
+            template.id
+        } else {
+            template.source_module
+        };
+        let source = source.trim();
+        return (!source.is_empty()).then(|| source.to_owned());
     }
+
+    // Releases before catalog provenance stamping shipped selected apps as
+    // immutable runtime-installed CTOX bundles. Recognize only that exact
+    // legacy shape; bespoke installed apps without an upstream remain
+    // intentionally unmapped and cannot be overwritten by catalog update.
+    let id = module.get("id").and_then(Value::as_str)?.trim();
+    let legacy_distribution = module
+        .pointer("/store/distribution")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value == "ctox-runtime-installed-module");
+    let legacy_source_path = module
+        .pointer("/store/source_path")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value.trim() == format!("installed-modules/{id}"));
+    let immutable_legacy_install = module
+        .pointer("/store/installable")
+        .and_then(Value::as_bool)
+        == Some(false)
+        && module.get("default_installed").and_then(Value::as_bool) == Some(true)
+        && module.get("developer").and_then(Value::as_str) == Some("CTOX");
+    let catalog_manifest = app_root.join("modules").join(id).join("module.json");
+    (legacy_distribution
+        && legacy_source_path
+        && immutable_legacy_install
+        && catalog_manifest.is_file())
+    .then(|| id.to_owned())
 }
 
 /// Read the declared version string of a catalog (`modules/<id>`) module.
@@ -12220,9 +12331,6 @@ pub fn install_app_module(
         copy_dir_recursive(&found_dir, &staging)
             .context("Failed to stage extracted module files")?;
 
-        manifest["entry"] = Value::String(format!("installed-modules/{module_id}/index.html"));
-        manifest["install_scope"] = Value::String("installed".to_owned());
-        manifest["default_installed"] = Value::Bool(false);
         // Stamp source provenance. Same-origin runtime modules are executable
         // code, so untrusted third-party archives remain blocked until an
         // isolated sandbox exists. The first-party repository is an explicit
@@ -12238,14 +12346,14 @@ pub fn install_app_module(
             "untrusted third-party apps cannot run same-origin; install a CTOX first-party source or wait for the sandbox runtime"
         );
         manifest["app_source"] = app_source;
-        ensure_local_icon_manifest_value(&mut manifest, &staging);
+        normalize_catalog_installed_manifest(&mut manifest, &module_id, &staging)?;
         fs::write(
             staging.join("module.json"),
             serde_json::to_vec_pretty(&manifest)?,
         )
         .with_context(|| format!("Failed to rewrite staged manifest for {module_id}"))?;
 
-        validate_staged_installed_module(root, &module_id, &staging)?;
+        validate_staged_catalog_module(root, &module_id, &staging)?;
 
         activate_staged_module_directory(&staging, &dest_dir, &backup)
     })();
@@ -12458,24 +12566,25 @@ pub fn session_with_persisted_user(
     let Some(session_user) = session.user.clone() else {
         return Ok(session);
     };
-    let conn = open_store(root)?;
-    if let Some(user) = business_user_by_id(&conn, &session_user.id)? {
-        if !user.active {
-            session.authenticated = false;
-            session.user = None;
-            session.reason = Some("business_user_inactive".to_owned());
+    with_store_connection(root, |conn| {
+        if let Some(user) = business_user_by_id(conn, &session_user.id)? {
+            if !user.active {
+                session.authenticated = false;
+                session.user = None;
+                session.reason = Some("business_user_inactive".to_owned());
+                return Ok(session);
+            }
+            session.user = Some(BusinessOsSessionUser {
+                id: user.id,
+                display_name: user.display_name,
+                role: user.role.clone(),
+                is_admin: role_can_manage(&user.role),
+            });
             return Ok(session);
         }
-        session.user = Some(BusinessOsSessionUser {
-            id: user.id,
-            display_name: user.display_name,
-            role: user.role.clone(),
-            is_admin: role_can_manage(&user.role),
-        });
-        return Ok(session);
-    }
-    seed_session_user(&conn, &session)?;
-    Ok(session)
+        seed_session_user(conn, &session)?;
+        Ok(session)
+    })
 }
 
 pub fn remember_authenticated_session_user(
@@ -12485,8 +12594,7 @@ pub fn remember_authenticated_session_user(
     if !session.authenticated {
         return Ok(());
     }
-    let conn = open_store(root)?;
-    seed_session_user(&conn, session)
+    with_store_connection(root, |conn| seed_session_user(conn, session))
 }
 
 fn query_users(conn: &Connection) -> anyhow::Result<Vec<BusinessOsUser>> {
@@ -12669,43 +12777,44 @@ pub fn session_from_cookie_token(
         return Ok(None);
     }
     let token_hash = hash_session_token(token);
-    let conn = open_store(root)?;
     let now = now_ms() as i64;
-    let row = conn
-        .query_row(
-            "SELECT user_id, role, display_name FROM business_sessions
-             WHERE token_hash = ?1 AND revoked = 0 AND expires_at_ms > ?2",
+    with_store_connection(root, |conn| {
+        let row = conn
+            .query_row(
+                "SELECT user_id, role, display_name FROM business_sessions
+                 WHERE token_hash = ?1 AND revoked = 0 AND expires_at_ms > ?2",
+                params![token_hash, now],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((user_id, role, display_name)) = row else {
+            return Ok(None);
+        };
+        let _ = conn.execute(
+            "UPDATE business_sessions SET last_seen_ms = ?2 WHERE token_hash = ?1",
             params![token_hash, now],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            },
-        )
-        .optional()?;
-    let Some((user_id, role, display_name)) = row else {
-        return Ok(None);
-    };
-    let _ = conn.execute(
-        "UPDATE business_sessions SET last_seen_ms = ?2 WHERE token_hash = ?1",
-        params![token_hash, now],
-    );
-    let role = normalize_business_role(&role);
-    Ok(Some(BusinessOsSession {
-        ok: true,
-        authenticated: true,
-        auth_required: false,
-        user: Some(BusinessOsSessionUser {
-            id: user_id,
-            display_name,
-            role: role.clone(),
-            is_admin: role_can_manage(&role),
-        }),
-        login_url: None,
-        reason: None,
-    }))
+        );
+        let role = normalize_business_role(&role);
+        Ok(Some(BusinessOsSession {
+            ok: true,
+            authenticated: true,
+            auth_required: false,
+            user: Some(BusinessOsSessionUser {
+                id: user_id,
+                display_name,
+                role: role.clone(),
+                is_admin: role_can_manage(&role),
+            }),
+            login_url: None,
+            reason: None,
+        }))
+    })
 }
 
 /// Revoke a single session by its cookie token (logout).
@@ -13142,6 +13251,9 @@ fn maybe_materialize_and_complete_runtime_app_starter(
     command: &BusinessCommand,
     queue_task: Option<&channels::QueueTaskView>,
 ) -> anyhow::Result<Option<CommandAccepted>> {
+    if command.client_context.get("source").and_then(Value::as_str) == Some("business-os-mcp") {
+        return Ok(None);
+    }
     let Some(queue_task) = queue_task else {
         return Ok(None);
     };
@@ -13654,6 +13766,77 @@ fn validate_staged_installed_module(
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         anyhow::bail!(
             "staged module validation failed: {}",
+            if stderr.is_empty() { stdout } else { stderr }
+        )
+    })();
+    let _ = fs::remove_dir_all(&validation_root);
+    result
+}
+
+fn validate_catalog_source_module(root: &Path, module_id: &str) -> anyhow::Result<()> {
+    let script = root.join("src/apps/business-os/scripts/validate-app-module.mjs");
+    anyhow::ensure!(script.is_file(), "Business OS app validator is unavailable");
+    let output = std::process::Command::new(
+        crate::service::business_os::resolve_business_os_validator_node(root),
+    )
+    .current_dir(root)
+    .arg(&script)
+    .arg(module_id)
+    .arg("--source")
+    // Release images intentionally omit source-only dev dependencies. The
+    // catalog source tests run before publishing; runtime updates still run
+    // the complete static, manifest, ESM, and syntax validation below.
+    .arg("--skip-tests")
+    .arg("--workspace")
+    .arg(root)
+    .output()
+    .context("failed to validate Business OS catalog source")?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    anyhow::bail!(
+        "catalog source validation failed: {}",
+        if stderr.is_empty() { stdout } else { stderr }
+    )
+}
+
+fn validate_staged_catalog_module(
+    root: &Path,
+    module_id: &str,
+    staged_module_dir: &Path,
+) -> anyhow::Result<()> {
+    let validation_root = std::env::temp_dir().join(format!(
+        "ctox-catalog-app-validation-{module_id}-{}",
+        Uuid::new_v4()
+    ));
+    let validation_module = validation_root
+        .join("runtime/business-os/installed-modules")
+        .join(module_id);
+    let result = (|| -> anyhow::Result<()> {
+        copy_dir_recursive(staged_module_dir, &validation_module)?;
+        let script = root.join("src/apps/business-os/scripts/validate-app-module.mjs");
+        anyhow::ensure!(script.is_file(), "Business OS app validator is unavailable");
+        let output = std::process::Command::new(
+            crate::service::business_os::resolve_business_os_validator_node(root),
+        )
+        .current_dir(root)
+        .arg(&script)
+        .arg(module_id)
+        .arg("--catalog-installed")
+        .arg("--skip-tests")
+        .arg("--workspace")
+        .arg(&validation_root)
+        .output()
+        .context("failed to run staged Business OS catalog app validation")?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        anyhow::bail!(
+            "staged catalog module validation failed: {}",
             if stderr.is_empty() { stdout } else { stderr }
         )
     })();
@@ -17842,6 +18025,12 @@ pub fn complete_business_command_from_queue_reply(
             Some(reply_text),
         )?
     } else if is_systematic_research_command(&command) {
+        promote_systematic_research_workspace_outputs(
+            root,
+            &command_id,
+            &command,
+            queue_task.as_ref(),
+        )?;
         process_systematic_research_command(
             root,
             &conn,
@@ -20530,8 +20719,8 @@ fn business_command_core_claim(
 ) -> anyhow::Result<channels::BusinessCommandClaimRequest> {
     let intent = serde_json::json!({
         "command_id": command_id,
-        "module": command.module,
-        "command_type": command.command_type,
+        "module": command.module.clone(),
+        "command_type": command.command_type.clone(),
         "record_id": command.record_id,
         "payload": command.payload,
         "client_context": policy_audit_client_context(command),
@@ -20563,6 +20752,7 @@ fn is_rxdb_control_command_type(command_type: &str) -> bool {
     exact_types.contains(command_type)
         || crate::coding_agents::is_coding_agent_command(command_type)
         || is_customers_active_command(command_type)
+        || super::external_sql_sync::is_external_sql_command(command_type)
         || is_outbound_active_command(command_type)
         || is_iot_active_command(command_type)
         || is_ats_active_command(command_type)
@@ -28754,9 +28944,8 @@ fn verified_capability_claims(
     }
     let secret = capability_signing_secret(root).ok()?;
     let claims = super::capability::verify_capability_token(&secret, token, now_ms() as i64)?;
-    let conn = open_store(root).ok()?;
-    let (role, epoch): (String, i64) = conn
-        .query_row(
+    let (role, epoch): (String, i64) = with_store_connection(root, |conn| {
+        conn.query_row(
             "SELECT role, capability_epoch
              FROM business_users
              WHERE user_id = ?1 AND active = 1",
@@ -28764,7 +28953,9 @@ fn verified_capability_claims(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
-        .ok()??;
+        .map_err(Into::into)
+    })
+    .ok()??;
     if normalize_business_role(&role) != normalize_business_role(&claims.role)
         || epoch != claims.actor_epoch
     {
@@ -28784,12 +28975,11 @@ pub(super) fn capability_allows_collection_permission(
     };
     let actor = BusinessOsActor::new(Some(claims.user_id), claims.role);
     let scope = BusinessOsScope::collection(collection.trim());
-    let Ok(conn) = open_store(root) else {
-        return false;
-    };
-    evaluate_policy_with_explicit_grants(&conn, &actor, permission, &scope)
-        .map(|decision| decision.allowed)
-        .unwrap_or(false)
+    with_store_connection(root, |conn| {
+        evaluate_policy_with_explicit_grants(conn, &actor, permission, &scope)
+    })
+    .map(|decision| decision.allowed)
+    .unwrap_or(false)
 }
 
 /// Preserve the pre-hardening ordinary-data behavior by materializing it as
@@ -28799,10 +28989,11 @@ pub(super) fn ensure_legacy_collection_grants(
     root: &Path,
     collections: &[String],
 ) -> anyhow::Result<()> {
-    // Resolving external projection ownership loads module manifests and hashes
-    // their assets. Do that once, before taking the SQLite write transaction.
+    // Loading local module mappings may hash app assets. Resolve ownership
+    // once before opening the SQLite write transaction to avoid startup lock
+    // contention during capability issuance.
     let server_owned_collections =
-        super::external_sql_sync::server_owned_projection_collections(root);
+        super::external_sql_sync::server_owned_projection_collections(root)?;
     let mut conn = open_store(root)?;
     let tx = conn.transaction()?;
     let now = now_ms() as i64;
@@ -28814,15 +29005,28 @@ pub(super) fn ensure_legacy_collection_grants(
         {
             continue;
         }
+        let server_owned_write = super::threads::is_threads_owned_collection(collection)
+            || server_owned_collections.contains(collection);
+        if server_owned_write {
+            tx.execute(
+                "UPDATE business_permission_grants
+                 SET active=0,
+                     reason='Server-owned collection is read-only for browser sync',
+                     updated_at_ms=?1
+                 WHERE active=1
+                   AND permission=?2
+                   AND scope_type='collection'
+                   AND scope_id=?3
+                   AND created_by='business-os-policy-migration'",
+                params![now, BusinessOsPermission::DataWrite.as_str(), collection],
+            )?;
+        }
         for role in ["founder", "user"] {
             for permission in [
                 BusinessOsPermission::DataRead,
                 BusinessOsPermission::DataWrite,
             ] {
-                if permission == BusinessOsPermission::DataWrite
-                    && (super::threads::is_threads_owned_collection(collection)
-                        || server_owned_collections.contains(collection))
-                {
+                if permission == BusinessOsPermission::DataWrite && server_owned_write {
                     continue;
                 }
                 let grant_id = format!(
@@ -31619,8 +31823,11 @@ fn process_documents_report_command(
     queue_task: Option<&channels::QueueTaskView>,
     reply_text: Option<&str>,
 ) -> anyhow::Result<CommandAccepted> {
-    ensure_generated_docx_exists(root, command)?;
-    match writeback_generated_docx(root, conn, command_id, command, reply_text) {
+    let writeback = (|| {
+        let lineage = document_report_lineage(root, command)?;
+        writeback_generated_docx(root, conn, command_id, command, reply_text, &lineage)
+    })();
+    match writeback {
         Ok(result) => {
             let completed_at_ms = now_ms() as i64;
             conn.execute(
@@ -31669,7 +31876,7 @@ fn process_documents_report_command(
         Err(err) => {
             let failed_at_ms = now_ms() as i64;
             conn.execute(
-                "UPDATE business_commands SET status = 'accepted', observed_at_ms = ?2 WHERE command_id = ?1",
+                "UPDATE business_commands SET status = 'failed', observed_at_ms = ?2 WHERE command_id = ?1",
                 params![command_id, failed_at_ms],
             )?;
             upsert_business_record(
@@ -31683,10 +31890,10 @@ fn process_documents_report_command(
                     "module": command.module.clone(),
                     "command_type": command.command_type.clone(),
                     "record_id": command.record_id.clone().unwrap_or_default(),
-                    "status": "accepted",
+                    "status": "failed",
                     "inbound_channel": command_inbound_channel(command),
                     "task_id": queue_task.map(|task| task.message_key.clone()),
-                    "task_status": queue_task.map(|task| normalize_queue_status(&task.route_status)),
+                    "task_status": "failed",
                     "error": err.to_string(),
                     "payload": command.payload.clone(),
                     "client_context": command.client_context.clone(),
@@ -31716,6 +31923,21 @@ fn process_systematic_research_command(
     reply_text: &str,
 ) -> anyhow::Result<CommandAccepted> {
     let completed_at_ms = now_ms() as i64;
+    let evidence = match systematic_research_evidence_snapshot(root, command_id, command) {
+        Ok(evidence) => evidence,
+        Err(error) => {
+            persist_systematic_research_failure(
+                root,
+                conn,
+                command_id,
+                command,
+                queue_task,
+                &error,
+                completed_at_ms,
+            )?;
+            return Err(error);
+        }
+    };
     conn.execute(
         "UPDATE business_commands SET status = 'accepted', observed_at_ms = ?2 WHERE command_id = ?1",
         params![command_id, completed_at_ms],
@@ -31750,6 +31972,12 @@ fn process_systematic_research_command(
         "knowledge_domain": knowledge_domain.clone(),
         "task_id": task_id.clone(),
         "task_queue_id": task_queue_id.clone(),
+        "identified_count": evidence.identified_count,
+        "accepted_count": evidence.accepted_count,
+        "used_count": evidence.used_count,
+        "source_receipt_links": evidence.source_receipt_links,
+        "source_receipt_snapshot_hashes": evidence.source_receipt_snapshot_hashes,
+        "knowledge_version": evidence.knowledge_version,
         "completed_at_ms": completed_at_ms
     });
     let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
@@ -31835,6 +32063,15 @@ fn process_systematic_research_command(
             );
         }
         object.insert("updated_at_ms".to_string(), Value::from(completed_at_ms));
+        object.insert(
+            "identified_count".to_string(),
+            Value::from(evidence.identified_count),
+        );
+        object.insert(
+            "accepted_count".to_string(),
+            Value::from(evidence.accepted_count),
+        );
+        object.insert("used_count".to_string(), Value::from(evidence.used_count));
         let payload = object
             .entry("payload".to_string())
             .or_insert_with(|| serde_json::json!({}));
@@ -32933,7 +33170,7 @@ fn commit_office_spreadsheet_version(
     );
     spreadsheet_object.insert("updated_at_ms".into(), Value::from(now));
     let diagnostics = [prepared.diagnostics.clone(), package.diagnostics.clone()].concat();
-    let version_payload = serde_json::json!({
+    let mut version_payload = serde_json::json!({
         "id": version_id, "version_id": version_id, "spreadsheet_id": spreadsheet_id,
         "version": version_number, "source_kind": "office_edited_xlsx", "blob_id": blob_id,
         "base_version_id": base_version_id, "editor_blob_id": staged_editor_blob_id,
@@ -32949,6 +33186,19 @@ fn commit_office_spreadsheet_version(
         },
         "business_command_id": command.id, "created_at_ms": now, "updated_at_ms": now
     });
+    if let Some(version_object) = version_payload.as_object_mut() {
+        for key in [
+            "ingestion_kind",
+            "linked_records",
+            "source_receipt_snapshot_hashes",
+            "knowledge_version",
+            "knowledge_lineage",
+        ] {
+            if let Some(value) = base_version.get(key).or_else(|| record.get(key)) {
+                version_object.insert(key.to_string(), value.clone());
+            }
+        }
+    }
 
     let tx = conn.unchecked_transaction()?;
     let stored: Option<String> = tx
@@ -33077,6 +33327,725 @@ struct DocumentsWritebackResult {
     chunks: usize,
     path: String,
     index_text_chars: usize,
+    source_receipt_snapshot_hashes: Vec<String>,
+    knowledge_version: Value,
+}
+
+#[derive(Debug, Clone)]
+struct DocumentsReportLineage {
+    linked_records: Vec<Value>,
+    source_receipt_snapshot_hashes: Vec<String>,
+    knowledge_version: Value,
+}
+
+#[derive(Debug, Clone)]
+struct SystematicResearchEvidence {
+    identified_count: i64,
+    accepted_count: i64,
+    used_count: i64,
+    source_receipt_links: Vec<Value>,
+    source_receipt_snapshot_hashes: Vec<String>,
+    knowledge_version: Value,
+}
+
+#[derive(Debug, Clone)]
+struct SystematicResearchCsvOutput {
+    file_name: &'static str,
+    table_key: &'static str,
+    title: &'static str,
+    require_manifest_evidence: bool,
+    require_manifest_claim: bool,
+}
+
+type ValidatedResearchClaim = (String, String, String, String, String, String);
+
+fn promote_systematic_research_workspace_outputs(
+    root: &Path,
+    command_id: &str,
+    command: &BusinessCommand,
+    queue_task: Option<&channels::QueueTaskView>,
+) -> anyhow::Result<usize> {
+    let workspace = queue_task
+        .and_then(|task| task.workspace_root.as_deref())
+        .map(Path::new)
+        .context("systematic research writeback requires the leased task workspace")?
+        .canonicalize()
+        .context("canonicalize systematic research task workspace")?;
+    let domain = first_string_field(&command.payload, &["knowledge_domain", "domain"])
+        .or_else(|| first_string_field(&command.client_context, &["knowledge_domain", "domain"]))
+        .context("systematic research writeback requires a Knowledge domain")?;
+    let run_id = first_string_field(&command.payload, &["research_run_id", "run_id"])
+        .or_else(|| first_string_field(&command.client_context, &["research_run_id", "run_id"]))
+        .context("systematic research writeback requires an immutable research_run_id")?;
+
+    let validation_receipt_path = workspace
+        .join(".ctox")
+        .join("systematic-research-validation.json");
+    let validation_receipt: Value =
+        serde_json::from_slice(&fs::read(&validation_receipt_path).with_context(|| {
+            format!(
+                "read systematic research validation receipt {}",
+                validation_receipt_path.display()
+            )
+        })?)
+        .context("parse systematic research validation receipt")?;
+    anyhow::ensure!(
+        validation_receipt
+            .get("schema_version")
+            .and_then(Value::as_str)
+            == Some("ctox.systematic-research.validation.v1")
+            && validation_receipt.get("status").and_then(Value::as_str) == Some("pass"),
+        "systematic research writeback requires a passing native validation receipt"
+    );
+    anyhow::ensure!(
+        validation_receipt
+            .get("research_run_id")
+            .and_then(Value::as_str)
+            == Some(run_id.as_str())
+            && validation_receipt
+                .get("research_command_id")
+                .and_then(Value::as_str)
+                == Some(command_id),
+        "systematic research validation receipt is bound to another run or command"
+    );
+
+    let manifest_path = workspace.join("validation/evidence-manifest.json");
+    let manifest_bytes = fs::read(&manifest_path)
+        .with_context(|| format!("read evidence manifest {}", manifest_path.display()))?;
+    let manifest_sha256 = format!("{:x}", Sha256::digest(&manifest_bytes));
+    let manifest: Value =
+        serde_json::from_slice(&manifest_bytes).context("parse systematic research manifest")?;
+    anyhow::ensure!(
+        validation_receipt
+            .get("manifests")
+            .and_then(Value::as_array)
+            .is_some_and(|manifests| manifests.iter().any(|item| {
+                item.get("manifest_sha256").and_then(Value::as_str)
+                    == Some(manifest_sha256.as_str())
+            })),
+        "systematic research validation receipt does not cover the current evidence manifest"
+    );
+    anyhow::ensure!(
+        manifest.get("schema_version").and_then(Value::as_str) == Some("ctox.research.evidence.v2")
+            && manifest.get("research_run_id").and_then(Value::as_str) == Some(run_id.as_str())
+            && manifest.get("research_command_id").and_then(Value::as_str) == Some(command_id),
+        "systematic research manifest binding changed after validation"
+    );
+
+    let evidence = manifest
+        .get("evidence")
+        .and_then(Value::as_array)
+        .context("systematic research manifest has no evidence array")?;
+    let mut eligible_sources = HashMap::new();
+    let mut evidence_by_id = HashMap::new();
+    for item in evidence {
+        let evidence_id = first_string_field(item, &["evidence_id"])
+            .context("systematic research evidence is missing evidence_id")?;
+        let source_id = first_string_field(item, &["source_id"])
+            .context("systematic research evidence is missing source_id")?;
+        let snapshot_id = first_string_field(item, &["snapshot_id"])
+            .context("systematic research evidence is missing snapshot_id")?;
+        let canonical_url = first_string_field(item, &["canonical_url"])
+            .context("systematic research evidence is missing canonical_url")?;
+        let snapshot_hash = first_string_field(item, &["snapshot_sha256"])
+            .context("systematic research evidence is missing snapshot_sha256")?;
+        eligible_sources.insert(
+            source_id.clone(),
+            (canonical_url.clone(), snapshot_hash.clone()),
+        );
+        evidence_by_id.insert(
+            evidence_id,
+            (source_id, snapshot_id, canonical_url, snapshot_hash),
+        );
+    }
+    anyhow::ensure!(
+        !eligible_sources.is_empty(),
+        "systematic research writeback requires eligible manifest evidence"
+    );
+    let claims = manifest
+        .get("claims")
+        .and_then(Value::as_array)
+        .context("systematic research manifest has no claims array")?;
+    let mut validated_claims: HashMap<String, ValidatedResearchClaim> = HashMap::new();
+    for claim in claims {
+        let claim_id = first_string_field(claim, &["claim_id"])
+            .context("systematic research claim is missing claim_id")?;
+        let evidence_id = first_string_field(claim, &["evidence_id"])
+            .context("systematic research claim is missing evidence_id")?;
+        let source_id = first_string_field(claim, &["source_id"])
+            .context("systematic research claim is missing source_id")?;
+        let snapshot_id = first_string_field(claim, &["snapshot_id"])
+            .context("systematic research claim is missing snapshot_id")?;
+        let canonical_url = first_string_field(claim, &["canonical_url"])
+            .context("systematic research claim is missing canonical_url")?;
+        let quote = first_string_field(claim, &["evidence_quote"])
+            .context("systematic research claim is missing evidence_quote")?;
+        let (expected_source_id, expected_snapshot_id, expected_url, snapshot_hash) =
+            evidence_by_id.get(&evidence_id).with_context(|| {
+                format!(
+                    "systematic research claim {claim_id} references unknown evidence {evidence_id}"
+                )
+            })?;
+        anyhow::ensure!(
+            source_id == *expected_source_id
+                && snapshot_id == *expected_snapshot_id
+                && canonical_url == *expected_url,
+            "systematic research claim {claim_id} does not match its evidence lineage"
+        );
+        validated_claims.insert(
+            claim_id,
+            (
+                evidence_id,
+                source_id,
+                snapshot_id,
+                canonical_url,
+                snapshot_hash.clone(),
+                quote,
+            ),
+        );
+    }
+    anyhow::ensure!(
+        !validated_claims.is_empty(),
+        "systematic research writeback requires validated manifest claims"
+    );
+
+    let mut outputs = vec![
+        SystematicResearchCsvOutput {
+            file_name: "source_candidates.csv",
+            table_key: "source_candidates",
+            title: "Discovery Candidates",
+            require_manifest_evidence: false,
+            require_manifest_claim: false,
+        },
+        SystematicResearchCsvOutput {
+            file_name: "evidence_points.csv",
+            table_key: "evidence_points",
+            title: "Evidence Points",
+            require_manifest_evidence: false,
+            require_manifest_claim: true,
+        },
+        SystematicResearchCsvOutput {
+            file_name: "evaluation_matrix.csv",
+            table_key: "evaluation_matrix",
+            title: "Evaluation Matrix",
+            require_manifest_evidence: false,
+            require_manifest_claim: false,
+        },
+        SystematicResearchCsvOutput {
+            file_name: "semantic_graph_nodes.csv",
+            table_key: "semantic_graph_nodes",
+            title: "Semantic Graph Nodes",
+            require_manifest_evidence: false,
+            require_manifest_claim: false,
+        },
+        SystematicResearchCsvOutput {
+            file_name: "semantic_graph_edges.csv",
+            table_key: "semantic_graph_edges",
+            title: "Semantic Graph Edges",
+            require_manifest_evidence: false,
+            require_manifest_claim: false,
+        },
+    ];
+    let requested_dashboard_tables = command
+        .payload
+        .pointer("/writeback_contract/dashboard_tables")
+        .and_then(Value::as_object);
+    if requested_dashboard_tables.is_some_and(|tables| tables.contains_key("measured_load_points"))
+    {
+        outputs.push(SystematicResearchCsvOutput {
+            file_name: "measured_load_points.csv",
+            table_key: "measured_load_points",
+            title: "Measured Load Points",
+            require_manifest_evidence: true,
+            require_manifest_claim: false,
+        });
+    }
+    if requested_dashboard_tables.is_some_and(|tables| tables.contains_key("derived_bearing_loads"))
+    {
+        outputs.push(SystematicResearchCsvOutput {
+            file_name: "derived_bearing_loads.csv",
+            table_key: "derived_bearing_loads",
+            title: "Derived Bearing Loads",
+            require_manifest_evidence: true,
+            require_manifest_claim: true,
+        });
+    }
+    // Promote the verified source registry last. It is the app-facing
+    // evidence gate for every dependent table above.
+    outputs.push(SystematicResearchCsvOutput {
+        file_name: "source_catalog.csv",
+        table_key: "source_catalog",
+        title: "Verified Source Catalog",
+        require_manifest_evidence: true,
+        require_manifest_claim: false,
+    });
+
+    let output_root = workspace.join("dashboard/knowledge");
+    let mut validated = Vec::with_capacity(outputs.len());
+    for output in &outputs {
+        let path = output_root
+            .join(output.file_name)
+            .canonicalize()
+            .with_context(|| format!("canonicalize research output {}", output.file_name))?;
+        anyhow::ensure!(
+            path.starts_with(&workspace),
+            "systematic research output escapes the task workspace: {}",
+            path.display()
+        );
+        let rows = validate_systematic_research_csv(
+            &path,
+            output,
+            &run_id,
+            command_id,
+            &eligible_sources,
+            &validated_claims,
+        )?;
+        validated.push((output, path, rows));
+    }
+
+    for (output, path, expected_rows) in validated {
+        let describe_args = vec![
+            "data".to_string(),
+            "describe".to_string(),
+            "--domain".to_string(),
+            domain.clone(),
+            "--key".to_string(),
+            output.table_key.to_string(),
+        ];
+        if crate::knowledge::dispatch_capturing(root, &describe_args).is_err() {
+            let create_args = vec![
+                "data".to_string(),
+                "create".to_string(),
+                "--domain".to_string(),
+                domain.clone(),
+                "--key".to_string(),
+                output.table_key.to_string(),
+                "--source-system".to_string(),
+                "systematic-research".to_string(),
+                "--title".to_string(),
+                output.title.to_string(),
+                "--description".to_string(),
+                format!("Validated systematic research output for {domain}; run {run_id}"),
+            ];
+            crate::knowledge::dispatch_capturing(root, &create_args)
+                .with_context(|| format!("create Knowledge table {domain}/{}", output.table_key))?;
+        }
+        let import_args = vec![
+            "data".to_string(),
+            "import".to_string(),
+            "--domain".to_string(),
+            domain.clone(),
+            "--key".to_string(),
+            output.table_key.to_string(),
+            "--from-file".to_string(),
+            path.display().to_string(),
+            "--mode".to_string(),
+            "replace".to_string(),
+        ];
+        let imported = crate::knowledge::dispatch_capturing(root, &import_args)
+            .with_context(|| format!("import Knowledge table {domain}/{}", output.table_key))?;
+        anyhow::ensure!(
+            imported.get("ok").and_then(Value::as_bool) == Some(true)
+                && imported.get("row_count").and_then(Value::as_i64) == Some(expected_rows as i64),
+            "Knowledge import row-count mismatch for {domain}/{}: expected {expected_rows}, got {}",
+            output.table_key,
+            imported
+        );
+    }
+
+    let projected = super::sync_knowledge_tables(root)
+        .context("project validated systematic research Knowledge over RxDB")?;
+    Ok(projected)
+}
+
+fn validate_systematic_research_csv(
+    path: &Path,
+    output: &SystematicResearchCsvOutput,
+    run_id: &str,
+    command_id: &str,
+    eligible_sources: &HashMap<String, (String, String)>,
+    validated_claims: &HashMap<String, ValidatedResearchClaim>,
+) -> anyhow::Result<usize> {
+    fn record_value<'a>(
+        record: &'a csv::StringRecord,
+        headers: &csv::StringRecord,
+        field: &str,
+    ) -> Option<&'a str> {
+        let index = headers.iter().position(|header| header == field)?;
+        record.get(index).map(str::trim)
+    }
+    fn normalized_hash(value: &str) -> &str {
+        value.trim().strip_prefix("sha256:").unwrap_or(value.trim())
+    }
+
+    let mut reader = csv::ReaderBuilder::new()
+        .flexible(false)
+        .from_path(path)
+        .with_context(|| format!("open systematic research CSV {}", path.display()))?;
+    let headers = reader
+        .headers()
+        .with_context(|| format!("read systematic research CSV header {}", path.display()))?
+        .clone();
+    for field in ["research_run_id", "research_command_id"] {
+        anyhow::ensure!(
+            headers.iter().any(|header| header == field),
+            "{} is missing required column {field}",
+            output.file_name
+        );
+    }
+    if output.require_manifest_evidence {
+        for field in ["source_id", "canonical_url", "snapshot_hash"] {
+            anyhow::ensure!(
+                headers.iter().any(|header| header == field),
+                "{} is missing required column {field}",
+                output.file_name
+            );
+        }
+    }
+    if output.require_manifest_claim {
+        for field in [
+            "claim_id",
+            "evidence_id",
+            "source_id",
+            "snapshot_id",
+            "canonical_url",
+            "snapshot_hash",
+            "quote",
+        ] {
+            anyhow::ensure!(
+                headers.iter().any(|header| header == field),
+                "{} is missing required column {field}",
+                output.file_name
+            );
+        }
+    }
+
+    let mut rows = 0usize;
+    for result in reader.records() {
+        let record =
+            result.with_context(|| format!("parse systematic research CSV {}", path.display()))?;
+        rows += 1;
+        anyhow::ensure!(
+            record_value(&record, &headers, "research_run_id") == Some(run_id)
+                && record_value(&record, &headers, "research_command_id") == Some(command_id),
+            "{} row {rows} is bound to another research run or command",
+            output.file_name
+        );
+        if output.require_manifest_evidence {
+            let source_id = record_value(&record, &headers, "source_id")
+                .filter(|value| !value.is_empty())
+                .with_context(|| format!("{} row {rows} has no source_id", output.file_name))?;
+            let (canonical_url, snapshot_hash) =
+                eligible_sources.get(source_id).with_context(|| {
+                    format!(
+                    "{} row {rows} source {source_id} is absent from validated manifest evidence",
+                    output.file_name
+                )
+                })?;
+            anyhow::ensure!(
+                record_value(&record, &headers, "canonical_url") == Some(canonical_url.as_str())
+                    && record_value(&record, &headers, "snapshot_hash").is_some_and(|value| {
+                        normalized_hash(value).eq_ignore_ascii_case(normalized_hash(snapshot_hash))
+                    }),
+                "{} row {rows} does not match validated evidence for source {source_id}",
+                output.file_name
+            );
+        }
+        if output.require_manifest_claim {
+            let claim_id = record_value(&record, &headers, "claim_id")
+                .filter(|value| !value.is_empty())
+                .with_context(|| format!("{} row {rows} has no claim_id", output.file_name))?;
+            let (evidence_id, source_id, snapshot_id, canonical_url, snapshot_hash, quote) =
+                validated_claims.get(claim_id).with_context(|| {
+                    format!(
+                        "{} row {rows} claim {claim_id} is absent from validated manifest claims",
+                        output.file_name
+                    )
+                })?;
+            anyhow::ensure!(
+                record_value(&record, &headers, "evidence_id") == Some(evidence_id.as_str())
+                    && record_value(&record, &headers, "source_id") == Some(source_id.as_str())
+                    && record_value(&record, &headers, "snapshot_id") == Some(snapshot_id.as_str())
+                    && record_value(&record, &headers, "canonical_url")
+                        == Some(canonical_url.as_str())
+                    && record_value(&record, &headers, "snapshot_hash").is_some_and(|value| {
+                        normalized_hash(value).eq_ignore_ascii_case(normalized_hash(snapshot_hash))
+                    })
+                    && record_value(&record, &headers, "quote") == Some(quote.as_str()),
+                "{} row {rows} does not match validated lineage for claim {claim_id}",
+                output.file_name
+            );
+        }
+    }
+    anyhow::ensure!(
+        rows > 0,
+        "systematic research output {} is empty",
+        output.file_name
+    );
+    Ok(rows)
+}
+
+fn systematic_research_evidence_snapshot(
+    root: &Path,
+    command_id: &str,
+    command: &BusinessCommand,
+) -> anyhow::Result<SystematicResearchEvidence> {
+    let domain = first_string_field(&command.payload, &["knowledge_domain", "domain"])
+        .or_else(|| first_string_field(&command.client_context, &["knowledge_domain", "domain"]))
+        .context("systematic research completion requires a Knowledge domain")?;
+    let run_id = first_string_field(&command.payload, &["research_run_id", "run_id"])
+        .or_else(|| first_string_field(&command.client_context, &["research_run_id", "run_id"]))
+        .context("systematic research completion requires an immutable research_run_id")?;
+    let path = rxdb_store_path(root);
+    anyhow::ensure!(
+        path.is_file(),
+        "systematic research completion requires the RxDB store"
+    );
+    let conn = Connection::open(&path)?;
+    let table = rxdb_collection_table_name(&path, &conn, "knowledge_tables")
+        .context("systematic research completion requires Knowledge tables")?;
+    let mut statement = conn.prepare(&format!("SELECT data FROM {table}"))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    let mut domain_tables = Vec::new();
+    for raw in rows {
+        let document: Value = serde_json::from_str(&raw?)?;
+        let source = document
+            .get("payload")
+            .filter(|value| value.is_object())
+            .unwrap_or(&document);
+        if first_string_field(source, &["domain", "knowledge_domain"]).as_deref()
+            == Some(domain.as_str())
+        {
+            domain_tables.push(document);
+        }
+    }
+    anyhow::ensure!(
+        !domain_tables.is_empty(),
+        "systematic research completion requires authoritative Knowledge tables for {domain}"
+    );
+    domain_tables.sort_by_key(|document| {
+        first_string_field(document, &["id", "table_id"]).unwrap_or_default()
+    });
+
+    let mut identified_count = 0_i64;
+    let mut source_receipt_links = Vec::new();
+    let mut snapshot_hashes = Vec::new();
+    let mut run_manifest = Vec::new();
+    for document in &domain_tables {
+        let source = document
+            .get("payload")
+            .filter(|value| value.is_object())
+            .unwrap_or(document);
+        let table_key = first_string_field(source, &["table_key"]).unwrap_or_default();
+        let table_id = first_string_field(source, &["id", "table_id"])
+            .or_else(|| first_string_field(document, &["id", "table_id"]))
+            .unwrap_or_default();
+        let run_rows = document_knowledge_table_rows(document)
+            .into_iter()
+            .filter(|row| {
+                first_string_field(row, &["research_run_id", "run_id"]).as_deref()
+                    == Some(run_id.as_str())
+                    && first_string_field(row, &["research_command_id", "command_id"]).as_deref()
+                        == Some(command_id)
+            })
+            .collect::<Vec<_>>();
+        if run_rows.is_empty() {
+            continue;
+        }
+        run_manifest.push(serde_json::json!({
+            "table_id": table_id,
+            "table_key": table_key,
+            "rows": run_rows,
+        }));
+        if table_key != "source_catalog" {
+            continue;
+        }
+        for receipt in run_manifest
+            .last()
+            .and_then(|entry| entry.get("rows"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
+            identified_count += 1;
+            if !document_source_receipt_is_eligible(&receipt)
+                || !document_source_receipt_snapshot_matches(root, &receipt)?
+            {
+                continue;
+            }
+            let source_id = first_string_field(&receipt, &["source_id"])
+                .context("eligible source receipt is missing source_id")?;
+            let snapshot_hash = first_string_field(&receipt, &["snapshot_hash"])
+                .context("eligible source receipt is missing snapshot_hash")?;
+            source_receipt_links.push(serde_json::json!({
+                "kind": "source_receipt",
+                "id": source_id,
+                "source_id": source_id,
+                "evidence_id": first_string_field(&receipt, &["evidence_id"]),
+                "claim_id": first_string_field(&receipt, &["claim_id"]),
+                "snapshot_id": first_string_field(&receipt, &["snapshot_id"]),
+                "snapshot_hash": snapshot_hash,
+                "table_id": table_id,
+                "research_run_id": run_id,
+                "research_command_id": command_id,
+            }));
+            if !snapshot_hashes.contains(&snapshot_hash) {
+                snapshot_hashes.push(snapshot_hash);
+            }
+        }
+    }
+    anyhow::ensure!(
+        !source_receipt_links.is_empty(),
+        "systematic research completion requires at least one persisted, eligible source receipt"
+    );
+    let table_ids = run_manifest
+        .iter()
+        .filter_map(|entry| first_string_field(entry, &["table_id"]))
+        .collect::<Vec<_>>();
+    let version_bytes = serde_json::to_vec(&run_manifest)?;
+    let content_hash = format!("sha256:{}", hex_sha256(&version_bytes));
+    let knowledge_version = serde_json::json!({
+        "version_id": content_hash,
+        "content_hash": content_hash,
+        "domain": domain,
+        "research_run_id": run_id,
+        "research_command_id": command_id,
+        "table_ids": table_ids,
+    });
+    let accepted_count = source_receipt_links.len() as i64;
+    Ok(SystematicResearchEvidence {
+        identified_count,
+        accepted_count,
+        used_count: accepted_count,
+        source_receipt_links,
+        source_receipt_snapshot_hashes: snapshot_hashes,
+        knowledge_version,
+    })
+}
+
+fn persist_systematic_research_failure(
+    root: &Path,
+    conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+    queue_task: Option<&channels::QueueTaskView>,
+    error: &anyhow::Error,
+    failed_at_ms: i64,
+) -> anyhow::Result<()> {
+    conn.execute(
+        "UPDATE business_commands SET status = 'failed', observed_at_ms = ?2 WHERE command_id = ?1",
+        params![command_id, failed_at_ms],
+    )?;
+    let payload = serde_json::json!({
+        "id": command_id,
+        "command_id": command_id,
+        "module": command.module,
+        "command_type": command.command_type,
+        "record_id": command.record_id.clone().unwrap_or_default(),
+        "status": "failed",
+        "task_id": queue_task.map(|task| task.message_key.clone()),
+        "task_status": "failed",
+        "error": error.to_string(),
+        "payload": command.payload.clone(),
+        "client_context": command.client_context.clone(),
+        "updated_at_ms": failed_at_ms,
+    });
+    upsert_business_record(
+        conn,
+        "business_commands",
+        command_id,
+        failed_at_ms,
+        payload.clone(),
+    )?;
+    let mut writers = RxdbProjectionWriterCache::new(root);
+    upsert_rxdb_collection_record_cached(
+        root,
+        Some(&mut writers),
+        "business_commands",
+        command_id,
+        failed_at_ms,
+        payload,
+    )?;
+    let task_id = command
+        .record_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| first_string_field(&command.payload, &["task_id", "research_task_id"]))
+        .unwrap_or_default();
+    if !task_id.is_empty() {
+        if let Some(mut task) = load_rxdb_collection_record(root, "research_tasks", &task_id)? {
+            if let Some(object) = task.as_object_mut() {
+                object.insert("status".to_string(), Value::String("failed".to_string()));
+                object.insert("updated_at_ms".to_string(), Value::from(failed_at_ms));
+                let task_payload = object
+                    .entry("payload".to_string())
+                    .or_insert_with(|| serde_json::json!({}));
+                if let Some(payload_object) = task_payload.as_object_mut() {
+                    payload_object.insert(
+                        "last_error".to_string(),
+                        serde_json::json!({
+                            "command_id": command_id,
+                            "message": error.to_string(),
+                            "failed_at_ms": failed_at_ms,
+                        }),
+                    );
+                }
+            }
+            upsert_business_record(conn, "research_tasks", &task_id, failed_at_ms, task.clone())?;
+            upsert_rxdb_collection_record_cached(
+                root,
+                Some(&mut writers),
+                "research_tasks",
+                &task_id,
+                failed_at_ms,
+                task,
+            )?;
+        }
+    }
+    if let Some((run_id, mut run)) = find_rxdb_collection_record_by_string_field(
+        root,
+        "research_runs",
+        "command_id",
+        command_id,
+    )? {
+        if let Some(object) = run.as_object_mut() {
+            object.insert("status".to_string(), Value::String("failed".to_string()));
+            object.insert("updated_at_ms".to_string(), Value::from(failed_at_ms));
+            let run_payload = object
+                .entry("payload".to_string())
+                .or_insert_with(|| serde_json::json!({}));
+            if let Some(payload_object) = run_payload.as_object_mut() {
+                payload_object.insert(
+                    "error".to_string(),
+                    serde_json::json!({
+                        "command_id": command_id,
+                        "message": error.to_string(),
+                        "failed_at_ms": failed_at_ms,
+                    }),
+                );
+            }
+        }
+        upsert_business_record(conn, "research_runs", &run_id, failed_at_ms, run.clone())?;
+        upsert_rxdb_collection_record_cached(
+            root,
+            Some(&mut writers),
+            "research_runs",
+            &run_id,
+            failed_at_ms,
+            run,
+        )?;
+    }
+    refresh_queue_task_projection(
+        root,
+        conn,
+        Some(&mut writers),
+        command_id,
+        command,
+        queue_task,
+        failed_at_ms,
+    )
 }
 
 fn document_knowledge_context(command: &BusinessCommand) -> Value {
@@ -33096,6 +34065,14 @@ fn document_knowledge_context(command: &BusinessCommand) -> Value {
 }
 
 fn document_linked_records(command: &BusinessCommand) -> Vec<Value> {
+    if let Some(linked_records) = command
+        .payload
+        .get("writeback_contract")
+        .and_then(|value| value.get("linked_records"))
+        .and_then(Value::as_array)
+    {
+        return linked_records.clone();
+    }
     let context = document_knowledge_context(command);
     let Some(context_object) = context.as_object() else {
         return Vec::new();
@@ -33123,12 +34100,507 @@ fn document_linked_records(command: &BusinessCommand) -> Vec<Value> {
     })]
 }
 
+fn document_report_is_research(command: &BusinessCommand) -> bool {
+    if command.command_type == "research.systematic.report.create"
+        || command
+            .payload
+            .get("research_mode")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        return true;
+    }
+    if command
+        .payload
+        .get("required_skills")
+        .and_then(Value::as_array)
+        .is_some_and(|skills| {
+            skills.iter().any(|skill| {
+                skill
+                    .as_str()
+                    .is_some_and(|value| value.trim() == "systematic-research")
+            })
+        })
+    {
+        return true;
+    }
+    document_linked_records(command).iter().any(|record| {
+        let kind = first_string_field(record, &["kind", "type", "record_type", "role"])
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        kind == "research_task"
+            || kind == "knowledge_domain"
+            || kind.contains("source_receipt")
+            || kind.contains("source-receipt")
+    })
+}
+
+fn document_source_receipt_links(
+    command: &BusinessCommand,
+    linked_records: &[Value],
+) -> Vec<Value> {
+    let mut links = linked_records
+        .iter()
+        .filter(|record| {
+            let kind = first_string_field(record, &["kind", "type", "record_type", "role"])
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let collection = first_string_field(record, &["collection", "table_collection"])
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            kind.contains("source_receipt")
+                || kind.contains("source-receipt")
+                || collection == "source_receipts"
+                || (collection == "knowledge_tables"
+                    && document_source_receipt_snapshot_hash(record).is_some())
+                || (kind == "source" && document_source_receipt_snapshot_hash(record).is_some())
+                || (kind.contains("evidence") && !kind.contains("knowledge"))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if links.is_empty() {
+        for key in ["source_receipt_links", "source_receipts"] {
+            if let Some(receipts) = command.payload.get(key).and_then(Value::as_array) {
+                links.extend(receipts.iter().cloned());
+            }
+        }
+        if links.is_empty() {
+            let source_ids = command
+                .payload
+                .get("source_ids")
+                .and_then(Value::as_array)
+                .or_else(|| {
+                    command
+                        .payload
+                        .pointer("/graph_focus/source_ids")
+                        .and_then(Value::as_array)
+                });
+            if let Some(source_ids) = source_ids {
+                links.extend(source_ids.iter().filter_map(|id| {
+                    id.as_str().map(|id| {
+                        serde_json::json!({
+                            "kind": "source_receipt",
+                            "id": id
+                        })
+                    })
+                }));
+            }
+        }
+    }
+    if links.is_empty() {
+        if let Some(source_references) = document_knowledge_context(command)
+            .get("source_references")
+            .and_then(Value::as_array)
+        {
+            links.extend(source_references.iter().cloned());
+        }
+    }
+    links
+}
+
+fn document_knowledge_version(
+    command: &BusinessCommand,
+    linked_records: &[Value],
+) -> Option<Value> {
+    for object in [&command.payload, &command.client_context] {
+        if let Some(value) = object.get("knowledge_version") {
+            if !value.is_null() {
+                return Some(value.clone());
+            }
+        }
+        if let Some(version_id) = object
+            .get("knowledge_version_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(serde_json::json!({ "version_id": version_id }));
+        }
+    }
+
+    let context = document_knowledge_context(command);
+    if let Some(object) = context.as_object() {
+        for key in ["knowledge_version", "version_id", "version"] {
+            if let Some(value) = object.get(key) {
+                if value.is_string() && value.as_str().is_some_and(|text| !text.trim().is_empty())
+                    || value.is_object()
+                {
+                    return Some(if key == "knowledge_version" {
+                        value.clone()
+                    } else {
+                        serde_json::json!({ key: value })
+                    });
+                }
+            }
+        }
+        if let (Some(id), Some(updated_at_ms)) = (
+            object.get("id").and_then(Value::as_str),
+            object.get("updated_at_ms").and_then(Value::as_i64),
+        ) {
+            if !id.trim().is_empty() && updated_at_ms > 0 {
+                let mut version = serde_json::Map::new();
+                version.insert("id".to_string(), Value::String(id.to_string()));
+                version.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+                for key in ["content_hash", "schema_hash"] {
+                    if let Some(value) = object.get(key).filter(|value| value.is_string()) {
+                        version.insert(key.to_string(), value.clone());
+                    }
+                }
+                return Some(Value::Object(version));
+            }
+        }
+    }
+
+    linked_records.iter().find_map(|record| {
+        let kind = first_string_field(record, &["kind", "type", "record_type"])
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if !(kind.contains("knowledge") || kind == "knowledge_domain") {
+            return None;
+        }
+        for key in ["knowledge_version", "version_id", "version"] {
+            if let Some(value) = record.get(key) {
+                if !value.is_null() {
+                    return Some(if key == "knowledge_version" {
+                        value.clone()
+                    } else {
+                        serde_json::json!({ key: value })
+                    });
+                }
+            }
+        }
+        record
+            .get("updated_at_ms")
+            .and_then(Value::as_i64)
+            .filter(|value| *value > 0)
+            .map(|updated_at_ms| {
+                serde_json::json!({
+                    "id": record.get("id").cloned().unwrap_or(Value::Null),
+                    "updated_at_ms": updated_at_ms
+                })
+            })
+    })
+}
+
+fn valid_document_receipt_snapshot_hash(value: &str) -> bool {
+    let Some(hex) = value.trim().strip_prefix("sha256:") else {
+        return false;
+    };
+    hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn document_source_receipt_reference(link: &Value) -> Option<String> {
+    first_string_field(
+        link,
+        &["source_id", "receipt_id", "evidence_id", "record_id", "id"],
+    )
+}
+
+fn document_source_receipt_snapshot_hash(link: &Value) -> Option<String> {
+    first_string_field(
+        link,
+        &[
+            "snapshot_hash",
+            "source_receipt_snapshot_hash",
+            "receipt_snapshot_hash",
+        ],
+    )
+}
+
+fn document_knowledge_table_rows(document: &Value) -> Vec<Value> {
+    [
+        document.get("rows"),
+        document.pointer("/payload/rows"),
+        document.get("records"),
+        document.pointer("/payload/records"),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(Value::as_array)
+    .cloned()
+    .unwrap_or_default()
+}
+
+fn document_source_receipt_row_matches(row: &Value, reference: &str) -> bool {
+    ["source_id", "receipt_id", "evidence_id", "id"]
+        .iter()
+        .filter_map(|key| row.get(*key).and_then(Value::as_str))
+        .any(|value| value == reference)
+}
+
+fn document_source_receipt_from_knowledge_tables(
+    root: &Path,
+    link: &Value,
+) -> anyhow::Result<Option<Value>> {
+    let Some(reference) = document_source_receipt_reference(link) else {
+        return Ok(None);
+    };
+    let table_reference = first_string_field(
+        link,
+        &[
+            "table_id",
+            "knowledge_table_id",
+            "table_record_id",
+            "table_ref",
+        ],
+    );
+    if let Some(table_id) = table_reference {
+        if let Some(document) = load_rxdb_collection_record(root, "knowledge_tables", &table_id)? {
+            if let Some(row) = document_knowledge_table_rows(&document)
+                .into_iter()
+                .find(|row| document_source_receipt_row_matches(row, &reference))
+            {
+                return Ok(Some(row));
+            }
+        }
+    }
+
+    let path = rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let conn = Connection::open(&path)?;
+    let Some(table) = rxdb_collection_table_name(&path, &conn, "knowledge_tables") else {
+        return Ok(None);
+    };
+    let mut statement = conn.prepare(&format!("SELECT data FROM {table}"))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    for raw in rows {
+        let document: Value = serde_json::from_str(&raw?)?;
+        if let Some(row) = document_knowledge_table_rows(&document)
+            .into_iter()
+            .find(|row| document_source_receipt_row_matches(row, &reference))
+        {
+            return Ok(Some(row));
+        }
+    }
+    Ok(None)
+}
+
+fn document_source_receipt_candidate(root: &Path, link: &Value) -> anyhow::Result<Option<Value>> {
+    // A writeback link is only a reference. Never treat its embedded fields as
+    // an authoritative receipt; the source row must come from Knowledge's
+    // projected tables so the report is bound to the stored snapshot.
+    document_source_receipt_from_knowledge_tables(root, link)
+}
+
+fn document_source_receipt_is_eligible(value: &Value) -> bool {
+    let snapshot_hash = value
+        .get("snapshot_hash")
+        .and_then(Value::as_str)
+        .is_some_and(valid_document_receipt_snapshot_hash);
+    let canonical_url = value
+        .get("canonical_url")
+        .and_then(Value::as_str)
+        .is_some_and(|url| {
+            if url != url.trim() {
+                return false;
+            }
+            Url::parse(url).is_ok_and(|parsed| {
+                matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some()
+            })
+        });
+    let source_tier = value
+        .get("source_tier")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let source_type = value
+        .get("source_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let status = [
+        "review_status",
+        "source_status",
+        "relevance_status",
+        "status",
+    ]
+    .iter()
+    .filter_map(|key| value.get(*key).and_then(Value::as_str))
+    .map(|status| status.trim().to_ascii_lowercase())
+    .collect::<Vec<_>>();
+    let has_identifier = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.trim().is_empty())
+    };
+    let url_role = value
+        .get("url_role")
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    let content_scope = value
+        .get("content_scope")
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    snapshot_hash
+        && value.get("evidence_eligible") == Some(&Value::Bool(true))
+        && value.get("verification_status").and_then(Value::as_str) == Some("verified")
+        && value.get("transport_verified") == Some(&Value::Bool(true))
+        && value.get("content_extracted") == Some(&Value::Bool(true))
+        && value.get("actual_full_text_or_data") == Some(&Value::Bool(true))
+        && value
+            .get("evidence_relevance_score")
+            .and_then(Value::as_i64)
+            .is_some_and(|score| score >= 8)
+        && value
+            .get("http_status")
+            .and_then(Value::as_i64)
+            .is_some_and(|status| (200..=299).contains(&status) && status != 204)
+        && canonical_url
+        && !source_tier.is_empty()
+        && !source_tier.contains("metadata")
+        && !source_tier.contains("aggregat")
+        && !source_type.contains("metadata")
+        && source_type != "aggregator"
+        && !value
+            .get("canonical_url")
+            .and_then(Value::as_str)
+            .is_some_and(document_metadata_canonical_url)
+        && !value
+            .get("metadata_only")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && !value
+            .get("evidence_rejection_reason")
+            .and_then(Value::as_str)
+            .is_some_and(|reason| !reason.trim().is_empty())
+        && has_identifier("source_id")
+        && (has_identifier("claim_id") || has_identifier("evidence_id"))
+        && has_identifier("snapshot_id")
+        && has_identifier("retrieved_at")
+        && matches!(
+            url_role.as_str(),
+            "original_content" | "original_data" | "publisher_full_text" | "dataset_archive"
+        )
+        && matches!(
+            content_scope.as_str(),
+            "full_text" | "original_data" | "full_dataset" | "dataset_archive"
+        )
+        && !status.iter().any(|status| {
+            matches!(
+                status.as_str(),
+                "rejected" | "off_topic" | "off-topic" | "irrelevant" | "fachfremd"
+            )
+        })
+}
+
+fn document_source_receipt_snapshot_matches(root: &Path, value: &Value) -> anyhow::Result<bool> {
+    let Some(raw_path) = first_string_field(
+        value,
+        &["snapshot_path", "archive_path", "local_snapshot_path"],
+    ) else {
+        return Ok(false);
+    };
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let candidate = path_from_output_value(&root, &raw_path);
+    let candidate = match candidate.canonicalize() {
+        Ok(path) if path.starts_with(&root) => path,
+        _ => return Ok(false),
+    };
+    let bytes = fs::read(candidate)?;
+    let expected = value
+        .get("snapshot_hash")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    Ok(expected == format!("sha256:{}", hex_sha256(&bytes)))
+}
+
+fn document_metadata_canonical_url(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    [
+        "https://doi.org/",
+        "http://doi.org/",
+        "https://api.crossref.org/",
+        "https://api.openalex.org/",
+        "https://api.semanticscholar.org/",
+        "https://www.semanticscholar.org/",
+        "https://scholar.google.",
+        "https://www.researchgate.net/",
+        "https://www.academia.edu/",
+    ]
+    .iter()
+    .any(|prefix| normalized.starts_with(prefix))
+}
+
+fn document_report_lineage(
+    root: &Path,
+    command: &BusinessCommand,
+) -> anyhow::Result<DocumentsReportLineage> {
+    let linked_records = document_linked_records(command);
+    if !document_report_is_research(command) {
+        return Ok(DocumentsReportLineage {
+            linked_records,
+            source_receipt_snapshot_hashes: Vec::new(),
+            knowledge_version: Value::Null,
+        });
+    }
+
+    let knowledge_version = document_knowledge_version(command, &linked_records)
+        .context("research DOCX writeback requires an exact Knowledge version")?;
+    let receipt_links = document_source_receipt_links(command, &linked_records);
+    anyhow::ensure!(
+        !receipt_links.is_empty(),
+        "research DOCX writeback requires requested source receipt links; refusing fallback completion"
+    );
+    let mut snapshot_hashes = Vec::new();
+    for link in receipt_links {
+        let candidate = document_source_receipt_candidate(root, &link)?
+            .context("source receipt link did not resolve to a receipt")?;
+        anyhow::ensure!(
+            document_source_receipt_is_eligible(&candidate),
+            "research DOCX writeback requires an eligible source receipt with a verified snapshot hash"
+        );
+        anyhow::ensure!(
+            document_source_receipt_snapshot_matches(root, &candidate)?,
+            "research DOCX writeback requires persisted snapshot bytes matching the receipt hash"
+        );
+        let snapshot_hash = candidate
+            .get("snapshot_hash")
+            .and_then(Value::as_str)
+            .context("eligible source receipt is missing snapshot_hash")?
+            .to_string();
+        if let Some(requested_hash) = document_source_receipt_snapshot_hash(&link) {
+            anyhow::ensure!(
+                requested_hash == snapshot_hash,
+                "source receipt snapshot hash changed; refusing to write unbound research DOCX"
+            );
+        }
+        if !snapshot_hashes.contains(&snapshot_hash) {
+            snapshot_hashes.push(snapshot_hash);
+        }
+    }
+    anyhow::ensure!(
+        !snapshot_hashes.is_empty(),
+        "research DOCX writeback requires at least one eligible source receipt"
+    );
+    Ok(DocumentsReportLineage {
+        linked_records,
+        source_receipt_snapshot_hashes: snapshot_hashes,
+        knowledge_version,
+    })
+}
+
+fn document_lineage_payload(lineage: &DocumentsReportLineage) -> Value {
+    serde_json::json!({
+        "knowledge_version": lineage.knowledge_version,
+        "source_receipt_snapshot_hashes": lineage.source_receipt_snapshot_hashes,
+    })
+}
+
 fn writeback_generated_docx(
     root: &Path,
     conn: &Connection,
     command_id: &str,
     command: &BusinessCommand,
     reply_text: Option<&str>,
+    lineage: &DocumentsReportLineage,
 ) -> anyhow::Result<DocumentsWritebackResult> {
     let filename = expected_docx_filename(command)
         .with_context(|| format!("documents command {command_id} has no expected DOCX filename"))?;
@@ -33184,14 +34656,16 @@ fn writeback_generated_docx(
     }]);
     let status = "Draft";
     let knowledge_context = document_knowledge_context(command);
-    let linked_records = document_linked_records(command);
+    let linked_records = lineage.linked_records.clone();
+    let knowledge_lineage = document_lineage_payload(lineage);
     let model_json = serde_json::json!({
         "type": "docx",
         "source_kind": "ctox_generated_docx",
         "filename": filename,
         "title": title,
         "index_text": index_text,
-        "knowledge_context": knowledge_context
+        "knowledge_context": knowledge_context,
+        "knowledge_lineage": knowledge_lineage
     });
     let document_payload = serde_json::json!({
         "id": document_id,
@@ -33205,6 +34679,9 @@ fn writeback_generated_docx(
         "owner_id": "",
         "current_version_id": version_id,
         "source_sha256": source_sha256,
+        "source_receipt_snapshot_hashes": lineage.source_receipt_snapshot_hashes,
+        "knowledge_version": lineage.knowledge_version,
+        "knowledge_lineage": document_lineage_payload(lineage),
         "page_count": 0,
         "diagnostics_count": 1,
         "linked_records": linked_records,
@@ -33265,6 +34742,9 @@ fn writeback_generated_docx(
         "blob_id": blob_id,
         "diagnostics": diagnostics,
         "model_json": model_json,
+        "source_receipt_snapshot_hashes": lineage.source_receipt_snapshot_hashes,
+        "knowledge_version": lineage.knowledge_version,
+        "knowledge_lineage": document_lineage_payload(lineage),
         "model": serde_json::Value::Null,
         "business_command_id": command_id,
         "source_path": docx_path.display().to_string(),
@@ -33352,6 +34832,8 @@ fn writeback_generated_docx(
         chunks: chunks_total,
         path: docx_path.display().to_string(),
         index_text_chars: index_text.chars().count(),
+        source_receipt_snapshot_hashes: lineage.source_receipt_snapshot_hashes.clone(),
+        knowledge_version: lineage.knowledge_version.clone(),
     })
 }
 
@@ -39902,12 +41384,21 @@ fn project_appsec_runs(
     Ok(())
 }
 
-fn project_appsec_artifacts(
+#[derive(Clone)]
+struct AppsecProjectedArtifact {
+    artifact_path: String,
+    kind: String,
+    version: Option<String>,
+    sha256: String,
+    size_bytes: i64,
+    metadata: Value,
+    updated_at: String,
+}
+
+fn load_appsec_projected_artifacts(
     core: &Connection,
-    business: &Connection,
     state: &str,
-    pairs: &mut Vec<(&'static str, String)>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<AppsecProjectedArtifact>> {
     let mut stmt = core.prepare(
         "SELECT artifact_path, kind, version, sha256, size_bytes, metadata_json, updated_at
          FROM appsec_artifacts
@@ -39915,35 +41406,123 @@ fn project_appsec_artifacts(
          ORDER BY CAST(updated_at AS INTEGER) ASC, artifact_path ASC",
     )?;
     let rows = stmt.query_map(params![state], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, Option<String>>(2)?,
-            row.get::<_, String>(3)?,
-            row.get::<_, i64>(4)?,
-            row.get::<_, String>(5)?,
-            row.get::<_, String>(6)?,
-        ))
+        Ok(AppsecProjectedArtifact {
+            artifact_path: row.get(0)?,
+            kind: row.get(1)?,
+            version: row.get(2)?,
+            sha256: row.get(3)?,
+            size_bytes: row.get(4)?,
+            metadata: sanitize_appsec_projection_json(parse_json_value(&row.get::<_, String>(5)?)),
+            updated_at: row.get(6)?,
+        })
     })?;
-    for row in rows {
-        let (artifact_path, kind, version, sha256, size_bytes, metadata_json, updated_at) = row?;
-        let id = stable_record_id("appsec_artifact", &artifact_path);
-        let metadata = sanitize_appsec_projection_json(parse_json_value(&metadata_json));
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+fn appsec_evidence_artifact_rank(artifact: &AppsecProjectedArtifact) -> u8 {
+    let path = format!(
+        "{} {}",
+        artifact.artifact_path,
+        artifact
+            .metadata
+            .get("relative_path")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+    )
+    .to_ascii_lowercase();
+    if path.contains("reproduce.py") {
+        0
+    } else if path.contains("latest-verification") {
+        1
+    } else if path.contains("http-proof") || path.contains("source-proof") {
+        2
+    } else if path.contains("verification-") && path.ends_with(".json") {
+        3
+    } else if path.contains("evidence-manifest") {
+        4
+    } else if path.contains("github-issue") {
+        5
+    } else {
+        10
+    }
+}
+
+fn appsec_finding_evidence_summary(
+    state: &str,
+    finding_id: &str,
+    evidence_artifact: Option<&str>,
+    artifacts: &[AppsecProjectedArtifact],
+) -> Vec<Value> {
+    let finding_marker = format!("{}-", finding_id.to_ascii_lowercase());
+    let explicit = evidence_artifact.unwrap_or("").to_ascii_lowercase();
+    let mut matching = artifacts
+        .iter()
+        .filter(|artifact| {
+            let path = format!(
+                "{} {} {}",
+                artifact.artifact_path,
+                artifact
+                    .metadata
+                    .get("relative_path")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
+                artifact.kind
+            )
+            .to_ascii_lowercase();
+            (!explicit.is_empty() && path.contains(&explicit))
+                || (!finding_marker.is_empty() && path.contains(&finding_marker))
+        })
+        .collect::<Vec<_>>();
+    matching.sort_by(|left, right| {
+        appsec_evidence_artifact_rank(left)
+            .cmp(&appsec_evidence_artifact_rank(right))
+            .then_with(|| left.artifact_path.cmp(&right.artifact_path))
+    });
+    matching
+        .into_iter()
+        .take(5)
+        .map(|artifact| {
+            serde_json::json!({
+                "artifact_id": stable_record_id("appsec_artifact", &artifact.artifact_path),
+                "artifact_path": artifact.artifact_path,
+                "state_dir": state,
+                "kind": artifact.kind,
+                "version": artifact.version,
+                "sha256": artifact.sha256,
+                "size_bytes": artifact.size_bytes,
+                "metadata": artifact.metadata,
+                "content_available": false,
+                "content_policy": "metadata-only; use redacted AppSec report/finding tools for detail reads",
+                "updated_at": artifact.updated_at,
+                "source": "ctox-appsec-core-projection",
+            })
+        })
+        .collect()
+}
+
+fn project_appsec_artifacts(
+    core: &Connection,
+    business: &Connection,
+    state: &str,
+    pairs: &mut Vec<(&'static str, String)>,
+) -> anyhow::Result<()> {
+    for artifact in load_appsec_projected_artifacts(core, state)? {
+        let id = stable_record_id("appsec_artifact", &artifact.artifact_path);
+        let updated_at_ms = appsec_updated_at_ms(&artifact.updated_at);
         let record = serde_json::json!({
             "artifact_id": id,
-            "artifact_path": artifact_path,
+            "artifact_path": artifact.artifact_path,
             "state_dir": state,
-            "kind": kind,
-            "version": version,
-            "sha256": sha256,
-            "size_bytes": size_bytes,
-            "metadata": metadata,
+            "kind": artifact.kind,
+            "version": artifact.version,
+            "sha256": artifact.sha256,
+            "size_bytes": artifact.size_bytes,
+            "metadata": artifact.metadata,
             "content_available": false,
             "content_policy": "metadata-only; use redacted AppSec report/finding tools for detail reads",
-            "updated_at": updated_at,
+            "updated_at": artifact.updated_at,
             "source": "ctox-appsec-core-projection",
         });
-        let updated_at_ms = appsec_updated_at_ms(&updated_at);
         upsert_business_record(business, "appsec_artifacts", &id, updated_at_ms, record)?;
         pairs.push(("appsec_artifacts", id));
     }
@@ -39956,6 +41535,7 @@ fn project_appsec_findings(
     state: &str,
     pairs: &mut Vec<(&'static str, String)>,
 ) -> anyhow::Result<()> {
+    let artifacts = load_appsec_projected_artifacts(core, state)?;
     let mut stmt = core.prepare(
         "SELECT finding_id, title, severity, category, status, target, evidence_artifact, payload_json, updated_at
          FROM appsec_findings
@@ -39988,6 +41568,13 @@ fn project_appsec_findings(
             updated_at,
         ) = row?;
         let payload = parse_json_value(&payload_json);
+        let evidence_artifacts =
+            appsec_finding_evidence_summary(state, &id, evidence_artifact.as_deref(), &artifacts);
+        let updated_at_ms = evidence_artifacts
+            .iter()
+            .filter_map(|artifact| artifact.get("updated_at").and_then(Value::as_str))
+            .map(appsec_updated_at_ms)
+            .fold(appsec_updated_at_ms(&updated_at), i64::max);
         let record = serde_json::json!({
             "finding_id": id,
             "state_dir": state,
@@ -39997,13 +41584,13 @@ fn project_appsec_findings(
             "status": status,
             "target": target,
             "evidence_artifact": evidence_artifact,
+            "evidence_artifacts": evidence_artifacts,
             "source_tool": payload.get("source_tool").cloned().unwrap_or(Value::Null),
             "signal": payload.get("signal").cloned().unwrap_or(Value::Null),
             "validation_state": payload.get("validation_state").cloned().unwrap_or(Value::Null),
             "updated_at": updated_at,
             "source": "ctox-appsec-core-projection",
         });
-        let updated_at_ms = appsec_updated_at_ms(&updated_at);
         upsert_business_record(business, "appsec_findings", &id, updated_at_ms, record)?;
         pairs.push(("appsec_findings", id));
     }
@@ -41250,7 +42837,139 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn verified_catalog_module_uses_the_catalog_validation_contract() -> anyhow::Result<()> {
+    fn appsec_findings_embed_bounded_state_scoped_evidence() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let core = Connection::open_in_memory()?;
+        core.execute_batch(
+            "CREATE TABLE appsec_artifacts (
+                artifact_path TEXT PRIMARY KEY,
+                state_dir TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                version TEXT,
+                sha256 TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                metadata_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+             );
+             CREATE TABLE appsec_findings (
+                finding_id TEXT PRIMARY KEY,
+                state_dir TEXT NOT NULL,
+                title TEXT,
+                severity TEXT,
+                category TEXT,
+                status TEXT NOT NULL,
+                target TEXT,
+                evidence_artifact TEXT,
+                payload_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+             );",
+        )?;
+        core.execute(
+            "INSERT INTO appsec_findings
+             (finding_id, state_dir, title, severity, category, status, target, evidence_artifact, payload_json, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9)",
+            params![
+                "F-001",
+                "/workspace/a",
+                "Cross-account access",
+                "high",
+                "idor",
+                "validated",
+                "https://example.test/api/profiles/other",
+                r#"{"source_tool":"browser","validation_state":"reproduced"}"#,
+                "1000",
+            ],
+        )?;
+        for (index, name) in [
+            "notes.json",
+            "github-issue.md",
+            "evidence-manifest.json",
+            "verification-result.json",
+            "source-proof.json",
+            "latest-verification.json",
+            "reproduce.py",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let path = format!("/workspace/a/reports/f-001-proof/{name}");
+            core.execute(
+                "INSERT INTO appsec_artifacts
+                 (artifact_path, state_dir, kind, version, sha256, size_bytes, metadata_json, updated_at)
+                 VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7)",
+                params![
+                    path,
+                    "/workspace/a",
+                    "evidence",
+                    format!("{index:064x}"),
+                    100 + index as i64,
+                    serde_json::json!({
+                        "relative_path": format!("reports/f-001-proof/{name}")
+                    })
+                    .to_string(),
+                    (1000 + index).to_string(),
+                ],
+            )?;
+        }
+        core.execute(
+            "INSERT INTO appsec_artifacts
+             (artifact_path, state_dir, kind, version, sha256, size_bytes, metadata_json, updated_at)
+             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7)",
+            params![
+                "/workspace/b/reports/f-001-proof/reproduce.py",
+                "/workspace/b",
+                "evidence",
+                "f".repeat(64),
+                999,
+                r#"{"relative_path":"reports/f-001-proof/reproduce.py"}"#,
+                "2000",
+            ],
+        )?;
+
+        let business = open_store(root.path())?;
+        let mut pairs = Vec::new();
+        project_appsec_findings(&core, &business, "/workspace/a", &mut pairs)?;
+        let payload_json: String = business.query_row(
+            "SELECT payload_json FROM business_records
+             WHERE collection = 'appsec_findings' AND record_id = 'F-001'",
+            [],
+            |row| row.get(0),
+        )?;
+        let payload: Value = serde_json::from_str(&payload_json)?;
+        let evidence = payload["evidence_artifacts"]
+            .as_array()
+            .context("finding evidence summary")?;
+        assert_eq!(evidence.len(), 5, "finding summaries stay bounded");
+        let paths = evidence
+            .iter()
+            .filter_map(|item| item["artifact_path"].as_str())
+            .collect::<Vec<_>>();
+        assert!(paths[0].ends_with("reproduce.py"));
+        assert!(paths[1].ends_with("latest-verification.json"));
+        assert!(paths[2].ends_with("source-proof.json"));
+        assert!(paths[3].ends_with("verification-result.json"));
+        assert!(paths[4].ends_with("evidence-manifest.json"));
+        assert!(
+            evidence
+                .iter()
+                .all(|item| item["state_dir"] == "/workspace/a"),
+            "embedded evidence must not cross assessment state"
+        );
+        let projected_updated_at_ms: i64 = business.query_row(
+            "SELECT updated_at_ms FROM business_records
+             WHERE collection = 'appsec_findings' AND record_id = 'F-001'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            projected_updated_at_ms, 1006,
+            "new evidence must advance the finding projection cursor"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn marketplace_buchhaltung_uses_catalog_installed_validation() -> anyhow::Result<()> {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let source = repo_root.join("src/apps/business-os/modules/buchhaltung");
         let temp = tempdir()?;
@@ -41259,17 +42978,17 @@ mod tests {
 
         let manifest_path = staging.join("module.json");
         let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path)?)?;
-        manifest["entry"] = Value::String("installed-modules/buchhaltung/index.html".to_string());
-        manifest["install_scope"] = Value::String("installed".to_string());
+
         manifest["app_source"] = serde_json::json!({
             "kind": "github",
             "repo": "metric-space-ai/ctox",
             "verified": true,
             "trust_model": "ctox-first-party-source"
         });
+        normalize_catalog_installed_manifest(&mut manifest, "buchhaltung", &staging)?;
         fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
 
-        validate_staged_installed_module(repo_root, "buchhaltung", &staging)
+        validate_staged_catalog_module(repo_root, "buchhaltung", &staging)
     }
 
     #[test]
@@ -41549,6 +43268,315 @@ mod tests {
                 .map(Vec::len),
             Some(2)
         );
+    }
+
+    #[test]
+    fn document_report_writeback_preserves_browser_linked_records_verbatim() {
+        let linked_records = vec![
+            serde_json::json!({ "kind": "research_task", "id": "task-42" }),
+            serde_json::json!({ "kind": "knowledge_domain", "id": "bearing_design" }),
+            serde_json::json!({
+                "kind": "source_receipt",
+                "id": "source-7",
+                "snapshot_hash": format!("sha256:{}", "a".repeat(64)),
+                "role": "evidence"
+            }),
+        ];
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd_doc_linked_records".to_string()),
+            module: "documents".to_string(),
+            command_type: "research.systematic.report.create".to_string(),
+            record_id: None,
+            payload: serde_json::json!({
+                "writeback_contract": { "linked_records": linked_records },
+            }),
+            client_context: Value::Null,
+        };
+
+        assert_eq!(document_linked_records(&command), linked_records);
+    }
+
+    #[test]
+    fn non_research_document_lineage_keeps_legacy_workflow_compatible() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let linked_records = vec![serde_json::json!({
+            "kind": "crm_record",
+            "id": "customer-7"
+        })];
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd_doc_non_research".to_string()),
+            module: "documents".to_string(),
+            command_type: "documents.report.generate".to_string(),
+            record_id: None,
+            payload: serde_json::json!({
+                "writeback_contract": {
+                    "preserve_knowledge_lineage": true,
+                    "linked_records": linked_records.clone()
+                }
+            }),
+            client_context: Value::Null,
+        };
+
+        let lineage = document_report_lineage(root.path(), &command)?;
+        assert_eq!(lineage.linked_records, linked_records);
+        assert!(lineage.source_receipt_snapshot_hashes.is_empty());
+        assert!(lineage.knowledge_version.is_null());
+        Ok(())
+    }
+
+    #[test]
+    fn research_report_lineage_rejects_missing_receipts_before_fallback_generation(
+    ) -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd_doc_missing_receipts".to_string()),
+            module: "documents".to_string(),
+            command_type: "research.systematic.report.create".to_string(),
+            record_id: None,
+            payload: serde_json::json!({
+                "output_filename": "missing-receipts.docx",
+                "required_skills": ["systematic-research"],
+                "knowledge_context": {
+                    "id": "skill:bearing-design",
+                    "updated_at_ms": 1700000000000_i64
+                },
+                "writeback_contract": {
+                    "linked_records": [
+                        { "kind": "research_task", "id": "task-42" },
+                        { "kind": "knowledge_domain", "id": "bearing_design" }
+                    ]
+                }
+            }),
+            client_context: Value::Null,
+        };
+
+        let error = document_report_lineage(root.path(), &command)
+            .expect_err("research writeback must fail closed without source receipts");
+        assert!(error.to_string().contains("source receipt"));
+        assert!(!root
+            .path()
+            .join("runtime/business-os/documents/generated/missing-receipts.docx")
+            .exists());
+        Ok(())
+    }
+
+    #[test]
+    fn research_report_lineage_binds_eligible_receipts_and_knowledge_version() -> anyhow::Result<()>
+    {
+        let root = tempdir()?;
+        let snapshot_path = root.path().join("runtime/research/snapshots/source-7.html");
+        fs::create_dir_all(snapshot_path.parent().context("snapshot parent")?)?;
+        fs::write(&snapshot_path, b"authoritative publisher content")?;
+        let receipt_hash = format!("sha256:{}", hex_sha256(b"authoritative publisher content"));
+        let rxdb_path = rxdb_store_path(root.path());
+        fs::create_dir_all(rxdb_path.parent().context("RxDB parent")?)?;
+        let rxdb_conn = Connection::open(&rxdb_path)?;
+        let table = format!(
+            "ctox_business_os__knowledge_tables__v{}",
+            rxdb_schema_version("knowledge_tables")
+        );
+        rxdb_conn.execute(
+            &format!(
+                "CREATE TABLE {} (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    revision TEXT,
+                    deleted INTEGER NOT NULL DEFAULT 0,
+                    lastWriteTime REAL NOT NULL DEFAULT 0,
+                    data TEXT NOT NULL
+                )",
+                sqlite_quote_identifier(&table)
+            ),
+            [],
+        )?;
+        drop(rxdb_conn);
+        upsert_rxdb_collection_record(
+            root.path(),
+            "knowledge_tables",
+            "table-evidence",
+            1700000000000,
+            serde_json::json!({
+                "table_key": "source_catalog",
+                "rows": [{
+                    "id": "source-7",
+                    "source_id": "source-7",
+                    "evidence_id": "evidence-7",
+                    "snapshot_id": "snapshot-7",
+                    "trace_id": "trace-7",
+                    "snapshot_path": "runtime/research/snapshots/source-7.html",
+                    "snapshot_hash": receipt_hash.clone(),
+                    "retrieved_at": "2026-07-17T00:00:00Z",
+                    "url_role": "publisher_full_text",
+                    "content_scope": "full_text",
+                    "verification_status": "verified",
+                    "transport_verified": true,
+                    "content_extracted": true,
+                    "actual_full_text_or_data": true,
+                    "evidence_relevance_score": 9,
+                    "http_status": 200,
+                    "canonical_url": "https://publisher.example/source-7",
+                    "source_tier": "primary",
+                    "evidence_eligible": true
+                }]
+            }),
+        )?;
+        let linked_records = vec![
+            serde_json::json!({ "kind": "research_task", "id": "task-42" }),
+            serde_json::json!({
+                "kind": "knowledge_domain",
+                "id": "bearing_design",
+                "knowledge_version": "knowledge-v7"
+            }),
+            serde_json::json!({
+                "kind": "source_receipt",
+                "id": "source-7",
+                "table_id": "table-evidence",
+                "snapshot_hash": receipt_hash,
+            }),
+        ];
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd_doc_receipts".to_string()),
+            module: "documents".to_string(),
+            command_type: "research.systematic.report.create".to_string(),
+            record_id: None,
+            payload: serde_json::json!({
+                "knowledge_context": {
+                    "id": "skill:bearing-design",
+                    "version_id": "knowledge-v7",
+                    "updated_at_ms": 1700000000000_i64
+                },
+                "writeback_contract": { "linked_records": linked_records }
+            }),
+            client_context: Value::Null,
+        };
+
+        let lineage = document_report_lineage(root.path(), &command)?;
+        assert_eq!(lineage.source_receipt_snapshot_hashes, vec![receipt_hash]);
+        assert_eq!(
+            lineage.knowledge_version,
+            serde_json::json!({ "version_id": "knowledge-v7" })
+        );
+        assert_eq!(
+            document_lineage_payload(&lineage)
+                .get("source_receipt_snapshot_hashes")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_ne!(
+            lineage.source_receipt_snapshot_hashes[0],
+            hex_sha256(b"the generated DOCX bytes")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn research_report_lineage_rejects_embedded_receipt_without_authoritative_row() {
+        let root = tempdir().expect("temp root");
+        let receipt = serde_json::json!({
+            "kind": "source_receipt",
+            "id": "source-embedded",
+            "snapshot_hash": format!("sha256:{}", "c".repeat(64)),
+            "verification_status": "verified",
+            "transport_verified": true,
+            "content_extracted": true,
+            "actual_full_text_or_data": true,
+            "evidence_relevance_score": 9,
+            "http_status": 200,
+            "canonical_url": "https://publisher.example/embedded",
+            "source_tier": "primary",
+            "evidence_eligible": true,
+            "source_id": "source-embedded",
+            "trace_id": "trace-embedded"
+        });
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd_doc_embedded_receipt".to_string()),
+            module: "documents".to_string(),
+            command_type: "research.systematic.report.create".to_string(),
+            record_id: None,
+            payload: serde_json::json!({
+                "required_skills": ["systematic-research"],
+                "knowledge_context": {
+                    "id": "skill:bearing-design",
+                    "updated_at_ms": 1700000000000_i64
+                },
+                "writeback_contract": {
+                    "linked_records": [
+                        { "kind": "research_task", "id": "task-42" },
+                        receipt
+                    ]
+                }
+            }),
+            client_context: Value::Null,
+        };
+
+        let error = document_report_lineage(root.path(), &command)
+            .expect_err("embedded receipt must not satisfy research lineage");
+        assert!(error.to_string().contains("source receipt"));
+    }
+
+    #[test]
+    fn document_source_receipt_eligibility_matches_research_ui_gate() {
+        let base = serde_json::json!({
+            "id": "source-7",
+            "source_id": "source-7",
+            "evidence_id": "evidence-7",
+            "snapshot_id": "snapshot-7",
+            "trace_id": "trace-7",
+            "snapshot_hash": format!("sha256:{}", "d".repeat(64)),
+            "retrieved_at": "2026-07-17T00:00:00Z",
+            "url_role": "publisher_full_text",
+            "content_scope": "full_text",
+            "verification_status": "verified",
+            "transport_verified": true,
+            "content_extracted": true,
+            "actual_full_text_or_data": true,
+            "evidence_relevance_score": 9,
+            "http_status": 200,
+            "canonical_url": "https://publisher.example/source-7",
+            "source_type": "publisher",
+            "source_tier": "primary",
+            "evidence_eligible": true
+        });
+        for (field, value) in [
+            ("actual_full_text_or_data", Value::Bool(false)),
+            ("evidence_relevance_score", Value::from(7)),
+            (
+                "evidence_rejection_reason",
+                Value::String("off_topic".to_owned()),
+            ),
+            ("http_status", Value::from(204)),
+            ("source_type", Value::String("metadata".to_owned())),
+            ("source_type", Value::String("aggregator".to_owned())),
+        ] {
+            let mut candidate = base.clone();
+            candidate[field] = value;
+            assert!(
+                !document_source_receipt_is_eligible(&candidate),
+                "mutated field {field} must fail the evidence gate"
+            );
+        }
+        for url in [
+            "https://doi.org/10.1000/test",
+            "https://api.crossref.org/works/test",
+            "https://api.openalex.org/works/test",
+            "https://api.semanticscholar.org/graph/v1/paper/test",
+            "https://www.semanticscholar.org/paper/test",
+            "https://scholar.google.com/scholar?q=test",
+            "https://www.researchgate.net/publication/test",
+            "https://www.academia.edu/test",
+        ] {
+            let mut candidate = base.clone();
+            candidate["canonical_url"] = Value::String(url.to_owned());
+            assert!(
+                !document_source_receipt_is_eligible(&candidate),
+                "metadata URL {url} must fail the evidence gate"
+            );
+        }
     }
 
     #[test]
@@ -42507,6 +44535,157 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn module_update_legacy_manifest_uses_explicit_separate_module_roots() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let source_app_root = root.join("src/apps/business-os");
+        let installed_app_root = root.join("installed-app");
+        let source_dir = source_app_root.join("modules/research");
+        let installed_dir = installed_app_root.join("installed-modules/research");
+        fs::create_dir_all(&source_dir)?;
+        fs::create_dir_all(installed_dir.parent().context("installed module parent")?)?;
+
+        let manifest = serde_json::json!({
+            "id": "research",
+            "title": "Research",
+            "version": "1.0.0",
+            "entry": "modules/research/index.html",
+            "collections": [],
+            "layout": {"shell": "windowed"},
+            "launch_kind": "desktop-app",
+            "presentation": {
+                "default_mode": "window",
+                "supported_modes": ["window", "maximized", "focus"],
+                "initial_size": {"width": 960, "height": 640},
+                "minimum_size": {"width": 640, "height": 480}
+            },
+            "install_scope": "store"
+        });
+        fs::write(
+            source_dir.join("module.json"),
+            serde_json::to_vec_pretty(&manifest)?,
+        )?;
+        fs::write(
+            source_dir.join("index.html"),
+            "<main data-module-root></main>",
+        )?;
+        fs::write(
+            source_dir.join("index.js"),
+            "export function mount(ctx) { ctx.host.textContent = 'Research'; }\n",
+        )?;
+        fs::write(
+            source_dir.join("collections.schema.json"),
+            r#"{"schema_format":"ctox-business-os-module-collections-v1","collections":{}}"#,
+        )?;
+        fs::write(
+            source_dir.join("schema.js"),
+            "export const collections = {};\n",
+        )?;
+        fs::write(
+            source_dir.join("index.css"),
+            ".research { color: var(--text); background: var(--surface); }\n",
+        )?;
+        fs::write(
+            source_dir.join("icon.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>",
+        )?;
+        fs::create_dir_all(source_dir.join("locales"))?;
+        fs::write(source_dir.join("locales/de.json"), "{}\n")?;
+        fs::write(source_dir.join("locales/en.json"), "{}\n")?;
+        fs::create_dir_all(source_dir.join("tests"))?;
+        fs::write(
+            source_dir.join("tests/research.test.mjs"),
+            "console.log('ok');\n",
+        )?;
+        copy_dir_recursive(&source_dir, &installed_dir)?;
+
+        let mut legacy_manifest = manifest.clone();
+        legacy_manifest["version"] = Value::String("0.1.0".to_owned());
+        legacy_manifest["entry"] =
+            Value::String("installed-modules/research/index.html".to_owned());
+        legacy_manifest["install_scope"] = Value::String("installed".to_owned());
+        legacy_manifest["default_installed"] = Value::Bool(true);
+        legacy_manifest["developer"] = Value::String("CTOX".to_owned());
+        legacy_manifest["store"] = serde_json::json!({
+            "distribution": "ctox-runtime-installed-module",
+            "source_path": "installed-modules/research",
+            "installable": false
+        });
+        fs::write(
+            installed_dir.join("module.json"),
+            serde_json::to_vec_pretty(&legacy_manifest)?,
+        )?;
+
+        // The update validator is rooted at the test store. Copy only the
+        // existing validator/checker inputs needed by this focused test.
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let validator = root.join("src/apps/business-os/scripts/validate-app-module.mjs");
+        fs::create_dir_all(validator.parent().context("validator parent")?)?;
+        fs::copy(
+            repo_root.join("src/apps/business-os/scripts/validate-app-module.mjs"),
+            &validator,
+        )?;
+        let checker = root.join(
+            "src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs",
+        );
+        fs::create_dir_all(checker.parent().context("checker parent")?)?;
+        fs::copy(
+            repo_root.join(
+                "src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs",
+            ),
+            &checker,
+        )?;
+
+        let outcome = update_module_to_catalog(
+            root,
+            &source_app_root,
+            &installed_app_root,
+            &chef_session(),
+            ModuleUpdateRequest {
+                module_id: "research".to_owned(),
+                mode: "vanilla".to_owned(),
+                expected_baseline_sha256: String::new(),
+                target_catalog_version: String::new(),
+            },
+        )?;
+        assert_eq!(outcome.get("updated").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            outcome.get("catalog_version").and_then(Value::as_str),
+            Some("1.0.0")
+        );
+        let updated: Value =
+            serde_json::from_str(&fs::read_to_string(installed_dir.join("module.json"))?)?;
+        assert_eq!(
+            updated.get("version").and_then(Value::as_str),
+            Some("1.0.0")
+        );
+        assert_eq!(
+            updated.get("source_module_id").and_then(Value::as_str),
+            Some("research")
+        );
+        assert_eq!(
+            updated
+                .pointer("/store/source_path")
+                .and_then(Value::as_str),
+            Some("installed-modules/research")
+        );
+        assert_eq!(
+            updated
+                .pointer("/store/distribution")
+                .and_then(Value::as_str),
+            Some("ctox-runtime-installed-module")
+        );
+        assert_eq!(
+            updated
+                .pointer("/store/installable")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(updated.pointer("/layout/icon_svg"), None);
+        Ok(())
+    }
+
     fn seed_test_business_os_app_root(root: &Path) -> anyhow::Result<()> {
         let app_root = root.join("src/apps/business-os");
         fs::create_dir_all(app_root.join("modules/ctox"))?;
@@ -42803,6 +44982,63 @@ mod tests {
             "customers",
             BusinessOsPermission::DataRead
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_grants_keep_external_sql_projections_server_owned() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let module_dir = root
+            .path()
+            .join("runtime/business-os/local-modules/inventory");
+        fs::create_dir_all(&module_dir)?;
+        fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "id": "inventory",
+                "title": "Inventory",
+                "external_data_sources": [{
+                    "id": "erp",
+                    "connection": {
+                        "server": "sql.example.test",
+                        "database": "erp",
+                        "user": "sync",
+                        "password_secret": "ERP_SQL_PASSWORD"
+                    },
+                    "status_collection": "inventory_sync_status",
+                    "projections": [{
+                        "id": "items",
+                        "collection": "inventory_items",
+                        "record_id_field": "item_id",
+                        "query": "SELECT item_id FROM dbo.items ORDER BY item_id OFFSET @P1 ROWS FETCH NEXT @P2 ROWS ONLY"
+                    }]
+                }]
+            }))?,
+        )?;
+        seed_business_user(root.path(), "user1", "user")?;
+        ensure_legacy_collection_grants(
+            root.path(),
+            &[
+                "inventory_items".to_string(),
+                "inventory_sync_status".to_string(),
+            ],
+        )?;
+        let (token, _) = issue_business_os_capability_token(root.path(), "user1", now_ms() as i64)?;
+
+        for collection in ["inventory_items", "inventory_sync_status"] {
+            assert!(capability_allows_collection_permission(
+                root.path(),
+                &token,
+                collection,
+                BusinessOsPermission::DataRead
+            ));
+            assert!(!capability_allows_collection_permission(
+                root.path(),
+                &token,
+                collection,
+                BusinessOsPermission::DataWrite
+            ));
+        }
         Ok(())
     }
 
@@ -45844,6 +48080,43 @@ mod tests {
             lifecycle.get("public").and_then(Value::as_bool),
             Some(false)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_ctox_runtime_install_resolves_same_id_catalog_source_only() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let app_root = temp.path().join("business-os");
+        let catalog_dir = app_root.join("modules/research");
+        fs::create_dir_all(&catalog_dir)?;
+        fs::write(catalog_dir.join("module.json"), r#"{"id":"research"}"#)?;
+
+        let legacy = serde_json::json!({
+            "id": "research",
+            "developer": "CTOX",
+            "default_installed": true,
+            "store": {
+                "distribution": "ctox-runtime-installed-module",
+                "source_path": "installed-modules/research",
+                "installable": false
+            }
+        });
+        assert_eq!(
+            module_catalog_source_id(&app_root, &legacy).as_deref(),
+            Some("research")
+        );
+
+        let bespoke = serde_json::json!({
+            "id": "research",
+            "developer": "Customer",
+            "default_installed": false,
+            "store": {
+                "distribution": "custom",
+                "source_path": "installed-modules/research",
+                "installable": false
+            }
+        });
+        assert_eq!(module_catalog_source_id(&app_root, &bespoke), None);
         Ok(())
     }
 
@@ -48992,8 +51265,15 @@ mod tests {
             app_root.join("modules/widget/index.js"),
             "export const v = 2;\n",
         )?;
-        record_module_version(root, &app_root, "widget", "manual_release", "Release 2", "tester")?
-            .expect("second sealed version");
+        record_module_version(
+            root,
+            &app_root,
+            "widget",
+            "manual_release",
+            "Release 2",
+            "tester",
+        )?
+        .expect("second sealed version");
 
         let conn = open_store(root)?;
         let read_commits = |conn: &Connection| -> anyhow::Result<Vec<Value>> {
@@ -49023,7 +51303,10 @@ mod tests {
                 .unwrap_or(false),
             "commit id is content-addressed"
         );
-        assert_eq!(first.get("module_id").and_then(Value::as_str), Some("widget"));
+        assert_eq!(
+            first.get("module_id").and_then(Value::as_str),
+            Some("widget")
+        );
         assert_eq!(first.get("sealed").and_then(Value::as_bool), Some(true));
         assert_eq!(
             first.get("parent_id").and_then(Value::as_str),
@@ -52945,7 +55228,8 @@ mod tests {
                     "title": "Research - Drone bearings",
                     "instruction": "Continue systematic research.",
                     "prompt": "Continue systematic research.",
-                    "knowledge_domain": "drone_bearing_design"
+                    "knowledge_domain": "drone_bearing_design",
+                    "research_run_id": "research_run_1"
                 },
                 "client_context": {
                     "source": "business-os-research",
@@ -53020,6 +55304,64 @@ mod tests {
                 "updated_at_ms": 1
             }),
         )?;
+        let snapshot_path = root.join("runtime/research/snapshots/source-1.html");
+        fs::create_dir_all(snapshot_path.parent().context("snapshot parent")?)?;
+        fs::write(&snapshot_path, b"verified source bytes")?;
+        let snapshot_hash = format!("sha256:{}", hex_sha256(b"verified source bytes"));
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__knowledge_tables__v0",
+            "knowledge_source_catalog",
+            serde_json::json!({
+                "id": "knowledge_source_catalog",
+                "domain": "drone_bearing_design",
+                "table_key": "source_catalog",
+                "rows": [{
+                    "source_id": "source-1",
+                    "research_run_id": "research_run_1",
+                    "research_command_id": "cmd_research_completed",
+                    "evidence_id": "evidence-1",
+                    "snapshot_id": "snapshot-1",
+                    "snapshot_path": "runtime/research/snapshots/source-1.html",
+                    "snapshot_hash": snapshot_hash,
+                    "canonical_url": "https://publisher.example/source-1",
+                    "url_role": "original_content",
+                    "content_scope": "full_text",
+                    "retrieved_at": "2026-07-17T00:00:00Z",
+                    "source_type": "publisher",
+                    "source_tier": "primary",
+                    "verification_status": "verified",
+                    "transport_verified": true,
+                    "content_extracted": true,
+                    "actual_full_text_or_data": true,
+                    "evidence_relevance_score": 9,
+                    "http_status": 200,
+                    "evidence_eligible": true
+                }, {
+                    "source_id": "stale-source",
+                    "research_run_id": "research_run_stale",
+                    "research_command_id": "cmd_research_stale",
+                    "evidence_id": "stale-evidence",
+                    "snapshot_id": "snapshot-1",
+                    "snapshot_path": "runtime/research/snapshots/source-1.html",
+                    "snapshot_hash": snapshot_hash,
+                    "canonical_url": "https://publisher.example/stale",
+                    "url_role": "original_content",
+                    "content_scope": "full_text",
+                    "retrieved_at": "2026-07-17T00:00:00Z",
+                    "source_type": "publisher",
+                    "source_tier": "primary",
+                    "verification_status": "verified",
+                    "transport_verified": true,
+                    "content_extracted": true,
+                    "actual_full_text_or_data": true,
+                    "evidence_relevance_score": 9,
+                    "http_status": 200,
+                    "evidence_eligible": true
+                }],
+                "updated_at_ms": 2
+            }),
+        )?;
         drop(rxdb_conn);
 
         channels::transition_business_command_for_task(
@@ -53087,6 +55429,25 @@ mod tests {
         );
         assert_eq!(
             rxdb_run
+                .pointer("/payload/result/accepted_count")
+                .and_then(Value::as_i64),
+            Some(1),
+            "eligible evidence from another run must not enter this manifest"
+        );
+        assert_eq!(
+            rxdb_run
+                .pointer("/payload/result/knowledge_version/research_run_id")
+                .and_then(Value::as_str),
+            Some("research_run_1")
+        );
+        assert_eq!(
+            rxdb_run
+                .pointer("/payload/result/knowledge_version/research_command_id")
+                .and_then(Value::as_str),
+            Some("cmd_research_completed")
+        );
+        assert_eq!(
+            rxdb_run
                 .pointer("/payload/result/knowledge_domain")
                 .and_then(Value::as_str),
             Some("drone_bearing_design")
@@ -53112,6 +55473,79 @@ mod tests {
         assert_eq!(
             rxdb_queue.get("route_status").and_then(Value::as_str),
             Some("handled")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn systematic_research_failure_projects_to_run_and_task() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let rxdb_conn = create_repair_rxdb_tables(root)?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__research_tasks__v0",
+            "research_task_failed",
+            serde_json::json!({
+                "id": "research_task_failed",
+                "status": "collecting",
+                "payload": {},
+                "updated_at_ms": 1
+            }),
+        )?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__research_runs__v0",
+            "research_run_failed",
+            serde_json::json!({
+                "id": "research_run_failed",
+                "task_id": "research_task_failed",
+                "status": "collecting",
+                "command_id": "cmd_research_failed",
+                "payload": {},
+                "updated_at_ms": 1
+            }),
+        )?;
+        drop(rxdb_conn);
+
+        let conn = open_store(root)?;
+        let command = BusinessCommand {
+            id: Some("cmd_research_failed".to_string()),
+            module: "research".to_string(),
+            command_type: "research.systematic.run".to_string(),
+            record_id: Some("research_task_failed".to_string()),
+            payload: serde_json::json!({
+                "knowledge_domain": "drone_bearing_design",
+                "research_run_id": "research_run_failed"
+            }),
+            client_context: Value::Null,
+            origin: CommandOrigin::TrustedLocal,
+        };
+        persist_systematic_research_failure(
+            root,
+            &conn,
+            "cmd_research_failed",
+            &command,
+            None,
+            &anyhow::anyhow!("verified evidence manifest is incomplete"),
+            42,
+        )?;
+
+        let run = load_rxdb_collection_record(root, "research_runs", "research_run_failed")?
+            .context("failed research run projection")?;
+        assert_eq!(run.get("status").and_then(Value::as_str), Some("failed"));
+        assert_eq!(
+            run.pointer("/payload/error/message")
+                .and_then(Value::as_str),
+            Some("verified evidence manifest is incomplete")
+        );
+        let task = load_rxdb_collection_record(root, "research_tasks", "research_task_failed")?
+            .context("failed research task projection")?;
+        assert_eq!(task.get("status").and_then(Value::as_str), Some("failed"));
+        assert_eq!(
+            task.pointer("/payload/last_error/command_id")
+                .and_then(Value::as_str),
+            Some("cmd_research_failed")
         );
         Ok(())
     }
@@ -53151,6 +55585,16 @@ mod tests {
         )?;
         conn.execute(
             "CREATE TABLE ctox_business_os__research_runs__v0 (
+                id TEXT PRIMARY KEY NOT NULL,
+                revision TEXT,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                lastWriteTime REAL NOT NULL DEFAULT 0,
+                data TEXT NOT NULL
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE TABLE ctox_business_os__knowledge_tables__v0 (
                 id TEXT PRIMARY KEY NOT NULL,
                 revision TEXT,
                 deleted INTEGER NOT NULL DEFAULT 0,
@@ -62115,7 +64559,13 @@ mod tests {
         let base_version = serde_json::json!({
             "id": "sheet_restart_v1", "spreadsheet_id": "sheet_restart", "version": 1,
             "blob_id": "sheet_restart_blob", "editor_blob_id": "sheet_restart_editor",
-            "editor_sha256": prepared.editor_sha256, "created_at_ms": 1, "updated_at_ms": 1
+            "editor_sha256": prepared.editor_sha256,
+            "ingestion_kind": "research_generated",
+            "linked_records": [{"kind": "source_receipt", "id": "source-7"}],
+            "source_receipt_snapshot_hashes": [format!("sha256:{}", "e".repeat(64))],
+            "knowledge_version": {"version_id": "knowledge-v7"},
+            "knowledge_lineage": {"domain": "bearing_design"},
+            "created_at_ms": 1, "updated_at_ms": 1
         });
         {
             let conn = open_store(root.path())?;
@@ -62176,6 +64626,31 @@ mod tests {
         )?;
         assert_eq!(spreadsheet_versions, 1);
         assert_eq!(leaked_document_versions, 0);
+        let committed_payload: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'spreadsheet_versions' AND record_id = ?1",
+            params![committed_version],
+            |row| row.get(0),
+        )?;
+        let committed_payload: Value = serde_json::from_str(&committed_payload)?;
+        assert_eq!(
+            committed_payload
+                .get("ingestion_kind")
+                .and_then(Value::as_str),
+            Some("research_generated")
+        );
+        assert_eq!(
+            committed_payload
+                .pointer("/knowledge_version/version_id")
+                .and_then(Value::as_str),
+            Some("knowledge-v7")
+        );
+        assert_eq!(
+            committed_payload
+                .get("source_receipt_snapshot_hashes")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
         drop(conn);
 
         let replay = commit_office_spreadsheet_version(

@@ -9,12 +9,12 @@
 //! `evidence_id = sha256(canonical_id)`. Re-importing the same DOI updates
 //! the row in place.
 
+use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::bail;
+use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
-use rusqlite::params;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -69,14 +69,7 @@ pub struct EvidenceView {
     pub resolver: String,
 }
 
-const VALID_KINDS: [&str; 6] = [
-    "doi",
-    "arxiv",
-    "url",
-    "book",
-    "standard",
-    "assumption",
-];
+const VALID_KINDS: [&str; 6] = ["doi", "arxiv", "url", "book", "standard", "assumption"];
 
 pub fn upsert_evidence(
     conn: &Connection,
@@ -150,8 +143,7 @@ pub fn upsert_evidence(
     .context("failed to upsert report_evidence_register")?;
     state_machine::advance_to(conn, run_id, Status::Gathering)?;
     crate::report::runs::set_next_stage(conn, run_id, Some("score"))?;
-    load_evidence(conn, run_id, &evidence_id)?
-        .context("evidence row missing after upsert")
+    load_evidence(conn, run_id, &evidence_id)?.context("evidence row missing after upsert")
 }
 
 pub fn list_evidence(conn: &Connection, run_id: &str) -> Result<Vec<EvidenceView>> {
@@ -237,11 +229,19 @@ mod hex {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ImportDiagnostic {
+    pub source_index: usize,
+    pub canonical_url: Option<String>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ImportSummary {
     pub bundle_sources: usize,
     pub registered: usize,
     pub resolved_dois: usize,
     pub unresolved_dois: Vec<String>,
+    pub rejected_sources: Vec<ImportDiagnostic>,
 }
 
 pub fn import_from_deep_research_bundle(
@@ -260,29 +260,42 @@ pub fn import_from_deep_research_bundle(
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
+    import_source_candidates(conn, run_id, &sources_arr, resolve_via_crossref)
+}
+
+fn import_source_candidates(
+    conn: &Connection,
+    run_id: &str,
+    sources_arr: &[Value],
+    resolve_via_crossref: bool,
+) -> Result<ImportSummary> {
     let mut registered = 0usize;
     let mut resolved_dois = 0usize;
     let mut unresolved = Vec::new();
-    for src in &sources_arr {
+    let mut rejected_sources = Vec::new();
+    for (source_index, src) in sources_arr.iter().enumerate() {
+        if !sources::web_research::is_evidence_eligible_source(src) {
+            rejected_sources.push(ImportDiagnostic {
+                source_index,
+                canonical_url: src
+                    .get("canonical_url")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                reason: source_rejection_reason(src),
+            });
+            continue;
+        }
+
         let url = src
-            .get("url")
+            .get("canonical_url")
             .and_then(Value::as_str)
-            .or_else(|| src.get("landing_url").and_then(Value::as_str));
+            .expect("eligible source must have a canonical URL");
         let title = src
             .get("title")
             .and_then(Value::as_str)
             .map(|s| s.to_string());
-        let snippet = src
-            .get("snippet")
-            .or_else(|| src.get("read").and_then(|r| r.get("summary")))
-            .and_then(Value::as_str)
-            .map(|s| trim_snippet(s));
-        let combined_text = format!(
-            "{}\n{}\n{}",
-            url.unwrap_or(""),
-            title.as_deref().unwrap_or(""),
-            snippet.as_deref().unwrap_or("")
-        );
+        let snippet = imported_snippet(src);
+        let combined_text = sources::web_research::evidence_text(src);
         let dois = sources::scholarly::extract_dois_from_text(&combined_text);
         let arxivs = sources::scholarly::extract_arxiv_from_text(&combined_text);
         if !dois.is_empty() {
@@ -320,7 +333,7 @@ pub fn import_from_deep_research_bundle(
                         venue: c.venue,
                         year: c.year,
                         publisher: c.publisher,
-                        landing_url: c.landing_url,
+                        landing_url: Some(url.to_string()),
                         full_text_url: c.full_text_url,
                         abstract_md: c.abstract_md,
                         snippet_md: snippet.clone(),
@@ -335,7 +348,7 @@ pub fn import_from_deep_research_bundle(
                         venue: None,
                         year: None,
                         publisher: None,
-                        landing_url: url.map(|s| s.to_string()),
+                        landing_url: Some(url.to_string()),
                         full_text_url: None,
                         abstract_md: None,
                         snippet_md: snippet.clone(),
@@ -343,7 +356,7 @@ pub fn import_from_deep_research_bundle(
                         resolver: Some("web".to_string()),
                     },
                 };
-                upsert_evidence(conn, run_id, &input)?;
+                upsert_verified_import(conn, run_id, &input, src)?;
                 registered += 1;
             }
         } else if !arxivs.is_empty() {
@@ -358,7 +371,7 @@ pub fn import_from_deep_research_bundle(
                         venue: c.venue,
                         year: c.year,
                         publisher: c.publisher,
-                        landing_url: c.landing_url,
+                        landing_url: Some(url.to_string()),
                         full_text_url: c.full_text_url,
                         abstract_md: c.abstract_md,
                         snippet_md: snippet.clone(),
@@ -373,7 +386,7 @@ pub fn import_from_deep_research_bundle(
                         venue: Some("arXiv".to_string()),
                         year: None,
                         publisher: None,
-                        landing_url: url.map(|s| s.to_string()),
+                        landing_url: Some(url.to_string()),
                         full_text_url: None,
                         abstract_md: None,
                         snippet_md: snippet.clone(),
@@ -381,26 +394,26 @@ pub fn import_from_deep_research_bundle(
                         resolver: Some("web".to_string()),
                     },
                 };
-                upsert_evidence(conn, run_id, &input)?;
+                upsert_verified_import(conn, run_id, &input, src)?;
                 registered += 1;
             }
-        } else if let Some(u) = url {
+        } else {
             let input = EvidenceInput {
                 citation_kind: "url".to_string(),
-                canonical_id: u.to_string(),
+                canonical_id: url.to_string(),
                 title,
                 authors: vec![],
                 venue: None,
                 year: None,
                 publisher: None,
-                landing_url: Some(u.to_string()),
+                landing_url: Some(url.to_string()),
                 full_text_url: None,
                 abstract_md: None,
                 snippet_md: snippet.clone(),
                 license: None,
                 resolver: Some("web".to_string()),
             };
-            upsert_evidence(conn, run_id, &input)?;
+            upsert_verified_import(conn, run_id, &input, src)?;
             registered += 1;
         }
     }
@@ -409,7 +422,72 @@ pub fn import_from_deep_research_bundle(
         registered,
         resolved_dois,
         unresolved_dois: unresolved,
+        rejected_sources,
     })
+}
+
+fn upsert_verified_import(
+    conn: &Connection,
+    run_id: &str,
+    input: &EvidenceInput,
+    source: &Value,
+) -> Result<()> {
+    let evidence = upsert_evidence(conn, run_id, input)?;
+    let http_status = source
+        .get("http_status")
+        .and_then(Value::as_i64)
+        .expect("eligible source must have an HTTP status");
+    let snapshot_hash = source
+        .get("snapshot_hash")
+        .and_then(Value::as_str)
+        .expect("eligible source must have a snapshot hash");
+    conn.execute(
+        "UPDATE report_evidence_register
+         SET verification_status = 'verified', http_status = ?3,
+             snapshot_hash = ?4, evidence_eligible = 1, updated_at = ?5
+         WHERE run_id = ?1 AND evidence_id = ?2",
+        params![
+            run_id,
+            evidence.evidence_id,
+            http_status,
+            snapshot_hash,
+            store::now_iso(),
+        ],
+    )?;
+    Ok(())
+}
+
+fn imported_snippet(source: &Value) -> Option<String> {
+    let read = source.get("read")?;
+    if let Some(summary) = read.get("summary").and_then(Value::as_str) {
+        return Some(trim_snippet(summary));
+    }
+    let excerpts = read.get("excerpts").and_then(Value::as_array)?;
+    let text = excerpts
+        .iter()
+        .filter_map(|excerpt| {
+            excerpt
+                .as_str()
+                .or_else(|| excerpt.get("text").and_then(Value::as_str))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then(|| trim_snippet(&text))
+}
+
+fn source_rejection_reason(source: &Value) -> String {
+    source
+        .get("evidence_rejection_reason")
+        .and_then(Value::as_str)
+        .filter(|reason| !reason.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| {
+            if source.get("metadata_only").and_then(Value::as_bool) == Some(true) {
+                "metadata_only".to_string()
+            } else {
+                "evidence_gate_incomplete".to_string()
+            }
+        })
 }
 
 fn trim_snippet(s: &str) -> String {
@@ -491,5 +569,70 @@ mod tests {
             resolver: None,
         };
         assert!(upsert_evidence(&conn, &run_id, &bad).is_err());
+    }
+
+    #[test]
+    fn bundle_import_keeps_rejected_candidates_out_of_register() {
+        let dir = tempdir().unwrap();
+        let conn = store::open(dir.path()).unwrap();
+        let run_id = seed_run(&conn);
+        let sources = vec![
+            serde_json::json!({
+                "canonical_url": "https://metadata.example/10.9999/metadata",
+                "source_type": "paper_metadata",
+                "source_tier": "metadata",
+                "metadata_only": true,
+                "verification_status": "verified",
+                "transport_verified": true,
+                "content_extracted": true,
+                "actual_full_text_or_data": true,
+                "evidence_relevance_score": 32,
+                "http_status": 200,
+                "snapshot_hash": format!("sha256:{}", "b".repeat(64)),
+                "evidence_eligible": true,
+                "read": {"summary": "metadata DOI 10.9999/metadata"}
+            }),
+            serde_json::json!({
+                "canonical_url": "https://publisher.example/article/10.1234/eligible",
+                "source_type": "scholarly",
+                "source_tier": "scholarly",
+                "verification_status": "verified",
+                "transport_verified": true,
+                "content_extracted": true,
+                "actual_full_text_or_data": true,
+                "evidence_relevance_score": 32,
+                "http_status": 200,
+                "snapshot_hash": format!("sha256:{}", "a".repeat(64)),
+                "evidence_eligible": true,
+                "read": {"summary": "The accepted source contains the measured result."}
+            }),
+        ];
+
+        let summary = import_source_candidates(&conn, &run_id, &sources, false).unwrap();
+        assert_eq!(summary.bundle_sources, 2);
+        assert_eq!(summary.registered, 1);
+        assert_eq!(summary.rejected_sources.len(), 1);
+        assert_eq!(summary.rejected_sources[0].reason, "metadata_only");
+
+        let rows = list_evidence(&conn, &run_id).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].canonical_id, "10.1234/eligible");
+        let gate: (String, i64, String, i64) = conn
+            .query_row(
+                "SELECT verification_status, http_status, snapshot_hash, evidence_eligible
+                 FROM report_evidence_register WHERE run_id = ?1",
+                params![run_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            gate,
+            (
+                "verified".to_string(),
+                200,
+                format!("sha256:{}", "a".repeat(64)),
+                1
+            )
+        );
     }
 }

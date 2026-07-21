@@ -19,3 +19,11 @@ test('consent: schema declares its owned collection', () => {
   assert.match(schemaSrc, /business_consents/);
   assert.match(schemaSrc, /export const collections/);
 });
+
+test('consent: denied collection access renders a locked state instead of an empty state', () => {
+  const source = read('index.js');
+  assert.match(source, /permissionCheck\(PRIMARY\)/);
+  assert.match(source, /CTOX_BUSINESS_OS_PERMISSION_DENIED/);
+  assert.match(source, /renderLockedCollection\(\)/);
+  assert.match(source, /dataLockedHint/);
+});

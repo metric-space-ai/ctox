@@ -37,3 +37,13 @@ test("desktop version is visible in both native and renderer chrome", () => {
   assert.match(html, /id="app-version"/);
   assert.match(renderer, /appVersion\.textContent\s*=\s*version\s*\?\s*`v\$\{version\}`/);
 });
+
+test("desktop shell forces reduced motion before Chromium starts", () => {
+  const main = source("src/apps/business-os-desktop/src/main/main.cjs");
+  const switchOffset = main.indexOf('app.commandLine.appendSwitch("force-prefers-reduced-motion")');
+  const readyOffset = main.indexOf("app.whenReady()");
+
+  assert.notEqual(switchOffset, -1);
+  assert.notEqual(readyOffset, -1);
+  assert.ok(switchOffset < readyOffset, "reduced-motion switch must be set before app readiness");
+});

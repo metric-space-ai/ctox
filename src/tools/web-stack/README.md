@@ -39,6 +39,42 @@ scholarly, open-access, DOI/metadata, patent/industry, and failure-mode search
 profiles, deduplicates sources, reads top pages, and returns an evidence bundle
 plus a report scaffold for the agent to synthesize.
 
+`max_sources` limits the final admitted evidence set, not the discovery pool.
+The reader keeps a depth-bounded ranked candidate queue and refills from the
+next candidate after an inaccessible, metadata-only, off-topic, or otherwise
+rejected read. Repository metadata reads may enqueue directly linked original
+data files for immediate verification. Search queries are bounded at word
+boundaries, while each page read receives a source-specific relevance query so
+an identifier from one repository cannot disqualify independent evidence.
+
+Successful retrieval and evidence promotion are separate gates. An HTTP 2xx
+response with a persisted snapshot proves transport and provenance only.
+Deep research promotes a source into the evidence bundle only when it also has
+a scored topical match, contains extracted evidence text, and is not
+metadata-only, an aggregator, a third-party dataset reupload, or a
+reference/link collection. Rejected reads remain in the workspace with an
+`evidence_rejection_reason` for auditability.
+
+Admitted original data files are validated by media type and file signature,
+then stored under `runtime/web_search_data_cache/` using their SHA-256 digest as
+the filename. Evidence receipts bind the final URL, response status, byte count,
+content kind, and digest to that server-owned artifact. Large binary files are
+not serialized into the JSON tool response. Systematic-research completion
+recomputes the artifact digest before accepting data-backed evidence.
+Repository download routes such as `.../files/archive.zip/content` are treated
+as data hints, but promotion still requires matching ZIP/file magic bytes.
+Large data downloads use one bounded long-running request instead of short
+page-read retries. ZIP evidence additionally produces a persisted manifest with
+the archive digest and each safe member's path, sizes, CRC32, and SHA-256.
+Unsafe paths, excessive member counts, and excessive expanded sizes fail
+closed; a transport receipt alone never proves the archive's dataset contents.
+
+Search and page caches keep bounded JSON indexes over content-addressed response
+artifacts. URL aliases do not duplicate response bodies. Oversized legacy JSON
+caches are disposable acceleration state and are discarded rather than loaded
+into the daemon; durable research receipts and workspace artifacts are
+unaffected.
+
 Deep research also creates a persistent research workspace by default under
 `runtime/research/deep-research/<timestamp>-<slug>`. The folder contains the
 full evidence bundle, source JSONL, per-source read payloads, limited raw
@@ -50,6 +86,15 @@ only for tests/smoke runs.
 Anna's Archive support is intentionally metadata-only. The tool may use it to
 discover bibliographic records when `--include-annas-archive` is explicit, but
 it must not download or reproduce unauthorized copyrighted full text.
+
+## Scholarly providers
+
+`ctox_web_scholarly_search` defaults to `auto`, which queries Crossref,
+OpenAlex, and Semantic Scholar independently, tolerates a partial provider
+outage, deduplicates DOI and canonical-URL matches, and interleaves the
+remaining records. Anna's Archive is available only as an explicitly selected
+metadata-only provider. A failed Anna's Archive request must never turn
+scientific auto-discovery into a successful empty result.
 
 ## Search providers
 
@@ -91,6 +136,8 @@ cookie-bootstrap profile flow — Playwright owns the entire Google path.
 | `CTOX_WEB_SEARCH_SEARXNG_BASE_URL` | Required when `CTOX_WEB_SEARCH_PROVIDER=searxng`. |
 | `CTOX_WEB_SEARCH_LANGUAGE` / `CTOX_WEB_SEARCH_REGION` | Forwarded to providers as locale/`gl` hints. |
 | `CTOX_WEB_SEARCH_TIMEOUT_MS` | Per-request timeout for HTTP and Playwright paths (default 7000). |
+| `CTOX_WEB_SEARCH_MAX_PAGE_BYTES` | Maximum response size for ordinary evidence pages (default 2 MB). |
+| `CTOX_WEB_SEARCH_MAX_DATA_FILE_BYTES` | Maximum response size for recognized original data files stored in the hash-addressed artifact cache (default 256 MB). |
 | `CTOX_WEB_AUTO_PROVIDER_BUDGET` | Max providers tried per query in `auto` mode (default 4). |
 | `CTOX_WEB_BROWSER_REFERENCE_DIR` | Directory containing `node_modules/playwright`. Defaults to `runtime/browser/interactive-reference`. |
 | `CTOX_WEB_EGRESS_ALLOW` | Comma-separated host allow-list that bypasses the SSRF egress guard (for deliberately-internal endpoints, e.g. a self-hosted SearXNG). Empty by default. |

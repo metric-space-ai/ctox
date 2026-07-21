@@ -390,6 +390,13 @@ fn handle_business_os_backup(root: &Path, args: &[String]) -> anyhow::Result<()>
 
 fn handle_business_os_desktop(root: &Path, args: &[String]) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
+        Some("invite") if desktop_invite_help_requested(args) => {
+            println!(
+                "usage: ctox business-os desktop invite [--display-name <name>] \
+[--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]"
+            );
+            Ok(())
+        }
         Some("invite") => {
             let invite = build_desktop_invite(root, args)?;
             match flag_value(args, "--format").unwrap_or("json") {
@@ -442,6 +449,12 @@ fn handle_business_os_desktop(root: &Path, args: &[String]) -> anyhow::Result<()
         }
         Some(other) => anyhow::bail!("unknown business-os desktop command `{other}`"),
     }
+}
+
+fn desktop_invite_help_requested(args: &[String]) -> bool {
+    args.iter()
+        .skip(1)
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
 }
 
 fn build_desktop_invite(root: &Path, args: &[String]) -> anyhow::Result<serde_json::Value> {
@@ -7087,6 +7100,23 @@ mod tests {
             Some("30")
         );
         Ok(())
+    }
+
+    #[test]
+    fn desktop_invite_help_is_detected_before_generating_credentials() {
+        assert!(desktop_invite_help_requested(&[
+            "invite".to_string(),
+            "--help".to_string(),
+        ]));
+        assert!(desktop_invite_help_requested(&[
+            "invite".to_string(),
+            "-h".to_string(),
+        ]));
+        assert!(!desktop_invite_help_requested(&[
+            "invite".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+        ]));
     }
 
     #[test]

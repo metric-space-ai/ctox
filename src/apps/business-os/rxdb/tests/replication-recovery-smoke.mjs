@@ -122,6 +122,31 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   await state.cancel();
 }
 
+// --- 1c. urgent command writes bypass an unrelated collection backlog -------
+{
+  const state = await makeState('business_commands');
+  const pushed = [];
+  state.collection.schema.primaryPath = 'id';
+  state.openPeerIds = () => ['p1'];
+  state.shared.peer = {
+    async request(peerId, method, [rows], _timeoutMs, collection) {
+      assert(peerId === 'p1', `unexpected peer ${peerId}`);
+      assert(method === 'masterWrite', `expected masterWrite, got ${method}`);
+      assert(collection === 'business_commands', `unexpected collection ${collection}`);
+      pushed.push(...rows.map((row) => row.newDocumentState));
+      return [];
+    },
+  };
+  state.demandSidecar = { markDirty: async () => new Promise(() => {}) };
+  state.pushInProgressPromise = new Promise(() => {});
+
+  await state.pushDocumentsToRemotePeers([{ id: 'cmd-urgent', status: 'pending_sync' }]);
+
+  assert(pushed.length === 1, `targeted push must write one command, got ${pushed.length}`);
+  assert(pushed[0].id === 'cmd-urgent', 'targeted push wrote the wrong command');
+  await state.cancel();
+}
+
 // --- 2. push scan continues after empty scan-limit batches ------------------
 {
   const state = await makeState('push-scan-limit');
@@ -257,6 +282,59 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   assert(pullAttempts >= 2, `pull retry: retry fired (attempts=${pullAttempts})`);
   await state.cancel();
   assert(!state.pullRetryTimer, 'pull retry: cancel clears the retry timer');
+}
+
+// --- 3b. large knowledge-table pulls drain every byte-bounded response -----
+{
+  const state = await makeState('knowledge_tables');
+  const docs = [];
+  let expectedRows = 0;
+  for (let chunkIndex = 0; chunkIndex < 57; chunkIndex += 1) {
+    const rowCount = chunkIndex < 31 ? 86 : 85;
+    expectedRows += rowCount;
+    docs.push({
+      id: `measured_load_points:${chunkIndex}`,
+      chunk_index: chunkIndex,
+      chunk_count: 57,
+      row_count: rowCount,
+      rows: Array.from({ length: rowCount }, (_, rowIndex) => ({
+        row_id: chunkIndex * 100 + rowIndex,
+        value: 'x'.repeat(4500),
+      })),
+    });
+  }
+  assert(expectedRows === 4876, `large knowledge fixture row count mismatch: ${expectedRows}`);
+  let stored = [];
+  state.collection.storageCollection.bulkWrite = async (batch) => {
+    stored = stored.concat(batch);
+    return {};
+  };
+  let requestCount = 0;
+  state.shared.peer = {
+    request: async (_peerId, method, params) => {
+      assert(method === 'masterChangesSince', `expected masterChangesSince, got ${method}`);
+      requestCount += 1;
+      const checkpoint = params[0];
+      const nextIndex = checkpoint?.id ? Number(String(checkpoint.id).split(':').at(-1)) + 1 : 0;
+      if (nextIndex >= docs.length) return { documents: [], checkpoint };
+      // Mirrors the native byte limiter: a short non-empty response advances
+      // only to the last document actually returned.
+      return {
+        documents: [docs[nextIndex]],
+        checkpoint: { id: docs[nextIndex].id, lwt: nextIndex + 1 },
+      };
+    },
+  };
+  await state.pullFromPeer('p1');
+  const receivedRows = stored.reduce((sum, doc) => sum + doc.rows.length, 0);
+  assert(stored.length === 57, `large knowledge pull lost chunks: ${stored.length}/57`);
+  assert(receivedRows === 4876, `large knowledge pull lost rows: ${receivedRows}/4876`);
+  assert(requestCount === 58, `large knowledge pull must finish with an empty probe: ${requestCount}`);
+  assert(
+    state.pullCheckpointsByPeer.get('p1')?.id === 'measured_load_points:56',
+    'large knowledge pull must persist the last received checkpoint',
+  );
+  await state.cancel();
 }
 
 // --- 4. checkpoint retention across reconnects -------------------------------

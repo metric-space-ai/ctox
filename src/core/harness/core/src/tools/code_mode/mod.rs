@@ -34,8 +34,7 @@ const CODE_MODE_BRIDGE_SOURCE: &str = include_str!("bridge.js");
 const CODE_MODE_DESCRIPTION_TEMPLATE: &str = include_str!("description.md");
 const CODE_MODE_WAIT_DESCRIPTION_TEMPLATE: &str = include_str!("wait_description.md");
 const CODE_MODE_PRAGMA_PREFIX: &str = "// @exec:";
-const CODE_MODE_ONLY_PREFACE: &str =
-    "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly";
+const CODE_MODE_ONLY_PREFACE: &str = "Use `exec/wait` to run nested tools. Collaboration controls and server-authoritative CTOX Web evidence tools may also be exposed directly.";
 
 pub(crate) const PUBLIC_TOOL_NAME: &str = "exec";
 pub(crate) const WAIT_TOOL_NAME: &str = "wait";

@@ -267,10 +267,8 @@ pub(crate) fn data_write_permission() -> BusinessOsPermission {
 
 pub(crate) fn server_owned_projection_collections(
     root: &Path,
-) -> std::collections::HashSet<String> {
-    let Ok(sources) = load_source_configs(root) else {
-        return std::collections::HashSet::new();
-    };
+) -> anyhow::Result<std::collections::HashSet<String>> {
+    let sources = load_source_configs(root)?;
     let mut collections = std::collections::HashSet::new();
     for source in sources {
         collections.insert(source.status_collection);
@@ -288,11 +286,17 @@ pub(crate) fn server_owned_projection_collections(
                 .map(|refresh| refresh.collection),
         );
     }
-    collections
+    Ok(collections)
 }
 
 pub(crate) fn projection_collection_is_server_owned(root: &Path, collection: &str) -> bool {
-    server_owned_projection_collections(root).contains(collection)
+    match server_owned_projection_collections(root) {
+        Ok(collections) => collections.contains(collection),
+        // Fail closed: when projection ownership cannot be resolved (e.g. an
+        // invalid local mapping), treat the collection as server-owned so no
+        // peer write slips into a projection mirror.
+        Err(_) => true,
+    }
 }
 
 pub(crate) fn handle_business_command(
@@ -2328,5 +2332,24 @@ mod tests {
         });
 
         assert_eq!(payload_fingerprint(&source), payload_fingerprint(&stored));
+    }
+
+    #[test]
+    fn invalid_local_mapping_fails_server_owned_collection_discovery() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let module_dir = root.path().join("business-os/local-modules/inventory");
+        std::fs::create_dir_all(&module_dir)?;
+        std::fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_vec_pretty(&json!({
+                "id": "inventory",
+                "title": "Inventory",
+                "external_data_sources_file": "external-sql.json"
+            }))?,
+        )?;
+        std::fs::write(module_dir.join("external-sql.json"), b"{not-json")?;
+
+        assert!(server_owned_projection_collections(root.path()).is_err());
+        Ok(())
     }
 }

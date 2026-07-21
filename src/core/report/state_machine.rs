@@ -6,11 +6,11 @@
 //! and [`advance_to`] to move the run forward atomically with their own
 //! mutations.
 
+use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::bail;
-use rusqlite::Connection;
 use rusqlite::params;
+use rusqlite::Connection;
 
 /// Iteration cap for the critique/revise loop. A run that needs more than
 /// this many revisions is structurally broken; the operator must abort or

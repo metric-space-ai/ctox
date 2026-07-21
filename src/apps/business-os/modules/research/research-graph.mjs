@@ -32,13 +32,18 @@ export function createResearchGraph(host, options = {}) {
   let hoveredId = '';
   let autoRotateEnabled = options.autoRotate !== false;
   let settledFitPending = true;
+  let topologyKey = projectionTopologyKey(projection);
+  let focusFrame = 0;
   let disposed = false;
+  host.dataset.graphReheatCount = '0';
+  let projectionFingerprint = graphProjectionFingerprint(projection);
 
   const graph = ForceGraph3D({
     controlType: 'orbit',
     rendererConfig: {
       alpha: false,
       antialias: projection.nodes.length <= 240,
+      preserveDrawingBuffer: true,
       powerPreference: 'high-performance',
     },
   })(host)
@@ -46,22 +51,33 @@ export function createResearchGraph(host, options = {}) {
     .showNavInfo(false)
     .numDimensions(dimensions)
     .nodeId('id')
-    .nodeLabel((node) => `${node.label}\n${Math.round((node.importance || 0) * 100)}% relevance`)
+    .nodeLabel((node) => [
+      node.label,
+      node.description,
+      `${options.sourceCountLabel || 'Sources'}: ${(node.sourceIds || []).length}`,
+      `Confidence: ${formatConfidence(node.confidence)}`,
+      `Provenance: ${formatProvenance(node.provenance)}`,
+    ].filter(Boolean).join('\n'))
     .nodeVal((node) => node.visualSize || 2)
     .nodeThreeObject((node) => buildNodeObject(node))
     .nodeThreeObjectExtend(false)
     .linkColor((link) => linkColor(link))
+    .linkLabel((link) => `${link.label || link.relationType || 'co_occurs'} · Confidence: ${formatConfidence(link.confidence)} · Provenance: ${formatProvenance(link.provenance)}`)
     .linkWidth((link) => linkWidth(link))
     .linkCurvature((link) => link.curvature || 0)
     .linkCurveRotation((link) => seededRotation(link.id))
-    .linkDirectionalParticles((link) => reduceMotion() ? 0 : (link.particles || 0))
+    .linkDirectionalParticles((link) => reduceMotion() || projection.nodes.length > 90 ? 0 : (link.particles || 0))
     .linkDirectionalParticleWidth((link) => Math.max(0.7, (link.visualWidth || 1) * 0.62))
     .linkDirectionalParticleSpeed((link) => 0.002 + Math.min(0.004, (link.weight || 1) * 0.00015))
     .linkDirectionalParticleColor((link) => link.color || MUTED)
     .linkOpacity(0.5)
     .onNodeHover((node) => {
       hoveredId = node?.id || '';
-      applyFocusState();
+      if (focusFrame) window.cancelAnimationFrame(focusFrame);
+      focusFrame = window.requestAnimationFrame(() => {
+        focusFrame = 0;
+        if (!disposed) applyFocusState();
+      });
       host.style.cursor = node ? 'pointer' : 'grab';
       options.onNodeHover?.(node || null);
     })
@@ -96,6 +112,7 @@ export function createResearchGraph(host, options = {}) {
 
   configureForces();
   graph.graphData(cloneProjection(projection));
+  applyVisibilityState();
   setAutoRotate(options.autoRotate !== false);
   resize();
 
@@ -110,14 +127,51 @@ export function createResearchGraph(host, options = {}) {
   const api = {
     setData(nextProjection) {
       if (disposed) return;
-      projection = normalizeProjection(nextProjection);
-      settledFitPending = true;
+      const positionedNodes = new Map(
+        (graph.graphData?.().nodes || []).map((node) => [node.id, node]),
+      );
+      const next = normalizeProjection(nextProjection);
+      const nextFingerprint = graphProjectionFingerprint(next);
+      const nextTopologyKey = projectionTopologyKey(next);
+      const topologyChanged = nextTopologyKey !== topologyKey;
+      const semanticChanged = nextFingerprint !== projectionFingerprint;
+      const visibilityChanged = !sameIdSet(next.visibleNodeIds, projection.visibleNodeIds)
+        || !sameIdSet(next.visibleLinkIds, projection.visibleLinkIds);
+      if (!topologyChanged && !semanticChanged && !visibilityChanged) return false;
+      projection = next;
+      projectionFingerprint = nextFingerprint;
+      topologyKey = nextTopologyKey;
+      projection.nodes = projection.nodes.map((node) => {
+        const positioned = positionedNodes.get(node.id);
+        if (!positioned || !Number.isFinite(positioned.x)) return node;
+        return {
+          ...node,
+          x: positioned.x,
+          y: positioned.y,
+          z: positioned.z,
+          vx: positioned.vx,
+          vy: positioned.vy,
+          vz: positioned.vz,
+        };
+      });
+      // Detail/layer slices preserve the existing camera and node positions.
+      // Only the initial mount needs the settled-layout camera correction.
+      settledFitPending = false;
+      for (const timer of cameraFitTimers) window.clearTimeout(timer);
+      cameraFitTimers.clear();
       rebuildAdjacency();
-      disposeNodeObjects();
-      graph.graphData(cloneProjection(projection));
+      if (topologyChanged || semanticChanged) {
+        graph.graphData(cloneProjection(projection));
+        disposeStaleNodeObjects(new Set(projection.nodes.map((node) => node.id)));
+      }
+      applyVisibilityState();
       configureForces();
-      graph.d3ReheatSimulation?.();
-      scheduleInitialCameraFits();
+      if (topologyChanged || semanticChanged) {
+        host.dataset.graphReheatCount = String(Number(host.dataset.graphReheatCount || 0) + 1);
+        if (topologyChanged) graph.d3ReheatSimulation?.();
+        if (selectedId || hoveredId) applyFocusState();
+      }
+      return true;
     },
     setDimensions(nextDimensions) {
       if (disposed) return;
@@ -125,6 +179,7 @@ export function createResearchGraph(host, options = {}) {
       settledFitPending = true;
       graph.numDimensions(dimensions);
       configureForces();
+      host.dataset.graphReheatCount = String(Number(host.dataset.graphReheatCount || 0) + 1);
       graph.d3ReheatSimulation?.();
       setAutoRotate(autoRotateEnabled);
       if (dimensions === 2) graph.cameraPosition({ x: 0, y: 0, z: 520 }, { x: 0, y: 0, z: 0 }, 700);
@@ -165,6 +220,7 @@ export function createResearchGraph(host, options = {}) {
       disposed = true;
       resizeObserver.disconnect();
       document.removeEventListener('visibilitychange', visibilityHandler);
+      if (focusFrame) window.cancelAnimationFrame(focusFrame);
       for (const timer of cameraFitTimers) window.clearTimeout(timer);
       cameraFitTimers.clear();
       disposeNodeObjects();
@@ -177,6 +233,9 @@ export function createResearchGraph(host, options = {}) {
       host.replaceChildren();
     },
     graph,
+    fingerprint() {
+      return projectionFingerprint;
+    },
   };
 
   rebuildAdjacency();
@@ -189,7 +248,7 @@ export function createResearchGraph(host, options = {}) {
     const size = Math.max(1.5, node.visualSize || 2);
     const geometry = node.primary
       ? new BoxGeometry(size * 1.42, size * 1.42, Math.max(1.3, size * 0.48))
-      : new SphereGeometry(size * 0.58, 14, 10);
+      : new SphereGeometry(size * 0.58, projection.nodes.length > 120 ? 8 : 10, projection.nodes.length > 120 ? 6 : 8);
     const material = new MeshLambertMaterial({
       color: new Color(node.color || '#58a9d8'),
       emissive: new Color(node.color || '#58a9d8'),
@@ -216,7 +275,8 @@ export function createResearchGraph(host, options = {}) {
     // A graph with a label sprite for every node becomes unreadable long
     // before it reaches the 120-node default. Keep persistent labels to the
     // most important concepts; all remaining nodes retain the hover tooltip.
-    if (node.primary || Number(node.rank || 0) <= 28) {
+    const labelRankLimit = projection.nodes.length > 90 ? 10 : projection.nodes.length > 50 ? 14 : 20;
+    if (node.primary || Number(node.rank || 0) <= labelRankLimit) {
       const label = new SpriteText(node.label || node.id);
       label.color = node.color || '#d6eaf3';
       label.textHeight = Math.min(9, Math.max(3.2, node.labelSize || 4.5));
@@ -269,6 +329,7 @@ export function createResearchGraph(host, options = {}) {
 
   function configureForces() {
     const factor = dimensions === 2 ? 0.65 : 1;
+    const large = projection.nodes.length > 120;
     const linkForce = graph.d3Force?.('link');
     linkForce?.distance?.((link) => {
       const source = nodeValue(link.source);
@@ -276,10 +337,10 @@ export function createResearchGraph(host, options = {}) {
       return (source?.cluster === target?.cluster ? 52 : 148) * factor;
     });
     linkForce?.strength?.((link) => Math.min(0.74, 0.12 + (link.weight || 1) * 0.035));
-    graph.d3Force?.('charge')?.strength?.((node) => -45 - (node.visualSize || 2) * 7.5);
+    graph.d3Force?.('charge')?.strength?.((node) => (large ? -30 : -42) - (node.visualSize || 2) * (large ? 5 : 7));
     graph.d3Force?.('center')?.strength?.(0.055);
-    graph.cooldownTime?.(8000);
-    graph.cooldownTicks?.(360);
+    graph.cooldownTime?.(large ? 2600 : 4200);
+    graph.cooldownTicks?.(large ? 120 : 200);
   }
 
   function rebuildAdjacency() {
@@ -308,6 +369,18 @@ export function createResearchGraph(host, options = {}) {
     }
     graph.linkColor(linkColor);
     graph.linkWidth(linkWidth);
+  }
+
+  function applyVisibilityState() {
+    for (const [id, object] of nodeObjects) {
+      object.visible = projection.visibleNodeIds.has(id);
+    }
+    for (const link of graph.graphData?.().links || []) {
+      const object = link.__lineObj;
+      if (object) {
+        object.visible = projection.visibleLinkIds.has(link.id);
+      }
+    }
   }
 
   function linkColor(link) {
@@ -356,21 +429,12 @@ export function createResearchGraph(host, options = {}) {
   function fit(duration = 700) {
     graph.resumeAnimation?.();
     graph.zoomToFit?.(duration, 36);
-    window.setTimeout(() => {
-      if (disposed) return;
-      dolly(0.72);
-      graph.refresh?.();
-    }, duration + 45);
   }
 
   function scheduleInitialCameraFits() {
-    // ForceGraph assigns coordinates incrementally. A single eager fit can
-    // therefore frame an empty origin and later leave the expanded graph
-    // outside the camera. These bounded checkpoints cover both quick and
-    // large live projections without depending on an engine-stop event.
-    scheduleCameraFit(420, 620);
-    scheduleCameraFit(2200, 760);
-    scheduleCameraFit(9200, 900);
+    // The settled fit handles the final force layout. This early checkpoint
+    // makes initial content visible without repeatedly moving the camera.
+    scheduleCameraFit(520, 560);
   }
 
   function scheduleCameraFit(delay, duration) {
@@ -397,9 +461,29 @@ export function createResearchGraph(host, options = {}) {
   }
 
   function disposeNodeObjects() {
-    nodeObjects.clear();
-    for (const resource of resources) resource?.dispose?.();
-    resources.clear();
+    disposeStaleNodeObjects(new Set());
+  }
+
+  function disposeStaleNodeObjects(activeIds) {
+    for (const [id, object] of nodeObjects) {
+      if (activeIds.has(id)) continue;
+      const staleResources = new Set();
+      object.traverse?.((child) => {
+        if (child.geometry) staleResources.add(child.geometry);
+        if (child.material) {
+          const materials = Array.isArray(child.material) ? child.material : [child.material];
+          materials.forEach((material) => {
+            staleResources.add(material);
+            if (material.map) staleResources.add(material.map);
+          });
+        }
+      });
+      staleResources.forEach((resource) => {
+        resource.dispose?.();
+        resources.delete(resource);
+      });
+      nodeObjects.delete(id);
+    }
   }
 }
 
@@ -413,10 +497,98 @@ function assertWebGlSupport() {
 }
 
 function normalizeProjection(value) {
+  const nodes = Array.isArray(value?.layoutNodes) ? value.layoutNodes : (Array.isArray(value?.nodes) ? value.nodes : []);
+  const links = Array.isArray(value?.layoutLinks) ? value.layoutLinks : (Array.isArray(value?.links) ? value.links : []);
   return {
-    nodes: Array.isArray(value?.nodes) ? value.nodes : [],
-    links: Array.isArray(value?.links) ? value.links : [],
+    nodes,
+    links,
+    visibleNodeIds: new Set(Array.isArray(value?.visibleNodeIds) ? value.visibleNodeIds : nodes.map((node) => node.id)),
+    visibleLinkIds: new Set(Array.isArray(value?.visibleLinkIds) ? value.visibleLinkIds : links.map((link) => link.id)),
   };
+}
+
+function projectionTopologyKey(value) {
+  return JSON.stringify({
+    nodes: (value?.nodes || []).map((node) => node.id),
+    links: (value?.links || []).map((link) => [nodeId(link.source), nodeId(link.target), link.id, link.relationType || 'co_occurs']),
+  });
+}
+
+function formatConfidence(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? `${Math.round((number > 1 ? number / 100 : number) * 100)}%` : 'n/a';
+}
+
+function formatProvenance(value) {
+  if (!value) return 'missing';
+  if (typeof value === 'string') return value;
+  return [value.method, value.table, value.evidenceId, value.kind].filter(Boolean).join(' · ') || 'verified';
+}
+
+// The renderer receives a clone for ForceGraph, so the update gate must be
+// based on stable semantic input rather than object identity or topology only.
+// Exclude force-layout coordinates and renderer-only fields; retain the
+// research meaning that must trigger a graphData refresh.
+export function graphProjectionFingerprint(value) {
+  const projection = normalizeProjection(value);
+  const nodes = projection.nodes
+    .map((node) => ({
+      id: node.id,
+      label: node.label,
+      kind: node.kind,
+      tags: node.tags,
+      description: node.description,
+      cluster: node.cluster,
+      clusterHint: node.clusterHint,
+      provenance: node.provenance,
+      sourceIds: node.sourceIds,
+      metadata: node.metadata,
+      occurrences: node.occurrences,
+      documentCount: node.documentCount,
+    }))
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+  const links = projection.links
+    .map((link) => ({
+      id: link.id,
+      source: nodeId(link.source),
+      target: nodeId(link.target),
+      kind: link.kind,
+      relation: link.relation,
+      label: link.label,
+      tags: link.tags,
+      description: link.description,
+      cluster: link.cluster,
+      provenance: link.provenance,
+      sourceIds: link.sourceIds,
+      metadata: link.metadata,
+      weight: link.weight,
+    }))
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+  return `graph:${stableSemanticHash({
+    metadata: projection.metadata,
+    tags: projection.tags,
+    description: projection.description,
+    clusters: projection.clusters,
+    provenance: projection.provenance,
+    nodes,
+    links,
+  })}`;
+}
+
+function stableSemanticHash(value) {
+  const canonical = canonicalize(value);
+  let hash = 2166136261;
+  for (const character of JSON.stringify(canonical)) {
+    hash ^= character.codePointAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
 }
 
 function cloneProjection(projection) {
@@ -428,6 +600,16 @@ function cloneProjection(projection) {
       target: nodeId(link.target),
     })),
   };
+}
+
+export function cloneResearchGraphData(value) {
+  return cloneProjection(normalizeProjection(value));
+}
+
+function sameIdSet(left, right) {
+  if (left?.size !== right?.size) return false;
+  for (const id of left || []) if (!right?.has(id)) return false;
+  return true;
 }
 
 function nodeId(value) {

@@ -220,7 +220,10 @@ pub fn run_pi_turn(dist: &Path, request: &Value, faux: bool) -> anyhow::Result<V
     stream.flush().ok();
 
     let response_bytes = read_line(&mut stream)?;
-    anyhow::ensure!(!response_bytes.is_empty(), "sidecar closed without a response");
+    anyhow::ensure!(
+        !response_bytes.is_empty(),
+        "sidecar closed without a response"
+    );
     let response: Value =
         serde_json::from_slice(&response_bytes).context("parse turn response JSON")?;
     Ok(response)
@@ -456,7 +459,10 @@ mod tests {
         let has_content = files
             .values()
             .any(|value| value.as_str() == Some("export const v = 1;\n"));
-        assert!(has_content, "widget source content projected into the files map");
+        assert!(
+            has_content,
+            "widget source content projected into the files map"
+        );
         Ok(())
     }
 
@@ -572,7 +578,11 @@ mod tests {
         let root = temp.path();
 
         let dist = resolve_sidecar_dist(root)?;
-        assert!(dist.exists(), "embedded sidecar extracted to {}", dist.display());
+        assert!(
+            dist.exists(),
+            "embedded sidecar extracted to {}",
+            dist.display()
+        );
         assert_eq!(
             std::fs::metadata(&dist)?.len(),
             SIDECAR_BUNDLE.len() as u64,
@@ -657,7 +667,10 @@ mod tests {
             "uses pi-ai's OpenAI Responses provider"
         );
         assert!(
-            model["id"].as_str().map(|id| !id.is_empty()).unwrap_or(false),
+            model["id"]
+                .as_str()
+                .map(|id| !id.is_empty())
+                .unwrap_or(false),
             "an active model id is resolved from the gateway config"
         );
         Ok(())

@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
+import { performance } from 'node:perf_hooks';
 import test from 'node:test';
 
 import { buildResearchGraphProjection } from '../research-graph-data.mjs';
+
+globalThis.window = {};
+const { cloneResearchGraphData, graphProjectionFingerprint } = await import('../research-graph.mjs');
 
 test('derives a clustered semantic graph with visual weights from research rows', () => {
   const projection = buildResearchGraphProjection({
@@ -45,16 +49,18 @@ test('derives a clustered semantic graph with visual weights from research rows'
 });
 
 test('prefers persisted graph rows and preserves source provenance', () => {
+  const provenance = JSON.stringify({ table: 'semantic_graph_nodes', method: 'evidence_grounded' });
   const projection = buildResearchGraphProjection({
     graphNodeRows: [
-      { node_id: 'concept:graph', label: 'Graph', cluster_id: 'visualization', occurrences: 12, source_ids_json: '["source_a"]' },
-      { node_id: 'concept:research', label: 'Research', cluster_id: 'visualization', occurrences: 9, source_ids_json: '["source_a","source_b"]' },
-      { node_id: 'concept:evidence', label: 'Evidence', cluster_id: 'quality', occurrences: 7, source_ids_json: '["source_b"]' },
+      { node_id: 'concept:graph', label: 'Graph', kind: 'concept', confidence: 0.9, provenance_json: provenance, cluster_id: 'visualization', occurrences: 12, source_ids_json: '["source_a"]' },
+      { node_id: 'concept:research', label: 'Research', kind: 'concept', confidence: 0.86, provenance_json: provenance, cluster_id: 'visualization', occurrences: 9, source_ids_json: '["source_a","source_b"]' },
+      { node_id: 'concept:evidence', label: 'Evidence', kind: 'concept', confidence: 0.82, provenance_json: provenance, cluster_id: 'quality', occurrences: 7, source_ids_json: '["source_b"]' },
     ],
     graphEdgeRows: [
-      { edge_id: 'edge_1', source_id: 'concept:graph', target_id: 'concept:research', weight: 8, source_ids_json: '["source_a"]' },
-      { edge_id: 'edge_2', source_id: 'concept:research', target_id: 'concept:evidence', weight: 4, source_ids_json: '["source_b"]' },
+      { edge_id: 'edge_1', source_id: 'concept:graph', target_id: 'concept:research', relation_type: 'supports', confidence: 0.8, provenance_json: provenance, weight: 8, source_ids_json: '["source_a"]' },
+      { edge_id: 'edge_2', source_id: 'concept:research', target_id: 'concept:evidence', relation_type: 'co_occurs', confidence: 0.7, provenance_json: provenance, weight: 4, source_ids_json: '["source_b"]' },
     ],
+    verifiedSourceIds: ['source_a', 'source_b'],
     visibleLimit: 120,
   });
 
@@ -63,6 +69,69 @@ test('prefers persisted graph rows and preserves source provenance', () => {
   assert.equal(projection.links.length, 2);
   assert.deepEqual(projection.nodes.find((node) => node.id === 'concept:research').sourceIds, ['source_a', 'source_b']);
   assert.equal(projection.metrics.clusterCount, 2);
+  assert.equal(projection.nodes[0].kind, 'concept');
+  assert.equal(projection.links[0].relationType, 'supports');
+  assert.equal(projection.links[0].provenance.method, 'evidence_grounded');
+});
+
+test('all layer preserves the complete small persisted graph at standard and deep detail', () => {
+  const provenance = JSON.stringify({ source_id: 'enola', evidence_ids: ['receipt-enola'] });
+  const kinds = ['topic', 'source', 'evidence', 'concept', 'measurement', 'measurement', 'measurement', 'concept', 'concept'];
+  const graphNodeRows = kinds.map((kind, index) => ({
+    node_id: `node:${index}`,
+    label: `Verified node ${index}`,
+    kind,
+    confidence: 1,
+    provenance_json: provenance,
+    source_ids_json: '["enola"]',
+  }));
+  const graphEdgeRows = Array.from({ length: 8 }, (_, index) => ({
+    edge_id: `edge:${index}`,
+    source_id: `node:${index}`,
+    target_id: `node:${index + 1}`,
+    relation_type: 'supports',
+    label: 'Supports',
+    weight: 1,
+    confidence: 1,
+    provenance_json: provenance,
+    source_ids_json: '["enola"]',
+  }));
+  for (const detailLevel of ['standard', 'deep']) {
+    const projection = buildResearchGraphProjection({
+      graphNodeRows,
+      graphEdgeRows,
+      graphLayer: 'all',
+      detailLevel,
+      verifiedSourceIds: ['enola'],
+    });
+    assert.equal(projection.origin, 'persisted');
+    assert.equal(projection.nodes.length, 9);
+    assert.equal(projection.links.length, 8);
+  }
+});
+
+test('rejects persisted graph rows with invalid relation, provenance, or source binding', () => {
+  const projection = buildResearchGraphProjection({
+    graphNodeRows: [{ node_id: 'concept:bad', label: 'Bad concept', kind: 'concept', confidence: 0.8, source_ids_json: '["unverified"]' }],
+    graphEdgeRows: [{ edge_id: 'edge:bad', source_id: 'concept:bad', target_id: 'concept:bad', relation_type: 'made_up', confidence: 0.8, source_ids_json: '["unverified"]' }],
+    verifiedSourceIds: ['verified'],
+  });
+  assert.equal(projection.status, 'invalid_graph_contract');
+  assert.equal(projection.origin, 'invalid');
+  assert.deepEqual(projection.nodes, []);
+  assert.ok(projection.errors.some((error) => error.includes('relation_type')));
+});
+
+test('derived graph excludes task prompt concepts and marks fallback relations explicitly', () => {
+  const projection = buildResearchGraphProjection({
+    task: { id: 'task-prompt', title: 'Unsubstantiated Roadmap Hypothesis', prompt: 'Secret roadmap token must never rank.' },
+    sourceModels: [{ id: 'source_verified', evidenceEligible: true, title: 'Governance evidence study', score: 88, row: { summary: 'Governance evidence supports audit controls.' } }],
+    verifiedSourceIds: ['source_verified'],
+    graphLayer: 'concepts',
+    visibleLimit: 36,
+  });
+  assert.doesNotMatch(projection.nodes.map((node) => node.label).join(' '), /Unsubstantiated|roadmap|secret/i);
+  assert.ok(projection.links.every((link) => link.relationType === 'co_occurs' && link.provenance?.kind === 'derived'));
 });
 
 test('adds source and evidence layers without exceeding graph limits', () => {
@@ -92,4 +161,175 @@ test('adds source and evidence layers without exceeding graph limits', () => {
   assert.ok(projection.nodes.some((node) => node.kind === 'evidence'));
   const nodeIds = new Set(projection.nodes.map((node) => node.id));
   assert.ok(projection.links.every((link) => nodeIds.has(link.source) && nodeIds.has(link.target)));
+});
+
+test('all layer reserves source and evidence nodes and deduplicates repeated evidence ids', () => {
+  const sourceModels = Array.from({ length: 20 }, (_, index) => ({
+    id: `source_${index}`,
+    title: `Ranked bearing concept source ${index}`,
+    note: `propeller bearing torque thrust vibration concept ${index}`,
+    score: 100 - index,
+    row: { summary: `Measured bearing concept ${index}` },
+  }));
+  const repeatedEvidence = {
+    source_id: 'source_0',
+    evidence_id: 'receipt-0',
+    fact_label: 'Measured thrust',
+    quote: 'The measured thrust value is source-backed.',
+  };
+  const projection = buildResearchGraphProjection({
+    sourceModels,
+    measurementRows: [repeatedEvidence, { ...repeatedEvidence }],
+    graphLayer: 'all',
+    visibleLimit: 12,
+  });
+
+  assert.ok(projection.nodes.some((node) => node.kind === 'source'));
+  assert.ok(projection.nodes.some((node) => node.kind === 'evidence'));
+  assert.equal(new Set(projection.nodes.map((node) => node.id)).size, projection.nodes.length);
+  assert.equal(new Set(projection.links.map((link) => link.id)).size, projection.links.length);
+});
+
+test('does not turn technical metadata keys into research concepts', () => {
+  const projection = buildResearchGraphProjection({
+    task: { id: 'bearing', title: 'UAV propeller bearing loads', prompt: 'Evaluate measured thrust and torque.' },
+    sourceModels: [{
+      id: 'source_a',
+      title: 'Measured propeller thrust and torque',
+      score: 96,
+      row: {
+        summary: 'Wind tunnel measurements connect propeller thrust, torque and rotational speed.',
+        tags: ['propeller performance', 'bearing load'],
+        source_id: 'source_a',
+        snapshot_hash: 'sha256:deadbeef',
+        canonical_url: 'https://example.test/data',
+        verification_status: 'verified',
+      },
+    }],
+    measurementRows: [{
+      source_id: 'source_a',
+      fact_label: 'Measured torque',
+      quote: 'Torque was measured across the complete rotational speed range.',
+      snapshot_path: '/runtime/snapshots/source_a.html',
+      extracted_at: '2026-07-17T00:00:00Z',
+    }],
+    detailLevel: 'standard',
+  });
+  const labels = projection.nodes.map((node) => node.label.toLocaleLowerCase()).join(' ');
+  assert.match(labels, /propeller|torque|bearing/);
+  assert.doesNotMatch(labels, /snapshot|canonical|verification|extracted|sha256|source id/);
+  assert.ok(projection.nodes.some((node) => node.label === 'Propeller Performance'));
+});
+
+test('detail levels are nested and preserve the requested source and evidence layers', () => {
+  const sourceModels = Array.from({ length: 80 }, (_, index) => ({
+    id: `source_${index}`,
+    title: `Propeller measurement study ${index}`,
+    score: 100 - index / 2,
+    row: { summary: 'Measured thrust torque rotational speed vibration bearing load.', tags: ['propeller load', 'bearing design'] },
+  }));
+  const measurementRows = sourceModels.flatMap((source, index) => Array.from({ length: 3 }, (_, fact) => ({
+    source_id: source.id,
+    fact_label: `Torque point ${index}-${fact}`,
+    quote: 'Measured torque and thrust.',
+    confidence: 0.95,
+  })));
+  const build = (detailLevel) => buildResearchGraphProjection({
+    task: { id: 'bearing', title: 'Drone bearing loads', prompt: 'Measured propeller loads.' },
+    sourceModels,
+    measurementRows,
+    graphLayer: 'evidence',
+    detailLevel,
+  });
+  const overview = build('overview');
+  const standard = build('standard');
+  const deep = build('deep');
+  assert.ok(overview.nodes.length <= 36);
+  assert.ok(standard.nodes.length <= 64);
+  assert.ok(deep.nodes.length <= 120);
+  for (const projection of [overview, standard, deep]) {
+    assert.ok(projection.nodes.some((node) => node.kind === 'source'));
+    assert.ok(projection.nodes.some((node) => node.kind === 'evidence'));
+  }
+  const standardIds = new Set(standard.nodes.map((node) => node.id));
+  const deepIds = new Set(deep.nodes.map((node) => node.id));
+  assert.ok(overview.nodes.every((node) => standardIds.has(node.id)));
+  assert.ok(standard.nodes.every((node) => deepIds.has(node.id)));
+  assert.equal(new Set(deep.nodes.map((node) => node.id)).size, deep.nodes.length);
+  assert.ok(overview.nodes.length <= 36 && standard.nodes.length <= 64 && deep.nodes.length <= 120);
+});
+
+test('projects SKF-sized research data within an interactive budget', () => {
+  const sourceModels = Array.from({ length: 322 }, (_, index) => ({
+    id: `source_${index}`,
+    title: `UAV propeller dataset ${index}`,
+    score: 95 - index / 20,
+    row: {
+      summary: 'Measured propeller thrust torque rpm vibration and bearing loads under test conditions.',
+      tags: ['propeller performance', 'rotor dynamics', 'bearing load'],
+    },
+  }));
+  const measurementRows = Array.from({ length: 816 }, (_, index) => ({
+    source_id: `source_${index % sourceModels.length}`,
+    fact_label: `Measured load point ${index}`,
+    quote: 'Direct experimental thrust and torque measurement.',
+    confidence: 0.94,
+  }));
+  const startedAt = performance.now();
+  const projection = buildResearchGraphProjection({
+    task: { id: 'skf', title: 'SKF UAV bearing design', prompt: 'Evaluate measured rotor loads.' },
+    sourceModels,
+    measurementRows,
+    graphLayer: 'evidence',
+    detailLevel: 'deep',
+  });
+  const elapsedMs = performance.now() - startedAt;
+  assert.ok(projection.nodes.length <= 120);
+  assert.ok(projection.links.length <= 1800);
+  assert.ok(elapsedMs < 1200, `projection took ${elapsedMs.toFixed(1)} ms`);
+});
+
+test('graph fingerprint changes for metadata-only updates and ignores layout coordinates', () => {
+  const base = {
+    metadata: { domain: 'drone_bearing_design' },
+    nodes: [{
+      id: 'concept:load',
+      label: 'Bearing load',
+      kind: 'concept',
+      tags: ['mechanics'],
+      description: 'Radial load transferred into the bearing.',
+      cluster: 1,
+      provenance: { source_id: 'source_a', method: 'direct' },
+      sourceIds: ['source_a'],
+      x: 12,
+      y: 8,
+    }],
+    links: [{
+      id: 'edge:load-force',
+      source: 'concept:load',
+      target: 'concept:force',
+      relation: 'supports',
+      provenance: { source_id: 'source_a' },
+      weight: 4,
+      z: 9,
+    }],
+  };
+  const layoutOnly = structuredClone(base);
+  layoutOnly.nodes[0].x = 900;
+  layoutOnly.nodes[0].y = -120;
+  layoutOnly.links[0].z = 44;
+  assert.equal(graphProjectionFingerprint(layoutOnly), graphProjectionFingerprint(base));
+
+  const metadataOnly = structuredClone(base);
+  metadataOnly.nodes[0].tags = ['mechanics', 'uav'];
+  metadataOnly.nodes[0].description = 'Updated description from the verified source record.';
+  metadataOnly.nodes[0].provenance = { source_id: 'source_b', method: 'reviewed' };
+  assert.notEqual(graphProjectionFingerprint(metadataOnly), graphProjectionFingerprint(base));
+
+  const graphData = cloneResearchGraphData(metadataOnly);
+  assert.deepEqual(graphData.nodes[0].tags, ['mechanics', 'uav']);
+  assert.equal(graphData.nodes[0].description, metadataOnly.nodes[0].description);
+  assert.deepEqual(graphData.nodes[0].provenance, metadataOnly.nodes[0].provenance);
+  assert.equal(graphData.links[0].relation, 'supports');
+  assert.notEqual(graphData.nodes[0], metadataOnly.nodes[0]);
 });

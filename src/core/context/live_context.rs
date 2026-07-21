@@ -1,3 +1,4 @@
+use anyhow::Context;
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value;
@@ -203,7 +204,7 @@ pub fn render_runtime_prompt(
         &rendered_context,
         suggested_skill,
     );
-    let context_instructions = format!(
+    let mut context_instructions = format!(
         "<ctox_runtime_context version=\"1\">\n{}\n</ctox_runtime_context>",
         render_chat_context(
             root,
@@ -214,6 +215,10 @@ pub fn render_runtime_prompt(
             suggested_skill,
         )
     );
+    if let Some(skill_instructions) = render_bound_skill_instructions(root, suggested_skill)? {
+        context_instructions.push_str("\n\n");
+        context_instructions.push_str(&skill_instructions);
+    }
     Ok(RenderedRuntimePrompt {
         prompt,
         latest_user_prompt,
@@ -221,6 +226,23 @@ pub fn render_runtime_prompt(
         rendered_context_items: rendered_context.entries.len(),
         omitted_context_items: rendered_context.omitted_items,
     })
+}
+
+fn render_bound_skill_instructions(
+    root: &Path,
+    suggested_skill: Option<&str>,
+) -> Result<Option<String>> {
+    let Some(skill_name) = suggested_skill
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let body = crate::skill_store::load_skill_body_by_name(root, skill_name)?
+        .with_context(|| format!("bound skill `{skill_name}` has no readable SKILL.md body"))?;
+    Ok(Some(format!(
+        "<ctox_bound_skill name=\"{skill_name}\">\nCTOX has bound this skill to the current task. Its instructions are mandatory for this run; do not substitute an improvised workflow.\n\n{body}\n</ctox_bound_skill>"
+    )))
 }
 
 pub fn prompt_context_breakdown(
@@ -2218,6 +2240,35 @@ mod tests {
         assert!(prompt.contains("Suggested skill dispatch:"));
         assert!(prompt.contains("required_skill: $system-onboarding"));
         assert!(prompt.contains("load this skill before acting"));
+    }
+
+    #[test]
+    fn bound_system_skill_includes_managed_body_in_runtime_context() {
+        let root = temp_root("bound-system-skill");
+        crate::skill_store::bootstrap_embedded_system_skills(&root)
+            .expect("bootstrap embedded skills");
+
+        let rendered = render_bound_skill_instructions(&root, Some("systematic-research"))
+            .expect("render bound skill")
+            .expect("bound skill instructions");
+
+        assert!(rendered.contains("<ctox_bound_skill name=\"systematic-research\">"));
+        assert!(rendered.contains("ctox web deep-research"));
+        assert!(rendered.contains("do not substitute an improvised workflow"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_bound_skill_body_fails_closed() {
+        let root = temp_root("missing-bound-skill");
+        crate::skill_store::bootstrap_embedded_system_skills(&root)
+            .expect("bootstrap embedded skills");
+
+        let error = render_bound_skill_instructions(&root, Some("missing-skill"))
+            .expect_err("missing bound skill must fail");
+
+        assert!(error.to_string().contains("has no readable SKILL.md body"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

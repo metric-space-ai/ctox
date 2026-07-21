@@ -38,9 +38,7 @@ use ctox_core::ThreadManager;
 use ctox_feedback::CodexFeedback;
 use ctox_protocol::config_types::SandboxMode;
 use ctox_protocol::openai_models::ReasoningEffort;
-use ctox_protocol::protocol::{
-    AskForApproval, EventMsg, ReadOnlyAccess, SandboxPolicy, SessionSource, SubAgentSource,
-};
+use ctox_protocol::protocol::{AskForApproval, EventMsg, SandboxPolicy, SessionSource};
 use ctox_protocol::user_input::UserInput;
 use ctox_utils_absolute_path::AbsolutePathBuf;
 
@@ -76,6 +74,80 @@ const CTOX_PERSISTENT_WORKER_THREAD_NAME: &str = "ctox-service-worker";
 #[cfg(test)]
 static DIRECT_SESSION_EVENT_DESERIALIZE_CALLS: AtomicUsize = AtomicUsize::new(0);
 
+fn direct_session_arg0_paths() -> Arg0DispatchPaths {
+    Arg0DispatchPaths {
+        #[cfg(target_os = "linux")]
+        ctox_linux_sandbox_exe: std::env::current_exe().ok(),
+        #[cfg(not(target_os = "linux"))]
+        ctox_linux_sandbox_exe: None,
+        main_execve_wrapper_exe: None,
+    }
+}
+
+fn configure_managed_linux_sandbox(cli_overrides: &mut Vec<(String, toml::Value)>) {
+    #[cfg(target_os = "linux")]
+    {
+        const KEY: &str = "features.use_legacy_landlock";
+        cli_overrides.retain(|(key, _)| key != KEY);
+        cli_overrides.push((KEY.to_string(), toml::Value::Boolean(true)));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    let _ = cli_overrides;
+}
+
+fn managed_worker_sandbox_policy(read_only_sandbox: bool) -> SandboxPolicy {
+    if read_only_sandbox {
+        return SandboxPolicy::new_read_only_policy();
+    }
+
+    let mut policy = SandboxPolicy::new_workspace_write_policy();
+    if let SandboxPolicy::WorkspaceWrite { network_access, .. } = &mut policy {
+        *network_access = true;
+    }
+    #[cfg(target_os = "linux")]
+    if let SandboxPolicy::WorkspaceWrite {
+        read_only_access,
+        exclude_tmpdir_env_var,
+        exclude_slash_tmp,
+        ..
+    } = &mut policy
+    {
+        *read_only_access = ctox_protocol::protocol::ReadOnlyAccess::Restricted {
+            include_platform_defaults: true,
+            readable_roots: Vec::new(),
+        };
+        *exclude_tmpdir_env_var = true;
+        *exclude_slash_tmp = true;
+    }
+    policy
+}
+
+fn configure_worker_tool_stack(
+    cli_overrides: &mut Vec<(String, toml::Value)>,
+    disable_active_tools: bool,
+) {
+    if disable_active_tools {
+        return;
+    }
+    const REQUIRED_WORKER_OVERRIDES: &[(&str, bool)] = &[
+        ("tools.ctox_web", true),
+        ("features.multi_agent", false),
+        ("features.enable_fanout", false),
+        ("features.memory_tool", false),
+    ];
+    cli_overrides.retain(|(key, _)| {
+        !REQUIRED_WORKER_OVERRIDES
+            .iter()
+            .any(|(required_key, _)| key == required_key)
+    });
+    cli_overrides.extend(
+        REQUIRED_WORKER_OVERRIDES
+            .iter()
+            .map(|(key, enabled)| ((*key).to_string(), toml::Value::Boolean(*enabled))),
+    );
+}
+
 fn persistent_worker_thread_name(root: &Path) -> String {
     let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let digest = Sha256::digest(canonical_root.to_string_lossy().as_bytes());
@@ -84,20 +156,6 @@ fn persistent_worker_thread_name(root: &Path) -> String {
         value
     });
     format!("{CTOX_PERSISTENT_WORKER_THREAD_NAME}-{}", suffix)
-}
-
-fn create_reviewer_scratch_workspace() -> Result<PathBuf> {
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "ctox-review-scratch-{}-{unique}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&path)
-        .with_context(|| format!("failed to create reviewer scratch at {}", path.display()))?;
-    Ok(path)
 }
 
 const CTOX_DIRECT_SESSION_BASE_INSTRUCTIONS: &str = r#"You are an agent working inside CTOX.
@@ -437,7 +495,6 @@ pub(crate) struct PersistentSession {
     disable_mcp_servers: bool,
     read_only_sandbox: bool,
     persistent_worker: bool,
-    reviewer_scratch_workspace: Option<PathBuf>,
     /// Set when a turn ended ambiguously (e.g. `turn/start` timed out with
     /// the request still detached server-side). A poisoned session refuses
     /// further turns: reusing it could overlap or steer into the original
@@ -600,14 +657,10 @@ impl PersistentSession {
 
         let composed_base_instructions =
             compose_base_instructions(root, settings, base_instructions)?;
-        let reviewer_scratch_workspace = read_only_sandbox
-            .then(create_reviewer_scratch_workspace)
-            .transpose()?;
-        let session_cwd = reviewer_scratch_workspace.as_deref().unwrap_or(root);
         let start_result = rt.block_on(async {
             Self::start_client_and_thread(
                 root,
-                session_cwd,
+                root,
                 settings,
                 &composed_base_instructions,
                 disable_active_tools,
@@ -620,12 +673,7 @@ impl PersistentSession {
         let (client, thread_id, cwd, seq, model, model_provider, api_provider, reasoning_effort) =
             match start_result {
                 Ok(started) => started,
-                Err(err) => {
-                    if let Some(scratch) = reviewer_scratch_workspace.as_ref() {
-                        let _ = std::fs::remove_dir_all(scratch);
-                    }
-                    return Err(err);
-                }
+                Err(err) => return Err(err),
             };
 
         let mut policy = CompactPolicy::from_settings(
@@ -695,7 +743,6 @@ impl PersistentSession {
             disable_mcp_servers,
             read_only_sandbox,
             persistent_worker,
-            reviewer_scratch_workspace,
             poisoned: false,
         })
     }
@@ -719,7 +766,7 @@ impl PersistentSession {
         timeout: Option<Duration>,
         exact_prompt_preflight: Option<ExactPromptTokenCount>,
     ) -> Result<String> {
-        self.run_turn_inner_with_context(prompt, None, timeout, exact_prompt_preflight)
+        self.run_turn_inner_with_context(prompt, None, timeout, exact_prompt_preflight, None)
     }
 
     pub(crate) fn run_turn_inner_with_context(
@@ -728,6 +775,7 @@ impl PersistentSession {
         developer_instructions: Option<&str>,
         timeout: Option<Duration>,
         exact_prompt_preflight: Option<ExactPromptTokenCount>,
+        required_initial_tool: Option<&str>,
     ) -> Result<String> {
         let mut ignore_progress = |_event: &JsonValue| {};
         self.run_turn_inner_with_context_and_progress(
@@ -736,6 +784,7 @@ impl PersistentSession {
             timeout,
             exact_prompt_preflight,
             &mut ignore_progress,
+            required_initial_tool,
         )
     }
 
@@ -746,6 +795,7 @@ impl PersistentSession {
         timeout: Option<Duration>,
         exact_prompt_preflight: Option<ExactPromptTokenCount>,
         progress: &mut dyn FnMut(&JsonValue),
+        required_initial_tool: Option<&str>,
     ) -> Result<String> {
         anyhow::ensure!(
             !self.poisoned,
@@ -769,6 +819,7 @@ impl PersistentSession {
         let disable_mcp_servers = self.disable_mcp_servers;
         let read_only_sandbox = self.read_only_sandbox;
         let persistent_worker = self.persistent_worker;
+        let required_initial_tool = required_initial_tool.map(str::to_string);
         self.ctx_log.log(
             "turn_request",
             &format!("\"prompt_len\":{},\"timeout\":{:?}", prompt.len(), timeout),
@@ -801,6 +852,7 @@ impl PersistentSession {
                 persistent_worker,
                 exact_prompt_preflight,
                 progress,
+                required_initial_tool.as_deref(),
             )
             .await
         });
@@ -1012,10 +1064,14 @@ impl PersistentSession {
             model_provider: selected_provider_id.clone(),
             cwd: Some(cwd.clone()),
             approval_policy: Some(AskForApproval::Never),
-            // Reviewers write only inside their disposable scratch cwd. The
-            // authoritative workspace and runtime tree are outside the cwd
-            // and therefore read-only under WorkspaceWrite.
-            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            // Completion review is a server-owned, independent read-only
+            // execution profile. It is not a child agent and cannot write
+            // anywhere, including the authoritative workspace/runtime tree.
+            sandbox_mode: Some(if read_only_sandbox {
+                SandboxMode::ReadOnly
+            } else {
+                SandboxMode::WorkspaceWrite
+            }),
             include_apply_patch_tool: Some(true),
             ephemeral: Some(true),
             disable_mcp_servers,
@@ -1041,20 +1097,21 @@ impl PersistentSession {
                 provider.provider_id, provider.base_url, provider.wire_api
             );
         }
-        let config = Arc::new(
-            ConfigBuilder::default()
-                .cli_overrides(cli_overrides.clone())
-                .harness_overrides(overrides)
-                .cloud_requirements(cloud_requirements.clone())
-                .build()
-                .await
-                .map_err(|err| anyhow::anyhow!("config build: {err}"))?,
-        );
-        let session_source = if read_only_sandbox {
-            SessionSource::SubAgent(SubAgentSource::Review)
-        } else {
-            SessionSource::Exec
-        };
+        // This must be part of the canonical override set passed into the
+        // in-process app server. Mutating only the initially built Config is
+        // insufficient because per-turn configs and spawned threads rebuild
+        // from these overrides.
+        configure_managed_linux_sandbox(&mut cli_overrides);
+        configure_worker_tool_stack(&mut cli_overrides, disable_active_tools);
+        let config = ConfigBuilder::default()
+            .cli_overrides(cli_overrides.clone())
+            .harness_overrides(overrides)
+            .cloud_requirements(cloud_requirements.clone())
+            .build()
+            .await
+            .map_err(|err| anyhow::anyhow!("config build: {err}"))?;
+        let config = Arc::new(config);
+        let session_source = SessionSource::Exec;
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager.clone(),
@@ -1063,7 +1120,7 @@ impl PersistentSession {
         ));
 
         let start_args = InProcessClientStartArgs {
-            arg0_paths: Arg0DispatchPaths::default(),
+            arg0_paths: direct_session_arg0_paths(),
             config,
             cli_overrides: cli_overrides.clone(),
             loader_overrides: Default::default(),
@@ -1225,6 +1282,7 @@ impl PersistentSession {
         persistent_worker: bool,
         exact_prompt_preflight: Option<ExactPromptTokenCount>,
         progress: &mut dyn FnMut(&JsonValue),
+        required_initial_tool: Option<&str>,
     ) -> Result<String> {
         // Reuse the session's thread across turns. The previous fresh-thread-
         // per-turn workaround ("the thread may not accept new TurnStart
@@ -1323,23 +1381,12 @@ impl PersistentSession {
                 text_elements: Vec::new(),
             }
             .into()],
+            required_initial_tool: required_initial_tool.map(str::to_string),
             developer_instructions: developer_instructions.map(str::to_string),
             cwd: Some(cwd.to_path_buf()),
             approval_policy: Some(AskForApproval::Never.into()),
             approvals_reviewer: None,
-            sandbox_policy: Some(
-                SandboxPolicy::WorkspaceWrite {
-                    writable_roots: Vec::new(),
-                    read_only_access: ReadOnlyAccess::FullAccess,
-                    network_access: true,
-                    // Reviewer scratch lives under the temp directory, but cwd
-                    // remains explicitly writable. Do not grant the rest of
-                    // the host temp tree as an additional writable surface.
-                    exclude_tmpdir_env_var: read_only_sandbox,
-                    exclude_slash_tmp: read_only_sandbox,
-                }
-                .into(),
-            ),
+            sandbox_policy: Some(managed_worker_sandbox_policy(read_only_sandbox).into()),
             model: None,
             service_tier: None,
             effort: reasoning_effort,
@@ -1856,6 +1903,116 @@ mod tests {
     use super::*;
 
     #[test]
+    fn direct_sessions_receive_the_managed_linux_sandbox_executable() {
+        let paths = direct_session_arg0_paths();
+
+        #[cfg(target_os = "linux")]
+        assert_eq!(paths.ctox_linux_sandbox_exe, std::env::current_exe().ok());
+
+        #[cfg(not(target_os = "linux"))]
+        assert!(paths.ctox_linux_sandbox_exe.is_none());
+    }
+
+    #[test]
+    fn managed_linux_sandbox_override_survives_turn_rebuilds() {
+        let mut overrides = vec![(
+            "features.use_legacy_landlock".to_string(),
+            toml::Value::Boolean(false),
+        )];
+
+        configure_managed_linux_sandbox(&mut overrides);
+
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            overrides,
+            vec![(
+                "features.use_legacy_landlock".to_string(),
+                toml::Value::Boolean(true),
+            )]
+        );
+
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!(
+            overrides,
+            vec![(
+                "features.use_legacy_landlock".to_string(),
+                toml::Value::Boolean(false),
+            )]
+        );
+    }
+
+    #[test]
+    fn managed_linux_workers_cannot_read_sibling_workspaces() {
+        use ctox_protocol::protocol::ReadOnlyAccess;
+
+        let policy = managed_worker_sandbox_policy(false);
+
+        #[cfg(target_os = "linux")]
+        assert!(matches!(
+            policy,
+            SandboxPolicy::WorkspaceWrite {
+                read_only_access: ReadOnlyAccess::Restricted {
+                    include_platform_defaults: true,
+                    readable_roots,
+                },
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+                ..
+            } if readable_roots.is_empty()
+        ));
+
+        #[cfg(not(target_os = "linux"))]
+        assert!(matches!(
+            policy,
+            SandboxPolicy::WorkspaceWrite {
+                read_only_access: ReadOnlyAccess::FullAccess,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn worker_sessions_enable_web_stack_and_forbid_free_subagents() {
+        let mut overrides = vec![
+            ("tools.ctox_web".to_string(), toml::Value::Boolean(false)),
+            (
+                "features.multi_agent".to_string(),
+                toml::Value::Boolean(true),
+            ),
+        ];
+
+        configure_worker_tool_stack(&mut overrides, false);
+
+        assert_eq!(
+            overrides,
+            vec![
+                ("tools.ctox_web".to_string(), toml::Value::Boolean(true)),
+                (
+                    "features.multi_agent".to_string(),
+                    toml::Value::Boolean(false),
+                ),
+                (
+                    "features.enable_fanout".to_string(),
+                    toml::Value::Boolean(false),
+                ),
+                (
+                    "features.memory_tool".to_string(),
+                    toml::Value::Boolean(false)
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn tool_disabled_review_sessions_do_not_enable_worker_tools() {
+        let mut overrides = Vec::new();
+
+        configure_worker_tool_stack(&mut overrides, true);
+
+        assert!(overrides.is_empty());
+    }
+
+    #[test]
     fn persistent_worker_thread_name_is_stable_and_root_scoped() {
         let first = persistent_worker_thread_name(Path::new("/tmp/ctox-a"));
         let same = persistent_worker_thread_name(Path::new("/tmp/ctox-a"));
@@ -1965,19 +2122,6 @@ mod tests {
         // contract must not leak in and instruct worker actions.
         assert!(!instructions.contains("required durable outcome exists"));
         assert!(!instructions.contains("You are CTOX, the personal CTO agent"));
-    }
-
-    #[test]
-    fn reviewer_scratch_workspaces_are_unique_and_removable() {
-        let first = create_reviewer_scratch_workspace().expect("create first scratch");
-        let second = create_reviewer_scratch_workspace().expect("create second scratch");
-        assert_ne!(first, second);
-        assert!(first.is_dir());
-        assert!(second.is_dir());
-        std::fs::remove_dir_all(&first).expect("remove first scratch");
-        std::fs::remove_dir_all(&second).expect("remove second scratch");
-        assert!(!first.exists());
-        assert!(!second.exists());
     }
 
     #[test]
@@ -2228,9 +2372,6 @@ impl PersistentSession {
                     );
                     client.abort_now();
                     runtime.shutdown_background();
-                    if let Some(scratch) = self.reviewer_scratch_workspace.take() {
-                        let _ = std::fs::remove_dir_all(&scratch);
-                    }
                     return;
                 }
                 // Try a bounded graceful shutdown first. `abort_now` skips
@@ -2255,14 +2396,6 @@ impl PersistentSession {
                 }
             }
             runtime.shutdown_timeout(Duration::from_secs(2));
-        }
-        if let Some(scratch) = self.reviewer_scratch_workspace.take() {
-            if let Err(err) = std::fs::remove_dir_all(&scratch) {
-                eprintln!(
-                    "[ctox direct-session] failed to remove reviewer scratch {}: {err}",
-                    scratch.display()
-                );
-            }
         }
     }
 }

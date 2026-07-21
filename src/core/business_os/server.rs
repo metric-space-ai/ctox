@@ -20,6 +20,8 @@ use std::net::IpAddr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::mpsc::sync_channel;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::thread;
@@ -43,6 +45,8 @@ const CHATGPT_AUTH_SCOPE: &str =
     "openid profile email offline_access api.connectors.read api.connectors.invoke";
 const CHATGPT_AUTH_SECRET_SCOPE: &str = "ctox-auth";
 const CHATGPT_AUTH_SECRET_NAME: &str = "chatgpt_subscription_auth_json";
+const BUSINESS_OS_HTTP_WORKERS: usize = 4;
+const BUSINESS_OS_HTTP_QUEUE_CAPACITY: usize = 256;
 
 #[derive(Clone)]
 struct PendingChatgptSubscriptionLogin {
@@ -176,14 +180,34 @@ pub fn serve_business_os(root: &Path, options: BusinessOsServeOptions) -> anyhow
         .map_err(|err| anyhow::anyhow!("failed to bind Business OS server: {err}"))?;
     println!("CTOX Business OS listening on http://{}", options.addr);
     println!("Serving {}", app_root.display());
-    for request in server.incoming_requests() {
+    let (request_tx, request_rx) = sync_channel(BUSINESS_OS_HTTP_QUEUE_CAPACITY);
+    let request_rx = Arc::new(Mutex::new(request_rx));
+    for worker_index in 0..BUSINESS_OS_HTTP_WORKERS {
         let root = root.to_path_buf();
         let app_root = app_root.clone();
-        std::thread::spawn(move || {
-            if let Err(err) = handle_request(&root, &app_root, request) {
-                eprintln!("[business-os] request failed: {err:#}");
-            }
-        });
+        let request_rx = Arc::clone(&request_rx);
+        thread::Builder::new()
+            .name(format!("business-os-http-{worker_index}"))
+            .spawn(move || loop {
+                let request = {
+                    let receiver = request_rx
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    receiver.recv()
+                };
+                let Ok(request) = request else {
+                    break;
+                };
+                if let Err(err) = handle_request(&root, &app_root, request) {
+                    eprintln!("[business-os] request failed: {err:#}");
+                }
+            })
+            .context("failed to start Business OS HTTP worker")?;
+    }
+    for request in server.incoming_requests() {
+        if request_tx.send(request).is_err() {
+            anyhow::bail!("Business OS HTTP workers stopped");
+        }
     }
     Ok(())
 }
@@ -2184,7 +2208,29 @@ fn sanitize_slug(value: &str) -> String {
     out.trim_matches('-').to_owned()
 }
 
-fn knowledge_index_payload(root: &Path) -> anyhow::Result<Value> {
+fn copy_dir_recursive(source: &Path, target: &Path) -> anyhow::Result<()> {
+    if target.exists() {
+        anyhow::bail!("target module already exists: {}", target.display());
+    }
+    fs::create_dir_all(target)
+        .with_context(|| format!("failed to create module dir {}", target.display()))?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let from = entry.path();
+        let to = target.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else if file_type.is_file() {
+            fs::copy(&from, &to).with_context(|| {
+                format!("failed to copy {} to {}", from.display(), to.display())
+            })?;
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn knowledge_index_payload(root: &Path) -> anyhow::Result<Value> {
     let mut items = Vec::new();
     let mut runbooks = Vec::new();
     let mut tables = Vec::new();
@@ -2289,6 +2335,7 @@ fn knowledge_index_payload(root: &Path) -> anyhow::Result<Value> {
                 let updated_at: String = row.get(6)?;
                 let runbook = serde_json::json!({
                     "id": format!("runbook:{id}"),
+                    "kind": "runbook",
                     "runbook_id": id,
                     "skillbook_id": skillbook_id,
                     "title": title,
@@ -2311,6 +2358,42 @@ fn knowledge_index_payload(root: &Path) -> anyhow::Result<Value> {
                     "has_table": false
                 }));
                 runbooks.push(runbook);
+            }
+        }
+
+        if sqlite_table_exists(&conn, "knowledge_resources")? {
+            let mut stmt = conn.prepare(
+                "SELECT resource_id, skillbook_id, title, kind, role, canonical_url,
+                        evidence_eligible, updated_at
+                   FROM knowledge_resources
+                  ORDER BY updated_at DESC, title
+                  LIMIT 320",
+            )?;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                let id: String = row.get(0)?;
+                let skillbook_id: String = row.get(1)?;
+                let title: String = row.get(2)?;
+                let kind: String = row.get(3)?;
+                let role: String = row.get(4)?;
+                let canonical_url: String = row.get(5)?;
+                let evidence_eligible: bool = row.get(6)?;
+                let updated_at: String = row.get(7)?;
+                items.push(serde_json::json!({
+                    "id": format!("resource:{id}"),
+                    "resource_id": id,
+                    "skillbook_id": skillbook_id,
+                    "kind": "resource",
+                    "resource_kind": kind,
+                    "title": title,
+                    "subtitle": format!("Resource · {role}"),
+                    "summary": canonical_url,
+                    "canonical_url": canonical_url,
+                    "evidence_eligible": evidence_eligible,
+                    "updated_at": updated_at,
+                    "file_count": 1,
+                    "has_table": false
+                }));
             }
         }
 
@@ -2402,6 +2485,7 @@ fn knowledge_index_payload(root: &Path) -> anyhow::Result<Value> {
     if runbooks.is_empty() {
         let runbook = serde_json::json!({
             "id": "runbook:knowledge-runtime-maintenance",
+            "kind": "runbook",
             "runbook_id": "knowledge-runtime-maintenance",
             "skillbook_id": "native-business-os-knowledge",
             "title": "Knowledge Runtime Maintenance",
@@ -2444,6 +2528,8 @@ fn knowledge_document_payload(root: &Path, id: &str) -> anyhow::Result<Value> {
         skillbook_markdown(root, skillbook_id)?
     } else if let Some(runbook_id) = id.strip_prefix("runbook:") {
         runbook_markdown(root, runbook_id)?
+    } else if let Some(resource_id) = id.strip_prefix("resource:") {
+        knowledge_resource_markdown(root, resource_id)?
     } else if id.starts_with("table:") || id.starts_with("parquet:") {
         let table = resolve_parquet_table(root, id)?;
         format!(
@@ -2585,6 +2671,32 @@ fn runbook_markdown(root: &Path, runbook_id: &str) -> anyhow::Result<String> {
         ));
     }
     Ok(text)
+}
+
+fn knowledge_resource_markdown(root: &Path, resource_id: &str) -> anyhow::Result<String> {
+    let conn = open_ctox_sqlite(root)?;
+    let mut stmt = conn.prepare(
+        "SELECT title, kind, role, canonical_url, snapshot_hash, evidence_eligible,
+                linked_runbook_items_json, metadata_json, updated_at
+           FROM knowledge_resources WHERE resource_id = ?1",
+    )?;
+    let row = stmt.query_row([resource_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, bool>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, String>(8)?,
+        ))
+    })?;
+    Ok(format!(
+        "# {}\n\n- Art: `{}`\n- Rolle: `{}`\n- Evidenzfähig: `{}`\n- Quelle: {}\n- Snapshot SHA-256: `{}`\n- Verknüpfte Runbook-Items: `{}`\n- Aktualisiert: `{}`\n\n## Receipt\n\n```json\n{}\n```",
+        row.0, row.1, row.2, row.5, row.3, row.4, row.6, row.8, row.7
+    ))
 }
 
 #[derive(Debug, Clone)]
@@ -2878,10 +2990,13 @@ fn business_os_static_cache_control(is_index: bool, rel: &str, request_url: &str
         return "no-cache, must-revalidate";
     }
 
-    // Packaged shell assets are immutable per URL: their `?v=` cache-buster
-    // is changed with the release.
+    // Release query keys remain useful for cache partitioning, but they are
+    // not a correctness boundary. A missed manual key bump must never leave a
+    // managed instance executing an old shell or module bundle after upgrade.
+    // Revalidate versioned packaged assets on navigation so the server's
+    // active release remains authoritative.
     if request_url.contains("?v=") || request_url.contains("&v=") {
-        "public, max-age=31536000, immutable"
+        "no-cache, must-revalidate"
     } else {
         "public, max-age=300, stale-while-revalidate=86400"
     }
@@ -3127,7 +3242,8 @@ mod tests {
         let runtime_root = temp.path().join("runtime");
         for (id, scope) in [
             ("ctox", "store"),
-            ("research", "store"),
+            ("research", "internal"),
+            ("marketplace-research", "store"),
             ("rogue-system", "core"),
         ] {
             let dir = source_root.join("modules").join(id);
@@ -3170,6 +3286,12 @@ mod tests {
         );
         assert_eq!(
             by_id
+                .get("research")
+                .map(|module| module.install_scope.as_str()),
+            Some("internal")
+        );
+        assert_eq!(
+            by_id
                 .get("public-addon")
                 .map(|module| module.install_scope.as_str()),
             Some("installed")
@@ -3180,7 +3302,7 @@ mod tests {
                 .map(|module| module.install_scope.as_str()),
             Some("local")
         );
-        assert!(!by_id.contains_key("research"));
+        assert!(!by_id.contains_key("marketplace-research"));
         assert!(!by_id.contains_key("rogue-system"));
         Ok(())
     }
@@ -3375,7 +3497,7 @@ mod tests {
                 "modules/calendar/index.js",
                 "/modules/calendar/index.js?v=shell-release"
             ),
-            "public, max-age=31536000, immutable"
+            "no-cache, must-revalidate"
         );
     }
 

@@ -9,9 +9,12 @@ use roxmltree::Document;
 use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
+#[cfg(test)]
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 #[cfg(test)]
@@ -174,6 +177,21 @@ pub struct DirectWebReadRequest {
     pub url: String,
     pub query: Option<String>,
     pub find: Vec<String>,
+    /// Optional immutable evidence workspace. Managed harness calls set this
+    /// to a call-scoped directory under the task workspace.
+    pub workspace: Option<PathBuf>,
+    /// Internal deep-research persistence needs the complete extracted text.
+    /// Direct tool output keeps it out of the response and returns only the
+    /// server-written workspace artifact path.
+    pub include_full_text: bool,
+    /// Optional per-call network timeout ceiling. Systematic research sets a
+    /// depth-specific cap so one slow artifact cannot consume the whole round;
+    /// direct operator reads remain uncapped by default.
+    pub timeout_cap_ms: Option<u64>,
+    /// Optional per-call ceiling for PDFs and original data artifacts.
+    /// Systematic research uses smaller limits for quick discovery and keeps
+    /// the full configured allowance for exhaustive extraction.
+    pub max_artifact_bytes: Option<usize>,
     /// Optional country hint (e.g. `"DE"`) used when invoking a matched
     /// source-module's `extract_fields`. Some source modules gate behaviour
     /// on country (LinkedIn, Zefix); without this hint they fall back to
@@ -205,6 +223,7 @@ impl OpenAiWebSearchCompatMode {
 
 #[derive(Debug, Clone)]
 struct SearchConfig {
+    root: PathBuf,
     enabled: bool,
     provider: ProviderKind,
     searxng_base_url: Option<String>,
@@ -218,8 +237,10 @@ struct SearchConfig {
     cache_ttl_secs: u64,
     page_cache_ttl_secs: u64,
     max_page_bytes: usize,
+    max_data_file_bytes: usize,
     max_page_chars: usize,
     max_pdf_pages: usize,
+    response_timeout_cap_ms: Option<u64>,
     /// Hosts that bypass the SSRF egress guard (operator-configured SearXNG plus
     /// any `CTOX_WEB_EGRESS_ALLOW` entries). See [`crate::egress`].
     egress_allow_hosts: Vec<String>,
@@ -228,6 +249,7 @@ struct SearchConfig {
 impl SearchConfig {
     fn from_root(root: &Path) -> Self {
         Self {
+            root: root.to_path_buf(),
             enabled: read_bool(root, "CTOX_WEB_SEARCH_ENABLED", true),
             provider: ProviderKind::from_config_value(runtime_config::get(
                 root,
@@ -247,8 +269,14 @@ impl SearchConfig {
             cache_ttl_secs: read_u64(root, "CTOX_WEB_SEARCH_CACHE_TTL_SECS", 86_400),
             page_cache_ttl_secs: read_u64(root, "CTOX_WEB_SEARCH_PAGE_CACHE_TTL_SECS", 259_200),
             max_page_bytes: read_usize(root, "CTOX_WEB_SEARCH_MAX_PAGE_BYTES", 2_000_000),
+            max_data_file_bytes: read_usize(
+                root,
+                "CTOX_WEB_SEARCH_MAX_DATA_FILE_BYTES",
+                256_000_000,
+            ),
             max_page_chars: read_usize(root, "CTOX_WEB_SEARCH_MAX_PAGE_CHARS", 16_000),
             max_pdf_pages: read_usize(root, "CTOX_WEB_SEARCH_MAX_PDF_PAGES", 12),
+            response_timeout_cap_ms: None,
             egress_allow_hosts: {
                 let mut hosts = crate::egress::allow_hosts_from_config(root);
                 // A self-hosted SearXNG instance is a deliberate operator choice
@@ -341,6 +369,36 @@ struct EvidenceDoc {
     /// extractors see the real DOM, not the LLM-summary plaintext.
     #[serde(default)]
     raw_html: Option<String>,
+    /// The exact bytes that passed the response admission gate. Keeping these
+    /// bytes with the evidence envelope prevents later workspace persistence
+    /// from fetching a different representation of the same URL.
+    #[serde(default)]
+    response_body: Option<Vec<u8>>,
+    /// Server-owned, hash-addressed original response body. Large data files
+    /// live here instead of being serialized as JSON byte arrays.
+    #[serde(default)]
+    response_artifact_path: Option<String>,
+    #[serde(default)]
+    response_archive_manifest: Option<Value>,
+    #[serde(default)]
+    response_receipt: Option<ResponseReceipt>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ResponseReceipt {
+    requested_url: String,
+    final_url: String,
+    status: u16,
+    content_type: Option<String>,
+    byte_count: usize,
+    sha256: Option<String>,
+    #[serde(default)]
+    content_kind: String,
+    redirected: bool,
+    redirect_chain: Vec<String>,
+    lineage: String,
+    #[serde(default)]
+    admission_rejection_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -442,6 +500,8 @@ struct GithubUrlParts {
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const GITHUB_API_VERSION: &str = "2022-11-28";
 const GITHUB_API_CONTENT_TYPE: &str = "application/x-ctox-github+json";
+const MAX_LEGACY_SEARCH_CACHE_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_LEGACY_PAGE_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 struct PdfExtraction {
@@ -577,6 +637,10 @@ struct SearchCacheEntry {
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct PageCacheFile {
     entries: BTreeMap<String, PageCacheEntry>,
+    #[serde(default)]
+    aliases: BTreeMap<String, String>,
+    #[serde(default)]
+    receipt_history: Vec<PageCacheReceiptEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -599,7 +663,63 @@ struct PageCacheEntry {
     source_tier: Option<String>,
     #[serde(default)]
     evidence_eligible: bool,
+    #[serde(default)]
+    evidence_relevance_score: Option<i64>,
     doc: EvidenceDoc,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PageCacheReceiptEntry {
+    created_at_epoch: u64,
+    original_url: String,
+    final_url: String,
+    #[serde(default)]
+    canonical_url: String,
+    #[serde(default)]
+    checked_at: u64,
+    #[serde(default)]
+    http_status: Option<u16>,
+    #[serde(default)]
+    snapshot_hash: Option<String>,
+    #[serde(default)]
+    evidence_eligible: bool,
+    #[serde(default)]
+    evidence_relevance_score: Option<i64>,
+    doc: PageCacheReceiptDoc,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PageCacheReceiptDoc {
+    #[serde(default)]
+    evidence_eligible: bool,
+    #[serde(default)]
+    extracted_text_sha256: Option<String>,
+    #[serde(default)]
+    response_artifact_path: Option<String>,
+    response_receipt: Option<ResponseReceipt>,
+}
+
+impl PageCacheReceiptEntry {
+    fn from_page_entry(entry: &PageCacheEntry) -> Self {
+        Self {
+            created_at_epoch: entry.created_at_epoch,
+            original_url: entry.original_url.clone(),
+            final_url: entry.final_url.clone(),
+            canonical_url: entry.canonical_url.clone(),
+            checked_at: entry.checked_at,
+            http_status: entry.http_status,
+            snapshot_hash: entry.snapshot_hash.clone(),
+            evidence_eligible: entry.evidence_eligible,
+            evidence_relevance_score: entry.evidence_relevance_score,
+            doc: PageCacheReceiptDoc {
+                evidence_eligible: entry.doc.evidence_eligible,
+                extracted_text_sha256: (!entry.doc.page_text.trim().is_empty())
+                    .then(|| snapshot_hash(entry.doc.page_text.as_bytes())),
+                response_artifact_path: entry.doc.response_artifact_path.clone(),
+                response_receipt: entry.doc.response_receipt.clone(),
+            },
+        }
+    }
 }
 
 struct WebSearchSession<'a> {
@@ -655,6 +775,10 @@ pub fn execute_canonical_web_search(
                 citations: result
                     .hits
                     .iter()
+                    .filter(|hit| {
+                        find_matching_evidence_doc(&result.evidence, &hit.url)
+                            .is_some_and(|doc| evidence_doc_is_admitted(doc, hit))
+                    })
                     .take(3)
                     .map(|hit| SearchCitation {
                         title: hit.title.clone(),
@@ -716,7 +840,15 @@ pub fn run_ctox_web_search_tool(root: &Path, request: &CanonicalWebSearchRequest
 }
 
 pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Result<Value> {
-    let config = SearchConfig::from_root(root);
+    let mut config = SearchConfig::from_root(root);
+    config.response_timeout_cap_ms = request
+        .timeout_cap_ms
+        .map(|timeout_ms| timeout_ms.clamp(1_000, 180_000));
+    if let Some(max_artifact_bytes) = request.max_artifact_bytes {
+        config.max_data_file_bytes = config
+            .max_data_file_bytes
+            .min(max_artifact_bytes.clamp(1_000_000, 256_000_000));
+    }
     if !config.enabled {
         return Ok(json!({
             "ok": false,
@@ -727,7 +859,7 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
 
     let url = normalize_text(&request.url).context("ctox_web_read requires a non-empty url")?;
     crate::egress::assert_fetchable_url(&url)?;
-    let read_query = request
+    let relevance_query = request
         .query
         .as_deref()
         .and_then(normalize_text)
@@ -736,8 +868,8 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
                 .find
                 .first()
                 .and_then(|pattern| normalize_text(pattern))
-        })
-        .unwrap_or_else(|| display_url(&url));
+        });
+    let read_query = relevance_query.clone().unwrap_or_else(|| display_url(&url));
     let hit = SearchHit {
         title: display_url(&url),
         url: url.clone(),
@@ -749,7 +881,103 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
         },
         rank: 1,
     };
-    let (doc, _) = build_evidence_doc(&config, &read_query, &hit)?;
+    let (doc, content_type) = match build_evidence_doc(&config, &read_query, &hit) {
+        Ok(primary) if evidence_doc_is_admitted_for_read(&primary.0) => primary,
+        Ok(primary) => {
+            if let Some(fallback_url) = canonical_read_fallback_url(&url) {
+                crate::egress::assert_fetchable_url(&fallback_url)?;
+                let fallback_hit = SearchHit {
+                    title: display_url(&fallback_url),
+                    url: fallback_url,
+                    snippet: hit.snippet.clone(),
+                    source: format!("{}_canonical_fallback", hit.source),
+                    rank: hit.rank,
+                };
+                match build_evidence_doc(&config, &read_query, &fallback_hit) {
+                    Ok(fallback) if evidence_doc_is_admitted_for_read(&fallback.0) => fallback,
+                    _ => primary,
+                }
+            } else {
+                primary
+            }
+        }
+        Err(primary_error) => {
+            let Some(fallback_url) = canonical_read_fallback_url(&url) else {
+                return Err(primary_error);
+            };
+            crate::egress::assert_fetchable_url(&fallback_url)?;
+            let fallback_hit = SearchHit {
+                title: display_url(&fallback_url),
+                url: fallback_url,
+                snippet: hit.snippet.clone(),
+                source: format!("{}_canonical_fallback", hit.source),
+                rank: hit.rank,
+            };
+            build_evidence_doc(&config, &read_query, &fallback_hit).with_context(|| {
+                format!(
+                    "primary read failed ({primary_error:#}); canonical source fallback also failed"
+                )
+            })?
+        }
+    };
+    let final_url = doc
+        .response_receipt
+        .as_ref()
+        .map(|receipt| receipt.final_url.as_str())
+        .unwrap_or(doc.canonical_url.as_str());
+    let mut session = WebSearchSession::new(root, &config)?;
+    session.store_page_doc(
+        &url,
+        final_url,
+        content_type,
+        &doc,
+        relevance_query.as_deref().unwrap_or_default(),
+    );
+    session.persist_page_cache()?;
+    let workspace_evidence = request
+        .workspace
+        .as_deref()
+        .map(|workspace| persist_direct_read_workspace(workspace, &doc))
+        .transpose()?;
+
+    Ok(render_direct_web_read_payload(
+        &url,
+        &read_query,
+        request,
+        doc,
+        workspace_evidence,
+    ))
+}
+
+fn render_direct_web_read_payload(
+    url: &str,
+    read_query: &str,
+    request: &DirectWebReadRequest,
+    doc: EvidenceDoc,
+    workspace_evidence: Option<Value>,
+) -> Value {
+    let transport_evidence_eligible = evidence_doc_is_admitted_for_read(&doc);
+    let evidence_relevance_score = request
+        .query
+        .as_deref()
+        .and_then(normalize_text)
+        .or_else(|| {
+            request
+                .find
+                .first()
+                .and_then(|pattern| normalize_text(pattern))
+        })
+        .and_then(|query| score_evidence_doc_relevance(&doc, &query));
+    let evidence_eligible =
+        transport_evidence_eligible && evidence_relevance_score.is_some_and(|score| score >= 8);
+    let evidence_rejection_reason = doc
+        .response_receipt
+        .as_ref()
+        .and_then(|receipt| receipt.admission_rejection_reason.clone())
+        .or_else(|| {
+            (transport_evidence_eligible && !evidence_eligible)
+                .then(|| "query_relevance_not_established".to_string())
+        });
     let mut find_results = request
         .find
         .iter()
@@ -762,32 +990,36 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
         find_results = doc.find_results.clone();
     }
 
-    // Phase 3: if the URL belongs to a registered source module, run its
-    // `extract_fields` post-processor and surface the typed evidence under
-    // `extracted_fields`. Country hint is forwarded if the caller set it.
-    let extracted = match_source_for_url(&url).map(|module| {
-        let read = evidence_doc_to_source_read(&doc);
-        let evidence = module.extract_fields(&read);
-        let payload: Vec<Value> = evidence
-            .into_iter()
-            .map(|(field, ev)| {
-                json!({
-                    "field": field.as_str(),
-                    "value": ev.value,
-                    "confidence": ev.confidence.as_str(),
-                    "note": ev.note,
-                    "source_url": ev.source_url,
+    // Phase 3: source modules may only turn admitted page content into typed
+    // fields. A successful transport or a shell/login response is not a
+    // source read and must not reach an extractor.
+    let extracted = if evidence_doc_is_admitted_for_read(&doc) {
+        match_source_for_url(&url).map(|module| {
+            let read = evidence_doc_to_source_read(&doc);
+            let evidence = module.extract_fields(&read);
+            let payload: Vec<Value> = evidence
+                .into_iter()
+                .map(|(field, ev)| {
+                    json!({
+                        "field": field.as_str(),
+                        "value": ev.value,
+                        "confidence": ev.confidence.as_str(),
+                        "note": ev.note,
+                        "source_url": ev.source_url,
+                    })
                 })
+                .collect();
+            json!({
+                "source_id": module.id(),
+                "tier": tier_label(module.tier()),
+                "fields": payload,
             })
-            .collect();
-        json!({
-            "source_id": module.id(),
-            "tier": tier_label(module.tier()),
-            "fields": payload,
         })
-    });
+    } else {
+        None
+    };
 
-    Ok(json!({
+    json!({
         "ok": true,
         "tool": "ctox_web_read",
         "url": url,
@@ -799,21 +1031,382 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
         "excerpts": doc.excerpts,
         "find_results": find_results,
         "page_sections": doc.page_sections,
+        "page_text": request
+            .include_full_text
+            .then(|| doc.page_text.clone()),
         "page_text_excerpt": trim_text(&doc.page_text, 4000),
         "canonical_url": doc.canonical_url,
+        "final_url": doc
+            .response_receipt
+            .as_ref()
+            .map(|receipt| receipt.final_url.clone()),
+        "redirected": doc
+            .response_receipt
+            .as_ref()
+            .map(|receipt| receipt.redirected),
+        "redirect_chain": doc
+            .response_receipt
+            .as_ref()
+            .map(|receipt| receipt.redirect_chain.clone())
+            .unwrap_or_default(),
+        "lineage": doc
+            .response_receipt
+            .as_ref()
+            .map(|receipt| receipt.lineage.clone()),
         "verification_status": doc.verification_status,
         "checked_at": doc.checked_at,
         "http_status": doc.http_status,
         "snapshot_hash": doc.snapshot_hash,
+        "response_metadata": doc.response_receipt.clone(),
+        "response_content_kind": doc
+            .response_receipt
+            .as_ref()
+            .map(|receipt| receipt.content_kind.clone()),
+        "content_type": doc
+            .response_receipt
+            .as_ref()
+            .and_then(|receipt| receipt.content_type.clone()),
+        "byte_count": doc
+            .response_receipt
+            .as_ref()
+            .map(|receipt| receipt.byte_count),
+        "admission_rejection_reason": evidence_rejection_reason,
+        // Immutable bytes stay behind the artifact and workspace receipts.
+        // Serializing a PDF into a tool response expands it into a huge JSON
+        // array and can exhaust the model context before synthesis.
+        "response_body": Value::Null,
+        "response_artifact_path": doc.response_artifact_path,
+        "response_archive_manifest": doc.response_archive_manifest,
+        "workspace_evidence": workspace_evidence,
         "source_tier": doc.source_tier,
-        "evidence_eligible": doc.evidence_eligible,
+        "transport_evidence_eligible": transport_evidence_eligible,
+        "evidence_eligible": evidence_eligible,
+        "evidence_relevance_score": evidence_relevance_score,
+        "evidence_content_kind": if evidence_eligible {
+            evidence_content_kind(&doc)
+        } else {
+            "none"
+        },
+        "dataset_content_extracted": evidence_doc_has_meaningful_content(&doc)
+            && evidence_content_kind(&doc) == "page_content",
         "context": render_direct_read_context(&read_query, &doc),
         "extracted_fields": extracted,
-        // Raw HTML body for downstream parsers that need DOM access
-        // (e.g. scrape-target scripts revising selectors). PDFs and
-        // cache-loaded pages from older CTOX versions return null.
-        "raw_html": doc.raw_html,
+        // DOM consumers can use the immutable HTML artifact or the dedicated
+        // scrape/browser tools without putting the full body into model input.
+        "raw_html": Value::Null,
+    })
+}
+
+fn persist_direct_read_workspace(workspace: &Path, doc: &EvidenceDoc) -> Result<Value> {
+    if !evidence_doc_is_admitted_for_read(doc) {
+        return Ok(json!({
+            "persisted": false,
+            "reason": "response_not_admitted_as_evidence",
+        }));
+    }
+    let bytes = if let Some(body) = doc.response_body.as_deref() {
+        body.to_vec()
+    } else if let Some(path) = doc.response_artifact_path.as_deref() {
+        fs::read(path).with_context(|| format!("read server-owned response artifact {path}"))?
+    } else {
+        bail!("admitted web response has no immutable response body");
+    };
+    if !evidence_doc_has_immutable_response_bytes(doc, &bytes) {
+        bail!("admitted web response bytes do not match the server receipt");
+    }
+
+    fs::create_dir_all(workspace)
+        .with_context(|| format!("create web-read evidence workspace {}", workspace.display()))?;
+    let receipt = doc
+        .response_receipt
+        .as_ref()
+        .context("admitted web response is missing its server receipt")?;
+    let extension = response_snapshot_extension(
+        receipt.content_kind.as_str(),
+        receipt.content_type.as_deref(),
+    );
+    let snapshot_path = workspace.join(format!("source.{extension}"));
+    fs::write(&snapshot_path, &bytes)
+        .with_context(|| format!("write web-read snapshot {}", snapshot_path.display()))?;
+
+    let extracted_text_path = if doc.page_text.trim().is_empty() {
+        None
+    } else {
+        let path = workspace.join("extracted-text.txt");
+        fs::write(&path, doc.page_text.as_bytes())
+            .with_context(|| format!("write extracted source text {}", path.display()))?;
+        Some(path)
+    };
+    let extracted_text_sha256 = extracted_text_path
+        .as_deref()
+        .map(fs::read)
+        .transpose()?
+        .map(|text| snapshot_hash(&text));
+    let receipt_path = workspace.join("receipt.json");
+    let persisted_receipt = json!({
+        "schema_version": "ctox.web-read.workspace-evidence.v2",
+        "requested_url": receipt.requested_url.clone(),
+        "final_url": receipt.final_url.clone(),
+        "status": receipt.status,
+        "checked_at_epoch": doc.checked_at,
+        "content_type": receipt.content_type.clone(),
+        "content_kind": receipt.content_kind.clone(),
+        "byte_count": receipt.byte_count,
+        "snapshot_sha256": receipt.sha256.clone(),
+        "snapshot_path": snapshot_path.clone(),
+        "extracted_text_path": extracted_text_path.clone(),
+        "extracted_text_sha256": extracted_text_sha256.clone(),
+        "lineage": receipt.lineage.clone(),
+    });
+    fs::write(
+        &receipt_path,
+        serde_json::to_vec_pretty(&persisted_receipt)?,
+    )
+    .with_context(|| format!("write web-read receipt {}", receipt_path.display()))?;
+
+    Ok(json!({
+        "persisted": true,
+        "workspace": workspace,
+        "snapshot_path": snapshot_path,
+        "snapshot_sha256": receipt.sha256.clone(),
+        "extracted_text_path": extracted_text_path,
+        "extracted_text_sha256": extracted_text_sha256,
+        "receipt_path": receipt_path,
+        "receipt_sha256": snapshot_hash(&fs::read(&receipt_path)?),
     }))
+}
+
+fn evidence_doc_has_immutable_response_bytes(doc: &EvidenceDoc, bytes: &[u8]) -> bool {
+    let Some(receipt) = doc.response_receipt.as_ref() else {
+        return false;
+    };
+    let hash = snapshot_hash(bytes);
+    receipt.byte_count == bytes.len()
+        && receipt.sha256.as_deref() == Some(hash.as_str())
+        && doc.snapshot_hash.as_deref() == Some(hash.as_str())
+}
+
+fn response_snapshot_extension(content_kind: &str, content_type: Option<&str>) -> &'static str {
+    if content_kind == "pdf" || content_type.is_some_and(|value| value.contains("pdf")) {
+        "pdf"
+    } else if content_kind == "html" || content_type.is_some_and(|value| value.contains("html")) {
+        "html"
+    } else if content_kind == "data_json" {
+        "json"
+    } else if content_kind == "data_delimited" {
+        "csv"
+    } else if content_kind == "data_table_text" {
+        "txt"
+    } else if content_kind == "data_zip" {
+        "zip"
+    } else if content_kind == "data_gzip" {
+        "gz"
+    } else if content_kind == "data_parquet" {
+        "parquet"
+    } else if content_kind == "data_xlsx" {
+        "xlsx"
+    } else {
+        "bin"
+    }
+}
+
+fn evidence_doc_has_meaningful_content(doc: &EvidenceDoc) -> bool {
+    meaningful_extracted_page_text(&doc.page_text)
+}
+
+fn evidence_doc_is_admitted(doc: &EvidenceDoc, hit: &SearchHit) -> bool {
+    evidence_doc_is_admitted_for_read(doc)
+        // Old page-cache entries may have persisted a search snippet as the
+        // entire page body. It is discovery data, not extracted source text.
+        && normalize_ws(&doc.page_text) != normalize_ws(&hit.snippet)
+}
+
+fn evidence_doc_is_admitted_for_read(doc: &EvidenceDoc) -> bool {
+    doc.evidence_eligible
+        && (evidence_doc_has_meaningful_content(doc) || evidence_doc_is_data_file(doc))
+}
+
+fn score_evidence_doc_relevance(doc: &EvidenceDoc, query: &str) -> Option<i64> {
+    if !evidence_doc_is_admitted_for_read(doc) {
+        return None;
+    }
+    let evidence_text = if evidence_doc_is_data_file(doc) {
+        format!("{} {} {}", doc.title, doc.url, doc.canonical_url)
+    } else {
+        doc.page_text.clone()
+    };
+    let body = evidence_text.to_ascii_lowercase();
+    let terms = query_terms(query);
+    if terms.is_empty() {
+        return None;
+    }
+    let body_tokens = body
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect::<BTreeSet<_>>();
+    let required_identifiers = terms
+        .iter()
+        .filter(|term| term.chars().any(|ch| ch.is_ascii_digit()))
+        .collect::<Vec<_>>();
+    if required_identifiers
+        .iter()
+        .any(|identifier| !body_tokens.contains(identifier.as_str()))
+    {
+        return None;
+    }
+    let matched_terms = terms
+        .iter()
+        .filter(|term| body.contains(term.as_str()))
+        .count();
+    Some(normalized_relevance_score(matched_terms, terms.len()))
+}
+
+fn normalized_relevance_score(matched_terms: usize, total_terms: usize) -> i64 {
+    if total_terms == 0 {
+        return 0;
+    }
+    i64::try_from((matched_terms * 10 + total_terms / 2) / total_terms).unwrap_or(10)
+}
+
+fn evidence_doc_is_data_file(doc: &EvidenceDoc) -> bool {
+    doc.response_receipt
+        .as_ref()
+        .is_some_and(|receipt| receipt.content_kind.starts_with("data_"))
+}
+
+fn evidence_doc_has_immutable_response(doc: &EvidenceDoc) -> bool {
+    let artifact_bytes = doc
+        .response_artifact_path
+        .as_deref()
+        .and_then(|path| fs::read(path).ok());
+    let Some(body) = doc
+        .response_body
+        .as_deref()
+        .or_else(|| artifact_bytes.as_deref())
+    else {
+        return false;
+    };
+    let Some(receipt) = doc.response_receipt.as_ref() else {
+        return false;
+    };
+    let body_hash = snapshot_hash(body);
+    doc.snapshot_hash.as_deref() == Some(body_hash.as_str())
+        && receipt.sha256.as_deref() == Some(body_hash.as_str())
+        && receipt.byte_count == body.len()
+}
+
+fn meaningful_extracted_page_text(text: &str) -> bool {
+    let normalized = normalize_ws(text);
+    !normalized.is_empty() && is_meaningful_evidence_text(&normalized)
+}
+
+fn evidence_content_kind(doc: &EvidenceDoc) -> &'static str {
+    if !evidence_doc_is_admitted_for_read(doc) {
+        "none"
+    } else if is_zenodo_record_api_url(&doc.url) {
+        // Zenodo's record endpoint is a canonical archive receipt: it proves
+        // record identity and file checksum, but does not parse the archive.
+        "metadata_receipt"
+    } else if evidence_doc_is_data_file(doc) {
+        "data_file"
+    } else {
+        "page_content"
+    }
+}
+
+fn is_zenodo_record_api_url(raw_url: &str) -> bool {
+    Url::parse(raw_url).ok().is_some_and(|url| {
+        if !url
+            .host_str()
+            .is_some_and(|host| host.trim_start_matches("www.") == "zenodo.org")
+        {
+            return false;
+        }
+        let segments = url
+            .path_segments()
+            .map(|segments| segments.collect::<Vec<_>>())
+            .unwrap_or_default();
+        matches!(
+            segments.as_slice(),
+            ["api", "records", record_id]
+                if !record_id.is_empty()
+                    && record_id.chars().all(|character| character.is_ascii_digit())
+        )
+    })
+}
+
+fn is_metadata_source(source: &str) -> bool {
+    let source = source.to_ascii_lowercase();
+    [
+        "metadata",
+        "crossref",
+        "openalex",
+        "semantic_scholar",
+        "annas_archive",
+    ]
+    .iter()
+    .any(|marker| source.contains(marker))
+}
+
+fn is_meaningful_evidence_text(text: &str) -> bool {
+    let normalized = normalize_ws(text);
+    if normalized.is_empty() || is_evidence_boilerplate(&normalized) {
+        return false;
+    }
+    normalized.chars().count() >= 32
+        && normalized.chars().filter(|ch| ch.is_alphabetic()).count() >= 16
+}
+
+fn is_evidence_boilerplate(text: &str) -> bool {
+    let lowered = text.to_ascii_lowercase();
+    let markers = [
+        "javascript is required",
+        "please enable javascript",
+        "enable javascript to continue",
+        "cookie settings",
+        "accept cookies",
+        "we use cookies",
+        "please sign in",
+        "please log in",
+        "authentication required",
+        "privacy policy",
+        "terms of service",
+        "all rights reserved",
+        "access denied",
+        "verify you are human",
+        "captcha",
+    ];
+    let marker_hits = markers
+        .iter()
+        .map(|marker| lowered.matches(marker).count())
+        .sum::<usize>();
+    if marker_hits == 0 {
+        return false;
+    }
+
+    // Login and consent shells are short or dominated by repeated boilerplate.
+    // Long papers, standards, and manufacturer manuals routinely contain one
+    // copyright/privacy phrase and must not be rejected for that alone.
+    let chars = lowered.chars().count();
+    let words = lowered.split_whitespace().count().max(1);
+    chars <= 1_200 || (marker_hits >= 3 && marker_hits.saturating_mul(80) >= words)
+}
+
+fn canonical_read_fallback_url(url: &str) -> Option<String> {
+    let parsed = Url::parse(url).ok()?;
+    let host = parsed.host_str()?.trim_start_matches("www.");
+    if host != "zenodo.org" {
+        return None;
+    }
+    let segments = parsed.path_segments()?.collect::<Vec<_>>();
+    if segments.len() == 2
+        && matches!(segments[0], "record" | "records")
+        && segments[1].chars().all(|ch| ch.is_ascii_digit())
+    {
+        Some(format!("https://zenodo.org/api/records/{}", segments[1]))
+    } else {
+        None
+    }
 }
 
 /// Resolve the source module that owns the given URL's host.
@@ -929,6 +1522,16 @@ fn ctox_web_search_payload(
         .iter()
         .map(|hit| {
             let evidence = find_matching_evidence_doc(&result.evidence, &hit.url);
+            let transport_verified = evidence
+                .is_some_and(|doc| doc.verification_status == "verified"
+                    && doc.http_status.is_some_and(|status| (200..300).contains(&status)));
+            let content_extracted = evidence.is_some_and(|doc| {
+                evidence_doc_is_admitted(doc, hit)
+            });
+            let evidence_content_kind = evidence
+                .filter(|_| content_extracted)
+                .map(evidence_content_kind)
+                .unwrap_or("none");
             json!({
                 "title": hit.title,
                 "url": hit.url,
@@ -936,17 +1539,21 @@ fn ctox_web_search_payload(
                 "snippet": hit.snippet,
                 "source": hit.source,
                 "rank": hit.rank,
-                "verification_status": "unverified",
+                "verification_status": evidence.map(|doc| doc.verification_status.clone()).unwrap_or_else(|| "unverified".to_string()),
                 "discovery_status": "discovered",
                 "discovery_score": discovery_score_for_hit(hit, query_text),
-                "evidence_eligible": evidence.map(|doc| doc.evidence_eligible).unwrap_or(false),
+                "transport_verified": transport_verified,
+                "content_extracted": content_extracted,
+                "evidence_eligible": content_extracted,
                 "checked_at": evidence.and_then(|doc| nonzero_checked_at(doc)),
                 "http_status": evidence.and_then(|doc| doc.http_status),
                 "snapshot_hash": evidence.and_then(|doc| doc.snapshot_hash.clone()),
                 "source_tier": evidence.and_then(|doc| doc.source_tier.clone()),
-                "summary": evidence.map(|doc| doc.summary.clone()),
-                "excerpts": evidence.map(|doc| doc.excerpts.clone()).unwrap_or_default(),
-                "find_results": evidence.map(|doc| doc.find_results.clone()).unwrap_or_default(),
+                "summary": evidence.filter(|_| content_extracted).map(|doc| doc.summary.clone()),
+                "excerpts": evidence.filter(|_| content_extracted).map(|doc| doc.excerpts.clone()).unwrap_or_default(),
+                "find_results": evidence.filter(|_| content_extracted).map(|doc| doc.find_results.clone()).unwrap_or_default(),
+                "evidence_content_kind": evidence_content_kind,
+                "dataset_content_extracted": content_extracted && evidence_content_kind == "page_content",
                 "is_pdf": evidence.map(|doc| doc.is_pdf).unwrap_or(false),
                 "pdf_total_pages": evidence.and_then(|doc| doc.pdf_total_pages),
             })
@@ -981,6 +1588,10 @@ fn ctox_web_search_payload(
         "citations": result
             .hits
             .iter()
+            .filter(|hit| {
+                find_matching_evidence_doc(&result.evidence, &hit.url)
+                    .is_some_and(|doc| evidence_doc_is_admitted(doc, hit))
+            })
             .take(3)
             .map(|hit| json!({ "title": hit.title, "url": hit.url }))
             .collect::<Vec<_>>(),
@@ -1116,7 +1727,7 @@ fn execute_search(
     // result for the full TTL and suppress retries after a transient block or
     // CAPTCHA, instead of letting the next call re-run the provider cascade.
     if !response.hits.is_empty() {
-        write_cached_search(root, &cache_key, &response)?;
+        write_cached_search(root, config, &cache_key, &response)?;
     }
     Ok(response)
 }
@@ -1277,11 +1888,10 @@ fn search_with_query_plan(
             let response = match run_search_provider(root, config, &query, *provider) {
                 Ok(response) => response,
                 Err(err) if auto_provider => {
-                    if is_rate_limit_error(&err) {
-                        // Persist the cooldown so a 429'd provider is not retried
-                        // (and re-throttled) on the next search, not only within
-                        // this multi-query call.
-                        let until_epoch = unix_ts() + 60;
+                    if let Some(cooldown_secs) = provider_block_cooldown_secs(&err) {
+                        // Persist the cooldown so blocked providers are not
+                        // hammered again by every facet in a research run.
+                        let until_epoch = unix_ts() + cooldown_secs;
                         provider_cooldown_until
                             .insert(*provider, UNIX_EPOCH + Duration::from_secs(until_epoch));
                         persist_provider_cooldown(root, *provider, until_epoch);
@@ -1350,7 +1960,21 @@ fn search_with_query_plan(
         hits: merged_hits,
         evidence: Vec::new(),
         executed_queries,
-        source_failures: Vec::new(),
+        source_failures: failures
+            .into_iter()
+            .map(|error| SourceFailure {
+                requested_source: "web_search_provider".to_string(),
+                source_id: None,
+                kind: if is_rate_limit_text(&error) {
+                    "rate_limited".to_string()
+                } else {
+                    "provider_attempt_failed".to_string()
+                },
+                error,
+                secret_name: None,
+                browser_assist: None,
+            })
+            .collect(),
     })
 }
 
@@ -1377,8 +2001,28 @@ fn auto_provider_budget(root: &Path, provider: ProviderKind) -> usize {
         .unwrap_or(4)
 }
 
-fn is_rate_limit_error(err: &anyhow::Error) -> bool {
+fn provider_block_cooldown_secs(err: &anyhow::Error) -> Option<u64> {
     let text = format!("{err:#}").to_ascii_lowercase();
+    if is_rate_limit_text(&text) {
+        return Some(5 * 60);
+    }
+    if text.contains("captcha")
+        || text.contains("/sorry/")
+        || text.contains("recaptcha")
+        || text.contains("anti-bot")
+        || text.contains("anomaly-modal")
+        || text.contains("bots use")
+    {
+        return Some(30 * 60);
+    }
+    if text.contains("consent wall") || text.contains("no result anchors matched") {
+        return Some(10 * 60);
+    }
+    None
+}
+
+fn is_rate_limit_text(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
     text.contains("429") || text.contains("too many requests") || text.contains("rate limit")
 }
 
@@ -1482,14 +2126,14 @@ impl<'a> WebSearchSession<'a> {
                 Ok((doc, content_type)) => {
                     let canonical_url = doc.canonical_url.clone();
                     self.memoize_doc_aliases([hit.url.as_str(), canonical_url.as_str()], &doc);
-                    self.store_page_doc(&hit.url, &canonical_url, content_type, &doc);
+                    self.store_page_doc(&hit.url, &canonical_url, content_type, &doc, query);
                     resolved[index] = Some(doc);
                 }
                 Err(err) => {
                     if let Some((doc, content_type)) = failed_http_evidence_doc(hit, &err) {
                         let canonical_url = doc.canonical_url.clone();
                         self.memoize_doc_aliases([hit.url.as_str(), canonical_url.as_str()], &doc);
-                        self.store_page_doc(&hit.url, &canonical_url, content_type, &doc);
+                        self.store_page_doc(&hit.url, &canonical_url, content_type, &doc, query);
                         resolved[index] = Some(doc);
                     }
                 }
@@ -1518,7 +2162,7 @@ impl<'a> WebSearchSession<'a> {
             Ok((doc, content_type)) => {
                 let canonical_url = doc.canonical_url.clone();
                 self.memoize_doc_aliases([hit.url.as_str(), canonical_url.as_str()], &doc);
-                self.store_page_doc(&hit.url, &canonical_url, content_type, &doc);
+                self.store_page_doc(&hit.url, &canonical_url, content_type, &doc, query);
                 Ok(doc)
             }
             Err(err) => {
@@ -1527,7 +2171,7 @@ impl<'a> WebSearchSession<'a> {
                 };
                 let canonical_url = doc.canonical_url.clone();
                 self.memoize_doc_aliases([hit.url.as_str(), canonical_url.as_str()], &doc);
-                self.store_page_doc(&hit.url, &canonical_url, content_type, &doc);
+                self.store_page_doc(&hit.url, &canonical_url, content_type, &doc, query);
                 Ok(doc)
             }
         }
@@ -1555,13 +2199,47 @@ impl<'a> WebSearchSession<'a> {
 
     fn load_cached_page_doc(&mut self, url: &str) -> Option<EvidenceDoc> {
         let key = normalize_url_cache_key(url);
-        let entry = self.page_cache.entries.get(&key)?.clone();
+        let storage_key = self.page_cache.aliases.get(&key).cloned().unwrap_or(key);
+        let entry = self.page_cache.entries.get(&storage_key)?.clone();
         if unix_ts().saturating_sub(entry.created_at_epoch) > self.config.page_cache_ttl_secs {
-            self.page_cache.entries.remove(&key);
+            self.page_cache.entries.remove(&storage_key);
+            self.page_cache
+                .aliases
+                .retain(|_, target| target != &storage_key);
             self.page_cache_dirty = true;
             return None;
         }
         let mut doc = entry.doc;
+        if doc.raw_html.is_none()
+            && entry
+                .content_type
+                .as_deref()
+                .is_some_and(|value| value.to_ascii_lowercase().contains("html"))
+        {
+            doc.raw_html = doc
+                .response_artifact_path
+                .as_deref()
+                .and_then(|path| fs::read_to_string(path).ok());
+        }
+        if doc.response_archive_manifest.is_none()
+            && doc
+                .response_receipt
+                .as_ref()
+                .is_some_and(|receipt| receipt.content_kind == "data_zip")
+        {
+            let manifest = doc
+                .response_artifact_path
+                .as_deref()
+                .zip(doc.snapshot_hash.as_deref())
+                .and_then(|(path, sha256)| {
+                    persist_zip_archive_manifest(Path::new(path), sha256).ok()
+                });
+            if let Some(manifest) = manifest {
+                doc.response_archive_manifest = Some(manifest);
+            } else {
+                doc.evidence_eligible = false;
+            }
+        }
         if doc.canonical_url.trim().is_empty() {
             doc.canonical_url = if entry.canonical_url.trim().is_empty() {
                 doc.url.clone()
@@ -1584,7 +2262,12 @@ impl<'a> WebSearchSession<'a> {
         if doc.verification_status == "unverified" && entry.verification_status != "unverified" {
             doc.verification_status = entry.verification_status;
         }
-        doc.evidence_eligible = doc.evidence_eligible || entry.evidence_eligible;
+        // Never let a duplicated cache envelope promote a document whose own
+        // admission bit is false. Older cache entries may have recorded
+        // transport success without extracted content.
+        doc.evidence_eligible = doc.evidence_eligible
+            && entry.evidence_eligible
+            && evidence_doc_has_immutable_response(&doc);
         Some(doc)
     }
 
@@ -1606,7 +2289,13 @@ impl<'a> WebSearchSession<'a> {
         final_url: &str,
         content_type: Option<String>,
         doc: &EvidenceDoc,
+        query: &str,
     ) {
+        let mut cached_doc = doc.clone();
+        // Immutable response bytes are content-addressed on disk. Avoid
+        // duplicating multi-megabyte bodies and HTML in every JSON cache alias.
+        cached_doc.response_body = None;
+        cached_doc.raw_html = None;
         let entry = PageCacheEntry {
             created_at_epoch: unix_ts(),
             original_url: original_url.to_string(),
@@ -1619,13 +2308,43 @@ impl<'a> WebSearchSession<'a> {
             snapshot_hash: doc.snapshot_hash.clone(),
             source_tier: doc.source_tier.clone(),
             evidence_eligible: doc.evidence_eligible,
-            doc: doc.clone(),
+            evidence_relevance_score: score_evidence_doc_relevance(doc, query),
+            doc: cached_doc,
         };
 
-        for url in [original_url, final_url] {
+        let mut aliases = vec![
+            original_url,
+            final_url,
+            doc.url.as_str(),
+            doc.canonical_url.as_str(),
+        ];
+        if let Some(receipt) = doc.response_receipt.as_ref() {
+            aliases.push(receipt.requested_url.as_str());
+            aliases.push(receipt.final_url.as_str());
+        }
+        let storage_key = normalize_url_cache_key(if doc.canonical_url.trim().is_empty() {
+            final_url
+        } else {
+            &doc.canonical_url
+        });
+        if storage_key.is_empty() {
+            return;
+        }
+        if let Some(previous) = self.page_cache.entries.get(&storage_key) {
+            self.page_cache
+                .receipt_history
+                .push(PageCacheReceiptEntry::from_page_entry(previous));
+        }
+        self.page_cache
+            .receipt_history
+            .push(PageCacheReceiptEntry::from_page_entry(&entry));
+        self.page_cache.entries.insert(storage_key.clone(), entry);
+        for url in aliases {
             let key = normalize_url_cache_key(url);
             if !key.is_empty() {
-                self.page_cache.entries.insert(key, entry.clone());
+                if key != storage_key {
+                    self.page_cache.aliases.insert(key, storage_key.clone());
+                }
             }
         }
         self.page_cache_dirty = true;
@@ -1807,16 +2526,57 @@ fn search_response_quality_ok(query: &str, hits: &[SearchHit]) -> bool {
     if hits.is_empty() {
         return false;
     }
-    let terms = significant_terms_with_numbers(query)
+    let focused_terms = significant_terms_with_numbers(query)
         .into_iter()
         .filter(|term| term.len() >= 3)
+        .filter(|term| !is_generic_search_modifier(term))
         .collect::<Vec<_>>();
+    let terms = if focused_terms.len() >= 2 {
+        focused_terms
+    } else {
+        significant_terms_with_numbers(query)
+            .into_iter()
+            .filter(|term| term.len() >= 3)
+            .collect()
+    };
     if terms.len() < 2 {
         return true;
     }
     hits.iter()
         .take(5)
         .any(|hit| score_search_hit_for_query(&terms, hit) >= 2)
+}
+
+fn is_generic_search_modifier(term: &str) -> bool {
+    matches!(
+        term,
+        "about"
+            | "benchmark"
+            | "current"
+            | "data"
+            | "dataset"
+            | "document"
+            | "file"
+            | "find"
+            | "information"
+            | "measured"
+            | "new"
+            | "official"
+            | "original"
+            | "paper"
+            | "pdf"
+            | "real"
+            | "report"
+            | "research"
+            | "result"
+            | "review"
+            | "small"
+            | "source"
+            | "study"
+            | "table"
+            | "technical"
+            | "test"
+    )
 }
 
 fn score_search_hit_for_query(terms: &[String], hit: &SearchHit) -> usize {
@@ -2403,20 +3163,257 @@ fn build_evidence_doc(
     let fetched = fetch_page_content(config, query, hit)?;
     let canonical_url = canonical_page_url(hit, &fetched);
     let is_pdf = is_pdf_content(hit, &fetched);
-    let opened_page = if is_pdf {
+    let response_kind = response_content_kind(hit, &fetched);
+    let opened_page = if is_zenodo_record_api_url(&hit.url) {
+        extract_zenodo_record_opened_page(query, hit, &String::from_utf8_lossy(&fetched.body))
+            .unwrap_or_else(|| {
+                extract_text_opened_page(query, hit, &String::from_utf8_lossy(&fetched.body))
+            })
+    } else if response_kind.starts_with("data_") {
+        OpenedPage {
+            title: hit.title.clone(),
+            summary: "Immutable original data file retrieved.".to_string(),
+            is_pdf: false,
+            pdf_total_pages: None,
+            page_sections: Vec::new(),
+            excerpts: Vec::new(),
+            page_text: String::new(),
+        }
+    } else if is_pdf {
         extract_pdf_opened_page(config, query, hit, &fetched)?
     } else {
         extract_opened_page(query, hit, &String::from_utf8_lossy(&fetched.body))
     };
-    let raw_html = if is_pdf {
+    let raw_html = if is_pdf || response_kind.starts_with("data_") {
         None
     } else {
         Some(String::from_utf8_lossy(&fetched.body).into_owned())
     };
     let mut doc = build_query_evidence_doc(config, query, hit, canonical_url, opened_page);
     doc.raw_html = raw_html;
+    doc.response_receipt = Some(response_receipt(hit, &fetched, None));
     apply_evidence_gate(&mut doc, hit, &fetched);
+    if doc.evidence_eligible {
+        doc.response_body = Some(fetched.body.clone());
+    }
+    persist_response_artifact(config, &mut doc)?;
     Ok((doc, fetched.content_type))
+}
+
+fn persist_response_artifact(config: &SearchConfig, doc: &mut EvidenceDoc) -> Result<()> {
+    if !doc.evidence_eligible {
+        return Ok(());
+    }
+    if !evidence_doc_has_immutable_response(doc) {
+        bail!("admitted web response is not hash-bound");
+    }
+    let body = if evidence_doc_is_data_file(doc) {
+        doc.response_body
+            .take()
+            .context("admitted web response has no body")?
+    } else {
+        doc.response_body
+            .clone()
+            .context("admitted web response has no body")?
+    };
+    let digest = snapshot_hash(&body);
+    let bare_digest = digest.strip_prefix("sha256:").unwrap_or(&digest);
+    let extension = doc
+        .response_receipt
+        .as_ref()
+        .map(|receipt| match receipt.content_kind.as_str() {
+            "data_zip" => "zip",
+            "data_gzip" => "gz",
+            "data_parquet" => "parquet",
+            "data_xlsx" => "xlsx",
+            "data_hdf5" => "h5",
+            "data_json" => "json",
+            "data_delimited" => "csv",
+            "data_table_text" => "txt",
+            "pdf" => "pdf",
+            "html" => "html",
+            "page_content" => "txt",
+            _ => "bin",
+        })
+        .unwrap_or("bin");
+    let cache_dir = config.root.join("runtime/web_search_data_cache");
+    fs::create_dir_all(&cache_dir)
+        .with_context(|| format!("create original-data cache {}", cache_dir.display()))?;
+    let target = cache_dir.join(format!("{bare_digest}.{extension}"));
+    let existing_matches = fs::read(&target)
+        .ok()
+        .is_some_and(|existing| snapshot_hash(&existing) == digest);
+    if !existing_matches {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let temporary =
+            cache_dir.join(format!(".{bare_digest}.tmp-{}-{nonce}", std::process::id()));
+        fs::write(&temporary, &body)
+            .with_context(|| format!("write response cache {}", temporary.display()))?;
+        if target.exists() {
+            fs::remove_file(&target)
+                .with_context(|| format!("replace corrupt response cache {}", target.display()))?;
+        }
+        fs::rename(&temporary, &target)
+            .with_context(|| format!("publish response cache {}", target.display()))?;
+    }
+    doc.response_artifact_path = Some(target.to_string_lossy().into_owned());
+    if extension == "zip" {
+        doc.response_archive_manifest =
+            Some(persist_zip_archive_manifest(&target, digest.as_str())?);
+    }
+    Ok(())
+}
+
+fn persist_zip_archive_manifest(archive_path: &Path, archive_sha256: &str) -> Result<Value> {
+    const MAX_ARCHIVE_MEMBERS: usize = 50_000;
+    const MAX_TOTAL_UNCOMPRESSED_BYTES: u64 = 4_000_000_000;
+
+    let manifest_path = archive_path.with_extension("zip.manifest.json");
+    if let Ok(bytes) = fs::read(&manifest_path) {
+        if let Ok(existing) = serde_json::from_slice::<Value>(&bytes) {
+            if existing.get("schema_version").and_then(Value::as_str)
+                == Some("ctox.web.zip-manifest.v2")
+                && existing.get("archive_sha256").and_then(Value::as_str) == Some(archive_sha256)
+            {
+                return Ok(zip_manifest_receipt(
+                    archive_sha256,
+                    &manifest_path,
+                    &bytes,
+                    &existing,
+                ));
+            }
+        }
+    }
+
+    let file = fs::File::open(archive_path)
+        .with_context(|| format!("open ZIP artifact {}", archive_path.display()))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .with_context(|| format!("parse ZIP artifact {}", archive_path.display()))?;
+    if archive.len() > MAX_ARCHIVE_MEMBERS {
+        bail!(
+            "ZIP artifact {} contains {} members, above the safety limit {}",
+            archive_path.display(),
+            archive.len(),
+            MAX_ARCHIVE_MEMBERS
+        );
+    }
+
+    let mut members = Vec::with_capacity(archive.len());
+    let mut total_uncompressed_bytes = 0_u64;
+    let mut data_member_count = 0_usize;
+    let mut sample_data_members = Vec::new();
+    for index in 0..archive.len() {
+        let mut member = archive
+            .by_index(index)
+            .with_context(|| format!("read ZIP member index {index}"))?;
+        let name = member.name().to_string();
+        if member.enclosed_name().is_none() {
+            bail!("ZIP artifact contains unsafe member path `{name}`");
+        }
+        total_uncompressed_bytes = total_uncompressed_bytes.saturating_add(member.size());
+        if total_uncompressed_bytes > MAX_TOTAL_UNCOMPRESSED_BYTES {
+            bail!(
+                "ZIP artifact uncompressed size exceeds {} bytes",
+                MAX_TOTAL_UNCOMPRESSED_BYTES
+            );
+        }
+        let is_dir = member.is_dir();
+        let member_sha256 = if is_dir {
+            None
+        } else {
+            let mut hasher = Sha256::new();
+            let mut buffer = [0_u8; 64 * 1024];
+            loop {
+                let count = member
+                    .read(&mut buffer)
+                    .with_context(|| format!("hash ZIP member `{name}`"))?;
+                if count == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..count]);
+            }
+            Some(format!("sha256:{:x}", hasher.finalize()))
+        };
+        let is_data_member = archive_member_is_data(&name);
+        if is_data_member {
+            data_member_count += 1;
+            if sample_data_members.len() < 24 {
+                sample_data_members.push(name.clone());
+            }
+        }
+        members.push(json!({
+            "path": name,
+            "is_dir": is_dir,
+            "compressed_size": member.compressed_size(),
+            "uncompressed_size": member.size(),
+            "crc32": format!("{:08x}", member.crc32()),
+            "sha256": member_sha256,
+        }));
+    }
+
+    let full_manifest = json!({
+        "schema_version": "ctox.web.zip-manifest.v2",
+        "archive_path": archive_path,
+        "archive_sha256": archive_sha256,
+        "member_count": members.len(),
+        "data_member_count": data_member_count,
+        "total_uncompressed_bytes": total_uncompressed_bytes,
+        "sample_data_members": sample_data_members,
+        "members": members,
+    });
+    let encoded = serde_json::to_vec_pretty(&full_manifest)?;
+    write_atomic(&manifest_path, &encoded)?;
+    Ok(zip_manifest_receipt(
+        archive_sha256,
+        &manifest_path,
+        &encoded,
+        &full_manifest,
+    ))
+}
+
+fn archive_member_is_data(name: &str) -> bool {
+    let lower_name = name.to_ascii_lowercase();
+    [
+        ".csv", ".tsv", ".tab", ".txt", ".dat", ".asc", ".json", ".jsonl", ".ndjson", ".xlsx",
+        ".xls", ".parquet", ".h5", ".hdf5",
+    ]
+    .iter()
+    .any(|suffix| lower_name.ends_with(suffix))
+}
+
+fn zip_manifest_receipt(
+    archive_sha256: &str,
+    manifest_path: &Path,
+    encoded: &[u8],
+    manifest: &Value,
+) -> Value {
+    json!({
+        "schema_version": "ctox.web.zip-manifest-receipt.v2",
+        "archive_sha256": archive_sha256,
+        "manifest_path": manifest_path,
+        "manifest_sha256": snapshot_hash(encoded),
+        "member_count": manifest.get("member_count").cloned().unwrap_or(Value::Null),
+        "data_member_count": manifest.get("data_member_count").cloned().unwrap_or(Value::Null),
+        "total_uncompressed_bytes": manifest.get("total_uncompressed_bytes").cloned().unwrap_or(Value::Null),
+        "sample_data_members": manifest.get("sample_data_members").cloned().unwrap_or_else(|| json!([])),
+    })
+}
+
+fn mock_zip_bytes() -> Vec<u8> {
+    let cursor = Cursor::new(Vec::new());
+    let mut writer = zip::ZipWriter::new(cursor);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    writer
+        .start_file("dataset.csv", options)
+        .expect("start mock ZIP member");
+    writer
+        .write_all(b"rpm,thrust_N,torque_Nm\n1000,1.2,0.03\n")
+        .expect("write mock ZIP member");
+    writer.finish().expect("finish mock ZIP").into_inner()
 }
 
 fn apply_evidence_gate(doc: &mut EvidenceDoc, hit: &SearchHit, fetched: &FetchedPageContent) {
@@ -2426,14 +3423,362 @@ fn apply_evidence_gate(doc: &mut EvidenceDoc, hit: &SearchHit, fetched: &Fetched
     doc.http_status = Some(fetched.http_status);
     doc.snapshot_hash = content_hash;
     doc.source_tier = source_tier_for_hit(hit);
+    let rejection = response_admission_rejection(hit, doc, fetched);
+    doc.response_receipt = Some(response_receipt(hit, fetched, rejection.clone()));
+    let metadata_receipt = is_zenodo_record_api_url(&doc.url);
+    let metadata_fallback = !metadata_receipt
+        && (is_metadata_source(&hit.source)
+            || (is_json_api_url(&hit.url)
+                || fetched.content_type.as_deref().is_some_and(|content_type| {
+                    content_type.to_ascii_lowercase().contains("json")
+                }))
+                && String::from_utf8_lossy(&fetched.body)
+                    .to_ascii_lowercase()
+                    .contains("\"metadata\""));
     doc.evidence_eligible = (200..300).contains(&fetched.http_status)
         && !fetched.body.is_empty()
-        && doc.snapshot_hash.is_some();
+        && doc.snapshot_hash.is_some()
+        && (evidence_doc_has_meaningful_content(doc) || evidence_doc_is_data_file(doc))
+        && (evidence_doc_is_data_file(doc)
+            || normalize_ws(&doc.page_text) != normalize_ws(&hit.snippet))
+        && !metadata_fallback
+        && rejection.is_none();
+    if let Some(reason) = rejection {
+        if let Some(receipt) = doc.response_receipt.as_mut() {
+            receipt.admission_rejection_reason = Some(reason);
+        }
+    }
     doc.verification_status = if doc.evidence_eligible {
         "verified".to_string()
     } else {
         "unverified".to_string()
     };
+}
+
+fn response_receipt(
+    hit: &SearchHit,
+    fetched: &FetchedPageContent,
+    admission_rejection_reason: Option<String>,
+) -> ResponseReceipt {
+    let final_url = if fetched.final_url.trim().is_empty() {
+        hit.url.clone()
+    } else {
+        fetched.final_url.clone()
+    };
+    let redirected = final_url != hit.url;
+    ResponseReceipt {
+        requested_url: hit.url.clone(),
+        final_url: final_url.clone(),
+        status: fetched.http_status,
+        content_type: fetched.content_type.clone(),
+        byte_count: fetched.body.len(),
+        sha256: (!fetched.body.is_empty()).then(|| snapshot_hash(&fetched.body)),
+        content_kind: response_content_kind(hit, fetched),
+        redirected,
+        redirect_chain: if redirected {
+            vec![hit.url.clone(), final_url]
+        } else {
+            vec![hit.url.clone()]
+        },
+        lineage: "web_search.evidence_fetch".to_string(),
+        admission_rejection_reason,
+    }
+}
+
+fn response_content_kind(hit: &SearchHit, fetched: &FetchedPageContent) -> String {
+    let content_type = fetched
+        .content_type
+        .as_deref()
+        .unwrap_or_default()
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let body = &fetched.body;
+    let trimmed = body.iter().position(|byte| !byte.is_ascii_whitespace());
+    let starts_with =
+        |prefix: &[u8]| trimmed.is_some_and(|index| body[index..].starts_with(prefix));
+    if body.starts_with(b"%PDF-") || content_type == "application/pdf" {
+        return "pdf".to_string();
+    }
+    if content_type == GITHUB_API_CONTENT_TYPE {
+        // CTOX wraps repository metadata, README text and tree entries in
+        // JSON. The wrapper is not an original JSON dataset.
+        return "repository_metadata".to_string();
+    }
+    if starts_with(b"<!doctype html") || starts_with(b"<html") || content_type.contains("html") {
+        return "html".to_string();
+    }
+    let data_hint = is_data_url_suffix(&hit.url) || is_data_url_suffix(&fetched.final_url);
+    let json_hint = content_type == "application/json"
+        || content_type.ends_with("+json")
+        || hit.url.to_ascii_lowercase().ends_with(".json")
+        || fetched.final_url.to_ascii_lowercase().ends_with(".json");
+    if json_hint {
+        return if serde_json::from_slice::<Value>(body)
+            .ok()
+            .is_some_and(|value| value.is_object() || value.is_array())
+        {
+            "data_json".to_string()
+        } else {
+            "malformed_data".to_string()
+        };
+    }
+    if content_type == "text/csv"
+        || content_type == "text/tab-separated-values"
+        || content_type == "application/vnd.ms-excel"
+        || (data_hint && looks_like_delimited_data(body))
+    {
+        return if looks_like_delimited_data(body) {
+            "data_delimited".to_string()
+        } else {
+            "malformed_data".to_string()
+        };
+    }
+    if data_hint && looks_like_whitespace_table_data(body) {
+        return "data_table_text".to_string();
+    }
+    if content_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        || url_path_has_suffix(&hit.url, &[".xlsx"])
+        || url_path_has_suffix(&fetched.final_url, &[".xlsx"])
+    {
+        return if body.starts_with(b"PK\x03\x04") {
+            "data_xlsx".to_string()
+        } else {
+            "malformed_data".to_string()
+        };
+    }
+    if matches!(
+        content_type.as_str(),
+        "application/vnd.apache.parquet" | "application/x-parquet"
+    ) || url_path_has_suffix(&hit.url, &[".parquet"])
+        || url_path_has_suffix(&fetched.final_url, &[".parquet"])
+    {
+        return if body.starts_with(b"PAR1") {
+            "data_parquet".to_string()
+        } else {
+            "malformed_data".to_string()
+        };
+    }
+    let hdf5_hint = content_type == "application/x-hdf5"
+        || url_path_has_suffix(&hit.url, &[".h5", ".hdf5"])
+        || url_path_has_suffix(&fetched.final_url, &[".h5", ".hdf5"]);
+    if hdf5_hint {
+        return if body.starts_with(b"\x89HDF\r\n\x1a\n") {
+            "data_hdf5".to_string()
+        } else {
+            "malformed_data".to_string()
+        };
+    }
+    let zip_hint = content_type == "application/zip"
+        || content_type == "application/x-zip-compressed"
+        || url_path_has_suffix(&hit.url, &[".zip"])
+        || url_path_has_suffix(&fetched.final_url, &[".zip"]);
+    if zip_hint {
+        return if body.starts_with(b"PK\x03\x04")
+            || body.starts_with(b"PK\x05\x06")
+            || body.starts_with(b"PK\x07\x08")
+        {
+            "data_zip".to_string()
+        } else {
+            "malformed_data".to_string()
+        };
+    }
+    let gzip_hint = content_type == "application/gzip"
+        || content_type == "application/x-gzip"
+        || url_path_has_suffix(&hit.url, &[".gz", ".tgz"])
+        || url_path_has_suffix(&fetched.final_url, &[".gz", ".tgz"]);
+    if gzip_hint {
+        return if body.starts_with(b"\x1f\x8b") {
+            "data_gzip".to_string()
+        } else {
+            "malformed_data".to_string()
+        };
+    }
+    if content_type.starts_with("text/") {
+        "page_content".to_string()
+    } else {
+        "binary".to_string()
+    }
+}
+
+fn is_data_url_suffix(raw: &str) -> bool {
+    url_path_has_suffix(
+        raw,
+        &[
+            ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".xlsx", ".xls", ".parquet", ".zip",
+            ".txt", ".gz", ".tgz", ".h5", ".hdf5",
+        ],
+    )
+}
+
+fn url_path_has_suffix(raw: &str, suffixes: &[&str]) -> bool {
+    let path = Url::parse(raw)
+        .ok()
+        .map(|url| url.path().to_ascii_lowercase())
+        .unwrap_or_default();
+    suffixes.iter().any(|suffix| {
+        path.ends_with(suffix) || path.split('/').any(|segment| segment.ends_with(suffix))
+    })
+}
+
+fn looks_like_delimited_data(body: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(body) else {
+        return false;
+    };
+    let lines = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>();
+    if lines.len() < 2 {
+        return false;
+    }
+    let delimiter = if lines[0].matches('\t').count() >= lines[0].matches(',').count() {
+        '\t'
+    } else {
+        ','
+    };
+    let width = lines[0].matches(delimiter).count();
+    width > 0
+        && lines
+            .iter()
+            .all(|line| line.matches(delimiter).count() == width)
+}
+
+fn looks_like_whitespace_table_data(body: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(body) else {
+        return false;
+    };
+    let rows = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with('#')
+                && !line.chars().all(|ch| matches!(ch, '-' | '=' | '_' | ' '))
+        })
+        .map(|line| line.split_whitespace().collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let Some(header) = rows.first() else {
+        return false;
+    };
+    if rows.len() < 3 || !(2..=64).contains(&header.len()) {
+        return false;
+    }
+    if !header
+        .iter()
+        .any(|cell| cell.chars().any(|ch| ch.is_ascii_alphabetic()) && cell.parse::<f64>().is_err())
+    {
+        return false;
+    }
+    rows.iter()
+        .skip(1)
+        .take(64)
+        .filter(|row| {
+            row.len() == header.len()
+                && row
+                    .iter()
+                    .filter(|cell| cell.parse::<f64>().is_ok())
+                    .count()
+                    * 4
+                    >= row.len() * 3
+        })
+        .count()
+        >= 2
+}
+
+fn response_admission_rejection(
+    hit: &SearchHit,
+    doc: &EvidenceDoc,
+    fetched: &FetchedPageContent,
+) -> Option<String> {
+    let body = String::from_utf8_lossy(&fetched.body).to_ascii_lowercase();
+    let extracted = format!("{} {} {}", doc.title, doc.summary, doc.page_text).to_ascii_lowercase();
+    let url = fetched.final_url.to_ascii_lowercase();
+    let content_kind = response_content_kind(hit, fetched);
+    if content_kind == "malformed_data"
+        || (is_data_url_suffix(&hit.url)
+            && matches!(content_kind.as_str(), "html" | "binary" | "page_content"))
+    {
+        return Some("invalid_data_response".to_string());
+    }
+
+    let blocked_url = url.contains("validate.perfdrive.com")
+        || url.contains("/captcha")
+        || url.contains("/recaptcha")
+        || url.contains("/challenge");
+    let bot_markers = [
+        "radware bot manager captcha",
+        "confirm you are a human",
+        "verify that you are human",
+        "verify you are human",
+        "captcha-form",
+        "g-recaptcha",
+        "h-captcha",
+        "cf-turnstile",
+        "request blocked",
+    ];
+    let bot_signal = bot_markers
+        .iter()
+        .any(|marker| body.contains(*marker) || extracted.contains(*marker));
+    if blocked_url || (bot_signal && doc.page_text.trim().chars().count() < 1_200) {
+        return Some("bot_or_captcha_wall".to_string());
+    }
+
+    let login_url = ["/login", "/signin", "/sign-in", "/authenticate", "/auth/"]
+        .iter()
+        .any(|marker| url.contains(marker));
+    let login_markers = [
+        "sign in to continue",
+        "log in to continue",
+        "login required",
+        "authentication required",
+        "please sign in",
+        "please log in",
+        "input type=\"password\"",
+        "name=\"password\"",
+        "verify your identity",
+        "create an account or sign in",
+    ];
+    let login_signal_count = login_markers
+        .iter()
+        .filter(|marker| body.contains(**marker) || extracted.contains(**marker))
+        .count();
+    // Journal and repository pages commonly include a dormant login form in
+    // their global navigation. It is only a wall when the response resolves
+    // to an authentication route or no substantial article body was found.
+    let extracted_body_chars = doc.page_text.trim().chars().count();
+    if login_url || (login_signal_count >= 1 && extracted_body_chars < 600) {
+        return Some("login_or_authentication_wall".to_string());
+    }
+
+    let not_found_markers = [
+        "page not found",
+        "404 not found",
+        "the requested page could not be found",
+        "this page does not exist",
+        "content not found",
+        "no longer available",
+        "page you requested was not found",
+        "error 404",
+    ];
+    let not_found_signal_count = not_found_markers
+        .iter()
+        .filter(|marker| body.contains(**marker) || extracted.contains(**marker))
+        .count();
+    let title_or_url_not_found = doc.title.to_ascii_lowercase().contains("404")
+        || url.contains("/404")
+        || url.contains("not-found");
+    if fetched.http_status == 200 && (not_found_signal_count >= 1 || title_or_url_not_found) {
+        return Some("soft_404".to_string());
+    }
+
+    // A redirect to a login/404 page can retain a plausible original title.
+    if hit.url != fetched.final_url && (body.contains("sign in") || body.contains("not found")) {
+        return Some("redirected_to_non_content_page".to_string());
+    }
+    None
 }
 
 fn failed_http_evidence_doc(
@@ -2465,6 +3810,22 @@ fn failed_evidence_doc(hit: &SearchHit, status: u16) -> (EvidenceDoc, Option<Str
             page_text: String::new(),
             find_results: Vec::new(),
             raw_html: None,
+            response_body: None,
+            response_artifact_path: None,
+            response_archive_manifest: None,
+            response_receipt: Some(ResponseReceipt {
+                requested_url: hit.url.clone(),
+                final_url: hit.url.clone(),
+                status,
+                content_type: None,
+                byte_count: 0,
+                sha256: None,
+                content_kind: "none".to_string(),
+                redirected: false,
+                redirect_chain: vec![hit.url.clone()],
+                lineage: "web_search.evidence_fetch".to_string(),
+                admission_rejection_reason: Some("http_fetch_failed".to_string()),
+            }),
         },
         None,
     )
@@ -2510,6 +3871,10 @@ fn build_query_evidence_doc(
             page_text: opened_page.page_text,
             find_results: Vec::new(),
             raw_html: None,
+            response_body: None,
+            response_artifact_path: None,
+            response_archive_manifest: None,
+            response_receipt: None,
         },
     )
 }
@@ -2520,8 +3885,15 @@ fn rebuild_cached_evidence_doc(
     hit: &SearchHit,
     cached: &EvidenceDoc,
 ) -> EvidenceDoc {
-    let page_text = trim_text(&cached.page_text, config.max_page_chars);
-    let excerpts = if cached.is_pdf {
+    let is_data_file = evidence_doc_is_data_file(cached);
+    let page_text = if is_data_file {
+        String::new()
+    } else {
+        trim_text(&cached.page_text, config.max_page_chars)
+    };
+    let excerpts = if is_data_file {
+        Vec::new()
+    } else if cached.is_pdf {
         best_pdf_paragraphs_for_query(query, &cached.page_sections, 3, &page_text)
     } else {
         let paragraphs = clean_candidate_paragraphs(split_plaintext_paragraphs(&page_text));
@@ -2532,8 +3904,12 @@ fn rebuild_cached_evidence_doc(
             best
         }
     };
-    let summary = if excerpts.is_empty() {
-        if cached.summary.trim().is_empty() {
+    let summary = if is_data_file {
+        "Immutable original data file retrieved.".to_string()
+    } else if excerpts.is_empty() {
+        if !meaningful_extracted_page_text(&page_text) {
+            String::new()
+        } else if cached.summary.trim().is_empty() {
             fallback_summary(hit, &page_text)
         } else {
             trim_text(&cached.summary, 360)
@@ -2543,6 +3919,25 @@ fn rebuild_cached_evidence_doc(
     };
     let find_results =
         build_find_in_page_results(query, &page_text, &cached.page_sections, &excerpts);
+    let rebuilt_content = EvidenceDoc {
+        page_text: page_text.clone(),
+        ..cached.clone()
+    };
+    let evidence_eligible = cached.evidence_eligible
+        && evidence_doc_has_immutable_response(cached)
+        && (evidence_doc_has_meaningful_content(&rebuilt_content)
+            || evidence_doc_is_data_file(&rebuilt_content))
+        && (evidence_doc_is_data_file(&rebuilt_content)
+            || normalize_ws(&page_text) != normalize_ws(&hit.snippet))
+        && (!is_metadata_source(cached.source_tier.as_deref().unwrap_or_default())
+            || is_zenodo_record_api_url(&cached.url));
+    let verification_status = if evidence_eligible {
+        cached.verification_status.clone()
+    } else if cached.verification_status == "failed" {
+        "failed".to_string()
+    } else {
+        "unverified".to_string()
+    };
 
     EvidenceDoc {
         url: cached.url.clone(),
@@ -2553,12 +3948,12 @@ fn rebuild_cached_evidence_doc(
         },
         title: cached.title.clone(),
         summary,
-        verification_status: cached.verification_status.clone(),
+        verification_status,
         checked_at: cached.checked_at,
         http_status: cached.http_status,
         snapshot_hash: cached.snapshot_hash.clone(),
         source_tier: cached.source_tier.clone(),
-        evidence_eligible: cached.evidence_eligible,
+        evidence_eligible,
         is_pdf: cached.is_pdf,
         pdf_total_pages: cached.pdf_total_pages,
         page_sections: cached.page_sections.clone(),
@@ -2566,6 +3961,10 @@ fn rebuild_cached_evidence_doc(
         page_text,
         find_results,
         raw_html: cached.raw_html.clone(),
+        response_body: cached.response_body.clone(),
+        response_artifact_path: cached.response_artifact_path.clone(),
+        response_archive_manifest: cached.response_archive_manifest.clone(),
+        response_receipt: cached.response_receipt.clone(),
     }
 }
 
@@ -2595,7 +3994,7 @@ fn canonical_page_url(hit: &SearchHit, fetched: &FetchedPageContent) -> String {
     }
 }
 
-fn snapshot_hash(bytes: &[u8]) -> String {
+pub(crate) fn snapshot_hash(bytes: &[u8]) -> String {
     // Keep the focused crate dependency-light while still giving cache
     // consumers a cryptographic content identity.
     const K: [u32; 64] = [
@@ -2702,63 +4101,162 @@ fn fetch_page_content(
 ) -> Result<FetchedPageContent> {
     if config.provider == ProviderKind::Mock && hit.source == "mock" {
         if hit.url.to_ascii_lowercase().ends_with(".pdf") {
-            return Ok(FetchedPageContent {
-                body: mock_pdf_bytes(query, hit),
-                content_type: Some("application/pdf".to_string()),
+            return enforce_response_limits(
+                config,
+                hit,
+                FetchedPageContent {
+                    body: mock_pdf_bytes(query, hit),
+                    content_type: Some("application/pdf".to_string()),
+                    final_url: hit.url.clone(),
+                    http_status: 200,
+                },
+            );
+        }
+        if hit.url.to_ascii_lowercase().ends_with(".zip") {
+            return enforce_response_limits(
+                config,
+                hit,
+                FetchedPageContent {
+                    body: mock_zip_bytes(),
+                    content_type: Some("application/zip".to_string()),
+                    final_url: hit.url.clone(),
+                    http_status: 200,
+                },
+            );
+        }
+        return enforce_response_limits(
+            config,
+            hit,
+            FetchedPageContent {
+                body: mock_open_page_html(query, hit).into_bytes(),
+                content_type: Some("text/html".to_string()),
                 final_url: hit.url.clone(),
                 http_status: 200,
-            });
-        }
-        return Ok(FetchedPageContent {
-            body: mock_open_page_html(query, hit).into_bytes(),
-            content_type: Some("text/html".to_string()),
-            final_url: hit.url.clone(),
-            http_status: 200,
-        });
+            },
+        );
     }
 
     if let Some(optimized) = fetch_platform_optimized_content(config, query, hit)? {
-        return Ok(optimized);
+        return enforce_response_limits(config, hit, optimized);
     }
 
-    let mut request = build_agent(config)?
-        .get(&hit.url)
-        .set("accept", evidence_accept_header(&hit.url));
-    if is_json_api_url(&hit.url) {
-        request = request.set("user-agent", "ctox-research/0.3 (+https://ctox.dev)");
+    fetch_http_page_content(config, hit)
+}
+
+fn enforce_response_limits(
+    config: &SearchConfig,
+    hit: &SearchHit,
+    fetched: FetchedPageContent,
+) -> Result<FetchedPageContent> {
+    let max_bytes =
+        response_byte_limit(config, &fetched.final_url, fetched.content_type.as_deref());
+    if fetched.body.len() > max_bytes {
+        return Err(anyhow!(
+            "evidence page {} exceeded {} bytes; response rejected without truncation",
+            hit.url,
+            max_bytes
+        ));
     }
-    let response = request
-        .call()
-        .with_context(|| format!("failed to fetch evidence page {}", hit.url))?;
-    let http_status = response.status();
-    let content_type = response.header("content-type").map(ToString::to_string);
-    if content_type_is_disallowed(content_type.as_deref()) {
+    if content_type_is_disallowed(fetched.content_type.as_deref(), &fetched.final_url) {
         return Err(anyhow!(
             "evidence page {} returned unsupported content type {:?}",
             hit.url,
-            content_type
+            fetched.content_type
         ));
     }
-    let final_url = response.get_url().to_string();
-    let mut body = Vec::new();
-    response
-        .into_reader()
-        .take(config.max_page_bytes.max(4096) as u64 + 1)
-        .read_to_end(&mut body)
-        .with_context(|| format!("failed to read evidence page {}", hit.url))?;
-    if body.len() > config.max_page_bytes.max(4096) {
-        return Err(anyhow!(
-            "evidence page {} exceeded {} bytes",
-            hit.url,
-            config.max_page_bytes
-        ));
+    Ok(fetched)
+}
+
+fn fetch_http_page_content(config: &SearchConfig, hit: &SearchHit) -> Result<FetchedPageContent> {
+    let max_attempts = if is_data_url_suffix(&hit.url) { 1 } else { 3 };
+    let mut last_error: Option<anyhow::Error> = None;
+    for attempt in 0..max_attempts {
+        let mut request = build_agent_with_timeout(config, response_timeout(config, &hit.url))?
+            .get(&hit.url)
+            .set("accept", evidence_accept_header(&hit.url));
+        if is_json_api_url(&hit.url) {
+            request = request.set("user-agent", "ctox-research/0.3 (+https://ctox.dev)");
+        }
+        // A malformed or prematurely closed response must not be able to take
+        // down the CTOX daemon. ureq 2.x contains an internal expect while it
+        // buffers short Content-Length responses, so contain that dependency
+        // panic at the network boundary and treat it like a transient fetch.
+        let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| request.call()));
+        match response {
+            Ok(Ok(response)) => {
+                let http_status = response.status();
+                let content_type = response.header("content-type").map(ToString::to_string);
+                let final_url = response.get_url().to_string();
+                if content_type_is_disallowed(content_type.as_deref(), &final_url) {
+                    return Err(anyhow!(
+                        "evidence page {} returned unsupported content type {:?}",
+                        hit.url,
+                        content_type
+                    ));
+                }
+                let max_bytes = response_byte_limit(config, &final_url, content_type.as_deref());
+                if let Some(content_length) = response
+                    .header("content-length")
+                    .and_then(|raw| raw.trim().parse::<usize>().ok())
+                {
+                    if content_length > max_bytes {
+                        return Err(anyhow!(
+                            "evidence page {} declared {} bytes, exceeding the {} byte research limit",
+                            hit.url,
+                            content_length,
+                            max_bytes
+                        ));
+                    }
+                }
+                let mut body = Vec::new();
+                response
+                    .into_reader()
+                    .take(max_bytes.saturating_add(1) as u64)
+                    .read_to_end(&mut body)
+                    .with_context(|| format!("failed to read evidence page {}", hit.url))?;
+                if body.len() > max_bytes {
+                    return Err(anyhow!(
+                        "evidence page {} exceeded {} bytes; response rejected without truncation",
+                        hit.url,
+                        max_bytes
+                    ));
+                }
+                return Ok(FetchedPageContent {
+                    body,
+                    content_type,
+                    final_url,
+                    http_status,
+                });
+            }
+            Ok(Err(error)) => {
+                let retryable = is_transient_fetch_error(&error);
+                last_error = Some(anyhow::Error::new(error));
+                if !retryable || attempt + 1 == max_attempts {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20 * (attempt as u64 + 1)));
+            }
+            Err(_) => {
+                last_error = Some(anyhow!(
+                    "HTTP client panicked while reading the response from {}",
+                    hit.url
+                ));
+                if attempt + 1 == max_attempts {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20 * (attempt as u64 + 1)));
+            }
+        }
     }
-    Ok(FetchedPageContent {
-        body,
-        content_type,
-        final_url,
-        http_status,
-    })
+    let error = last_error.expect("fetch loop always records its terminal error");
+    Err(error).with_context(|| format!("failed to fetch evidence page {}", hit.url))
+}
+
+fn is_transient_fetch_error(error: &ureq::Error) -> bool {
+    match error {
+        ureq::Error::Status(status, _) => matches!(status, 408 | 425 | 429 | 500 | 502 | 503 | 504),
+        ureq::Error::Transport(_) => true,
+    }
 }
 
 fn evidence_accept_header(url: &str) -> &'static str {
@@ -2881,13 +4379,20 @@ fn fetch_arxiv_abstract(
         .call()
         .with_context(|| format!("failed to fetch arXiv metadata for {}", hit.url))?;
     let xml = {
-        let mut raw = String::new();
-        let reader = response.into_reader();
-        reader
-            .take(config.max_page_bytes.max(4096) as u64)
-            .read_to_string(&mut raw)
+        let mut raw = Vec::new();
+        response
+            .into_reader()
+            .take(config.max_page_bytes.saturating_add(1) as u64)
+            .read_to_end(&mut raw)
             .context("failed to read arXiv metadata response")?;
-        raw
+        if raw.len() > config.max_page_bytes {
+            return Err(anyhow!(
+                "evidence page {} exceeded {} bytes; response rejected without truncation",
+                hit.url,
+                config.max_page_bytes
+            ));
+        }
+        String::from_utf8(raw).context("arXiv metadata response was not UTF-8")?
     };
     let title = extract_first_xml_tag_text(&xml, "title")
         .filter(|value| !value.eq_ignore_ascii_case("arxiv query results"))
@@ -3621,7 +5126,7 @@ fn github_fetch_text(config: &SearchConfig, url: &str, accept: &str) -> Result<S
     Ok(raw)
 }
 
-fn content_type_is_disallowed(content_type: Option<&str>) -> bool {
+fn content_type_is_disallowed(content_type: Option<&str>, url: &str) -> bool {
     let Some(content_type) = content_type else {
         return false;
     };
@@ -3631,15 +5136,50 @@ fn content_type_is_disallowed(content_type: Option<&str>) -> bool {
         || lowered.contains("html")
         || lowered.contains("xml")
         || lowered.contains("json")
+        || lowered.contains("application/zip")
+        || lowered.contains("application/x-zip-compressed")
+        || lowered.contains("application/gzip")
+        || lowered.contains("application/x-gzip")
+        || lowered.contains("application/vnd.ms-excel")
+        || lowered.contains("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        || lowered.contains("application/vnd.apache.parquet")
+        || lowered.contains("application/x-parquet")
+        || lowered.contains("application/x-hdf5")
     {
         return false;
     }
     lowered.starts_with("image/")
         || lowered.starts_with("audio/")
         || lowered.starts_with("video/")
-        || lowered.contains("application/zip")
-        || lowered.contains("application/gzip")
-        || lowered.contains("application/octet-stream")
+        || (lowered.contains("application/octet-stream") && !is_data_url_suffix(url))
+}
+
+fn response_byte_limit(config: &SearchConfig, url: &str, content_type: Option<&str>) -> usize {
+    let content_type = content_type.unwrap_or_default().to_ascii_lowercase();
+    let path_is_pdf = Url::parse(url)
+        .ok()
+        .is_some_and(|parsed| parsed.path().to_ascii_lowercase().ends_with(".pdf"));
+    if path_is_pdf
+        || content_type.contains("application/pdf")
+        || is_data_url_suffix(url)
+        || content_type.contains("application/zip")
+        || content_type.contains("application/x-zip-compressed")
+        || content_type.contains("application/gzip")
+        || content_type.contains("application/x-gzip")
+        || content_type.contains("application/octet-stream")
+        || content_type.contains("application/vnd.ms-excel")
+        || content_type
+            .contains("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        || content_type.contains("application/vnd.apache.parquet")
+        || content_type.contains("application/x-parquet")
+        || content_type.contains("application/x-hdf5")
+        || content_type.contains("text/csv")
+        || content_type.contains("text/tab-separated-values")
+    {
+        config.max_data_file_bytes
+    } else {
+        config.max_page_bytes
+    }
 }
 
 fn mock_open_page_html(query: &str, hit: &SearchHit) -> String {
@@ -3755,17 +5295,19 @@ fn pdf_escape_text(input: &str) -> String {
 }
 
 fn is_pdf_content(hit: &SearchHit, fetched: &FetchedPageContent) -> bool {
-    hit.url.to_ascii_lowercase().ends_with(".pdf")
-        || fetched.final_url.to_ascii_lowercase().ends_with(".pdf")
-        || fetched
-            .content_type
-            .as_deref()
-            .map(|value| value.to_ascii_lowercase().contains("application/pdf"))
-            .unwrap_or(false)
+    let _ = hit;
+    fetched
+        .content_type
+        .as_deref()
+        .map(|value| value.to_ascii_lowercase().contains("application/pdf"))
+        .unwrap_or(false)
         || fetched.body.starts_with(b"%PDF-")
 }
 
 fn extract_opened_page(query: &str, hit: &SearchHit, body: &str) -> OpenedPage {
+    if let Some(page) = extract_zenodo_record_opened_page(query, hit, body) {
+        return page;
+    }
     match detect_page_adapter(hit, body) {
         PageAdapterKind::Github => extract_github_opened_page(query, hit, body)
             .or_else(|| extract_github_discussion_opened_page(query, hit, body))
@@ -3779,6 +5321,98 @@ fn extract_opened_page(query: &str, hit: &SearchHit, body: &str) -> OpenedPage {
         PageAdapterKind::GenericHtml => extract_html_opened_page(query, hit, body),
         PageAdapterKind::PlainText => extract_text_opened_page(query, hit, body),
     }
+}
+
+fn extract_zenodo_record_opened_page(
+    query: &str,
+    hit: &SearchHit,
+    body: &str,
+) -> Option<OpenedPage> {
+    let parsed_url = Url::parse(&hit.url).ok()?;
+    let host = parsed_url.host_str()?.trim_start_matches("www.");
+    if host != "zenodo.org" || !parsed_url.path().starts_with("/api/records/") {
+        return None;
+    }
+
+    let value: Value = serde_json::from_str(body).ok()?;
+    let metadata = value.get("metadata").unwrap_or(&Value::Null);
+    let title = metadata
+        .get("title")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("title").and_then(Value::as_str))
+        .unwrap_or(&hit.title)
+        .trim()
+        .to_string();
+    let description = metadata
+        .get("description")
+        .and_then(Value::as_str)
+        .map(strip_html_text)
+        .unwrap_or_default();
+
+    let mut paragraphs = Vec::new();
+    if !title.is_empty() {
+        paragraphs.push(title.clone());
+    }
+    if !description.is_empty() {
+        paragraphs.extend(split_plaintext_paragraphs(&description));
+    }
+    if let Some(doi) = value
+        .get("doi")
+        .and_then(Value::as_str)
+        .or_else(|| metadata.get("doi").and_then(Value::as_str))
+    {
+        paragraphs.push(format!("DOI: {doi}"));
+    }
+    if let Some(publication_date) = metadata.get("publication_date").and_then(Value::as_str) {
+        paragraphs.push(format!("Publication date: {publication_date}"));
+    }
+    if let Some(files) = value.get("files").and_then(Value::as_array) {
+        for file in files {
+            let key = file.get("key").and_then(Value::as_str).unwrap_or("unnamed");
+            let size = file.get("size").and_then(Value::as_u64);
+            let checksum = file.get("checksum").and_then(Value::as_str);
+            let content_url = file
+                .get("links")
+                .and_then(|links| links.get("content").or_else(|| links.get("self")))
+                .and_then(Value::as_str);
+            let mut parts = vec![format!("File: {key}")];
+            if let Some(size) = size {
+                parts.push(format!("size_bytes: {size}"));
+            }
+            if let Some(checksum) = checksum {
+                parts.push(format!("checksum: {checksum}"));
+            }
+            if let Some(content_url) = content_url {
+                parts.push(format!("content_url: {content_url}"));
+            }
+            paragraphs.push(parts.join("; "));
+        }
+    }
+
+    let paragraphs = clean_candidate_paragraphs(paragraphs);
+    if paragraphs.is_empty() {
+        return None;
+    }
+    let excerpts = best_paragraphs_for_query(query, &paragraphs, 3);
+    let summary = if excerpts.is_empty() {
+        trim_text(&format!("{title} {description}"), 360)
+    } else {
+        trim_text(&excerpts.join(" "), 360)
+    };
+    Some(OpenedPage {
+        title,
+        summary,
+        is_pdf: false,
+        pdf_total_pages: None,
+        page_sections: Vec::new(),
+        excerpts,
+        page_text: paragraphs.join("\n\n"),
+    })
+}
+
+fn strip_html_text(raw: &str) -> String {
+    let fragment = Html::parse_fragment(raw);
+    normalize_ws(&fragment.root_element().text().collect::<Vec<_>>().join(" "))
 }
 
 fn looks_like_html(body: &str) -> bool {
@@ -3812,21 +5446,10 @@ fn detect_page_adapter(hit: &SearchHit, body: &str) -> PageAdapterKind {
 fn extract_html_opened_page(query: &str, hit: &SearchHit, body: &str) -> OpenedPage {
     let doc = Html::parse_document(body);
     let title = select_text(&doc, "title, h1").unwrap_or_else(|| hit.title.clone());
-    let mut paragraphs = select_relevant_html_blocks(&doc);
-    if paragraphs.is_empty() {
-        paragraphs.push(hit.snippet.clone());
-    }
+    let paragraphs = select_relevant_html_blocks(&doc);
     let excerpts = best_paragraphs_for_query(query, &paragraphs, 3);
-    let summary = if excerpts.is_empty() {
-        hit.snippet.clone()
-    } else {
-        excerpts.join(" ")
-    };
-    let page_text = if paragraphs.is_empty() {
-        summary.clone()
-    } else {
-        paragraphs.join("\n\n")
-    };
+    let summary = excerpts.join(" ");
+    let page_text = paragraphs.join("\n\n");
     OpenedPage {
         title,
         summary,
@@ -4695,11 +6318,7 @@ fn best_github_tree_entries_for_query(query: &str, entries: &[String]) -> Vec<St
 fn extract_text_opened_page(query: &str, hit: &SearchHit, body: &str) -> OpenedPage {
     let paragraphs = clean_candidate_paragraphs(split_plaintext_paragraphs(body));
     let excerpts = best_paragraphs_for_query(query, &paragraphs, 3);
-    let summary = if excerpts.is_empty() {
-        hit.snippet.clone()
-    } else {
-        excerpts.join(" ")
-    };
+    let summary = excerpts.join(" ");
     OpenedPage {
         title: hit.title.clone(),
         summary,
@@ -5000,13 +6619,9 @@ fn fallback_candidate_paragraphs(paragraphs: Vec<String>) -> Vec<String> {
     }
 }
 
-fn fallback_summary(hit: &SearchHit, text: &str) -> String {
+fn fallback_summary(_hit: &SearchHit, text: &str) -> String {
     let cleaned = trim_text(text, 360);
-    if cleaned.is_empty() {
-        hit.snippet.clone()
-    } else {
-        cleaned
-    }
+    cleaned
 }
 
 fn clean_pdf_text_for_llm(text: &str) -> String {
@@ -5923,7 +7538,9 @@ fn query_terms(query: &str) -> Vec<String> {
     for term in query
         .split(|ch: char| !ch.is_alphanumeric())
         .map(str::trim)
-        .filter(|term| term.len() >= 3 || term.chars().all(|ch| ch.is_ascii_digit()))
+        .filter(|term| {
+            !term.is_empty() && (term.len() >= 3 || term.chars().all(|ch| ch.is_ascii_digit()))
+        })
     {
         let lowered = term.to_ascii_lowercase();
         if STOP_WORDS.contains(&lowered.as_str()) || terms.contains(&lowered) {
@@ -6104,6 +7721,10 @@ fn load_cached_search(
     if !path.exists() {
         return Ok(None);
     }
+    if cache_file_is_oversized(&path, MAX_LEGACY_SEARCH_CACHE_BYTES) {
+        let _ = fs::remove_file(&path);
+        return Ok(None);
+    }
     let raw = fs::read_to_string(&path)
         .with_context(|| format!("failed to read web-search cache {}", path.display()))?;
     let file: SearchCacheFile =
@@ -6115,7 +7736,12 @@ fn load_cached_search(
         .filter(|entry| unix_ts().saturating_sub(entry.created_at_epoch) <= config.cache_ttl_secs))
 }
 
-fn write_cached_search(root: &Path, cache_key: &str, response: &SearchResponse) -> Result<()> {
+fn write_cached_search(
+    root: &Path,
+    config: &SearchConfig,
+    cache_key: &str,
+    response: &SearchResponse,
+) -> Result<()> {
     let path = cache_path(root);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| {
@@ -6123,26 +7749,54 @@ fn write_cached_search(root: &Path, cache_key: &str, response: &SearchResponse) 
         })?;
     }
 
-    let mut file = if path.exists() {
-        let raw = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read web-search cache {}", path.display()))?;
-        serde_json::from_str::<SearchCacheFile>(&raw).unwrap_or_default()
-    } else {
-        SearchCacheFile::default()
-    };
+    let mut file =
+        if path.exists() && !cache_file_is_oversized(&path, MAX_LEGACY_SEARCH_CACHE_BYTES) {
+            let raw = fs::read_to_string(&path)
+                .with_context(|| format!("failed to read web-search cache {}", path.display()))?;
+            serde_json::from_str::<SearchCacheFile>(&raw).unwrap_or_default()
+        } else {
+            SearchCacheFile::default()
+        };
 
+    let mut cached_evidence = response.evidence.clone();
+    for doc in &mut cached_evidence {
+        doc.response_body = None;
+        doc.raw_html = None;
+    }
     file.entries.insert(
         cache_key.to_string(),
         SearchCacheEntry {
             created_at_epoch: unix_ts(),
             provider: response.provider.clone(),
             hits: response.hits.clone(),
-            evidence: response.evidence.clone(),
+            evidence: cached_evidence,
         },
     );
-    let encoded =
-        serde_json::to_string_pretty(&file).context("failed to encode web-search cache")?;
-    fs::write(&path, encoded)
+    let now = unix_ts();
+    file.entries
+        .retain(|_, entry| now.saturating_sub(entry.created_at_epoch) <= config.cache_ttl_secs);
+    if file.entries.len() > 128 {
+        let mut newest = file
+            .entries
+            .iter()
+            .map(|(key, entry)| (entry.created_at_epoch, key.clone()))
+            .collect::<Vec<_>>();
+        newest.sort_by(|a, b| b.cmp(a));
+        let keep = newest
+            .into_iter()
+            .take(128)
+            .map(|(_, key)| key)
+            .collect::<BTreeSet<_>>();
+        file.entries.retain(|key, _| keep.contains(key));
+    }
+    for entry in file.entries.values_mut() {
+        for doc in &mut entry.evidence {
+            doc.response_body = None;
+            doc.raw_html = None;
+        }
+    }
+    let encoded = serde_json::to_vec(&file).context("failed to encode web-search cache")?;
+    write_atomic(&path, &encoded)
         .with_context(|| format!("failed to write web-search cache {}", path.display()))
 }
 
@@ -6220,6 +7874,10 @@ fn load_page_cache(root: &Path) -> Result<PageCacheFile> {
     if !path.exists() {
         return Ok(PageCacheFile::default());
     }
+    if cache_file_is_oversized(&path, MAX_LEGACY_PAGE_CACHE_BYTES) {
+        let _ = fs::remove_file(&path);
+        return Ok(PageCacheFile::default());
+    }
     let raw = fs::read_to_string(&path)
         .with_context(|| format!("failed to read web-search page cache {}", path.display()))?;
     serde_json::from_str(&raw).context("failed to parse web-search page cache")
@@ -6235,16 +7893,100 @@ fn write_page_cache(root: &Path, file: &PageCacheFile) -> Result<()> {
             )
         })?;
     }
-    let encoded =
-        serde_json::to_string_pretty(file).context("failed to encode web-search page cache")?;
-    fs::write(&path, encoded)
+    let encoded = serde_json::to_vec(file).context("failed to encode web-search page cache")?;
+    write_atomic(&path, &encoded)
         .with_context(|| format!("failed to write web-search page cache {}", path.display()))
 }
 
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+    fs::write(&temporary, bytes)
+        .with_context(|| format!("write temporary cache {}", temporary.display()))?;
+    if fs::rename(&temporary, path).is_ok() {
+        return Ok(());
+    }
+    if path.exists() {
+        fs::remove_file(path).with_context(|| format!("replace cache {}", path.display()))?;
+    }
+    fs::rename(&temporary, path).with_context(|| format!("publish cache {}", path.display()))
+}
+
+fn cache_file_is_oversized(path: &Path, max_bytes: u64) -> bool {
+    fs::metadata(path)
+        .ok()
+        .is_some_and(|metadata| metadata.len() > max_bytes)
+}
+
 fn prune_expired_page_cache(file: &mut PageCacheFile, ttl_secs: u64) {
+    const MAX_RECEIPT_HISTORY: usize = 4_096;
+
     let now = unix_ts();
     file.entries
         .retain(|_, entry| now.saturating_sub(entry.created_at_epoch) <= ttl_secs);
+    file.receipt_history
+        .retain(|entry| now.saturating_sub(entry.created_at_epoch) <= ttl_secs);
+    file.receipt_history.sort_by(|left, right| {
+        right
+            .created_at_epoch
+            .cmp(&left.created_at_epoch)
+            .then_with(|| right.checked_at.cmp(&left.checked_at))
+    });
+    file.receipt_history.dedup_by(|left, right| {
+        left.checked_at == right.checked_at
+            && left.final_url == right.final_url
+            && left.snapshot_hash == right.snapshot_hash
+            && left.evidence_relevance_score == right.evidence_relevance_score
+    });
+    file.receipt_history.truncate(MAX_RECEIPT_HISTORY);
+    let mut compacted = BTreeMap::<String, PageCacheEntry>::new();
+    let mut aliases = BTreeMap::<String, String>::new();
+    for (old_key, mut entry) in std::mem::take(&mut file.entries) {
+        entry.doc.response_body = None;
+        entry.doc.raw_html = None;
+        let canonical = [
+            entry.canonical_url.as_str(),
+            entry.final_url.as_str(),
+            entry.original_url.as_str(),
+        ]
+        .into_iter()
+        .map(normalize_url_cache_key)
+        .find(|key| !key.is_empty())
+        .unwrap_or_else(|| old_key.clone());
+        let replace = compacted.get(&canonical).map_or(true, |current| {
+            current.created_at_epoch <= entry.created_at_epoch
+        });
+        if replace {
+            compacted.insert(canonical.clone(), entry.clone());
+        }
+        for alias in [
+            old_key,
+            normalize_url_cache_key(&entry.original_url),
+            normalize_url_cache_key(&entry.final_url),
+            normalize_url_cache_key(&entry.canonical_url),
+        ] {
+            if !alias.is_empty() && alias != canonical {
+                aliases.insert(alias, canonical.clone());
+            }
+        }
+    }
+    aliases.extend(std::mem::take(&mut file.aliases));
+    aliases.retain(|alias, target| alias != target && compacted.contains_key(target));
+    if compacted.len() > 2_048 {
+        let mut newest = compacted
+            .iter()
+            .map(|(key, entry)| (entry.created_at_epoch, key.clone()))
+            .collect::<Vec<_>>();
+        newest.sort_by(|a, b| b.cmp(a));
+        let keep = newest
+            .into_iter()
+            .take(2_048)
+            .map(|(_, key)| key)
+            .collect::<BTreeSet<_>>();
+        compacted.retain(|key, _| keep.contains(key));
+        aliases.retain(|_, target| keep.contains(target));
+    }
+    file.entries = compacted;
+    file.aliases = aliases;
 }
 
 fn normalize_url_cache_key(raw: &str) -> String {
@@ -6261,9 +8003,13 @@ fn page_cache_path(root: &Path) -> PathBuf {
 }
 
 fn build_agent(config: &SearchConfig) -> Result<ureq::Agent> {
+    build_agent_with_timeout(config, Duration::from_millis(config.timeout_ms))
+}
+
+fn build_agent_with_timeout(config: &SearchConfig, timeout: Duration) -> Result<ureq::Agent> {
     Ok(ureq::AgentBuilder::new()
         .user_agent(&config.user_agent)
-        .timeout(Duration::from_millis(config.timeout_ms))
+        .timeout(timeout)
         // SSRF guard: every fetch (evidence pages from a SERP, the model-chosen
         // `ctox_web_read` URL, redirect hops) only connects to public addresses,
         // unless the operator allow-listed the host.
@@ -6271,6 +8017,20 @@ fn build_agent(config: &SearchConfig) -> Result<ureq::Agent> {
             config.egress_allow_hosts.clone(),
         ))
         .build())
+}
+
+fn response_timeout(config: &SearchConfig, url: &str) -> Duration {
+    let configured = Duration::from_millis(config.timeout_ms);
+    let desired = if is_data_url_suffix(url) {
+        configured.max(Duration::from_secs(180))
+    } else {
+        configured
+    };
+    if let Some(cap_ms) = config.response_timeout_cap_ms {
+        desired.min(Duration::from_millis(cap_ms))
+    } else {
+        desired
+    }
 }
 
 fn percent_decode_lossy(input: &str) -> String {
@@ -6356,7 +8116,7 @@ fn best_paragraphs_for_query(query: &str, paragraphs: &[String], limit: usize) -
         .map(|(_, _, paragraph)| paragraph.clone())
         .collect::<Vec<_>>();
 
-    if selected.is_empty() {
+    if selected.is_empty() && terms.is_empty() {
         let cleaned_fallback = clean_candidate_paragraphs(paragraphs.to_vec());
         if cleaned_fallback.is_empty() {
             selected = paragraphs
@@ -6419,7 +8179,7 @@ fn best_pdf_paragraphs_for_query(
         .map(|(_, _, page_number, paragraph)| format_pdf_excerpt(*page_number, paragraph))
         .collect::<Vec<_>>();
 
-    if selected.is_empty() {
+    if selected.is_empty() && terms.is_empty() {
         selected = sections
             .iter()
             .filter(|section| !section.text.trim().is_empty())
@@ -6428,7 +8188,7 @@ fn best_pdf_paragraphs_for_query(
             .collect();
     }
 
-    if selected.is_empty() && !fallback_text.trim().is_empty() {
+    if selected.is_empty() && terms.is_empty() && !fallback_text.trim().is_empty() {
         selected.push(trim_text(fallback_text, 240));
     }
 
@@ -6444,21 +8204,25 @@ fn format_pdf_excerpt(page_number: Option<u32>, text: &str) -> String {
 }
 
 fn score_paragraph_for_query(query: &str, terms: &[String], paragraph: &str) -> usize {
-    if paragraph.trim().is_empty() || is_low_value_paragraph(paragraph) {
+    if paragraph.trim().is_empty() {
         return 0;
     }
 
     let lowered = paragraph.to_ascii_lowercase();
     let query_lowered = query.to_ascii_lowercase();
+    let exact_query_match = query_lowered.len() >= 5 && lowered.contains(query_lowered.as_str());
+    if is_low_value_paragraph(paragraph) && !exact_query_match {
+        return 0;
+    }
     let term_hits = terms
         .iter()
         .filter(|term| lowered.contains(term.as_str()))
         .count();
     let mut score = term_hits * 100;
-    if query_lowered.len() >= 10 && lowered.contains(query_lowered.as_str()) {
+    if exact_query_match {
         score += 150;
     }
-    if (80..=420).contains(&paragraph.len()) {
+    if score > 0 && (80..=420).contains(&paragraph.len()) {
         score += 20;
     }
     score
@@ -7396,6 +9160,11 @@ mod tests {
     #[test]
     fn ctox_web_read_tool_returns_find_results() {
         let root = unique_test_root("ctox_web_read_tool");
+        let evidence_workspace = root
+            .join("task")
+            .join(".ctox")
+            .join("web-read")
+            .join("call-1");
         set_runtime_config(&root, "CTOX_WEB_SEARCH_PROVIDER", "mock");
 
         let payload = run_ctox_web_read_tool(
@@ -7404,6 +9173,10 @@ mod tests {
                 url: "https://example.com/mock-result".to_string(),
                 query: Some("ctox web search evidence".to_string()),
                 find: vec!["CTOX_REMOTE_WEB_OK".to_string()],
+                workspace: Some(evidence_workspace.clone()),
+                include_full_text: false,
+                timeout_cap_ms: None,
+                max_artifact_bytes: None,
                 country: None,
             },
         )
@@ -7413,6 +9186,341 @@ mod tests {
         assert_eq!(payload["ok"], json!(true));
         assert_eq!(payload["url"], "https://example.com/mock-result");
         assert_eq!(payload["find_results"][0]["pattern"], "ctox remote web ok");
+        assert_eq!(payload["workspace_evidence"]["persisted"], true);
+        assert!(evidence_workspace.join("source.html").is_file());
+        assert!(evidence_workspace.join("extracted-text.txt").is_file());
+        assert!(evidence_workspace.join("receipt.json").is_file());
+        let persisted_receipt: Value = serde_json::from_slice(
+            &fs::read(evidence_workspace.join("receipt.json")).expect("workspace receipt"),
+        )
+        .expect("valid workspace receipt");
+        assert_eq!(
+            persisted_receipt["schema_version"],
+            "ctox.web-read.workspace-evidence.v2"
+        );
+        assert!(persisted_receipt["checked_at_epoch"]
+            .as_u64()
+            .is_some_and(|value| value > 0));
+        assert_eq!(
+            payload["workspace_evidence"]["snapshot_sha256"],
+            payload["snapshot_hash"]
+        );
+
+        let cache: PageCacheFile = serde_json::from_str(
+            &fs::read_to_string(page_cache_path(&root)).expect("direct read page cache"),
+        )
+        .expect("valid direct read page cache");
+        let entry = cache
+            .entries
+            .get(&normalize_url_cache_key("https://example.com/mock-result"))
+            .expect("direct read cache entry");
+        assert!(entry.evidence_eligible);
+        assert_eq!(
+            entry.evidence_relevance_score,
+            payload["evidence_relevance_score"].as_i64()
+        );
+        assert!(entry
+            .evidence_relevance_score
+            .is_some_and(|score| score >= 8));
+        assert_eq!(entry.http_status, Some(200));
+        assert_eq!(
+            entry.snapshot_hash,
+            payload["snapshot_hash"].as_str().map(ToOwned::to_owned)
+        );
+        assert_eq!(
+            entry
+                .doc
+                .response_receipt
+                .as_ref()
+                .and_then(|receipt| receipt.sha256.as_deref()),
+            entry.snapshot_hash.as_deref()
+        );
+    }
+
+    #[test]
+    fn ctox_web_read_without_intent_has_no_relevance_score() {
+        let root = unique_test_root("ctox_web_read_without_intent");
+        let evidence_workspace = root
+            .join("task")
+            .join(".ctox")
+            .join("web-read")
+            .join("call-1");
+        set_runtime_config(&root, "CTOX_WEB_SEARCH_PROVIDER", "mock");
+
+        let payload = run_ctox_web_read_tool(
+            &root,
+            &DirectWebReadRequest {
+                url: "https://example.com/mock-result".to_string(),
+                query: None,
+                find: Vec::new(),
+                workspace: Some(evidence_workspace),
+                include_full_text: false,
+                timeout_cap_ms: None,
+                max_artifact_bytes: None,
+                country: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(payload["workspace_evidence"]["persisted"], true);
+        assert_eq!(payload["transport_evidence_eligible"], true);
+        assert_eq!(payload["evidence_eligible"], false);
+        assert!(payload["evidence_relevance_score"].is_null());
+        assert_eq!(payload["evidence_content_kind"], "none");
+        assert_eq!(
+            payload["admission_rejection_reason"],
+            "query_relevance_not_established"
+        );
+        let cache: PageCacheFile = serde_json::from_str(
+            &fs::read_to_string(page_cache_path(&root)).expect("direct read page cache"),
+        )
+        .expect("valid direct read page cache");
+        let entry = cache
+            .entries
+            .get(&normalize_url_cache_key("https://example.com/mock-result"))
+            .expect("direct read cache entry");
+        assert_eq!(entry.evidence_relevance_score, None);
+    }
+
+    #[test]
+    fn ctox_web_read_rejects_transport_valid_but_identifier_mismatched_content() {
+        let root = unique_test_root("ctox_web_read_identifier_mismatch");
+        let evidence_workspace = root
+            .join("task")
+            .join(".ctox")
+            .join("web-read")
+            .join("call-1");
+        set_runtime_config(&root, "CTOX_WEB_SEARCH_PROVIDER", "mock");
+
+        let payload = run_ctox_web_read_tool(
+            &root,
+            &DirectWebReadRequest {
+                url: "https://example.com/mock-result".to_string(),
+                query: Some(format!(
+                    "{} ISO 281",
+                    "dynamic bearing load rating ".repeat(8)
+                )),
+                find: Vec::new(),
+                workspace: Some(evidence_workspace.clone()),
+                include_full_text: false,
+                timeout_cap_ms: None,
+                max_artifact_bytes: None,
+                country: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(payload["workspace_evidence"]["persisted"], true);
+        assert!(evidence_workspace.join("receipt.json").is_file());
+        assert_eq!(payload["transport_evidence_eligible"], true);
+        assert_eq!(payload["evidence_eligible"], false);
+        assert!(payload["evidence_relevance_score"].is_null());
+        assert_eq!(payload["evidence_content_kind"], "none");
+        assert_eq!(
+            payload["admission_rejection_reason"],
+            "query_relevance_not_established"
+        );
+    }
+
+    #[test]
+    fn evidence_relevance_requires_exact_numeric_query_identifiers() {
+        let body =
+            b"ISO 21940-11:2016 establishes procedures and unbalance tolerances for rigid rotors."
+                .to_vec();
+        let doc = EvidenceDoc {
+            url: "https://www.iso.org/standard/54074.html".to_string(),
+            canonical_url: "https://www.iso.org/standard/54074.html".to_string(),
+            title: "ISO 21940-11:2016 - Mechanical vibration - Rotor balancing".to_string(),
+            summary: String::new(),
+            verification_status: "verified".to_string(),
+            checked_at: 1,
+            http_status: Some(200),
+            snapshot_hash: Some(snapshot_hash(&body)),
+            source_tier: Some("primary".to_string()),
+            evidence_eligible: true,
+            is_pdf: false,
+            pdf_total_pages: None,
+            page_sections: Vec::new(),
+            excerpts: Vec::new(),
+            page_text: String::from_utf8(body.clone()).expect("fixture text"),
+            find_results: Vec::new(),
+            raw_html: None,
+            response_body: Some(body.clone()),
+            response_artifact_path: None,
+            response_archive_manifest: None,
+            response_receipt: Some(ResponseReceipt {
+                requested_url: "https://www.iso.org/standard/54074.html".to_string(),
+                final_url: "https://www.iso.org/standard/54074.html".to_string(),
+                status: 200,
+                content_type: Some("text/html".to_string()),
+                byte_count: body.len(),
+                sha256: Some(snapshot_hash(&body)),
+                content_kind: "html".to_string(),
+                redirected: false,
+                redirect_chain: Vec::new(),
+                lineage: "test".to_string(),
+                admission_rejection_reason: None,
+            }),
+        };
+
+        assert_eq!(
+            score_evidence_doc_relevance(
+                &doc,
+                "ISO 492 tolerance classes Normal P6 P5 P4 for radial rolling bearings",
+            ),
+            None
+        );
+        assert!(score_evidence_doc_relevance(
+            &doc,
+            "ISO 21940-11:2016 rotor balancing procedures and tolerances",
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn ctox_web_read_tool_persists_admitted_original_data_file() {
+        let root = unique_test_root("ctox_web_read_data_file");
+        set_runtime_config(&root, "CTOX_WEB_SEARCH_PROVIDER", "mock");
+        let url = "https://example.com/original-dataset.zip";
+
+        let payload = run_ctox_web_read_tool(
+            &root,
+            &DirectWebReadRequest {
+                url: url.to_string(),
+                query: Some("original dataset".to_string()),
+                find: Vec::new(),
+                workspace: None,
+                include_full_text: false,
+                timeout_cap_ms: None,
+                max_artifact_bytes: None,
+                country: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(payload["evidence_eligible"], true);
+        assert!(payload["evidence_relevance_score"]
+            .as_i64()
+            .is_some_and(|score| score >= 8));
+        assert_eq!(payload["evidence_content_kind"], "data_file");
+        assert_eq!(payload["response_content_kind"], "data_zip");
+        assert!(payload["page_text_excerpt"].as_str().unwrap().is_empty());
+        let cache: PageCacheFile = serde_json::from_str(
+            &fs::read_to_string(page_cache_path(&root)).expect("direct data page cache"),
+        )
+        .expect("valid direct data page cache");
+        let entry = cache
+            .entries
+            .get(&normalize_url_cache_key(url))
+            .expect("direct data cache entry");
+        assert!(entry.evidence_eligible);
+        assert!(entry.doc.response_body.is_none());
+        let artifact = entry
+            .doc
+            .response_artifact_path
+            .as_deref()
+            .expect("hash-addressed original data artifact");
+        assert!(fs::read(artifact)
+            .expect("original data artifact")
+            .starts_with(b"PK\x03\x04"));
+        assert_eq!(
+            entry.doc.response_archive_manifest.as_ref().unwrap()["member_count"],
+            json!(1)
+        );
+        assert_eq!(
+            entry.doc.response_archive_manifest.as_ref().unwrap()["data_member_count"],
+            json!(1)
+        );
+        assert_eq!(
+            entry.doc.response_receipt.as_ref().unwrap().sha256,
+            entry.snapshot_hash
+        );
+
+        let cache_config = test_config(ProviderKind::Mock);
+        let mut session = WebSearchSession::new(&root, &cache_config).unwrap();
+        let cached = session
+            .load_cached_page_doc(url)
+            .expect("persisted data cache entry");
+        let rebuilt = rebuild_cached_evidence_doc(
+            &cache_config,
+            "different but relevant original dataset query",
+            &fixture_hit(url),
+            &cached,
+        );
+        assert!(evidence_doc_is_admitted_for_read(&rebuilt));
+        assert!(rebuilt.page_text.is_empty());
+        assert_eq!(rebuilt.summary, "Immutable original data file retrieved.");
+    }
+
+    #[test]
+    fn archive_manifest_recognizes_engineering_text_tables_as_data() {
+        assert!(archive_member_is_data(
+            "UIUC-propDB/volume-1/data/ance_8.5x6_2849cm_4000.txt"
+        ));
+        assert!(archive_member_is_data("measurements/run-01.dat"));
+        assert!(!archive_member_is_data("assets/header.png"));
+    }
+
+    #[test]
+    fn repository_content_routes_are_classified_by_filename_segment() {
+        let url = "https://zenodo.org/api/records/20111572/files/Propeller_Database.zip/content";
+        assert!(is_data_url_suffix(url));
+        assert!(!is_zenodo_record_api_url(url));
+        assert!(is_zenodo_record_api_url(
+            "https://zenodo.org/api/records/20111572"
+        ));
+        assert!(!content_type_is_disallowed(
+            Some("application/octet-stream"),
+            url
+        ));
+        let hit = SearchHit {
+            title: "Propeller_Database.zip".to_string(),
+            url: url.to_string(),
+            snippet: String::new(),
+            source: "direct".to_string(),
+            rank: 1,
+        };
+        let fetched = FetchedPageContent {
+            body: b"PK\x03\x04archive".to_vec(),
+            content_type: Some("application/octet-stream".to_string()),
+            final_url: url.to_string(),
+            http_status: 200,
+        };
+        assert_eq!(response_content_kind(&hit, &fetched), "data_zip");
+
+        let invalid = FetchedPageContent {
+            body: b"not a zip".to_vec(),
+            ..fetched
+        };
+        assert_eq!(response_content_kind(&hit, &invalid), "malformed_data");
+    }
+
+    #[test]
+    fn whitespace_numeric_text_tables_are_validated_as_original_data() {
+        let url =
+            "https://m-selig.ae.illinois.edu/props/volume-2/data/apcff_4.2x4_static_0615rd.txt";
+        let hit = fixture_hit(url);
+        let fetched = FetchedPageContent {
+            body: b"RPM CT CP\n1490.000 0.125114 0.135440\n2033.333 0.121907 0.126335\n2556.667 0.121578 0.118066\n".to_vec(),
+            content_type: Some("text/plain".to_string()),
+            final_url: url.to_string(),
+            http_status: 200,
+        };
+        assert!(looks_like_whitespace_table_data(&fetched.body));
+        assert_eq!(response_content_kind(&hit, &fetched), "data_table_text");
+    }
+
+    #[test]
+    fn github_repository_wrapper_is_not_classified_as_json_data() {
+        let url = "https://github.com/example/propeller-data";
+        let hit = fixture_hit(url);
+        let fetched = FetchedPageContent {
+            body: br#"{"kind":"repo_root","readme":"measured propeller data"}"#.to_vec(),
+            content_type: Some(GITHUB_API_CONTENT_TYPE.to_string()),
+            final_url: url.to_string(),
+            http_status: 200,
+        };
+        assert_eq!(response_content_kind(&hit, &fetched), "repository_metadata");
     }
 
     #[test]
@@ -7592,6 +9700,17 @@ mod tests {
     }
 
     #[test]
+    fn oversized_cache_detection_uses_file_size_without_parsing() {
+        let root = unique_test_root("oversized-cache");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("cache.json");
+        fs::write(&path, b"0123456789").unwrap();
+        assert!(cache_file_is_oversized(&path, 9));
+        assert!(!cache_file_is_oversized(&path, 10));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn provider_cooldown_persists_across_calls_and_expires() {
         let root = unique_test_root("provider-cooldown");
         assert!(
@@ -7635,6 +9754,10 @@ mod tests {
             page_text: "body".to_string(),
             find_results: Vec::new(),
             raw_html: None,
+            response_body: None,
+            response_artifact_path: None,
+            response_archive_manifest: None,
+            response_receipt: None,
         };
 
         // Direct read: page-derived title/summary/excerpts sit inside the fence;
@@ -7680,6 +9803,125 @@ mod tests {
     }
 
     #[test]
+    fn search_payload_preserves_verified_evidence_contract() {
+        let url = "https://example.com/verified".to_string();
+        let result = SearchResponse {
+            provider: "mock".to_string(),
+            hits: vec![SearchHit {
+                title: "Verified source".to_string(),
+                url: url.clone(),
+                snippet: "Measured propeller torque and thrust".to_string(),
+                source: "mock".to_string(),
+                rank: 1,
+            }],
+            evidence: vec![EvidenceDoc {
+                url: url.clone(),
+                canonical_url: url.clone(),
+                title: "Verified source".to_string(),
+                summary: "Measured propeller torque and thrust data.".to_string(),
+                verification_status: "verified".to_string(),
+                checked_at: 1,
+                http_status: Some(200),
+                snapshot_hash: Some("sha256:test".to_string()),
+                source_tier: Some("primary".to_string()),
+                evidence_eligible: true,
+                is_pdf: false,
+                pdf_total_pages: None,
+                page_sections: Vec::new(),
+                excerpts: vec!["Measured propeller torque and thrust data.".to_string()],
+                page_text: "Measured propeller torque and thrust data.".to_string(),
+                find_results: Vec::new(),
+                raw_html: None,
+                response_body: None,
+                response_artifact_path: None,
+                response_archive_manifest: None,
+                response_receipt: None,
+            }],
+            executed_queries: vec!["propeller torque thrust".to_string()],
+            source_failures: Vec::new(),
+        };
+
+        let payload = ctox_web_search_payload(
+            "propeller torque thrust",
+            &SearchToolRequest::default(),
+            ContextSize::Medium,
+            &result,
+            String::new(),
+        );
+        let row = &payload["results"][0];
+        assert_eq!(row["verification_status"], "verified");
+        assert_eq!(row["transport_verified"], true);
+        assert_eq!(row["content_extracted"], true);
+        assert_eq!(row["evidence_eligible"], true);
+        assert_eq!(payload["citations"][0]["url"], url);
+    }
+
+    #[test]
+    fn search_payload_withholds_transport_only_evidence_and_citations() {
+        let url = "https://example.com/shell".to_string();
+        let result = SearchResponse {
+            provider: "mock".to_string(),
+            hits: vec![SearchHit {
+                title: "Shell source".to_string(),
+                url: url.clone(),
+                snippet: "A long search snippet with plausible source claims that were not read
+                    from the page."
+                    .repeat(4),
+                source: "mock".to_string(),
+                rank: 1,
+            }],
+            evidence: vec![EvidenceDoc {
+                url: url.clone(),
+                canonical_url: url.clone(),
+                title: "Shell source".to_string(),
+                summary: "A long fallback summary that came from discovery metadata.".to_string(),
+                verification_status: "verified".to_string(),
+                checked_at: 1,
+                http_status: Some(200),
+                snapshot_hash: Some("sha256:shell".to_string()),
+                source_tier: Some("web".to_string()),
+                evidence_eligible: true,
+                is_pdf: false,
+                pdf_total_pages: None,
+                page_sections: Vec::new(),
+                excerpts: Vec::new(),
+                page_text: String::new(),
+                find_results: Vec::new(),
+                raw_html: None,
+                response_body: None,
+                response_artifact_path: None,
+                response_archive_manifest: None,
+                response_receipt: None,
+            }],
+            executed_queries: vec!["shell source".to_string()],
+            source_failures: Vec::new(),
+        };
+
+        let payload = ctox_web_search_payload(
+            "shell source",
+            &SearchToolRequest::default(),
+            ContextSize::Medium,
+            &result,
+            String::new(),
+        );
+        assert_eq!(payload["results"][0]["transport_verified"], true);
+        assert_eq!(payload["results"][0]["content_extracted"], false);
+        assert_eq!(payload["results"][0]["evidence_eligible"], false);
+        assert_eq!(payload["results"][0]["evidence_content_kind"], "none");
+        assert!(payload["results"][0]["summary"].is_null());
+        assert_eq!(payload["citations"], json!([]));
+    }
+
+    #[test]
+    fn paragraph_selection_does_not_promote_unrelated_text() {
+        let paragraphs = vec![
+            "This paragraph discusses medieval manuscript preservation in libraries.".to_string(),
+        ];
+        assert!(best_paragraphs_for_query("propeller torque", &paragraphs, 3).is_empty());
+        assert_eq!(best_paragraphs_for_query("", &paragraphs, 3), paragraphs);
+    }
+
+    #[test]
     fn build_web_search_calls_uses_real_find_results() {
         let result = SearchResponse {
             provider: "mock".to_string(),
@@ -7705,6 +9947,10 @@ mod tests {
                     matches: vec!["CTOX_REMOTE_WEB_OK".to_string()],
                 }],
                 raw_html: None,
+                response_body: None,
+                response_artifact_path: None,
+                response_archive_manifest: None,
+                response_receipt: None,
             }],
             executed_queries: vec!["find CTOX_REMOTE_WEB_OK".to_string()],
             source_failures: Vec::new(),
@@ -7917,6 +10163,10 @@ mod tests {
                     url: "https://example.com/mock-result.pdf".to_string(),
                     query: Some("Attention Is All You Need".to_string()),
                     find: vec!["Attention Is All You Need".to_string()],
+                    workspace: None,
+                    include_full_text: false,
+                    timeout_cap_ms: None,
+                    max_artifact_bytes: None,
                     country: None,
                 },
             )
@@ -8651,6 +10901,10 @@ mod tests {
             page_text: String::new(),
             find_results: Vec::new(),
             raw_html: None,
+            response_body: None,
+            response_artifact_path: None,
+            response_archive_manifest: None,
+            response_receipt: None,
         };
 
         let mut verified = base_doc();
@@ -8664,8 +10918,25 @@ mod tests {
                 http_status: 200,
             },
         );
+        assert_eq!(verified.verification_status, "unverified");
+        assert!(!verified.evidence_eligible);
+        assert!(!evidence_doc_has_meaningful_content(&verified));
+        verified.page_text =
+            "Primary source record with downloadable data files and verified measurements."
+                .to_string();
+        apply_evidence_gate(
+            &mut verified,
+            &hit,
+            &FetchedPageContent {
+                body: b"verified body".to_vec(),
+                content_type: Some("text/plain".to_string()),
+                final_url: hit.url.clone(),
+                http_status: 200,
+            },
+        );
         assert_eq!(verified.verification_status, "verified");
         assert!(verified.evidence_eligible);
+        assert!(evidence_doc_has_meaningful_content(&verified));
         assert!(verified.snapshot_hash.is_some());
 
         let mut empty = base_doc();
@@ -8699,6 +10970,173 @@ mod tests {
     }
 
     #[test]
+    fn evidence_gate_rejects_200_shell_even_with_a_long_search_snippet() {
+        let hit = SearchHit {
+            title: "Shell result".to_string(),
+            url: "https://example.com/shell".to_string(),
+            snippet: "A long search-engine snippet that repeats plausible factual language about
+                the requested source but was never extracted from the opened page. "
+                .repeat(4),
+            source: "mock".to_string(),
+            rank: 1,
+        };
+        let shell = r#"<!doctype html><html><head><title>Source</title><script>window.__DATA__ = {};</script></head><body><div id="app"></div></body></html>"#;
+        let opened = extract_opened_page("requested source facts", &hit, shell);
+        assert!(
+            opened.page_text.is_empty(),
+            "shell must not become page text"
+        );
+
+        let config = test_config(ProviderKind::Mock);
+        let mut doc = build_query_evidence_doc(
+            &config,
+            "requested source facts",
+            &hit,
+            hit.url.clone(),
+            opened,
+        );
+        apply_evidence_gate(
+            &mut doc,
+            &hit,
+            &FetchedPageContent {
+                body: shell.as_bytes().to_vec(),
+                content_type: Some("text/html".to_string()),
+                final_url: hit.url.clone(),
+                http_status: 200,
+            },
+        );
+
+        assert!(!doc.evidence_eligible);
+        assert_eq!(doc.verification_status, "unverified");
+        assert_eq!(evidence_content_kind(&doc), "none");
+
+        let payload = ctox_web_search_payload(
+            "requested source facts",
+            &SearchToolRequest::default(),
+            ContextSize::Medium,
+            &SearchResponse {
+                provider: "mock".to_string(),
+                hits: vec![hit.clone()],
+                evidence: vec![doc],
+                executed_queries: vec!["requested source facts".to_string()],
+                source_failures: Vec::new(),
+            },
+            String::new(),
+        );
+        assert_eq!(payload["results"][0]["transport_verified"], false);
+        assert_eq!(payload["results"][0]["evidence_eligible"], false);
+        assert_eq!(payload["results"][0]["content_extracted"], false);
+        assert!(payload["citations"].as_array().is_some_and(Vec::is_empty));
+    }
+
+    #[test]
+    fn evidence_gate_rejects_login_cookie_and_metadata_fallbacks() {
+        let config = test_config(ProviderKind::Mock);
+        let cases = [
+            (
+                "https://example.com/login",
+                "login",
+                r#"<html><body><main><p>Please sign in to continue. Your account login is required before this page can be displayed.</p></main></body></html>"#,
+                "text/html",
+            ),
+            (
+                "https://example.com/cookie",
+                "cookie",
+                r#"<html><body><div class="cookie-banner"><p>We use cookies and similar technologies. Review cookie settings and privacy policy before continuing.</p></div></body></html>"#,
+                "text/html",
+            ),
+            (
+                "https://api.example.com/records/1",
+                "metadata",
+                r#"{"metadata":{"title":"A plausible record title","description":"A plausible metadata description with enough words to look like extracted content."}}"#,
+                "application/json",
+            ),
+        ];
+
+        for (url, source, body, content_type) in cases {
+            let hit = SearchHit {
+                title: source.to_string(),
+                url: url.to_string(),
+                snippet: "A long discovery snippet that must never be admitted as source evidence."
+                    .to_string(),
+                source: source.to_string(),
+                rank: 1,
+            };
+            let opened = extract_opened_page("requested source facts", &hit, body);
+            let mut doc = build_query_evidence_doc(
+                &config,
+                "requested source facts",
+                &hit,
+                hit.url.clone(),
+                opened,
+            );
+            apply_evidence_gate(
+                &mut doc,
+                &hit,
+                &FetchedPageContent {
+                    body: body.as_bytes().to_vec(),
+                    content_type: Some(content_type.to_string()),
+                    final_url: hit.url.clone(),
+                    http_status: 200,
+                },
+            );
+            assert!(
+                !doc.evidence_eligible,
+                "fallback must not be eligible for {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_read_withholds_typed_fields_until_page_content_is_admitted() {
+        let doc = EvidenceDoc {
+            url: "https://companyhouse.de/firma/example".to_string(),
+            canonical_url: "https://companyhouse.de/firma/example".to_string(),
+            title: "Sign in".to_string(),
+            summary: "Please sign in to continue".to_string(),
+            verification_status: "unverified".to_string(),
+            checked_at: 1,
+            http_status: Some(200),
+            snapshot_hash: Some("sha256:shell".to_string()),
+            source_tier: Some("P".to_string()),
+            evidence_eligible: false,
+            is_pdf: false,
+            pdf_total_pages: None,
+            page_sections: Vec::new(),
+            excerpts: Vec::new(),
+            page_text: String::new(),
+            find_results: Vec::new(),
+            raw_html: Some(
+                "<html><body><h1>Example GmbH</h1><p>Sign in to continue</p></body></html>"
+                    .to_string(),
+            ),
+            response_body: None,
+            response_artifact_path: None,
+            response_archive_manifest: None,
+            response_receipt: None,
+        };
+        let url = doc.url.clone();
+        let payload = render_direct_web_read_payload(
+            &url,
+            "example",
+            &DirectWebReadRequest {
+                url: doc.url.clone(),
+                query: Some("example".to_string()),
+                find: Vec::new(),
+                workspace: None,
+                include_full_text: false,
+                timeout_cap_ms: None,
+                max_artifact_bytes: None,
+                country: None,
+            },
+            doc,
+            None,
+        );
+        assert!(payload["extracted_fields"].is_null());
+        assert_eq!(payload["evidence_content_kind"], "none");
+    }
+
+    #[test]
     fn json_api_urls_use_api_content_negotiation() {
         assert!(is_json_api_url("https://zenodo.org/api/records/20111572"));
         assert!(is_json_api_url("https://example.test/data/source.json"));
@@ -8707,6 +11145,201 @@ mod tests {
             evidence_accept_header("https://zenodo.org/api/records/20111572"),
             "application/json,application/problem+json;q=0.9,*/*;q=0.1"
         );
+    }
+
+    #[test]
+    fn zenodo_record_pages_have_canonical_api_fallbacks() {
+        assert_eq!(
+            canonical_read_fallback_url("https://zenodo.org/records/15856431").as_deref(),
+            Some("https://zenodo.org/api/records/15856431")
+        );
+        assert_eq!(
+            canonical_read_fallback_url("https://www.zenodo.org/record/20111572").as_deref(),
+            Some("https://zenodo.org/api/records/20111572")
+        );
+        assert!(canonical_read_fallback_url("https://zenodo.org/search?q=propeller").is_none());
+        assert!(canonical_read_fallback_url("https://example.org/records/15856431").is_none());
+    }
+
+    #[test]
+    fn zenodo_record_adapter_extracts_canonical_file_receipts() {
+        let hit = SearchHit {
+            title: "zenodo.org".to_string(),
+            url: "https://zenodo.org/api/records/20111572".to_string(),
+            snippet: String::new(),
+            source: "direct_read".to_string(),
+            rank: 1,
+        };
+        let body = r#"{
+          "doi": "10.5281/zenodo.20111572",
+          "metadata": {
+            "title": "ENOLA numerical and experimental propeller database",
+            "description": "<div>Experimental measurements include forces, moments, and acoustic emissions.</div>",
+            "publication_date": "2026-05-10"
+          },
+          "files": [{
+            "key": "Propeller_Database.zip",
+            "size": 223601320,
+            "checksum": "md5:245267e590546f160f3b971d7f8e05fb",
+            "links": {"content": "https://zenodo.org/api/records/20111572/files/archive/content"}
+          }]
+        }"#;
+
+        let page = extract_zenodo_record_opened_page(
+            "ENOLA propeller database archive checksum forces moments",
+            &hit,
+            body,
+        )
+        .expect("Zenodo record");
+        assert_eq!(
+            page.title,
+            "ENOLA numerical and experimental propeller database"
+        );
+        assert!(page.page_text.contains("Propeller_Database.zip"));
+        assert!(page.page_text.contains("223601320"));
+        assert!(page.page_text.contains("245267e590546f160f3b971d7f8e05fb"));
+        assert!(page
+            .excerpts
+            .iter()
+            .any(|excerpt| excerpt.contains("checksum")));
+        assert!(is_meaningful_evidence_text(&page.summary));
+
+        let config = test_config(ProviderKind::Mock);
+        let mut doc = build_query_evidence_doc(
+            &config,
+            "ENOLA propeller database archive checksum forces moments",
+            &hit,
+            hit.url.clone(),
+            page,
+        );
+        apply_evidence_gate(
+            &mut doc,
+            &hit,
+            &FetchedPageContent {
+                body: body.as_bytes().to_vec(),
+                content_type: Some("application/json".to_string()),
+                final_url: hit.url.clone(),
+                http_status: 200,
+            },
+        );
+        assert!(doc.evidence_eligible);
+        assert_eq!(evidence_content_kind(&doc), "metadata_receipt");
+        assert!(
+            !(evidence_doc_has_meaningful_content(&doc)
+                && evidence_content_kind(&doc) == "page_content")
+        );
+    }
+
+    #[test]
+    fn legacy_page_cache_evidence_requires_immutable_body_receipt_and_matching_sha() {
+        let config = test_config(ProviderKind::Mock);
+        let hit = SearchHit {
+            title: "Cached source".to_string(),
+            url: "https://example.com/cached-source".to_string(),
+            snippet: "Discovery snippet".to_string(),
+            source: "mock".to_string(),
+            rank: 1,
+        };
+        let body =
+            b"Persisted source content with enough terms to count as meaningful evidence.".to_vec();
+        let fetched = FetchedPageContent {
+            body: body.clone(),
+            content_type: Some("text/plain".to_string()),
+            final_url: hit.url.clone(),
+            http_status: 200,
+        };
+        let body_hash = snapshot_hash(&body);
+        let receipt = response_receipt(&hit, &fetched, None);
+        let mut mismatched_receipt = receipt.clone();
+        mismatched_receipt.sha256 = Some(snapshot_hash(b"different body"));
+        let base_doc = || EvidenceDoc {
+            url: hit.url.clone(),
+            canonical_url: hit.url.clone(),
+            title: hit.title.clone(),
+            summary: "Cached source summary".to_string(),
+            verification_status: "verified".to_string(),
+            checked_at: 1,
+            http_status: Some(200),
+            snapshot_hash: Some(body_hash.clone()),
+            source_tier: Some("primary".to_string()),
+            evidence_eligible: true,
+            is_pdf: false,
+            pdf_total_pages: None,
+            page_sections: Vec::new(),
+            excerpts: vec!["Persisted source excerpt".to_string()],
+            page_text: String::from_utf8(body.clone()).expect("fixture text"),
+            find_results: Vec::new(),
+            raw_html: None,
+            response_body: Some(body.clone()),
+            response_artifact_path: None,
+            response_archive_manifest: None,
+            response_receipt: Some(receipt.clone()),
+        };
+        let cases = [
+            (
+                "missing_body",
+                None,
+                Some(receipt.clone()),
+                Some(body_hash.clone()),
+            ),
+            (
+                "missing_receipt",
+                Some(body.clone()),
+                None,
+                Some(body_hash.clone()),
+            ),
+            (
+                "mismatched_receipt_sha",
+                Some(body.clone()),
+                Some(mismatched_receipt),
+                Some(body_hash.clone()),
+            ),
+            (
+                "mismatched_snapshot_sha",
+                Some(body.clone()),
+                Some(receipt.clone()),
+                Some(snapshot_hash(b"different body")),
+            ),
+        ];
+
+        let root = unique_test_root("legacy_page_cache");
+        let mut session = WebSearchSession::new(&root, &config).expect("session");
+        for (label, response_body, response_receipt, snapshot_hash) in cases {
+            let mut doc = base_doc();
+            doc.snapshot_hash = snapshot_hash;
+            doc.response_body = response_body;
+            doc.response_receipt = response_receipt;
+            let key = normalize_url_cache_key(&hit.url);
+            session.page_cache.entries.insert(
+                key,
+                PageCacheEntry {
+                    created_at_epoch: unix_ts(),
+                    original_url: hit.url.clone(),
+                    final_url: hit.url.clone(),
+                    content_type: Some("text/plain".to_string()),
+                    canonical_url: hit.url.clone(),
+                    verification_status: "verified".to_string(),
+                    checked_at: 1,
+                    http_status: Some(200),
+                    snapshot_hash: Some(body_hash.clone()),
+                    source_tier: Some("primary".to_string()),
+                    evidence_eligible: true,
+                    evidence_relevance_score: Some(16),
+                    doc,
+                },
+            );
+
+            let loaded = session
+                .load_cached_page_doc(&hit.url)
+                .expect("legacy cache entry");
+            assert!(!loaded.evidence_eligible, "{label} must fail closed");
+            let rebuilt = rebuild_cached_evidence_doc(&config, "source content", &hit, &loaded);
+            assert!(
+                !rebuilt.evidence_eligible,
+                "{label} rebuild must fail closed"
+            );
+            assert!(!evidence_doc_is_admitted_for_read(&rebuilt));
+        }
     }
 
     #[test]
@@ -8723,7 +11356,13 @@ mod tests {
         };
         let (doc, content_type) = failed_evidence_doc(&hit, 404);
         let mut session = WebSearchSession::new(&root, &config).expect("session");
-        session.store_page_doc(&hit.url, &doc.canonical_url, content_type, &doc);
+        session.store_page_doc(
+            &hit.url,
+            &doc.canonical_url,
+            content_type,
+            &doc,
+            "source content",
+        );
         session.persist_page_cache().expect("persist cache");
 
         let raw = fs::read_to_string(page_cache_path(&root)).expect("cache file");
@@ -9560,12 +12199,354 @@ mod tests {
         );
     }
 
+    #[test]
+    fn local_fixture_preserves_admitted_body_without_a_second_fetch() {
+        let body_a = b"The first admitted response is the only evidence body.".to_vec();
+        let body_b = b"A second fetch would return a mismatched body.".to_vec();
+        let (url, server) = spawn_http_fixture(
+            vec![
+                FixtureReply::ok("text/plain", body_a.clone()),
+                FixtureReply::ok("text/plain", body_b),
+            ],
+            1,
+        );
+        let mut config = test_config(ProviderKind::Brave);
+        config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+        let hit = fixture_hit(&url);
+        let (doc, _) =
+            build_evidence_doc(&config, "first admitted response", &hit).expect("fixture evidence");
+        assert_eq!(doc.response_body, Some(body_a));
+        assert_eq!(
+            doc.response_receipt
+                .as_ref()
+                .map(|receipt| receipt.byte_count),
+            Some(54)
+        );
+        assert_eq!(server.join().expect("fixture server"), 1);
+    }
+
+    #[test]
+    fn local_fixture_rejects_soft_404_and_login_pages() {
+        for (path, body, expected_reason) in [
+            (
+                "/missing",
+                b"<html><head><title>Page not found</title></head><body><h1>Page not found</h1><p>The requested page could not be found.</p></body></html>".to_vec(),
+                "soft_404",
+            ),
+            (
+                "/login",
+                b"<html><head><title>Sign in</title></head><body><form><input type=\"password\" name=\"password\"><p>Please sign in to continue.</p></form></body></html>".to_vec(),
+                "login_or_authentication_wall",
+            ),
+        ] {
+            let (url, server) = spawn_http_fixture(
+                vec![FixtureReply::ok("text/html", body)],
+                1,
+            );
+            let mut config = test_config(ProviderKind::Brave);
+            config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+            let hit = fixture_hit(&format!("{url}{path}"));
+            let (doc, _) = build_evidence_doc(&config, "source facts", &hit)
+                .expect("fixture evidence");
+            assert!(!doc.evidence_eligible);
+            assert_eq!(
+                doc.response_receipt
+                    .as_ref()
+                    .and_then(|receipt| receipt.admission_rejection_reason.as_deref()),
+                Some(expected_reason)
+            );
+            assert_eq!(server.join().expect("fixture server"), 1);
+        }
+    }
+
+    #[test]
+    fn local_fixture_retries_503_then_admits_200() {
+        let body =
+            b"This stable response contains enough source content to be admitted after retry."
+                .to_vec();
+        let (url, server) = spawn_http_fixture(
+            vec![
+                FixtureReply::status(503, "text/plain", b"temporary outage".to_vec()),
+                FixtureReply::ok("text/plain", body),
+            ],
+            2,
+        );
+        let mut config = test_config(ProviderKind::Brave);
+        config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+        let (doc, _) = build_evidence_doc(&config, "stable response", &fixture_hit(&url))
+            .expect("retry evidence");
+        assert!(doc.evidence_eligible);
+        assert_eq!(doc.http_status, Some(200));
+        assert_eq!(server.join().expect("fixture server"), 2);
+    }
+
+    #[test]
+    fn local_fixture_records_redirect_receipt_metadata() {
+        let body =
+            b"The redirected final response contains stable source content for audit.".to_vec();
+        let (url, server) = spawn_http_fixture(
+            vec![
+                FixtureReply::redirect("/final"),
+                FixtureReply::ok("text/plain", body),
+            ],
+            2,
+        );
+        let mut config = test_config(ProviderKind::Brave);
+        config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+        let (doc, _) = build_evidence_doc(&config, "redirected source", &fixture_hit(&url))
+            .expect("redirect evidence");
+        let receipt = doc.response_receipt.expect("response receipt");
+        assert!(receipt.redirected);
+        assert_eq!(receipt.final_url, format!("{url}/final"));
+        assert_eq!(
+            receipt.redirect_chain,
+            vec![url.clone(), format!("{url}/final")]
+        );
+        assert_eq!(receipt.status, 200);
+        assert_eq!(server.join().expect("fixture server"), 2);
+    }
+
+    #[test]
+    fn local_fixture_rejects_over_limit_body_without_truncation() {
+        let (url, server) = spawn_http_fixture(
+            vec![FixtureReply::ok(
+                "text/plain",
+                b"this body is intentionally over the configured limit".to_vec(),
+            )],
+            1,
+        );
+        let mut config = test_config(ProviderKind::Brave);
+        config.max_page_bytes = 8;
+        config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+        let error = build_evidence_doc(&config, "over limit", &fixture_hit(&url))
+            .expect_err("over-limit response must be rejected");
+        assert!(error.to_string().contains("rejected without truncation"));
+        assert_eq!(server.join().expect("fixture server"), 1);
+    }
+
+    #[test]
+    fn long_source_text_with_copyright_notice_is_not_boilerplate() {
+        let text = format!(
+            "{} All rights reserved.",
+            "Rolling bearing rating life, equivalent dynamic load, operating clearance, \
+             lubrication, sealing, speed, and contamination are documented with equations, \
+             units, test conditions, and engineering limitations. "
+                .repeat(20)
+        );
+        assert!(meaningful_extracted_page_text(&text));
+        assert!(!is_evidence_boilerplate(&text));
+        assert!(is_evidence_boilerplate(
+            "Please sign in to continue. Authentication required."
+        ));
+    }
+
+    #[test]
+    fn pdf_responses_use_the_original_file_size_limit() {
+        let config = test_config(ProviderKind::Mock);
+        assert_eq!(
+            response_byte_limit(
+                &config,
+                "https://example.org/manual.pdf?download=1",
+                Some("application/octet-stream")
+            ),
+            config.max_data_file_bytes
+        );
+        assert_eq!(
+            response_byte_limit(
+                &config,
+                "https://example.org/download",
+                Some("application/pdf")
+            ),
+            config.max_data_file_bytes
+        );
+        assert_eq!(
+            response_byte_limit(&config, "https://example.org/page", Some("text/html")),
+            config.max_page_bytes
+        );
+    }
+
+    #[test]
+    fn repository_data_downloads_receive_a_streaming_timeout_budget() {
+        let config = test_config(ProviderKind::Mock);
+        assert_eq!(
+            response_timeout(
+                &config,
+                "https://zenodo.org/api/records/20111572/files/Propeller_Database.zip/content"
+            ),
+            Duration::from_secs(180)
+        );
+        assert_eq!(
+            response_timeout(&config, "https://example.org/article"),
+            Duration::from_millis(config.timeout_ms)
+        );
+    }
+
+    #[test]
+    fn local_fixture_rejects_malformed_data_by_response_content() {
+        let malformed = b"{ this is not valid JSON data, despite the .json URL suffix }".to_vec();
+        let (url, server) =
+            spawn_http_fixture(vec![FixtureReply::ok("application/json", malformed)], 1);
+        let mut config = test_config(ProviderKind::Brave);
+        config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+        let hit = fixture_hit(&format!("{url}/data.json"));
+        let (doc, _) = build_evidence_doc(&config, "data", &hit).expect("data evidence");
+        let receipt = doc.response_receipt.expect("response receipt");
+        assert_eq!(receipt.content_kind, "malformed_data");
+        assert_eq!(
+            receipt.admission_rejection_reason.as_deref(),
+            Some("invalid_data_response")
+        );
+        assert!(!doc.evidence_eligible);
+        assert_eq!(server.join().expect("fixture server"), 1);
+    }
+
+    #[test]
+    fn local_fixture_rejects_html_disguised_as_zip_data() {
+        let body = b"<html><body><h1>Download unavailable</h1></body></html>".to_vec();
+        let (url, server) = spawn_http_fixture(vec![FixtureReply::ok("application/zip", body)], 1);
+        let mut config = test_config(ProviderKind::Brave);
+        config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+        let hit = fixture_hit(&format!("{url}/dataset.zip"));
+        let (doc, _) = build_evidence_doc(&config, "dataset", &hit).expect("data response");
+        let receipt = doc.response_receipt.expect("response receipt");
+        assert_eq!(receipt.content_kind, "html");
+        assert_eq!(
+            receipt.admission_rejection_reason.as_deref(),
+            Some("invalid_data_response")
+        );
+        assert!(!doc.evidence_eligible);
+        assert_eq!(server.join().expect("fixture server"), 1);
+    }
+
+    #[derive(Clone)]
+    struct FixtureReply {
+        status: u16,
+        content_type: &'static str,
+        location: Option<String>,
+        body: Vec<u8>,
+    }
+
+    impl FixtureReply {
+        fn ok(content_type: &'static str, body: Vec<u8>) -> Self {
+            Self::status(200, content_type, body)
+        }
+
+        fn status(status: u16, content_type: &'static str, body: Vec<u8>) -> Self {
+            Self {
+                status,
+                content_type,
+                location: None,
+                body,
+            }
+        }
+
+        fn redirect(location: &str) -> Self {
+            Self {
+                status: 302,
+                content_type: "text/plain",
+                location: Some(location.to_string()),
+                body: Vec::new(),
+            }
+        }
+    }
+
+    fn fixture_hit(url: &str) -> SearchHit {
+        SearchHit {
+            title: "Fixture source".to_string(),
+            url: url.to_string(),
+            snippet: String::new(),
+            source: "direct".to_string(),
+            rank: 1,
+        }
+    }
+
+    fn spawn_http_fixture(
+        replies: Vec<FixtureReply>,
+        expected_requests: usize,
+    ) -> (String, std::thread::JoinHandle<usize>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("fixture listener");
+        let address = listener.local_addr().expect("fixture address");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking fixture listener");
+        let handle = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            let mut requests = 0;
+            while requests < expected_requests && std::time::Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        read_fixture_request(&mut stream);
+                        write_fixture_reply(&mut stream, &replies[requests]);
+                        requests += 1;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("fixture accept failed: {error}"),
+                }
+            }
+            let observe_deadline = std::time::Instant::now() + Duration::from_millis(100);
+            while std::time::Instant::now() < observe_deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        read_fixture_request(&mut stream);
+                        requests += 1;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("fixture observe failed: {error}"),
+                }
+            }
+            requests
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    fn read_fixture_request(stream: &mut TcpStream) {
+        let mut buffer = [0_u8; 2048];
+        let _ = stream.read(&mut buffer);
+    }
+
+    fn write_fixture_reply(stream: &mut TcpStream, reply: &FixtureReply) {
+        let reason = match reply.status {
+            200 => "OK",
+            302 => "Found",
+            503 => "Service Unavailable",
+            _ => "Fixture",
+        };
+        let location = reply
+            .location
+            .as_deref()
+            .map(|value| format!("Location: {value}\r\n"))
+            .unwrap_or_default();
+        let headers = format!(
+            "HTTP/1.1 {} {reason}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{location}Connection: close\r\n\r\n",
+            reply.status,
+            reply.content_type,
+            reply.body.len()
+        );
+        stream
+            .write_all(headers.as_bytes())
+            .expect("fixture headers");
+        stream.write_all(&reply.body).expect("fixture body");
+    }
+
     fn test_config(provider: ProviderKind) -> SearchConfig {
         SearchConfig {
+            root: std::env::temp_dir().join(format!(
+                "ctox_web_search_config_{}_{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            )),
             enabled: true,
             provider,
             searxng_base_url: None,
             timeout_ms: 1000,
+            response_timeout_cap_ms: None,
             default_top_k: 5,
             max_top_k: 8,
             user_agent: "ctox-test".to_string(),
@@ -9575,6 +12556,7 @@ mod tests {
             cache_ttl_secs: 60,
             page_cache_ttl_secs: 60,
             max_page_bytes: 128_000,
+            max_data_file_bytes: 256_000_000,
             max_page_chars: 8_000,
             max_pdf_pages: 12,
             egress_allow_hosts: Vec::new(),

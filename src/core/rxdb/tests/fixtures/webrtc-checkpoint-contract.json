@@ -25,8 +25,14 @@
     "lwtRendering": "latestLwt is an f64 rendered via Rust Display inside the epoch input: integer values render WITHOUT a decimal point, matching JS String(Number)"
   },
   "replicationCursor": {
-    "fields": ["id", "lwt"],
-    "empty": { "id": "", "lwt": 0 }
+    "fields": [
+      "id",
+      "lwt"
+    ],
+    "empty": {
+      "id": "",
+      "lwt": 0
+    }
   },
   "handshake": {
     "checkpointKeyPaths": [
@@ -45,13 +51,14 @@
   "validityKeys": {
     "v2": {
       "capability": "ctox-checkpoint-generation-v2",
-      "template": "{storageGeneration}|{collectionName}|{schemaHash}",
-      "requires": "capability advertised AND non-empty storageGeneration AND non-empty schemaHash; independent of peerSession.sessionId",
+      "template": "{storageGeneration}|{collectionName}|{schemaHash}|{epoch}",
+      "requires": "capability advertised AND non-empty storageGeneration AND non-empty schemaHash; independent of peerSession.sessionId. The current collection checkpoint epoch is appended so a native projection rewrite invalidates retained browser heads without forcing a resync on every daemon restart.",
       "example": {
         "storageGeneration": "storage-gen-1",
         "collectionName": "business_notes",
         "schemaHash": "fixture-checkpoint-schema-hash",
-        "key": "storage-gen-1|business_notes|fixture-checkpoint-schema-hash"
+        "key": "storage-gen-1|business_notes|fixture-checkpoint-schema-hash|cc6b690025fba578bce192f5a930539c31b9f9e32a14388c12d1e09e3a505c99",
+        "epoch": "cc6b690025fba578bce192f5a930539c31b9f9e32a14388c12d1e09e3a505c99"
       }
     },
     "v1": {

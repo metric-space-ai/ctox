@@ -75,6 +75,8 @@ struct CtoxDeepResearchArgs {
     #[serde(default)]
     max_sources: Option<u64>,
     #[serde(default)]
+    exclude_urls: Vec<String>,
+    #[serde(default)]
     workspace: Option<String>,
     #[serde(default)]
     include_annas_archive: bool,
@@ -170,7 +172,11 @@ impl ToolHandler for CtoxWebHandler {
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
-            tool_name, payload, ..
+            turn,
+            call_id,
+            tool_name,
+            payload,
+            ..
         } = invocation;
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -205,7 +211,13 @@ impl ToolHandler for CtoxWebHandler {
             }
             "ctox_web_read" => {
                 let args: CtoxWebReadArgs = parse_arguments(&arguments)?;
-                command.arg("web").arg("read").arg("--url").arg(args.url);
+                command
+                    .arg("web")
+                    .arg("read")
+                    .arg("--url")
+                    .arg(args.url)
+                    .arg("--workspace")
+                    .arg(default_web_read_workspace(&turn.cwd, &call_id));
                 if let Some(query) = args.query {
                     command.arg("--query").arg(query);
                 }
@@ -265,7 +277,13 @@ impl ToolHandler for CtoxWebHandler {
                 if let Some(max_sources) = args.max_sources {
                     command.arg("--max-sources").arg(max_sources.to_string());
                 }
+                for exclude_url in args.exclude_urls {
+                    command.arg("--exclude-url").arg(exclude_url);
+                }
                 if let Some(workspace) = args.workspace {
+                    command.arg("--workspace").arg(workspace);
+                } else if !args.no_workspace {
+                    let workspace = default_deep_research_workspace(&turn.cwd, &call_id);
                     command.arg("--workspace").arg(workspace);
                 }
                 if args.include_annas_archive {
@@ -387,6 +405,36 @@ impl ToolHandler for CtoxWebHandler {
 
 fn default_true() -> bool {
     true
+}
+
+fn safe_path_component(value: &str) -> String {
+    let component = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if component.is_empty() {
+        "research-call".to_string()
+    } else {
+        component
+    }
+}
+
+fn default_deep_research_workspace(cwd: &std::path::Path, call_id: &str) -> std::path::PathBuf {
+    cwd.join("research")
+        .join("deep-research")
+        .join(safe_path_component(call_id))
+}
+
+fn default_web_read_workspace(cwd: &std::path::Path, call_id: &str) -> std::path::PathBuf {
+    cwd.join(".ctox")
+        .join("web-read")
+        .join(safe_path_component(call_id))
 }
 
 #[async_trait]
@@ -562,4 +610,21 @@ fn resolve_ctox_binary() -> Result<String, FunctionCallError> {
                 "ctox binary not found. Set CTOX_WEB_BIN or install ctox.".to_string(),
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deep_research_defaults_to_call_specific_task_workspace() {
+        let path = default_deep_research_workspace(
+            std::path::Path::new("/workspace/task-1"),
+            "call/research:42",
+        );
+        assert_eq!(
+            path,
+            std::path::Path::new("/workspace/task-1/research/deep-research/call_research_42")
+        );
+    }
 }

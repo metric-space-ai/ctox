@@ -1,7 +1,7 @@
 # CTOX Harness Operating Model
 
 This document describes how the CTOX harness is expected to behave when work
-flows through review, rework, task spawning, subagents, and process-mining
+flows through review, rework, durable task spawning, and process-mining
 checks.
 
 This page defines the orchestration and liveness contract. For the end-to-end
@@ -15,7 +15,7 @@ The short version:
 - the reviewer is a quality gate, not an independent work orchestrator
 - every durable spawn is represented as a parent-child process edge
 - every accepted spawn path has a finite budget or a decreasing rank
-- subagents are leaf workers
+- free Harness subagents are forbidden
 - process mining provides the executable proof that these invariants still hold
 
 The implementation must treat this model as a release-blocking contract. If a
@@ -68,23 +68,15 @@ The runtime persists accepted and rejected spawn edges in
 `ctox_core_spawn_edges`. This makes the process graph inspectable and lets the
 kernel reject unregistered, unstable, cyclic, or over-budget spawns.
 
-### Subagents
+### External Coding Agents
 
-Subagents are parallel work leaves. They help the parent agent do bounded work;
-they do not become independent runtime owners.
+The parent Harness has no free child-agent capability. `spawn_agent`,
+`spawn_agents_on_csv`, and all related controls are absent and rejected.
 
-Subagent invariants:
-
-- subagents do not receive recursive collaboration tools
-- subagents do not receive `spawn_agents_on_csv`
-- agent-job workers receive only `report_agent_job_result`
-- the parent agent owns review, rework, completion, and owner-visible claims
-- the review state machine sees one parent result, not independent review gates
-  for each child
-
-Thread-spawn subagents are bounded by `agents.max_depth` and
-`agents.max_threads`. Agent-job workers are bounded by a finite persisted item
-table and the same concurrency cap.
+Coding Agents are the sole external-agent exception. They run through the
+separate Business OS provider channel with persisted commands, explicit
+workspace grants, bounded sessions, policy checks, and durable events. They are
+not children of the parent Harness thread.
 
 ## Review Gate Flow
 
@@ -222,27 +214,6 @@ Any spawn kind that contains `review` also requires a finite budget. Cycles in
 the process graph require a finite budget and are rejected when the budget is
 exhausted.
 
-### Decreasing Rank
-
-Subagent spawning uses a decreasing rank:
-
-```text
-depth_remaining = agents.max_depth - child_depth
-```
-
-A child can only exist while the rank is non-negative, and subagent tool
-surfaces remove recursive spawn tools. Therefore a subagent path is either a
-bounded leaf execution or a rejected spawn request.
-
-Agent-job workers use a different rank:
-
-```text
-pending_agent_job_items
-```
-
-The job has a finite item table, workers are concurrency-capped, and workers
-can only report results. They cannot create more job items by delegation.
-
 ## Intervention Contract
 
 When the core spawn guard rejects a path, the intervention is deliberately
@@ -272,8 +243,8 @@ The command returns a combined JSON report:
 
 - `core_spawn_liveness`: registered durable spawn contracts, budgets,
   intervention skill checks, and graph-cycle checks
-- `harness_subagent_liveness`: subagent depth/concurrency bounds and leaf-only
-  tool-surface checks
+- `harness_subagent_liveness`: proof that free subagent tools remain absent
+  from CTOX-managed tool surfaces
 - `ok`: true only when both layers pass
 
 The proof is intentionally not a `build.rs` compile-time step. It is a
@@ -296,7 +267,7 @@ Before adding or changing harness behavior:
 2. Register every new durable spawner with parent type, child type, finite
    budget, intervention skill, and intervention effects.
 3. Keep review as a checkpoint owned by the parent task.
-4. Keep subagents leaf-only unless the liveness proof is extended first.
+4. Keep free subagent and fanout tools removed from every managed session.
 5. Add deterministic tests for new protected edges.
 6. Run:
 

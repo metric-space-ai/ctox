@@ -97,8 +97,10 @@ const v2 = fixture.validityKeys.v2;
 const renderedV2 = v2.template
   .replace('{storageGeneration}', v2.example.storageGeneration)
   .replace('{collectionName}', v2.example.collectionName)
-  .replace('{schemaHash}', v2.example.schemaHash);
+  .replace('{schemaHash}', v2.example.schemaHash)
+  .replace('{epoch}', v2.example.epoch);
 assert(renderedV2 === v2.example.key, `v2 validity key template mismatch: ${renderedV2}`);
+assert(v2.example.epoch === example.epoch, 'v2 example epoch must be the worked-example epoch');
 const renderedV1 = v1.template
   .replace('{epoch}', v1.example.epoch)
   .replace('{sessionId}', v1.example.sessionId)

@@ -29,10 +29,12 @@ pub use rxdb_peer::enqueue_business_command_document;
 pub use rxdb_peer::native_peer_status;
 pub use rxdb_peer::repair_optional_rxdb_collection_schema_drift;
 pub use rxdb_peer::run_native_peer_foreground;
+pub(crate) use rxdb_peer::sync_business_record_projections;
 pub use rxdb_peer::sync_desktop_file_from_path;
 pub use rxdb_peer::sync_desktop_files_from_workspace_root;
+pub(crate) use rxdb_peer::sync_knowledge_tables;
 pub use rxdb_peer::BrowserContextCaptureRequest;
-pub use rxdb_peer::{ensure_native_peer, restart_native_peer};
+pub use rxdb_peer::{ensure_native_peer, native_peer_maintenance_health, restart_native_peer};
 pub use server::serve_business_os;
 pub use server::BusinessOsServeOptions;
 

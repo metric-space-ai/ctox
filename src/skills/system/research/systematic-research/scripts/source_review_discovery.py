@@ -19,7 +19,6 @@ import re
 import subprocess
 import sys
 import time
-import tempfile
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
@@ -1456,99 +1455,6 @@ def write_discovery_graph(
     (out_dir / "discovery_graph.json").write_text(json.dumps(graph, indent=2) + "\n", encoding="utf-8")
 
 
-def psql_json(database_url: str, sql_text: str) -> str:
-    proc = subprocess.run(
-        ["psql", database_url, "--tuples-only", "--no-align", "-v", "ON_ERROR_STOP=1", "-c", sql_text],
-        check=True,
-        text=True,
-        capture_output=True,
-    )
-    return proc.stdout.strip()
-
-
-def load_business_runs(database_url: str, store_key: str) -> list[dict[str, Any]]:
-    ensure_sql = """
-CREATE TABLE IF NOT EXISTS business_runtime_stores (
-  store_key text PRIMARY KEY,
-  payload_json text NOT NULL DEFAULT '{}',
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
-"""
-    psql_json(database_url, ensure_sql)
-    payload = psql_json(database_url, f"SELECT payload_json FROM business_runtime_stores WHERE store_key = '{store_key}' LIMIT 1;")
-    if not payload:
-        return []
-    try:
-        value = json.loads(payload)
-        return value if isinstance(value, list) else []
-    except json.JSONDecodeError:
-        return []
-
-
-def save_business_runs(database_url: str, store_key: str, runs: list[dict[str, Any]]) -> None:
-    payload = json.dumps(runs, ensure_ascii=False)
-    marker = "ctox_json_payload"
-    while marker in payload:
-        marker += "_x"
-    sql_text = f"""
-CREATE TABLE IF NOT EXISTS business_runtime_stores (
-  store_key text PRIMARY KEY,
-  payload_json text NOT NULL DEFAULT '{{}}',
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
-INSERT INTO business_runtime_stores (store_key, payload_json, updated_at)
-VALUES ('{store_key}', ${marker}${payload}${marker}$, now())
-ON CONFLICT (store_key)
-DO UPDATE SET payload_json = EXCLUDED.payload_json, updated_at = now();
-"""
-    with tempfile.NamedTemporaryFile("w", suffix=".sql", delete=False, encoding="utf-8") as handle:
-        handle.write(sql_text)
-        temp_path = handle.name
-    try:
-        subprocess.run(["psql", database_url, "-v", "ON_ERROR_STOP=1", "-f", temp_path], check=True, text=True, capture_output=True)
-    finally:
-        try:
-            os.unlink(temp_path)
-        except OSError:
-            pass
-
-
-def upsert_business_progress(
-    database_url: str,
-    store_key: str,
-    run_id: str,
-    title: str,
-    topic: str,
-    progress: dict[str, Any],
-) -> None:
-    runs = load_business_runs(database_url, store_key)
-    now_date = time.strftime("%Y-%m-%d")
-    run = next((item for item in runs if item.get("id") == run_id), None)
-    if not run:
-        run = {
-            "id": run_id,
-            "title": title or topic[:80] or run_id,
-            "status": "collecting",
-            "updated": now_date,
-            "prompt": topic,
-            "criteria": "",
-            "queryCount": 0,
-            "screenedCount": 0,
-            "acceptedCount": 0,
-            "summary": {"en": topic, "de": topic},
-            "sources": [],
-            "graph": {"nodes": [], "edges": []},
-            "expansionRequests": [],
-        }
-        runs.insert(0, run)
-    run["status"] = "collecting" if progress.get("status") != "done" else "synthesized"
-    run["updated"] = now_date
-    run["researchProgress"] = progress
-    save_business_runs(database_url, store_key, runs)
-
-
 def existing_candidate_rows(path: Path | None, discovery_dir: Path | None) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     if discovery_dir:
@@ -1584,7 +1490,12 @@ def main() -> int:
     parser.add_argument(
         "--discovery-backend",
         choices=["ctox-deep-research", "open-metadata", "web-search", "hybrid"],
-        default="hybrid",
+        default="ctox-deep-research",
+        help=(
+            "Discovery backend. Defaults to the CTOX Web Stack so admitted "
+            "sources carry persisted response bytes and receipts; metadata "
+            "and hybrid paths require an explicit opt-in."
+        ),
     )
     parser.add_argument("--snowball-rounds", type=int, default=1)
     parser.add_argument("--snowball-limit", type=int, default=12)
@@ -1596,21 +1507,26 @@ def main() -> int:
         default=0,
         help="Continuation mode: stop after this many new accepted candidates have been added to the existing corpus.",
     )
-    parser.add_argument("--business-database-url", default=os.environ.get("DATABASE_URL", ""))
-    parser.add_argument("--business-store-key", default="marketing/research/runs")
-    parser.add_argument("--business-research-run-id")
-    parser.add_argument("--business-research-title")
+    # Keep retired writeback arguments parseable so old callers receive the
+    # explicit fail-closed error below instead of starting another path.
+    parser.add_argument("--business-database-url", help=argparse.SUPPRESS)
+    parser.add_argument("--business-store-key", help=argparse.SUPPRESS)
+    parser.add_argument("--business-research-run-id", help=argparse.SUPPRESS)
+    parser.add_argument("--business-research-title", help=argparse.SUPPRESS)
     parser.add_argument(
         "--business-writeback",
         action="store_true",
-        help=(
-            "Write live progress only. This runner must not publish visible "
-            "Business OS sources or scores; final catalog writeback is an "
-            "agent-curated step."
-        ),
+        help="Retired and unsupported; fails closed before discovery starts.",
     )
     parser.add_argument("--plan-only", action="store_true")
     args = parser.parse_args()
+
+    if args.business_writeback:
+        parser.error(
+            "--business-writeback is retired and disabled; this runner never "
+            "writes PostgreSQL or Business OS state. Use the native Business OS "
+            "command path after agent review."
+        )
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1644,30 +1560,6 @@ def main() -> int:
     queue = list(query_plan)
     rounds_remaining = max(0, args.snowball_rounds)
     reviewed_total = 0
-    business_writeback = bool(args.business_writeback and args.business_database_url and args.business_research_run_id)
-
-    if business_writeback:
-        try:
-            upsert_business_progress(
-                args.business_database_url,
-                args.business_store_key,
-                args.business_research_run_id,
-                args.business_research_title or args.topic[:80],
-                args.topic,
-                {
-                    "status": "running",
-                    "currentStep": "Recherche gestartet",
-                    "currentQuery": queue[0].query if queue else "",
-                    "targetAdditionalSources": args.target_additional_candidates or 0,
-                    "identifiedDelta": 0,
-                    "readDelta": 0,
-                    "usedDelta": len(existing_candidates),
-                    "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                },
-            )
-        except Exception as exc:  # noqa: BLE001 - writeback must not kill discovery.
-            print(f"business_writeback_start_failed: {exc}", file=sys.stderr)
-
     idx = 0
     while queue:
         idx += 1
@@ -1739,28 +1631,6 @@ def main() -> int:
             }
         )
 
-        if business_writeback:
-            try:
-                upsert_business_progress(
-                    args.business_database_url,
-                    args.business_store_key,
-                    args.business_research_run_id,
-                    args.business_research_title or args.topic[:80],
-                    args.topic,
-                    {
-                        "status": "running",
-                        "currentStep": f"Suchrichtung {idx} von {len(query_plan)}",
-                        "currentQuery": spec.query,
-                        "targetAdditionalSources": args.target_additional_candidates or 0,
-                        "identifiedDelta": len(screened_sources),
-                        "readDelta": 0,
-                        "usedDelta": len(existing_candidates),
-                        "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    },
-                )
-            except Exception as exc:  # noqa: BLE001
-                print(f"business_writeback_progress_failed: {exc}", file=sys.stderr)
-
         additional_candidates = len(candidates) - initial_candidate_count
         if args.target_additional_candidates > 0 and additional_candidates >= args.target_additional_candidates:
             break
@@ -1769,27 +1639,6 @@ def main() -> int:
 
     write_outputs(out_dir, protocol_rows, candidates, screened_sources, rejected_sources, query_plan, research_ids)
     write_discovery_graph(out_dir, protocol_rows, candidates)
-    if business_writeback:
-        try:
-            upsert_business_progress(
-                args.business_database_url,
-                args.business_store_key,
-                args.business_research_run_id,
-                args.business_research_title or args.topic[:80],
-                args.topic,
-                {
-                    "status": "running",
-                    "currentStep": "Discovery abgeschlossen, Agent prueft und scoret Quellen",
-                    "currentQuery": "",
-                    "targetAdditionalSources": args.target_additional_candidates or 0,
-                    "identifiedDelta": len(screened_sources),
-                    "readDelta": 0,
-                    "usedDelta": len(existing_candidates),
-                    "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                },
-            )
-        except Exception as exc:  # noqa: BLE001
-            print(f"business_writeback_final_failed: {exc}", file=sys.stderr)
     summary_obj = {
         "out_dir": str(out_dir),
         "queries_run": len(protocol_rows),

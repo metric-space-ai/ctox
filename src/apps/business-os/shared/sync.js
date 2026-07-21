@@ -17,7 +17,11 @@
 // Per-collection sync runtime on top of CTOX Sync Engine. Repair philosophy: the
 // shared native peer self-heals its transport; this layer only classifies
 // errors and schedules bounded restarts.
-import { batchSizeFor, collectionTopic, nativeRxdbPeerReady } from './sync-contract.js';
+import {
+  batchSizeFor,
+  collectionTopic,
+  nativeRxdbPeerReady,
+} from './sync-contract.js?v=20260717-knowledge-sync-v130';
 import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260714-chat-queue-v56';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
@@ -48,6 +52,27 @@ const ROOM_CIRCUIT_FAILURE_THRESHOLD = 5;
 const ROOM_CIRCUIT_OPEN_MS = 120_000;
 const ROOM_RETRY_BASE_MS = 1_000;
 const ROOM_RETRY_MAX_MS = 30_000;
+const COLLECTION_START_GAP_MS = 500;
+const COLLECTION_RESTART_GAP_MS = 500;
+const DESKTOP_ICON_SAFE_FIELDS = new Set([
+  'id',
+  'target_type',
+  'target_module',
+  'target_record_id',
+  'label',
+  'glyph',
+  'x',
+  'y',
+  'pinned',
+  'hidden',
+  'sort_index',
+  'updated_at_ms',
+  '_deleted',
+  '_rev',
+  '_meta',
+  '_attachments',
+]);
+const desktopIconRepairPromises = new WeakMap();
 const RETRYABLE_CONTROL_PLANE_CODES = new Set([
   'control_plane_token_expired',
   'temporary_unavailable',
@@ -332,7 +357,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
   emitDiagnostic({ phase: 'ready' });
   const ensureMultiTabCoordinator = async () => {
     if (multiTabCoordinator) return multiTabCoordinator;
-    const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260720-source-commits-failover-v75');
+    const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260721-main-merge-v76');
     if (typeof rxdb?.getMultiTabSyncCoordinator !== 'function') return null;
     multiTabCoordinator = rxdb.getMultiTabSyncCoordinator({
       databaseName: db?.name || db?.raw?.name || 'ctox_business_os_js_v1',
@@ -617,18 +642,35 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
           scheduleRestart: scheduleRestartOfUnhealthyCollections,
         });
       });
-      // 50 ms spacing between collection starts. The original 500 ms guarded
-      // the pre-multiplex world where every start dialled its own
-      // RTCPeerConnection through signaling; since phase 3 all collections
-      // share ONE room peer and a "start" is just a registration + catch-up
-      // pull on the existing channel. 500 ms turned an 18-collection shell
-      // start into 9 s of pure queue delay. A small gap is kept so start
-      // bursts stay ordered and the first connection wins the race cleanly.
-      collectionStartQueue = bridgePromise.catch(() => {}).then(() => delay(50));
+      // Every collection shares one bounded room send queue. Pacing initial
+      // catch-up keeps a legitimate multi-collection bootstrap below the
+      // wedged-peer recycle threshold while preserving deterministic order.
+      collectionStartQueue = bridgePromise.catch(() => {}).then(() => delay(COLLECTION_START_GAP_MS));
       bridges.set(collection, bridgePromise);
       publishResourceBudget();
       try {
         const bridge = await withTimeout(bridgePromise, 3000);
+        if (!bridge) {
+          const pendingBridge = {
+            mode: 'pending',
+            collection,
+            reason: 'startup-in-progress',
+            state: null,
+            stop: async () => {
+              const resolvedBridge = await bridgePromise.catch(() => null);
+              await resolvedBridge?.stop?.();
+            },
+          };
+          recordCollection(collection, {
+            status: 'pending',
+            connectionStatus: 'connecting',
+            reason: pendingBridge.reason,
+            lastError: null,
+            reconnectingSince: null,
+            connectedAt: null,
+          });
+          return pendingBridge;
+        }
         recordCollection(collection, {
           status: bridge.mode === 'pending' ? 'pending' : 'running',
           connectionStatus: bridge.mode === 'pending' ? 'pending' : 'connecting',
@@ -718,7 +760,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
           batch.push(await this.startCollection(collection, {
             pin: pinnedBeforeRestart.get(collection) === true,
           }));
-          await delay(250);
+          await delay(COLLECTION_RESTART_GAP_MS);
         }
         return batch;
       };
@@ -1051,7 +1093,10 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260720-source-commits-failover-v75');
+  if (collection === 'desktop_icons') {
+    await repairDesktopIconsBeforeReplication(rxCollection);
+  }
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260721-main-merge-v76');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }
@@ -1324,7 +1369,10 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     }
     if (now - lastErrorLogAt > 5000) {
       lastErrorLogAt = now;
-      console.error(`[business-os] WebRTC replication failed for ${collection}`, error);
+      const serializedError = serializeError(error);
+      console.error(
+        `[business-os] WebRTC replication failed for ${collection}: ${JSON.stringify(serializedError)}`,
+      );
     }
     recordCollection?.(collection, {
       status: 'error',
@@ -1392,6 +1440,105 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
       try { await withTimeout(replicationState.cancel?.(), 3000); } catch {}
     },
   };
+}
+
+async function repairDesktopIconsBeforeReplication(collection) {
+  let repairPromise = desktopIconRepairPromises.get(collection);
+  if (repairPromise) return repairPromise;
+  repairPromise = (async () => {
+    const documents = await collection.find().exec();
+    for (const document of documents || []) {
+      const raw = typeof document?.toJSON === 'function' ? document.toJSON() : document;
+      if (!desktopIconNeedsRepair(raw)) continue;
+      const sanitized = sanitizeDesktopIconForReplication(raw);
+      await removeDesktopIconAttachments(document);
+      // The app-local storage upsert deliberately field-merges documents.
+      // Remove the corrupted cache row first so unknown legacy fields cannot
+      // survive the repair and permanently block WebRTC replication.
+      if (typeof collection?.storageCollection?.hardDeleteByIds === 'function') {
+        await collection.storageCollection.hardDeleteByIds([raw.id]);
+      }
+      await collection.upsert(sanitized);
+      const repairedDocument = await collection.findOne(raw.id).exec();
+      const repaired = typeof repairedDocument?.toJSON === 'function'
+        ? repairedDocument.toJSON()
+        : repairedDocument;
+      if (desktopIconNeedsRepair(repaired)) {
+        throw new Error(`Desktop icon ${boundedString(raw.id, 128)} remains unsafe after repair.`);
+      }
+    }
+  })();
+  desktopIconRepairPromises.set(collection, repairPromise);
+  try {
+    await repairPromise;
+  } catch (error) {
+    desktopIconRepairPromises.delete(collection);
+    throw error;
+  }
+}
+
+function desktopIconNeedsRepair(raw) {
+  if (!raw || typeof raw !== 'object') return false;
+  if (!isSafeDesktopIconGlyph(raw.glyph)) return true;
+  if (raw._attachments && Object.keys(raw._attachments).length > 0) return true;
+  if (encodedJsonSize(raw) > 64 * 1024) return true;
+  return Object.keys(raw).some((key) => !DESKTOP_ICON_SAFE_FIELDS.has(key));
+}
+
+function sanitizeDesktopIconForReplication(raw) {
+  const now = Date.now();
+  const icon = {
+    id: boundedString(raw.id, 128),
+    target_type: boundedString(raw.target_type, 32) || 'app',
+    target_module: boundedString(raw.target_module, 128),
+    target_record_id: boundedString(raw.target_record_id, 256),
+    label: boundedString(raw.label, 256),
+    glyph: isSafeDesktopIconGlyph(raw.glyph) ? String(raw.glyph).trim() : '◻︎',
+    x: boundedNumber(raw.x),
+    y: boundedNumber(raw.y),
+    pinned: Boolean(raw.pinned),
+    hidden: Boolean(raw.hidden),
+    sort_index: boundedNumber(raw.sort_index),
+    updated_at_ms: now,
+    _deleted: Boolean(raw._deleted),
+  };
+  return icon;
+}
+
+async function removeDesktopIconAttachments(document) {
+  const attachments = typeof document?.allAttachments === 'function'
+    ? document.allAttachments()
+    : [];
+  for (const attachment of attachments || []) {
+    await attachment?.remove?.();
+  }
+}
+
+function encodedJsonSize(value) {
+  try {
+    const json = JSON.stringify(value);
+    return typeof TextEncoder === 'function'
+      ? new TextEncoder().encode(json).byteLength
+      : json.length;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function isSafeDesktopIconGlyph(value) {
+  const glyph = String(value || '').trim();
+  if (!glyph || glyph.length > 16) return false;
+  return !/^(?:data:|https?:)/i.test(glyph) && !/[<>{}]/.test(glyph);
+}
+
+function boundedString(value, maxLength) {
+  return String(value || '').trim().slice(0, maxLength);
+}
+
+function boundedNumber(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.max(-100_000, Math.min(100_000, number));
 }
 
 function formatLifecycleError(error) {
@@ -1839,7 +1986,7 @@ function serializeError(error) {
   if (!error) return null;
   const signalingControlPlaneError = classifySignalingControlPlaneError(error);
   if (signalingControlPlaneError) return signalingControlPlaneError;
-  return {
+  const serialized = {
     name: typeof error.name === 'string' ? error.name : 'Error',
     message: String(error.message || error),
     code: error.code || null,
@@ -1847,6 +1994,32 @@ function serializeError(error) {
     severity: error.severity || null,
     retryable: typeof error.retryable === 'boolean' ? error.retryable : null,
   };
+  const details = serializeErrorDetails(error);
+  if (details) serialized.details = details;
+  return serialized;
+}
+
+function serializeErrorDetails(error) {
+  if (!error || typeof error !== 'object') return null;
+  const details = {};
+  for (const key of ['parameters', 'errors', 'error', 'direction', 'collection', 'method', 'reason']) {
+    if (error[key] == null) continue;
+    details[key] = boundedDiagnosticValue(error[key]);
+  }
+  return Object.keys(details).length ? details : null;
+}
+
+function boundedDiagnosticValue(value) {
+  try {
+    const json = JSON.stringify(value, (key, nested) => (
+      isSecretParam(key) ? '[redacted]' : nested
+    ));
+    if (!json) return String(value).slice(0, 4000);
+    if (json.length > 16_000) return `${json.slice(0, 16_000)}…`;
+    return JSON.parse(json);
+  } catch {
+    return String(value).slice(0, 4000);
+  }
 }
 
 function sanitizeReplicationTransportStatus(status) {
@@ -2382,6 +2555,9 @@ function classifyPeerLifecycleEvent(error) {
   } else if (haystack.includes('ERR_PC_CONSTRUCTOR') || haystack.includes('Cannot create so many PeerConnections')) {
     lifecycleCode = 'peer_connection_limit';
     lifecycleMessage = 'Browser peer connection limit was reached; reconnect repair is scheduled.';
+  } else if (haystack.includes('ctox_webrtc_send_queue_budget_exceeded')) {
+    lifecycleCode = 'peer_send_queue_pressure';
+    lifecycleMessage = 'WebRTC send queue exceeded its hard budget; the wedged peer was recycled and reconnect repair is scheduled.';
   } else if (haystack.includes('Still in CONNECTING state')) {
     lifecycleCode = 'peer_connect_timeout';
     lifecycleMessage = 'WebRTC peer stayed in connecting state; reconnect repair is scheduled.';

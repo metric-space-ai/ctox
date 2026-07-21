@@ -16,15 +16,20 @@ use rusqlite::OptionalExtension;
 use serde_json::json;
 use serde_json::Map;
 use serde_json::Value;
+use sha2::Digest;
+use sha2::Sha256;
 use std::fs;
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
+use url::Url;
 use uuid::Uuid;
 
 const KNOWLEDGE_DATA_ROOT: &str = "runtime/knowledge/data";
 
-type KnowledgeFileChangeStamp = (bool, u64, u128);
+type KnowledgeFileChangeStamp = (bool, u64, u128, String);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KnowledgeTablesProjectionSourceStamp {
@@ -40,6 +45,7 @@ struct KnowledgeTablesCatalogSourceStamp {
     title: String,
     description: String,
     schema_hash: String,
+    content_hash: String,
     row_count: i64,
     bytes: i64,
     tags_json: String,
@@ -88,6 +94,345 @@ pub fn handle_data_command(root: &Path, args: &[String]) -> Result<()> {
             bail!("unknown knowledge data subcommand: {unknown}");
         }
     }
+}
+
+/// Source and claim tables are allowed to retain discovery candidates, but
+/// their evidence flag is derived here rather than trusted from caller input.
+/// This helper is used both on write paths and immediately before projection so
+/// direct file edits or legacy rows cannot reintroduce a self-asserted claim.
+pub(super) fn normalize_evidence_rows(table_key: &str, rows: Vec<Value>) -> Result<Vec<Value>> {
+    if !is_evidence_table(table_key) {
+        return Ok(rows);
+    }
+
+    rows.into_iter()
+        .map(|row| {
+            let mut object = row
+                .as_object()
+                .cloned()
+                .context("evidence knowledge rows must be JSON objects")?;
+            let reasons = evidence_rejection_reasons(table_key, &object);
+            let eligible = reasons.is_empty();
+            object.insert("evidence_eligible".to_string(), Value::Bool(eligible));
+            if eligible {
+                object.remove("evidence_rejection_reason");
+            } else {
+                object.insert(
+                    "evidence_rejection_reason".to_string(),
+                    Value::String(reasons.join(",")),
+                );
+            }
+            Ok(Value::Object(object))
+        })
+        .collect()
+}
+
+pub(super) fn normalize_evidence_rows_with_server_receipts(
+    root: &Path,
+    table_key: &str,
+    rows: Vec<Value>,
+) -> Result<Vec<Value>> {
+    let rows = normalize_evidence_rows(table_key, rows)?;
+    if !is_evidence_table(table_key) {
+        return Ok(rows);
+    }
+    let cache = fs::read(root.join("runtime/web_search_page_cache.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+    let entries = cache
+        .as_ref()
+        .and_then(|value| value.get("entries"))
+        .and_then(Value::as_object);
+
+    rows.into_iter()
+        .map(|row| {
+            let mut object = row
+                .as_object()
+                .cloned()
+                .context("evidence knowledge rows must be JSON objects")?;
+            if object.get("evidence_eligible") == Some(&Value::Bool(true))
+                && !has_matching_server_web_receipt(root, entries, &object)
+            {
+                object.insert("evidence_eligible".to_string(), Value::Bool(false));
+                object.insert(
+                    "evidence_rejection_reason".to_string(),
+                    Value::String("missing_server_web_receipt".to_string()),
+                );
+            }
+            Ok(Value::Object(object))
+        })
+        .collect()
+}
+
+fn has_matching_server_web_receipt(
+    root: &Path,
+    entries: Option<&Map<String, Value>>,
+    row: &Map<String, Value>,
+) -> bool {
+    let Some(entries) = entries else {
+        return false;
+    };
+    let Some(canonical_url) = row.get("canonical_url").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(http_status) = row.get("http_status").and_then(Value::as_u64) else {
+        return false;
+    };
+    let Some(snapshot_hash) = row
+        .get("snapshot_hash")
+        .and_then(Value::as_str)
+        .and_then(normalized_sha256)
+    else {
+        return false;
+    };
+
+    entries.values().any(|entry| {
+        let doc = entry.get("doc").unwrap_or(&Value::Null);
+        let receipt = doc.get("response_receipt").unwrap_or(&Value::Null);
+        let url_matches = ["original_url", "final_url", "canonical_url"]
+            .into_iter()
+            .any(|field| entry.get(field).and_then(Value::as_str) == Some(canonical_url))
+            || ["url", "canonical_url"]
+                .into_iter()
+                .any(|field| doc.get(field).and_then(Value::as_str) == Some(canonical_url))
+            || ["requested_url", "final_url"]
+                .into_iter()
+                .any(|field| receipt.get(field).and_then(Value::as_str) == Some(canonical_url));
+        url_matches
+            && entry.get("created_at_epoch").and_then(Value::as_u64) > Some(0)
+            && entry.get("checked_at").and_then(Value::as_u64) > Some(0)
+            && entry.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
+            && doc.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
+            && entry.get("http_status").and_then(Value::as_u64) == Some(http_status)
+            && hashes_match(
+                entry.get("snapshot_hash").and_then(Value::as_str),
+                snapshot_hash,
+            )
+            && receipt.get("status").and_then(Value::as_u64) == Some(http_status)
+            && hashes_match(receipt.get("sha256").and_then(Value::as_str), snapshot_hash)
+            && data_artifact_matches(root, doc, receipt, snapshot_hash)
+    })
+}
+
+fn normalized_sha256(value: &str) -> Option<&str> {
+    let digest = value.strip_prefix("sha256:").unwrap_or(value);
+    (digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(digest)
+}
+
+fn hashes_match(value: Option<&str>, expected: &str) -> bool {
+    value
+        .and_then(normalized_sha256)
+        .is_some_and(|digest| digest.eq_ignore_ascii_case(expected))
+}
+
+fn data_artifact_matches(root: &Path, doc: &Value, receipt: &Value, expected: &str) -> bool {
+    let is_data_file = receipt
+        .get("content_kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind.starts_with("data_"));
+    if !is_data_file {
+        return true;
+    }
+    let Some(raw_path) = doc.get("response_artifact_path").and_then(Value::as_str) else {
+        return false;
+    };
+    let Ok(cache_root) = root.join("runtime/web_search_data_cache").canonicalize() else {
+        return false;
+    };
+    let Ok(path) = Path::new(raw_path).canonicalize() else {
+        return false;
+    };
+    if !path.starts_with(cache_root) {
+        return false;
+    }
+    let Ok(bytes) = fs::read(path) else {
+        return false;
+    };
+    if receipt.get("byte_count").and_then(Value::as_u64) != Some(bytes.len() as u64) {
+        return false;
+    }
+    format!("{:x}", Sha256::digest(bytes)).eq_ignore_ascii_case(expected)
+}
+
+pub(super) fn is_evidence_table(table_key: &str) -> bool {
+    let key = table_key.trim().to_ascii_lowercase().replace('-', "_");
+    matches!(
+        key.as_str(),
+        "source_catalog"
+            | "source_claims"
+            | "claims"
+            | "knowledge_claims"
+            | "evidence_points"
+            | "evidence_claims"
+            | "claim_evidence"
+    ) || key.ends_with("_claims")
+}
+
+fn evidence_rejection_reasons(table_key: &str, row: &Map<String, Value>) -> Vec<String> {
+    let mut reasons = Vec::new();
+    let canonical_url = row
+        .get("canonical_url")
+        .and_then(Value::as_str)
+        .is_some_and(valid_canonical_url);
+    if !canonical_url {
+        reasons.push("invalid_canonical_url".to_string());
+    }
+
+    if row.get("verification_status").and_then(Value::as_str) != Some("verified") {
+        reasons.push("verification_not_verified".to_string());
+    }
+    if row.get("transport_verified") != Some(&Value::Bool(true)) {
+        reasons.push("transport_not_verified".to_string());
+    }
+    if row.get("content_extracted") != Some(&Value::Bool(true)) {
+        reasons.push("content_not_extracted".to_string());
+    }
+    if row.get("actual_full_text_or_data") != Some(&Value::Bool(true)) {
+        reasons.push("full_content_not_verified".to_string());
+    }
+    if !row
+        .get("evidence_relevance_score")
+        .and_then(Value::as_i64)
+        .is_some_and(|score| score >= 8)
+    {
+        reasons.push("evidence_relevance_below_threshold".to_string());
+    }
+
+    let http_status = row.get("http_status").and_then(Value::as_i64);
+    if !http_status.is_some_and(|status| (200..=299).contains(&status)) {
+        reasons.push("http_status_not_2xx".to_string());
+    } else if http_status == Some(204) {
+        reasons.push("http_status_no_content".to_string());
+    }
+    if !row
+        .get("snapshot_hash")
+        .and_then(Value::as_str)
+        .is_some_and(valid_snapshot_hash)
+    {
+        reasons.push("invalid_snapshot_hash".to_string());
+    }
+
+    let source_tier = row
+        .get("source_tier")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if source_tier.is_empty()
+        || source_tier.contains("metadata")
+        || source_tier.contains("aggregat")
+    {
+        reasons.push("metadata_or_aggregated_source_tier".to_string());
+    }
+    if row
+        .get("metadata_only")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        reasons.push("metadata_only".to_string());
+    }
+
+    let source_type = row
+        .get("source_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if source_type.contains("metadata") || source_type == "aggregator" {
+        reasons.push("metadata_or_aggregated_source_type".to_string());
+    }
+    if row
+        .get("canonical_url")
+        .and_then(Value::as_str)
+        .is_some_and(is_metadata_canonical_url)
+    {
+        reasons.push("metadata_canonical_url".to_string());
+    }
+    if row
+        .get("evidence_rejection_reason")
+        .and_then(Value::as_str)
+        .is_some_and(|reason| !reason.trim().is_empty())
+    {
+        reasons.push("evidence_rejection_reason_present".to_string());
+    }
+    append_trace_rejection_reasons(table_key, row, &mut reasons);
+    reasons
+}
+
+fn append_trace_rejection_reasons(
+    table_key: &str,
+    row: &Map<String, Value>,
+    reasons: &mut Vec<String>,
+) {
+    let has_nonempty = |key: &str| {
+        row.get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+    };
+    let key = table_key.trim().to_ascii_lowercase().replace('-', "_");
+    if key.contains("claim") || key.contains("evidence") {
+        if !has_nonempty("source_id") {
+            reasons.push("missing_source_id".to_string());
+        }
+        if !has_nonempty("claim_id") && !has_nonempty("evidence_id") {
+            reasons.push("missing_claim_or_evidence_id".to_string());
+        }
+        if !has_nonempty("snapshot_id") {
+            reasons.push("missing_snapshot_id".to_string());
+        }
+        return;
+    }
+
+    let primary = if key == "source_catalog" || key.contains("source") {
+        has_nonempty("source_id")
+    } else {
+        has_nonempty("source_id") || has_nonempty("claim_id") || has_nonempty("evidence_id")
+    };
+    let trace = [
+        "trace_id",
+        "run_id",
+        "research_run_id",
+        "source_row_ref",
+        "provenance",
+    ]
+    .iter()
+    .any(|key| has_nonempty(key));
+    if !primary || !trace {
+        reasons.push("missing_trace_identifier".to_string());
+    }
+}
+
+fn valid_canonical_url(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed != value {
+        return false;
+    }
+    Url::parse(trimmed)
+        .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+}
+
+fn valid_snapshot_hash(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return false;
+    };
+    hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn is_metadata_canonical_url(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    [
+        "https://doi.org/",
+        "http://doi.org/",
+        "https://api.crossref.org/",
+        "https://api.openalex.org/",
+        "https://api.semanticscholar.org/",
+        "https://www.semanticscholar.org/",
+        "https://scholar.google.",
+        "https://www.researchgate.net/",
+        "https://www.academia.edu/",
+    ]
+    .iter()
+    .any(|prefix| normalized.starts_with(prefix))
 }
 
 fn help_payload() -> Value {
@@ -768,6 +1113,7 @@ pub fn knowledge_tables_projection_source_stamp(
                 updated_at,
             )| {
                 let parquet_path = compute_parquet_path(root, &domain, &table_key);
+                let content_hash = knowledge_file_content_hash(&parquet_path);
                 KnowledgeTablesCatalogSourceStamp {
                     table_id,
                     domain,
@@ -776,6 +1122,7 @@ pub fn knowledge_tables_projection_source_stamp(
                     title,
                     description,
                     schema_hash,
+                    content_hash,
                     row_count,
                     bytes,
                     tags_json,
@@ -792,7 +1139,7 @@ pub fn knowledge_tables_projection_source_stamp(
 
 fn knowledge_file_change_stamp(path: &Path) -> KnowledgeFileChangeStamp {
     let Ok(metadata) = fs::metadata(path) else {
-        return (false, 0, 0);
+        return (false, 0, 0, String::new());
     };
     let modified_at = metadata
         .modified()
@@ -800,15 +1147,73 @@ fn knowledge_file_change_stamp(path: &Path) -> KnowledgeFileChangeStamp {
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    (metadata.is_file(), metadata.len(), modified_at)
+    (
+        metadata.is_file(),
+        metadata.len(),
+        modified_at,
+        knowledge_file_content_hash(path),
+    )
 }
 
-/// Hard upper bound on rows embedded into a single `knowledge_tables` RxDB
-/// doc. Record-shape knowledge tables in CTOX are small (tens to low
-/// thousands of rows), but the cap keeps a pathological table from inflating
-/// a synced doc to an unbounded size. The browser surfaces still read whatever
-/// rows ride in the doc; the cap is purely a safety valve.
+fn knowledge_file_content_hash(path: &Path) -> String {
+    let Ok(mut file) = File::open(path) else {
+        return String::new();
+    };
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 128 * 1024];
+    loop {
+        let Ok(read) = file.read(&mut buffer) else {
+            return String::new();
+        };
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+/// Hard upper bound on rows projected for one logical knowledge table.
 const KNOWLEDGE_TABLE_RXDB_ROW_CAP: usize = 5_000;
+
+/// Maximum rows carried by one replicated `knowledge_tables` document.
+///
+/// A single wide evidence row can contain substantial provenance metadata.
+/// Keeping chunks deliberately small prevents multi-megabyte RxDB documents
+/// from stalling WebRTC replication while still preserving the complete
+/// logical table in the browser.
+const KNOWLEDGE_TABLE_RXDB_CHUNK_ROWS: usize = 200;
+
+/// Maximum combined JSON bytes of source rows assigned to one chunk.
+///
+/// Rows are mirrored at the document root and under `payload`, so the final
+/// serialized document is roughly twice this size plus metadata. Keeping the
+/// row budget below the 256 KiB demand-fetch frame budget also leaves ample
+/// room below the 8 MiB WebRTC transfer ceiling.
+const KNOWLEDGE_TABLE_RXDB_CHUNK_ROW_JSON_BYTES: usize = 192 * 1024;
+
+fn knowledge_table_chunk_ranges(rows: &[Value]) -> Vec<(usize, usize)> {
+    if rows.is_empty() {
+        return vec![(0, 0)];
+    }
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    let mut chunk_bytes: usize = 0;
+    for (index, row) in rows.iter().enumerate() {
+        let row_bytes = serde_json::to_vec(row).map_or(0, |value| value.len());
+        let row_limit_reached = index.saturating_sub(start) >= KNOWLEDGE_TABLE_RXDB_CHUNK_ROWS;
+        let byte_limit_reached = index > start
+            && chunk_bytes.saturating_add(row_bytes) > KNOWLEDGE_TABLE_RXDB_CHUNK_ROW_JSON_BYTES;
+        if row_limit_reached || byte_limit_reached {
+            ranges.push((start, index));
+            start = index;
+            chunk_bytes = 0;
+        }
+        chunk_bytes = chunk_bytes.saturating_add(row_bytes);
+    }
+    ranges.push((start, rows.len()));
+    ranges
+}
 
 /// Build the `knowledge_tables` RxDB documents that carry record-shape
 /// knowledge to the Business OS browser surfaces (Web Research + Knowledge).
@@ -829,10 +1234,10 @@ const KNOWLEDGE_TABLE_RXDB_ROW_CAP: usize = 5_000;
 ///      [`KNOWLEDGE_TABLE_RXDB_ROW_CAP`].
 ///   3. Add table-specific schema metadata for the browser, including
 ///      standardized metric columns and hover-help descriptions.
-///   4. Emit a doc whose `id` is `table:<table_id>` (matching the
-///      browser/HTTP id scheme), with the rows mirrored at both
-///      `payload.rows` and top-level `rows` (the browser reads either), the
-///      true `row_count`, and the resolved `parquet_path`.
+///   4. Emit deterministic row chunks. Chunk zero keeps the historical
+///      `table:<table_id>` id; later chunks use
+///      `table:<table_id>:chunk:<index>`. Browser modules merge chunks by
+///      `logical_table_id`.
 ///
 /// A missing or unreadable parquet file is not fatal: the doc is still
 /// emitted (so the table appears in the catalog UI) but with an empty `rows`
@@ -842,7 +1247,7 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
     let conn = open_runtime_db(root)?;
     let mut stmt = conn.prepare(
         "SELECT table_id, domain, table_key, source_system, title, description,
-                row_count, bytes, updated_at
+                schema_hash, row_count, bytes, updated_at
          FROM knowledge_data_tables
          WHERE archived_at IS NULL
          ORDER BY updated_at DESC, title",
@@ -856,9 +1261,10 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
                 row.get::<_, String>(3)?, // source_system
                 row.get::<_, String>(4)?, // title
                 row.get::<_, String>(5)?, // description
-                row.get::<_, i64>(6)?,    // row_count (catalog, may be stale)
-                row.get::<_, i64>(7)?,    // bytes
-                row.get::<_, String>(8)?, // updated_at (rfc3339)
+                row.get::<_, String>(6)?, // schema_hash (catalog fallback)
+                row.get::<_, i64>(7)?,    // row_count (catalog, may be stale)
+                row.get::<_, i64>(8)?,    // bytes
+                row.get::<_, String>(9)?, // updated_at (rfc3339)
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -871,6 +1277,7 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
         source_system,
         title,
         description,
+        catalog_schema_hash,
         row_count,
         bytes,
         updated_at,
@@ -881,73 +1288,114 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
         let resolved_path_str = resolved_path.display().to_string();
 
         // (2) Read rows (capped). Missing/unreadable parquet is non-fatal.
-        let (rows, resolved_row_count) = if resolved_path.is_file() {
+        let (rows, resolved_row_count, live_schema_hash) = if resolved_path.is_file() {
+            let live_schema_hash = super::parquet_io::scan_table(&resolved_path)
+                .and_then(|mut lf| lf.collect_schema())
+                .map(|schema| super::parquet_io::schema_hash(&schema))
+                .unwrap_or_else(|_| catalog_schema_hash.clone());
             match super::parquet_io::read_rows_capped(&resolved_path, KNOWLEDGE_TABLE_RXDB_ROW_CAP)
             {
-                Ok((rows, count)) => (rows, count),
+                Ok((rows, count)) => (rows, count, live_schema_hash),
                 Err(err) => {
                     eprintln!(
                         "[knowledge] knowledge_tables projection: failed to read parquet rows for \
                          {domain}/{table_key} ({}): {err:#}",
                         resolved_path.display()
                     );
-                    (Vec::new(), row_count)
+                    (Vec::new(), row_count, live_schema_hash)
                 }
             }
         } else {
-            (Vec::new(), row_count)
+            (Vec::new(), row_count, catalog_schema_hash.clone())
         };
 
+        let rows = normalize_evidence_rows_with_server_receipts(root, &table_key, rows)?;
         let (rows, quality_notes) = enrich_knowledge_table_rows(&table_key, rows);
         let columns = knowledge_table_columns(&table_key, &rows);
         let schema_value = json!({ "columns": columns.clone() });
         let quality_notes_value =
             Value::Array(quality_notes.into_iter().map(Value::String).collect());
-        let id = format!("table:{table_id}");
+        let logical_table_id = format!("table:{table_id}");
         let updated_at_ms =
             rfc3339_to_millis(&updated_at).unwrap_or_else(|| Utc::now().timestamp_millis());
-        let rows_value = Value::Array(rows);
+        let content_hash = knowledge_file_content_hash(&resolved_path);
+        let projected_row_count = rows.len();
+        let chunk_ranges = knowledge_table_chunk_ranges(&rows);
+        let chunk_count = chunk_ranges.len();
+        let rows_complete = projected_row_count as i64 == resolved_row_count;
 
-        // (4) Mirror rows at payload.rows and top-level rows; refresh
-        //     parquet_path + row_count to the resolved values.
-        let payload = json!({
-            "id": id,
-            "table_id": table_id,
-            "kind": "dataframe",
-            "domain": domain,
-            "table_key": table_key,
-            "source_system": source_system,
-            "title": title,
-            "description": description,
-            "parquet_path": resolved_path_str,
-            "row_count": resolved_row_count,
-            "bytes": bytes,
-            "updated_at": updated_at,
-            "has_table": true,
-            "columns": columns.clone(),
-            "schema": schema_value.clone(),
-            "quality_notes": quality_notes_value.clone(),
-            "rows": rows_value.clone(),
-        });
+        // (4) Mirror each row chunk at payload.rows and top-level rows. The
+        // logical row_count remains the complete parquet count on every chunk.
+        for (chunk_index, (start, end)) in chunk_ranges.into_iter().enumerate() {
+            let chunk_rows = if start < end {
+                rows[start..end].to_vec()
+            } else {
+                Vec::new()
+            };
+            let id = if chunk_index == 0 {
+                logical_table_id.clone()
+            } else {
+                format!("{logical_table_id}:chunk:{chunk_index:04}")
+            };
+            let rows_value = Value::Array(chunk_rows);
+            let payload = json!({
+                "id": id,
+                "logical_table_id": logical_table_id,
+                "table_id": table_id,
+                "kind": "dataframe",
+                "domain": domain,
+                "table_key": table_key,
+                "source_system": source_system,
+                "title": title,
+                "description": description,
+                "parquet_path": resolved_path_str,
+                "row_count": resolved_row_count,
+                "projected_row_count": projected_row_count,
+                "rows_complete": rows_complete,
+                "chunk_index": chunk_index,
+                "chunk_count": chunk_count,
+                "chunk_row_offset": start,
+                "chunk_row_count": end.saturating_sub(start),
+                "bytes": bytes,
+                "content_hash": content_hash,
+                "schema_hash": live_schema_hash,
+                "updated_at": updated_at,
+                "has_table": true,
+                "columns": columns.clone(),
+                "schema": schema_value.clone(),
+                "quality_notes": quality_notes_value.clone(),
+                "rows": rows_value.clone(),
+            });
 
-        documents.push(json!({
-            "id": id,
-            "kind": "dataframe",
-            "title": title,
-            "subtitle": format!("{domain} · {resolved_row_count} rows"),
-            "summary": description,
-            "source_path": resolved_path_str,
-            "domain": domain,
-            "table_key": table_key,
-            "row_count": resolved_row_count,
-            "updated_at": updated_at,
-            "updated_at_ms": updated_at_ms,
-            "columns": columns,
-            "schema": schema_value,
-            "quality_notes": quality_notes_value,
-            "rows": rows_value,
-            "payload": payload,
-        }));
+            documents.push(json!({
+                "id": id,
+                "logical_table_id": logical_table_id,
+                "table_id": table_id,
+                "kind": "dataframe",
+                "title": title,
+                "subtitle": format!("{domain} · {resolved_row_count} rows"),
+                "summary": description,
+                "source_path": resolved_path_str,
+                "domain": domain,
+                "table_key": table_key,
+                "row_count": resolved_row_count,
+                "projected_row_count": projected_row_count,
+                "rows_complete": rows_complete,
+                "chunk_index": chunk_index,
+                "chunk_count": chunk_count,
+                "chunk_row_offset": start,
+                "chunk_row_count": end.saturating_sub(start),
+                "content_hash": content_hash,
+                "schema_hash": live_schema_hash,
+                "updated_at": updated_at,
+                "updated_at_ms": updated_at_ms,
+                "columns": columns.clone(),
+                "schema": schema_value.clone(),
+                "quality_notes": quality_notes_value.clone(),
+                "rows": rows_value,
+                "payload": payload,
+            }));
+        }
     }
 
     Ok(documents)
@@ -977,7 +1425,7 @@ fn enrich_knowledge_table_rows(table_key: &str, rows: Vec<Value>) -> (Vec<Value>
         rows,
         vec![
             "propeller_size is split into metric prop_diameter_mm and prop_pitch_mm for Excel-ready analysis.".to_string(),
-            "legacy radial_load_N is preserved in raw rows, but exposed as tangential_equivalent_force_N because it was derived from torque/radius rather than measured bearing radial load.".to_string(),
+            "legacy radial_load_N is preserved in raw rows and is only exposed as tangential_equivalent_force_N when explicit metadata proves a torque/radius derivation; bearing radial load remains blank unless the source establishes it.".to_string(),
             "load_case separates steady propeller tests, vibration, shock/blast, and mixed derived rows; aggregate these cases separately.".to_string(),
         ],
     )
@@ -997,6 +1445,8 @@ fn enrich_measured_load_point_row(index: usize, mut row: Value) -> Value {
     normalize_number_field(map, "axial_load_N");
     normalize_number_field(map, "torque_Nm");
     normalize_number_field(map, "radial_load_N");
+    normalize_optional_number_field(map, "tangential_equivalent_force_N");
+    normalize_optional_number_field(map, "bearing_radial_load_N");
 
     if !map.contains_key("row_id") {
         map.insert(
@@ -1042,10 +1492,11 @@ fn enrich_measured_load_point_row(index: usize, mut row: Value) -> Value {
         insert_number(map, "moment_Nm", torque);
         insert_number(map, "torque_signed_Nm", torque);
     }
-    if let Some(legacy_radial) = number_from_map(map, "radial_load_N") {
-        insert_number(map, "tangential_equivalent_force_N", legacy_radial.abs());
-        insert_number(map, "tangential_equivalent_force_signed_N", legacy_radial);
-    }
+    // `radial_load_N` is never reinterpreted here. A bearing radial load and a
+    // torque/radius tangential equivalent are different physical quantities.
+    // Derived values must be supplied explicitly with their own provenance.
+    map.entry("tangential_equivalent_force_N".to_string())
+        .or_insert(Value::Null);
     map.entry("bearing_radial_load_N".to_string())
         .or_insert(Value::Null);
 
@@ -1060,19 +1511,30 @@ fn enrich_measured_load_point_row(index: usize, mut row: Value) -> Value {
     map.entry("original_unit_system".to_string())
         .or_insert(Value::String("mixed_source_metric_projection".to_string()));
 
-    if !map.contains_key("source_row_ref") {
-        let source_id =
-            string_from_map(map, "source_id").unwrap_or_else(|| "unknown-source".to_string());
-        let source_file =
-            string_from_map(map, "source_file").unwrap_or_else(|| "unknown-file".to_string());
-        map.insert(
-            "source_row_ref".to_string(),
-            Value::String(format!("{source_id}:{source_file}:{}", index + 1)),
-        );
+    if let Some(source_row_ref) = explicit_source_row_ref(map) {
+        map.insert("source_row_ref".to_string(), Value::String(source_row_ref));
+    } else {
+        map.entry("source_row_ref".to_string())
+            .or_insert(Value::Null);
     }
     normalize_derivation_method(map);
 
     row
+}
+
+fn explicit_source_row_ref(map: &Map<String, Value>) -> Option<String> {
+    [
+        "source_row_ref",
+        "original_row_ref",
+        "source_row",
+        "original_row",
+        "source_row_number",
+        "original_row_number",
+        "source_row_index",
+        "original_row_index",
+    ]
+    .iter()
+    .find_map(|key| string_from_map(map, key))
 }
 
 fn normalize_derivation_method(map: &mut serde_json::Map<String, Value>) {
@@ -1093,7 +1555,7 @@ fn knowledge_table_columns(table_key: &str, rows: &[Value]) -> Vec<Value> {
         "measured_load_points" => vec![
             column_def("row_id", "Row ID", "", "string", "Stable row identifier for audit, export, and report references.", ""),
             column_def("source_id", "Source ID", "", "string", "Source catalog identifier used to trace this measurement back to the evidence source.", ""),
-            column_def("source_row_ref", "Source row reference", "", "string", "Stable reference combining source, source file, and projected row number.", ""),
+            column_def("source_row_ref", "Source row reference", "", "string", "Original source-row reference supplied by the source data; blank when the source provides no row reference.", ""),
             column_def("propeller_size", "Propeller size", "in", "string", "Propeller shorthand such as 9x5 means 9 inch diameter and 5 inch pitch. It is shown and exported as metric diameter x pitch in millimetres.", "propeller_size"),
             column_def("prop_diameter_mm", "Diameter", "mm", "number", "Propeller diameter split from propeller_size or prop_diameter_in and normalized to millimetres.", "numeric"),
             column_def("prop_pitch_mm", "Pitch", "mm", "number", "Propeller pitch split from propeller_size or prop_pitch_in and normalized to millimetres.", "numeric"),
@@ -1194,6 +1656,19 @@ fn normalize_number_field(map: &mut Map<String, Value>, key: &str) {
     }
 }
 
+fn normalize_optional_number_field(map: &mut Map<String, Value>, key: &str) {
+    if !map.contains_key(key) {
+        return;
+    }
+    let value = map.get(key).and_then(json_number);
+    match value {
+        Some(number) => insert_number(map, key, number),
+        None => {
+            map.insert(key.to_string(), Value::Null);
+        }
+    }
+}
+
 fn number_from_map(map: &Map<String, Value>, key: &str) -> Option<f64> {
     map.get(key).and_then(json_number)
 }
@@ -1263,6 +1738,23 @@ fn infer_load_case(map: &Map<String, Value>) -> &'static str {
 
 fn infer_measurement_kind(map: &Map<String, Value>) -> (&'static str, bool) {
     let text = row_text(map);
+    let has_derived_fields = map
+        .get("is_derived")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || [
+            "derivation_formula",
+            "derivation_metadata",
+            "calculation_method",
+            "calculation_formula",
+        ]
+        .iter()
+        .any(|key| map.get(*key).is_some_and(|value| !value.is_null()))
+        || (map.contains_key("tangential_equivalent_force_N")
+            && (text.contains("torque") && text.contains("radius")));
+    if has_derived_fields {
+        return ("measured_with_derived_fields", true);
+    }
     if text.contains("direct experimental") || text.contains("measured") || text.contains(".csv") {
         ("measured", false)
     } else {
@@ -1449,6 +1941,20 @@ mod tests {
             stale_path.display().to_string(),
             "must not echo the stale catalog path"
         );
+        assert!(doc["content_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("sha256:") && hash.len() == 71));
+        assert_eq!(
+            doc["content_hash"], doc["payload"]["content_hash"],
+            "content hash must be present at both projection levels"
+        );
+        assert!(doc["schema_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.len() == 64));
+        assert_eq!(
+            doc["schema_hash"], doc["payload"]["schema_hash"],
+            "schema hash must be present at both projection levels"
+        );
 
         // updated_at_ms is present (required RxDB field) and parsed from the
         // catalog rfc3339 stamp.
@@ -1464,6 +1970,123 @@ mod tests {
     }
 
     #[test]
+    fn knowledge_tables_projection_chunks_wide_tables_without_losing_rows() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let domain = "verified_research";
+        let table_key = "measured_load_points";
+        let table_id = "kdt-verified-measurements";
+        let row_total = KNOWLEDGE_TABLE_RXDB_CHUNK_ROWS * 2 + 1;
+        let now = now_rfc3339();
+        let live_path = compute_parquet_path(root, domain, table_key);
+
+        let conn = open_runtime_db(root)?;
+        conn.execute(
+            "INSERT INTO knowledge_data_tables (
+                 table_id, domain, table_key, source_system, title, description,
+                 parquet_path, schema_hash, row_count, bytes, tags_json, archived_at,
+                 created_at, updated_at
+             ) VALUES (?1, ?2, ?3, 'verified-import', 'Measurements', 'verified rows',
+                       ?4, '', ?5, 0, '{}', NULL, ?6, ?6)",
+            params![
+                table_id,
+                domain,
+                table_key,
+                live_path.to_string_lossy().into_owned(),
+                row_total as i64,
+                now
+            ],
+        )?;
+
+        let rows = (0..row_total)
+            .map(|index| {
+                json!({
+                    "source_id": "source-verified",
+                    "source_row": index as i64,
+                    "rpm": 8_000.0 + index as f64,
+                    "evidence_eligible": true,
+                })
+            })
+            .collect::<Vec<_>>();
+        let df = super::super::parquet_io::rows_to_df(&rows)?;
+        super::super::parquet_io::commit_parquet(&live_path, df)?;
+
+        let docs = knowledge_tables_rxdb_documents(root)?;
+        assert_eq!(docs.len(), 3);
+        assert_eq!(docs[0]["id"], json!("table:kdt-verified-measurements"));
+        assert_eq!(
+            docs[1]["id"],
+            json!("table:kdt-verified-measurements:chunk:0001")
+        );
+        assert_eq!(
+            docs[2]["id"],
+            json!("table:kdt-verified-measurements:chunk:0002")
+        );
+
+        let chunk_lengths = docs
+            .iter()
+            .map(|doc| doc["rows"].as_array().map(Vec::len).unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            chunk_lengths,
+            vec![
+                KNOWLEDGE_TABLE_RXDB_CHUNK_ROWS,
+                KNOWLEDGE_TABLE_RXDB_CHUNK_ROWS,
+                1
+            ]
+        );
+        assert!(docs.iter().all(|doc| {
+            doc["logical_table_id"] == json!("table:kdt-verified-measurements")
+                && doc["row_count"] == json!(row_total)
+                && doc["projected_row_count"] == json!(row_total)
+                && doc["rows_complete"] == json!(true)
+                && doc["chunk_count"] == json!(3)
+                && doc["payload"]["rows"] == doc["rows"]
+        }));
+
+        let projected_source_rows = docs
+            .iter()
+            .flat_map(|doc| {
+                doc["rows"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|row| row["source_row"].as_i64())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(projected_source_rows.len(), row_total);
+        assert_eq!(projected_source_rows[0], 0);
+        assert_eq!(projected_source_rows[row_total - 1], row_total as i64 - 1);
+        Ok(())
+    }
+
+    #[test]
+    fn knowledge_tables_projection_limits_serialized_chunk_size() -> anyhow::Result<()> {
+        let rows = (0..120)
+            .map(|index| {
+                json!({
+                    "source_id": "source-verified",
+                    "source_row": index,
+                    "provenance": "x".repeat(8_192),
+                })
+            })
+            .collect::<Vec<_>>();
+        let ranges = knowledge_table_chunk_ranges(&rows);
+        assert!(ranges.len() > 1);
+        assert_eq!(ranges.first().map(|range| range.0), Some(0));
+        assert_eq!(ranges.last().map(|range| range.1), Some(rows.len()));
+        assert!(ranges.windows(2).all(|pair| pair[0].1 == pair[1].0));
+        assert!(ranges.iter().all(|(start, end)| {
+            rows[*start..*end]
+                .iter()
+                .map(|row| serde_json::to_vec(row).expect("serialize row").len())
+                .sum::<usize>()
+                <= KNOWLEDGE_TABLE_RXDB_CHUNK_ROW_JSON_BYTES
+        }));
+        Ok(())
+    }
+
+    #[test]
     fn measured_load_point_projection_adds_metric_semantics() {
         let rows = vec![json!({
             "source_id": "SRC-1",
@@ -1474,7 +2097,9 @@ mod tests {
             "thrust_N": 12.5,
             "torque_Nm": -0.2,
             "radial_load_N": "-1.75",
+            "tangential_equivalent_force_N": 1.75,
             "vibration_g_rms": "1.500000",
+            "derivation_formula": "abs(torque_Nm) / (prop_diameter_mm / 2000)",
             "derivation_method": "direct experimental CSV row; radial_load_N=TORQUE_Nm/(prop_diameter_m/2) when torque present"
         })];
 
@@ -1487,7 +2112,12 @@ mod tests {
         assert_eq!(row["force_N"].as_f64(), Some(12.5));
         assert_eq!(row["moment_Nm"].as_f64(), Some(-0.2));
         assert_eq!(row["tangential_equivalent_force_N"].as_f64(), Some(1.75));
-        assert_eq!(row["measurement_kind"].as_str(), Some("measured"));
+        assert_eq!(row["source_row_ref"], Value::Null);
+        assert_eq!(
+            row["measurement_kind"].as_str(),
+            Some("measured_with_derived_fields")
+        );
+        assert_eq!(row["is_derived"].as_bool(), Some(true));
         assert_eq!(row["load_case"].as_str(), Some("vibration_test"));
         let method = row["derivation_method"]
             .as_str()
@@ -1503,6 +2133,39 @@ mod tests {
         assert!(labels.contains(&"Pitch".to_string()));
         assert!(labels.contains(&"Torque".to_string()));
         assert!(labels.contains(&"Tangential equivalent force".to_string()));
+    }
+
+    #[test]
+    fn measured_load_projection_keeps_unproven_legacy_radial_values_noncanonical() {
+        let rows = vec![
+            json!({
+                "source_id": "SRC-legacy",
+                "source_file": "legacy.csv",
+                "radial_load_N": "0",
+                "torque_Nm": 0,
+                "prop_diameter_in": 0,
+                "derivation_method": "radial_load_N=torque_Nm/radius",
+            }),
+            json!({
+                "source_id": "SRC-zero",
+                "radial_load_N": -4.5,
+                "tangential_equivalent_force_N": 0,
+                "bearing_radial_load_N": "0",
+                "original_row_number": 0,
+            }),
+        ];
+
+        let (rows, _) = enrich_knowledge_table_rows("measured_load_points", rows);
+        let legacy = rows[0].as_object().expect("legacy projected row");
+        assert_eq!(legacy["radial_load_N"].as_f64(), Some(0.0));
+        assert_eq!(legacy["tangential_equivalent_force_N"], Value::Null);
+        assert_eq!(legacy["bearing_radial_load_N"], Value::Null);
+        assert_eq!(legacy["source_row_ref"], Value::Null);
+
+        let zero = rows[1].as_object().expect("zero projected row");
+        assert_eq!(zero["tangential_equivalent_force_N"].as_f64(), Some(0.0));
+        assert_eq!(zero["bearing_radial_load_N"].as_f64(), Some(0.0));
+        assert_eq!(zero["source_row_ref"].as_str(), Some("0"));
     }
 
     #[test]
@@ -1530,6 +2193,336 @@ mod tests {
                 "source catalog must expose {required}"
             );
         }
+    }
+
+    #[test]
+    fn evidence_normalization_derives_eligibility_and_preserves_candidates() -> anyhow::Result<()> {
+        let valid = json!({
+            "source_id": "src-1",
+            "canonical_url": "https://publisher.example/source",
+            "source_type": "web",
+            "verification_status": "verified",
+            "transport_verified": true,
+            "content_extracted": true,
+            "actual_full_text_or_data": true,
+            "evidence_relevance_score": 32,
+            "metadata_only": false,
+            "http_status": 200,
+            "snapshot_hash": format!("sha256:{}", "a".repeat(64)),
+            "source_tier": "primary",
+            "provenance": "research-run-1",
+            "evidence_eligible": false
+        });
+        let mut forged = valid.clone();
+        forged["canonical_url"] = json!("not a url");
+        forged["snapshot_hash"] = json!("sha256:test");
+        forged["evidence_eligible"] = json!(true);
+
+        let rows = normalize_evidence_rows("source_catalog", vec![valid, forged])?;
+        assert_eq!(rows[0]["evidence_eligible"], json!(true));
+        assert_eq!(rows[1]["evidence_eligible"], json!(false));
+        assert!(rows[1]["evidence_rejection_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("invalid_canonical_url")
+                && reason.contains("invalid_snapshot_hash")));
+
+        for (field, value, reason) in [
+            (
+                "verification_status",
+                json!("unverified"),
+                "verification_not_verified",
+            ),
+            ("transport_verified", json!(false), "transport_not_verified"),
+            ("content_extracted", json!(false), "content_not_extracted"),
+            (
+                "actual_full_text_or_data",
+                json!(false),
+                "full_content_not_verified",
+            ),
+            (
+                "evidence_relevance_score",
+                json!(7),
+                "evidence_relevance_below_threshold",
+            ),
+            ("http_status", json!(500), "http_status_not_2xx"),
+            ("http_status", json!(204), "http_status_no_content"),
+            ("metadata_only", json!(true), "metadata_only"),
+            (
+                "source_type",
+                json!("paper_metadata"),
+                "metadata_or_aggregated_source_type",
+            ),
+            (
+                "canonical_url",
+                json!("https://doi.org/10.1234/metadata"),
+                "metadata_canonical_url",
+            ),
+            (
+                "evidence_rejection_reason",
+                json!("operator said ok"),
+                "evidence_rejection_reason_present",
+            ),
+            (
+                "source_tier",
+                json!("metadata"),
+                "metadata_or_aggregated_source_tier",
+            ),
+            ("provenance", json!(null), "missing_trace_identifier"),
+        ] {
+            let mut candidate = rows[0].clone();
+            candidate[field] = value;
+            let normalized = normalize_evidence_rows("source_catalog", vec![candidate])?;
+            assert_eq!(normalized[0]["evidence_eligible"], json!(false));
+            assert!(
+                normalized[0]["evidence_rejection_reason"]
+                    .as_str()
+                    .is_some_and(|reasons| reasons.contains(reason)),
+                "{field}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn imported_evidence_requires_matching_server_web_receipt() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let digest = "a".repeat(64);
+        let url = "https://publisher.example/source";
+        let row = json!({
+            "source_id": "src-1",
+            "canonical_url": url,
+            "source_type": "web",
+            "verification_status": "verified",
+            "transport_verified": true,
+            "content_extracted": true,
+            "actual_full_text_or_data": true,
+            "evidence_relevance_score": 9,
+            "metadata_only": false,
+            "http_status": 200,
+            "snapshot_hash": format!("sha256:{digest}"),
+            "source_tier": "primary",
+            "research_run_id": "run-1"
+        });
+
+        let missing = normalize_evidence_rows_with_server_receipts(
+            root,
+            "source_catalog",
+            vec![row.clone()],
+        )?;
+        assert_eq!(missing[0]["evidence_eligible"], json!(false));
+        assert_eq!(
+            missing[0]["evidence_rejection_reason"],
+            json!("missing_server_web_receipt")
+        );
+
+        let cache_path = root.join("runtime/web_search_page_cache.json");
+        fs::create_dir_all(cache_path.parent().expect("cache parent"))?;
+        fs::write(
+            &cache_path,
+            serde_json::to_vec(&json!({
+                "entries": {
+                    (url): {
+                        "created_at_epoch": 1,
+                        "checked_at": 1,
+                        "original_url": url,
+                        "final_url": url,
+                        "canonical_url": url,
+                        "evidence_eligible": true,
+                        "http_status": 200,
+                        "snapshot_hash": format!("sha256:{digest}"),
+                        "doc": {
+                            "url": url,
+                            "canonical_url": url,
+                            "evidence_eligible": true,
+                            "response_receipt": {
+                                "requested_url": url,
+                                "final_url": url,
+                                "status": 200,
+                                "sha256": format!("sha256:{digest}")
+                            }
+                        }
+                    }
+                }
+            }))?,
+        )?;
+
+        let admitted = normalize_evidence_rows_with_server_receipts(
+            root,
+            "source_catalog",
+            vec![row.clone()],
+        )?;
+        assert_eq!(admitted[0]["evidence_eligible"], json!(true));
+        assert!(admitted[0].get("evidence_rejection_reason").is_none());
+
+        let mut forged = row;
+        forged["snapshot_hash"] = json!(format!("sha256:{}", "b".repeat(64)));
+        let rejected =
+            normalize_evidence_rows_with_server_receipts(root, "source_catalog", vec![forged])?;
+        assert_eq!(rejected[0]["evidence_eligible"], json!(false));
+        assert_eq!(
+            rejected[0]["evidence_rejection_reason"],
+            json!("missing_server_web_receipt")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn imported_data_evidence_requires_untampered_server_artifact() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let artifact_dir = root.join("runtime/web_search_data_cache");
+        fs::create_dir_all(&artifact_dir)?;
+        let body = b"verified-original-data";
+        let digest = format!("{:x}", Sha256::digest(body));
+        let artifact = artifact_dir.join(format!("{digest}.csv"));
+        fs::write(&artifact, body)?;
+        let url = "https://publisher.example/data.csv";
+        fs::write(
+            root.join("runtime/web_search_page_cache.json"),
+            serde_json::to_vec(&json!({
+                "entries": {
+                    (url): {
+                        "created_at_epoch": 1,
+                        "checked_at": 1,
+                        "original_url": url,
+                        "final_url": url,
+                        "canonical_url": url,
+                        "evidence_eligible": true,
+                        "http_status": 200,
+                        "snapshot_hash": format!("sha256:{digest}"),
+                        "doc": {
+                            "url": url,
+                            "canonical_url": url,
+                            "evidence_eligible": true,
+                            "response_artifact_path": artifact,
+                            "response_receipt": {
+                                "requested_url": url,
+                                "final_url": url,
+                                "status": 200,
+                                "byte_count": body.len(),
+                                "sha256": format!("sha256:{digest}"),
+                                "content_kind": "data_csv"
+                            }
+                        }
+                    }
+                }
+            }))?,
+        )?;
+        let row = json!({
+            "source_id": "data-1",
+            "canonical_url": url,
+            "source_type": "dataset",
+            "verification_status": "verified",
+            "transport_verified": true,
+            "content_extracted": true,
+            "actual_full_text_or_data": true,
+            "evidence_relevance_score": 9,
+            "metadata_only": false,
+            "http_status": 200,
+            "snapshot_hash": format!("sha256:{digest}"),
+            "source_tier": "primary",
+            "research_run_id": "run-1"
+        });
+
+        let admitted = normalize_evidence_rows_with_server_receipts(
+            root,
+            "source_catalog",
+            vec![row.clone()],
+        )?;
+        assert_eq!(admitted[0]["evidence_eligible"], json!(true));
+
+        fs::write(
+            root.join("runtime/web_search_data_cache")
+                .join(format!("{digest}.csv")),
+            b"tampered",
+        )?;
+        let rejected =
+            normalize_evidence_rows_with_server_receipts(root, "source_catalog", vec![row])?;
+        assert_eq!(rejected[0]["evidence_eligible"], json!(false));
+        assert_eq!(
+            rejected[0]["evidence_rejection_reason"],
+            json!("missing_server_web_receipt")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn formatted_flags_and_hashes_do_not_qualify_without_full_gate() -> anyhow::Result<()> {
+        let row = json!({
+            "source_id": "src-1",
+            "canonical_url": "https://publisher.example/source",
+            "source_type": "web",
+            "verification_status": "verified",
+            "transport_verified": true,
+            "content_extracted": true,
+            "http_status": 200,
+            "snapshot_hash": format!("sha256:{}", "d".repeat(64)),
+            "source_tier": "primary",
+            "provenance": "research-run-1",
+            "evidence_eligible": true
+        });
+        let normalized = normalize_evidence_rows("source_catalog", vec![row])?;
+        assert_eq!(normalized[0]["evidence_eligible"], json!(false));
+        let reason = normalized[0]["evidence_rejection_reason"]
+            .as_str()
+            .expect("normalizer records why formatted flags are insufficient");
+        assert!(reason.contains("full_content_not_verified"));
+        assert!(reason.contains("evidence_relevance_below_threshold"));
+        Ok(())
+    }
+
+    #[test]
+    fn claim_normalization_requires_claim_source_and_snapshot_trace_ids() -> anyhow::Result<()> {
+        let mut row = json!({
+            "claim_id": "claim-1",
+            "source_id": "src-1",
+            "trace_id": "trace-1",
+            "canonical_url": "https://publisher.example/source",
+            "source_type": "web",
+            "verification_status": "verified",
+            "transport_verified": true,
+            "content_extracted": true,
+            "actual_full_text_or_data": true,
+            "evidence_relevance_score": 32,
+            "metadata_only": false,
+            "http_status": 200,
+            "snapshot_id": "snapshot:run-1:source-1",
+            "snapshot_hash": format!("sha256:{}", "b".repeat(64)),
+            "source_tier": "authoritative",
+            "evidence_eligible": true
+        });
+        let eligible = normalize_evidence_rows("evidence_points", vec![row.clone()])?;
+        assert_eq!(eligible[0]["evidence_eligible"], json!(true));
+
+        row["claim_id"] = Value::Null;
+        let rejected = normalize_evidence_rows("evidence_points", vec![row])?;
+        assert_eq!(rejected[0]["evidence_eligible"], json!(false));
+        assert!(rejected[0]["evidence_rejection_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("missing_claim_or_evidence_id")));
+
+        let mut missing_source = eligible[0].clone();
+        missing_source["source_id"] = Value::Null;
+        let rejected = normalize_evidence_rows("evidence_points", vec![missing_source])?;
+        assert!(rejected[0]["evidence_rejection_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("missing_source_id")));
+
+        let mut missing_snapshot = eligible[0].clone();
+        missing_snapshot["snapshot_id"] = Value::Null;
+        let rejected = normalize_evidence_rows("evidence_points", vec![missing_snapshot])?;
+        assert!(rejected[0]["evidence_rejection_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("missing_snapshot_id")));
+        Ok(())
+    }
+
+    #[test]
+    fn non_evidence_table_rows_are_unchanged() -> anyhow::Result<()> {
+        let rows = vec![json!({"evidence_eligible": true, "value": 1})];
+        assert_eq!(normalize_evidence_rows("measurements", rows.clone())?, rows);
+        Ok(())
     }
 
     /// An archived catalog row must not be projected.

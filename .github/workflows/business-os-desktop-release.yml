@@ -145,6 +145,7 @@ jobs:
 
       - name: Build packaged app
         working-directory: src/apps/business-os-desktop
+        shell: bash
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
@@ -155,7 +156,20 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.builderPlatform == 'win' && 'false' || 'true' }}
           CTOX_WINDOWS_STORE_RELEASE: ${{ matrix.builderPlatform == 'win' && '1' || '0' }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run dist -- --${{ matrix.builderPlatform }} --${{ matrix.arch }} --publish never
+        run: |
+          max_attempts=1
+          if [ "${{ matrix.builderPlatform }}" = "mac" ]; then
+            max_attempts=2
+          fi
+          attempt=1
+          until npm run dist -- --${{ matrix.builderPlatform }} --${{ matrix.arch }} --publish never; do
+            if [ "$attempt" -ge "$max_attempts" ]; then
+              exit 1
+            fi
+            echo "::warning::macOS package build failed on attempt ${attempt}; retrying once for transient hdiutil detach failures"
+            attempt=$((attempt + 1))
+            sleep 15
+          done
 
       - name: Release artifact smoke
         working-directory: src/apps/business-os-desktop
@@ -182,15 +196,31 @@ jobs:
     name: Publish Business OS Desktop release
 
     steps:
+      - name: Check out release source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/apps/business-os-desktop/package-lock.json
+
+      - name: Install release tooling
+        working-directory: src/apps/business-os-desktop
+        run: npm ci
+
       - name: Download all artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          path: artifacts
-          merge-multiple: true
+          path: artifact-inputs
+
+      - name: Prepare release artifacts
+        run: node src/apps/business-os-desktop/scripts/prepare-release-artifacts.cjs artifact-inputs artifacts
 
       - name: Create release checksums
         working-directory: artifacts
-        run: find . -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+        run: find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
 
       - name: Sign release provenance
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1

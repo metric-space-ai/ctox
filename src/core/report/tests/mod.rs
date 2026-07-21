@@ -144,7 +144,7 @@ pub mod fixtures {
                  verification_status, http_status, snapshot_hash, evidence_eligible
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, NULL, NULL, NULL,
                        NULL, NULL, NULL, ?8, 'manual', NULL, 0,
-                       'verified', 200, 'fixture-snapshot', 1)",
+                       'verified', 200, 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 1)",
             params![
                 evidence_id,
                 run_id,

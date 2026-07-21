@@ -910,7 +910,12 @@ impl TableNotifier {
 
     fn signal(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
-        self.notify.notify_one();
+        // A table can have multiple independent observers: the storage
+        // change-stream drain plus latency-sensitive consumers such as the
+        // Business OS command intake. Waking only one observer made the other
+        // wait for its safety timeout even though the shared generation had
+        // advanced.
+        self.notify.notify_waiters();
     }
 
     fn signal_local_hook(&self) {
@@ -2448,6 +2453,33 @@ mod tests {
             object.insert("result".to_string(), result);
         }
         document
+    }
+
+    #[tokio::test]
+    async fn table_notifier_wakes_all_registered_observers() {
+        struct TestWake;
+        impl std::task::Wake for TestWake {
+            fn wake(self: Arc<Self>) {}
+        }
+
+        let notifier = TableNotifier::new();
+        let first = notifier.notify.notified();
+        let second = notifier.notify.notified();
+        tokio::pin!(first);
+        tokio::pin!(second);
+        let waker = std::task::Waker::from(Arc::new(TestWake));
+        let mut context = std::task::Context::from_waker(&waker);
+        assert!(std::future::Future::poll(first.as_mut(), &mut context).is_pending());
+        assert!(std::future::Future::poll(second.as_mut(), &mut context).is_pending());
+
+        notifier.signal();
+
+        tokio::time::timeout(Duration::from_millis(100), async {
+            first.await;
+            second.await;
+        })
+        .await
+        .expect("one table change must wake every registered observer");
     }
 
     #[tokio::test]
@@ -4604,6 +4636,10 @@ mod tests {
         );
         reset_changed_documents_since_table_call_count(&instance.table_name);
 
+        // Let the database-wide watcher leave its initial active window. This
+        // proves the standby cadence still notices an unrelated SQLite
+        // connection promptly instead of only exercising the startup poll.
+        tokio::time::sleep(Duration::from_secs(4)).await;
         let table_notifications_before =
             runtime_counter_map_value("external_poll_notifications_by_table", &instance.table_name);
 
@@ -4618,7 +4654,7 @@ mod tests {
             .unwrap();
         }
 
-        let bulk = match timeout(Duration::from_secs(4), stream.next()).await {
+        let bulk = match timeout(Duration::from_secs(3), stream.next()).await {
             Ok(Some(bulk)) => bulk,
             Ok(None) => panic!("change stream closed before other-connection write was emitted"),
             Err(_) => panic!(

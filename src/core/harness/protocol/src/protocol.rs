@@ -238,6 +238,9 @@ pub enum Op {
         /// Optional JSON Schema used to constrain the final assistant message for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         final_output_json_schema: Option<Value>,
+        /// Tool that must be the first external action for this turn.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        required_initial_tool: Option<String>,
     },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
@@ -4138,6 +4141,7 @@ mod tests {
         let op = Op::UserInput {
             items: Vec::new(),
             final_output_json_schema: None,
+            required_initial_tool: None,
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -4155,6 +4159,7 @@ mod tests {
             Op::UserInput {
                 items: Vec::new(),
                 final_output_json_schema: None,
+                required_initial_tool: None,
             }
         );
 
@@ -4174,6 +4179,7 @@ mod tests {
         let op = Op::UserInput {
             items: Vec::new(),
             final_output_json_schema: Some(schema.clone()),
+            required_initial_tool: None,
         };
 
         let json_op = serde_json::to_value(op)?;

@@ -58,8 +58,24 @@ impl EvidenceEntry {
             && self
                 .snapshot_hash
                 .as_deref()
-                .is_some_and(|hash| !hash.trim().is_empty())
+                .is_some_and(super::web_research::is_sha256_receipt)
+            && self.has_content_bound_snapshot()
             && self.evidence_eligible
+    }
+
+    fn has_content_bound_snapshot(&self) -> bool {
+        let Some(snapshot_hash) = self.snapshot_hash.as_deref() else {
+            return false;
+        };
+        let mut source = self.raw_payload.clone();
+        let Value::Object(object) = &mut source else {
+            return false;
+        };
+        object.insert(
+            "snapshot_hash".to_string(),
+            Value::String(snapshot_hash.to_string()),
+        );
+        super::web_research::is_content_bound_snapshot(&source)
     }
 }
 
@@ -81,10 +97,13 @@ impl<'a> EvidenceCache<'a> {
     }
 
     /// Cache hit path. Looks up `(run_id, kind, canonical_id)` and returns
-    /// the existing row if present.
+    /// the newest immutable register version if present.
     pub fn lookup(&self, kind: SourceKind, canonical_id: &str) -> Result<Option<EvidenceEntry>> {
         let evidence_id = derive_evidence_id(kind, canonical_id);
-        self.lookup_by_evidence_id(&evidence_id)
+        let Some(latest_id) = self.latest_evidence_id(&evidence_id)? else {
+            return Ok(None);
+        };
+        self.lookup_by_evidence_id(&latest_id)
     }
 
     fn lookup_by_evidence_id(&self, evidence_id: &str) -> Result<Option<EvidenceEntry>> {
@@ -103,32 +122,34 @@ impl<'a> EvidenceCache<'a> {
         Ok(row)
     }
 
-    /// Upsert a [`NormalisedSource`] into the register. Returns the stable
-    /// evidence_id. Existing rows are refreshed in place; `created_at` is
-    /// preserved on update, `updated_at` always advances.
+    /// Append a new [`NormalisedSource`] version to the register. The first
+    /// version keeps the historical base id; later versions use `:vN`.
+    /// Refreshing a source always starts unverified, which invalidates the
+    /// current cache result without mutating its prior audit record.
     pub fn upsert(&self, source: &NormalisedSource) -> Result<String> {
-        let evidence_id = derive_evidence_id(source.kind, &source.canonical_id);
+        let base_id = derive_evidence_id(source.kind, &source.canonical_id);
+        let latest_id = self.latest_evidence_id(&base_id)?;
+        let evidence_id = self.next_version_id(&base_id, latest_id.as_deref())?;
         let now = Utc::now().to_rfc3339();
         let authors_json = serde_json::to_string(&source.authors)
             .context("serialise authors for evidence register")?;
         let raw_payload_json = serde_json::to_string(&source.raw_payload)
             .context("serialise raw_payload for evidence register")?;
 
-        // Preserve created_at if a prior row exists; otherwise use `now`.
-        let existing_created_at: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT created_at FROM report_evidence_register \
-                 WHERE run_id = ?1 AND evidence_id = ?2",
-                params![self.run_id, evidence_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        let created_at = existing_created_at.unwrap_or_else(|| now.clone());
+        let (created_at, citations_count) = if let Some(ref current_id) = latest_id {
+            self.conn.query_row(
+                "SELECT created_at, citations_count FROM report_evidence_register \
+                     WHERE run_id = ?1 AND evidence_id = ?2",
+                params![self.run_id, current_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )?
+        } else {
+            (now.clone(), 0)
+        };
 
         self.conn
             .execute(
-                "INSERT OR REPLACE INTO report_evidence_register \
+                "INSERT INTO report_evidence_register \
                  (evidence_id, run_id, kind, canonical_id, title, authors_json, venue, year, \
                   publisher, url_canonical, url_full_text, license, abstract_md, snippet_md, \
                   full_text_md, full_text_source, full_text_chars, resolver_used, raw_payload_json, \
@@ -136,9 +157,7 @@ impl<'a> EvidenceCache<'a> {
                   citations_count, created_at, updated_at) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, NULL, NULL, NULL, ?15, ?16, \
                          'unverified', NULL, NULL, 0, \
-                         COALESCE((SELECT citations_count FROM report_evidence_register \
-                                   WHERE run_id = ?2 AND evidence_id = ?1), 0), \
-                         ?17, ?18)",
+                         ?17, ?18, ?19)",
                 params![
                     evidence_id,
                     self.run_id,
@@ -156,11 +175,12 @@ impl<'a> EvidenceCache<'a> {
                     source.snippet_md,
                     source.resolver_used.as_str(),
                     raw_payload_json,
+                    citations_count.max(0),
                     created_at,
                     now,
                 ],
             )
-            .context("upsert into report_evidence_register")?;
+            .context("append report_evidence_register version")?;
         Ok(evidence_id)
     }
 
@@ -173,24 +193,40 @@ impl<'a> EvidenceCache<'a> {
         if !(200..=299).contains(&http_status) {
             anyhow::bail!("evidence verification requires a 2xx HTTP status");
         }
-        if snapshot_hash.trim().is_empty() {
-            anyhow::bail!("evidence verification requires a snapshot hash");
+        if !super::web_research::is_sha256_receipt(snapshot_hash) {
+            anyhow::bail!("evidence verification requires a sha256 receipt");
         }
-        self.conn
-            .execute(
-                "UPDATE report_evidence_register
-                 SET verification_status = 'verified', http_status = ?3,
-                     snapshot_hash = ?4, evidence_eligible = 1, updated_at = ?5
-                 WHERE run_id = ?1 AND evidence_id = ?2",
-                params![
-                    self.run_id,
-                    evidence_id,
-                    http_status,
-                    snapshot_hash,
-                    Utc::now().to_rfc3339(),
-                ],
-            )
-            .context("mark evidence register row verified")?;
+        let base_id = base_evidence_id(evidence_id);
+        let current_id = self
+            .latest_evidence_id(&base_id)?
+            .ok_or_else(|| anyhow::anyhow!("evidence row {evidence_id} was not found"))?;
+        let current = self
+            .lookup_by_evidence_id(&current_id)?
+            .ok_or_else(|| anyhow::anyhow!("evidence row {evidence_id} was not found"))?;
+        let mut source = current.raw_payload;
+        if let Value::Object(object) = &mut source {
+            object.insert(
+                "snapshot_hash".to_string(),
+                Value::String(snapshot_hash.to_string()),
+            );
+        } else {
+            anyhow::bail!("evidence verification requires snapshot metadata");
+        }
+        if !super::web_research::is_content_bound_snapshot(&source) {
+            anyhow::bail!(
+                "evidence verification requires a persisted snapshot matching the receipt"
+            );
+        }
+        let next_id = self.next_version_id(&base_id, Some(&current_id))?;
+        self.append_existing_version(
+            &current_id,
+            &next_id,
+            Some("verified"),
+            Some(http_status),
+            Some(snapshot_hash),
+            Some(1),
+            0,
+        )?;
         Ok(())
     }
 
@@ -200,9 +236,16 @@ impl<'a> EvidenceCache<'a> {
                     publisher, url_canonical, url_full_text, license, abstract_md, snippet_md, \
                     resolver_used, raw_payload_json, citations_count, created_at, updated_at, \
                     verification_status, http_status, snapshot_hash, evidence_eligible \
-             FROM report_evidence_register \
-             WHERE run_id = ?1 \
-             ORDER BY created_at ASC",
+             FROM report_evidence_register AS current \
+             WHERE run_id = ?1
+               AND NOT EXISTS (
+                   SELECT 1 FROM report_evidence_register AS newer
+                   WHERE newer.run_id = current.run_id
+                     AND newer.kind = current.kind
+                     AND newer.canonical_id = current.canonical_id
+                     AND newer.rowid > current.rowid
+               )
+             ORDER BY current.rowid ASC",
         )?;
         let rows = stmt
             .query_map(params![self.run_id], row_to_entry)?
@@ -215,7 +258,15 @@ impl<'a> EvidenceCache<'a> {
         let n: i64 = self
             .conn
             .query_row(
-                "SELECT COUNT(*) FROM report_evidence_register WHERE run_id = ?1",
+                "SELECT COUNT(*) FROM report_evidence_register AS current
+                 WHERE run_id = ?1
+                   AND NOT EXISTS (
+                       SELECT 1 FROM report_evidence_register AS newer
+                       WHERE newer.run_id = current.run_id
+                         AND newer.kind = current.kind
+                         AND newer.canonical_id = current.canonical_id
+                         AND newer.rowid > current.rowid
+                   )",
                 params![self.run_id],
                 |row| row.get(0),
             )
@@ -223,21 +274,93 @@ impl<'a> EvidenceCache<'a> {
         Ok(n.max(0) as usize)
     }
 
-    /// Bump the `citations_count` for an evidence row. Used by the claims
-    /// stage when a claim references a row, so LINT-EVIDENCE-CONCENTRATION
-    /// can flag over-cited sources.
+    /// Append a citation-count version instead of mutating the current row.
     pub fn bump_citations(&self, evidence_id: &str) -> Result<()> {
-        self.conn
-            .execute(
-                "UPDATE report_evidence_register \
-                 SET citations_count = citations_count + 1, \
-                     updated_at = ?3 \
-                 WHERE run_id = ?1 AND evidence_id = ?2",
-                params![self.run_id, evidence_id, Utc::now().to_rfc3339()],
-            )
-            .context("bump citations_count in report_evidence_register")?;
+        let base_id = base_evidence_id(evidence_id);
+        let current_id = self
+            .latest_evidence_id(&base_id)?
+            .ok_or_else(|| anyhow::anyhow!("evidence row {evidence_id} was not found"))?;
+        let next_id = self.next_version_id(&base_id, Some(&current_id))?;
+        self.append_existing_version(&current_id, &next_id, None, None, None, None, 1)?;
         Ok(())
     }
+
+    fn latest_evidence_id(&self, base_id: &str) -> Result<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT evidence_id FROM report_evidence_register
+                 WHERE run_id = ?1 AND (evidence_id = ?2 OR evidence_id LIKE ?3)
+                 ORDER BY rowid DESC LIMIT 1",
+                params![self.run_id, base_id, format!("{base_id}:v%")],
+                |row| row.get(0),
+            )
+            .optional()
+            .context("find latest report_evidence_register version")
+    }
+
+    fn next_version_id(&self, base_id: &str, latest_id: Option<&str>) -> Result<String> {
+        let Some(latest_id) = latest_id else {
+            return Ok(base_id.to_string());
+        };
+        let next = latest_id
+            .strip_prefix(&format!("{base_id}:v"))
+            .and_then(|version| version.parse::<u64>().ok())
+            .unwrap_or(1)
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("evidence version overflow for {base_id}"))?;
+        Ok(format!("{base_id}:v{next}"))
+    }
+
+    fn append_existing_version(
+        &self,
+        current_id: &str,
+        next_id: &str,
+        verification_status: Option<&str>,
+        http_status: Option<i64>,
+        snapshot_hash: Option<&str>,
+        evidence_eligible: Option<i64>,
+        citations_delta: i64,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn
+            .execute(
+                "INSERT INTO report_evidence_register (
+                     evidence_id, run_id, kind, canonical_id, title, authors_json,
+                     venue, year, publisher, url_canonical, url_full_text, license,
+                     abstract_md, snippet_md, full_text_md, full_text_source, full_text_chars,
+                     resolver_used, raw_payload_json, citations_count, created_at, updated_at,
+                     verification_status, http_status, snapshot_hash, evidence_eligible
+                 )
+                 SELECT ?1, run_id, kind, canonical_id, title, authors_json,
+                        venue, year, publisher, url_canonical, url_full_text, license,
+                        abstract_md, snippet_md, full_text_md, full_text_source, full_text_chars,
+                        resolver_used, raw_payload_json, citations_count + ?7, created_at, ?2,
+                        COALESCE(?3, verification_status), COALESCE(?4, http_status),
+                        COALESCE(?5, snapshot_hash), COALESCE(?6, evidence_eligible)
+                 FROM report_evidence_register
+                 WHERE run_id = ?8 AND evidence_id = ?9",
+                params![
+                    next_id,
+                    now,
+                    verification_status,
+                    http_status,
+                    snapshot_hash,
+                    evidence_eligible,
+                    citations_delta,
+                    self.run_id,
+                    current_id,
+                ],
+            )
+            .context("append report_evidence_register version")?;
+        Ok(())
+    }
+}
+
+fn base_evidence_id(evidence_id: &str) -> String {
+    evidence_id
+        .split_once(":v")
+        .map(|(base, _)| base.to_string())
+        .unwrap_or_else(|| evidence_id.to_string())
 }
 
 fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<EvidenceEntry> {
@@ -300,6 +423,9 @@ mod tests {
     use super::*;
     use crate::report::sources::open_register_conn;
     use serde_json::json;
+    use sha2::Digest;
+    use sha2::Sha256;
+    use std::fs;
     use tempfile::TempDir;
 
     fn fresh_root() -> TempDir {
@@ -323,6 +449,21 @@ mod tests {
             resolver_used: ResolverName::Crossref,
             raw_payload: json!({"x": 1}),
         }
+    }
+
+    fn source_with_snapshot() -> (TempDir, NormalisedSource, String) {
+        let dir = TempDir::new().unwrap();
+        let bytes = b"cache evidence snapshot";
+        let path = dir.path().join("snapshot.txt");
+        fs::write(&path, bytes).unwrap();
+        let digest = Sha256::digest(bytes);
+        let receipt = format!("sha256:{digest:x}");
+        let mut source = sample_source();
+        source.raw_payload = json!({
+            "snapshot_path": path.to_string_lossy(),
+            "snapshot_id": "snapshot.txt"
+        });
+        (dir, source, receipt)
     }
 
     #[test]
@@ -362,6 +503,36 @@ mod tests {
     }
 
     #[test]
+    fn refresh_appends_a_new_unverified_version() {
+        let tmp = fresh_root();
+        let conn = open_register_conn(tmp.path()).unwrap();
+        let cache = EvidenceCache::new(&conn, "run-append-only");
+        let (_snapshot_dir, source, receipt) = source_with_snapshot();
+        let first_id = cache.upsert(&source).unwrap();
+        cache.mark_verified(&first_id, 200, &receipt).unwrap();
+        let refreshed_id = cache.upsert(&source).unwrap();
+
+        assert_ne!(first_id, refreshed_id);
+        assert!(refreshed_id.ends_with(":v3"));
+        assert!(!cache
+            .lookup(SourceKind::Doi, "10.1234/test")
+            .unwrap()
+            .unwrap()
+            .is_evidence_eligible());
+        let physical_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM report_evidence_register
+                 WHERE run_id = 'run-append-only'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(physical_rows, 3);
+        assert_eq!(cache.count().unwrap(), 1);
+        assert_eq!(cache.list_for_run().unwrap().len(), 1);
+    }
+
+    #[test]
     fn count_and_list_match() {
         let tmp = fresh_root();
         let conn = open_register_conn(tmp.path()).unwrap();
@@ -394,16 +565,15 @@ mod tests {
         let tmp = fresh_root();
         let conn = open_register_conn(tmp.path()).unwrap();
         let cache = EvidenceCache::new(&conn, "run-verification");
-        let evidence_id = cache.upsert(&sample_source()).unwrap();
+        let (_snapshot_dir, source, receipt) = source_with_snapshot();
+        let evidence_id = cache.upsert(&source).unwrap();
         let before = cache
             .lookup(SourceKind::Doi, "10.1234/test")
             .unwrap()
             .unwrap();
         assert!(!before.is_evidence_eligible());
 
-        cache
-            .mark_verified(&evidence_id, 200, "snapshot-hash")
-            .unwrap();
+        cache.mark_verified(&evidence_id, 200, &receipt).unwrap();
         let after = cache
             .lookup(SourceKind::Doi, "10.1234/test")
             .unwrap()

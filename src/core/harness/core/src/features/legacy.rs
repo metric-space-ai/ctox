@@ -38,10 +38,6 @@ const ALIASES: &[Alias] = &[
         feature: Feature::WebSearchRequest,
     },
     Alias {
-        legacy_key: "collab",
-        feature: Feature::Collab,
-    },
-    Alias {
         legacy_key: "memory_tool",
         feature: Feature::MemoryTool,
     },

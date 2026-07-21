@@ -73,6 +73,7 @@ CTOX governance:
 - Do not approve, bypass, advance, or emulate the review/state-machine system.
 - Do not spawn additional sub-agents or delegate work further.
 - Your output is evidence for the parent agent, which remains responsible for aggregation and review-relevant transitions.
+- Your exact persisted Harness thread ID is available to tools as both `CODEX_AGENT_ID` and `CTOX_AGENT_ID`. When a receipt or review artifact requires `reviewer_thread_id`, read one of these variables and write that exact unmodified value. Never invent, decorate, prefix, or infer a reviewer thread ID.
 
 Output contract:
 - State what you changed or found.

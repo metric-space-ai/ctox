@@ -466,11 +466,17 @@ fn run_coding_turn_cli(root: &Path, args: &[String]) -> anyhow::Result<Value> {
     while idx < args.len() {
         match args[idx].as_str() {
             "--module" | "-m" => {
-                module = args.get(idx + 1).context("--module value is required")?.clone();
+                module = args
+                    .get(idx + 1)
+                    .context("--module value is required")?
+                    .clone();
                 idx += 2;
             }
             "--prompt" | "-p" => {
-                prompt = args.get(idx + 1).context("--prompt value is required")?.clone();
+                prompt = args
+                    .get(idx + 1)
+                    .context("--prompt value is required")?
+                    .clone();
                 idx += 2;
             }
             "--faux" => {

@@ -16,8 +16,9 @@
 
 // Phase-3 multiplex: ONE SharedRoomPeer carries EVERY collection of a sync
 // room. Recovery semantics here (push re-run flag, pull/push retry timers,
-// checkpoint retention keyed by storage epoch + native session) are pinned
-// by tests/replication-recovery-smoke.mjs.
+// checkpoint retention keyed by storage generation + collection epoch, with
+// native session fallback for v1 peers) are pinned by
+// tests/replication-recovery-smoke.mjs.
 import { CtoxSubject } from './observable.mjs';
 import { createCtoxWebRtcNativePeer } from './webrtc-native.mjs';
 import {
@@ -274,6 +275,11 @@ class SharedRoomPeer {
       .then(() => this.catchUpRegisteredCollection(collection, registration))
       .catch((error) => registration.state?.emitError?.(error))
       .finally(() => this.collectionCatchUps.delete(collection));
+    // A shared peer reconnect re-drives every registered collection at once.
+    // Keep the complete initial pull/push for each collection on one room-wide
+    // chain; merely pacing collection registration does not protect a peer
+    // that reconnects after all collections are already registered.
+    this.peerOpenQueue = run.catch(() => {});
     this.collectionCatchUps.set(collection, run);
   }
 
@@ -992,9 +998,10 @@ class CtoxWebRtcReplicationState {
     this.activeRemotePeerId = peerId;
     this.demandStatus.peerConnected = true;
     this.demandStatus.peerCapabilityQueryFetchV1 = queryFetchCapable === true;
-    // Seed retained checkpoints when the native storage generation matches —
-    // the catch-up pull/push below then resumes incrementally instead of
-    // re-reading everything from a null checkpoint after each reconnect.
+    // Seed retained checkpoints only when the native storage generation and
+    // collection head still match. The storage generation alone survives
+    // projection rewrites; reusing its old pull checkpoint after the browser
+    // cache lost rows would incorrectly treat a partial collection as synced.
     const validityKey = checkpointValidityKeyFromProtocol(normalizedRemoteProtocol);
     const localCheckpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
     const localValidityKey = localCheckpointValidityKey(localCheckpoint);
@@ -1221,6 +1228,39 @@ class CtoxWebRtcReplicationState {
     return this.pushInProgressPromise;
   }
 
+  async pushDocumentsToRemotePeers(documents = []) {
+    if (!this.push || this.cancelled || !documents.length) return;
+    const peerIds = this.openPeerIds();
+    const results = await Promise.allSettled(
+      peerIds.map((peerId) => this.pushDocumentsToPeer(peerId, documents)),
+    );
+    this.reportPeerResults(results, peerIds);
+    const rejected = results.find((result) => result.status === 'rejected');
+    if (rejected) {
+      this.schedulePushRetry();
+      throw rejected.reason;
+    }
+  }
+
+  async pushDocumentsToPeer(peerId, documents) {
+    const unique = new Map();
+    for (const document of documents) {
+      const id = primaryValue(document, this.collection.schema.primaryPath);
+      if (id) unique.set(id, document);
+    }
+    const pending = [...unique.values()];
+    if (!pending.length) return;
+    for (const document of pending) {
+      const id = primaryValue(document, this.collection.schema.primaryPath);
+      Promise.resolve(this.demandSidecar?.markDirty?.(this.collection.name, id, true)).catch(() => {});
+    }
+    await this.writeDocumentsToPeer(peerId, pending);
+    for (const document of pending) {
+      const id = primaryValue(document, this.collection.schema.primaryPath);
+      Promise.resolve(this.demandSidecar?.markDirty?.(this.collection.name, id, false)).catch(() => {});
+    }
+  }
+
   async pushToPeer(peerId) {
     if (!this.push || this.cancelled) return;
     const batchSize = Number(this.push?.batchSize || 10);
@@ -1327,6 +1367,48 @@ class CtoxWebRtcReplicationState {
       this.pushCheckpointsByPeer.set(peerId, checkpoint);
       await this.persistCheckpointsForPeer(peerId);
       if (documents.length < batchSize) break;
+    }
+  }
+
+  async writeDocumentsToPeer(peerId, documents) {
+    let rows = documents.map((doc) => ({
+      newDocumentState: doc,
+      assumedMasterState: null,
+    }));
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const conflicts = await this.peer.request(
+        peerId,
+        'masterWrite',
+        [rows],
+        this.requestTimeoutMsFor('masterWrite'),
+        this.collection.name,
+      );
+      const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath);
+      if (!conflictMap.size) {
+        rows = [];
+        break;
+      }
+      rows = rows
+        .map((row) => {
+          const id = primaryValue(row.newDocumentState, this.collection.schema.primaryPath);
+          const assumedMasterState = conflictMap.get(id);
+          return assumedMasterState ? { ...row, assumedMasterState } : null;
+        })
+        .filter(Boolean);
+      if (!rows.length) break;
+      if (this.collection.storageCollection?.conflictStrategy !== 'field-merge') {
+        rows = await this.resolveWholeDocumentLwwConflicts(rows, peerId);
+        if (!rows.length) break;
+      }
+      // Field-merge collections absorb the master's concurrent state into
+      // retry rows instead of force-overwriting the whole document.
+      rows = await this.absorbMasterStateIntoConflictRows(rows);
+    }
+    if (rows.length) {
+      rows = await this.absorbAuthoritativeCommandConflicts(rows, peerId);
+    }
+    if (rows.length) {
+      throw new Error(`masterWrite conflicts remained for ${this.collection.name}`);
     }
   }
 
@@ -1761,13 +1843,9 @@ class CtoxWebRtcReplicationState {
     this.ctox?.onPeerClose?.({ peerId, reason });
   }
 
-  // Checkpoints are only reusable against the SAME native storage generation.
-  // Against `ctox-checkpoint-generation-v2` peers the validity key is the
-  // PERSISTENT native storage generation + collection + schema hash, so
-  // retained checkpoints survive daemon restarts and resume incrementally;
-  // only a storage reset or schema change forces a full re-pull. Mixed-version
-  // (v1) peers keep the conservative epoch + peer-session key, where a daemon
-  // restart mints a new sessionId and the full resync is intentional (docs §8).
+  // Checkpoints are only reusable against the same native storage generation
+  // and collection head. A changed native projection forces a conservative
+  // full pull; a transport reconnect with an unchanged collection resumes.
   checkpointValidityKeyForPeer(peerId) {
     const remoteProtocol = this.remoteProtocolForPeer(peerId);
     return checkpointValidityKeyFromProtocol(remoteProtocol);
@@ -2008,10 +2086,11 @@ class CtoxWebRtcReplicationState {
 
 const BROWSER_PEER_SESSION_ID = createBrowserPeerSessionId();
 
-// Native storage generation a checkpoint is valid against: storage epoch +
-// the native peer's per-run session id. Both must match for retained
-// checkpoints to be reused after a reconnect; empty when either is missing
-// (then no reuse happens and the conservative full resync runs).
+// Native storage generation and collection head a checkpoint is valid against.
+// `storageGeneration` alone is insufficient because it intentionally survives
+// normal projection updates. Binding retained checkpoints to the advertised
+// collection epoch prevents a locally incomplete collection from skipping
+// native rows after an upgrade or projection rewrite.
 function checkpointValidityKeyFromProtocol(remoteProtocol) {
   if (!remoteProtocol || typeof remoteProtocol !== 'object') return '';
   const capabilities = Array.isArray(remoteProtocol.capabilities) ? remoteProtocol.capabilities : [];
@@ -2032,9 +2111,10 @@ function checkpointValidityKeyFromProtocol(remoteProtocol) {
   ).trim();
   if (capabilities.includes(CTOX_CHECKPOINT_GENERATION_CAPABILITY)
       && storageGeneration
+      && epoch
       && schemaHashValue) {
     const collectionName = String(remoteProtocol.collection?.name || '').trim();
-    return `${storageGeneration}|${collectionName}|${schemaHashValue}`;
+    return `${storageGeneration}|${collectionName}|${schemaHashValue}|${epoch}`;
   }
   if (!epoch || !sessionId || !schemaHashValue) return '';
   return `${epoch}|${sessionId}|${schemaHashValue}`;

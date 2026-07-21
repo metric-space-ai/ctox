@@ -36,9 +36,11 @@ fn turn_counters() -> &'static Mutex<HashMap<i64, RefreshTelemetry>> {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ChatTurnSessionOptions {
     pub(crate) disable_mcp_servers: bool,
+    pub(crate) force_isolated_session: bool,
     pub(crate) base_instructions: Option<String>,
     pub(crate) plain_prompt: bool,
     pub(crate) turn_timeout_secs_override: Option<u64>,
+    pub(crate) required_initial_tool: Option<String>,
 }
 
 struct ToolFreeSemanticSummarizer {
@@ -835,6 +837,7 @@ where
                 Some(Duration::from_secs(config.turn_timeout_secs)),
                 None,
                 &mut emit_progress,
+                options.required_initial_tool.as_deref(),
             )?,
             None => owned_session
                 .as_mut()
@@ -845,6 +848,7 @@ where
                     Some(Duration::from_secs(config.turn_timeout_secs)),
                     None,
                     &mut emit_progress,
+                    options.required_initial_tool.as_deref(),
                 )?,
         };
         emit("persist-assistant-turn");
@@ -1111,6 +1115,7 @@ where
             Some(Duration::from_secs(config.turn_timeout_secs)),
             exact_prompt_preflight.clone(),
             &mut emit_progress,
+            options.required_initial_tool.as_deref(),
         )?,
         None => owned_session
             .as_mut()
@@ -1121,6 +1126,7 @@ where
                 Some(Duration::from_secs(config.turn_timeout_secs)),
                 exact_prompt_preflight.clone(),
                 &mut emit_progress,
+                options.required_initial_tool.as_deref(),
             )?,
     };
     emit("persist-assistant-turn");

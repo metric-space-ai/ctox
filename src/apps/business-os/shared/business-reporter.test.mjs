@@ -3,36 +3,21 @@ import test from 'node:test';
 
 function makeElement(tagName) {
   const children = [];
-  const element = {
+  return {
     tagName,
     children,
     className: '',
     dataset: {},
     style: {},
     attributes: new Map(),
-    append(...nodes) {
-      children.push(...nodes);
-    },
-    appendChild(node) {
-      children.push(node);
-      return node;
-    },
+    append(...nodes) { children.push(...nodes); },
+    appendChild(node) { children.push(node); return node; },
     addEventListener() {},
-    classList: {
-      add() {},
-      remove() {},
-    },
-    querySelector() {
-      return null;
-    },
-    setAttribute(name, value) {
-      this.attributes.set(name, value);
-    },
-    getBoundingClientRect() {
-      return { left: 0, top: 0, width: 44, height: 44 };
-    },
+    classList: { add() {}, remove() {} },
+    querySelector() { return null; },
+    setAttribute(name, value) { this.attributes.set(name, value); },
+    getBoundingClientRect() { return { left: 0, top: 0, width: 44, height: 44 }; },
   };
-  return element;
 }
 
 test('Business reporter keeps desktop idle free of RAF animation timers', async () => {
@@ -49,12 +34,8 @@ test('Business reporter keeps desktop idle free of RAF animation timers', async 
       body: makeElement('body'),
       head: makeElement('head'),
       documentElement: { lang: 'de' },
-      getElementById() {
-        return null;
-      },
-      querySelector() {
-        return null;
-      },
+      getElementById() { return null; },
+      querySelector() { return null; },
       createElement: makeElement,
     };
     globalThis.document = documentStub;
@@ -66,21 +47,17 @@ test('Business reporter keeps desktop idle free of RAF animation timers', async 
       },
     };
     globalThis.ctoxBusinessOsDesktop = { openSwitcher() {} };
-    globalThis.setTimeout = () => {
-      timeoutCount += 1;
-      return 1;
-    };
+    globalThis.setTimeout = () => { timeoutCount += 1; return 1; };
     globalThis.clearTimeout = () => {};
-    globalThis.requestAnimationFrame = () => {
-      rafCount += 1;
-      return 1;
-    };
+    globalThis.requestAnimationFrame = () => { rafCount += 1; return 1; };
+
     const { initBusinessReporter } = await import(`./business-reporter.js?test=${Date.now()}`);
     initBusinessReporter({
       session: { authenticated: true },
       getActiveModule: () => ({ id: 'ctox', title: 'CTOX' }),
       commandBus: {},
     });
+
     assert.equal(documentStub.body.children.length, 1);
     assert.equal(timeoutCount, 0);
     assert.equal(rafCount, 0);

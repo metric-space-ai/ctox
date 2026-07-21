@@ -81,7 +81,7 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   appsec_artifacts: "96e48a95be0e013773561dd52b5be8170d13aa0409488d5569e7060654eb22e1",
   appsec_assessments: "d3de37068175a449d2a17e5f63aa296265faf050e03900781c8cfaf8e4bf3e3f",
   appsec_coverage: "6fb9caf08dcf52ab1e7a669950bdb62159aec0b37112fb89aed0f93de475dde1",
-  appsec_findings: "1c16a6500dc1dfbb3401ca83208338f2d8371c5abe88e8f5dfd21d4b3a73fbec",
+  appsec_findings: "96a6e32a3838227464ce88f2b5674c6fed0ba1fb2b136880e27ce6cd421cc83c",
   appsec_investigations: "fd4aea13736e18cc279d7829417cffe44b5068dbc99aaca8743a64d9598ec12e",
   appsec_pipeline_stages: "fd99085c9659da98841542afe627873bbfe19a892d0af52092686d5fd81c5d87",
   appsec_runs: "815d0931042bedab1356e27a22b3172b8e62e6c3eff983e7e2f74be89f30b326",
@@ -8723,6 +8723,8 @@ var SharedRoomPeer = class {
   scheduleCollectionCatchUp(collection, registration) {
     if (!collection || this.collectionCatchUps.has(collection)) return;
     const run = this.peerOpenQueue.then(() => this.catchUpRegisteredCollection(collection, registration)).catch((error) => registration.state?.emitError?.(error)).finally(() => this.collectionCatchUps.delete(collection));
+    this.peerOpenQueue = run.catch(() => {
+    });
     this.collectionCatchUps.set(collection, run);
   }
   async catchUpRegisteredCollection(collection, registration) {
@@ -9541,6 +9543,39 @@ var CtoxWebRtcReplicationState = class {
     })();
     return this.pushInProgressPromise;
   }
+  async pushDocumentsToRemotePeers(documents = []) {
+    if (!this.push || this.cancelled || !documents.length) return;
+    const peerIds = this.openPeerIds();
+    const results = await Promise.allSettled(
+      peerIds.map((peerId) => this.pushDocumentsToPeer(peerId, documents))
+    );
+    this.reportPeerResults(results, peerIds);
+    const rejected = results.find((result) => result.status === "rejected");
+    if (rejected) {
+      this.schedulePushRetry();
+      throw rejected.reason;
+    }
+  }
+  async pushDocumentsToPeer(peerId, documents) {
+    const unique = /* @__PURE__ */ new Map();
+    for (const document2 of documents) {
+      const id = primaryValue(document2, this.collection.schema.primaryPath);
+      if (id) unique.set(id, document2);
+    }
+    const pending = [...unique.values()];
+    if (!pending.length) return;
+    for (const document2 of pending) {
+      const id = primaryValue(document2, this.collection.schema.primaryPath);
+      Promise.resolve(this.demandSidecar?.markDirty?.(this.collection.name, id, true)).catch(() => {
+      });
+    }
+    await this.writeDocumentsToPeer(peerId, pending);
+    for (const document2 of pending) {
+      const id = primaryValue(document2, this.collection.schema.primaryPath);
+      Promise.resolve(this.demandSidecar?.markDirty?.(this.collection.name, id, false)).catch(() => {
+      });
+    }
+  }
   async pushToPeer(peerId) {
     if (!this.push || this.cancelled) return;
     const batchSize = Number(this.push?.batchSize || 10);
@@ -9628,6 +9663,43 @@ var CtoxWebRtcReplicationState = class {
       this.pushCheckpointsByPeer.set(peerId, checkpoint);
       await this.persistCheckpointsForPeer(peerId);
       if (documents.length < batchSize) break;
+    }
+  }
+  async writeDocumentsToPeer(peerId, documents) {
+    let rows = documents.map((doc) => ({
+      newDocumentState: doc,
+      assumedMasterState: null
+    }));
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const conflicts = await this.peer.request(
+        peerId,
+        "masterWrite",
+        [rows],
+        this.requestTimeoutMsFor("masterWrite"),
+        this.collection.name
+      );
+      const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath);
+      if (!conflictMap.size) {
+        rows = [];
+        break;
+      }
+      rows = rows.map((row) => {
+        const id = primaryValue(row.newDocumentState, this.collection.schema.primaryPath);
+        const assumedMasterState = conflictMap.get(id);
+        return assumedMasterState ? { ...row, assumedMasterState } : null;
+      }).filter(Boolean);
+      if (!rows.length) break;
+      if (this.collection.storageCollection?.conflictStrategy !== "field-merge") {
+        rows = await this.resolveWholeDocumentLwwConflicts(rows, peerId);
+        if (!rows.length) break;
+      }
+      rows = await this.absorbMasterStateIntoConflictRows(rows);
+    }
+    if (rows.length) {
+      rows = await this.absorbAuthoritativeCommandConflicts(rows, peerId);
+    }
+    if (rows.length) {
+      throw new Error(`masterWrite conflicts remained for ${this.collection.name}`);
     }
   }
   async resolveWholeDocumentLwwConflicts(rows, peerId) {
@@ -10016,13 +10088,9 @@ var CtoxWebRtcReplicationState = class {
     }
     this.ctox?.onPeerClose?.({ peerId, reason });
   }
-  // Checkpoints are only reusable against the SAME native storage generation.
-  // Against `ctox-checkpoint-generation-v2` peers the validity key is the
-  // PERSISTENT native storage generation + collection + schema hash, so
-  // retained checkpoints survive daemon restarts and resume incrementally;
-  // only a storage reset or schema change forces a full re-pull. Mixed-version
-  // (v1) peers keep the conservative epoch + peer-session key, where a daemon
-  // restart mints a new sessionId and the full resync is intentional (docs §8).
+  // Checkpoints are only reusable against the same native storage generation
+  // and collection head. A changed native projection forces a conservative
+  // full pull; a transport reconnect with an unchanged collection resumes.
   checkpointValidityKeyForPeer(peerId) {
     const remoteProtocol = this.remoteProtocolForPeer(peerId);
     return checkpointValidityKeyFromProtocol(remoteProtocol);
@@ -10245,9 +10313,9 @@ function checkpointValidityKeyFromProtocol(remoteProtocol) {
   const schemaHashValue = String(
     remoteProtocol.collection?.schemaHash || remoteProtocol.schemaHash || remoteProtocol.schema?.hash || ""
   ).trim();
-  if (capabilities.includes(CTOX_CHECKPOINT_GENERATION_CAPABILITY) && storageGeneration && schemaHashValue) {
+  if (capabilities.includes(CTOX_CHECKPOINT_GENERATION_CAPABILITY) && storageGeneration && epoch && schemaHashValue) {
     const collectionName = String(remoteProtocol.collection?.name || "").trim();
-    return `${storageGeneration}|${collectionName}|${schemaHashValue}`;
+    return `${storageGeneration}|${collectionName}|${schemaHashValue}|${epoch}`;
   }
   if (!epoch || !sessionId || !schemaHashValue) return "";
   return `${epoch}|${sessionId}|${schemaHashValue}`;

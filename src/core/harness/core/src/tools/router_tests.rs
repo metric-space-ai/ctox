@@ -10,6 +10,24 @@ use super::ToolCall;
 use super::ToolCallSource;
 use super::ToolRouter;
 use super::ToolRouterParams;
+use super::is_removed_free_subagent_tool;
+
+#[test]
+fn all_free_subagent_tool_names_are_reserved_and_removed() {
+    for name in [
+        "spawn_agent",
+        "spawn_agents_on_csv",
+        "send_input",
+        "list_agents",
+        "resume_agent",
+        "wait_agent",
+        "close_agent",
+        "report_agent_job_result",
+    ] {
+        assert!(is_removed_free_subagent_tool(name), "{name}");
+    }
+    assert!(!is_removed_free_subagent_tool("ctox_deep_research"));
+}
 
 #[tokio::test]
 async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {

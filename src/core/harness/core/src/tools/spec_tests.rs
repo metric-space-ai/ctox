@@ -12,6 +12,7 @@ use ctox_protocol::openai_models::InputModality;
 use ctox_protocol::openai_models::ModelInfo;
 use ctox_protocol::openai_models::ModelsResponse;
 use ctox_protocol::protocol::ReadOnlyAccess;
+use ctox_protocol::protocol::SubAgentSource;
 use ctox_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
@@ -615,11 +616,6 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
             search_content_types: None,
         },
         create_view_image_tool(config.can_request_original_image_detail),
-        create_spawn_agent_tool(&config),
-        create_send_input_tool(),
-        create_resume_agent_tool(),
-        create_wait_agent_tool(),
-        create_close_agent_tool(),
     ] {
         expected.insert(tool_name(&spec).to_string(), spec);
     }
@@ -645,7 +641,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
 }
 
 #[test]
-fn test_build_specs_collab_tools_enabled() {
+fn removed_collab_flag_cannot_expose_free_subagent_tools() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
     let mut features = Features::with_defaults();
@@ -661,46 +657,21 @@ fn test_build_specs_collab_tools_enabled() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-    assert_contains_tool_names(
-        &tools,
-        &[
-            "spawn_agent",
-            "send_input",
-            "list_agents",
-            "wait_agent",
-            "close_agent",
-        ],
-    );
-    assert_lacks_tool_name(&tools, "spawn_agents_on_csv");
+    for tool_name in [
+        "spawn_agent",
+        "send_input",
+        "list_agents",
+        "resume_agent",
+        "wait_agent",
+        "close_agent",
+        "spawn_agents_on_csv",
+    ] {
+        assert_lacks_tool_name(&tools, tool_name);
+    }
 }
 
 #[test]
-fn spawn_agent_schema_does_not_expose_context_forking() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    let features = Features::with_defaults();
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let tool = create_spawn_agent_tool(&tools_config);
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
-        panic!("expected function tool");
-    };
-    let JsonSchema::Object { properties, .. } = parameters else {
-        panic!("expected object parameters");
-    };
-    assert!(!properties.contains_key("fork_context"));
-}
-
-#[test]
-fn test_build_specs_enable_fanout_enables_agent_jobs_and_collab_tools() {
+fn removed_fanout_flag_cannot_expose_free_subagent_tools() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
     let mut features = Features::with_defaults();
@@ -717,21 +688,21 @@ fn test_build_specs_enable_fanout_enables_agent_jobs_and_collab_tools() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-    assert_contains_tool_names(
-        &tools,
-        &[
-            "spawn_agent",
-            "send_input",
-            "list_agents",
-            "wait_agent",
-            "close_agent",
-            "spawn_agents_on_csv",
-        ],
-    );
+    for tool_name in [
+        "spawn_agent",
+        "send_input",
+        "list_agents",
+        "resume_agent",
+        "wait_agent",
+        "close_agent",
+        "spawn_agents_on_csv",
+    ] {
+        assert_lacks_tool_name(&tools, tool_name);
+    }
 }
 
 #[test]
-fn test_build_specs_thread_spawn_subagents_are_leaf_workers() {
+fn legacy_thread_spawn_source_cannot_expose_free_subagent_tools() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
     let mut features = Features::with_defaults();
@@ -857,7 +828,7 @@ fn test_build_specs_artifact_tool_enabled() {
 }
 
 #[test]
-fn test_build_specs_agent_job_worker_tools_enabled() {
+fn removed_agent_job_worker_source_cannot_expose_result_tool() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
     let mut features = Features::with_defaults();
@@ -877,7 +848,7 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-    assert_contains_tool_names(&tools, &["report_agent_job_result"]);
+    assert_lacks_tool_name(&tools, "report_agent_job_result");
     for tool_name in [
         "spawn_agent",
         "send_input",
@@ -890,19 +861,6 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
         assert_lacks_tool_name(&tools, tool_name);
     }
     assert_lacks_tool_name(&tools, "request_user_input");
-    for tool_name in [
-        "channel_sync",
-        "channel_take",
-        "channel_ack",
-        "channel_send",
-        "meeting_status",
-        "meeting_get_transcript",
-        "meeting_send_chat",
-        "meeting_join",
-        "meeting_schedule",
-    ] {
-        assert_lacks_tool_name(&tools, tool_name);
-    }
 }
 
 #[test]
@@ -934,50 +892,6 @@ fn read_only_sessions_omit_mutating_builtin_tools() {
         "spawn_agent",
         "spawn_agents_on_csv",
         "channel_sync",
-        "channel_take",
-        "channel_ack",
-        "channel_send",
-        "meeting_send_chat",
-        "meeting_join",
-        "meeting_schedule",
-    ] {
-        assert_lacks_tool_name(&tools, tool_name);
-    }
-}
-
-#[test]
-fn reviewer_scratch_session_keeps_read_only_tool_surface() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    let mut features = Features::with_defaults();
-    features.enable(Feature::ApplyPatchFreeform);
-    features.enable(Feature::Collab);
-    features.enable(Feature::SpawnCsv);
-    features.normalize_dependencies();
-    let available_models = Vec::new();
-    let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: Vec::new(),
-        read_only_access: ReadOnlyAccess::FullAccess,
-        network_access: true,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    };
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::SubAgent(SubAgentSource::Review),
-        sandbox_policy: &policy,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-    assert_contains_tool_names(&tools, &["context_retrieve"]);
-    for tool_name in [
-        "apply_patch",
-        "update_plan",
-        "spawn_agent",
-        "spawn_agents_on_csv",
         "channel_take",
         "channel_ack",
         "channel_send",
@@ -1675,12 +1589,6 @@ fn test_build_specs_gpt5_codex_default() {
             "apply_patch",
             "web_search",
             "view_image",
-            "spawn_agent",
-            "send_input",
-            "list_agents",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
         ],
     );
 }
@@ -1699,12 +1607,6 @@ fn test_build_specs_gpt51_codex_default() {
             "apply_patch",
             "web_search",
             "view_image",
-            "spawn_agent",
-            "send_input",
-            "list_agents",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
         ],
     );
 }
@@ -1725,12 +1627,6 @@ fn test_build_specs_gpt5_codex_unified_exec_web_search() {
             "apply_patch",
             "web_search",
             "view_image",
-            "spawn_agent",
-            "send_input",
-            "list_agents",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
         ],
     );
 }
@@ -1751,12 +1647,6 @@ fn test_build_specs_gpt51_codex_unified_exec_web_search() {
             "apply_patch",
             "web_search",
             "view_image",
-            "spawn_agent",
-            "send_input",
-            "list_agents",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
         ],
     );
 }
@@ -1775,12 +1665,6 @@ fn test_gpt_5_1_codex_max_defaults() {
             "apply_patch",
             "web_search",
             "view_image",
-            "spawn_agent",
-            "send_input",
-            "list_agents",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
         ],
     );
 }
@@ -1799,12 +1683,6 @@ fn test_codex_5_1_mini_defaults() {
             "apply_patch",
             "web_search",
             "view_image",
-            "spawn_agent",
-            "send_input",
-            "list_agents",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
         ],
     );
 }
@@ -1822,12 +1700,6 @@ fn test_gpt_5_defaults() {
             "request_user_input",
             "web_search",
             "view_image",
-            "spawn_agent",
-            "send_input",
-            "list_agents",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
         ],
     );
 }
@@ -1846,12 +1718,6 @@ fn test_gpt_5_1_defaults() {
             "apply_patch",
             "web_search",
             "view_image",
-            "spawn_agent",
-            "send_input",
-            "list_agents",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
         ],
     );
 }
@@ -1872,12 +1738,6 @@ fn test_gpt_5_1_codex_max_unified_exec_web_search() {
             "apply_patch",
             "web_search",
             "view_image",
-            "spawn_agent",
-            "send_input",
-            "list_agents",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
         ],
     );
 }
@@ -3199,12 +3059,75 @@ fn code_mode_only_restricts_model_tools_to_exec_tools() {
     let mut features = Features::with_defaults();
     features.enable(Feature::CodeMode);
     features.enable(Feature::CodeModeOnly);
+    features.disable(Feature::Collab);
 
     assert_model_tools(
         "gpt-5.1-codex",
         &features,
         Some(WebSearchMode::Live),
         &["exec", "wait"],
+    );
+}
+
+#[test]
+fn code_mode_only_never_exposes_removed_collaboration_controls() {
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    features.enable(Feature::CodeModeOnly);
+    features.enable(Feature::Collab);
+
+    assert_model_tools(
+        "gpt-5.1-codex",
+        &features,
+        Some(WebSearchMode::Live),
+        &["exec", "wait"],
+    );
+}
+
+#[test]
+fn code_mode_only_keeps_server_authoritative_ctox_web_tools_directly_visible() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    features.enable(Feature::CodeModeOnly);
+    features.disable(Feature::Collab);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Live),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_ctox_web_stack_enabled(true);
+    let router = ToolRouter::from_config(
+        &tools_config,
+        ToolRouterParams {
+            mcp_tools: None,
+            app_tools: None,
+            discoverable_tools: None,
+            dynamic_tools: &[],
+        },
+    );
+    let tool_names = router
+        .model_visible_specs()
+        .into_iter()
+        .map(|spec| spec.name().to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        tool_names,
+        [
+            "exec",
+            "wait",
+            "ctox_web_search",
+            "ctox_web_read",
+            "ctox_scholarly_search",
+            "ctox_deep_research",
+        ]
     );
 }
 
@@ -3235,7 +3158,7 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
     assert!(!description.contains("Enabled nested tools:"));
     assert!(!description.contains("Nested tool reference:"));
     assert!(description.starts_with(
-        "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly"
+        "Use `exec/wait` to run nested tools. Collaboration controls may also be exposed directly."
     ));
     assert!(description.contains("### `update_plan` (`update_plan`)"));
     assert!(description.contains("### `view_image` (`view_image`)"));

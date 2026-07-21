@@ -1,12 +1,18 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
-import { buildResearchGraphProjection } from './research-graph-data.mjs';
+import {
+  buildResearchGraphProjection,
+  GRAPH_DETAIL_LEVELS,
+  GRAPH_NODE_KINDS,
+  GRAPH_RELATION_TYPES,
+  sliceResearchGraphProjection,
+} from './research-graph-data.mjs';
 
-const BUILD = '20260713-semantic-graph-v1';
+const BUILD = '20260721-command-reference-context-v2';
 const DEFAULT_AXIS_X = 'evidence_strength';
 const DEFAULT_AXIS_Y = 'topic_fit';
 const ROW_LIMIT = 5000;
 const COLLECTION_READ_TIMEOUT_MS = 10000;
-const POST_SYNC_REFRESH_LIMIT = 3;
+const POST_SYNC_REFRESH_LIMIT = 1;
 const KNOWLEDGE_TABLE_EMPTY_RETRY_DELAYS_MS = Object.freeze([250, 750, 1500]);
 const RESEARCH_COLLECTIONS = Object.freeze([
   'business_commands',
@@ -34,6 +40,8 @@ const RESEARCH_OPTIONAL_COLLECTIONS = Object.freeze([
 ]);
 const RESEARCH_DEMAND_ONLY_COLLECTIONS = new Set(['document_blob_chunks']);
 const STOP_TERMS = new Set(['eine', 'einen', 'einer', 'eines', 'und', 'oder', 'auf', 'basis', 'nutze', 'score', 'quellen', 'source', 'sources', 'dashboard', 'research', 'knowledge', 'base', 'table', 'data', 'fuer', 'from', 'with', 'that', 'this', 'the']);
+const RECEIPT_URL_ROLES = new Set(['original_content', 'original_data', 'publisher_full_text', 'dataset_archive']);
+const RECEIPT_CONTENT_SCOPES = new Set(['full_text', 'original_data', 'full_dataset', 'dataset_archive']);
 
 const BASE_AXES = Object.freeze([
   { id: 'evidence_strength', label: 'Evidence strength' },
@@ -66,8 +74,28 @@ const COMPETITIVE_AI_AXES = Object.freeze([
 ]);
 
 const RESEARCH_TABLE_CONTRACT = Object.freeze({
+  source_candidates: {
+    title: 'Discovery Candidates',
+    columns: [
+      'source_id',
+      'title',
+      'source_url',
+      'source_type',
+      'publisher',
+      'discovery_query',
+      'discovered_at',
+      'canonical_url',
+      'source_tier',
+      'verification_status',
+      'http_status',
+      'snapshot_hash',
+      'evidence_eligible',
+      'evidence_rejection_reason',
+      'review_status',
+    ],
+  },
   source_catalog: {
-    title: 'Source Catalog',
+    title: 'Verified Source Registry',
     columns: [
       'source_id',
       'title',
@@ -80,6 +108,23 @@ const RESEARCH_TABLE_CONTRACT = Object.freeze({
       'contribution_note',
       'evidence_relevance',
       'review_status',
+      'canonical_url',
+      'snapshot_id',
+      'snapshot_path',
+      'snapshot_hash',
+      'evidence_id',
+      'claim_id',
+      'retrieved_at',
+      'url_role',
+      'content_scope',
+      'verification_status',
+      'transport_verified',
+      'content_extracted',
+      'actual_full_text_or_data',
+      'evidence_relevance_score',
+      'http_status',
+      'evidence_eligible',
+      'source_tier',
     ],
   },
   evidence_points: {
@@ -95,6 +140,22 @@ const RESEARCH_TABLE_CONTRACT = Object.freeze({
       'source_url',
       'extracted_at',
       'confidence',
+      'canonical_url',
+      'snapshot_id',
+      'snapshot_path',
+      'snapshot_hash',
+      'claim_id',
+      'retrieved_at',
+      'url_role',
+      'content_scope',
+      'verification_status',
+      'transport_verified',
+      'content_extracted',
+      'actual_full_text_or_data',
+      'evidence_relevance_score',
+      'http_status',
+      'evidence_eligible',
+      'source_tier',
     ],
   },
   evaluation_matrix: {
@@ -116,9 +177,14 @@ const RESEARCH_TABLE_CONTRACT = Object.freeze({
       'node_id',
       'label',
       'kind',
+      'description',
+      'aliases_json',
       'cluster_id',
+      'cluster_label',
       'occurrences',
+      'evidence_count',
       'betweenness_centrality',
+      'confidence',
       'source_ids_json',
       'provenance_json',
       'updated_at',
@@ -130,7 +196,10 @@ const RESEARCH_TABLE_CONTRACT = Object.freeze({
       'edge_id',
       'source_id',
       'target_id',
+      'relation_type',
+      'label',
       'weight',
+      'confidence',
       'source_ids_json',
       'provenance_json',
       'updated_at',
@@ -294,6 +363,7 @@ const state = {
   tasks: [],
   runs: [],
   notes: [],
+  documents: [],
   commands: [],
   queueTasks: [],
   knowledgeBases: [],
@@ -307,6 +377,8 @@ const state = {
   sourceSearchTerm: '',
   sourceActiveTag: 'all',
   mapMode: 'discovery',
+  candidateRows: [],
+  candidateModels: [],
   sourceRows: [],
   curatedRows: [],
   measurementRows: [],
@@ -314,16 +386,20 @@ const state = {
   graphEdgeRows: [],
   sourceModels: [],
   graphProjection: null,
+  graphContractStatus: '',
+  graphContractErrors: [],
+  graphProjectionCache: new Map(),
   graphSurface: null,
   graphMountToken: 0,
   selectedGraphNodeId: '',
   graph: {
     dimensions: 3,
-    visibleLimit: 120,
-    layer: 'concepts',
+    detailLevel: 'standard',
+    visibleLimit: GRAPH_DETAIL_LEVELS.standard,
+    layer: 'all',
     panel: 'topics',
     query: '',
-    autoRotate: true,
+    autoRotate: false,
     busyAction: '',
     status: 'loading',
   },
@@ -342,7 +418,16 @@ const state = {
     postSyncRefreshes: 0,
   },
   initialDataReady: false,
-  refreshTimer: null,
+  refreshInFlight: null,
+  refreshDirty: false,
+  researchRefreshTimer: null,
+  knowledgeRefreshTimer: null,
+  refreshSequences: {
+    research: 0,
+    knowledge: 0,
+  },
+  rowLimitWarnings: [],
+  chunkDiagnostics: [],
   cleanup: [],
   contextMenu: null,
   mountToken: null,
@@ -393,13 +478,12 @@ export async function mount(ctx) {
   startResearchCollections(mountToken)
     .then(async () => {
       if (state.mountToken !== mountToken) return;
-      await refreshAll({ seed: true, mountToken });
+      const hadInitialData = state.initialDataReady;
+      if (!hadInitialData) await refreshAll({ seed: true, mountToken });
       if (state.mountToken !== mountToken) return;
       state.initialDataReady = true;
       render();
-      queueKnowledgeRefreshAfter(300);
-      queueKnowledgeRefreshAfter(2500);
-      queueKnowledgeRefreshAfter(6500);
+      if (hadInitialData) scheduleKnowledgeRefresh(250);
     })
     .catch((error) => {
       console.warn('[research] background sync start failed', error);
@@ -410,11 +494,13 @@ export async function mount(ctx) {
   // subsequently opened window.
   render();
   setStatus(state.t('loadingKnowledge', 'Knowledge wird geladen...'));
-  refreshAll({ seed: true, retryEmptyKnowledge: false, mountToken }).catch((error) => {
-    if (state.mountToken === mountToken) {
-      console.warn('[research] initial background refresh failed', error);
-    }
-  });
+  refreshAll({ seed: true, retryEmptyKnowledge: false, mountToken })
+    .then(() => {
+      if (state.mountToken === mountToken) state.initialDataReady = true;
+    })
+    .catch((error) => {
+      if (state.mountToken === mountToken) console.warn('[research] initial background refresh failed', error);
+    });
   schedulePostSyncRefresh(1200);
   return () => {
     if (state.mountToken === mountToken) state.mountToken = null;
@@ -427,8 +513,12 @@ export async function mount(ctx) {
     state.cleanup.forEach((fn) => fn?.());
     state.cleanup = [];
     disposeResearchGraph();
-    if (state.refreshTimer) window.clearTimeout(state.refreshTimer);
-    state.refreshTimer = null;
+    if (state.researchRefreshTimer) window.clearTimeout(state.researchRefreshTimer);
+    if (state.knowledgeRefreshTimer) window.clearTimeout(state.knowledgeRefreshTimer);
+    state.researchRefreshTimer = null;
+    state.knowledgeRefreshTimer = null;
+    state.refreshSequences.research += 1;
+    state.refreshSequences.knowledge += 1;
     state.contextMenu?.remove();
     state.contextMenu = null;
     ctx.host.replaceChildren();
@@ -525,8 +615,12 @@ function bindEvents(root) {
     } else if (action === 'graph-command') {
       handleGraphCommand(target.dataset.graphCommand || '');
     } else if (action === 'graph-layer') {
-      state.graph.layer = target.dataset.graphLayer || 'concepts';
-      renderCenter();
+      state.graph.layer = target.dataset.graphLayer || 'all';
+      refreshGraphProjectionInPlace();
+    } else if (action === 'graph-detail') {
+      state.graph.detailLevel = target.dataset.graphDetail || 'standard';
+      state.graph.visibleLimit = GRAPH_DETAIL_LEVELS[state.graph.detailLevel] || GRAPH_DETAIL_LEVELS.standard;
+      refreshGraphProjectionInPlace();
     } else if (action === 'graph-panel') {
       state.graph.panel = target.dataset.graphPanel || 'topics';
       updateGraphInsights();
@@ -575,12 +669,6 @@ function bindEvents(root) {
     }
   });
   root.addEventListener('change', (event) => {
-    const graphLimit = event.target.closest('[data-action="graph-limit"]');
-    if (graphLimit) {
-      state.graph.visibleLimit = clampNumber(Number(graphLimit.value) || 120, 20, 500);
-      renderCenter();
-      return;
-    }
     const axis = event.target.closest('[data-axis-select]');
     if (!axis) return;
     updateTaskAxis(axis.dataset.axisSelect, axis.value).catch((error) => {
@@ -592,12 +680,6 @@ function bindEvents(root) {
     if (graphSearch) {
       state.graph.query = graphSearch.value;
       state.graphSurface?.search?.(graphSearch.value);
-      return;
-    }
-    const graphLimit = event.target.closest('[data-action="graph-limit"]');
-    if (graphLimit) {
-      const label = graphLimit.closest('.research-graph-limit')?.querySelector('span');
-      if (label) label.textContent = graphLimit.value;
       return;
     }
     const searchInput = event.target.closest('[data-action="source-search"]');
@@ -622,7 +704,23 @@ function bindEvents(root) {
   root.addEventListener('pointercancel', stopMapDrag);
 }
 
-async function refreshAll({ seed = false, retryEmptyKnowledge = true, mountToken = null } = {}) {
+function refreshAll(options = {}) {
+  if (state.refreshInFlight) {
+    state.refreshDirty = true;
+    return state.refreshInFlight;
+  }
+  const run = refreshAllNow(options);
+  state.refreshInFlight = run;
+  return run.finally(() => {
+    state.refreshInFlight = null;
+    if (state.refreshDirty && state.mountToken) {
+      state.refreshDirty = false;
+      refreshAll({ ...options, seed: false }).catch((error) => console.warn('[research] deduplicated refresh failed', error));
+    }
+  });
+}
+
+async function refreshAllNow({ seed = false, retryEmptyKnowledge = true, mountToken = null } = {}) {
   state.diagnostics.reloadStartedAt = Date.now();
   state.diagnostics.reloadFinishedAt = 0;
   state.diagnostics.reloadCount += 1;
@@ -646,12 +744,13 @@ async function refreshAll({ seed = false, retryEmptyKnowledge = true, mountToken
 }
 
 async function loadLocalState({ mountToken = null } = {}) {
-  const [tasks, runs, notes, commands, queueTasks] = await Promise.all([
+  const [tasks, runs, notes, commands, queueTasks, documents] = await Promise.all([
     findAll(readableCollection('research_tasks'), 'research_tasks'),
     findAll(readableCollection('research_runs'), 'research_runs'),
     findAll(readableCollection('research_notes'), 'research_notes'),
     findAll(readableCollection('business_commands'), 'business_commands'),
     findAll(readableCollection('ctox_queue_tasks'), 'ctox_queue_tasks'),
+    findAll(readableCollection('documents'), 'documents'),
   ]);
   if (mountToken && state.mountToken !== mountToken) return;
   if (tasks.length || !state.tasks.length) {
@@ -663,6 +762,7 @@ async function loadLocalState({ mountToken = null } = {}) {
   if (notes.length || !state.notes.length) state.notes = notes;
   if (commands.length || !state.commands.length) state.commands = commands;
   if (queueTasks.length || !state.queueTasks.length) state.queueTasks = queueTasks;
+  if (documents.length || !state.documents.length) state.documents = documents;
 }
 
 function wireRealtime() {
@@ -672,6 +772,7 @@ function wireRealtime() {
     ['research_notes', readableCollection('research_notes')],
     ['business_commands', readableCollection('business_commands')],
     ['ctox_queue_tasks', readableCollection('ctox_queue_tasks')],
+    ['documents', readableCollection('documents')],
   ].filter(([, collection]) => collection);
   for (const [, collection] of collections) {
     const subscription = collection.$?.subscribe?.(() => scheduleLocalRefresh(80));
@@ -704,10 +805,12 @@ function schedulePostSyncRefresh(delay = 250) {
 }
 
 function scheduleLocalRefresh(delay = 80) {
-  if (state.refreshTimer) window.clearTimeout(state.refreshTimer);
+  if (state.researchRefreshTimer) window.clearTimeout(state.researchRefreshTimer);
+  const sequence = ++state.refreshSequences.research;
   const mountToken = state.mountToken;
-  state.refreshTimer = window.setTimeout(async () => {
-    state.refreshTimer = null;
+  state.researchRefreshTimer = window.setTimeout(async () => {
+    if (sequence !== state.refreshSequences.research) return;
+    state.researchRefreshTimer = null;
     if (!mountToken || state.mountToken !== mountToken) return;
     await loadLocalState({ mountToken });
     if (state.mountToken !== mountToken) return;
@@ -716,10 +819,12 @@ function scheduleLocalRefresh(delay = 80) {
 }
 
 function scheduleKnowledgeRefresh(delay = 120) {
-  if (state.refreshTimer) window.clearTimeout(state.refreshTimer);
+  if (state.knowledgeRefreshTimer) window.clearTimeout(state.knowledgeRefreshTimer);
+  const sequence = ++state.refreshSequences.knowledge;
   const mountToken = state.mountToken;
-  state.refreshTimer = window.setTimeout(async () => {
-    state.refreshTimer = null;
+  state.knowledgeRefreshTimer = window.setTimeout(async () => {
+    if (sequence !== state.refreshSequences.knowledge) return;
+    state.knowledgeRefreshTimer = null;
     if (!mountToken || state.mountToken !== mountToken) return;
     const knowledgeBases = await loadKnowledgeBases();
     if (state.mountToken !== mountToken) return;
@@ -769,6 +874,7 @@ async function ensureTasksFromKnowledgeBases() {
       criteria: state.t('evidenceNoteText', 'Nutze die vorhandene Knowledge Base als Ausgangspunkt. Score nur belegte Quellen und trenne Rohkandidaten von kuratierten Dashboard-Ergebnissen.'),
       status: 'ready',
       knowledge_domain: base.domain,
+      candidate_catalog_key: tableKey(base, ['source_candidates']) || 'source_candidates',
       source_catalog_key: tableKey(base, ['source_catalog', 'sources', 'curated_sources']) || 'source_catalog',
       curated_table_key: tableKey(base, ['evaluation_matrix', 'load_data_library', 'curated_sources', 'source_library']) || 'evaluation_matrix',
       measurements_table_key: tableKey(base, ['evidence_points', 'measured_load_points', 'measurements']) || 'evidence_points',
@@ -799,7 +905,7 @@ async function loadKnowledgeBases({ retryEmpty = true } = {}) {
 
 function knowledgeBasesFromTables(tables = []) {
   const byDomain = new Map();
-  for (const rawTable of tables) {
+  for (const rawTable of mergeKnowledgeTableChunks(tables)) {
     const source = rawTable?.payload && typeof rawTable.payload === 'object' ? rawTable.payload : rawTable;
     const domain = String(source?.domain || '').trim();
     const tableKey = String(source?.table_key || '').trim();
@@ -826,6 +932,64 @@ function knowledgeBasesFromTables(tables = []) {
   return [...byDomain.values()]
     .map((base) => ({ ...base, tables: base.tables.sort((a, b) => String(a.table_key).localeCompare(String(b.table_key))) }))
     .sort((a, b) => scoreResearchBase(b) - scoreResearchBase(a) || a.title.localeCompare(b.title));
+}
+
+function mergeKnowledgeTableChunks(tables = []) {
+  const groups = new Map();
+  for (const rawTable of Array.isArray(tables) ? tables : []) {
+    if (!rawTable || typeof rawTable !== 'object') continue;
+    const source = rawTable.payload && typeof rawTable.payload === 'object' && !Array.isArray(rawTable.payload)
+      ? rawTable.payload
+      : rawTable;
+    const logicalId = String(
+      source.logical_table_id
+      || rawTable.logical_table_id
+      || source.id
+      || rawTable.id
+      || '',
+    ).trim();
+    if (!logicalId) continue;
+    if (!groups.has(logicalId)) groups.set(logicalId, []);
+    groups.get(logicalId).push({ rawTable, source });
+  }
+
+  return [...groups.entries()].map(([logicalId, parts]) => {
+    parts.sort((left, right) => (
+      Number(left.source.chunk_index ?? left.rawTable.chunk_index ?? 0)
+      - Number(right.source.chunk_index ?? right.rawTable.chunk_index ?? 0)
+    ));
+    const first = parts[0];
+    const rows = parts.flatMap(({ rawTable, source }) => firstArray(
+      source.rows,
+      source.records,
+      source.data,
+      rawTable.rows,
+      rawTable.records,
+      rawTable.data,
+    ));
+    const expectedChunks = Math.max(...parts.map(({ rawTable, source }) => (
+      Number(source.chunk_count ?? rawTable.chunk_count ?? 1)
+    )).filter(Number.isFinite), 1);
+    const payload = {
+      ...first.source,
+      id: logicalId,
+      logical_table_id: logicalId,
+      chunk_index: 0,
+      chunk_count: expectedChunks,
+      chunk_row_offset: 0,
+      chunk_row_count: rows.length,
+      projected_row_count: rows.length,
+      rows_complete: parts.length === expectedChunks && parts.every(({ rawTable, source }) => (
+        (source.rows_complete ?? rawTable.rows_complete ?? true) !== false
+      )),
+      rows,
+    };
+    return {
+      ...first.rawTable,
+      ...payload,
+      payload,
+    };
+  });
 }
 
 async function loadKnowledgeTables({ retryEmpty = true } = {}) {
@@ -908,6 +1072,7 @@ function isBusinessOsPermissionDenied(error) {
 function scoreResearchBase(base) {
   const keys = new Set(base.tables.map((table) => table.table_key));
   let score = 0;
+  if (keys.has('source_candidates')) score += 2;
   if (keys.has('source_catalog')) score += 6;
   if (keys.has('curated_sources') || keys.has('load_data_library')) score += 4;
   if (keys.has('measured_load_points') || keys.has('measurements')) score += 3;
@@ -917,6 +1082,8 @@ function scoreResearchBase(base) {
 
 async function loadDashboardData() {
   const task = selectedTask();
+  state.candidateRows = [];
+  state.candidateModels = [];
   state.sourceRows = [];
   state.curatedRows = [];
   state.measurementRows = [];
@@ -924,28 +1091,41 @@ async function loadDashboardData() {
   state.graphEdgeRows = [];
   state.sourceModels = [];
   state.graphProjection = null;
+  state.graphContractStatus = '';
+  state.graphContractErrors = [];
+  state.rowLimitWarnings = [];
+  state.chunkDiagnostics = [];
   if (!task) return;
   const base = knowledgeBaseForTask(task);
-  const sourceTable = tableForKey(base, task.source_catalog_key) || firstTableMatching(base, /source|catalog|curated/i);
+  const candidateTable = tableForKey(base, task.candidate_catalog_key || 'source_candidates');
+  const sourceTable = tableForKey(
+    base,
+    task.source_catalog_key || tableKey(base, ['source_catalog', 'sources', 'curated_sources']),
+  );
   const curatedTable = tableForKey(base, task.curated_table_key) || firstTableMatching(base, /library|curated/i);
   const measurementTable = tableForKey(base, task.measurements_table_key) || firstTableMatching(base, /measure|load|point/i);
   const graphNodeTable = tableForKey(base, task.payload?.graph_contract?.nodes_table_key || 'semantic_graph_nodes') || firstTableMatching(base, /semantic.*graph.*node|concept.*node/i);
   const graphEdgeTable = tableForKey(base, task.payload?.graph_contract?.edges_table_key || 'semantic_graph_edges') || firstTableMatching(base, /semantic.*graph.*edge|concept.*edge/i);
-  const [sourceRows, curatedRows, measurementRows, graphNodeRows, graphEdgeRows] = await Promise.all([
+  const [candidateRows, sourceRows, curatedRows, measurementRows, graphNodeRows, graphEdgeRows] = await Promise.all([
+    candidateTable ? fetchTableRows(candidateTable.id) : Promise.resolve([]),
     sourceTable ? fetchTableRows(sourceTable.id) : Promise.resolve([]),
     curatedTable && curatedTable.id !== sourceTable?.id ? fetchTableRows(curatedTable.id) : Promise.resolve([]),
     measurementTable && measurementTable.id !== sourceTable?.id && measurementTable.id !== curatedTable?.id ? fetchTableRows(measurementTable.id) : Promise.resolve([]),
     graphNodeTable ? fetchTableRows(graphNodeTable.id) : Promise.resolve([]),
     graphEdgeTable ? fetchTableRows(graphEdgeTable.id) : Promise.resolve([]),
   ]);
+  state.candidateRows = candidateRows;
   state.sourceRows = sourceRows;
   state.curatedRows = curatedRows;
   state.measurementRows = measurementRows;
   state.graphNodeRows = graphNodeRows;
   state.graphEdgeRows = graphEdgeRows;
+  state.candidateModels = buildSourceModels(task, candidateRows, [], []);
   state.sourceModels = buildSourceModels(task, sourceRows, curatedRows, measurementRows);
   const evidenceMeasurementRows = filterMeasurementRowsForEvidence(measurementRows, state.sourceModels);
   const evidenceGraphRows = filterGraphRowsForEvidence(graphNodeRows, graphEdgeRows, evidenceSourceIds(state.sourceModels));
+  state.graphContractStatus = evidenceGraphRows.status || '';
+  state.graphContractErrors = evidenceGraphRows.errors || [];
   state.graphProjection = buildResearchGraphProjection({
     task,
     sourceModels: evidenceSourceModels(state.sourceModels),
@@ -953,8 +1133,13 @@ async function loadDashboardData() {
     graphNodeRows: evidenceGraphRows.nodes,
     graphEdgeRows: evidenceGraphRows.edges,
     graphLayer: state.graph.layer,
+    detailLevel: state.graph.detailLevel,
     visibleLimit: state.graph.visibleLimit,
+    verifiedSourceIds: evidenceSourceIds(state.sourceModels),
+    graphContractStatus: evidenceGraphRows.status,
+    graphContractErrors: evidenceGraphRows.errors,
   });
+  state.graphProjection = enrichGraphSemanticMetadata(state.graphProjection, graphNodeRows, graphEdgeRows, task);
   if (!state.selectedSourceId || !state.sourceModels.some((item) => item.id === state.selectedSourceId)) {
     state.selectedSourceId = state.sourceModels[0]?.id || '';
   }
@@ -965,6 +1150,47 @@ async function fetchTableRows(tableId) {
   const table = state.knowledgeBases
     .flatMap((base) => base.tables || [])
     .find((entry) => entry.id === tableId);
+  const normalized = normalizeKnowledgeTableRows(table, tableId);
+  if (normalized.valid && normalized.rows.length) return applyRowLimit(normalized.rows, table, tableId, normalized.rowCount);
+  if (!normalized.valid) return [];
+  // Record-shaped rows flow exclusively through the RxDB/WebRTC mesh: CTOX, as
+  // the authoritative peer, materializes the parquet records into the synced
+  // knowledge_tables doc. There is no HTTP fallback — if a doc carries no rows
+  // yet, we surface nothing until replication delivers them.
+  markCollectionDiagnostic('knowledge_tables', 'read', 'ok', `0 synced rows (${String(tableId || '')})`);
+  return [];
+}
+
+function normalizeKnowledgeTableRows(table, tableId = '') {
+  const source = table?.payload && typeof table.payload === 'object' ? table.payload : table;
+  const chunks = firstArray(
+    table?.chunks,
+    table?.row_chunks,
+    table?.rows_chunks,
+    source?.chunks,
+    source?.row_chunks,
+    source?.rows_chunks,
+    source?.dataframe?.chunks,
+  );
+  if (chunks.length) {
+    const result = validateChunkSequence(chunks, {
+      expectedChunkCount: firstPositiveNumber(table, ['chunk_count', 'chunkCount', 'total_chunks', 'totalChunks'])
+        || firstPositiveNumber(source, ['chunk_count', 'chunkCount', 'total_chunks', 'totalChunks']),
+      expectedItemCount: firstPositiveNumber(table, ['row_count', 'rowCount', 'total_row_count', 'totalRows'])
+        || firstPositiveNumber(source, ['row_count', 'rowCount', 'total_row_count', 'totalRows']),
+      indexFields: ['index', 'idx', 'chunk_index', 'chunkIndex'],
+      countFields: ['chunk_count', 'chunkCount', 'total_chunks', 'totalChunks'],
+      offsetFields: ['offset', 'row_offset', 'rowOffset', 'start'],
+      itemCountFields: ['row_count', 'rowCount', 'rows_count', 'rowsCount', 'count'],
+      itemArrayFields: ['rows', 'records', 'dataframe.rows', 'payload.rows', 'payload.records'],
+      itemLabel: 'rows',
+    });
+    if (!result.valid) {
+      recordChunkDiagnostic(tableId, result.reason);
+      return result;
+    }
+    return result;
+  }
   const rows = firstArray(
     table?.rows,
     table?.records,
@@ -975,15 +1201,122 @@ async function fetchTableRows(tableId) {
     table?.dataframe?.rows,
     table?.payload?.dataframe?.rows,
   );
-  if (rows.length) {
-    return rows.slice(0, ROW_LIMIT).map((row) => row && typeof row === 'object' ? row : { value: row });
+  return {
+    valid: true,
+    rows: rows.map((row) => row && typeof row === 'object' ? row : { value: row }),
+    rowCount: rows.length,
+  };
+}
+
+function applyRowLimit(rows, table, tableId, declaredRowCount = rows.length) {
+  const sourceRowCount = Math.max(rows.length, Number(declaredRowCount) || 0, Number(table?.row_count) || 0, Number(table?.payload?.row_count) || 0);
+  if (sourceRowCount > ROW_LIMIT || rows.length > ROW_LIMIT) {
+    state.rowLimitWarnings.push({
+      tableId,
+      cap: ROW_LIMIT,
+      sourceRowCount,
+      returnedRowCount: Math.min(rows.length, ROW_LIMIT),
+    });
   }
-  // Record-shaped rows flow exclusively through the RxDB/WebRTC mesh: CTOX, as
-  // the authoritative peer, materializes the parquet records into the synced
-  // knowledge_tables doc. There is no HTTP fallback — if a doc carries no rows
-  // yet, we surface nothing until replication delivers them.
-  markCollectionDiagnostic('knowledge_tables', 'read', 'ok', `0 synced rows (${String(tableId || '')})`);
+  return rows.slice(0, ROW_LIMIT);
+}
+
+function recordChunkDiagnostic(tableId, reason) {
+  const message = `knowledge_tables ${tableId || 'unknown'}: ${reason}`;
+  state.chunkDiagnostics.push({ tableId, reason, message });
+  markCollectionDiagnostic('knowledge_tables', 'read', 'failed', message);
+}
+
+function validateChunkSequence(chunks, options = {}) {
+  if (!Array.isArray(chunks) || !chunks.length) return { valid: false, reason: 'Keine Chunks vorhanden.', rows: [], rowCount: 0, chunkCount: 0 };
+  const indexFields = options.indexFields || ['idx', 'index', 'chunk_index', 'chunkIndex'];
+  const countFields = options.countFields || ['total', 'chunk_count', 'chunkCount'];
+  const offsetFields = options.offsetFields || ['offset', 'row_offset', 'rowOffset', 'start'];
+  const itemCountFields = options.itemCountFields || ['row_count', 'rowCount', 'count'];
+  const itemArrayFields = options.itemArrayFields || ['rows', 'records', 'data'];
+  const itemValueFields = options.itemValueFields || [];
+  const normalized = [];
+  const indices = new Set();
+  const declaredCounts = new Set();
+  for (const [position, chunk] of chunks.entries()) {
+    if (!chunk || typeof chunk !== 'object') return { valid: false, reason: `Chunk ${position} ist kein Objekt.`, rows: [], rowCount: 0, chunkCount: 0 };
+    const index = finiteNonNegative(firstNumber(chunk, indexFields));
+    if (index === null) return { valid: false, reason: `Chunk ${position} hat keinen gültigen Index.`, rows: [], rowCount: 0, chunkCount: 0 };
+    if (indices.has(index)) return { valid: false, reason: `Chunk-Index ${index} ist doppelt vorhanden.`, rows: [], rowCount: 0, chunkCount: 0 };
+    indices.add(index);
+    const declaredCount = finitePositive(firstNumber(chunk, countFields));
+    if (declaredCount !== null) declaredCounts.add(declaredCount);
+    const rows = extractChunkItems(chunk, itemArrayFields, itemValueFields);
+    if (options.requireItems && !rows.length) return { valid: false, reason: `Chunk ${index} enthält keine Daten.`, rows: [], rowCount: 0, chunkCount: 0 };
+    const itemCount = finiteNonNegative(firstNumber(chunk, itemCountFields));
+    if (itemCount !== null && itemCount !== rows.length) {
+      return { valid: false, reason: `Chunk ${index} meldet ${itemCount} ${options.itemLabel || 'Elemente'}, enthält aber ${rows.length}.`, rows: [], rowCount: 0, chunkCount: 0 };
+    }
+    normalized.push({ index, rows, offset: finiteNonNegative(firstNumber(chunk, offsetFields)) });
+  }
+  const ordered = normalized.sort((left, right) => left.index - right.index);
+  if (ordered.some((chunk, position) => chunk.index !== position)) {
+    return { valid: false, reason: 'Chunk-Indizes sind nicht lückenlos von 0 bis N-1.', rows: [], rowCount: 0, chunkCount: 0 };
+  }
+  const expectedChunkCount = Number(options.expectedChunkCount) || null;
+  const declaredChunkCount = declaredCounts.size ? [...declaredCounts] : [];
+  if (declaredChunkCount.length > 1 || (declaredChunkCount.length && declaredChunkCount[0] !== ordered.length)) {
+    return { valid: false, reason: 'chunk_count ist zwischen den Chunks nicht konsistent.', rows: [], rowCount: 0, chunkCount: 0 };
+  }
+  if (expectedChunkCount !== null && expectedChunkCount !== ordered.length) {
+    return { valid: false, reason: `chunk_count ${expectedChunkCount} stimmt nicht mit ${ordered.length} Chunks überein.`, rows: [], rowCount: 0, chunkCount: 0 };
+  }
+  const rows = ordered.flatMap((chunk) => chunk.rows);
+  let runningOffset = 0;
+  for (const chunk of ordered) {
+    if (chunk.offset !== null && chunk.offset !== runningOffset) {
+      return { valid: false, reason: `Chunk ${chunk.index} beginnt bei Offset ${chunk.offset}, erwartet wurde ${runningOffset}.`, rows: [], rowCount: 0, chunkCount: 0 };
+    }
+    runningOffset += chunkAdvance(chunk.rows, options.offsetUnit);
+  }
+  const expectedItemCount = Number(options.expectedItemCount) || null;
+  if (expectedItemCount !== null && expectedItemCount !== rows.length) {
+    return { valid: false, reason: `Die Row-Summe ${rows.length} stimmt nicht mit ${expectedItemCount} überein.`, rows: [], rowCount: 0, chunkCount: 0 };
+  }
+  return { valid: true, rows, rowCount: rows.length, chunkCount: ordered.length };
+}
+
+function extractChunkItems(chunk, itemArrayFields, itemValueFields = []) {
+  for (const field of itemArrayFields) {
+    const value = field.split('.').reduce((current, key) => current?.[key], chunk);
+    if (Array.isArray(value)) return value;
+  }
+  for (const field of itemValueFields) {
+    const value = field.split('.').reduce((current, key) => current?.[key], chunk);
+    if (typeof value === 'string' && value.length) return [value];
+  }
   return [];
+}
+
+function chunkAdvance(items, offsetUnit) {
+  if (offsetUnit === 'payload') return items.reduce((sum, item) => sum + String(item || '').length, 0);
+  return items.length;
+}
+
+function firstNumber(value, keys) {
+  for (const key of keys) {
+    const candidate = value?.[key];
+    if (candidate !== null && candidate !== undefined && String(candidate).trim() !== '') return Number(candidate);
+  }
+  return null;
+}
+
+function firstPositiveNumber(value, keys) {
+  const number = firstNumber(value, keys);
+  return finitePositive(number) || null;
+}
+
+function finiteNonNegative(value) {
+  return Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function finitePositive(value) {
+  return Number.isInteger(value) && value > 0 ? value : null;
 }
 
 function buildSourceModels(task, sourceRows, curatedRows, measurementRows) {
@@ -992,11 +1325,15 @@ function buildSourceModels(task, sourceRows, curatedRows, measurementRows) {
     const id = sourceId(row);
     if (id) curatedBySource.set(id, row);
   }
-  const raw = sourceRows.length ? sourceRows : curatedRows;
-  const verifiedIds = new Set(raw.filter((row) => evidenceGate(row).eligible).map(sourceId).filter(Boolean));
-  const measurementAgg = aggregateMeasurements((measurementRows || []).filter((row) => verifiedIds.has(sourceId(row))));
+  const raw = (sourceRows.length ? sourceRows : curatedRows).filter((row) => firstString(row, ['source_id']));
+  const initialModels = raw.map((row) => {
+    const id = firstString(row, ['source_id']);
+    const gate = evidenceGate(row);
+    return { id, row, evidenceEligible: gate.eligible };
+  });
+  const measurementAgg = aggregateMeasurements(measurementRows || [], initialModels);
   return raw.map((row, index) => {
-    const id = sourceId(row) || `source_${index + 1}`;
+    const id = firstString(row, ['source_id']);
     const title = firstString(row, ['title', 'source_title', 'name']) || `Source ${index + 1}`;
     const sourceClass = firstString(row, ['source_class', 'type', 'bucket', 'record_type']) || 'source';
     const note = firstString(row, ['contribution_note', 'contribution', 'summary', 'relevance_to_bearing_design', 'use']) || '';
@@ -1013,6 +1350,7 @@ function buildSourceModels(task, sourceRows, curatedRows, measurementRows) {
       title,
       subtitle: sourceClass,
       url: firstString(row, ['source_url', 'url', 'direct_url', 'doi']) || '',
+      canonicalUrl: firstString(row, ['canonical_url']) || '',
       sourceClass,
       note,
       row,
@@ -1048,30 +1386,37 @@ function evidenceSourceIds(sourceModels = state.sourceModels) {
 }
 
 function filterMeasurementRowsForEvidence(rows, sourceModels = state.sourceModels) {
-  const eligibleIds = evidenceSourceIds(sourceModels);
-  return (rows || []).filter((row) => eligibleIds.has(sourceId(row)));
+  const modelsById = new Map((sourceModels || []).map((model) => [String(model.id), model]));
+  return (rows || []).filter((row) => {
+    const model = modelsById.get(firstString(row, ['source_id']));
+    if (sourceModels?.length && (!model || !model.evidenceEligible)) return false;
+    return measurementEvidenceBinding(row, model).eligible;
+  });
 }
 
 function filterGraphRowsForEvidence(nodeRows, edgeRows, eligibleIds) {
+  if (!(nodeRows || []).length && !(edgeRows || []).length) return { nodes: [], edges: [], status: '', errors: [] };
+  const errors = [];
   const nodes = (nodeRows || []).map((row) => {
     const nodeId = firstString(row, ['node_id', 'id', 'concept_id', 'key']);
     const explicitSourceId = nodeId.startsWith('source:') ? nodeId.slice('source:'.length) : '';
     const sourceIds = graphSourceIds(row);
     const filteredSourceIds = sourceIds.filter((id) => eligibleIds.has(id));
-    if (explicitSourceId && !eligibleIds.has(explicitSourceId)) return null;
-    if (sourceIds.length && !filteredSourceIds.length) return null;
-    if (!sourceIds.length || filteredSourceIds.length === sourceIds.length) return row;
-    return { ...row, source_ids_json: JSON.stringify(filteredSourceIds) };
-  }).filter(Boolean);
-  const edges = (edgeRows || []).filter((row) => {
-    const sourceIds = graphSourceIds(row);
-    return !sourceIds.length || sourceIds.some((id) => eligibleIds.has(id));
-  }).map((row) => {
-    const sourceIds = graphSourceIds(row);
-    if (!sourceIds.length || sourceIds.every((id) => eligibleIds.has(id))) return row;
-    return { ...row, source_ids_json: JSON.stringify(sourceIds.filter((id) => eligibleIds.has(id))) };
+    if (explicitSourceId && !eligibleIds.has(explicitSourceId)) errors.push(`${nodeId || 'node'}.source_id`);
+    if (!sourceIds.length) errors.push(`${nodeId || 'node'}.source_ids`);
+    if (filteredSourceIds.length !== sourceIds.length) errors.push(`${nodeId || 'node'}.unverified_source`);
+    return row;
   });
-  return { nodes, edges };
+  const edges = (edgeRows || []).map((row) => {
+    const sourceIds = graphSourceIds(row);
+    const edgeId = firstString(row, ['edge_id', 'id']) || 'edge';
+    if (!sourceIds.length) errors.push(`${edgeId}.source_ids`);
+    if (sourceIds.some((id) => !eligibleIds.has(id))) errors.push(`${edgeId}.unverified_source`);
+    return row;
+  });
+  return errors.length
+    ? { nodes: [], edges: [], status: 'invalid_graph_contract', errors }
+    : { nodes, edges, status: '', errors: [] };
 }
 
 function graphSourceIds(row) {
@@ -1085,24 +1430,165 @@ function graphSourceIds(row) {
   return raw.split(/[,;|]/).map((value) => value.trim()).filter(Boolean);
 }
 
+function measurementEvidenceBinding(row, sourceModel = null) {
+  const sourceIdValue = firstString(row, ['source_id']);
+  const snapshotId = firstString(row, ['snapshot_id', 'source_snapshot_id']);
+  const snapshotHash = firstString(row, ['snapshot_hash', 'snapshot_sha256']);
+  const canonicalUrl = firstString(row, ['canonical_url']);
+  const evidenceId = firstString(row, ['evidence_id', 'claim_id']);
+  const snapshotPath = firstString(row, ['snapshot_path', 'archive_path', 'local_snapshot_path']);
+  const retrievedAt = firstString(row, ['retrieved_at', 'extracted_at']);
+  const urlRole = firstString(row, ['url_role']).toLowerCase();
+  const contentScope = firstString(row, ['content_scope']).toLowerCase();
+  const validHash = /^sha256:[0-9a-f]{64}$/i.test(snapshotHash);
+  const expectedRow = sourceModel?.row || {};
+  const expectedSnapshotId = firstString(expectedRow, ['snapshot_id', 'source_snapshot_id']);
+  const expectedHash = firstString(expectedRow, ['snapshot_hash', 'snapshot_sha256']);
+  const expectedCanonicalUrl = firstString(expectedRow, ['canonical_url']);
+  const eligible = Boolean(sourceIdValue)
+    && Boolean(snapshotId)
+    && validHash
+    && Boolean(canonicalUrl)
+    && Boolean(evidenceId)
+    && Boolean(snapshotPath)
+    && Boolean(retrievedAt)
+    && RECEIPT_URL_ROLES.has(urlRole)
+    && RECEIPT_CONTENT_SCOPES.has(contentScope)
+    && (!sourceModel || (
+      sourceModel.evidenceEligible === true
+      && snapshotId === expectedSnapshotId
+      && snapshotHash === expectedHash
+      && canonicalUrl === expectedCanonicalUrl
+    ));
+  if (eligible) return { eligible: true, sourceId: sourceIdValue, snapshotId, snapshotHash, canonicalUrl };
+  return {
+    eligible: false,
+    sourceId: sourceIdValue,
+    reason: !sourceIdValue
+      ? 'missing_source_id'
+      : !snapshotId
+        ? 'missing_snapshot_id'
+        : !validHash
+          ? 'invalid_snapshot_hash'
+      : !canonicalUrl
+        ? 'missing_canonical_url'
+        : !evidenceId
+          ? 'missing_evidence_id'
+          : !snapshotPath
+            ? 'missing_snapshot_path'
+            : !retrievedAt
+              ? 'missing_retrieved_at'
+              : !RECEIPT_URL_ROLES.has(urlRole)
+                ? 'invalid_url_role'
+                : !RECEIPT_CONTENT_SCOPES.has(contentScope)
+                  ? 'invalid_content_scope'
+            : 'source_snapshot_lineage_mismatch',
+  };
+}
+
+function sourceReceiptLineage(source) {
+  const row = source?.row || {};
+  const sourceIdValue = firstString(row, ['source_id']) || String(source?.id || '').trim();
+  const sourceUrl = firstString(row, ['source_url', 'url', 'direct_url', 'doi']);
+  const canonicalUrl = firstString(row, ['canonical_url']) || String(source?.canonicalUrl || '').trim();
+  const snapshotId = firstString(row, ['snapshot_id', 'source_snapshot_id']);
+  const snapshotHash = firstString(row, ['snapshot_hash', 'snapshot_sha256']);
+  const receiptUrl = firstString(row, [
+    'source_receipt_url',
+    'source_receipt_link',
+    'evidence_receipt_url',
+    'receipt_url',
+    'receipt_link',
+    'snapshot_url',
+  ]);
+  const receiptId = firstString(row, ['source_receipt_id', 'evidence_receipt_id', 'receipt_id']);
+  const evidenceId = firstString(row, ['evidence_id']);
+  const claimId = firstString(row, ['claim_id']);
+  const snapshotPath = firstString(row, ['snapshot_path', 'archive_path', 'local_snapshot_path']);
+  const retrievedAt = firstString(row, ['retrieved_at']);
+  const urlRole = firstString(row, ['url_role']).toLowerCase();
+  const contentScope = firstString(row, ['content_scope']).toLowerCase();
+  const valid = Boolean(sourceIdValue)
+    && Boolean(canonicalUrl)
+    && Boolean(receiptUrl || receiptId)
+    && Boolean(snapshotId)
+    && Boolean(snapshotPath)
+    && Boolean(evidenceId || claimId)
+    && Boolean(retrievedAt)
+    && RECEIPT_URL_ROLES.has(urlRole)
+    && RECEIPT_CONTENT_SCOPES.has(contentScope)
+    && /^sha256:[0-9a-f]{64}$/i.test(snapshotHash);
+  return {
+    valid,
+    source_id: sourceIdValue,
+    source_url: sourceUrl,
+    url: receiptUrl,
+    receipt_url: receiptUrl,
+    source_receipt_url: receiptUrl,
+    receipt_id: receiptId,
+    evidence_id: evidenceId,
+    claim_id: claimId,
+    snapshot_path: snapshotPath,
+    retrieved_at: retrievedAt,
+    url_role: urlRole,
+    content_scope: contentScope,
+    snapshot_id: snapshotId,
+    snapshot_hash: snapshotHash,
+    snapshot_sha256: snapshotHash,
+    canonical_url: canonicalUrl,
+  };
+}
+
 function evidenceGate(row) {
+  const sourceIdValue = firstString(row, ['source_id']);
   const verificationStatus = firstString(row, ['verification_status']).toLowerCase();
   const httpStatus = Number(row?.http_status);
   const snapshotHash = firstString(row, ['snapshot_hash']);
+  const canonicalUrl = firstString(row, ['canonical_url']);
+  const snapshotId = firstString(row, ['snapshot_id', 'source_snapshot_id']);
+  const snapshotPath = firstString(row, ['snapshot_path', 'archive_path', 'local_snapshot_path']);
+  const evidenceId = firstString(row, ['evidence_id']);
+  const claimId = firstString(row, ['claim_id']);
+  const retrievedAt = firstString(row, ['retrieved_at']);
+  const urlRole = firstString(row, ['url_role']).toLowerCase();
+  const contentScope = firstString(row, ['content_scope']).toLowerCase();
   const sourceTier = firstString(row, ['source_tier']).toLowerCase();
+  const sourceType = firstString(row, ['source_type', 'type']).toLowerCase();
+  const rejectionReason = firstString(row, ['evidence_rejection_reason']);
+  const relevanceScore = Number(row?.evidence_relevance_score);
+  const validSnapshotHash = /^sha256:[0-9a-f]{64}$/i.test(snapshotHash);
+  const actualSourceContent = row?.actual_full_text_or_data === true;
+  const relevant = Number.isInteger(relevanceScore) && relevanceScore >= 8;
+  const canonicalIsMetadata = isMetadataCanonicalUrl(canonicalUrl);
   const metadataOnly = row?.metadata_only === true
     || firstString(row, ['reading_status', 'source_status', 'review_status', 'status']).toLowerCase() === 'metadata_only'
     || firstString(row, ['source_type', 'type']).toLowerCase() === 'paper_metadata';
   const rejected = ['relevance_status', 'screening_status', 'review_status', 'source_status', 'status']
     .map((key) => firstString(row, [key]).toLowerCase())
     .some((value) => ['rejected', 'off_topic', 'off-topic', 'fachfremd', 'irrelevant'].includes(value));
-  const aggregated = /aggregat|rollup|derived|synthes|summary/.test(sourceTier);
+  const aggregated = /aggregat|rollup|derived|synthes|summary/.test(sourceTier)
+    || sourceType === 'aggregator';
   const eligible = verificationStatus === 'verified'
+    && Boolean(sourceIdValue)
+    && row?.transport_verified === true
+    && row?.content_extracted === true
     && Number.isInteger(httpStatus)
     && httpStatus >= 200
     && httpStatus < 300
-    && Boolean(snapshotHash)
+    && httpStatus !== 204
+    && validSnapshotHash
+    && Boolean(snapshotId)
+    && Boolean(snapshotPath)
+    && Boolean(evidenceId || claimId)
+    && Boolean(retrievedAt)
+    && RECEIPT_URL_ROLES.has(urlRole)
+    && RECEIPT_CONTENT_SCOPES.has(contentScope)
+    && Boolean(canonicalUrl)
+    && !canonicalIsMetadata
     && row?.evidence_eligible === true
+    && actualSourceContent
+    && relevant
+    && !rejectionReason
     && Boolean(sourceTier)
     && !aggregated
     && !metadataOnly
@@ -1115,11 +1601,40 @@ function evidenceGate(row) {
     return { eligible: false, status: 'http_error', label: `HTTP ${httpStatus}` };
   }
   if (aggregated) return { eligible: false, status: 'aggregated', label: 'Aggregated source' };
+  if (canonicalIsMetadata) return { eligible: false, status: 'metadata_url', label: 'Metadata URL only' };
   if (verificationStatus !== 'verified') return { eligible: false, status: 'unverified', label: 'Not verified' };
-  if (!snapshotHash) return { eligible: false, status: 'missing_snapshot', label: 'Snapshot missing' };
+  if (!sourceIdValue) return { eligible: false, status: 'missing_source_id', label: 'Source ID missing' };
+  if (row?.transport_verified !== true) return { eligible: false, status: 'transport_unverified', label: 'Transport not verified' };
+  if (row?.content_extracted !== true) return { eligible: false, status: 'empty_content', label: 'No source content extracted' };
+  if (!validSnapshotHash) return { eligible: false, status: 'missing_snapshot', label: 'Valid snapshot missing' };
+  if (!snapshotId) return { eligible: false, status: 'missing_snapshot_id', label: 'Snapshot ID missing' };
+  if (!snapshotPath) return { eligible: false, status: 'missing_snapshot_path', label: 'Snapshot path missing' };
+  if (!evidenceId && !claimId) return { eligible: false, status: 'missing_evidence_id', label: 'Evidence or claim ID missing' };
+  if (!retrievedAt) return { eligible: false, status: 'missing_retrieved_at', label: 'Retrieval time missing' };
+  if (!RECEIPT_URL_ROLES.has(urlRole)) return { eligible: false, status: 'invalid_url_role', label: 'URL role not receipt-bound' };
+  if (!RECEIPT_CONTENT_SCOPES.has(contentScope)) return { eligible: false, status: 'invalid_content_scope', label: 'Content scope not receipt-bound' };
+  if (!canonicalUrl) return { eligible: false, status: 'missing_canonical_url', label: 'Canonical source missing' };
+  if (!actualSourceContent) return { eligible: false, status: 'no_primary_content', label: 'No full text or original data' };
+  if (!relevant) return { eligible: false, status: 'insufficient_relevance', label: 'Relevance not verified' };
+  if (rejectionReason) return { eligible: false, status: 'rejected', label: 'Evidence rejected' };
   if (row?.evidence_eligible !== true) return { eligible: false, status: 'not_eligible', label: 'Evidence not eligible' };
   if (!sourceTier) return { eligible: false, status: 'legacy', label: 'Legacy / not verified' };
   return { eligible: false, status: 'not_eligible', label: 'Evidence not eligible' };
+}
+
+function isMetadataCanonicalUrl(raw) {
+  const normalized = String(raw || '').trim().toLowerCase();
+  return [
+    'https://doi.org/',
+    'http://doi.org/',
+    'https://api.crossref.org/',
+    'https://api.openalex.org/',
+    'https://api.semanticscholar.org/',
+    'https://www.semanticscholar.org/',
+    'https://scholar.google.',
+    'https://www.researchgate.net/',
+    'https://www.academia.edu/',
+  ].some((prefix) => normalized.startsWith(prefix));
 }
 
 function emptyScoreDimensions(axisDefs = BASE_AXES) {
@@ -1131,10 +1646,13 @@ function emptyScoreDimensions(axisDefs = BASE_AXES) {
   ].map((axis) => axis.id))].map((id) => [id, null]));
 }
 
-function aggregateMeasurements(rows) {
+function aggregateMeasurements(rows, sourceModels = null) {
   const bySource = new Map();
-  for (const row of rows || []) {
-    const id = sourceId(row);
+  const eligibleRows = sourceModels
+    ? filterMeasurementRowsForEvidence(rows, sourceModels)
+    : (rows || []).filter((row) => measurementEvidenceBinding(row).eligible);
+  for (const row of eligibleRows) {
+    const id = firstString(row, ['source_id']);
     if (!id) continue;
     const current = bySource.get(id) || {
       count: 0,
@@ -1219,10 +1737,12 @@ function scoreDimensions(row, curated, measurements, task, axisDefs = BASE_AXES)
     if (direct) scores[axis.id] = normalizeScoreScale(direct);
   }
   
-  // High-fidelity keyword filter on Title to prevent crawler noise / cross-domain leakage!
+  // Bearing relevance is a domain rule, not a global filter. Other research
+  // domains use their own inferred terms and are never penalized for lacking
+  // rotor vocabulary.
   const titleText = String(row.title || row.name || '').toLowerCase();
-  const hasDroneTopic = /propeller|rotor|uav|drone|bearing|load|force|moment|thrust|torque|rpm|vibration|spindel|motor|flight|telemetry|aerodynamic|blade|windtunnel|w\u00e4lzlager|lager|schub|drehmoment|last|messung|pr\u00fcfstand|spindle|vibrat|flight|telemetr|testing|bench|load cell|stanag|mil-std/i.test(titleText);
-  if (!hasDroneTopic) {
+  const hasBearingTopic = /propeller|rotor|uav|drone|bearing|load|force|moment|thrust|torque|rpm|vibration|spindel|motor|flight|telemetry|aerodynamic|blade|windtunnel|w\u00e4lzlager|lager|schub|drehmoment|last|messung|pr\u00fcfstand|spindle|vibrat|flight|telemetr|testing|bench|load cell|stanag|mil-std/i.test(titleText);
+  if (inferResearchKind(task) === 'bearing' && !hasBearingTopic) {
     scores.topic_fit = 10;
   }
 
@@ -1383,15 +1903,17 @@ function renderCenter() {
         </div>
       </div>
     </header>
+    ${state.status ? `<div class="research-status-line" role="status" aria-live="polite">${escapeHtml(state.status)}</div>` : ''}
     <div class="research-center-body${state.showDiagram ? '' : ' has-hidden-map'}">
       ${renderSemanticGraph(task, projection)}
       <section class="research-workbench">
         <div class="research-tabs-container">
           <div class="ctox-pane-tabs" role="tablist" aria-label="Research views">
-            ${tabButton('sources', `${state.t('sources', 'Sources')} (${state.sourceModels.length})`)}
-            ${tabButton('measurements', `${state.t('measurements', 'Measurements')} (${state.measurementRows.length})`)}
+            ${tabButton('sources', `${state.t('sources', 'Sources')} (${evidenceRankedSources().length})`)}
+            ${tabButton('candidates', `${state.t('candidates', 'Candidates')} (${state.candidateModels.length})`)}
+            ${tabButton('measurements', `${state.t('measurements', 'Measurements')} (${filterMeasurementRowsForEvidence(state.measurementRows, state.sourceModels).length})`)}
             ${tabButton('knowledge', `${state.t('knowledge', 'Knowledge')} (${state.curatedRows.length})`)}
-            ${tabButton('reports', `Fachberichte (12)`)}
+            ${tabButton('reports', `${state.t('reports', 'Fachberichte')} (${researchReportsForTask(task).length})`)}
           </div>
           ${state.activeTab === 'sources' ? `
             <div class="ctox-pane-tabs research-view-toggle">
@@ -1426,7 +1948,6 @@ function renderCenter() {
 
 function renderSemanticGraph(task, projection) {
   const metrics = projection.metrics || {};
-  const maximum = Math.max(20, Math.min(500, projection.availableNodeCount || state.graph.visibleLimit));
   const runInfo = researchRunInfo(task);
   const live = ['queued', 'running'].includes(runInfo.statusKind);
   return `
@@ -1440,9 +1961,9 @@ function renderSemanticGraph(task, projection) {
         <div class="research-graph-meta">
           <div>
             <strong>${escapeHtml(state.t('semanticResearchGraph', 'Semantic Research Graph'))}</strong>
-            <span>${metrics.nodeCount || 0} ${escapeHtml(state.t('concepts', 'Begriffe'))} · ${metrics.linkCount || 0} ${escapeHtml(state.t('relations', 'Beziehungen'))} · ${metrics.clusterCount || 0} ${escapeHtml(state.t('clusters', 'Cluster'))}</span>
+            <span data-graph-summary>${graphSummary(metrics)}</span>
           </div>
-          <span class="research-graph-live${live ? ' is-live' : ''}">${live ? escapeHtml(state.t('liveRun', 'LIVE · CTOX aktualisiert')) : escapeHtml(projection.origin === 'persisted' ? state.t('persistedGraph', 'Knowledge Graph') : state.t('derivedGraph', 'Live projection'))}</span>
+          <span class="research-graph-live${live ? ' is-live' : ''}">${live ? escapeHtml(state.t('liveRun', 'LIVE · CTOX aktualisiert')) : escapeHtml(projection.origin === 'persisted' ? state.t('persistedGraph', 'Knowledge Graph') : projection.status === 'invalid_graph_contract' ? 'invalid_graph_contract' : state.t('derivedGraph', 'Live projection'))}</span>
         </div>
         <label class="research-graph-search">
           <span class="research-sr-only">${escapeHtml(state.t('searchGraph', 'Graph durchsuchen'))}</span>
@@ -1452,10 +1973,11 @@ function renderSemanticGraph(task, projection) {
         <div class="research-graph-rail" aria-label="${escapeHtml(state.t('graphControls', 'Graph-Steuerung'))}">
           <button type="button" data-action="graph-command" data-graph-command="panel" class="research-graph-tool${state.graph.panel !== 'hidden' ? ' is-active' : ''}" aria-label="${escapeHtml(state.t('toggleInsights', 'Insights ein-/ausblenden'))}" title="${escapeHtml(state.t('toggleInsights', 'Insights ein-/ausblenden'))}">${iconSvg('layers')}</button>
           <button type="button" data-action="graph-command" data-graph-command="reset" class="research-graph-tool" aria-label="${escapeHtml(state.t('resetGraph', 'Ansicht zurücksetzen'))}" title="${escapeHtml(state.t('resetGraph', 'Ansicht zurücksetzen'))}">${iconSvg('refresh')}</button>
-          <label class="research-graph-limit" title="${escapeHtml(state.t('topWordsShown', 'Angezeigte Top-Begriffe'))}">
-            <span>${state.graph.visibleLimit}</span>
-            <input type="range" data-action="graph-limit" min="20" max="${maximum}" step="10" value="${Math.min(maximum, state.graph.visibleLimit)}" aria-label="${escapeHtml(state.t('topWordsShown', 'Angezeigte Top-Begriffe'))}" />
-          </label>
+          <div class="research-graph-detail" role="group" aria-label="${escapeHtml(state.t('graphDetail', 'Detailstufe'))}">
+            ${graphDetailButton('overview', state.t('detailOverview', 'Übersicht'))}
+            ${graphDetailButton('standard', state.t('detailStandard', 'Standard'))}
+            ${graphDetailButton('deep', state.t('detailDeep', 'Tief'))}
+          </div>
           <button type="button" data-action="graph-dimension" class="research-graph-tool research-graph-dimension" aria-label="${state.graph.dimensions === 3 ? escapeHtml(state.t('switch2d', 'Zu 2D wechseln')) : escapeHtml(state.t('switch3d', 'Zu 3D wechseln'))}" title="${state.graph.dimensions === 3 ? escapeHtml(state.t('switch2d', 'Zu 2D wechseln')) : escapeHtml(state.t('switch3d', 'Zu 3D wechseln'))}">${state.graph.dimensions}D</button>
           <button type="button" data-action="graph-command" data-graph-command="rotate" class="research-graph-tool${state.graph.autoRotate ? ' is-active' : ''}" aria-pressed="${state.graph.autoRotate}" aria-label="${escapeHtml(state.t('autoRotate', 'Automatische Rotation'))}" title="${escapeHtml(state.t('autoRotate', 'Automatische Rotation'))}">${iconSvg('refresh')}</button>
           <button type="button" data-action="graph-command" data-graph-command="zoom-in" class="research-graph-tool" aria-label="${escapeHtml(state.t('zoomIn', 'Vergrößern'))}" title="${escapeHtml(state.t('zoomIn', 'Vergrößern'))}">+</button>
@@ -1463,11 +1985,13 @@ function renderSemanticGraph(task, projection) {
           <button type="button" data-action="graph-command" data-graph-command="fit" class="research-graph-tool" aria-label="${escapeHtml(state.t('fitGraph', 'Graph einpassen'))}" title="${escapeHtml(state.t('fitGraph', 'Graph einpassen'))}">${iconSvg('focus')}</button>
         </div>
         <div class="research-graph-layer-switch" role="group" aria-label="${escapeHtml(state.t('graphLayer', 'Graph-Ebene'))}">
-          ${graphLayerButton('concepts', state.t('concepts', 'Begriffe'))}
+          ${graphLayerButton('all', state.t('all', 'Alle'))}
+          ${graphLayerButton('concepts', state.t('concepts', 'Themen'))}
           ${graphLayerButton('sources', state.t('sources', 'Quellen'))}
           ${graphLayerButton('evidence', state.t('evidence', 'Belege'))}
         </div>
         ${state.graph.panel === 'hidden' ? '' : renderGraphInsights(projection)}
+        ${projection.status === 'invalid_graph_contract' ? `<div class="research-graph-contract-error" data-graph-contract-status="invalid_graph_contract" data-graph-contract-errors="${escapeHtml((projection.errors || state.graphContractErrors || []).join(','))}">invalid_graph_contract</div>` : ''}
         <div class="research-graph-actions">
           <button type="button" class="research-graph-action" data-action="graph-ai" data-graph-ai="research" ${state.graph.busyAction ? 'disabled' : ''}>${iconSvg('search')}<span>${escapeHtml(state.t('targetedResearch', 'Nachrecherche'))}</span></button>
           <button type="button" class="research-graph-action" data-action="graph-ai" data-graph-ai="document" ${state.graph.busyAction || !evidenceRankedSources().length ? 'disabled' : ''}>${iconSvg('file')}<span>${escapeHtml(evidenceRankedSources().length ? state.t('createDocument', 'Dokument erstellen') : state.t('reportUnavailable', 'Report nicht verfügbar'))}</span></button>
@@ -1481,17 +2005,28 @@ function graphLayerButton(id, label) {
   return `<button type="button" data-action="graph-layer" data-graph-layer="${id}" class="${state.graph.layer === id ? 'is-active' : ''}" aria-pressed="${state.graph.layer === id}">${escapeHtml(label)}</button>`;
 }
 
+function graphDetailButton(id, label) {
+  return `<button type="button" data-action="graph-detail" data-graph-detail="${id}" class="${state.graph.detailLevel === id ? 'is-active' : ''}" aria-pressed="${state.graph.detailLevel === id}" title="${escapeHtml(label)}"><span>${escapeHtml(label)}</span></button>`;
+}
+
+function graphSummary(metrics = {}) {
+  const nodeLabel = state.graph.layer === 'concepts'
+    ? state.t('concepts', 'Themen')
+    : state.t('nodes', 'Elemente');
+  return `${metrics.nodeCount || 0} ${escapeHtml(nodeLabel)} · ${metrics.linkCount || 0} ${escapeHtml(state.t('relations', 'Verknüpfungen'))} · ${metrics.clusterCount || 0} ${escapeHtml(state.t('clusters', 'Themenfelder'))}`;
+}
+
 function renderGraphInsights(projection) {
   const metrics = projection.metrics || {};
   const body = state.graph.panel === 'analytics'
     ? `
       <dl class="research-graph-metrics">
-        <div><dt>${escapeHtml(state.t('nodes', 'Knoten'))}</dt><dd>${metrics.nodeCount || 0}</dd></div>
-        <div><dt>${escapeHtml(state.t('relations', 'Beziehungen'))}</dt><dd>${metrics.linkCount || 0}</dd></div>
-        <div><dt>${escapeHtml(state.t('clusters', 'Cluster'))}</dt><dd>${metrics.clusterCount || 0}</dd></div>
+        <div><dt>${escapeHtml(state.t('nodes', 'Elemente'))}</dt><dd>${metrics.nodeCount || 0}</dd></div>
+        <div><dt>${escapeHtml(state.t('relations', 'Verknüpfungen'))}</dt><dd>${metrics.linkCount || 0}</dd></div>
+        <div><dt>${escapeHtml(state.t('clusters', 'Themenfelder'))}</dt><dd>${metrics.clusterCount || 0}</dd></div>
         <div><dt>${escapeHtml(state.t('sources', 'Quellen'))}</dt><dd>${metrics.sourceCount || 0}</dd></div>
       </dl>
-      <p>${escapeHtml(state.t('graphMethod', 'Größe: Betweenness-Zentralität · Farbe: automatische Community · Kante: gemeinsame Nennung'))}</p>
+      <p>${escapeHtml(state.t('graphMethod', 'Größe zeigt fachliche Vernetzung, Farben gruppieren Themenfelder, Relationen zeigen Typ, Konfidenz und Provenienz.'))}</p>
     `
     : `<ol class="research-graph-topics">${(projection.topics || []).slice(0, 6).map((topic, index) => `
         <li>
@@ -1503,27 +2038,134 @@ function renderGraphInsights(projection) {
   return `
     <aside class="research-graph-insights">
       <div class="research-graph-insights-tabs" role="tablist" aria-label="Graph insights">
-        <button type="button" data-action="graph-panel" data-graph-panel="topics" class="${state.graph.panel === 'topics' ? 'is-active' : ''}" role="tab" aria-selected="${state.graph.panel === 'topics'}">${escapeHtml(state.t('topics', 'Topics'))}</button>
-        <button type="button" data-action="graph-panel" data-graph-panel="analytics" class="${state.graph.panel === 'analytics' ? 'is-active' : ''}" role="tab" aria-selected="${state.graph.panel === 'analytics'}">${escapeHtml(state.t('analytics', 'Analytics'))}</button>
+        <button type="button" data-action="graph-panel" data-graph-panel="topics" class="${state.graph.panel === 'topics' ? 'is-active' : ''}" role="tab" aria-selected="${state.graph.panel === 'topics'}">${escapeHtml(state.t('topics', 'Themenfelder'))}</button>
+        <button type="button" data-action="graph-panel" data-graph-panel="analytics" class="${state.graph.panel === 'analytics' ? 'is-active' : ''}" role="tab" aria-selected="${state.graph.panel === 'analytics'}">${escapeHtml(state.t('analytics', 'Qualität'))}</button>
       </div>
       ${body}
+      ${renderGraphInspector(projection)}
     </aside>
   `;
 }
 
+function renderGraphInspector(projection) {
+  const node = projection.nodes.find((candidate) => candidate.id === state.selectedGraphNodeId);
+  if (!node) return '<div class="research-graph-inspector" data-graph-inspector>Node auswählen, um Relation und Provenienz zu prüfen.</div>';
+  const relations = projection.links
+    .filter((link) => graphLinkNodeId(link.source) === node.id || graphLinkNodeId(link.target) === node.id)
+    .slice(0, 6)
+    .map((link) => `<li><strong>${escapeHtml(link.label || link.relationType || 'co_occurs')}</strong><span>${escapeHtml(formatGraphConfidence(link.confidence))}</span><small>${escapeHtml(formatGraphProvenance(link.provenance))}</small></li>`)
+    .join('');
+  return `<div class="research-graph-inspector" data-graph-inspector><strong>${escapeHtml(node.label)}</strong><span>Confidence ${escapeHtml(formatGraphConfidence(node.confidence))}</span><small>Provenienz: ${escapeHtml(formatGraphProvenance(node.provenance))}</small>${relations ? `<ul>${relations}</ul>` : ''}</div>`;
+}
+
+function formatGraphConfidence(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? `${Math.round((number > 1 ? number / 100 : number) * 100)}%` : 'n/a';
+}
+
+function formatGraphProvenance(value) {
+  if (!value) return 'nicht vorhanden';
+  if (typeof value === 'string') return value;
+  return [value.method, value.table, value.evidenceId, value.kind].filter(Boolean).join(' · ') || 'verifiziert';
+}
+
 function currentGraphProjection(task = selectedTask()) {
   const evidenceGraphRows = filterGraphRowsForEvidence(state.graphNodeRows, state.graphEdgeRows, evidenceSourceIds(state.sourceModels));
-  const projection = buildResearchGraphProjection({
-    task,
-    sourceModels: evidenceSourceModels(state.sourceModels),
-    measurementRows: filterMeasurementRowsForEvidence(state.measurementRows),
-    graphNodeRows: evidenceGraphRows.nodes,
-    graphEdgeRows: evidenceGraphRows.edges,
-    graphLayer: state.graph.layer,
-    visibleLimit: state.graph.visibleLimit,
-  });
+  const key = graphProjectionFingerprint(task, evidenceGraphRows, state.graph.layer, state.sourceModels, state.measurementRows);
+  const cached = state.graphProjectionCache.get(key);
+  const baseProjection = cached || enrichGraphSemanticMetadata(buildResearchGraphProjection({
+      task,
+      sourceModels: evidenceSourceModels(state.sourceModels),
+      measurementRows: filterMeasurementRowsForEvidence(state.measurementRows),
+      graphNodeRows: evidenceGraphRows.nodes,
+      graphEdgeRows: evidenceGraphRows.edges,
+      graphLayer: state.graph.layer,
+      detailLevel: 'deep',
+      visibleLimit: GRAPH_DETAIL_LEVELS.deep,
+      verifiedSourceIds: evidenceSourceIds(state.sourceModels),
+      graphContractStatus: evidenceGraphRows.status,
+      graphContractErrors: evidenceGraphRows.errors,
+    }), evidenceGraphRows.nodes, evidenceGraphRows.edges, task);
+  const projection = baseProjection.status === 'invalid_graph_contract'
+    ? baseProjection
+    : sliceResearchGraphProjection(baseProjection, state.graph.detailLevel, state.graph.visibleLimit, state.graph.layer);
   state.graphProjection = projection;
+  if (!cached) state.graphProjectionCache.set(key, baseProjection);
+  while (state.graphProjectionCache.size > 8) state.graphProjectionCache.delete(state.graphProjectionCache.keys().next().value);
   return projection;
+}
+
+function enrichGraphSemanticMetadata(projection, graphNodeRows = [], graphEdgeRows = [], task = null) {
+  const nodeMetadata = new Map(graphNodeRows.map((row) => [firstString(row, ['node_id', 'id', 'concept_id', 'key']), graphSemanticMetadata(row)]));
+  const edgeMetadata = new Map(graphEdgeRows.map((row) => [firstString(row, ['edge_id', 'id']), graphSemanticMetadata(row)]));
+  return {
+    ...projection,
+    metadata: {
+      ...(projection?.metadata || {}),
+      task: task ? { id: task.id || '', title: task.title || '', knowledge_domain: task.knowledge_domain || '' } : null,
+      provenance: 'research-graph-projection',
+    },
+    nodes: (projection?.nodes || []).map((node) => ({
+      ...node,
+      ...nodeMetadata.get(node.id),
+    })),
+    links: (projection?.links || []).map((link) => ({
+      ...link,
+      ...edgeMetadata.get(link.id),
+    })),
+  };
+}
+
+function graphSemanticMetadata(row) {
+  if (!row || typeof row !== 'object') return {};
+  const metadata = parseObject(row.metadata_json ?? row.metadata) || {};
+  return compactDefined({
+    label: firstString(row, ['label', 'title', 'concept', 'term']) || undefined,
+    tags: parseStringList(row.tags_json ?? row.tags ?? row.labels),
+    description: firstString(row, ['description', 'summary', 'note']) || undefined,
+    clusterHint: firstString(row, ['cluster_id', 'cluster', 'community']) || undefined,
+    provenance: parseObject(row.provenance_json ?? row.provenance) || undefined,
+    metadata: Object.keys(metadata).length ? metadata : undefined,
+  });
+}
+
+function compactDefined(value) {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
+}
+
+function graphProjectionFingerprint(task, graphRows, layer, sourceModels, measurementRows) {
+  return JSON.stringify({
+    task: task?.id || task?.knowledge_domain || '',
+    layer,
+    graphStatus: graphRows.status || '',
+    nodes: (graphRows.nodes || []).map((row) => [row.node_id || row.id, row.updated_at, row.confidence, row.provenance_json, row.source_ids_json]),
+    edges: (graphRows.edges || []).map((row) => [row.edge_id || row.id, row.updated_at, row.relation_type, row.confidence, row.provenance_json, row.source_ids_json]),
+    sources: (sourceModels || []).map((source) => [source.id, source.evidenceEligible, source.score, source.row?.snapshot_id, source.row?.snapshot_hash]),
+    evidence: (measurementRows || []).map((row) => [row.evidence_id || row.claim_id || row.id, row.source_id, row.snapshot_id, row.snapshot_hash, row.updated_at]),
+  });
+}
+
+function refreshGraphProjectionInPlace() {
+  if (!state.graphSurface) {
+    renderCenter();
+    return;
+  }
+  const projection = currentGraphProjection();
+  const center = pane('center');
+  center?.querySelectorAll('[data-action="graph-layer"]').forEach((button) => {
+    const active = button.dataset.graphLayer === state.graph.layer;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+  center?.querySelectorAll('[data-action="graph-detail"]').forEach((button) => {
+    const active = button.dataset.graphDetail === state.graph.detailLevel;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+  const summary = center?.querySelector('[data-graph-summary]');
+  if (summary) summary.innerHTML = graphSummary(projection.metrics);
+  updateGraphInsights();
+  state.graphSurface.setData(projection);
 }
 
 async function scheduleResearchGraphMount(task, projection) {
@@ -1534,7 +2176,9 @@ async function scheduleResearchGraphMount(task, projection) {
   const token = ++state.graphMountToken;
   const loading = root.querySelector('[data-research-graph-loading]');
   if (!projection.nodes.length) {
-    if (loading) loading.innerHTML = `<span>${escapeHtml(state.t('graphNoData', 'Noch keine Begriffe. Starte eine Nachrecherche oder füge Quellen hinzu.'))}</span>`;
+    if (loading) loading.innerHTML = projection.status === 'invalid_graph_contract'
+      ? '<strong>invalid_graph_contract</strong><span>Persistierte Graphdaten erfüllen den Evidence-/Provenienzvertrag nicht.</span>'
+      : `<span>${escapeHtml(state.t('graphNoData', 'Noch keine Begriffe. Starte eine Nachrecherche oder füge Quellen hinzu.'))}</span>`;
     return;
   }
   try {
@@ -1546,6 +2190,7 @@ async function scheduleResearchGraphMount(task, projection) {
       projection,
       dimensions: state.graph.dimensions,
       autoRotate: state.graph.autoRotate,
+      sourceCountLabel: state.t('sources', 'Quellen'),
       onNodeClick(node) {
         selectGraphNode(node);
       },
@@ -1590,6 +2235,7 @@ function selectGraphNode(node) {
     renderLeft();
     renderRight();
   }
+  updateGraphInsights();
 }
 
 function handleGraphCommand(command) {
@@ -1636,10 +2282,29 @@ function updateGraphInsights() {
 async function dispatchGraphAiAction(action) {
   const task = selectedTask();
   if (!task || state.graph.busyAction) return;
+  if (action !== 'document') {
+    const selectedNode = state.graphProjection?.nodes?.find((node) => node.id === state.selectedGraphNodeId) || null;
+    if (!selectedNode) {
+      await runSelectedResearch();
+      return;
+    }
+  }
   if (action === 'document' && !evidenceRankedSources().length) {
     setStatus(state.t('reportRequiresVerifiedSources', 'Reports sind ohne verifizierte Quellen nicht verfügbar.'));
     renderCenter();
     return;
+  }
+  if (action === 'document') {
+    const base = knowledgeBaseForTask(task);
+    const latestRun = latestEvidenceRunForTask(task.id, state.runs);
+    const selectedNode = state.graphProjection?.nodes?.find((node) => node.id === state.selectedGraphNodeId) || null;
+    const selectedIds = eligibleGraphFocusSourceIds(selectedNode, state.sourceModels);
+    const lineage = graphDocumentLineage(task, base, latestRun, state.sourceModels, selectedIds);
+    if (!lineage.ok) {
+      setStatus(`${state.t('graphDocumentUnavailable', 'Dokument nicht erstellt: belastbare Knowledge-/Quellen-Provenienz fehlt')}. ${lineage.reason}`);
+      renderCenter();
+      return;
+    }
   }
   if (!canWriteResearchState()) {
     setStatus(researchWriteDeniedMessage());
@@ -1661,7 +2326,10 @@ async function dispatchGraphAiAction(action) {
 }
 
 async function dispatchTargetedGraphResearch(task) {
+  const commandId = `cmd_${crypto.randomUUID()}`;
+  const researchRunId = `research_run_${crypto.randomUUID()}`;
   const selectedNode = state.graphProjection?.nodes?.find((node) => node.id === state.selectedGraphNodeId) || null;
+  const graphFocusSourceIds = eligibleGraphFocusSourceIds(selectedNode, state.sourceModels);
   const focus = selectedNode?.label || task.title;
   const related = selectedNode
     ? state.graphProjection.links
@@ -1675,6 +2343,8 @@ async function dispatchTargetedGraphResearch(task) {
     : [];
   const instruction = [
     `Führe eine gezielte Nachrecherche für den Research-Graph "${task.title}" durch.`,
+    `Research Run ID: ${researchRunId}`,
+    `Research Command ID: ${commandId}`,
     `Fokusbegriff: ${focus}`,
     related.length ? `Benachbarte Begriffe: ${related.join(', ')}` : '',
     `Knowledge domain: ${task.knowledge_domain}`,
@@ -1682,9 +2352,9 @@ async function dispatchTargetedGraphResearch(task) {
     task.prompt || '',
     '',
     'Nutze systematic-research und die CTOX Web-Research-Tools. Prüfe die vorhandenen Belege, schließe erkennbare Lücken und schreibe neue Quellen und Belege sofort in die bestehenden Knowledge-Tabellen.',
-    'Aktualisiere semantic_graph_nodes und semantic_graph_edges inkrementell. Erzeuge Kanten aus gemeinsamer Nennung in einem 4-Token-Fenster, behalte Provenienz und Source-IDs und überschreibe keine belegten Daten ohne neuen Nachweis.',
+    `Schreibe auf jede erzeugte oder aktualisierte Knowledge-Zeile research_run_id=${researchRunId} und research_command_id=${commandId}.`,
+    'Aktualisiere semantic_graph_nodes und semantic_graph_edges inkrementell aus verifizierten Evidenzzeilen. Verwende kanonische fachliche Mehrwort-Begriffe, klare Clusterbezeichnungen und typisierte Relationen. Technische Feldnamen, IDs, Hashes, URLs und generische Metadaten dürfen keine Konzepte werden. Jeder Knoten und jede Kante braucht Source-IDs, Konfidenz und Provenienz; überschreibe keine belegten Daten ohne neuen Nachweis.',
   ].filter(Boolean).join('\n');
-  const commandId = `cmd_${crypto.randomUUID()}`;
   const now = Date.now();
   const result = await state.ctx.commandBus.dispatch({
     id: commandId,
@@ -1700,17 +2370,23 @@ async function dispatchTargetedGraphResearch(task) {
       required_skills: ['systematic-research'],
       research_mode: 'targeted_graph_gap',
       thread_key: `business-os/research/${task.id}`,
+      research_run_id: researchRunId,
+      research_command_id: commandId,
       knowledge_domain: task.knowledge_domain,
       graph_focus: {
         node_id: selectedNode?.id || '',
         label: focus,
         related_terms: related,
-        source_ids: selectedNode?.sourceIds || [],
+        source_ids: graphFocusSourceIds,
       },
       knowledge_contract: {
         domain: task.knowledge_domain,
         tables: task.payload?.table_contract || RESEARCH_TABLE_CONTRACT,
         provenance_required: true,
+        row_lineage_required: {
+          research_run_id: researchRunId,
+          research_command_id: commandId,
+        },
       },
       graph_contract: semanticGraphContract(),
       writeback_contract: {
@@ -1724,16 +2400,18 @@ async function dispatchTargetedGraphResearch(task) {
       source_module: 'research',
       inbound_channel: 'business_os.research',
       knowledge_domain: task.knowledge_domain,
+      research_run_id: researchRunId,
+      research_command_id: commandId,
       graph_node_id: selectedNode?.id || '',
     },
   });
   const run = {
-    id: `research_run_${now}`,
+    id: researchRunId,
     task_id: task.id,
     status: result?.task_status || result?.status || 'queued',
     command_id: commandId,
     task_queue_id: result?.task_id || '',
-    identified_count: state.sourceRows.length,
+    identified_count: state.candidateRows.length + state.sourceRows.length,
     accepted_count: evidenceRankedSources().length,
     used_count: evidenceRankedSources().length,
     payload: { result, graph_focus: focus },
@@ -1745,9 +2423,18 @@ async function dispatchTargetedGraphResearch(task) {
   setStatus(state.t('targetedResearchQueued', 'Gezielte Nachrecherche wurde an CTOX übergeben.'));
 }
 
+function eligibleGraphFocusSourceIds(selectedNode, sourceModels = state.sourceModels) {
+  const eligibleIds = evidenceSourceIds(sourceModels);
+  return [...new Set((selectedNode?.sourceIds || []).map(String).filter((id) => eligibleIds.has(id)))];
+}
+
 async function dispatchGraphDocumentTask(task) {
-  if (!evidenceRankedSources().length) return;
+  const base = knowledgeBaseForTask(task);
+  const latestRun = latestEvidenceRunForTask(task.id, state.runs);
   const selectedNode = state.graphProjection?.nodes?.find((node) => node.id === state.selectedGraphNodeId) || null;
+  const graphFocusSourceIds = eligibleGraphFocusSourceIds(selectedNode, state.sourceModels);
+  const lineage = graphDocumentLineage(task, base, latestRun, state.sourceModels, graphFocusSourceIds);
+  if (!lineage.ok) throw new Error(lineage.reason);
   const focus = selectedNode?.label || task.title;
   const title = `${task.title} · ${focus}`.slice(0, 120);
   const filename = `${slugId(title).slice(0, 82) || 'research-graph-report'}.docx`;
@@ -1755,9 +2442,12 @@ async function dispatchGraphDocumentTask(task) {
   const commandId = `cmd_${crypto.randomUUID()}`;
   const instruction = [
     `Erstelle ein belastbares Word-Dokument aus dem Research-Graph "${task.title}".`,
+    `Research Run ID: ${latestRun?.id || ''}`,
+    `Research Command ID: ${commandId}`,
     `Fokus: ${focus}`,
     `Knowledge domain: ${task.knowledge_domain}`,
-    selectedNode?.sourceIds?.length ? `Bevorzugte Source-IDs: ${selectedNode.sourceIds.join(', ')}` : '',
+    `Knowledge version: ${lineage.knowledge_version_id}`,
+    graphFocusSourceIds.length ? `Bevorzugte Source-IDs: ${graphFocusSourceIds.join(', ')}` : '',
     '',
     'Nutze systematic-research für die Knowledge-Lookup-Pflicht und den doc-Skill für Produktion, Rendering und visuelle Qualitätsprüfung.',
     'Strukturiere Kernaussagen, Cluster, Zusammenhänge, Evidenzlücken und Handlungsempfehlungen. Zitiere nur nachweisbare Quellen aus der Knowledge Base.',
@@ -1783,10 +2473,18 @@ async function dispatchGraphDocumentTask(task) {
       required_artifacts: [outputPath],
       thread_key: `business-os/research/${task.id}`,
       knowledge_domain: task.knowledge_domain,
+      knowledge_version_id: lineage.knowledge_version_id,
+      knowledge_version: lineage.knowledge_version,
+      source_receipts: lineage.source_receipts,
+      requested_snapshot_hashes: lineage.requested_snapshot_hashes,
+      evidence_lineage: lineage.evidence_lineage,
       graph_focus: {
         node_id: selectedNode?.id || '',
         label: focus,
-        source_ids: selectedNode?.sourceIds || [],
+        source_ids: graphFocusSourceIds,
+        snapshot_hashes: lineage.source_receipts
+          .filter((receipt) => !graphFocusSourceIds.length || graphFocusSourceIds.includes(receipt.source_id))
+          .map((receipt) => receipt.snapshot_hash),
       },
       document_quality_contract: {
         use_documents_skill: true,
@@ -1803,6 +2501,14 @@ async function dispatchGraphDocumentTask(task) {
         title,
         filename,
         output_path: outputPath,
+        linked_records: [
+          { kind: 'research_task', id: task.id },
+          { kind: 'knowledge_domain', id: task.knowledge_domain },
+          { kind: 'knowledge_version', id: lineage.knowledge_version_id },
+        ],
+        knowledge_version_id: lineage.knowledge_version_id,
+        source_receipts: lineage.source_receipts,
+        requested_snapshot_hashes: lineage.requested_snapshot_hashes,
       },
     },
     client_context: {
@@ -1823,12 +2529,19 @@ function semanticGraphContract() {
   return {
     nodes_table_key: 'semantic_graph_nodes',
     edges_table_key: 'semantic_graph_edges',
-    extraction: 'concept_cooccurrence',
-    cooccurrence_window_tokens: 4,
+    extraction: 'evidence_grounded_domain_concepts',
+    node_kinds: [...GRAPH_NODE_KINDS],
+    node_fields: ['node_id', 'label', 'kind', 'description', 'aliases_json', 'cluster_id', 'cluster_label', 'occurrences', 'evidence_count', 'betweenness_centrality', 'confidence', 'source_ids_json', 'provenance_json'],
+    edge_fields: ['edge_id', 'source_id', 'target_id', 'relation_type', 'label', 'weight', 'confidence', 'source_ids_json', 'provenance_json'],
+    allowed_relation_types: [...GRAPH_RELATION_TYPES],
+    semantic_labels_required: true,
+    technical_metadata_keys_forbidden_as_concepts: true,
     community_detection: 'automatic_modularity',
     node_importance: 'betweenness_centrality',
     incremental_writeback: true,
     provenance_required: true,
+    verified_source_required: true,
+    confidence_range: [0, 1],
   };
 }
 
@@ -1932,9 +2645,13 @@ function renderDiscoveryGraph(task) {
 }
 
 function getSearchCluster(source) {
-  const meta = DRONE_SOURCES_METADATA[source.id];
-  const tags = meta?.tags || [];
-  const text = [source.id, source.title, source.sourceClass, source.note, meta?.kind, ...(meta?.tags || [])].join(' ').toLowerCase();
+  const tags = sourceTags(source);
+  const text = [source.id, source.title, source.sourceClass, source.note, ...tags].join(' ').toLowerCase();
+
+  if (inferResearchKind(selectedTask()) !== 'bearing') {
+    const taxonomy = domainTaxonomy(selectedTask());
+    return taxonomy.clusters.find((cluster) => cluster.pattern.test(text))?.id || taxonomy.fallback;
+  }
 
   if (tags.includes('simulation') || /simulation|modell|gazebo|sih|virtuell|cfd|ansys|numerical/i.test(text)) {
     return 'simulation';
@@ -1951,7 +2668,7 @@ function getSearchCluster(source) {
   if (tags.includes('rotorload') || tags.includes('windtunnel') || /rotor|propeller|thrust|force|moment|aerodynamic|windtunnel|windkanal/i.test(text)) {
     return 'rotorload';
   }
-  return 'rotorload';
+  return 'other';
 }
 
 function discoveryGraph(task) {
@@ -2154,10 +2871,11 @@ function updateMapTransform() {
 }
 
 function renderActiveTable(task) {
+  if (state.activeTab === 'candidates') return renderSourcesWorkbench(state.candidateModels, { candidates: true });
   if (state.activeTab === 'measurements') return renderMeasurementsTable();
   if (state.activeTab === 'knowledge') return renderKnowledgeTables(task);
   if (state.activeTab === 'reports') return renderReportsWorkbench(task);
-  return renderSourcesWorkbench();
+  return renderSourcesWorkbench(evidenceRankedSources());
 }
 
 function renderSourcesTable(filteredList = state.sourceModels) {
@@ -2193,7 +2911,7 @@ function renderSourcesTable(filteredList = state.sourceModels) {
             <td class="is-num"><span class="ctox-badge ${gradeBadgeClass(source.grade)}">${escapeHtml(source.grade)}${source.evidenceEligible ? ` · ${formatPortfolioScore(source.score)}` : ''}</span></td>
             <td class="is-num">${formatDimensionScore(source.dimensions[yAxis])}</td>
             <td class="is-num">${formatDimensionScore(source.dimensions[xAxis])}</td>
-            <td class="is-num">${source.url ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(state.t('openLabel', 'Open'))}</a>` : ''}</td>
+            <td class="is-num">${source.evidenceEligible && source.canonicalUrl ? `<a href="${escapeHtml(source.canonicalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(state.t('openLabel', 'Open'))}</a>` : ''}</td>
           </tr>
         `).join('') || `<tr><td colspan="6">${escapeHtml(state.t('noSources', 'Keine Quellen vorhanden.'))}</td></tr>`}
       </tbody>
@@ -2201,18 +2919,11 @@ function renderSourcesTable(filteredList = state.sourceModels) {
   `;
 }
 
-function renderSourcesWorkbench() {
+function renderSourcesWorkbench(sourceModels = evidenceRankedSources(), { candidates = false } = {}) {
   const activeTag = state.sourceActiveTag || 'all';
-  const subthemes = [
-    { id: 'all', label: state.t('subthemeAll', 'Alle') },
-    { id: 'rotorload', label: state.t('subthemeRotorload', 'Rotorlast') },
-    { id: 'bench', label: state.t('subthemeBench', 'Prüfstand') },
-    { id: 'flightlog', label: state.t('subthemeFlightlog', 'Fluglog') },
-    { id: 'vibration', label: state.t('subthemeVibration', 'Vibration') },
-    { id: 'simulation', label: state.t('subthemeSimulation', 'Simulation') }
-  ];
+  const subthemes = [{ id: 'all', label: state.t('subthemeAll', 'Alle') }, ...domainTaxonomy(selectedTask()).clusters];
 
-  const filtered = filteredSources();
+  const filtered = filteredSources(sourceModels);
 
   return `
     <div class="research-sources-shards-wrapper">
@@ -2221,7 +2932,9 @@ function renderSourcesWorkbench() {
                class="ctox-input research-sources-shards-search"
                id="research-source-search-input"
                data-action="source-search"
-               placeholder="${escapeHtml(state.t('searchSourcesPlaceholder', 'Quelle suchen: NASA, UIUC, Tyto, PX4, Vibration ...'))}"
+               placeholder="${escapeHtml(candidates
+                 ? state.t('searchCandidatesPlaceholder', 'Kandidat suchen: DOI, Titel, Publisher ...')
+                 : state.t('searchSourcesPlaceholder', 'Quelle suchen: NASA, UIUC, Tyto, PX4, Vibration ...'))}"
                value="${escapeHtml(state.sourceSearchTerm || '')}"
                autocomplete="off" />
         <div class="research-sources-shards-filters">
@@ -2250,14 +2963,13 @@ function renderSourcesWorkbench() {
   `;
 }
 
-function filteredSources() {
+function filteredSources(sourceModels = state.sourceModels) {
   const activeTag = state.sourceActiveTag || 'all';
   const searchTerm = (state.sourceSearchTerm || '').trim().toLowerCase();
 
-  return state.sourceModels.filter((source) => {
+  return sourceModels.filter((source) => {
     if (activeTag !== 'all') {
-      const meta = DRONE_SOURCES_METADATA[source.id];
-      const tags = meta?.tags || [];
+      const tags = sourceTags(source);
       if (!tags.includes(activeTag)) return false;
     }
     if (searchTerm) {
@@ -2265,12 +2977,11 @@ function filteredSources() {
       const idMatch = (source.id || '').toLowerCase().includes(searchTerm);
       const classMatch = (source.sourceClass || '').toLowerCase().includes(searchTerm);
 
-      const meta = DRONE_SOURCES_METADATA[source.id];
-      const kindMatch = meta?.kind ? meta.kind.toLowerCase().includes(searchTerm) : false;
-      const fieldsMatch = meta?.fields ? meta.fields.toLowerCase().includes(searchTerm) : false;
-      const useMatch = meta?.use ? meta.use.toLowerCase().includes(searchTerm) : false;
-      const missingMatch = meta?.missing ? meta.missing.toLowerCase().includes(searchTerm) : false;
-      const tagMatch = meta?.tags ? meta.tags.some(t => t.toLowerCase().includes(searchTerm)) : false;
+      const kindMatch = source.subtitle.toLowerCase().includes(searchTerm);
+      const fieldsMatch = firstString(source.row, ['data_fields', 'fields', 'measurement_fields']).toLowerCase().includes(searchTerm);
+      const useMatch = firstString(source.row, ['contribution_note', 'contribution', 'use']).toLowerCase().includes(searchTerm);
+      const missingMatch = firstString(source.row, ['evidence_gap', 'gap', 'limitations']).toLowerCase().includes(searchTerm);
+      const tagMatch = sourceTags(source).some((tag) => tag.toLowerCase().includes(searchTerm));
 
       if (!titleMatch && !idMatch && !classMatch && !kindMatch && !fieldsMatch && !useMatch && !missingMatch && !tagMatch) {
         return false;
@@ -2282,13 +2993,12 @@ function filteredSources() {
 
 function renderSourceCard(source) {
   const isSelected = source.id === state.selectedSourceId;
-  const meta = DRONE_SOURCES_METADATA[source.id];
-
-  const kind = meta?.kind || source.sourceClass || 'Quelle';
-  const tags = meta?.tags || [source.sourceClass.toLowerCase()];
-  const fields = meta?.fields || source.summary || state.t('noSummaryAvailable', 'Keine Zusammenfassung.');
-  const use = meta?.use || 'Verfügbare quantitative Datenpunkte für das Dashboard.';
-  const missing = meta?.missing || 'Nicht separat aufbereitete Lückenanalyse.';
+  const kind = source.sourceClass || 'Quelle';
+  const tags = sourceTags(source);
+  const fields = firstString(source.row, ['data_fields', 'fields', 'measurement_fields', 'summary']) || state.t('noSummaryAvailable', 'Keine Zusammenfassung.');
+  const use = firstString(source.row, ['contribution_note', 'contribution', 'use']) || state.t('contributionMissing', 'Beitrag nicht dokumentiert.');
+  const missing = firstString(source.row, ['evidence_gap', 'gap', 'limitations']) || state.t('limitationsMissing', 'Grenzen nicht dokumentiert.');
+  const canonicalUrl = firstString(source.row, ['canonical_url']);
 
   return `
     <div class="research-source-card${isSelected ? ' is-selected' : ''}"
@@ -2317,21 +3027,9 @@ function renderSourceCard(source) {
         <span class="k">Lücke</span>
         <span class="v">${escapeHtml(missing)}</span>
       </div>
-      ${meta?.links && meta.links.length > 0 ? `
+      ${source.evidenceEligible && canonicalUrl ? `
         <div class="research-source-card-actions">
-          ${meta.links.map((link, idx) => `
-            <a href="${escapeHtml(link[1])}"
-               class="research-source-card-btn${idx === 0 ? ' primary' : ''}"
-               target="_blank"
-               rel="noreferrer"
-               onclick="event.stopPropagation();">
-              ${escapeHtml(link[0])}
-            </a>
-          `).join('')}
-        </div>
-      ` : source.url ? `
-        <div class="research-source-card-actions">
-          <a href="${escapeHtml(source.url)}"
+          <a href="${escapeHtml(canonicalUrl)}"
              class="research-source-card-btn primary"
              target="_blank"
              rel="noreferrer"
@@ -2342,6 +3040,26 @@ function renderSourceCard(source) {
       ` : ''}
     </div>
   `;
+}
+
+function sourceTags(source) {
+  const raw = source?.row?.tags ?? source?.row?.source_tags ?? source?.sourceClass ?? '';
+  const values = Array.isArray(raw)
+    ? raw
+    : typeof raw === 'string' && raw.trim().startsWith('[')
+      ? (() => { try { return JSON.parse(raw); } catch { return raw.split(/[,;|]/); } })()
+      : String(raw).split(/[,;|]/);
+  const taxonomy = domainTaxonomy(selectedTask());
+  const allowed = new Set(taxonomy.clusters.map((cluster) => cluster.id));
+  const aliases = new Map([
+    ['autonomous agents', 'agent'], ['agent orchestration', 'agent'], ['agentic workflow', 'agent'],
+    ['enterprise readiness', 'enterprise'], ['trust compliance', 'enterprise'], ['customer proof', 'market'],
+    ['integration api', 'integration'], ['research quality', 'research-quality'],
+    ['rotor load', 'rotorload'], ['wind tunnel', 'rotorload'], ['flight log', 'flightlog'],
+  ]);
+  return [...new Set(values.map((value) => String(value).trim().toLowerCase())
+    .map((value) => aliases.get(value) || value.replace(/\s+/g, '-'))
+    .filter((value) => value && value !== 'source' && allowed.has(value)))];
 }
 
 function gradeFullText(grade) {
@@ -2366,6 +3084,7 @@ function formatDimensionScore(value) {
 }
 
 function renderMeasurementsTable() {
+  const rows = filterMeasurementRowsForEvidence(state.measurementRows, state.sourceModels);
   return `
     <table class="ctox-table" style="table-layout: fixed; width: 100%;">
       <colgroup>
@@ -2393,7 +3112,7 @@ function renderMeasurementsTable() {
         </tr>
       </thead>
       <tbody>
-        ${state.measurementRows.slice(0, 120).map((row) => `
+        ${rows.slice(0, 120).map((row) => `
           <tr>
             <td>${escapeHtml(row.source_id || '')}</td>
             <td>${escapeHtml(propellerSize(row))}</td>
@@ -2405,7 +3124,7 @@ function renderMeasurementsTable() {
             <td class="is-num">${formatMeasurementNumber(row.torque_Nm)}</td>
             <td>${escapeHtml(firstString(row, ['confidence', 'derivation_method']).slice(0, 90))}</td>
           </tr>
-        `).join('') || `<tr><td colspan="9">${escapeHtml(state.t('noMeasurements', 'Keine Messpunkte vorhanden.'))}</td></tr>`}
+        `).join('') || `<tr><td colspan="9">${escapeHtml(state.t('noMeasurements', 'Keine verifizierten Messpunkte vorhanden.'))}</td></tr>`}
       </tbody>
     </table>
   `;
@@ -2428,23 +3147,22 @@ function propellerSize(row) {
 }
 
 function metricPropellerLength(row, stem) {
-  const metric = numberValue(row[`${stem}_mm`]);
-  if (metric) return metric;
-  const inches = numberValue(row[`${stem}_in`]);
-  return inches ? inches * 25.4 : '';
+  const metric = optionalNumberValue(row[`${stem}_mm`]);
+  if (metric !== null) return metric;
+  const inches = optionalNumberValue(row[`${stem}_in`]);
+  return inches === null ? '' : inches * 25.4;
 }
 
 function tangentialEquivalentForce(row) {
-  const explicit = numberValue(row.tangential_equivalent_force_N);
-  if (explicit) return explicit;
-  const legacy = numberValue(row.radial_load_N);
-  return legacy ? Math.abs(legacy) : '';
+  const explicit = optionalNumberValue(row.tangential_equivalent_force_N);
+  return explicit === null ? '' : explicit;
 }
 
 function renderKnowledgeTables(task) {
   const base = knowledgeBaseForTask(task);
   return `
     <div class="research-knowledge-list">
+      ${renderDataQualityNotices()}
       ${(base?.tables || []).map((table) => `
         <button type="button" data-action="open-knowledge" data-table-id="${escapeHtml(table.id)}">
           <strong>${escapeHtml(table.title || table.table_key)}</strong>
@@ -2453,6 +3171,15 @@ function renderKnowledgeTables(task) {
       `).join('') || `<div class="research-empty">${escapeHtml(state.t('noKnowledgeConnected', 'Keine Knowledge-Tabellen verknüpft.'))}</div>`}
     </div>
   `;
+}
+
+function renderDataQualityNotices() {
+  const notices = [
+    ...state.rowLimitWarnings.map((warning) => `Anzeige auf ${ROW_LIMIT.toLocaleString(state.lang === 'de' ? 'de-DE' : 'en-US')} Zeilen begrenzt (${warning.sourceRowCount.toLocaleString(state.lang === 'de' ? 'de-DE' : 'en-US')} vorhanden).`),
+    ...state.chunkDiagnostics.map((diagnostic) => `Tabelle ${diagnostic.tableId || 'unbekannt'} wurde wegen unvollständiger Chunk-Metadaten nicht geladen: ${diagnostic.reason}`),
+  ];
+  if (!notices.length) return '';
+  return `<div class="research-data-quality-notices" role="status">${notices.map((notice) => `<span>${escapeHtml(notice)}</span>`).join('')}</div>`;
 }
 
 function renderRight() {
@@ -2486,9 +3213,9 @@ function renderRight() {
       </section>
       ${renderScoringModel(task)}
       <section class="research-metric-grid">
-        <div><strong>${state.sourceModels.length}</strong><span>${escapeHtml(state.t('sources', 'Sources'))}</span></div>
-        <div><strong>${evidenceRankedSources().length}</strong><span>${escapeHtml(state.t('verified', 'Verified'))}</span></div>
-        <div><strong>${state.measurementRows.length}</strong><span>${escapeHtml(state.t('measurements', 'Measurements'))}</span></div>
+        <div><strong>${state.candidateModels.length}</strong><span>${escapeHtml(state.t('candidates', 'Candidates'))}</span></div>
+        <div><strong>${evidenceRankedSources().length}</strong><span>${escapeHtml(state.t('sources', 'Sources'))}</span></div>
+        <div><strong>${filterMeasurementRowsForEvidence(state.measurementRows, state.sourceModels).length}</strong><span>${escapeHtml(state.t('measurements', 'Measurements'))}</span></div>
         <div><strong>${avgScore()}</strong><span>${escapeHtml(state.t('avgScore', 'Avg score'))}</span></div>
         <div><strong>${runInfo.status || latestRun?.status || task?.status || 'ready'}</strong><span>${escapeHtml(state.t('status', 'Status'))}</span></div>
       </section>
@@ -2611,8 +3338,9 @@ function computedDecisionNotes(source) {
   if (top) {
     notes.push({ kind: 'opportunity', title: state.t('decisionNoteEv1', 'Use strongest evidence first'), body: state.t('decisionNoteEv1Body', `${top.title} ist aktuell der stärkste Dashboard-Anker.`, top.title) });
   }
-  if (state.measurementRows.length) {
-    notes.push({ kind: 'opportunity', title: state.t('decisionNoteQuant', 'Quantitative evidence available'), body: state.t('decisionNoteQuantBody', `${state.measurementRows.length} Messpunkte können in die aktiven Scoring-Kriterien einfließen.`, state.measurementRows.length) });
+  const verifiedMeasurementCount = filterMeasurementRowsForEvidence(state.measurementRows, state.sourceModels).length;
+  if (verifiedMeasurementCount) {
+    notes.push({ kind: 'opportunity', title: state.t('decisionNoteQuant', 'Quantitative evidence available'), body: state.t('decisionNoteQuantBody', `${verifiedMeasurementCount} Messpunkte können in die aktiven Scoring-Kriterien einfließen.`, verifiedMeasurementCount) });
   }
   if (!top) {
     notes.push({ kind: 'risk', title: state.t('decisionNoteGate', 'Evidence gate active'), body: state.t('decisionNoteGateBody', 'Discovery-Kandidaten bleiben sichtbar, bis Verifizierung, Snapshot und HTTP-Erfolg vollständig vorliegen.') });
@@ -2650,11 +3378,19 @@ function canRunResearchTask(task) {
 }
 
 function canBuildKnowledgeFromResearch(task = selectedTask()) {
-  return Boolean(task?.id && evidenceRankedSources().length && canWriteResearchState());
+  const base = task ? knowledgeBaseForTask(task) : null;
+  const latestRun = task ? latestEvidenceRunForTask(task.id, state.runs) : null;
+  return Boolean(task?.id
+    && evidenceRankedSources().length
+    && knowledgeVersionContext(base, latestRun).available
+    && canWriteResearchState());
 }
 
 function knowledgeUnavailableReason() {
   if (!evidenceRankedSources().length) return state.t('knowledgeRequiresVerifiedSources', 'Knowledge ist ohne verifizierte Quellen nicht verfügbar.');
+  const task = selectedTask();
+  const version = knowledgeVersionContext(task ? knowledgeBaseForTask(task) : null, task ? latestEvidenceRunForTask(task.id, state.runs) : null);
+  if (!version.available) return `${state.t('knowledgeVersionUnavailable', 'Knowledge ist ohne eine immutable Version nicht verfügbar')}: ${version.reason}`;
   if (!canWriteResearchState()) return researchWriteDeniedMessage();
   return '';
 }
@@ -2884,6 +3620,7 @@ async function createTaskFromForm(form) {
     criteria,
     status: current?.status || 'ready',
     knowledge_domain: domain,
+    candidate_catalog_key: current?.candidate_catalog_key || tableKey(base, ['source_candidates']) || 'source_candidates',
     source_catalog_key: current?.source_catalog_key || tableKey(base, ['source_catalog', 'sources', 'curated_sources']) || 'source_catalog',
     curated_table_key: current?.curated_table_key || tableKey(base, ['evaluation_matrix', 'load_data_library', 'curated_sources', 'source_library']) || 'evaluation_matrix',
     measurements_table_key: current?.measurements_table_key || tableKey(base, ['evidence_points', 'measured_load_points', 'measurements']) || 'evidence_points',
@@ -2921,15 +3658,30 @@ async function runSelectedResearch() {
   }
   const base = knowledgeBaseForTask(task);
   const now = Date.now();
+  const commandId = `cmd_${crypto.randomUUID()}`;
+  const researchRunId = `research_run_${crypto.randomUUID()}`;
   const scoringDimensions = scoringDimensionsForTask(task).filter((axis) => axis.id !== 'portfolio_priority');
   const tableContract = task.payload?.table_contract || RESEARCH_TABLE_CONTRACT;
   const existingTables = new Set((base?.tables || []).map((table) => table.table_key));
   const missingTables = Object.keys(tableContract).filter((key) => !existingTables.has(key));
+  const candidateTable = tableForKey(base, task.candidate_catalog_key || 'source_candidates');
+  const candidateRows = candidateTable ? await fetchTableRows(candidateTable.id) : [];
+  const knowledgeTableRefs = compactKnowledgeTableReferences(base?.tables || []);
+  const verifiedSourceUrls = sourceUrlsFromRows((state.sourceModels || [])
+    .filter((source) => source.evidenceEligible)
+    .map((source) => source.row));
+  const excludedSourceUrls = [...new Set([
+    ...sourceUrlsFromRows(candidateRows),
+    ...sourceUrlsFromRows((state.sourceModels || []).map((source) => source.row)),
+  ])];
   const instruction = [
     `Führe systematic-research für das Business-OS Web Research Dashboard "${task.title}" fort.`,
     `Research Task ID: ${task.id}`,
+    `Research Run ID: ${researchRunId}`,
+    `Research Command ID: ${commandId}`,
     `Knowledge domain: ${task.knowledge_domain}`,
-    `Source catalog: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.source_catalog_key || 'source_catalog'}`,
+    `Discovery candidates: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.candidate_catalog_key || 'source_candidates'}`,
+    `Verified source registry: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.source_catalog_key || 'source_catalog'}`,
     `Evaluation matrix: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.curated_table_key || 'evaluation_matrix'}`,
     `Evidence points: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.measurements_table_key || 'evidence_points'}`,
     missingTables.length ? `Missing tables to create first: ${missingTables.join(', ')}` : 'Required Knowledge tables already exist in the catalog.',
@@ -2942,10 +3694,12 @@ async function runSelectedResearch() {
     `Scoring-Modell:\n${scoringDimensions.map((axis) => `- ${axis.id}: ${axis.label}; weight=${axis.weight || scoringWeights(scoringDimensions)[axis.id] || 1}`).join('\n')}`,
     `Portfolio axes: x=${normalizedAxisPair(task).x}, y=${normalizedAxisPair(task).y}`,
     '',
-    'Nutze den systematic-research Skill. Starte mit ctox knowledge search, dann ctox web deep-research. Schreibe jede Discovery-Runde sofort nach source_catalog. Lies/prüfe Quellen, extrahiere Fakten nach evidence_points und schreibe nur belegte Optionen mit gewichteten Scores nach evaluation_matrix. Aktualisiere bestehende Zeilen, wenn sich Fokus oder Kriterien ändern, statt parallele Tabellen zu erzeugen. Die UI-Evidence-Gate-Felder verification_status=verified, http_status 2xx, snapshot_hash, evidence_eligible=true und ein nicht-aggregierter source_tier sind zwingend; alte, fehlende, metadata_only, fachfremde oder rejected Zeilen bleiben ungescored.',
-    'Pflege parallel semantic_graph_nodes und semantic_graph_edges: Konzepte aus Titel, Zusammenfassung und Evidenz; gemeinsame Nennung im 4-Token-Fenster; automatische Communities; Betweenness-Zentralität; Source-IDs und Provenienz an jedem Graph-Datensatz. Schreibe inkrementell, damit die laufende Research-App über RxDB/WebRTC live aktualisiert wird.',
+    'Nutze systematic-research als Eigentümer des gesamten iterativen Workflows. Inventarisiere zuerst Knowledge und plane orthogonale Suchfacetten. Wähle danach pro Runde selbstständig das passende Werkzeug aus ctox_scholarly_search, ctox_web_search, ctox_deep_research, ctox_web_read und Browser/Scrape. Ein ctox_deep_research-Aufruf ist nur eine mögliche Discovery-Runde und niemals die fertige Recherche. Für wissenschaftliche Themen sind Paper-Suche, DOI/OA-Auflösung sowie das Verfolgen relevanter Referenzen, Zitationen, Datensätze und Supplemente Pflicht. Schreibe jede Discovery-Runde vollständig nach source_candidates; diese Tabelle ist nur Audit/Discovery und niemals Evidence. Promoviere ausschließlich Quellen, die evidence_guard.py bestanden haben, nach source_catalog. Lies/prüfe jede kanonische Quelle, extrahiere Fakten nach evidence_points und schreibe nur belegte Optionen mit gewichteten Scores nach evaluation_matrix. Aktualisiere bestehende Zeilen, wenn sich Fokus oder Kriterien ändern, statt parallele Tabellen zu erzeugen. Die UI-Evidence-Gate-Felder verification_status=verified, transport_verified=true, content_extracted=true, actual_full_text_or_data=true, evidence_relevance_score>=8, http_status 2xx (nicht 204), snapshot_hash als SHA-256, canonical_url auf die Originalquelle, evidence_eligible=true und ein nicht-aggregierter source_tier sind zwingend; Metadaten-URLs, alte, fehlende, metadata_only, fachfremde oder rejected Zeilen bleiben ausschließlich in source_candidates.',
+    `${excludedSourceUrls.length} bereits bekannte kanonische URLs (${verifiedSourceUrls.length} evidence-eligible) sind in web_stack_plan.exclude_urls vorgegeben. Übergib diese Liste vollständig an jede ctox_deep_research-Runde, damit bekannte Kandidaten weder erneut als neue Discovery zählen noch das Such- und Lesebudget verbrauchen. Bereits bekannte, noch ungeprüfte Kandidaten dürfen ausschließlich gezielt mit ctox_web_read oder Browser/Scrape nachverifiziert werden.`,
+    `Schreibe auf jede in diesem Lauf erzeugte oder aktualisierte Knowledge-Zeile research_run_id=${researchRunId} und research_command_id=${commandId}. Ohne beide exakten IDs gilt die Zeile nicht als Ergebnis dieses Laufs.`,
+    'Vor Abschluss sind drei voneinander getrennte Audits auszuführen: Source-Audit (URL, Autorität, Inhalt, Snapshot), Data-Audit (Originaldatei, Zeile/Spalte, Einheit, Parsing, Umrechnung, Row-Count) und Claim-Audit (jede Knowledge- und Report-Aussage gegen freigegebene Evidence). Nicht bestandene Aussagen oder Quellen dürfen nicht in Knowledge, Scores oder Reports gelangen.',
+    'Pflege parallel semantic_graph_nodes und semantic_graph_edges: kanonische fachliche Themen und Konzepte ausschließlich aus verifizierten Titeln, Zusammenfassungen und Evidenz; klare Definitionen, Aliase und Themenfeld-Bezeichnungen; typisierte belegte Relationen; Source-IDs, Konfidenz und Provenienz an jedem Datensatz. Technische Schlüssel, IDs, Hashes, URLs und generische Metadaten sind keine Konzepte. Schreibe inkrementell, damit die laufende Research-App über RxDB/WebRTC live aktualisiert wird.',
   ].filter(Boolean).join('\n');
-  const commandId = `cmd_${crypto.randomUUID()}`;
   const title = `Research · ${task.title}`;
   const threadKey = `business-os/research/${task.id}`;
   const payload = {
@@ -2956,35 +3710,43 @@ async function runSelectedResearch() {
     required_skills: ['systematic-research'],
     research_mode: 'library+living_dashboard',
     thread_key: threadKey,
+    research_run_id: researchRunId,
+    research_command_id: commandId,
     knowledge_domain: task.knowledge_domain,
+    candidate_catalog_key: task.candidate_catalog_key || 'source_candidates',
     source_catalog_key: task.source_catalog_key,
     curated_table_key: task.curated_table_key,
     measurements_table_key: task.measurements_table_key,
     web_stack_plan: {
-      first_command: `ctox web deep-research --query ${JSON.stringify(task.prompt || task.title)} --depth standard --max-sources 24`,
-      followups: [
-        'ctox web scholarly search --query <refined topic> --with-oa-pdf --only-doi',
-        'ctox web read --url <candidate-url> --query <research focus>',
-        'ctox web search only as fallback for non-technical/vendor lookup gaps',
+      strategy: 'agentic_iterative_systematic_research',
+      seed_query: task.prompt || task.title,
+      exclude_urls: excludedSourceUrls,
+      verified_source_urls: verifiedSourceUrls,
+      available_rounds: [
+        'ctox web scholarly search --query <paper facet> --with-oa-pdf --only-doi',
+        'ctox web deep-research --query <broad or gap facet> --depth standard --max-sources 24 --exclude-url <repeat for every web_stack_plan.exclude_urls entry>',
+        'ctox web search --query <focused source or official-domain facet>',
+        'ctox web read --url <canonical-candidate-url> --query <precise evidence intent>',
+        'browser/scrape for interactive or structured source extraction',
       ],
+      saturation_rule: 'stop only after two consecutive orthogonal facet or citation rounds add no new eligible source',
     },
     knowledge_contract: {
       domain: task.knowledge_domain,
       tables: tableContract,
       create_missing_tables: missingTables,
       provenance_required: true,
+      row_lineage_required: {
+        research_run_id: researchRunId,
+        research_command_id: commandId,
+      },
     },
     graph_contract: semanticGraphContract(),
-    scoring_contract: {
-      dimensions: scoringDimensions,
-      weights: scoringWeights(scoringDimensions),
-      total_field: 'weighted_total',
-      rule: 'Only score rows passing the UI evidence gate: verification_status=verified, http_status 2xx, non-empty snapshot_hash, evidence_eligible=true, and non-aggregated source_tier. Raw, legacy, metadata-only, off-topic, rejected, or aggregated discovery candidates stay unscored.',
-      required_source_fields: ['verification_status', 'http_status', 'snapshot_hash', 'evidence_eligible', 'source_tier'],
-    },
+    scoring_contract: researchScoringContract(scoringDimensions),
     writeback_contract: {
       collections: ['research_runs', 'research_tasks', 'knowledge_tables'],
       dashboard_tables: {
+        source_candidates: task.candidate_catalog_key || 'source_candidates',
         source_catalog: task.source_catalog_key || 'source_catalog',
         evaluation_matrix: task.curated_table_key || 'evaluation_matrix',
         evidence_points: task.measurements_table_key || 'evidence_points',
@@ -3006,7 +3768,9 @@ async function runSelectedResearch() {
         source_module: 'research',
         inbound_channel: 'business_os.research',
         knowledge_domain: task.knowledge_domain,
-        knowledge_tables: base?.tables || [],
+        research_run_id: researchRunId,
+        research_command_id: commandId,
+        knowledge_table_refs: knowledgeTableRefs,
       },
   });
   const result = {
@@ -3020,12 +3784,12 @@ async function runSelectedResearch() {
     transport: 'business-chat',
   };
   const run = {
-    id: `research_run_${now}`,
+    id: researchRunId,
     task_id: task.id,
     status: result.task_status,
     command_id: commandId,
     task_queue_id: '',
-    identified_count: state.sourceRows.length,
+    identified_count: state.candidateRows.length + state.sourceRows.length,
     accepted_count: evidenceRankedSources().length,
     used_count: evidenceRankedSources().length,
     payload: { result },
@@ -3043,7 +3807,221 @@ async function runSelectedResearch() {
   render();
 }
 
-function knowledgeRefreshPayload(task, base, latestRun) {
+function compactKnowledgeTableReferences(tables = []) {
+  return (tables || []).slice(0, 100).map((table) => ({
+    id: String(table?.id || ''),
+    table_key: String(table?.table_key || table?.key || ''),
+    domain: String(table?.domain || table?.knowledge_domain || ''),
+    row_count: Number(table?.row_count ?? table?.total_rows ?? table?.rows?.length ?? 0),
+    knowledge_version_id: String(table?.knowledge_version_id || table?.knowledge_version?.version_id || ''),
+  }));
+}
+
+function sourceUrlsFromRows(rows = []) {
+  return (rows || [])
+    .flatMap((row) => [
+      firstString(row, ['canonical_url']),
+      firstString(row, ['source_url', 'url', 'direct_url', 'doi']),
+    ])
+    .map((url) => String(url || '').trim())
+    .filter((url) => /^https?:\/\//i.test(url));
+}
+
+function researchScoringContract(scoringDimensions) {
+  return {
+    dimensions: scoringDimensions,
+    weights: scoringWeights(scoringDimensions),
+    total_field: 'weighted_total',
+    rule: 'Only score rows passing the UI evidence gate and native receipt lineage: source_id, verification flags, HTTP 2xx, snapshot_id, snapshot_path, byte-hash-shaped snapshot_hash, canonical_url, evidence_id or claim_id, retrieved_at, allowed url_role/content_scope, evidence_eligible=true, and non-aggregated source_tier. Raw, legacy, metadata-only, off-topic, rejected, empty, or aggregated discovery candidates stay unscored.',
+    required_source_fields: ['source_id', 'verification_status', 'transport_verified', 'content_extracted', 'actual_full_text_or_data', 'evidence_relevance_score', 'http_status', 'snapshot_id', 'snapshot_path', 'snapshot_hash', 'canonical_url', 'evidence_id_or_claim_id', 'retrieved_at', 'url_role', 'content_scope', 'evidence_eligible', 'source_tier'],
+    required_audits: ['source', 'data', 'claim'],
+  };
+}
+
+function knowledgeVersionContext(base, latestRun = null) {
+  const candidates = [];
+  const addCandidate = (value, origin) => {
+    if (value === null || value === undefined) return;
+    if (typeof value === 'string') {
+      const id = value.trim();
+      if (id) candidates.push({ id, origin, record: null });
+      return;
+    }
+    if (typeof value !== 'object' || Array.isArray(value)) return;
+    const id = firstString(value, ['current_version_id', 'knowledge_version_id', 'version_id', 'id']);
+    if (id) candidates.push({ id, origin, record: value });
+  };
+  const visit = (value, origin, table = false) => {
+    if (!value || typeof value !== 'object') return;
+    const keys = table
+      ? ['knowledge_version_id', 'current_version_id', 'knowledge_version']
+      : ['knowledge_version_id', 'current_version_id', 'knowledge_version'];
+    for (const key of keys) addCandidate(value[key], `${origin}.${key}`);
+    if (value.knowledge && typeof value.knowledge === 'object') visit(value.knowledge, `${origin}.knowledge`);
+    if (value.knowledge?.version && typeof value.knowledge.version === 'object') addCandidate(value.knowledge.version, `${origin}.knowledge.version`);
+    if (value.versions && Array.isArray(value.versions)) {
+      const current = value.versions.find((item) => item?.status === 'current');
+      if (current) addCandidate(current, `${origin}.versions[current]`);
+    }
+  };
+  visit(base, 'knowledge_base');
+  for (const table of base?.tables || []) visit(table, `knowledge_table:${table.table_key || table.id || 'unknown'}`, true);
+  visit(latestRun, 'research_run');
+  visit(latestRun?.payload, 'research_run.payload');
+  visit(latestRun?.payload?.result, 'research_run.payload.result');
+
+  const ids = [...new Set(candidates.map((candidate) => candidate.id))];
+  if (!ids.length) return { available: false, reason: 'authoritative Knowledge version is missing' };
+  if (ids.length > 1) return { available: false, reason: `authoritative Knowledge version is inconsistent (${ids.join(', ')})` };
+  const record = candidates.find((candidate) => candidate.record && candidate.id === ids[0])?.record || null;
+  if (record?.status && String(record.status).toLowerCase() !== 'current') {
+    return { available: false, reason: `Knowledge version ${ids[0]} is not current` };
+  }
+  return {
+    available: true,
+    id: ids[0],
+    record,
+    origin: candidates.filter((candidate) => candidate.id === ids[0]).map((candidate) => candidate.origin),
+  };
+}
+
+function tableRowsForLineage(table) {
+  return firstArray(
+    table?.rows,
+    table?.records,
+    table?.data,
+    table?.payload?.rows,
+    table?.payload?.records,
+    table?.payload?.data,
+    table?.dataframe?.rows,
+    table?.payload?.dataframe?.rows,
+  ).filter((row) => row && typeof row === 'object');
+}
+
+function knowledgeLineageForPayload(base, latestRun = null, sourceModels = []) {
+  const version = knowledgeVersionContext(base, latestRun);
+  const models = sourceModels.length
+    ? sourceModels
+    : (tableForKey(base, 'source_catalog') ? tableRowsForLineage(tableForKey(base, 'source_catalog')).map((row) => ({ id: sourceId(row), row, evidenceEligible: evidenceGate(row).eligible })) : []);
+  let sourceReceipts = models
+    .filter((source) => source?.evidenceEligible)
+    .map(sourceReceiptLineage)
+    .filter((receipt) => receipt.valid)
+    .map(({ valid, ...receipt }) => receipt);
+  let sourceById = new Map(sourceReceipts.map((receipt) => [receipt.source_id, receipt]));
+  const evidenceLineage = [];
+  const claimLineage = [];
+  for (const table of base?.tables || []) {
+    for (const row of tableRowsForLineage(table)) {
+      const source = sourceById.get(firstString(row, ['source_id']));
+      if (!source) continue;
+      const snapshotId = firstString(row, ['snapshot_id', 'source_snapshot_id']) || source.snapshot_id;
+      const snapshotHash = firstString(row, ['snapshot_hash', 'snapshot_sha256']) || source.snapshot_hash;
+      const canonicalUrl = firstString(row, ['canonical_url']) || source.canonical_url;
+      if (!snapshotId || snapshotHash !== source.snapshot_hash || canonicalUrl !== source.canonical_url) continue;
+      const evidenceId = firstString(row, ['evidence_id']);
+      const claimId = firstString(row, ['claim_id']);
+      const lineage = {
+        source_id: source.source_id,
+        canonical_url: source.canonical_url,
+        snapshot_id: snapshotId,
+        snapshot_hash: snapshotHash,
+        evidence_id: evidenceId,
+        claim_id: claimId,
+        claim_text: firstString(row, ['claim_text', 'fact_label', 'fact_value']),
+        lineage_sha256: firstString(row, ['lineage_sha256']),
+        table_key: table.table_key || '',
+        row_id: firstString(row, ['row_id', 'id', 'record_id']),
+      };
+      if (evidenceId) evidenceLineage.push(lineage);
+      if (claimId) claimLineage.push(lineage);
+    }
+  }
+  if (!sourceModels.length) {
+    const runLineage = [
+      latestRun?.payload?.evidence_lineage,
+      latestRun?.payload?.lineage,
+      latestRun?.evidence_lineage,
+      latestRun?.lineage,
+    ].filter((value) => value && typeof value === 'object');
+    const runReceipts = runLineage.flatMap((lineage) => firstArray(lineage.source_receipts, lineage.source_lineage, lineage.sources))
+      .map((receipt) => ({
+        ...receipt,
+        receipt_url: firstString(receipt, ['receipt_url', 'source_receipt_url', 'receipt_link', 'url']),
+        receipt_id: firstString(receipt, ['source_receipt_id', 'evidence_receipt_id', 'receipt_id']),
+        canonical_url: firstString(receipt, ['canonical_url', 'source_url']),
+        snapshot_id: firstString(receipt, ['snapshot_id', 'source_snapshot_id']),
+        snapshot_hash: firstString(receipt, ['snapshot_hash', 'snapshot_sha256']),
+      }))
+      .filter((receipt) => receipt.source_id && (receipt.receipt_url || receipt.receipt_id) && receipt.canonical_url && receipt.snapshot_id && /^sha256:[0-9a-f]{64}$/i.test(receipt.snapshot_hash));
+    sourceReceipts = [...sourceReceipts, ...runReceipts].filter((receipt, index, all) => all.findIndex((candidate) => candidate.source_id === receipt.source_id && candidate.snapshot_hash === receipt.snapshot_hash) === index);
+    sourceById = new Map(sourceReceipts.map((receipt) => [receipt.source_id, receipt]));
+    for (const lineage of runLineage) {
+      for (const row of firstArray(lineage.evidence, lineage.evidence_lineage, lineage.items)) {
+        if (row?.evidence_id) evidenceLineage.push(row);
+      }
+      for (const row of firstArray(lineage.claims, lineage.claim_lineage)) {
+        if (row?.claim_id) claimLineage.push(row);
+      }
+    }
+  }
+  const dedupe = (rows) => {
+    const seen = new Set();
+    return rows.filter((row) => {
+      const key = JSON.stringify(row);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+  const snapshots = dedupe(sourceReceipts.map((receipt) => ({
+    source_id: receipt.source_id,
+    canonical_url: receipt.canonical_url,
+    snapshot_id: receipt.snapshot_id,
+    snapshot_hash: receipt.snapshot_hash,
+  })));
+  return {
+    available: version.available,
+    reason: version.reason || '',
+    knowledge_version_id: version.id || '',
+    knowledge_version: version.record,
+    source_receipts: sourceReceipts,
+    snapshots,
+    evidence: dedupe(evidenceLineage),
+    claims: dedupe(claimLineage),
+    requested_snapshot_hashes: [...new Set(sourceReceipts.map((receipt) => receipt.snapshot_hash))],
+  };
+}
+
+function graphDocumentLineage(task, base, latestRun, sourceModels, selectedSourceIds = []) {
+  const lineage = knowledgeLineageForPayload(base, latestRun, sourceModels);
+  const eligibleSources = (sourceModels || []).filter((source) => source?.evidenceEligible);
+  if (!lineage.available) return { ok: false, reason: lineage.reason || 'authoritative Knowledge version is missing' };
+  if (!eligibleSources.length) return { ok: false, reason: 'no eligible source receipts are loaded' };
+  if (lineage.source_receipts.length !== eligibleSources.length) {
+    return { ok: false, reason: 'a verified source is missing its immutable receipt lineage' };
+  }
+  const selected = new Set((selectedSourceIds || []).map(String));
+  const requested = lineage.source_receipts.filter((receipt) => !selected.size || selected.has(receipt.source_id));
+  return {
+    ok: true,
+    task_id: task?.id || '',
+    knowledge_version_id: lineage.knowledge_version_id,
+    knowledge_version: lineage.knowledge_version,
+    source_receipts: lineage.source_receipts,
+    requested_snapshot_hashes: [...new Set(requested.map((receipt) => receipt.snapshot_hash))],
+    evidence_lineage: {
+      knowledge_version_id: lineage.knowledge_version_id,
+      source_receipts: lineage.source_receipts,
+      snapshots: lineage.snapshots,
+      evidence: lineage.evidence,
+      claims: lineage.claims,
+    },
+  };
+}
+
+function knowledgeRefreshPayload(task, base, latestRun, commandId) {
+  const lineage = knowledgeLineageForPayload(base, latestRun);
   const tables = base?.tables || [];
   const tableRefs = Object.fromEntries(tables
     .filter((table) => table.table_key)
@@ -3051,7 +4029,8 @@ function knowledgeRefreshPayload(task, base, latestRun) {
   const instruction = [
     `Baue oder aktualisiere die Knowledge Base fuer das abgeschlossene Research "${task.title}".`,
     `Research Task ID: ${task.id}`,
-    `Research Run ID: ${latestRun?.id || 'latest'}`,
+    `Research Run ID: ${latestRun?.id || ''}`,
+    `Research Command ID: ${commandId}`,
     `Knowledge domain: ${task.knowledge_domain}`,
     '',
     'Erzeuge bzw. aktualisiere einen fachlichen Skill/Skillbook und die dazugehoerigen Runbooks und Ressourcen.',
@@ -3071,15 +4050,27 @@ function knowledgeRefreshPayload(task, base, latestRun) {
     thread_key: `business-os/research/${task.id}/knowledge`,
     research_task_id: task.id,
     research_run_id: latestRun?.id || '',
+    research_command_id: commandId,
     knowledge_domain: task.knowledge_domain,
+    knowledge_version_id: lineage.knowledge_version_id,
+    knowledge_version: lineage.knowledge_version,
+    immutable_knowledge_version: true,
     source_tables: tableRefs,
+    source_lineage: lineage.source_receipts,
+    snapshot_lineage: lineage.snapshots,
+    evidence_lineage: lineage.evidence,
+    claim_lineage: lineage.claims,
+    requested_snapshot_hashes: lineage.requested_snapshot_hashes,
+    lineage_status: lineage.available ? 'complete' : 'incomplete',
     knowledge_contract: {
       domain: task.knowledge_domain,
+      knowledge_version_id: lineage.knowledge_version_id,
+      immutable_version_required: true,
       create_or_update: ['skillbook', 'skills', 'runbooks', 'resources'],
       stable_identity: true,
       provenance_required: true,
       source_of_truth: 'original_sources',
-      citations: ['source_id', 'source_url'],
+      citations: ['claim_id', 'evidence_id', 'snapshot_id', 'source_id', 'canonical_url', 'lineage_sha256'],
       refresh_policy: 'update_existing_elements_from_latest_research_run',
     },
     writeback_contract: {
@@ -3090,6 +4081,11 @@ function knowledgeRefreshPayload(task, base, latestRun) {
         research_task_id: task.id,
         research_run_id: latestRun?.id || '',
         knowledge_domain: task.knowledge_domain,
+        knowledge_version_id: lineage.knowledge_version_id,
+        source_lineage: lineage.source_receipts,
+        snapshot_lineage: lineage.snapshots,
+        evidence_lineage: lineage.evidence,
+        claim_lineage: lineage.claims,
         table_ids: Object.values(tableRefs),
       },
     },
@@ -3114,9 +4110,9 @@ async function buildKnowledgeFromResearch() {
     return;
   }
   const base = knowledgeBaseForTask(task);
-  const latestRun = latestRunForTask(task.id);
+  const latestRun = latestEvidenceRunForTask(task.id, state.runs);
   const commandId = `cmd_${crypto.randomUUID()}`;
-  const payload = knowledgeRefreshPayload(task, base, latestRun);
+  const payload = knowledgeRefreshPayload(task, base, latestRun, commandId);
   const result = await state.ctx.commandBus.dispatch({
     id: commandId,
     command_id: commandId,
@@ -3147,9 +4143,16 @@ async function buildKnowledgeFromResearch() {
     updated_at_ms: now,
   });
   task.payload = { ...(task.payload || {}), knowledge_refresh: knowledgeRefresh };
-  sessionStorage.setItem('ctox.businessOs.knowledge.openDomain', task.knowledge_domain);
+  state.ctx.storageScope.set('ctox.businessOs.knowledge.openDomain', task.knowledge_domain);
   setStatus(state.t('knowledgeQueued', 'Knowledge-Aufbau wurde an CTOX uebergeben.'));
   render();
+}
+
+function latestEvidenceRunForTask(taskId, runs = state.runs) {
+  return [...(runs || [])]
+    .filter((run) => run.task_id === taskId)
+    .filter((run) => Number(run.used_count) > 0 || Number(run.accepted_count) > 0)
+    .sort((a, b) => Number(b.updated_at_ms || b.created_at_ms || 0) - Number(a.updated_at_ms || a.created_at_ms || 0))[0] || null;
 }
 
 function runInfoActionLabel(task) {
@@ -3347,7 +4350,12 @@ function selectedTask() {
 }
 
 function selectedSource() {
-  return state.sourceModels.find((source) => source.id === state.selectedSourceId) || state.sourceModels[0] || null;
+  const visibleModels = state.activeTab === 'candidates' ? state.candidateModels : evidenceRankedSources();
+  return visibleModels.find((source) => source.id === state.selectedSourceId)
+    || state.sourceModels.find((source) => source.id === state.selectedSourceId)
+    || state.candidateModels.find((source) => source.id === state.selectedSourceId)
+    || visibleModels[0]
+    || null;
 }
 
 function latestRunForTask(taskId) {
@@ -3399,7 +4407,7 @@ function latestResearchCommandForTask(taskId) {
 
 function statusKindFor(status) {
   const value = String(status || '').toLowerCase();
-  if (['leased', 'running', 'in_progress', 'collecting'].includes(value)) return 'running';
+  if (['leased', 'running', 'in_progress', 'collecting', 'review_rework'].includes(value)) return 'running';
   if (['accepted', 'queued', 'pending'].includes(value)) return 'queued';
   if (['handled', 'completed', 'done', 'ready'].includes(value)) return 'completed';
   if (['blocked'].includes(value)) return 'blocked';
@@ -3458,6 +4466,41 @@ function inferResearchKind(task) {
   if (/bearing|propeller|uav|drone|load|rpm|thrust|torque/.test(text)) return 'bearing';
   if (/(competitive|competitor|wettbewerb|anbieter|unternehmen|market).*(agent|employee|worker|ki|ai)|agent.*(employee|worker|enterprise|platform)|ki[-\s]?mitarbeiter|ai employee/.test(text)) return 'competitive_ai';
   return 'generic';
+}
+
+function domainTaxonomy(task) {
+  const kind = inferResearchKind(task);
+  if (kind === 'bearing') {
+    return {
+      fallback: 'other',
+      clusters: [
+        { id: 'rotorload', label: state.t('subthemeRotorload', 'Rotorlast'), pattern: /rotor|propeller|thrust|force|moment|aerodynamic|windtunnel|windkanal/i },
+        { id: 'bench', label: state.t('subthemeBench', 'Prüfstand'), pattern: /bench|pr\u00fcfstand|motor|esc|spindel|dynamometer|dyno|messstand/i },
+        { id: 'flightlog', label: state.t('subthemeFlightlog', 'Fluglog'), pattern: /flight|flug|telemetry|telemetrie|mission|ulog|blackbox/i },
+        { id: 'vibration', label: state.t('subthemeVibration', 'Vibration'), pattern: /vibration|unwucht|schaden|fault|pitting|edm|abrasiv|sand/i },
+        { id: 'simulation', label: state.t('subthemeSimulation', 'Simulation'), pattern: /simulation|modell|gazebo|sih|virtuell|cfd|ansys|numerical/i },
+      ],
+    };
+  }
+  if (kind === 'competitive_ai') {
+    return {
+      fallback: 'other',
+      clusters: [
+        { id: 'agent', label: 'Agent depth', pattern: /agent|autonomous|orchestrat|workflow|tool use|delegat/i },
+        { id: 'enterprise', label: 'Enterprise readiness', pattern: /enterprise|governance|security|compliance|sso|privacy|audit/i },
+        { id: 'integration', label: 'Integration/API', pattern: /api|integration|connector|webhook|sdk|slack|salesforce|jira/i },
+        { id: 'market', label: 'Market evidence', pattern: /buyer|pricing|customer|market|category|competitor|adoption/i },
+        { id: 'research-quality', label: 'Research quality', pattern: /evidence|source|study|benchmark|method|reproduc/i },
+      ],
+    };
+  }
+  return {
+    fallback: 'other',
+    clusters: [
+      { id: 'domain', label: 'Domain relevance', pattern: new RegExp(String(task?.knowledge_domain || task?.title || '').split(/[^a-z0-9]+/i).filter((term) => term.length >= 4).slice(0, 6).join('|') || 'a^', 'i') },
+      { id: 'evidence', label: 'Evidence quality', pattern: /evidence|source|study|dataset|benchmark|method/i },
+    ],
+  };
 }
 
 function defaultAxisPairForTask(task) {
@@ -3761,6 +4804,27 @@ function firstArray(...values) {
   return values.find(Array.isArray) || [];
 }
 
+function parseStringList(value) {
+  if (Array.isArray(value)) return value.map(String).filter(Boolean);
+  if (typeof value !== 'string' || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
+  } catch {}
+  return value.split(/[,;|]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function parseObject(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function sourceId(row) {
   return firstString(row, ['source_id', 'id', 'record_id', 'source_key']);
 }
@@ -3781,10 +4845,9 @@ function defaultPromptForKnowledgeBase(base) {
 function topicFitScore(task, text, row) {
   const titleText = String(row?.title || '').toLowerCase();
   
-  // High-fidelity keyword filter on Title to prevent crawler noise / cross-domain leakage!
-  const hasDroneTopic = /propeller|rotor|uav|drone|bearing|load|force|moment|thrust|torque|rpm|vibration|spindel|motor|flight|telemetry|aerodynamic|blade|windtunnel|w\u00e4lzlager|lager|schub|drehmoment|last|messung|pr\u00fcfstand|spindle|vibrat|flight|telemetr|testing|bench|load cell|stanag|mil-std/i.test(titleText);
-  
-  if (!hasDroneTopic) {
+  const hasBearingTopic = /propeller|rotor|uav|drone|bearing|load|force|moment|thrust|torque|rpm|vibration|spindel|motor|flight|telemetry|aerodynamic|blade|windtunnel|w\u00e4lzlager|lager|schub|drehmoment|last|messung|pr\u00fcfstand|spindle|vibrat|flight|telemetr|testing|bench|load cell|stanag|mil-std/i.test(titleText);
+
+  if (inferResearchKind(task) === 'bearing' && !hasBearingTopic) {
     return 10;
   }
 
@@ -3855,8 +4918,13 @@ function normalizeScoreScale(value) {
 }
 
 function numberValue(value) {
+  return optionalNumberValue(value) ?? 0;
+}
+
+function optionalNumberValue(value) {
+  if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) return null;
   const next = Number(value);
-  return Number.isFinite(next) ? next : 0;
+  return Number.isFinite(next) ? next : null;
 }
 
 function weightedAverage(pairs) {
@@ -4204,11 +5272,20 @@ async function loadReportContentFromRxdb(filename) {
     const blobId = version && typeof version.toJSON === 'function' ? version.toJSON().blob_id : null;
     if (blobId) {
       const chunkDocs = await blobChunks.find({ selector: { blob_id: blobId } }).exec();
-      const chunks = chunkDocs
-        .map((c) => (typeof c.toJSON === 'function' ? c.toJSON() : c))
-        .sort((a, b) => (a.idx || 0) - (b.idx || 0));
-      if (chunks.length) {
-        const joined = chunks.map((c) => c.data || '').join('');
+      const chunks = chunkDocs.map((c) => (typeof c.toJSON === 'function' ? c.toJSON() : c));
+      const validation = validateChunkSequence(chunks, {
+        indexFields: ['idx', 'index', 'chunk_index', 'chunkIndex'],
+        countFields: ['total', 'chunk_count', 'chunkCount'],
+        offsetFields: ['offset', 'byte_offset', 'byteOffset', 'start'],
+        itemCountFields: [],
+        itemArrayFields: [],
+        itemValueFields: ['data'],
+        itemLabel: 'Daten',
+        requireItems: true,
+        offsetUnit: 'payload',
+      });
+      if (validation.valid) {
+        const joined = validation.rows.join('');
         try {
           const bytes = Uint8Array.from(atob(joined), (ch) => ch.charCodeAt(0));
           return new TextDecoder('utf-8').decode(bytes);
@@ -4216,6 +5293,7 @@ async function loadReportContentFromRxdb(filename) {
           return joined;
         }
       }
+      throw new Error(`Dokument-Chunks sind unvollständig: ${validation.reason}`);
     }
   }
   throw new Error(`Kein Inhalt für ${filename}`);
@@ -4230,7 +5308,15 @@ function renderReportsWorkbench(task) {
       </section>
     `;
   }
-  const reports = GENERATED_REPORTS;
+  const reports = researchReportsForTask(task);
+  if (!reports.length) {
+    return `
+      <section class="research-empty research-empty-card" data-report-gate="ready-empty">
+        <strong>${escapeHtml(state.t('noResearchReports', 'Noch keine verknüpften Fachberichte'))}</strong>
+        <span>${escapeHtml(state.t('createResearchReportHint', 'Erstelle einen Bericht aus dem verifizierten Research-Graph. Er erscheint nach der Documents-Synchronisierung hier.'))}</span>
+      </section>
+    `;
+  }
   const selectedReportId = state.selectedReportId || reports[0].id;
   const selectedReport = reports.find(r => r.id === selectedReportId) || reports[0];
   
@@ -4262,23 +5348,11 @@ function renderReportsWorkbench(task) {
         <div class="ai-warning-banner">
           <div class="research-ai-banner-row">
             <div class="research-ai-banner-title">
-              <span class="research-ai-banner-icon">🤖</span>
               <div>
-                <strong>KI-generierter Fachbericht</strong>
-                <span>Erstellt auf Basis des aggregierten Wälzlager-Wissens (323 Referenzen, 816 Messpunkte).</span>
+                <strong>${escapeHtml(state.t('evidenceBackedReport', 'Evidence-basierter Fachbericht'))}</strong>
+                <span>${evidenceRankedSources().length} ${escapeHtml(state.t('verifiedSources', 'verifizierte Quellen'))} · ${filterMeasurementRowsForEvidence(state.measurementRows, state.sourceModels).length} ${escapeHtml(state.t('traceableMeasurements', 'nachverfolgbare Messpunkte'))}</span>
               </div>
             </div>
-            <button type="button" class="ctox-button" onclick="window.showPromptViewer('${selectedReport.filename}')">
-              Prompt im Modal
-            </button>
-          </div>
-          <div class="research-ai-prompt">
-            <details>
-              <summary>
-                <span>▶ System-Prompt der KI-Generierung einblenden</span>
-              </summary>
-              <div class="research-ai-prompt-pre">${escapeHtml(getPromptForFilename(selectedReport.filename))}</div>
-            </details>
           </div>
         </div>
         <div class="markdown-body">${parseMarkdown(content)}</div>
@@ -4307,22 +5381,60 @@ function renderReportsWorkbench(task) {
   `;
 }
 
+function researchReportsForTask(task, documents = state.documents) {
+  if (!task?.id || !task.knowledge_domain) return [];
+  return (documents || [])
+    .filter((document) => !document.is_deleted && document.filename)
+    .filter((document) => documentLinksToResearch(document, task))
+    .map((document) => ({
+      id: String(document.id),
+      filename: String(document.filename),
+      title: String(document.title || document.filename),
+      category: String(document.document_type || state.t('report', 'Fachbericht')),
+      updated_at_ms: Number(document.updated_at_ms || document.created_at_ms || 0),
+    }))
+    .sort((a, b) => b.updated_at_ms - a.updated_at_ms || a.title.localeCompare(b.title));
+}
+
+function documentLinksToResearch(document, task) {
+  return (document.linked_records || []).some((record) => {
+    const kind = String(record?.kind || record?.type || record?.record_type || '').toLowerCase();
+    const id = String(record?.id || record?.record_id || record?.value || '');
+    return (kind === 'research_task' && id === task.id)
+      || (kind === 'knowledge_domain' && id === task.knowledge_domain);
+  });
+}
+
 export const __researchTestHooks = {
   buildSourceModels,
   collectionDiagnosticRows,
   diagnosticRows,
   disabledTabButton,
   evidenceGate,
+  eligibleGraphFocusSourceIds,
   filterGraphRowsForEvidence,
   filterMeasurementRowsForEvidence,
   formatDimensionScore,
   formatPortfolioScore,
+  aggregateMeasurements,
   hasVerifiedEvidence: () => evidenceRankedSources().length > 0,
   knowledgeBasesFromTables,
+  mergeKnowledgeTableChunks,
+  knowledgeLineageForPayload,
   knowledgeRefreshPayload,
+  compactKnowledgeTableReferences,
+  graphDocumentLineage,
+  latestEvidenceRunForTask,
+  researchScoringContract,
+  researchReportsForTask,
+  renderSourcesTable,
+  normalizeKnowledgeTableRows,
   renderNoTaskCenter,
   researchDomainFromFormValue,
+  metricPropellerLength,
   shouldRetryEmptyKnowledgeTables,
+  tangentialEquivalentForce,
+  validateChunkSequence,
   validateResearchTaskInput,
   validateSelectedResearchTask,
 };

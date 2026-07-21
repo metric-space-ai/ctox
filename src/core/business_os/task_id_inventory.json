@@ -53,6 +53,13 @@
     },
     {
       "file": "src/core/business_os/store.rs",
+      "function": "persist_systematic_research_failure",
+      "occurrence": 1,
+      "semantics": "execution_link",
+      "target_field": "execution_task_id"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
       "function": "persist_terminal_business_chat_command_projection",
       "occurrence": 1,
       "semantics": "execution_link",

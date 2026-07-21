@@ -51,6 +51,11 @@ import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
 } from './shared/workspace-session.js?v=20260716-workspace-session-v1';
+import {
+  decodeTaskbarPinCache,
+  encodeTaskbarPinCache,
+  resolveTaskbarPinState,
+} from './shared/taskbar-pins.js?v=20260717-taskbar-pins-v2';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -65,7 +70,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260718-knowledge-cards-mobile-v146';
+const APP_BUILD = '20260721-main-merge-v155';
 
 ensureShellStylesheets();
 
@@ -218,6 +223,7 @@ const state = {
   governance: null,
   moduleLayout: null,
   taskbarPins: [],
+  taskbarPinsUpdatedAtMs: 0,
   schemaRegistrations: new Map(),
   schemaRegistrationQueue: Promise.resolve(),
   schemaImportRetries: new Map(),
@@ -4653,16 +4659,17 @@ function draggedTaskbarPinId(event) {
 }
 
 function readTaskbarPins() {
-  try {
-    const parsed = JSON.parse(readScopedLocalStorage(TASKBAR_PINS_KEY) || 'null');
-    return Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
+  const cached = decodeTaskbarPinCache(readScopedLocalStorage(TASKBAR_PINS_KEY));
+  state.taskbarPinsUpdatedAtMs = cached.updatedAtMs;
+  return cached.pins.length ? cached.pins : null;
 }
 
 function persistTaskbarPins() {
-  writeScopedLocalStorage(TASKBAR_PINS_KEY, JSON.stringify(state.taskbarPins));
+  state.taskbarPinsUpdatedAtMs = Date.now();
+  writeScopedLocalStorage(
+    TASKBAR_PINS_KEY,
+    encodeTaskbarPinCache(state.taskbarPins, state.taskbarPinsUpdatedAtMs),
+  );
   clearTimeout(taskbarPinSaveTimer);
   taskbarPinSaveTimer = window.setTimeout(() => {
     taskbarPinSaveTimer = null;
@@ -4705,12 +4712,23 @@ async function hydrateTaskbarPinsFromDesktopLayout() {
     'desktop_layout read',
   );
   const layout = doc?.toJSON?.() || null;
-  if (Array.isArray(layout?.taskbar_pins)) {
-    state.taskbarPins = normalizeTaskbarPins(layout.taskbar_pins, state.modules, { compactLegacyAllPins: true });
-  } else {
-    state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules);
-  }
-  writeScopedLocalStorage(TASKBAR_PINS_KEY, JSON.stringify(state.taskbarPins));
+  const local = decodeTaskbarPinCache(readScopedLocalStorage(TASKBAR_PINS_KEY));
+  const resolved = resolveTaskbarPinState({
+    localPins: local.pins,
+    localUpdatedAtMs: local.updatedAtMs,
+    remotePins: layout?.taskbar_pins,
+    remoteUpdatedAtMs: layout?.updated_at_ms,
+  });
+  state.taskbarPins = state.modules.length
+    ? normalizeTaskbarPins(resolved.pins, state.modules, {
+        compactLegacyAllPins: resolved.source === 'remote',
+      })
+    : resolved.pins;
+  state.taskbarPinsUpdatedAtMs = resolved.updatedAtMs || Date.now();
+  writeScopedLocalStorage(
+    TASKBAR_PINS_KEY,
+    encodeTaskbarPinCache(state.taskbarPins, state.taskbarPinsUpdatedAtMs),
+  );
   await withStartupTimeout(syncTaskbarPinsToDesktopLayout(), 1500, null, 'desktop_layout write');
 }
 
@@ -4735,9 +4753,23 @@ async function syncTaskbarPinsToDesktopLayout() {
   const collection = state.db?.collection?.('desktop_layout');
   if (!collection) return;
   const existing = await collection.findOne('layout').exec();
+  const existingLayout = existing?.toJSON?.() || null;
+  const remoteUpdatedAtMs = Number(existingLayout?.updated_at_ms || 0);
+  if (remoteUpdatedAtMs > Number(state.taskbarPinsUpdatedAtMs || 0)) {
+    state.taskbarPins = normalizeTaskbarPins(existingLayout.taskbar_pins, state.modules, {
+      compactLegacyAllPins: true,
+    });
+    state.taskbarPinsUpdatedAtMs = remoteUpdatedAtMs;
+    writeScopedLocalStorage(
+      TASKBAR_PINS_KEY,
+      encodeTaskbarPinCache(state.taskbarPins, state.taskbarPinsUpdatedAtMs),
+    );
+    renderTabs();
+    return;
+  }
   const patch = {
     taskbar_pins: state.taskbarPins,
-    updated_at_ms: Date.now(),
+    updated_at_ms: state.taskbarPinsUpdatedAtMs || Date.now(),
   };
   if (existing) {
     await existing.incrementalPatch(patch);
@@ -4805,8 +4837,19 @@ async function openModule(moduleId, options = {}) {
   if (requestedId !== moduleId && currentHashModuleId() === moduleId) {
     history.replaceState(null, '', `#${requestedId}`);
   }
-  const mod = state.modules.find((item) => item.id === requestedId) || state.modules[0];
-  if (!mod) return;
+  let mod = state.modules.find((item) => item.id === requestedId);
+  if (!mod && requestedId) {
+    // Runtime-installed apps arrive through the replicated module catalog.
+    // Refresh once before resolving the route so a just-installed app opens
+    // itself instead of silently falling back to the first visible module.
+    await refreshModules();
+    mod = state.modules.find((item) => item.id === requestedId);
+  }
+  if (!mod) {
+    console.warn(`[business-os] requested module is not available: ${requestedId || '(empty)'}`);
+    setStatus(`${requestedId || 'App'} ist noch nicht im Modulkatalog verfügbar.`);
+    return;
+  }
   if (!canSeeModuleForAppVersion(mod)) {
     const lifecycle = appLifecycleState(mod, {
       session: state.session,
@@ -9327,18 +9370,26 @@ function mergePackagedCatalogModules(cachedModules, packagedModules, options = {
       continue;
     }
     const current = merged[index];
-    const next = {
-      ...current,
-      ...shellMod,
-      layout: {
-        ...(current.layout || {}),
-        ...(shellMod.layout || {}),
-      },
-      store: {
-        ...(current.store || {}),
-        ...(shellMod.store || {}),
-      },
-    };
+    const currentBase = moduleBasePath(current);
+    const packagedBase = moduleBasePath(shellMod);
+    // A catalog row is also the asset-routing contract. Never retain
+    // lifecycle/source fields from an old runtime install while taking the
+    // entry, version, and presentation from a packaged module with the same
+    // id. That hybrid can display the new version while executing old code.
+    const next = currentBase !== packagedBase
+      ? { ...shellMod }
+      : {
+        ...current,
+        ...shellMod,
+        layout: {
+          ...(current.layout || {}),
+          ...(shellMod.layout || {}),
+        },
+        store: {
+          ...(current.store || {}),
+          ...(shellMod.store || {}),
+        },
+      };
     if (JSON.stringify(current) !== JSON.stringify(next)) {
       merged[index] = next;
       changedIds.push(shellMod.id);
@@ -10627,11 +10678,12 @@ function workspaceStatusText() {
     : '';
   if (brandingName) return brandingName;
   const instanceName = getInstanceName();
-  const managedDesktop = (
+  const desktopInstanceSource = String(
     launchConfigForPageSession?.desktop_instance?.source
     || readUrlPairingConfig()?.desktop_instance?.source
-  ) === 'ctox_dev';
-  if (instanceName && (managedDesktop || (instanceName !== 'A6000' && !isLocalBusinessOsSurface()))) {
+    || ''
+  ).trim();
+  if (instanceName && (desktopInstanceSource || (instanceName !== 'A6000' && !isLocalBusinessOsSurface()))) {
     return instanceName;
   }
   return shellText('localWorkspace');
