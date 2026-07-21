@@ -2,5 +2,12 @@
   "title": "Bewerbungseingang",
   "subtitle": "Generischer Mehrkanal-Eingang: normalisierte Bewerbungen aus Karriereseite/Jobbörse/E-Mail/QR.",
   "add": "Anlegen",
-  "empty": "Noch keine Einträge."
+  "empty": "Noch keine Einträge.",
+  "listTitle": "Bewerbungen",
+  "newTitle": "Neue Bewerbung",
+  "import": "Importieren",
+  "export": "Exportieren",
+  "bandAll": "Alle",
+  "bandOpen": "Offen",
+  "bandClosed": "Abgeschlossen"
 }

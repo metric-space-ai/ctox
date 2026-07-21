@@ -1,39 +1,96 @@
-<section class="ats-intake ctox-record-workbench" data-ats-root>
-  <header class="ctox-pane-header ctox-pane-band ctox-record-workbench__header">
-    <div class="ctox-pane-title-row">
-      <div class="ctox-pane-titles">
-        <span class="ctox-pane-kicker" data-copy="kicker">Bewerbungseingang</span>
-        <h1 class="ctox-pane-title" data-ats-title></h1>
-      </div>
-    </div>
-    <p class="ctox-record-workbench__subtitle" data-ats-sub></p>
-  </header>
-  <div class="ctox-record-workbench__body">
-    <form class="ctox-compact-form" data-ats-form>
-      <div class="ctox-compact-form__fields">
-        <label class="ctox-compact-field"><span data-copy="name">Name</span><input class="ctox-input" type="text" name="name" required data-f /></label>
-        <label class="ctox-compact-field"><span data-copy="email">E-Mail</span><input class="ctox-input" type="email" name="email" data-f /></label>
-      </div>
-      <div class="ctox-compact-form__actions"><button class="ctox-button is-primary" type="submit" data-copy="capture">Erfassen</button></div>
-      <details class="ats-more">
-        <summary data-copy="more">Weitere Angaben</summary>
-        <div class="ctox-compact-form__fields">
-          <label class="ctox-compact-field"><span data-copy="phone">Telefon</span><input class="ctox-input" type="text" name="phone" data-f /></label>
-          <label class="ctox-compact-field"><span data-copy="vacancy">Vakanz-ID</span><input class="ctox-input" type="text" name="vacancy_id" data-f /></label>
-          <label class="ctox-compact-field"><span data-copy="channel">Kanal</span><select class="ctox-select" name="channel" data-f>
-            <option value="career_site">Karriereseite</option>
-            <option value="job_board">Jobbörse</option>
-            <option value="easy_apply">Easy Apply</option>
-            <option value="email">E-Mail</option>
-            <option value="qr">QR</option>
-            <option value="walk_in">Walk-in</option>
-            <option value="referral">Empfehlung</option>
-          </select></label>
+<main class="ctox-workspace ctox-workspace--two-pane intake-module" data-ats-root data-resize-frame>
+  <!-- LEFT: record list — canonical column grammar. All chrome behaviour
+       (search / view-toggle / tray / reset / active-dot / band) is SHELL-wired
+       from the data-pg-* attributes; this module writes no chrome JS/CSS. -->
+  <aside class="ctox-pane intake-rail" aria-label="Bewerbungen" data-left-content>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-copy="kicker">Bewerbungseingang</span>
+          <h2 class="ctox-pane-title" data-copy="listTitle">Bewerbungen</h2>
         </div>
-      </details>
-    </form>
-    <div class="ctox-callout" data-ats-gate></div>
-    <div class="ctox-record-workbench__status" data-ats-count></div>
-    <div class="ctox-record-list" data-ats-list></div>
-  </div>
-</section>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon is-primary" data-action="new" aria-label="Neue Bewerbung" title="Neue Bewerbung"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-action="import" aria-label="Importieren" title="Importieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-action="export" aria-label="Exportieren" title="Exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21V9M12 9l-4 4M12 9l4 4M5 3h14"/></svg></button>
+        </div>
+      </div>
+      <div class="ctox-filterbar">
+        <input class="ctox-pane-search" type="search" data-pg-search placeholder="Suchen..." aria-label="Bewerbungen suchen" />
+        <div class="ctox-view-toggle" role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
+        <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="ctox-filter-tray" data-pg-tray hidden>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" data-pg-filter data-pg-name="status" data-pg-default="all" aria-label="Status filtern">
+            <option value="all" data-copy="statusAll">Alle Status</option>
+            <option value="new" data-copy="status_new">Neu</option>
+            <option value="screening" data-copy="status_screening">Prüfung</option>
+            <option value="hired" data-copy="status_hired">Eingestellt</option>
+            <option value="rejected" data-copy="status_rejected">Abgelehnt</option>
+            <option value="duplicate" data-copy="status_duplicate">Duplikat</option>
+          </select>
+          <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+        </div>
+      </div>
+    </header>
+    <nav class="ctox-view-switch" aria-label="Ansichten">
+      <div class="ctox-pane-tabs">
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="all" aria-selected="true"><span data-copy="bandAll">Alle</span><span class="view-count" data-pg-count="all"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="open" aria-selected="false"><span data-copy="bandOpen">Offen</span><span class="view-count" data-pg-count="open"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="closed" aria-selected="false"><span data-copy="bandClosed">Abgeschlossen</span><span class="view-count" data-pg-count="closed"></span></button>
+      </div>
+    </nav>
+    <div class="ctox-pane-body ctox-well">
+      <div class="ctox-list" data-ats-list></div>
+    </div>
+    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
+  </aside>
+
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="260" data-resizer-max="480" aria-label="Spaltenbreite anpassen"></button>
+
+  <!-- MAIN: capture workbench, record-bound. The detail readout auto-reveals
+       on selection (visible = hasSelection && !userCollapsed). -->
+  <section class="ctox-pane intake-main" aria-label="Bewerbungseingang" data-ats-main>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-copy="kicker">Bewerbungseingang</span>
+          <h1 class="ctox-pane-title" data-ats-title></h1>
+        </div>
+        <div class="ctox-pane-actions"></div>
+      </div>
+      <p class="intake-sub" data-ats-sub></p>
+    </header>
+    <div class="ctox-pane-scroll intake-workbench">
+      <article class="ctox-card intake-detail" data-ats-detail hidden></article>
+      <form class="ctox-compact-form" data-ats-form>
+        <div class="ctox-compact-form__fields">
+          <label class="ctox-compact-field"><span data-copy="name">Name</span><input class="ctox-input" type="text" name="name" required data-f /></label>
+          <label class="ctox-compact-field"><span data-copy="email">E-Mail</span><input class="ctox-input" type="email" name="email" data-f /></label>
+        </div>
+        <div class="ctox-compact-form__actions"><button class="ctox-button is-primary" type="submit" data-copy="capture">Erfassen</button></div>
+        <details class="ats-more">
+          <summary data-copy="more">Weitere Angaben</summary>
+          <div class="ctox-compact-form__fields">
+            <label class="ctox-compact-field"><span data-copy="phone">Telefon</span><input class="ctox-input" type="text" name="phone" data-f /></label>
+            <label class="ctox-compact-field"><span data-copy="vacancy">Vakanz-ID</span><input class="ctox-input" type="text" name="vacancy_id" data-f /></label>
+            <label class="ctox-compact-field"><span data-copy="channel">Kanal</span><select class="ctox-select" name="channel" data-f>
+              <option value="career_site">Karriereseite</option>
+              <option value="job_board">Jobbörse</option>
+              <option value="easy_apply">Easy Apply</option>
+              <option value="email">E-Mail</option>
+              <option value="qr">QR</option>
+              <option value="walk_in">Walk-in</option>
+              <option value="referral">Empfehlung</option>
+            </select></label>
+          </div>
+        </details>
+      </form>
+      <div class="ctox-callout" data-ats-gate></div>
+    </div>
+  </section>
+</main>
