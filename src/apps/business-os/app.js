@@ -11403,8 +11403,6 @@ function isGlobalCtoxContextSurface(target) {
     '.shell-context-menu',
     '[data-ctox-chat-root]',
     '[data-ctox-local-context-menu]',
-    '[data-shell-taskbar]',
-    '.shell-taskbar',
     '.topbar',
     '.module-nav',
     '.drawer',
