@@ -1136,10 +1136,11 @@ impl LcmEngine {
         // A mid-sequence failure (e.g. SQLITE_BUSY, or a failing ordinal read) must not
         // commit an orphan messages row: render/compaction JOIN through context_items and
         // would never see it, while the persist-retry helper would insert a duplicate.
-        let tx = self
-            .conn
-            .unchecked_transaction()
-            .context("failed to begin add-message transaction")?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .context("failed to begin add-message transaction")?;
         let seq = self
             .conn
             .query_row(
@@ -1584,10 +1585,11 @@ impl LcmEngine {
     }
 
     pub fn continuity_init_documents(&self, conversation_id: i64) -> Result<ContinuityShowAll> {
-        let tx = self
-            .conn
-            .unchecked_transaction()
-            .context("failed to begin continuity init transaction")?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .context("failed to begin continuity init transaction")?;
         let show_all = load_or_init_continuity_show_all(&tx, conversation_id)?;
         let previous = load_mission_state_with(&tx, conversation_id)?;
         persist_mission_state_with(
@@ -1649,10 +1651,11 @@ impl LcmEngine {
         kind: ContinuityKind,
         diff_text: &str,
     ) -> Result<ContinuityDocumentState> {
-        let tx = self
-            .conn
-            .unchecked_transaction()
-            .context("failed to begin continuity apply transaction")?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .context("failed to begin continuity apply transaction")?;
         let document = ensure_continuity_document_with(&tx, conversation_id, kind)?;
         let normalized_diff = normalize_continuity_diff(kind, diff_text)?;
         let rendered = apply_continuity_diff(kind, &document.content, &normalized_diff)?;
@@ -1706,10 +1709,11 @@ impl LcmEngine {
         kind: ContinuityKind,
         new_content: &str,
     ) -> Result<ContinuityDocumentState> {
-        let tx = self
-            .conn
-            .unchecked_transaction()
-            .context("failed to begin continuity full-replace transaction")?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .context("failed to begin continuity full-replace transaction")?;
         let document = ensure_continuity_document_with(&tx, conversation_id, kind)?;
         let rendered = new_content.trim().to_string();
         if rendered.is_empty() {
@@ -1764,10 +1768,11 @@ impl LcmEngine {
         if find.is_empty() {
             anyhow::bail!("continuity_string_replace_document: find is empty");
         }
-        let tx = self
-            .conn
-            .unchecked_transaction()
-            .context("failed to begin continuity string-replace transaction")?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .context("failed to begin continuity string-replace transaction")?;
         let document = ensure_continuity_document_with(&tx, conversation_id, kind)?;
         let before = document.content.clone();
         let matches: usize = before.matches(find).count();
@@ -1837,10 +1842,11 @@ impl LcmEngine {
             !match_text.trim().is_empty(),
             "match_text must not be empty for secret rewrite"
         );
-        let tx = self
-            .conn
-            .unchecked_transaction()
-            .context("failed to begin secret rewrite transaction")?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .context("failed to begin secret rewrite transaction")?;
         let message_rows_updated =
             rewrite_message_rows_with(&tx, conversation_id, match_text, replacement_text)?;
         let summary_rows_updated =
@@ -1941,10 +1947,11 @@ impl LcmEngine {
         &self,
         conversation_id: i64,
     ) -> Result<MissionStateRepairOutcome> {
-        let tx = self
-            .conn
-            .unchecked_transaction()
-            .context("failed to begin mission sync transaction")?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .context("failed to begin mission sync transaction")?;
         let mut continuity = load_or_init_continuity_show_all(&tx, conversation_id)?;
         let previous = load_mission_state_with(&tx, conversation_id)?;
         let previous_focus_head_commit_id = continuity.focus.head_commit_id.clone();
@@ -2121,10 +2128,11 @@ impl LcmEngine {
         record: &MissionStateRecord,
         reason: &str,
     ) -> Result<bool> {
-        let tx = self
-            .conn
-            .unchecked_transaction()
-            .context("failed to begin focus continuity rewrite transaction")?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .context("failed to begin focus continuity rewrite transaction")?;
         let continuity = load_or_init_continuity_show_all(&tx, conversation_id)?;
         let repaired_content = render_focus_continuity_from_record(&continuity, record);
         if repaired_content.trim() == continuity.focus.content.trim() {
