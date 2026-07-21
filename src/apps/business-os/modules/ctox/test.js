@@ -22,6 +22,7 @@ const { __ctoxTestHooks: hooks } = await importBrowserBundle('./index.js');
 
 const {
   aggregateFlowMetrics,
+  applyTaskSelection,
   clampMetric,
   compactTaskFlowRow,
   deriveHarnessHealth,
@@ -33,6 +34,7 @@ const {
   normalizeFocusTask,
   observedDetailsFromFlow,
   progressPercent,
+  renderTaskList,
   resolveSelectedTaskId,
   safeTaskDisplayText,
   setFlowZoom,
@@ -40,9 +42,69 @@ const {
   taskPipelineStage,
   taskSteps,
   timelinePanel,
+  webStackPanel,
   webStackStateFromRefreshResult,
   webStackProjectionMissing,
 } = hooks;
+
+// --- Minimal fake DOM ---------------------------------------------------------
+// Just enough of the element API for the focus-safe refresh + in-place selection
+// pins (no HTML parsing): attribute + class + descendant selectors, and a plain
+// innerHTML string sink so we can assert that only the list node is rewritten.
+function fakeEl(attrs = {}, children = []) {
+  const el = {
+    _attrs: { ...attrs },
+    _classes: new Set(String(attrs.class || '').split(/\s+/).filter(Boolean)),
+    children,
+    innerHTML: attrs.innerHTML || '',
+    value: attrs.value ?? '',
+    className: attrs.class || '',
+    __ctoxPaneGrammar: null,
+    getAttribute(name) { return name in this._attrs ? this._attrs[name] : null; },
+    setAttribute(name, val) { this._attrs[name] = String(val); },
+    removeAttribute(name) { delete this._attrs[name]; },
+    get classList() {
+      return {
+        add: (cls) => el._classes.add(cls),
+        remove: (cls) => el._classes.delete(cls),
+        contains: (cls) => el._classes.has(cls),
+        toggle: (cls, on) => {
+          const next = on === undefined ? !el._classes.has(cls) : on;
+          if (next) el._classes.add(cls); else el._classes.delete(cls);
+          return next;
+        },
+      };
+    },
+    querySelector(sel) { return fakeQueryAll(this, sel)[0] || null; },
+    querySelectorAll(sel) { return fakeQueryAll(this, sel); },
+  };
+  return el;
+}
+
+function fakeMatch(sel) {
+  const attrConds = [...sel.matchAll(/\[([\w-]+)(?:="([^"]*)")?\]/g)].map((m) => ({ name: m[1], value: m[2] }));
+  const classConds = [...sel.matchAll(/\.([\w-]+)/g)].map((m) => m[1]);
+  return (el) => attrConds.every((c) => (c.value === undefined ? el._attrs[c.name] !== undefined : el._attrs[c.name] === c.value))
+    && classConds.every((c) => el._classes.has(c));
+}
+
+function fakeDescendants(el, acc = []) {
+  for (const child of el.children || []) { acc.push(child); fakeDescendants(child, acc); }
+  return acc;
+}
+
+function fakeQueryAll(root, sel) {
+  let ctxNodes = [root];
+  for (const part of sel.trim().split(/\s+/)) {
+    const pred = fakeMatch(part);
+    const next = [];
+    for (const node of ctxNodes) for (const cand of fakeDescendants(node)) if (pred(cand)) next.push(cand);
+    ctxNodes = next;
+  }
+  return ctxNodes;
+}
+
+const noopActionIcon = { getActionIcon: (name) => `<svg data-icon="${name}"></svg>` };
 
 function test(name, fn) {
   try {
@@ -86,16 +148,16 @@ test('Presentation layer stays compact and shell-native', () => {
   assert.match(manifest, /currentColor/);
 });
 
-test('Task column pins the complete canonical grammar contract', () => {
+test('Task column pins the shell-owned canonical grammar contract', () => {
   const js = readFileSync(new URL('./index.js', import.meta.url), 'utf8');
+  const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
   const state = {
-    ctx: { getActionIcon: (name) => `<svg data-icon="${name}"></svg>` },
+    ctx: noopActionIcon,
     lang: 'en',
     selectedTaskId: 'task-working',
     taskSearch: '',
     taskViewMode: 'cards',
     taskPrimaryView: 'all',
-    taskFiltersOpen: false,
     taskSourceFilter: 'all',
     taskPinFilter: 'all',
     taskSort: 'updated',
@@ -108,22 +170,103 @@ test('Task column pins the complete canonical grammar contract', () => {
   ];
   const markup = taskColumnMarkup(tasks, state);
 
-  assert.match(markup, /class="ctox-task-filterbar"[\s\S]*data-task-search[\s\S]*data-task-view-mode="cards"[\s\S]*data-task-view-mode="list"[\s\S]*data-toggle-task-filters/);
-  assert.match(markup, /class="ctox-task-filter-tray"[\s\S]*data-task-source-filter[\s\S]*data-task-pin-filter[\s\S]*data-task-sort[\s\S]*data-reset-task-filters/);
-  const tabs = markup.match(/class="ctox-pane-tab[^\"]*"/g) || [];
-  assert.ok(tabs.length >= 2, 'counted view band must have at least two real views');
-  assert.match(markup, /All \(2\)/);
-  assert.match(markup, /Working \(1\)/);
-  assert.match(markup, /Waiting \(0\)/);
-  assert.match(markup, /Done \(1\)/);
-  assert.match(markup, /class="ctox-pane-body ctox-task-well"/);
-  assert.match(markup, /<footer class="ctox-harness-footer">2 entries · All<\/footer>/);
-  assert.doesNotMatch(markup, /data-[^=\s]*refresh|>\s*(?:Refresh|Aktualisieren)\s*</i);
+  // SHELL-owned data-pg-* grammar with the kit classes (no bespoke chrome).
+  assert.match(markup, /class="ctox-filterbar"[\s\S]*data-pg-search[\s\S]*data-pg-view="cards"[\s\S]*data-pg-view="list"[\s\S]*data-pg-tray-toggle/);
+  assert.match(markup, /class="ctox-filter-tray" data-pg-tray hidden[\s\S]*data-pg-name="source"[\s\S]*data-pg-name="pin"[\s\S]*data-pg-name="sort"[\s\S]*data-pg-reset/);
+  assert.match(markup, /class="ctox-view-switch"/);
+  assert.doesNotMatch(markup, /ctox-task-filterbar|ctox-task-filter-tray|ctox-task-view-switch|data-task-search|data-toggle-task-filters|data-task-primary-view/);
+  const bands = markup.match(/data-pg-band="[a-z]+"/g) || [];
+  assert.ok(bands.length >= 2, 'counted view band must have at least two real views');
+  assert.match(markup, /data-pg-band="all"[\s\S]*data-pg-count="all"> \(2\)</);
+  assert.match(markup, /data-pg-band="working"[\s\S]*data-pg-count="working"> \(1\)</);
+  assert.match(markup, /data-pg-band="waiting"[\s\S]*data-pg-count="waiting"> \(0\)</);
+  assert.match(markup, /data-pg-band="done"[\s\S]*data-pg-count="done"> \(1\)</);
+  assert.match(markup, /class="ctox-pane-body ctox-well"/);
+  assert.match(markup, /<footer class="ctox-pane-footer"><span data-pg-footer>2 entries · All<\/span><\/footer>/);
   assert.doesNotMatch(markup, /ctox-badge/);
-  assert.doesNotMatch(js, /data-webstack-refresh/);
+  // index.html carries an empty left pane — the module builds the localized
+  // chrome once (never a second static, drift-prone copy).
+  assert.match(html, /<aside class="ctox-pane ctox-harness-left" data-ctox-left aria-label="CTOX Tasks"><\/aside>/);
   assert.doesNotMatch(js, /localStorage/);
   assert.match(js, /moduleAssetUrl\('\.\/index\.html'\)/);
   assert.match(js, /moduleAssetUrl\('\.\/index\.css'\)/);
+});
+
+test('Data refresh re-renders only the list content, never the search input node', () => {
+  const searchNode = fakeEl({ 'data-pg-search': '', value: '' });
+  const sourceSelect = fakeEl({ 'data-pg-filter': '', 'data-pg-name': 'source', 'data-pg-default': 'all', value: 'all' });
+  const countAll = fakeEl({ 'data-pg-count': 'all' });
+  const footer = fakeEl({ 'data-pg-footer': '' });
+  const list = fakeEl({ 'data-task-list': '', class: 'ctox-list ctox-task-list is-cards', innerHTML: 'STALE' });
+  const well = fakeEl({ class: 'ctox-pane-body ctox-well' }, [list]);
+  const left = fakeEl({ 'data-ctox-left': '', class: 'ctox-pane ctox-harness-left' }, [searchNode, sourceSelect, countAll, footer, well]);
+  const host = fakeEl({}, [left]);
+  const state = {
+    ctx: { ...noopActionIcon, host },
+    lang: 'en',
+    selectedTaskId: '',
+    taskSearch: '',
+    taskViewMode: 'cards',
+    taskPrimaryView: 'all',
+    taskSourceFilter: 'all',
+    taskPinFilter: 'all',
+    taskSort: 'updated',
+    taskSortDirection: 'desc',
+    pinnedTaskIds: new Set(),
+    model: { tasks: [] },
+  };
+
+  renderTaskList(state);
+
+  // The exact search input object survives the refresh (no focus/caret loss).
+  assert.equal(host.querySelector('[data-pg-search]'), searchNode);
+  assert.equal(searchNode.value, '');
+  // Only the list content was rewritten.
+  assert.notEqual(list.innerHTML, 'STALE');
+  assert.match(list.innerHTML, /ctox-empty/);
+  // Counts + footer flowed through the null-guarded (no grammar handle) fallback.
+  assert.equal(countAll.textContent, ' (0)');
+  assert.equal(footer.textContent, '0 entries · All');
+});
+
+test('Selecting a task is an in-place class flip across the existing rows', () => {
+  const rowA = fakeEl({ 'data-task-id': 'a', class: 'ctox-list-item ctox-task-card is-selected' });
+  const rowB = fakeEl({ 'data-task-id': 'b', class: 'ctox-list-item ctox-task-card' });
+  const list = fakeEl({ 'data-task-list': '' }, [rowA, rowB]);
+  const left = fakeEl({ 'data-ctox-left': '' }, [list]);
+  const host = fakeEl({}, [left]);
+  const state = { ctx: { host }, selectedTaskId: 'b' };
+
+  applyTaskSelection(state);
+
+  // Same row objects, only the selection classes/attrs flipped in place.
+  assert.equal(list.children[0], rowA);
+  assert.equal(list.children[1], rowB);
+  assert.equal(rowA.classList.contains('is-selected'), false);
+  assert.equal(rowA.getAttribute('aria-selected'), 'false');
+  assert.equal(rowB.classList.contains('is-selected'), true);
+  assert.equal(rowB.getAttribute('aria-selected'), 'true');
+});
+
+test('Web Stack panel is hidden by default and the toggle reveals it', () => {
+  const js = readFileSync(new URL('./index.js', import.meta.url), 'utf8');
+  const base = {
+    ctx: noopActionIcon,
+    lang: 'en',
+    model: { tasks: [] },
+    webStack: { loading: false, error: '', notice: '', data: null },
+  };
+  const closed = webStackPanel({ ...base, webStackPanelOpen: false });
+  const open = webStackPanel({ ...base, webStackPanelOpen: true });
+
+  assert.match(closed, /<section class="ctox-web-stack-panel[^"]*" data-webstack-panel[^>]*hidden>/);
+  assert.doesNotMatch(open, /data-webstack-panel[^>]*hidden>/);
+  assert.match(open, /data-webstack-panel/);
+  // Restored on-demand machinery: collected header toggle + credential/auth wiring.
+  assert.match(js, /data-webstack-toggle/);
+  assert.match(js, /data-webstack-refresh/);
+  assert.match(js, /data-webstack-auth-source/);
+  assert.match(js, /function requestWebStackAuthAssist/);
 });
 
 test('Compact task rendering shows the four-stage live flow and session pins', () => {

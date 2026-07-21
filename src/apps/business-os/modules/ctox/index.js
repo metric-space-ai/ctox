@@ -477,11 +477,15 @@ export async function mount(ctx) {
     taskSearch: '',
     taskViewMode: 'cards',
     taskPrimaryView: 'all',
-    taskFiltersOpen: false,
     taskSourceFilter: 'all',
     taskPinFilter: 'all',
     taskSort: 'updated',
     taskSortDirection: 'desc',
+    // Tray open/close is now shell-owned (data-pg-tray); the module keeps no
+    // filter-tray state of its own.
+    // On-demand Web Stack panel (main view), hidden by default; toggled from a
+    // collected header icon. State survives the reactive re-renders.
+    webStackPanelOpen: false,
     // No declared CTOX collection is suitable for user UI preferences; pins
     // therefore survive reactive re-renders for this mount session only.
     pinnedTaskIds: new Set(),
@@ -639,9 +643,8 @@ async function refresh(state) {
 
 function renderLoading(state) {
   const t = labels[state.lang];
-  const left = state.ctx.host.querySelector('[data-ctox-left]');
   const main = state.ctx.host.querySelector('[data-ctox-main]');
-  if (left) left.innerHTML = taskColumnMarkup([], state, { loading: true });
+  buildTaskColumn(state, { loading: true });
   if (main) {
     main.innerHTML = `
       <header class="ctox-pane-header ctox-pane-band">
@@ -664,7 +667,10 @@ function renderLoading(state) {
 }
 
 function render(state) {
-  renderLeft(state);
+  // Data refresh path: re-render ONLY the list content inside the well (never
+  // the header/filterbar/search input — the operator never moves), then the
+  // flow canvas / drawer as before.
+  renderTaskList(state);
   renderMain(state);
   syncHarnessHealthUiState(state);
   updateLiveIndicators(state);
@@ -852,81 +858,151 @@ function wireColumnResize(state) {
   return () => {};
 }
 
-function renderLeft(state) {
+// The task column chrome is SHELL-owned canonical grammar: the module builds
+// the data-pg-* markup ONCE (here) and the shell wires search / view toggle /
+// tray / reset / active-dot / band behaviour (autoWirePaneGrammar). It is never
+// rebuilt on a data refresh — only the list inside the well is re-rendered — so
+// the operator never loses focus or scroll position on the 4s refresh.
+function buildTaskColumn(state, options = {}) {
   const left = state.ctx.host.querySelector('[data-ctox-left]');
   if (!left) return;
-  const well = left.querySelector('.ctox-task-well');
-  const scrollTop = well?.scrollTop || 0;
-  left.innerHTML = taskColumnMarkup(state.model?.tasks || [], state);
-  const nextWell = left.querySelector('.ctox-task-well');
-  if (nextWell) nextWell.scrollTop = scrollTop;
+  left.innerHTML = taskColumnMarkup(state.model?.tasks || [], state, options);
+  // Force the shell to (re)wire the freshly built chrome: the pane may still
+  // carry a stale wired-marker + grammar handle from a previous build (e.g. a
+  // language switch), which autoWirePaneGrammar would otherwise skip.
+  left.removeAttribute('data-pg-wired');
+  left.__ctoxPaneGrammar = null;
+  wireTaskColumn(state);
+}
 
-  left.querySelector('[data-task-search]')?.addEventListener('input', (event) => {
-    state.taskSearch = event.currentTarget.value;
-    renderLeft(state);
-    const search = left.querySelector('[data-task-search]');
-    search?.focus();
-    search?.setSelectionRange?.(state.taskSearch.length, state.taskSearch.length);
-  });
-  left.querySelectorAll('[data-task-view-mode]').forEach((button) => {
-    button.addEventListener('click', () => {
-      state.taskViewMode = button.dataset.taskViewMode === 'list' ? 'list' : 'cards';
-      renderLeft(state);
-    });
-  });
-  left.querySelector('[data-toggle-task-filters]')?.addEventListener('click', () => {
-    state.taskFiltersOpen = !state.taskFiltersOpen;
-    renderLeft(state);
-  });
-  left.querySelector('[data-task-source-filter]')?.addEventListener('change', (event) => {
-    state.taskSourceFilter = event.currentTarget.value || 'all';
-    renderLeft(state);
-  });
-  left.querySelector('[data-task-pin-filter]')?.addEventListener('change', (event) => {
-    state.taskPinFilter = event.currentTarget.value || 'all';
-    renderLeft(state);
-  });
-  left.querySelector('[data-task-sort]')?.addEventListener('change', (event) => {
-    state.taskSort = event.currentTarget.value || 'updated';
-    renderLeft(state);
-  });
-  left.querySelector('[data-task-sort-direction]')?.addEventListener('click', () => {
-    state.taskSortDirection = state.taskSortDirection === 'asc' ? 'desc' : 'asc';
-    renderLeft(state);
-  });
-  left.querySelector('[data-reset-task-filters]')?.addEventListener('click', () => {
-    resetTaskFilters(state);
-    renderLeft(state);
-  });
-  left.querySelectorAll('[data-task-primary-view]').forEach((button) => {
-    button.addEventListener('click', () => {
-      state.taskPrimaryView = button.dataset.taskPrimaryView || 'all';
-      renderLeft(state);
-    });
-  });
-  left.querySelectorAll('[data-pin-task-id]').forEach((button) => {
-    button.addEventListener('click', (event) => {
+// Persistent, delegated wiring on the pane element (survives list rebuilds).
+// Search / view / tray / reset / band are the shell's job (reported through the
+// bubbling ctox-pane-grammar-change event); the module only owns record actions
+// (select / pin) and the domain-specific sort-direction toggle.
+function wireTaskColumn(state) {
+  const left = state.ctx.host.querySelector('[data-ctox-left]');
+  if (!left || left.__ctoxTaskWired) return;
+  left.__ctoxTaskWired = true;
+  left.addEventListener('ctox-pane-grammar-change', (event) => onTaskGrammarChange(state, event));
+  left.addEventListener('click', (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) return;
+    const direction = target.closest('[data-task-sort-direction]');
+    if (direction) {
+      state.taskSortDirection = state.taskSortDirection === 'asc' ? 'desc' : 'asc';
+      direction.innerHTML = actionIcon(state, state.taskSortDirection === 'asc' ? 'chevronUp' : 'chevronDown');
+      renderTaskList(state);
+      return;
+    }
+    const pin = target.closest('[data-pin-task-id]');
+    if (pin) {
       event.preventDefault();
       event.stopPropagation();
-      toggleTaskPin(state, button.dataset.pinTaskId);
-      renderLeft(state);
-    });
+      toggleTaskPin(state, pin.dataset.pinTaskId);
+      renderTaskList(state);
+      return;
+    }
+    const select = target.closest('[data-select-task-id]');
+    if (select) selectTask(state, select.dataset.selectTaskId, { drawer: true, center: true });
   });
-  left.querySelectorAll('[data-select-task-id]').forEach((button) => {
-    button.addEventListener('click', () => {
-      selectTask(state, button.dataset.selectTaskId, { drawer: true, center: true });
-    });
+}
+
+function onTaskGrammarChange(state, event) {
+  const detail = event?.detail || {};
+  state.taskSearch = String(detail.search ?? state.taskSearch ?? '');
+  state.taskViewMode = detail.view === 'list' ? 'list' : 'cards';
+  state.taskPrimaryView = detail.band || 'all';
+  const filters = detail.filters || {};
+  state.taskSourceFilter = filters.source || 'all';
+  state.taskPinFilter = filters.pin || 'all';
+  state.taskSort = filters.sort || 'updated';
+  // Intentional reset: a list rebuild here is correct (the shell scroll guard
+  // clears recorded offsets on this event).
+  renderTaskList(state);
+}
+
+// Data-refresh path: re-render ONLY the list content + counts/footer. Never the
+// header/filterbar/search input.
+function renderTaskList(state) {
+  const left = state.ctx.host.querySelector('[data-ctox-left]');
+  if (!left) return;
+  const list = left.querySelector('[data-task-list]');
+  if (!list) { buildTaskColumn(state); return; }
+  const tasks = state.model?.tasks || [];
+  const cards = state.taskViewMode !== 'list';
+  list.className = `ctox-list ctox-task-list ${cards ? 'is-cards' : 'is-compact-flow'}`;
+  list.innerHTML = taskListInner(tasks, state);
+  updateTaskSourceOptions(state, left, tasks);
+  renderTaskCountsAndFooter(state, left, tasks);
+}
+
+// In-place selection: flip is-selected/aria-selected across the existing rows,
+// never a list rebuild (the flow canvas / drawer still re-render on selection).
+function applyTaskSelection(state) {
+  const list = state.ctx.host.querySelector('[data-ctox-left] [data-task-list]');
+  if (!list) return;
+  list.querySelectorAll('[data-task-id]').forEach((row) => {
+    const on = (row.getAttribute('data-task-id') || '') === String(state.selectedTaskId || '');
+    row.classList.toggle('is-selected', on);
+    row.setAttribute('aria-selected', String(on));
   });
+}
+
+// The source filter is a data-pg-filter select the shell wired; only rewrite its
+// <option>s when the source set actually changes so a plain refresh never
+// touches the filterbar (and the wired listener is preserved).
+function updateTaskSourceOptions(state, left, tasks) {
+  const select = left.querySelector('[data-pg-filter][data-pg-name="source"]');
+  if (!select) return;
+  const t = labels[state.lang];
+  const options = taskSourceOptions(tasks);
+  const signature = `${state.lang}::${options.map((item) => `${item.value}:${item.label}`).join('|')}`;
+  if (select.__ctoxSourceSig === signature) return;
+  select.__ctoxSourceSig = signature;
+  const current = state.taskSourceFilter || 'all';
+  if (current !== 'all' && !options.some((item) => item.value === current)) state.taskSourceFilter = 'all';
+  select.innerHTML = `<option value="all">${escapeHtml(t.allSources)}</option>`
+    + options.map((item) => `<option value="${escapeAttr(item.value)}">${escapeHtml(item.label)}</option>`).join('');
+  select.value = state.taskSourceFilter;
+}
+
+function renderTaskCountsAndFooter(state, left, tasks) {
+  const t = labels[state.lang];
+  const counts = taskPrimaryViewCounts(tasks, state);
+  const visibleTasks = filterAndSortTasks(tasks, state);
+  const viewLabel = taskPrimaryViewLabel(state.taskPrimaryView, t);
+  const scopeLabel = state.taskPinFilter === 'pinned' ? `${viewLabel} · ${t.pinned}` : viewLabel;
+  const footerText = `${visibleTasks.length} ${t.entries} · ${scopeLabel}${state.pinnedTaskIds.size ? ` · ${state.pinnedTaskIds.size} ${t.pinned}` : ''}`;
+  const pg = left.__ctoxPaneGrammar;
+  if (pg?.setCounts) pg.setCounts(counts);
+  else for (const [key, value] of Object.entries(counts)) {
+    const node = left.querySelector(`[data-pg-count="${key}"]`);
+    if (node) node.textContent = ` (${value})`;
+  }
+  if (pg?.setFooter) pg.setFooter(footerText);
+  else {
+    const node = left.querySelector('[data-pg-footer]');
+    if (node) node.textContent = footerText;
+  }
+}
+
+function taskListInner(tasks, state, options = {}) {
+  const t = labels[state.lang];
+  if (options.loading) return '<div class="ctox-loading-list" aria-hidden="true"><span></span><span></span><span></span></div>';
+  const cards = state.taskViewMode !== 'list';
+  const visibleTasks = filterAndSortTasks(tasks, state);
+  if (!visibleTasks.length) return `<div class="ctox-empty"><span>${escapeHtml(t.noWorkHere)}</span></div>`;
+  return visibleTasks.map((task) => (cards ? taskCardMarkup(task, state) : compactTaskFlowRow(task, state))).join('');
 }
 
 function taskColumnMarkup(tasks, state, options = {}) {
   const t = labels[state.lang];
-  const visibleTasks = filterAndSortTasks(tasks, state);
   const counts = taskPrimaryViewCounts(tasks, state);
-  const filtersActive = taskFiltersActive(state);
   const sourceOptions = taskSourceOptions(tasks);
   const viewLabel = taskPrimaryViewLabel(state.taskPrimaryView, t);
   const scopeLabel = state.taskPinFilter === 'pinned' ? `${viewLabel} · ${t.pinned}` : viewLabel;
+  const visibleCount = filterAndSortTasks(tasks, state).length;
+  const footerText = `${visibleCount} ${t.entries} · ${scopeLabel}${state.pinnedTaskIds.size ? ` · ${state.pinnedTaskIds.size} ${t.pinned}` : ''}`;
   const cards = state.taskViewMode !== 'list';
   return `
     <header class="ctox-pane-header ctox-pane-band">
@@ -937,36 +1013,36 @@ function taskColumnMarkup(tasks, state, options = {}) {
         </div>
         <div class="ctox-pane-actions"></div>
       </div>
-      <div class="ctox-task-filterbar">
-        <input class="ctox-pane-search" type="search" data-task-search value="${escapeAttr(state.taskSearch || '')}" placeholder="${escapeAttr(t.taskSearch)}" aria-label="${escapeAttr(t.taskSearch)}">
-        <div class="ctox-task-view-toggle" role="group" aria-label="${escapeAttr(t.mode)}">
-          <button type="button" class="ctox-pane-icon" data-task-view-mode="cards" aria-pressed="${cards}" aria-label="${escapeAttr(t.cardsView)}" title="${escapeAttr(t.cardsView)}">${cardsViewIcon()}</button>
-          <button type="button" class="ctox-pane-icon" data-task-view-mode="list" aria-pressed="${!cards}" aria-label="${escapeAttr(t.compactFlowView)}" title="${escapeAttr(t.compactFlowView)}">${listViewIcon()}</button>
+      <div class="ctox-filterbar">
+        <input class="ctox-pane-search" type="search" data-pg-search value="${escapeAttr(state.taskSearch || '')}" placeholder="${escapeAttr(t.taskSearch)}" aria-label="${escapeAttr(t.taskSearch)}">
+        <div class="ctox-view-toggle" role="group" aria-label="${escapeAttr(t.mode)}">
+          <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="${cards}" aria-label="${escapeAttr(t.cardsView)}" title="${escapeAttr(t.cardsView)}">${cardsViewIcon()}</button>
+          <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="${!cards}" aria-label="${escapeAttr(t.compactFlowView)}" title="${escapeAttr(t.compactFlowView)}">${listViewIcon()}</button>
         </div>
-        <button type="button" class="ctox-pane-icon ctox-task-filter-toggle ${filtersActive ? 'has-active-filter' : ''}" data-toggle-task-filters aria-expanded="${state.taskFiltersOpen}" aria-label="${escapeAttr(t.filters)}" title="${escapeAttr(t.filters)}">${actionIcon(state, 'filter')}</button>
+        <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="${escapeAttr(t.filters)}" title="${escapeAttr(t.filters)}">${actionIcon(state, 'filter')}</button>
       </div>
-      <div class="ctox-task-filter-tray" data-task-filter-tray ${state.taskFiltersOpen ? '' : 'hidden'}>
-        <div class="ctox-task-filter-row">
-          <select class="ctox-select" data-task-source-filter aria-label="${escapeAttr(t.source)}">
+      <div class="ctox-filter-tray" data-pg-tray hidden>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" data-pg-filter data-pg-name="source" data-pg-default="all" aria-label="${escapeAttr(t.source)}">
             <option value="all">${escapeHtml(t.allSources)}</option>
             ${sourceOptions.map((item) => `<option value="${escapeAttr(item.value)}" ${state.taskSourceFilter === item.value ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}
           </select>
-          <select class="ctox-select" data-task-pin-filter aria-label="${escapeAttr(t.pinned)}">
+          <select class="ctox-select" data-pg-filter data-pg-name="pin" data-pg-default="all" aria-label="${escapeAttr(t.pinned)}">
             <option value="all" ${state.taskPinFilter !== 'pinned' ? 'selected' : ''}>${escapeHtml(t.allTasks)}</option>
             <option value="pinned" ${state.taskPinFilter === 'pinned' ? 'selected' : ''}>${escapeHtml(t.pinnedOnly)}</option>
           </select>
-          <select class="ctox-select" data-task-sort aria-label="${escapeAttr(t.newestFirst)}">
+          <select class="ctox-select" data-pg-filter data-pg-name="sort" data-pg-default="updated" aria-label="${escapeAttr(t.newestFirst)}">
             <option value="updated" ${state.taskSort === 'updated' ? 'selected' : ''}>${escapeHtml(t.sortUpdated)}</option>
             <option value="title" ${state.taskSort === 'title' ? 'selected' : ''}>${escapeHtml(t.sortTitle)}</option>
             <option value="source" ${state.taskSort === 'source' ? 'selected' : ''}>${escapeHtml(t.sortSource)}</option>
             <option value="status" ${state.taskSort === 'status' ? 'selected' : ''}>${escapeHtml(t.sortStatus)}</option>
           </select>
-          <button type="button" class="ctox-pane-icon" data-task-sort-direction aria-label="${escapeAttr(t.sortDirection)}" title="${escapeAttr(t.sortDirection)}">${actionIcon(state, state.taskSortDirection === 'asc' ? 'chevronUp' : 'chevronDown')}</button>
-          <button type="button" class="ctox-pane-icon ctox-task-filter-reset" data-reset-task-filters aria-label="${escapeAttr(t.resetFilters)}" title="${escapeAttr(t.resetFilters)}">${resetIcon()}</button>
+          <button type="button" class="ctox-sort-dir" data-task-sort-direction aria-label="${escapeAttr(t.sortDirection)}" title="${escapeAttr(t.sortDirection)}">${actionIcon(state, state.taskSortDirection === 'asc' ? 'chevronUp' : 'chevronDown')}</button>
+          <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="${escapeAttr(t.resetFilters)}" title="${escapeAttr(t.resetFilters)}">${resetIcon()}</button>
         </div>
       </div>
     </header>
-    <nav class="ctox-task-view-switch" aria-label="${escapeAttr(t.tasks)}">
+    <nav class="ctox-view-switch" aria-label="${escapeAttr(t.tasks)}">
       <div class="ctox-pane-tabs" role="tablist">
         ${taskViewTab('all', t.viewAll, counts.all, state)}
         ${taskViewTab('working', t.viewWorking, counts.working, state)}
@@ -974,20 +1050,16 @@ function taskColumnMarkup(tasks, state, options = {}) {
         ${taskViewTab('done', t.viewDone, counts.done, state)}
       </div>
     </nav>
-    <div class="ctox-pane-body ctox-task-well">
-      ${options.loading
-        ? `<div class="ctox-loading-list" aria-hidden="true"><span></span><span></span><span></span></div>`
-        : visibleTasks.length
-          ? `<div class="ctox-list ctox-task-list ${cards ? 'is-cards' : 'is-compact-flow'}" data-task-list>${visibleTasks.map((task) => cards ? taskCardMarkup(task, state) : compactTaskFlowRow(task, state)).join('')}</div>`
-          : `<div class="ctox-empty"><span>${escapeHtml(t.noWorkHere)}</span></div>`}
+    <div class="ctox-pane-body ctox-well">
+      <div class="ctox-list ctox-task-list ${cards ? 'is-cards' : 'is-compact-flow'}" data-task-list>${taskListInner(tasks, state, options)}</div>
     </div>
-    <footer class="ctox-harness-footer">${visibleTasks.length} ${escapeHtml(t.entries)} · ${escapeHtml(scopeLabel)}${state.pinnedTaskIds.size ? ` · ${state.pinnedTaskIds.size} ${escapeHtml(t.pinned)}` : ''}</footer>
+    <footer class="ctox-pane-footer"><span data-pg-footer>${escapeHtml(footerText)}</span></footer>
   `;
 }
 
 function taskViewTab(view, label, count, state) {
   const selected = (state.taskPrimaryView || 'all') === view;
-  return `<button type="button" class="ctox-pane-tab ${selected ? 'is-active' : ''}" role="tab" data-task-primary-view="${escapeAttr(view)}" aria-selected="${selected}">${escapeHtml(label)} (${count})</button>`;
+  return `<button type="button" class="ctox-pane-tab ${selected ? 'is-active' : ''}" role="tab" data-pg-band="${escapeAttr(view)}" aria-selected="${selected}">${escapeHtml(label)}<span class="view-count" data-pg-count="${escapeAttr(view)}"> (${count})</span></button>`;
 }
 
 function taskCardMarkup(task, state) {
@@ -1111,22 +1183,6 @@ function taskPrimaryViewLabel(view, t) {
   return t.viewAll;
 }
 
-function taskFiltersActive(state) {
-  return Boolean(String(state.taskSearch || '').trim()
-    || (state.taskSourceFilter && state.taskSourceFilter !== 'all')
-    || state.taskPinFilter === 'pinned'
-    || (state.taskSort && state.taskSort !== 'updated')
-    || state.taskSortDirection === 'asc');
-}
-
-function resetTaskFilters(state) {
-  state.taskSearch = '';
-  state.taskSourceFilter = 'all';
-  state.taskPinFilter = 'all';
-  state.taskSort = 'updated';
-  state.taskSortDirection = 'desc';
-}
-
 function toggleTaskPin(state, taskId) {
   if (!taskId) return;
   if (state.pinnedTaskIds.has(taskId)) state.pinnedTaskIds.delete(taskId);
@@ -1202,6 +1258,158 @@ function browserExtractSummary(fields = {}, lang = 'en') {
     .slice(0, 4)
     .map(([key, value]) => `${key}: ${safeTaskDisplayText(value, lang, { max: 80 })}`)
     .join(' · ');
+}
+
+function webStackIcon() {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.7 2.6 15.3 0 18M12 3c-2.6 2.7-2.6 15.3 0 18"/></svg>';
+}
+
+// On-demand Web Stack section for the main view — a hidden-by-default popover
+// toggled from the collected header icon. Ported from the original left-column
+// aux panel onto kit classes; the shape (status, credential sources, recent
+// captures/extracts, refresh) is unchanged.
+function webStackPanel(state) {
+  const t = labels[state.lang];
+  const webStack = state.webStack || {};
+  const data = webStack.data || {};
+  const summary = data.summary || {};
+  const sources = Array.isArray(data.sources) ? data.sources : [];
+  const credentialSources = sources
+    .filter((source) => source?.credential?.required)
+    .sort((left, right) => Number(left.credential.configured) - Number(right.credential.configured) || String(left.id).localeCompare(String(right.id)));
+  const firstMissing = credentialSources.find((source) => !source.credential.configured) || credentialSources[0];
+  const selectedSecret = firstMissing?.credential?.secret_name || '';
+  const hasCredentialOptions = credentialSources.length > 0;
+  const rows = credentialSources.slice(0, 5).map((source) => {
+    const configured = Boolean(source.credential.configured);
+    return `
+      <article class="ctox-web-stack-source ${configured ? 'is-configured' : 'is-missing'}">
+        <span>
+          <strong>${escapeHtml(source.id)}</strong>
+          <small>${escapeHtml(source.credential.secret_name || '')}</small>
+        </span>
+        <button type="button" class="ctox-button ctox-button--sm" data-webstack-auth-source="${escapeAttr(source.id)}" data-webstack-auth-secret="${escapeAttr(source.credential.secret_name || '')}">
+          ${escapeHtml(configured ? t.webStackAuthAssist : t.webStackVerifyCredential)}
+        </button>
+      </article>
+    `;
+  }).join('');
+  const captureRows = recentWebStackBrowserCaptures(state).slice(0, 3).map((capture) => `
+    <article class="ctox-web-stack-capture" data-task-id="${escapeAttr(capture.taskId)}" data-context-label="${escapeAttr(capture.sourceId || capture.captureScript || capture.taskId)}">
+      <span><strong>${escapeHtml(capture.sourceId || capture.captureScript || capture.title)}</strong><small>${escapeHtml([capture.captureScript, capture.frameId].filter(Boolean).join(' · '))}</small></span>
+      <small>${escapeHtml(formatShortTimestamp(capture.timestamp))}</small>
+    </article>
+  `).join('');
+  const extractRows = recentWebStackBrowserExtracts(state).slice(0, 3).map((extract) => `
+    <article class="ctox-web-stack-capture is-extract" data-command-id="${escapeAttr(extract.commandId)}" data-context-label="${escapeAttr(extract.sourceId || extract.captureScript || extract.commandId)}">
+      <span><strong>${escapeHtml(extract.sourceId || extract.captureScript || extract.title)}</strong><small>${escapeHtml(extract.summary || extract.captureScript || extract.commandId)}</small></span>
+      <small>${escapeHtml(formatShortTimestamp(extract.timestamp))}</small>
+    </article>
+  `).join('');
+
+  const friendlyStatus = friendlyWebStackStatus(webStack, t);
+  const projectionMissing = webStackProjectionMissing(webStack);
+  const headerSummary = webStack.loading
+    ? t.webStackLoading
+    : projectionMissing
+      ? t.webStackSyncRequired
+      : `${summary.credential_configured || 0}/${summary.credential_required || 0} ${t.webStackConfigured}`;
+  const statusTone = webStack.error ? 'is-warning' : (webStack.notice ? 'is-info' : '');
+  return `
+    <section class="ctox-web-stack-panel ctox-context-item" data-webstack-panel data-context-label="${escapeAttr(t.webStack)}" data-context-record-id="ctox-web-stack" ${state.webStackPanelOpen ? '' : 'hidden'}>
+      <header class="ctox-web-stack-head">
+        <div class="ctox-web-stack-head-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(t.webStack)}</span>
+          <strong class="ctox-badge ${statusTone}">${escapeHtml(headerSummary)}</strong>
+        </div>
+        <div class="ctox-web-stack-head-actions">
+          <button type="button" class="ctox-pane-icon" data-webstack-refresh aria-label="${escapeAttr(t.webStackSyncRequired)}" title="${escapeAttr(t.webStackSyncRequired)}">${resetIcon()}</button>
+          <button type="button" class="ctox-pane-icon" data-webstack-close aria-label="${escapeAttr(t.auxHide)}" title="${escapeAttr(t.auxHide)}">${actionIcon(state, 'close')}</button>
+        </div>
+      </header>
+      <div class="ctox-web-stack-body">
+        <div class="ctox-callout ctox-web-stack-status ${statusTone}" role="status">${escapeHtml(friendlyStatus)}</div>
+        ${projectionMissing ? `<div class="ctox-callout is-info ctox-web-stack-diagnostic">${escapeHtml(t.webStackProjectionMissing)}</div>` : ''}
+        ${hasCredentialOptions && !projectionMissing ? `<small>${escapeHtml(`${t.webStackSecret}: ${selectedSecret}`)}</small>` : ''}
+        <div class="ctox-web-stack-source-list">
+          ${!projectionMissing && rows ? rows : `<small>${escapeHtml(t.webStackSources)}: ${Number(summary.sources || 0)}${projectionMissing ? ` · ${t.webStackSyncRequired}` : ''}</small>`}
+        </div>
+        <div class="ctox-web-stack-capture-list">
+          <span>${escapeHtml(t.webStackRecentCaptures)}</span>
+          ${captureRows || `<small>${escapeHtml(t.webStackNoCaptures)}</small>`}
+        </div>
+        <div class="ctox-web-stack-capture-list">
+          <span>${escapeHtml(t.webStackRecentExtracts)}</span>
+          ${extractRows || `<small>${escapeHtml(t.webStackNoExtracts)}</small>`}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function recentWebStackBrowserCaptures(state) {
+  const tasks = state.model?.tasks || [];
+  return tasks
+    .map((task) => {
+      const artifact = task.browserContextArtifact || task.browser_context_artifact || null;
+      if (artifact?.kind !== 'browser_context') return null;
+      const context = artifact.browser_context || {};
+      return {
+        taskId: task.taskId || task.id || '',
+        title: task.title || '',
+        sourceId: artifact.source_id || context.source_id || '',
+        captureScript: artifact.capture_script || context.capture_script || '',
+        frameId: context.frame_id || '',
+        timestamp: task.updatedAt || task.createdAt || task.timestamp || '',
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => Date.parse(right.timestamp || 0) - Date.parse(left.timestamp || 0));
+}
+
+function recentWebStackBrowserExtracts(state) {
+  const tasks = state.model?.tasks || [];
+  return tasks
+    .map((task) => {
+      const artifact = task.browserExtractArtifact || null;
+      if (artifact?.kind !== 'browser_extract') return null;
+      return {
+        commandId: task.commandId || artifact.command_id || task.id || '',
+        title: task.title || '',
+        sourceId: artifact.source_id || '',
+        captureScript: artifact.capture_script || '',
+        summary: browserExtractSummary(artifact.fields, state.lang),
+        timestamp: task.updatedAt || task.createdAt || task.timestamp || '',
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => Date.parse(right.timestamp || 0) - Date.parse(left.timestamp || 0));
+}
+
+function wireWebStackPanel(state, root) {
+  root.querySelector('[data-webstack-close]')?.addEventListener('click', () => {
+    state.webStackPanelOpen = false;
+    const panel = root.querySelector('[data-webstack-panel]');
+    if (panel) panel.hidden = true;
+    const toggle = root.querySelector('[data-webstack-toggle]');
+    toggle?.classList.remove('is-active');
+    toggle?.setAttribute('aria-pressed', 'false');
+    toggle?.setAttribute('aria-expanded', 'false');
+  });
+  root.querySelector('[data-webstack-refresh]')?.addEventListener('click', async () => {
+    state.webStack = { ...(state.webStack || {}), loading: true, notice: '' };
+    renderMain(state);
+    await refreshWebStackPanel(state);
+  });
+  root.querySelectorAll('[data-webstack-auth-source]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const sourceId = button.dataset.webstackAuthSource || '';
+      const secretName = button.dataset.webstackAuthSecret || '';
+      const source = (state.webStack?.data?.sources || []).find((candidate) => candidate.id === sourceId);
+      if (source?.credential?.configured) await requestWebStackAuthAssist(state, source);
+      else await verifyWebStackCredential(state, sourceId, secretName);
+    });
+  });
 }
 
 function taskSteps(task, state) {
@@ -1354,10 +1562,12 @@ function renderMain(state) {
           <h2 class="ctox-pane-title">${escapeHtml(t.doingNow)}</h2>
         </div>
         <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon ${state.webStackPanelOpen ? 'is-active' : ''}" data-webstack-toggle aria-pressed="${state.webStackPanelOpen}" aria-expanded="${state.webStackPanelOpen}" aria-label="${escapeAttr(t.webStack)}" title="${escapeAttr(t.webStack)}">${webStackIcon()}</button>
           ${selectedTask ? `<button type="button" class="ctox-pane-icon" data-open-selected-task aria-label="${escapeAttr(t.openTaskDetail)}" title="${escapeAttr(t.openTaskDetail)}">${actionIcon(state, 'open')}</button>` : ''}
         </div>
       </div>
     </header>
+    ${webStackPanel(state)}
     <section class="ctox-metrics-strip" aria-label="${escapeAttr(t.measurements)}">
       ${metricCard(t.inputTokens, metrics.inputTokens, 'tokens', state.lang)}
       ${metricCard(t.outputTokens, metrics.outputTokens, 'tokens', state.lang)}
@@ -1380,6 +1590,16 @@ function renderMain(state) {
     <footer class="ctox-harness-footer" data-harness-health-tooltip>${escapeHtml(selectedTask ? taskDisplayTitle(selectedTask, state) : t.flowFooterEmpty)} · ${escapeHtml(flowSource.mode)} · ${escapeHtml(flowSource.status)}${live ? ` · ${escapeHtml(t.live)}` : ''}</footer>
   `;
   restoreFlowViewport(state, previousViewport);
+  main.querySelector('[data-webstack-toggle]')?.addEventListener('click', () => {
+    state.webStackPanelOpen = !state.webStackPanelOpen;
+    const panel = main.querySelector('[data-webstack-panel]');
+    if (panel) panel.hidden = !state.webStackPanelOpen;
+    main.querySelector('[data-webstack-toggle]')?.classList.toggle('is-active', state.webStackPanelOpen);
+    main.querySelector('[data-webstack-toggle]')?.setAttribute('aria-pressed', String(state.webStackPanelOpen));
+    main.querySelector('[data-webstack-toggle]')?.setAttribute('aria-expanded', String(state.webStackPanelOpen));
+    if (state.webStackPanelOpen) refreshWebStackPanel(state);
+  });
+  wireWebStackPanel(state, main);
   main.querySelector('[data-open-selected-task]')?.addEventListener('click', () => {
     if (selectedTask) selectTask(state, selectedTask.id, { drawer: true, center: false });
   });
@@ -2092,7 +2312,10 @@ function selectTask(state, taskId, options = {}) {
   if (nextIndex !== null) state.selectedStepIndex = nextIndex;
   state.selectedTaskStepIndex = activeTaskStepIndex(task, state);
   if (options.drawer) state.detailDrawer = { type: 'task', taskId };
-  render(state);
+  // Selection is an in-place class flip across the existing task rows (no list
+  // rebuild); the flow canvas / drawer may re-render on selection.
+  applyTaskSelection(state);
+  renderMain(state);
   if (options.center !== false) centerSelectedNode(state);
   syncDetailDrawer(state);
 }
@@ -2101,7 +2324,7 @@ function setTimelineStep(state, nextIndex, options = {}) {
   state.selectedNodeId = '';
   state.selectedStepIndex = clampIndex(nextIndex, state.model?.timeline?.length || 1);
   state.userNavigatedTimeline = true;
-  render(state);
+  renderMain(state);
   if (options.center) centerSelectedNode(state);
   syncDetailDrawer(state);
 }
@@ -2113,7 +2336,7 @@ function setTaskTimelineStep(state, nextIndex, options = {}) {
   state.selectedNodeId = '';
   state.selectedTaskStepIndex = clampMetric(nextIndex, 0, Math.max(steps.length - 1, 0));
   state.userNavigatedTimeline = true;
-  render(state);
+  renderMain(state);
   if (options.center) centerSelectedNode(state);
   syncDetailDrawer(state);
 }
@@ -2131,7 +2354,7 @@ function selectFlowNode(state, nodeId, options = {}) {
     if (stepIndex >= 0) state.selectedTaskStepIndex = stepIndex;
   }
   if (options.drawer) state.detailDrawer = { type: 'node', nodeId };
-  render(state);
+  renderMain(state);
   if (options.center !== false) centerSelectedNode(state);
   syncDetailDrawer(state);
 }
@@ -3056,6 +3279,82 @@ function webStackStateFromRefreshResult(previous, data) {
   };
 }
 
+async function refreshWebStackPanel(state) {
+  try {
+    const data = await loadLocalWebStackOverview(state.ctx);
+    state.webStack = webStackStateFromRefreshResult(state.webStack, data);
+  } catch (error) {
+    state.webStack = {
+      ...(state.webStack || {}),
+      loading: false,
+      error: error.message || String(error),
+    };
+  }
+  renderMain(state);
+}
+
+async function verifyWebStackCredential(state, sourceId, secretName) {
+  const source = (state.webStack?.data?.sources || []).find((candidate) => candidate.id === sourceId);
+  const configured = Boolean(source?.credential?.configured);
+  state.webStack = {
+    ...(state.webStack || {}),
+    loading: false,
+    error: '',
+    notice: configured
+      ? `${secretName || sourceId}: Credential ist im CTOX Secret Store vorhanden.`
+      : `${secretName || sourceId}: Credential fehlt im CTOX Secret Store. Hinterlegen bleibt aus Datenschutzgründen außerhalb von RxDB.`,
+  };
+  renderMain(state);
+}
+
+async function requestWebStackAuthAssist(state, source) {
+  const t = labels[state.lang];
+  if (!state.ctx?.commandBus?.dispatch) {
+    state.webStack = { ...(state.webStack || {}), error: 'RxDB command bus is not available' };
+    renderMain(state);
+    return;
+  }
+  const now = Date.now();
+  const sourceId = source?.id || '';
+  const sourceSlug = sourceId.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').toLowerCase() || 'source';
+  const commandId = `web_stack_auth_assist_${now}_${Math.random().toString(36).slice(2, 10)}`;
+  const host = String(sourceId || '').replace(/^https?:\/\//, '').split('/')[0];
+  const browserAssist = source?.browser_assist || {};
+  const targetUrl = browserAssist.target_url || (host ? `https://${host}` : 'https://example.com');
+  const allowedDomains = Array.isArray(browserAssist.allowed_domains) && browserAssist.allowed_domains.length
+    ? browserAssist.allowed_domains
+    : [host, ...(source?.host_suffixes || [])].filter(Boolean);
+  await state.ctx.commandBus.dispatch({
+    id: commandId,
+    module: 'ctox',
+    command_type: 'web_stack.auth_assist.request',
+    record_id: sourceId,
+    inbound_channel: 'business_os.ctox.web_stack',
+    payload: {
+      session_id: `browser_session_web_stack_auth_${sourceSlug}`,
+      tab_id: `browser_tab_web_stack_auth_${sourceSlug}`,
+      source_id: sourceId,
+      secret_name: source?.credential?.secret_name || '',
+      target_url: targetUrl,
+      allowed_domains: allowedDomains,
+      verify_selector: browserAssist.verify_selector || '',
+      credential_selector: browserAssist.credential_selector || '',
+      capture_script: browserAssist.capture_script || '',
+      purpose: 'web_stack_auth',
+      expires_at_ms: now + 30 * 60 * 1000,
+      browser_stream: 'rxdb',
+      secret_value_in_rxdb: false,
+    },
+    client_context: {
+      source_module: 'ctox',
+      command_path: 'web_stack_auth_assist',
+      actor: state.ctx.session?.user || {},
+    },
+  });
+  state.webStack = { ...(state.webStack || {}), error: '', notice: t.webStackAuthQueued };
+  renderMain(state);
+}
+
 async function loadLocalCollection(ctx, collectionName) {
   const collection = ctoxCollection(ctx, collectionName);
   if (!collection) return [];
@@ -3107,6 +3406,9 @@ function wireShellMessages(state) {
     const nextLang = lang === 'en' ? 'en' : 'de';
     loadCtoxMessages(nextLang).then(() => {
       state.lang = nextLang;
+      // Rebuild the (localized) column chrome once, then take the normal render
+      // path. buildTaskColumn clears the wired-marker so the shell re-wires.
+      buildTaskColumn(state);
       render(state);
     }).catch((error) => {
       console.warn('[ctox] language switch failed', error);
@@ -3801,5 +4103,9 @@ export const __ctoxTestHooks = {
   compactTaskFlowRow,
   filterAndSortTasks,
   taskColumnMarkup,
+  taskListInner,
+  renderTaskList,
+  applyTaskSelection,
+  webStackPanel,
   taskPipelineStage,
 };

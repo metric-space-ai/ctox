@@ -38,27 +38,17 @@
   grid-column: 3;
 }
 
-.ctox-harness-aux {
-  display: grid;
-  gap: 8px;
-  min-height: 0;
-  overflow: auto;
-  padding: 0 10px 10px;
-}
-
-.ctox-harness-aux:empty {
-  display: none;
-}
-
 /* Flow console layout — header, metrics, recessed canvas, timeline, footer. */
 .ctox-harness-main {
   grid-template-rows: auto auto minmax(0, 1fr) auto auto;
 }
 
+/* Left column rides the shell-owned canonical grammar (header → view band →
+   well → footer); the chrome classes come from shared/base.css. */
 .ctox-harness-left > .ctox-pane-header { grid-row: 1; }
-.ctox-harness-left > .ctox-task-view-switch { grid-row: 2; }
-.ctox-harness-left > .ctox-task-well { grid-row: 3; }
-.ctox-harness-left > .ctox-harness-footer { grid-row: 4; }
+.ctox-harness-left > .ctox-view-switch { grid-row: 2; }
+.ctox-harness-left > .ctox-well { grid-row: 3; }
+.ctox-harness-left > .ctox-pane-footer { grid-row: 4; }
 .ctox-harness-main > .ctox-pane-header { grid-row: 1; }
 .ctox-harness-main > .ctox-metrics-strip { grid-row: 2; }
 .ctox-harness-main > .ctox-flow-well { grid-row: 3; }
@@ -106,87 +96,31 @@
   height: 6px;
 }
 
-/* Canonical task-column grammar: filterbar → tray → counted views → well → footer. */
-.ctox-task-filterbar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 4px;
-  align-items: center;
-  min-width: 0;
-}
-
-.ctox-task-view-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.ctox-task-filter-toggle {
-  position: relative;
-}
-
-.ctox-task-filter-toggle.has-active-filter::after {
-  content: "";
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 5px;
-  height: 5px;
-  border-radius: 999px;
-  background: var(--accent);
-}
-
-.ctox-task-filter-tray {
-  margin-top: 6px;
-  border-top: 1px solid var(--line);
-  background: var(--surface-2);
+/* The task-column chrome (filterbar → tray → counted band → well → footer) is
+   the shell-owned canonical grammar from shared/base.css — this module declares
+   NO chrome CSS. Only the well padding and the four-up band grid are scoped. */
+.ctox-harness-left > .ctox-well {
   padding: 6px;
+  border-top: 1px solid var(--line);
 }
 
-.ctox-task-filter-tray[hidden] {
-  display: none;
-}
-
-.ctox-task-filter-row {
-  display: grid;
-  grid-template-columns: minmax(112px, 1fr) minmax(96px, 0.8fr) minmax(104px, 0.9fr) auto auto;
-  gap: 4px;
-  align-items: center;
-  min-width: 0;
-  overflow-x: auto;
-}
-
-.ctox-task-filter-row .ctox-select {
-  min-width: 0;
-}
-
-.ctox-task-view-switch {
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
-}
-
-.ctox-task-view-switch .ctox-pane-tabs {
+.ctox-harness-left .ctox-pane-tabs {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
-.ctox-task-view-switch .ctox-pane-tab {
+.ctox-harness-left .ctox-pane-tab {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ctox-task-well,
 .ctox-flow-well {
   min-height: 0;
   overflow: auto;
   border-top: 1px solid var(--line);
   background: var(--surface-2);
-}
-
-.ctox-task-well {
-  padding: 6px;
 }
 
 .ctox-harness-footer {
@@ -369,100 +303,6 @@
   font-size: 8.5px;
 }
 
-/* Legacy task-chip rules remain below for the drawer and compatibility paths;
-   the live task column uses the canonical controls above. */
-.ctox-task-filter-chips {
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  padding-bottom: 2px;
-  scrollbar-width: none;
-}
-
-.ctox-task-filter-chips::-webkit-scrollbar {
-  display: none;
-}
-
-.ctox-task-filter-chips .ctox-chip {
-  flex: 0 0 auto;
-}
-
-/* custom: padded stack of task group accordions in the pane scroll area */
-.ctox-work-overview {
-  display: grid;
-  align-content: start;
-  gap: 8px;
-  padding: 10px;
-}
-
-/* custom: collapsible task group accordion (the kit has no collapsible section).
-   Surface step only — no full border, no extra wrapper around the
-   .ctox-pane background, so it doesn't read as a frame-in-a-frame. */
-.ctox-work-section {
-  border-radius: var(--panel-radius);
-  background: var(--surface-2);
-  overflow: hidden;
-}
-
-.ctox-work-section > summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 34px;
-  padding: 7px 10px;
-  color: var(--text);
-  cursor: pointer;
-  list-style: none;
-  user-select: none;
-}
-
-.ctox-work-section > summary::-webkit-details-marker {
-  display: none;
-}
-
-.ctox-work-section > summary::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  flex: 0 0 auto;
-  border-right: 1px solid var(--muted);
-  border-bottom: 1px solid var(--muted);
-  transform: rotate(-45deg);
-  transition: transform 160ms ease, border-color 160ms ease;
-}
-
-.ctox-work-section[open] > summary::before {
-  border-color: var(--accent);
-  transform: rotate(45deg);
-}
-
-.ctox-work-section > summary span {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  font-size: 12px;
-  font-weight: 760;
-  letter-spacing: 0.04em;
-  line-height: 1.1;
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.ctox-work-section[open] > summary .ctox-badge {
-  background: var(--accent-soft);
-  color: color-mix(in srgb, var(--accent) 80%, var(--text));
-}
-
-.ctox-work-section .ctox-task-list {
-  max-height: 184px;
-  border-top: 1px solid var(--hairline);
-}
-
-.ctox-work-section.is-queue .ctox-task-list {
-  max-height: none;
-}
-
 .ctox-task-list > p {
   margin: 0;
   padding: 9px 14px;
@@ -470,188 +310,57 @@
   font-size: 12px;
 }
 
-/* custom: task row content layout (copy + status badge) inside the kit list item */
-.ctox-task-row {
+/* On-demand Web Stack popover on the main view — hidden by default, toggled
+   from the collected header icon; anchored to the main pane's top-right. */
+.ctox-harness-main {
+  position: relative;
+}
+
+.ctox-web-stack-panel {
+  position: absolute;
+  top: 46px;
+  right: 12px;
+  z-index: 20;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 2px 8px;
-  align-items: center;
-}
-
-.ctox-task-status-wrapper {
-  grid-column: 2;
-  grid-row: 1;
-  justify-self: end;
-}
-
-.ctox-task-copy {
-  grid-column: 1;
-  grid-row: 1;
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.ctox-task-copy strong,
-.ctox-task-copy small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ctox-task-copy strong {
-  color: var(--text);
-  font-size: 12.5px;
-  font-weight: 650;
-  line-height: 1.25;
-}
-
-.ctox-task-copy small {
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.25;
-}
-
-.ctox-task-icon-container {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  flex: 0 0 auto;
-}
-
-.ctox-status-icon {
-  width: 14px;
-  height: 14px;
-  stroke-width: 2.5;
-}
-
-.ctox-status-icon.is-ok {
-  color: var(--success);
-}
-
-.ctox-status-icon.is-blocked {
-  color: var(--danger);
-}
-
-.ctox-status-icon.is-waiting,
-.ctox-status-icon.is-warning {
-  color: var(--muted);
-}
-
-.ctox-status-pulse {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background-color: var(--accent);
-  animation: ctox-status-pulse-anim 1.5s infinite;
-}
-
-/* Status tone hooks set from JS (statusClass) — tint the row hairline. */
-.tone-ok {
-  border-color: color-mix(in srgb, var(--success) 42%, var(--line));
-}
-
-.tone-running {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
-}
-
-.tone-blocked {
-  border-color: color-mix(in srgb, var(--danger) 42%, var(--line));
-}
-
-/* custom: collapsible aux panels (inbound channels, web stack).
-   Same surface-step treatment as .ctox-work-section — no border. */
-.ctox-aux-section {
-  min-width: 0;
+  gap: 8px;
+  width: min(340px, calc(100% - 24px));
+  max-height: min(72%, 520px);
+  overflow: auto;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--line);
   border-radius: var(--panel-radius);
-  background: var(--surface-2);
-  overflow: hidden;
+  background: var(--surface);
 }
 
-/* The aux block (channels + web stack status) is hidden by default; the
-   workspace's `data-ctox-aux` attribute (toggled by the header button) reveals
-   it. Most of the time the user only needs the task work overview. */
-.ctox-harness[data-ctox-aux="hidden"] .ctox-harness-aux {
+.ctox-web-stack-panel[hidden] {
   display: none;
 }
 
-.ctox-aux-section > summary {
+.ctox-web-stack-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
-  min-height: 32px;
-  padding: 6px 10px;
-  cursor: pointer;
-  list-style: none;
-  user-select: none;
 }
 
-.ctox-aux-section > summary::-webkit-details-marker {
-  display: none;
-}
-
-.ctox-aux-section > summary .ctox-pane-kicker {
-  flex: 1 1 auto;
-}
-
-.ctox-aux-section > summary .ctox-badge {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* custom: compact inbound channel rows */
-.ctox-inbound-list {
-  display: grid;
-  gap: 2px;
-  padding: 0 6px 6px;
-}
-
-.ctox-inbound-list article {
+.ctox-web-stack-head-titles {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  gap: 6px;
   min-width: 0;
-  min-height: 24px;
-  padding: 4px 8px;
-  border: 1px solid transparent;
-  border-radius: var(--kit-radius);
 }
 
-.ctox-inbound-list article:hover {
-  border-color: var(--hairline);
-  background: var(--kit-hover);
-}
-
-.ctox-inbound-list article.is-active {
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-  background: var(--accent-soft);
-}
-
-.ctox-inbound-list span,
-.ctox-inbound-list small {
+.ctox-web-stack-head-titles .ctox-badge {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.ctox-inbound-list span {
-  color: var(--text);
-  font-size: 11.5px;
-  font-weight: 650;
-}
-
-.ctox-inbound-list small {
-  color: var(--muted);
-  font-size: 10px;
+.ctox-web-stack-head-actions {
+  display: inline-flex;
+  gap: 2px;
+  flex: 0 0 auto;
 }
 
 /* custom: web stack projection panel — compact source/capture rows */
@@ -659,13 +368,6 @@
   display: grid;
   gap: 6px;
   min-width: 0;
-  max-height: 240px;
-  overflow: auto;
-  padding: 0 8px 8px;
-}
-
-.ctox-web-stack-body > .ctox-pane-icon {
-  justify-self: end;
 }
 
 .ctox-web-stack-body > small,
@@ -731,22 +433,6 @@
   color: var(--muted);
   font-size: 10.5px;
   line-height: 1.25;
-}
-
-/* custom: right-aligned flow source/mode readout in the console band */
-.ctox-flow-source {
-  display: grid;
-  gap: 1px;
-  justify-items: end;
-  color: var(--muted);
-  font-size: 10px;
-  text-align: right;
-}
-
-.ctox-flow-source strong {
-  color: var(--text);
-  font-size: 12.5px;
-  font-weight: 700;
 }
 
 /* custom: live indicator with spinner (runtime liveness, no kit equivalent) */
@@ -1593,21 +1279,6 @@
   }
 }
 
-@keyframes ctox-status-pulse-anim {
-  0% {
-    transform: scale(0.95);
-    opacity: 0.74;
-  }
-  70% {
-    transform: scale(1);
-    opacity: 1;
-  }
-  100% {
-    transform: scale(0.95);
-    opacity: 0.74;
-  }
-}
-
 @container business-app-window (max-width: 1180px) {
   /* custom: the flow console needs more width than the kit's 760px collapse */
   .ctox-harness-app {
@@ -1647,7 +1318,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ctox-status-pulse,
   .ctox-live-chip i,
   .ctox-flow-edge.is-active-edge,
   .ctox-flow-node-live-ring {
