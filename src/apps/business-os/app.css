@@ -5348,216 +5348,6 @@ body[data-auth-state="locked"] .topbar {
   color: rgba(0, 0, 0, 0.55);
 }
 
-/* Shell taskbar — live list of open windows, grouped by ownerId. Bottom-anchored
-   so it sits under the window layer but above page content. */
-.shell-taskbar {
-  position: fixed;
-  left: 50%;
-  bottom: 8px;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  max-width: calc(100vw - 32px);
-  height: 38px;
-  padding: 4px 6px;
-  border: 1px solid var(--hairline, var(--line));
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--surface) 86%, transparent);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  box-shadow: var(--panel-shadow);
-  z-index: 60;
-  overflow: visible;
-  pointer-events: auto;
-}
-.shell-taskbar:empty {
-  display: none;
-}
-.shell-taskbar-group {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-.shell-taskbar-item {
-  appearance: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 180px;
-  height: 30px;
-  padding: 0 10px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
-}
-.shell-taskbar-item:hover {
-  background: color-mix(in srgb, var(--accent-soft) 70%, transparent);
-}
-.shell-taskbar-item:active {
-  transform: scale(0.97);
-}
-.shell-taskbar-item[data-state="focused"] {
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface-2));
-  color: var(--accent);
-  box-shadow: inset 0 -2px 0 var(--accent);
-}
-.shell-taskbar-item[data-state="minimized"] {
-  color: var(--muted);
-  opacity: 0.72;
-}
-.shell-taskbar-item[data-always-on-top="true"]::after {
-  content: "↑";
-  margin-left: 4px;
-  color: var(--accent);
-  font-size: 10px;
-  font-weight: 700;
-}
-.shell-taskbar-icon {
-  display: inline-grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--surface-2) 80%, transparent);
-  font-size: 11px;
-  font-weight: 800;
-  flex: 0 0 auto;
-}
-.shell-taskbar-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.shell-taskbar-group[data-count="2"] .shell-taskbar-item,
-.shell-taskbar-group[data-count="3"] .shell-taskbar-item,
-.shell-taskbar-group[data-count="more"] .shell-taskbar-item {
-  padding-right: 22px;
-}
-.shell-taskbar-group .shell-taskbar-badge {
-  position: absolute;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: inline-grid;
-  place-items: center;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 4px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: var(--bg);
-  font-size: 9px;
-  font-weight: 800;
-  pointer-events: none;
-}
-.shell-taskbar-popover {
-  position: absolute;
-  left: 50%;
-  bottom: calc(100% + 8px);
-  transform: translateX(-50%);
-  display: none;
-  min-width: 200px;
-  max-width: 280px;
-  padding: 6px;
-  border: 1px solid var(--hairline, var(--line));
-  border-radius: 10px;
-  background: var(--surface);
-  box-shadow: var(--panel-shadow);
-  z-index: 61;
-}
-.shell-taskbar-group:hover .shell-taskbar-popover,
-.shell-taskbar-group:focus-within .shell-taskbar-popover {
-  display: grid;
-  gap: 2px;
-}
-.shell-taskbar-popover-item {
-  appearance: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 8px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text);
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-.shell-taskbar-popover-item:hover {
-  background: color-mix(in srgb, var(--accent-soft) 60%, transparent);
-  color: var(--accent);
-}
-.shell-taskbar-popover-item[data-state="focused"] {
-  color: var(--accent);
-  font-weight: 700;
-}
-.shell-taskbar-popover-item[data-state="minimized"] {
-  color: var(--muted);
-}
-
-/* Expanded Business Chat is a real shell dock. The taskbar becomes a compact
-   right-hand rail inside the horizontal space reserved by the window manager,
-   instead of competing with the chat dock for the same bottom pixels. */
-body[data-shell-chat-dock-expanded] .shell-taskbar {
-  left: auto !important;
-  right: 8px;
-  bottom: 8px;
-  transform: none !important;
-  flex-direction: column;
-  width: 44px;
-  height: auto;
-  max-width: 44px;
-  max-height: calc(100svh - 16px);
-  padding: 4px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  z-index: 70;
-}
-
-body[data-shell-chat-dock-expanded] .shell-taskbar-group {
-  flex: 0 0 auto;
-  width: 34px;
-}
-
-body[data-shell-chat-dock-expanded] .shell-taskbar-item {
-  justify-content: center;
-  width: 34px;
-  max-width: 34px;
-  padding: 0;
-}
-
-body[data-shell-chat-dock-expanded] .shell-taskbar-label {
-  display: none;
-}
-
-body[data-shell-chat-dock-expanded] .shell-taskbar-group[data-count="2"] .shell-taskbar-item,
-body[data-shell-chat-dock-expanded] .shell-taskbar-group[data-count="3"] .shell-taskbar-item,
-body[data-shell-chat-dock-expanded] .shell-taskbar-group[data-count="more"] .shell-taskbar-item {
-  padding-right: 0;
-}
-
-body[data-shell-chat-dock-expanded] .shell-taskbar-group .shell-taskbar-badge {
-  right: -2px;
-  top: 2px;
-  transform: none;
-}
-
-body[data-shell-chat-dock-expanded] .shell-taskbar-popover {
-  left: auto;
-  right: calc(100% + 8px);
-  bottom: 0;
-  transform: none;
-}
-
 /* When the focused app's declared min-height cannot coexist with a bottom
    chat window, the same dock moves into the reserved right-hand workspace. */
 body[data-shell-chat-dock-side] .ctox-chat-root {
@@ -5612,14 +5402,6 @@ body[data-shell-chat-dock-side] .ctox-chat-window:not(.is-active) {
 body[data-shell-chat-dock-compact] .ctox-chat-stage {
   display: none !important;
 }
-.shell-taskbar-popover-title {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* Window switcher overlay — opens on Ctrl+Alt+Tab. */
 .shell-window-switcher {
   position: fixed;
@@ -5915,26 +5697,6 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   box-shadow: 0 4px 12px oklch(0.22 0.015 235 / 0.08);
 }
 
-.shell-taskbar-item {
-  transition: transform var(--motion-base) var(--ease-spring),
-              background-color var(--motion-base) var(--ease-standard),
-              color var(--motion-base) var(--ease-standard),
-              box-shadow var(--motion-base) var(--ease-standard);
-}
-
-.shell-taskbar-item:hover {
-  transform: translateY(-1px) scale(1.02);
-}
-
-.shell-taskbar-item:active {
-  transform: translateY(0) scale(0.97);
-}
-
-.shell-taskbar-item[data-state="focused"] {
-  transform: scale(1.02);
-  box-shadow: inset 0 -2px 0 var(--accent), 0 4px 12px oklch(0.22 0.015 235 / 0.08) !important;
-}
-
 /* ==========================================================================
    Cohesive Glassmorphism Overhaul & Premium SVG Outlines Override
    ========================================================================== */
@@ -5968,11 +5730,6 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   width: 16px;
   height: 16px;
   margin-right: 0px;
-}
-
-.shell-taskbar-icon .svg-icon {
-  width: 20px;
-  height: 20px;
 }
 
 .shell-window-title-icon .svg-icon {
@@ -6025,75 +5782,9 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   display: none !important; /* Remove the old clunky underlines */
 }
 
-/* 4. Bottom Taskbar Dock glassmorphism */
-.shell-taskbar {
-  backdrop-filter: blur(24px) saturate(150%) !important;
-  -webkit-backdrop-filter: blur(24px) saturate(150%) !important;
-  background: color-mix(in srgb, var(--surface) 35%, transparent) !important;
-  border: 1px solid color-mix(in srgb, var(--line) 35%, transparent) !important;
-  border-radius: 20px !important;
-  box-shadow:
-    0 12px 40px rgba(0, 0, 0, 0.12),
-    0 1px 0 rgba(255, 255, 255, 0.08) inset !important;
-  padding: 6px 12px !important;
-  gap: 8px !important;
-}
-
-.shell-taskbar-item {
-  border-radius: 12px !important;
-  border: 1px solid transparent !important;
-  background: transparent !important;
-  transition: background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard) !important;
-  padding: 4px 12px !important;
-}
-
-.shell-taskbar-item:hover {
-  background: color-mix(in srgb, var(--surface) 25%, transparent) !important;
-  border-color: color-mix(in srgb, var(--line) 20%, transparent) !important;
-  transform: translateY(-2px) scale(1.03) !important;
-}
-
-.shell-taskbar-item[data-state="focused"] {
-  background: color-mix(in srgb, var(--accent-soft) 70%, rgba(255, 255, 255, 0.08)) !important;
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent) !important;
-  color: var(--text) !important;
-  box-shadow:
-    0 6px 16px rgba(0, 0, 0, 0.06),
-    0 0 0 1px color-mix(in srgb, var(--accent) 15%, transparent) inset !important;
-  transform: translateY(-2px) scale(1.03) !important;
-}
-
 /* 5. (removed) The former "Sleek Floating Glass Windows" block was fully
    neutralized by the Operational Instrument contract below and is replaced
    by the scoped CTOX shell chrome at the end of this file. */
-
-/* 6. Active Window Group Badge */
-.shell-taskbar-badge {
-  background: var(--accent) !important;
-  color: var(--surface) !important;
-  font-weight: 800 !important;
-  box-shadow: 0 0 10px var(--accent) !important;
-}
-
-/* 7. Dropdowns/Popovers in taskbar */
-.shell-taskbar-popover {
-  backdrop-filter: blur(20px) saturate(150%) !important;
-  -webkit-backdrop-filter: blur(20px) saturate(150%) !important;
-  background: color-mix(in srgb, var(--surface) 60%, transparent) !important;
-  border: 1px solid color-mix(in srgb, var(--line) 35%, transparent) !important;
-  border-radius: 14px !important;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.1) !important;
-  padding: 6px !important;
-}
-
-.shell-taskbar-popover-item {
-  border-radius: 8px !important;
-  transition: background-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard) !important;
-}
-
-.shell-taskbar-popover-item:hover {
-  background: color-mix(in srgb, var(--surface) 25%, transparent) !important;
-}
 
 /* Startup loader follows the active shell theme. */
 .workspace-startup-loader {
@@ -6454,14 +6145,13 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
 /* Shared UI safety and consistency pass. Keep this low-specificity so module
    CSS can opt into stronger local behavior without fighting the shell. */
 :root {
-  --shell-taskbar-safe-area: 58px;
   --shell-focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent);
   --shell-danger-soft: color-mix(in srgb, var(--danger) 12%, var(--surface));
   --shell-danger-line: color-mix(in srgb, var(--danger) 48%, var(--line));
 }
 
 :where(button, [role="button"], input, select, textarea):focus-visible,
-:where(.module-tab, .shell-taskbar-item, .shell-window-control, .shell-context-menu-item):focus-visible {
+:where(.module-tab, .shell-window-control, .shell-context-menu-item):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   box-shadow: var(--shell-focus-ring);
@@ -6614,15 +6304,6 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   opacity: 1;
   background: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
-}
-
-body[data-shell-taskbar-open] .workspace-frame {
-  padding-bottom: calc(var(--shell-taskbar-safe-area) + env(safe-area-inset-bottom, 0px));
-}
-
-body[data-shell-taskbar-open] .drawer-bottom {
-  bottom: calc(var(--shell-taskbar-safe-area) + env(safe-area-inset-bottom, 0px));
-  max-height: min(420px, calc(80svh - var(--shell-taskbar-safe-area)));
 }
 
 /* ───────────────────────────────────────────────────────────────────────────
@@ -6896,8 +6577,6 @@ body.is-resizing-horizontal * { cursor: row-resize !important; }
    ========================================================================== */
 .topbar,
 .topbar-brand-triad,
-.shell-taskbar,
-.shell-taskbar-popover,
 .shell-window,
 .shell-start-menu-panel,
 .startup-error-card {
@@ -6957,27 +6636,6 @@ body.is-resizing-horizontal * { cursor: row-resize !important; }
   border-color: color-mix(in srgb, var(--accent) 55%, var(--line)) !important;
   box-shadow: inset 0 -2px 0 var(--accent) !important;
   transform: none !important;
-}
-
-.shell-taskbar {
-  padding: 4px 6px !important;
-  gap: 2px !important;
-  border: 1px solid var(--line) !important;
-  border-radius: var(--panel-radius) !important;
-  background: var(--surface) !important;
-  box-shadow: var(--shadow-sm) !important;
-}
-
-.shell-taskbar-item,
-.shell-taskbar-popover-item {
-  border-radius: var(--control-radius) !important;
-  transform: none !important;
-}
-
-.shell-taskbar-item:hover,
-.shell-taskbar-item[data-state="focused"] {
-  transform: none !important;
-  box-shadow: inset 0 -2px 0 var(--accent) !important;
 }
 
 .shell-window {
@@ -7117,19 +6775,6 @@ button.shell-window-header-meta:focus-visible,
 
 .shell-window-content {
   background: var(--bg) !important;
-}
-
-.shell-taskbar-popover {
-  padding: 3px !important;
-  border: 1px solid var(--line) !important;
-  border-radius: var(--panel-radius) !important;
-  background: var(--surface) !important;
-  box-shadow: var(--shadow-md) !important;
-}
-
-.shell-taskbar-badge {
-  color: var(--accent-foreground) !important;
-  box-shadow: none !important;
 }
 
 .svg-icon,
@@ -7316,16 +6961,6 @@ button.shell-window-header-meta:focus-visible,
     border-top: 1px solid var(--line);
   }
 
-  .shell-taskbar {
-    max-width: calc(100vw - 12px) !important;
-    overflow-x: auto;
-    overscroll-behavior-inline: contain;
-    scrollbar-width: thin;
-  }
-
-  .shell-taskbar-group {
-    flex: 0 0 auto;
-  }
   .drawer-left,
   .drawer-right,
   .drawer-bottom {
@@ -7336,13 +6971,6 @@ button.shell-window-header-meta:focus-visible,
     border-radius: 0 !important;
   }
 }
-/* The top module strip is the single app switcher. Keep stale installed
-   index files from resurrecting the retired bottom window taskbar. */
-.shell-taskbar,
-[data-shell-taskbar] {
-  display: none !important;
-}
-
 /* App-owned developer tools stay inside the running app window. The original
    app remains mounted underneath so selection, drafts and scroll state survive
    App/Source/Versions switches. */
@@ -7989,75 +7617,6 @@ button.shell-window-header-meta:focus-visible,
     0 3px 10px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
-/* --- Taskbar: a floating glass dock --------------------------------------
-   Scoped to the non-dock-expanded layout so the chat-dock side rail keeps
-   its own geometry. */
-:root[data-shell-style="ctox"] body:not([data-shell-chat-dock-expanded]) .shell-taskbar {
-  bottom: 12px;
-  height: 46px;
-  gap: 6px;
-  padding: 5px 8px;
-  border: 1px solid color-mix(in srgb, var(--line) 48%, transparent) !important;
-  border-radius: 17px !important;
-  background: color-mix(in srgb, var(--surface) 56%, transparent) !important;
-  backdrop-filter: blur(24px) saturate(180%) !important;
-  -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.5),
-    0 18px 44px rgba(0, 0, 0, 0.16),
-    0 3px 10px rgba(0, 0, 0, 0.08) !important;
-}
-
-:root[data-shell-style="ctox"] .shell-taskbar-item {
-  height: 34px;
-  border-radius: 11px !important;
-  transition:
-    background-color var(--motion-fast) var(--ease-standard),
-    color var(--motion-fast) var(--ease-standard),
-    box-shadow var(--motion-fast) var(--ease-standard),
-    transform var(--motion-base) var(--ease-spring) !important;
-}
-
-:root[data-shell-style="ctox"] body:not([data-shell-chat-dock-expanded]) .shell-taskbar-item:hover {
-  background: color-mix(in srgb, var(--surface) 58%, transparent) !important;
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--line) 46%, transparent),
-    0 6px 14px rgba(0, 0, 0, 0.12) !important;
-  transform: translateY(-3px);
-}
-
-:root[data-shell-style="ctox"] body:not([data-shell-chat-dock-expanded]) .shell-taskbar-item:active {
-  transform: translateY(-1px) scale(0.96);
-}
-
-:root[data-shell-style="ctox"] .shell-taskbar-item[data-state="focused"] {
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--accent) 20%, var(--surface)) 0%,
-    color-mix(in srgb, var(--accent) 13%, var(--surface-2)) 100%
-  ) !important;
-  color: var(--accent) !important;
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--accent) 32%, transparent),
-    inset 0 1px 0 rgba(255, 255, 255, 0.4),
-    0 4px 12px color-mix(in srgb, var(--accent) 18%, transparent) !important;
-}
-
-:root[data-shell-style="ctox"] .shell-taskbar-popover {
-  border-radius: 14px !important;
-  border: 1px solid color-mix(in srgb, var(--line) 44%, transparent) !important;
-  background: color-mix(in srgb, var(--surface) 76%, transparent) !important;
-  backdrop-filter: blur(22px) saturate(170%) !important;
-  -webkit-backdrop-filter: blur(22px) saturate(170%) !important;
-  box-shadow:
-    var(--shadow-lg),
-    inset 0 1px 0 rgba(255, 255, 255, 0.4) !important;
-}
-
-:root[data-shell-style="ctox"] .shell-taskbar-popover-item {
-  border-radius: 9px !important;
-}
-
 /* --- Start menu: a floating glass panel under the island ---------------- */
 
 :root[data-shell-style="ctox"] .shell-start-menu-panel {
@@ -8125,35 +7684,6 @@ button.shell-window-header-meta:focus-visible,
     inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),
     inset 0 1px 0 rgba(255, 255, 255, 0.08),
     0 3px 12px color-mix(in srgb, var(--accent) 18%, transparent);
-}
-
-:root[data-shell-style="ctox"][data-theme="dark"] body:not([data-shell-chat-dock-expanded]) .shell-taskbar {
-  background: color-mix(in srgb, var(--surface) 50%, transparent) !important;
-  border-color: color-mix(in srgb, var(--line) 38%, transparent) !important;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.07),
-    0 18px 44px rgba(0, 0, 0, 0.48),
-    0 3px 10px rgba(0, 0, 0, 0.3) !important;
-}
-
-:root[data-shell-style="ctox"][data-theme="dark"] body:not([data-shell-chat-dock-expanded]) .shell-taskbar-item:hover {
-  background: color-mix(in srgb, var(--surface) 46%, transparent) !important;
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--line) 40%, transparent),
-    0 6px 14px rgba(0, 0, 0, 0.34) !important;
-}
-
-:root[data-shell-style="ctox"][data-theme="dark"] .shell-taskbar-item[data-state="focused"] {
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--accent) 38%, transparent),
-    inset 0 1px 0 rgba(255, 255, 255, 0.07),
-    0 4px 14px color-mix(in srgb, var(--accent) 20%, transparent) !important;
-}
-
-:root[data-shell-style="ctox"][data-theme="dark"] .shell-taskbar-popover {
-  box-shadow:
-    var(--shadow-lg),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
 }
 
 :root[data-shell-style="ctox"][data-theme="dark"] .shell-start-menu-panel {
