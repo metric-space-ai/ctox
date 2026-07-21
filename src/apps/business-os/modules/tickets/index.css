@@ -1,48 +1,55 @@
-/* Migration to the shared design system: the frame (.ctox-workspace +
-   [data-resize-frame] with declarative .ctox-column-resizer handles), panes
-   (.ctox-pane), pane headers/bands/kicker/title, search and filter select
-   (.ctox-pane-search/.ctox-pane-filter), list rows (.ctox-list/.ctox-list-item
-   with .is-selected), inspector cards (.ctox-card/.ctox-card-body), key/value
-   fields (.ctox-fields), status badges (.ctox-badge + is-* variants), buttons
-   (.ctox-button) and empty states (.ctox-empty) all come from shared/base.css
-   + app.css. This file only keeps what is tickets-specific: row/card content
-   composition, the event timeline, prose bodies, the action row layout, the
-   command status line, the collapsible controls column, and the stacked
-   narrow-viewport layout. */
+/* tickets/index.css — module layer over shared/base.css. The workspace frame,
+   panes, canonical column grammar (filterbar, view toggle, filter tray, counted
+   band, .ctox-well, .ctox-pane-footer), list rows, cards, badges, buttons and
+   empty states all come from the kit and are wired by the shell. This file only
+   pins the pane grid tracks, the on-demand operations pane, and the genuinely
+   tickets-specific bits: shard rows, the event timeline, prose bodies, card
+   action clusters and the command-status line. */
 
-/* Controls/context column is collapsible and hidden by default so the ticket
-   timeline gets the full width; the left-pane header toggle re-reveals it on
-   demand. Mirrors the threads module's pattern. */
-.tickets-module.is-actions-hidden {
-  grid-template-columns: var(--ctox-left-width, 340px) 12px minmax(0, 1fr);
-}
-
-.tickets-module.is-actions-hidden .tickets-right,
-.tickets-module.is-actions-hidden > [data-resizer="right"] {
-  display: none;
-}
-
-.tickets-module > [data-toggle-actions][aria-pressed="true"] {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
-/* Standard width defaults for the declarative resizers — the shell writes
-   inline --ctox-*-width onto the frame element while dragging. */
 .tickets-module {
   --ctox-left-width: 340px;
   --ctox-right-width: 360px;
 }
 
-/* Empty/loading states are injected as a pane's only child: span both pane
-   grid rows so .ctox-empty fills the whole column. */
+/* Explicit column pins so the center pane never slides onto a resizer track
+   when the kit hides resizers on narrow windows. Primary (center) keeps a hard
+   minimum; the on-demand side pane yields. */
+.tickets-left { grid-column: 1; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.tickets-module > [data-resizer="left"] { grid-column: 2; }
+.tickets-center { grid-column: 3; grid-template-rows: auto minmax(0, 1fr); }
+.tickets-module > [data-resizer="right"] { grid-column: 4; }
+.tickets-right { grid-column: 5; grid-template-rows: auto minmax(0, 1fr); }
+
+/* Operations pane is ON-DEMAND: hidden by default, the center timeline owns the
+   full width. Opened from the MAIN header icon / auto-revealed on an operation
+   flow (the module drops .is-ops-hidden). */
+.tickets-module {
+  grid-template-columns: var(--ctox-left-width, 340px) 12px minmax(300px, 1fr) 12px var(--ctox-right-width, 360px);
+}
+
+.tickets-module.is-ops-hidden {
+  grid-template-columns: var(--ctox-left-width, 340px) 12px minmax(300px, 1fr);
+}
+
+.tickets-module.is-ops-hidden .tickets-right,
+.tickets-module.is-ops-hidden > [data-resizer="right"] {
+  display: none;
+}
+
+.tickets-center [data-action="toggle-ops"].is-active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Empty/loading states are injected as a pane's only child: span both pane grid
+   rows so .ctox-empty fills the whole column. */
 .tickets-pane > .ctox-empty {
   grid-row: 1 / -1;
 }
 
-/* Detail/context scrollers stack sections and cards vertically. */
+/* Detail / operations scrollers stack sections and cards vertically. */
 .tickets-detail-scroll,
-.tickets-context-scroll {
+.tickets-ops-scroll {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -55,54 +62,75 @@
   align-content: start;
 }
 
-/* Section headings use the kit .ctox-field-label look on an h3 — reset the
-   UA heading margins so the grid gap alone controls spacing. */
 .tickets-section > h3 {
   margin: 0;
 }
 
-/* custom: ticket-row content (source/status meta line, title, subtitle)
-   inside kit .ctox-list-item rows — padding, hover and the selected accent
-   bar come from the kit. */
+/* Card header holds a title on the left and a collected icon cluster top-right,
+   the canonical element-actions placement. */
+.tickets-ops-scroll .ctox-card > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tickets-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* custom: shard / compact selector rows inside the kit .ctox-list-item. */
 .ticket-row {
   display: grid;
   gap: 4px;
 }
 
-.ticket-row-meta {
+.ticket-row--list {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
-  color: var(--muted);
-  font-size: 11px;
+  padding-top: 6px;
+  padding-bottom: 6px;
 }
 
-.ticket-row strong,
+.ticket-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ticket-row-title,
 .tickets-context-item-title {
-  display: block;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
+  font-weight: 600;
   line-height: 1.35;
 }
 
-.ticket-row small,
+.ticket-row-meta,
 .tickets-context-item-meta {
-  display: block;
   overflow: hidden;
   color: var(--muted);
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .tickets-context-item-meta {
   margin: 2px 0 6px;
+  font-size: 12px;
 }
 
-/* custom: event timeline — chronological entries with pre-wrap bodies; the
-   kit has no timeline pattern. */
+/* custom: event timeline — chronological protocol lines with pre-wrap bodies;
+   the kit has no timeline pattern. */
 .ticket-timeline {
   display: grid;
   gap: 8px;
@@ -143,8 +171,7 @@
   line-height: 1.45;
 }
 
-/* custom: prose bodies (ticket description, clarification answers) — long
-   pre-wrap text, no kit equivalent. */
+/* custom: prose bodies (ticket description, clarification answers). */
 .tickets-body {
   max-width: 78ch;
   margin: 8px 0 0;
@@ -160,16 +187,8 @@
   line-height: 1.45;
 }
 
-/* Action rows hold kit .ctox-button controls; only the wrap layout is local. */
-.tickets-action-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-/* Command feedback line under the left pane tools ([data-state] is a JS
-   hook: module JS toggles data-state="error"). */
+/* Command feedback line under the left pane tools (transient; hidden until JS
+   fills it). [data-state] is a JS hook: module JS toggles data-state="error". */
 .tickets-command-status {
   margin: 8px 0 0;
   color: var(--muted);
@@ -181,30 +200,42 @@
   color: var(--danger);
 }
 
-/* Inline "no entries" line inside cards/sections — pane-level empty states
-   use the kit .ctox-empty instead. */
+/* Inline "no entries" line inside cards/sections — pane-level empty states use
+   the kit .ctox-empty instead. */
 .tickets-inline-empty {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
 }
 
-/* custom: narrow windows stack the three panes vertically (earlier than the
-   kit's 760px collapse, because ticket triage needs all three columns
-   readable without horizontal squeezing). */
+/* custom: narrow windows stack the panes vertically (earlier than the kit's
+   760px collapse, because ticket triage needs the columns readable without
+   horizontal squeezing). The on-demand ops pane keeps its is-ops-hidden state. */
 @container business-app-window (max-width: 1160px) {
-  .tickets-module {
+  .tickets-module,
+  .tickets-module.is-ops-hidden {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(220px, 34vh) minmax(420px, 1fr) minmax(260px, 38vh);
     height: auto;
     min-height: 100%;
     overflow-y: auto;
     gap: 8px;
   }
 
+  /* Ops shown → three stacked rows; ops hidden → the timeline + list only. */
+  .tickets-module {
+    grid-template-rows: minmax(220px, 34vh) minmax(420px, 1fr) minmax(260px, 38vh);
+  }
+  .tickets-module.is-ops-hidden {
+    grid-template-rows: minmax(220px, 34vh) minmax(420px, 1fr);
+  }
+
   .tickets-module > [data-resizer] {
     display: none !important;
   }
+
+  .tickets-left { grid-column: 1; }
+  .tickets-center { grid-column: 1; }
+  .tickets-right { grid-column: 1; }
 
   .tickets-left,
   .tickets-center,
@@ -216,5 +247,8 @@
 @container business-app-window (max-width: 640px) {
   .tickets-module {
     grid-template-rows: minmax(220px, 38vh) minmax(380px, 1fr) minmax(240px, 42vh);
+  }
+  .tickets-module.is-ops-hidden {
+    grid-template-rows: minmax(220px, 38vh) minmax(380px, 1fr);
   }
 }

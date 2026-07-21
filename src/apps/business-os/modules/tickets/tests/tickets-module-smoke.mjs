@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
 const bundledModule = await build({
-  entryPoints: [fileURLToPath(new URL('./index.js', import.meta.url))],
+  entryPoints: [fileURLToPath(new URL('../index.js', import.meta.url))],
   bundle: true,
   format: 'esm',
   platform: 'browser',
