@@ -13,36 +13,14 @@
   display: none;
 }
 
-/* Sidebar gets a third grid row for the "Neuer CV" footer button. */
+/* Left column follows the canonical grammar grid: header, counted view band,
+   the recessed well, and the one-line footer. The chrome itself is shell-owned
+   (base.css .ctox-filterbar / .ctox-view-switch / .ctox-well /
+   .ctox-pane-footer) — this module writes no chrome CSS. */
 .cv-sidebar {
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
-/* Tools row: search + sort side by side. The bulk-action row lives in a
-   child wrapper that the data-toggle-bulk kebab reveals (hidden by default
-   via the [hidden] attribute) — it's an advanced bulk action, not part of
-   the primary search/sort surface. */
-.cv-tools {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(86px, 0.62fr);
-}
-
-.cv-tools > .cv-tools-extra {
-  grid-column: 1 / -1;
-}
-
-/* Highlight the sidebar bulk-action kebab while the bulk row is revealed.
-   Mirrors the threads / conversations / invoices is-actions-hidden idiom —
-   the kit's .ctox-pane-icon[aria-pressed="true"] rule already styles the
-   accent fill, so we only need the explicit data-toggle-* selector when a
-   module wants its own colour override. */
-.cv-print-builder [data-toggle-bulk][aria-pressed="true"] {
-  color: color-mix(in srgb, var(--accent) 78%, var(--text));
-}
-
-/* custom: candidate record card — avatar, multi-line identity, status badge
-   and (when selected) an inline workflow control cluster. Richer than
-   .ctox-list-item, so it stays a module component on kit tokens. */
 .cv-candidate-list {
   display: grid;
   align-content: start;
@@ -50,11 +28,21 @@
   padding: 6px;
 }
 
+.cv-candidate-list.is-compact {
+  gap: 2px;
+  padding: 4px 6px;
+}
+
+/* Shard = pure selector: avatar + name + one muted meta line. Selection is an
+   accent fill plus a flat 2px ::before bar (no inset shadow — kit guard). */
 .cv-card {
+  position: relative;
   width: 100%;
   display: grid;
-  gap: 7px;
-  padding: 9px;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  padding: 8px 9px;
   border: 1px solid var(--hairline, var(--line));
   border-radius: var(--panel-radius);
   background: var(--surface);
@@ -71,15 +59,15 @@
 .cv-card.is-selected {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
   background: var(--accent-soft);
-  box-shadow: inset 2px 0 0 var(--accent);
 }
 
-.cv-card-main {
-  display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) auto;
-  gap: 9px;
-  align-items: center;
-  min-width: 0;
+.cv-card.is-selected::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  border-radius: var(--panel-radius) 0 0 var(--panel-radius);
+  background: var(--accent);
 }
 
 .cv-card-info {
@@ -97,7 +85,7 @@
   white-space: nowrap;
 }
 
-.cv-card-line {
+.cv-card-meta {
   margin-top: 2px;
   overflow: hidden;
   color: var(--muted);
@@ -106,64 +94,54 @@
   white-space: nowrap;
 }
 
-.cv-card-controls {
-  display: grid;
-  gap: 6px;
-}
-
-.cv-flow-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 6px;
-  align-items: center;
-}
-
-.cv-flow-row .ctox-pane-tabs {
-  display: flex;
+/* Compact row variant (list view toggle) — single line, same selection bar. */
+.cv-row {
+  position: relative;
   width: 100%;
-  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: var(--control-radius);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
-.cv-flow-row .ctox-pane-tab {
-  flex: 1 1 0;
+.cv-row:hover {
+  background: var(--kit-hover);
+}
+
+.cv-row.is-selected {
+  background: var(--accent-soft);
+}
+
+.cv-row.is-selected::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: var(--accent);
+}
+
+.cv-row-name {
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.cv-template-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 5px;
-}
-
-/* Per-record print toggles (anonymize + logo) — collapsed behind the
-   data-toggle-card-options kebab in the template row. The kit's hidden
-   attribute rule hides the wrapper when collapsed. */
-.cv-card-options {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.cv-card-options[hidden] {
-  display: none !important;
-}
-
-/* Mirror the primary kebab highlight while the options are revealed. */
-.cv-print-builder [data-toggle-card-options][aria-pressed="true"] {
-  color: color-mix(in srgb, var(--accent) 78%, var(--text));
-}
-
-.cv-card-foot {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 11px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.cv-row-meta {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 /* custom: inline pill linking a parsing card to its CTOX flow task. */
@@ -202,61 +180,51 @@
   color: var(--danger);
 }
 
-/* custom: dashed "create from PDF" affordance pinned under the list. */
-.cv-new-card {
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr);
-  gap: 10px;
+/* Workbench pane = the stage: a header (identity + element actions + the
+   view-switch/template controls) that only exists with a revealed selection,
+   over the stage body. */
+.cv-workbench {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.cv-stage-head[hidden] {
+  display: none;
+}
+
+.cv-stage-head .cv-stage-controls {
+  display: flex;
   align-items: center;
-  margin: 8px;
-  padding: 8px;
-  border: 1px dashed var(--line-strong);
-  border-radius: var(--panel-radius);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  cursor: pointer;
-  text-align: left;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 12px 8px;
 }
 
-.cv-new-card:hover {
-  background: var(--kit-hover);
+.cv-view-switch-tabs {
+  display: flex;
+  flex: 0 0 auto;
 }
 
-.cv-new-card:disabled {
-  cursor: default;
-  opacity: 0.55;
+.cv-template-select {
+  flex: 0 0 auto;
+  max-width: 180px;
 }
 
-.cv-new-card strong,
-.cv-new-card small {
-  display: block;
+.cv-stage-foot {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
   overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.cv-new-card small {
-  color: var(--muted);
-  font-size: 11.5px;
-}
-
-.cv-new-icon {
-  width: 38px;
-  height: 38px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--hairline, var(--line));
-  border-radius: var(--control-radius);
-  color: var(--accent);
-  font-size: 22px;
-  font-weight: 400;
-}
-
-/* Workbench pane holds only the stage (no pane header), so it collapses
-   the kit's auto header row. */
-.cv-workbench {
-  grid-template-rows: minmax(0, 1fr);
+.cv-stage-show {
+  margin-top: 8px;
 }
 
 .cv-stage {
@@ -1076,8 +1044,10 @@
     overflow-y: hidden;
   }
 
-  .cv-new-card {
-    margin-top: 0;
+  .cv-candidate-list.is-compact {
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    overflow-x: hidden;
   }
 
   .cv-view-grid.is-split {

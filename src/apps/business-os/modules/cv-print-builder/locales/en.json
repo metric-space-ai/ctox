@@ -1,4 +1,14 @@
 {
   "title": "CV Print Builder",
-  "description": "Parse CV PDFs, correct the structured profile, and approve consistent print views."
+  "description": "Parse CV PDFs, correct the structured profile, and approve consistent print views.",
+  "kicker": "CTOX Recruiting",
+  "listTitle": "Candidates",
+  "newAction": "New CV",
+  "importAction": "Import profiles",
+  "exportAction": "Export profiles",
+  "reparseAllAction": "Reparse all",
+  "bandAll": "All",
+  "bandProgress": "In progress",
+  "bandReview": "Review",
+  "bandApproved": "Approved"
 }

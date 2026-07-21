@@ -1,4 +1,14 @@
 {
   "title": "CV Print Builder",
-  "description": "CV-PDFs strukturiert parsen, korrigieren und in einheitliche Druckansichten freigeben."
+  "description": "CV-PDFs strukturiert parsen, korrigieren und in einheitliche Druckansichten freigeben.",
+  "kicker": "CTOX Recruiting",
+  "listTitle": "Kandidaten",
+  "newAction": "Neuer CV",
+  "importAction": "Profile importieren",
+  "exportAction": "Profile exportieren",
+  "reparseAllAction": "Alle reparsen",
+  "bandAll": "Alle",
+  "bandProgress": "In Arbeit",
+  "bandReview": "Korrektur",
+  "bandApproved": "Freigegeben"
 }

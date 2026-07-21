@@ -2,7 +2,7 @@ import {
   readStoredFileFromDemandChunks,
 } from '../../shared/file-integrity.js?v=20260708-canonical-rechunk2';
 
-const BUILD = '20260717-kit-migration-v29';
+const BUILD = '20260721-ia-grammar-v30';
 const MODULE_ID = 'cv-print-builder';
 const PROFILE_MIME = 'application/vnd.ctox.cv-print-profile+json';
 const CHUNK_SIZE = 16 * 1024;
@@ -86,7 +86,7 @@ const COMMON_FIRST_NAMES = new Set([
 export async function mount(ctx) {
   ACTIVE_LOCALE = String(ctx.locale || document.documentElement.lang || 'de').toLowerCase().startsWith('en') ? 'en' : 'de';
   await ensureStyles();
-  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  const html = await fetch(`${new URL('./index.html', import.meta.url).pathname}?v=${BUILD}`).then((res) => res.text());
   ctx.host.innerHTML = html;
   applyStaticLocale(ctx.host);
   ctx.host.dataset.cvPrintBuilder = 'native';
@@ -100,9 +100,8 @@ export async function mount(ctx) {
     selectedId: '',
     lastSelectedId: '',
     lastSelectedPhase: '',
-    query: '',
-    sortMode: 'updated_desc',
     viewMode: 'original',
+    userCollapsed: false,
     originalUrls: new Map(),
     disposers: [],
     refreshTimer: null,
@@ -154,12 +153,20 @@ function applyStaticLocale(host) {
   root.setAttribute('lang', ACTIVE_LOCALE);
   if (ACTIVE_LOCALE !== 'en') return;
   const text = new Map([
-    ['Kandidaten', 'Candidates'], ['Suchen', 'Search'], ['Neueste', 'Newest'], ['Status', 'Status'], ['Template', 'Template'],
-    ['Alle reparsen', 'Reparse all'], ['Neuer CV', 'New CV'], ['PDF als Kandidat anlegen', 'Create candidate from PDF'],
+    ['Kandidaten', 'Candidates'], ['Neueste', 'Newest'], ['Name', 'Name'], ['Status', 'Status'], ['Template', 'Template'],
+    ['Alle', 'All'], ['In Arbeit', 'In progress'], ['Korrektur', 'Review'], ['Freigegeben', 'Approved'],
+    ['Alle Templates', 'All templates'], ['Minimal', 'Minimal'], ['Klassisch', 'Classic'], ['Modern', 'Modern'],
+    ['CV Stage', 'CV Stage'],
   ]);
   const attrs = new Map([
-    ['Kandidaten', 'Candidates'], ['Kandidaten suchen', 'Search candidates'], ['Kandidaten sortieren', 'Sort candidates'],
-    ['Kandidatenspalte anpassen', 'Resize candidate column'], ['CV Arbeitsbereich', 'CV workspace'], ['Suchen', 'Search'],
+    ['Kandidaten', 'Candidates'], ['Kandidaten suchen', 'Search candidates'], ['Suchen...', 'Search...'],
+    ['Kandidatenspalte anpassen', 'Resize candidate column'], ['CV Arbeitsbereich', 'CV workspace'],
+    ['Neuer CV', 'New CV'], ['Profile importieren', 'Import profiles'], ['Profile importieren (JSON)', 'Import profiles (JSON)'],
+    ['Profile exportieren', 'Export profiles'], ['Profile exportieren (JSON)', 'Export profiles (JSON)'],
+    ['Alle reparsen', 'Reparse all'], ['Alle CV-PDFs erneut parsen', 'Reparse all CV PDFs'],
+    ['Filter', 'Filter'], ['Darstellung', 'View'], ['Shard-Ansicht', 'Shard view'], ['Listen-Ansicht', 'List view'],
+    ['Filter zurücksetzen', 'Reset filters'], ['Sortieren', 'Sort'], ['Template filtern', 'Filter by template'],
+    ['Status-Ansichten', 'Status views'],
   ]);
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let node;
@@ -186,78 +193,196 @@ async function ensureStyles() {
 }
 
 function bindStaticEvents(state) {
-  state.host.querySelector('[data-cv-new]')?.addEventListener('click', () => {
-    if (!state.ready) {
-      notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('CVs können importiert werden, sobald die Arbeitsdaten geladen sind.', 'CVs can be imported once the workspace data is loaded.'));
-      return;
-    }
-    state.host.querySelector('[data-cv-upload]')?.click();
-  });
-  state.host.querySelector('[data-cv-search]')?.addEventListener('input', (event) => {
-    state.query = event.target.value || '';
-    renderSidebar(state);
-  });
-  state.host.querySelector('[data-cv-sort]')?.addEventListener('change', (event) => {
-    state.sortMode = event.target.value || 'updated_desc';
-    renderSidebar(state);
-  });
-  state.host.querySelector('[data-cv-reparse-all]')?.addEventListener('click', async () => {
-    const candidates = reparseCandidates(state);
-    if (!state.ready && !candidates.length) {
-      notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('Parsing kann starten, sobald die Arbeitsdaten geladen sind.', 'Parsing can start once the workspace data is loaded.'));
-      return;
-    }
-    if (!candidates.length) {
-      notify(state, 'info', tr('Keine PDFs zum Parsen', 'No PDFs to parse'), tr('Es wurden keine CVs mit lokaler PDF-Quelle gefunden.', 'No CVs with a local PDF source were found.'));
-      return;
-    }
-    const confirmed = window.confirm(tr(
-      `${candidates.length} CV-PDF${candidates.length === 1 ? '' : 's'} erneut parsen? Bestehende Parser-Tasks werden nicht gelöscht, die CVs erhalten neue Parser-Aufträge.`,
-      `Reparse ${candidates.length} CV PDF${candidates.length === 1 ? '' : 's'}? Existing parser tasks remain and each CV receives a new parser task.`,
-    ));
-    if (!confirmed) return;
-    await reparseAllPdfs(state, candidates);
-  });
-  state.host.addEventListener('change', async (event) => {
-    if (!event.target?.matches?.('[data-cv-upload]')) return;
-    const files = Array.from(event.target.files || []);
-    event.target.value = '';
-    if (!files.length) return;
-    if (!state.ready) {
-      notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('Bitte kurz warten, bis die CV-Liste geladen ist.', 'Please wait until the CV list is loaded.'));
-      return;
-    }
-    try {
-      await importPdfs(state, files);
-    } catch (error) {
-      notify(state, 'error', tr('PDF konnte nicht importiert werden', 'PDF could not be imported'), String(error?.message || error));
-    }
-  });
-  state.host.querySelector('[data-cv-logo-upload]')?.addEventListener('change', async (event) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) return;
-    const dataUrl = await fileToDataUrl(file);
-    await patchSelectedModel(state, (model) => ({
-      ...model,
-      print: {
-        ...model.print,
-        showLogo: true,
-        logoDataUrl: dataUrl,
-      },
-    }));
-  });
-  // Bulk-actions kebab reveals the (otherwise hidden) "Alle reparsen" row —
-  // mirrors the threads / conversations / buchhaltung collapse idiom. The
-  // primary search + sort stay permanently visible.
-  state.host.querySelector('[data-toggle-bulk]')?.addEventListener('click', () => {
-    const bulk = state.host.querySelector('[data-cv-bulk-actions]');
-    const toggle = state.host.querySelector('[data-toggle-bulk]');
-    if (!bulk || !toggle) return;
-    const willHide = !bulk.hasAttribute('hidden');
-    bulk.toggleAttribute('hidden', willHide);
-    toggle.setAttribute('aria-pressed', willHide ? 'false' : 'true');
-  });
+  const rail = state.host.querySelector('[data-cv-rail]');
+  // The left column's chrome (search / view-toggle / tray / reset / active-dot
+  // / band) is SHELL-wired from the data-pg-* markup; the module only listens
+  // for the bubbling change event and re-renders the list from data.
+  rail?.addEventListener('ctox-pane-grammar-change', () => render(state));
+  // One delegated click handler for header actions, the selector list, and the
+  // stage controls. Selecting a candidate is an in-place class flip, never a
+  // list rebuild, so the operator's scroll offset is preserved.
+  state.host.addEventListener('click', (event) => onHostClick(state, event));
+  state.host.addEventListener('change', (event) => onHostChange(state, event));
+}
+
+function onHostClick(state, event) {
+  const target = event.target;
+  const action = target.closest?.('[data-action]');
+  if (action && state.host.contains(action)) {
+    if (action.dataset.action === 'new') return triggerNewCandidate(state);
+    if (action.dataset.action === 'import') return triggerImportCandidates(state);
+    if (action.dataset.action === 'export') return exportCandidates(state);
+  }
+  if (target.closest?.('[data-cv-reparse-all]')) return triggerReparseAll(state);
+
+  const taskLink = target.closest?.('[data-cv-open-task]');
+  if (taskLink) {
+    event.preventDefault();
+    event.stopPropagation();
+    return openCtoxTask(taskLink.dataset.cvTaskId || '', taskLink.dataset.cvCommandId || '');
+  }
+  if (target.closest?.('[data-toggle-stage]')) return toggleStage(state);
+  if (target.closest?.('[data-cv-action]')) return runWorkflowAction(state);
+  const viewButton = target.closest?.('[data-cv-view]');
+  if (viewButton) return changeStageView(state, viewButton.dataset.cvView);
+  if (target.closest?.('[data-cv-toggle-anon]')) return toggleAnonymize(state);
+  if (target.closest?.('[data-cv-logo-control]')) return toggleLogo(state);
+
+  const row = target.closest?.('[data-cv-select]');
+  if (row && state.host.contains(row)) return selectCandidate(state, row.dataset.cvSelect);
+}
+
+function onHostChange(state, event) {
+  const target = event.target;
+  if (target.matches?.('[data-cv-upload]')) return handleUploadChange(state, target);
+  if (target.matches?.('[data-cv-import]')) return handleImportChange(state, target);
+  if (target.matches?.('[data-cv-logo-upload]')) return handleLogoChange(state, target);
+  if (target.matches?.('[data-cv-template]')) return changeTemplate(state, target.value);
+}
+
+function triggerNewCandidate(state) {
+  if (!state.ready) {
+    notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('CVs können importiert werden, sobald die Arbeitsdaten geladen sind.', 'CVs can be imported once the workspace data is loaded.'));
+    return;
+  }
+  state.host.querySelector('[data-cv-upload]')?.click();
+}
+
+function triggerImportCandidates(state) {
+  if (!state.ready) {
+    notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('Profile können importiert werden, sobald die Arbeitsdaten geladen sind.', 'Profiles can be imported once the workspace data is loaded.'));
+    return;
+  }
+  state.host.querySelector('[data-cv-import]')?.click();
+}
+
+async function triggerReparseAll(state) {
+  const candidates = reparseCandidates(state);
+  if (!state.ready && !candidates.length) {
+    notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('Parsing kann starten, sobald die Arbeitsdaten geladen sind.', 'Parsing can start once the workspace data is loaded.'));
+    return;
+  }
+  if (!candidates.length) {
+    notify(state, 'info', tr('Keine PDFs zum Parsen', 'No PDFs to parse'), tr('Es wurden keine CVs mit lokaler PDF-Quelle gefunden.', 'No CVs with a local PDF source were found.'));
+    return;
+  }
+  const confirmed = window.confirm(tr(
+    `${candidates.length} CV-PDF${candidates.length === 1 ? '' : 's'} erneut parsen? Bestehende Parser-Tasks werden nicht gelöscht, die CVs erhalten neue Parser-Aufträge.`,
+    `Reparse ${candidates.length} CV PDF${candidates.length === 1 ? '' : 's'}? Existing parser tasks remain and each CV receives a new parser task.`,
+  ));
+  if (!confirmed) return;
+  await reparseAllPdfs(state, candidates);
+}
+
+async function handleUploadChange(state, input) {
+  const files = Array.from(input.files || []);
+  input.value = '';
+  if (!files.length) return;
+  if (!state.ready) {
+    notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('Bitte kurz warten, bis die CV-Liste geladen ist.', 'Please wait until the CV list is loaded.'));
+    return;
+  }
+  try {
+    await importPdfs(state, files);
+  } catch (error) {
+    notify(state, 'error', tr('PDF konnte nicht importiert werden', 'PDF could not be imported'), String(error?.message || error));
+  }
+}
+
+async function handleImportChange(state, input) {
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  if (!state.ready) {
+    notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('Bitte kurz warten, bis die CV-Liste geladen ist.', 'Please wait until the CV list is loaded.'));
+    return;
+  }
+  try {
+    await importCandidates(state, file);
+  } catch (error) {
+    notify(state, 'error', tr('Import fehlgeschlagen', 'Import failed'), String(error?.message || error));
+  }
+}
+
+async function handleLogoChange(state, input) {
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  const dataUrl = await fileToDataUrl(file);
+  await patchSelectedModel(state, (model) => ({
+    ...model,
+    print: { ...model.print, showLogo: true, logoDataUrl: dataUrl },
+  }));
+}
+
+// Selection = in-place class flip across the existing rows (never a rebuild),
+// then a stage re-render. Picking a candidate re-reveals the stage.
+function selectCandidate(state, id) {
+  const item = state.items.find((candidate) => candidate.record.id === id);
+  if (!item) return;
+  state.selectedId = id;
+  state.userCollapsed = false;
+  state.viewMode = defaultViewMode(item.model);
+  state.lastSelectedId = id;
+  state.lastSelectedPhase = workflowPhase(item.model);
+  applyListSelection(state);
+  renderStage(state);
+}
+
+async function runWorkflowAction(state) {
+  const item = getSelectedItem(state);
+  if (!item) return;
+  const phase = workflowPhase(item.model);
+  try {
+    if (phase === 'uploaded' || phase === 'error') await startParsing(state, item);
+    else if (phase === 'review') await approvePrint(state, item);
+    else if (phase === 'approved') window.print();
+  } catch (error) {
+    notify(state, 'error', tr('Aktion fehlgeschlagen', 'Action failed'), String(error?.message || error));
+  }
+}
+
+async function changeStageView(state, requested) {
+  const item = getSelectedItem(state);
+  if (!item || !viewAllowed(item.model, requested)) return;
+  state.viewMode = requested;
+  await patchSelectedModel(state, (model) => ({
+    ...model,
+    workflow: { ...model.workflow, view_mode: requested, updated_at_ms: Date.now() },
+  }), { quiet: true });
+  renderStage(state);
+}
+
+async function changeTemplate(state, value) {
+  await patchSelectedModel(state, (model) => ({
+    ...model,
+    print: { ...model.print, template: value },
+  }));
+}
+
+async function toggleAnonymize(state) {
+  await patchSelectedModel(state, (model) => ({
+    ...model,
+    print: { ...model.print, anonymize: !model.print?.anonymize },
+  }));
+}
+
+async function toggleLogo(state) {
+  const item = getSelectedItem(state);
+  if (!item) return;
+  if (!item.model.print?.logoDataUrl) {
+    state.host.querySelector('[data-cv-logo-upload]')?.click();
+    return;
+  }
+  await patchSelectedModel(state, (model) => ({
+    ...model,
+    print: { ...model.print, showLogo: !model.print?.showLogo },
+  }));
+}
+
+function toggleStage(state) {
+  state.userCollapsed = !state.userCollapsed;
+  renderStage(state);
 }
 
 function subscribeToCollections(state) {
@@ -275,7 +400,7 @@ function subscribeToCollections(state) {
 function setModuleBusy(state, busy) {
   state.host.toggleAttribute('data-cv-busy', Boolean(busy));
   const upload = state.host.querySelector('[data-cv-upload]');
-  const newButton = state.host.querySelector('[data-cv-new]');
+  const newButton = state.host.querySelector('[data-action="new"]');
   if (upload) {
     upload.disabled = Boolean(busy);
     upload.toggleAttribute('disabled', Boolean(busy));
@@ -433,133 +558,103 @@ async function refresh(state) {
 }
 
 function render(state) {
-  renderSidebar(state);
+  renderList(state);
   renderStage(state);
   setModuleBusy(state, !state.ready || state.importing || state.bulkParsing);
 }
 
-function renderSidebar(state) {
+// Shell-wired grammar state, read straight from the pane DOM (the handle may
+// not be attached yet on the first mount tick).
+function readGrammar(state) {
+  const rail = state.host.querySelector('[data-cv-rail]');
+  return {
+    search: (rail?.querySelector('[data-pg-search]')?.value || '').trim().toLowerCase(),
+    view: rail?.querySelector('[data-pg-view][aria-pressed="true"]')?.dataset.pgView || 'cards',
+    band: rail?.querySelector('[data-pg-band][aria-selected="true"]')?.dataset.pgBand || 'all',
+    sort: rail?.querySelector('[data-pg-filter][data-pg-name="sort"]')?.value || 'updated_desc',
+    template: rail?.querySelector('[data-pg-filter][data-pg-name="template"]')?.value || 'all',
+  };
+}
+
+function writeCounts(state, counts) {
+  const rail = state.host.querySelector('[data-cv-rail]');
+  const pg = rail?.__ctoxPaneGrammar;
+  if (pg?.setCounts) { pg.setCounts(counts); return; }
+  for (const [key, value] of Object.entries(counts)) {
+    const node = rail?.querySelector(`[data-pg-count="${key}"]`);
+    if (node) node.textContent = ` (${value})`;
+  }
+}
+
+function writeFooter(state, textValue) {
+  const rail = state.host.querySelector('[data-cv-rail]');
+  const pg = rail?.__ctoxPaneGrammar;
+  if (pg?.setFooter) { pg.setFooter(textValue); return; }
+  const node = rail?.querySelector('[data-pg-footer]');
+  if (node) node.textContent = textValue || '';
+}
+
+// Band = high-level workflow status. Real partition with zeros included:
+// In Arbeit (uploaded/parsing/error) · Korrektur (review) · Freigegeben.
+function bandOf(model) {
+  const phase = workflowPhase(model);
+  if (phase === 'review') return 'review';
+  if (phase === 'approved') return 'approved';
+  return 'progress';
+}
+
+function bandCounts(state) {
+  const counts = { all: state.items.length, progress: 0, review: 0, approved: 0 };
+  for (const item of state.items) counts[bandOf(item.model)] += 1;
+  return counts;
+}
+
+function bandLabel(band) {
+  return ({
+    all: tr('Alle', 'All'),
+    progress: tr('In Arbeit', 'In progress'),
+    review: tr('Korrektur', 'Review'),
+    approved: tr('Freigegeben', 'Approved'),
+  })[band] || tr('Alle', 'All');
+}
+
+// Data-driven list rebuild. Selection does NOT call this — it flips classes in
+// place (applyListSelection). The row is a pure selector; the workflow controls
+// live on the stage, so no per-row control listeners are bound here.
+function renderList(state) {
   const list = state.host.querySelector('[data-cv-list]');
-  const count = state.host.querySelector('[data-cv-count]');
-  const visible = visibleItems(state);
-  count.textContent = state.query.trim()
-    ? `${visible.length}/${state.items.length} CVs`
-    : `${state.items.length} CV${state.items.length === 1 ? '' : 's'}`;
+  if (!list) return;
+  const grammar = readGrammar(state);
+  const visible = visibleItems(state, grammar);
+  list.classList.toggle('is-compact', grammar.view === 'list');
   list.innerHTML = visible.length
-    ? visible.map((item) => renderCandidateCard(state, item)).join('')
-    : '<div class="ctox-empty">' + escapeHtml(tr('Keine Kandidaten gefunden.', 'No candidates found.')) + '</div>';
-  list.querySelectorAll('[data-cv-select]').forEach((button) => {
-    button.addEventListener('click', (event) => {
-      if (event.target.closest('[data-cv-action],[data-cv-view],[data-cv-template],[data-cv-toggle-anon],[data-cv-logo-control],[data-cv-open-task]')) return;
-      const id = button.dataset.cvSelect;
-      const item = state.items.find((candidate) => candidate.record.id === id);
-      state.selectedId = id;
-      state.viewMode = defaultViewMode(item?.model);
-      state.lastSelectedId = id;
-      state.lastSelectedPhase = workflowPhase(item?.model);
-      render(state);
-    });
-  });
-  list.querySelectorAll('[data-cv-action]').forEach((button) => {
-    button.addEventListener('click', async () => {
-      const item = getSelectedItem(state);
-      if (!item) return;
-      const phase = workflowPhase(item.model);
-      try {
-        if (phase === 'uploaded' || phase === 'error') {
-          await startParsing(state, item);
-        } else if (phase === 'review') {
-          await approvePrint(state, item);
-        } else if (phase === 'approved') {
-          window.print();
-        }
-      } catch (error) {
-        notify(state, 'error', tr('Aktion fehlgeschlagen', 'Action failed'), String(error?.message || error));
-      }
-    });
-  });
-  list.querySelectorAll('[data-cv-open-task]').forEach((button) => {
-    button.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      openCtoxTask(button.dataset.cvTaskId || '', button.dataset.cvCommandId || '');
-    });
-  });
-  list.querySelectorAll('[data-cv-view]').forEach((button) => {
-    button.addEventListener('click', async () => {
-      const requested = button.dataset.cvView;
-      const item = getSelectedItem(state);
-      if (!item || !viewAllowed(item.model, requested)) return;
-      state.viewMode = requested;
-      await patchSelectedModel(state, (model) => ({
-        ...model,
-        workflow: {
-          ...model.workflow,
-          view_mode: requested,
-          updated_at_ms: Date.now(),
-        },
-      }), { quiet: true });
-      render(state);
-    });
-  });
-  list.querySelectorAll('[data-cv-template]').forEach((select) => {
-    select.addEventListener('change', async () => {
-      await patchSelectedModel(state, (model) => ({
-        ...model,
-        print: {
-          ...model.print,
-          template: select.value,
-        },
-      }));
-    });
-  });
-  list.querySelectorAll('[data-cv-logo-control]').forEach((button) => {
-    button.addEventListener('click', async () => {
-      const item = getSelectedItem(state);
-      if (!item) return;
-      if (!item.model.print?.logoDataUrl) {
-        state.host.querySelector('[data-cv-logo-upload]')?.click();
-        return;
-      }
-      await patchSelectedModel(state, (model) => ({
-        ...model,
-        print: {
-          ...model.print,
-          showLogo: !model.print?.showLogo,
-        },
-      }));
-    });
-  });
-  list.querySelectorAll('[data-cv-toggle-anon]').forEach((button) => {
-    button.addEventListener('click', async () => {
-      await patchSelectedModel(state, (model) => ({
-        ...model,
-        print: {
-          ...model.print,
-          anonymize: !model.print?.anonymize,
-        },
-      }));
-    });
-  });
-  // Per-card kebab reveals the per-record print options (anonymize + logo)
-  // — secondary toggles that aren't part of the primary workflow row.
-  list.querySelectorAll('[data-toggle-card-options]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const options = button.closest('.cv-card')?.querySelector('[data-cv-card-options]');
-      if (!options) return;
-      const willHide = !options.hasAttribute('hidden');
-      options.toggleAttribute('hidden', willHide);
-      button.setAttribute('aria-pressed', willHide ? 'false' : 'true');
-    });
+    ? visible.map((item) => renderCandidateCard(state, item, grammar.view)).join('')
+    : '<div class="ctox-empty">' + escapeHtml(state.items.length
+      ? tr('Keine Kandidaten für diesen Filter.', 'No candidates for this filter.')
+      : tr('Noch keine CVs. Über „Neu" ein PDF anlegen.', 'No CVs yet. Add a PDF via "New".')) + '</div>';
+  applyListSelection(state);
+  writeCounts(state, bandCounts(state));
+  writeFooter(state, `${visible.length} ${visible.length === 1 ? tr('Eintrag', 'entry') : tr('Einträge', 'entries')} · ${bandLabel(grammar.band)}`);
+}
+
+// In-place selection flip — never a rebuild, so the operator's scroll offset in
+// the well is preserved (design-guide: re-renders never move the operator).
+function applyListSelection(state) {
+  const list = state.host.querySelector('[data-cv-list]');
+  list?.querySelectorAll('[data-cv-select]').forEach((row) => {
+    const on = (row.dataset.cvSelect || '') === String(state.selectedId || '');
+    row.classList.toggle('is-selected', on);
+    row.setAttribute('aria-selected', String(on));
   });
 }
 
-function visibleItems(state) {
-  const query = state.query.trim().toLowerCase();
-  const candidates = query
-    ? state.items.filter((item) => candidateSearchText(item).includes(query))
-    : state.items.slice();
-  return candidates.sort((a, b) => compareCandidates(a, b, state.sortMode));
+function visibleItems(state, grammar = readGrammar(state)) {
+  const { search, band, template, sort } = grammar;
+  let items = state.items.slice();
+  if (band && band !== 'all') items = items.filter((item) => bandOf(item.model) === band);
+  if (template && template !== 'all') items = items.filter((item) => normalizeTemplateId(item.model.print?.template) === template);
+  if (search) items = items.filter((item) => candidateSearchText(item).includes(search));
+  return items.sort((a, b) => compareCandidates(a, b, sort));
 }
 
 function candidateSearchText(item) {
@@ -677,83 +772,85 @@ function normalizeLiveStatus(value) {
   return status;
 }
 
-function renderCandidateCard(state, item) {
+// A shard is a PURE selector: title + ONE muted meta line. No inline controls,
+// no expansion — the selected CV's workflow lives on the stage.
+function renderCandidateCard(state, item, view) {
   const model = item.model;
   const candidate = model.candidate || {};
   const phase = workflowPhase(model);
   const selected = item.record.id === state.selectedId;
-  const viewMode = selected ? state.viewMode : defaultViewMode(model);
-  const action = actionForPhase(phase);
-  const role = candidate.currentRole || tr('CV Profil', 'CV profile');
-  const location = [candidate.location, candidate.availability].filter(Boolean).join(' · ');
-  const template = normalizeTemplateId(model.print?.template || 'modern');
-  const controlsDisabled = !state.ready || phase === 'uploaded' || phase === 'parsing';
-  const approved = phase === 'approved';
-  const templateOptions = TEMPLATES.map((entry) => (
-    `<option value="${escapeHtml(entry.id)}"${entry.id === template ? ' selected' : ''}>${escapeHtml(templateLabel(entry.id))}</option>`
-  )).join('');
+  const name = displayCandidateName(model);
+  const meta = [phaseLabel(phase), templateLabel(model.print?.template), candidate.currentRole || candidate.location]
+    .filter(Boolean).join(' · ');
+  const attrs = `data-cv-select="${escapeAttr(item.record.id)}" data-context-record-id="${escapeAttr(item.record.id)}" data-context-record-type="cv_profile" data-context-label="${escapeAttr(item.record.title || name)}" aria-selected="${selected ? 'true' : 'false'}"`;
+  if (view === 'list') {
+    return `
+      <button type="button" class="cv-row${selected ? ' is-selected' : ''}" ${attrs}>
+        <span class="cv-row-name">${escapeHtml(name)}</span>
+        <span class="cv-row-meta">${escapeHtml(phaseLabel(phase))}</span>
+      </button>
+    `;
+  }
   return `
-    <article class="cv-card${selected ? ' is-selected' : ''}" data-cv-select="${escapeHtml(item.record.id)}" data-context-record-id="${escapeHtml(item.record.id)}" data-context-record-type="cv_profile" data-context-label="${escapeHtml(item.record.title || item.record.name || item.record.id)}">
-      <div class="cv-card-main">
-        <span class="ctox-avatar ctox-avatar--lg">${escapeHtml(initials(candidate.name || item.record.title))}</span>
-        <div class="cv-card-info">
-          <h3 class="cv-card-name">${escapeHtml(displayCandidateName(model))}</h3>
-          <div class="cv-card-line cv-card-role">${escapeHtml(role)}</div>
-          <div class="cv-card-line">${escapeHtml(location || phaseLabel(phase))}</div>
-        </div>
-        <span class="ctox-badge ${phase === 'uploaded' ? 'is-warning' : 'is-info'}">${escapeHtml(statusShort(phase))}</span>
+    <article class="cv-card${selected ? ' is-selected' : ''}" ${attrs}>
+      <span class="ctox-avatar">${escapeHtml(initials(candidate.name || name))}</span>
+      <div class="cv-card-info">
+        <h3 class="cv-card-name">${escapeHtml(name)}</h3>
+        <div class="cv-card-meta">${escapeHtml(meta || phaseLabel(phase))}</div>
       </div>
-      ${selected ? `
-        <div class="cv-card-controls">
-          <div class="cv-flow-row">
-            <button class="ctox-pane-icon is-primary" type="button" title="${escapeHtml(action.title)}" aria-label="${escapeHtml(action.title)}" data-cv-action ${phase === 'parsing' ? 'disabled' : ''}>
-              ${action.icon}
-            </button>
-            <div class="ctox-pane-tabs" role="tablist" aria-label="${escapeAttr(tr('Ansicht', 'View'))}">
-              ${Object.entries(VIEW_LABELS).map(([key, label]) => `
-                <button type="button" data-cv-view="${key}" class="ctox-pane-tab${viewMode === key ? ' is-active' : ''}" ${viewAllowed(model, key) && !approved ? '' : 'disabled'}>${escapeHtml(key === 'split' ? tr('Beide', 'Both') : label)}</button>
-              `).join('')}
-            </div>
-          </div>
-          <div class="cv-template-row">
-            <select class="ctox-select" data-cv-template ${controlsDisabled || approved ? 'disabled' : ''} aria-label="${escapeAttr(tr('Print Template', 'Print template'))}">
-              ${templateOptions}
-            </select>
-            <button class="ctox-pane-icon" type="button" data-toggle-card-options title="${escapeAttr(tr('Druck-Optionen', 'Print options'))}" aria-label="${escapeAttr(tr('Druck-Optionen', 'Print options'))}" aria-pressed="false">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="6" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="18" r="1.4"/></svg>
-            </button>
-          </div>
-          <!-- Per-record print toggles (anonymize / logo) are hidden by default
-               and revealed via the kebab above — they're one-time settings,
-               not part of the primary workflow row. -->
-          <div class="cv-card-options" data-cv-card-options hidden>
-            <button class="ctox-pane-icon${model.print?.anonymize ? ' is-active' : ''}" type="button" data-cv-toggle-anon title="${escapeAttr(tr('Anonymisieren', 'Anonymize'))}" aria-label="${escapeAttr(tr('Anonymisieren', 'Anonymize'))}" ${controlsDisabled || approved ? 'disabled' : ''}>${iconEyeOff()}</button>
-            <button class="ctox-pane-icon${model.print?.showLogo ? ' is-active' : ''}" type="button" data-cv-logo-control title="${escapeAttr(model.print?.logoDataUrl ? tr('Logo anzeigen', 'Show logo') : tr('Logo wählen', 'Choose logo'))}" aria-label="${escapeAttr(model.print?.logoDataUrl ? tr('Logo anzeigen', 'Show logo') : tr('Logo wählen', 'Choose logo'))}" ${controlsDisabled || approved ? 'disabled' : ''}>${iconImage()}</button>
-          </div>
-        </div>
-        <div class="cv-card-foot">${phaseFootnoteHtml(model)}</div>
-      ` : ''}
     </article>
   `;
 }
 
+// The stage auto-reveals on selection: visible = hasSelection && !userCollapsed
+// (recomputed every render). No selection → empty state; collapsed → a compact
+// re-show line; visible → header controls + the render/print pipeline.
+function stageVisible(state) {
+  return Boolean(getSelectedItem(state)) && !state.userCollapsed;
+}
+
+function emptyStageHtml(title, sub, showToggle = false) {
+  const toggle = showToggle
+    ? `<button type="button" class="ctox-button cv-stage-show" data-toggle-stage>${escapeHtml(tr('Anzeigen', 'Show'))}</button>`
+    : '';
+  return `<div class="ctox-empty"><div><strong>${escapeHtml(title)}</strong><div>${escapeHtml(sub)}</div>${toggle}</div></div>`;
+}
+
 function renderStage(state) {
+  const main = state.host.querySelector('[data-cv-main]');
+  const head = state.host.querySelector('[data-cv-stage-head]');
   const stage = state.host.querySelector('[data-cv-stage]');
+  if (!stage) return;
   const item = getSelectedItem(state);
+  const visible = stageVisible(state);
+
+  if (head) head.hidden = !visible;
+  if (main) {
+    if (visible && item) {
+      main.setAttribute('data-context-record-id', item.record.id);
+      main.setAttribute('data-context-record-type', 'cv_profile');
+      main.setAttribute('data-context-label', item.record.title || displayCandidateName(item.model));
+    } else {
+      main.removeAttribute('data-context-record-id');
+      main.removeAttribute('data-context-record-type');
+      main.removeAttribute('data-context-label');
+    }
+  }
+
   if (!item) {
-    stage.innerHTML = `
-      <div class="ctox-empty">
-        <div>
-          <strong>${escapeHtml(tr('Kein CV ausgewählt', 'No CV selected'))}</strong>
-          <div>${escapeHtml(tr('Links einen PDF-CV anlegen.', 'Create a candidate from a PDF on the left.'))}</div>
-        </div>
-      </div>
-    `;
+    stage.innerHTML = emptyStageHtml(tr('Kein CV ausgewählt', 'No CV selected'), tr('Links einen Kandidaten wählen oder über „Neu" ein PDF anlegen.', 'Pick a candidate on the left or add a PDF via "New".'));
     return;
   }
+  if (!visible) {
+    stage.innerHTML = emptyStageHtml(displayCandidateName(item.model), tr('CV-Bühne ausgeblendet.', 'CV stage hidden.'), true);
+    return;
+  }
+
   const phase = workflowPhase(item.model);
   if (phase === 'approved') state.viewMode = 'print';
   if (!viewAllowed(item.model, state.viewMode)) state.viewMode = defaultViewMode(item.model);
+  renderStageHead(state, item);
+
   const serial = ++state.renderSerial;
   const mode = state.viewMode;
   const views = [];
@@ -771,6 +868,42 @@ function renderStage(state) {
       if (fileId) state.originalErrors.set(fileId, error?.message || String(error || tr('Original-PDF konnte nicht geladen werden.', 'Original PDF could not be loaded.')));
       if (serial === state.renderSerial) renderOriginalFrame(state, item);
     });
+}
+
+// Stage header: candidate identity + element actions (anonymize, logo, the one
+// primary workflow action, collapse) top-right, and a view-switch band + the
+// print-template select in the controls row underneath.
+function renderStageHead(state, item) {
+  const model = item.model;
+  const phase = workflowPhase(model);
+  const approved = phase === 'approved';
+  const controlsDisabled = !state.ready || phase === 'uploaded' || phase === 'parsing';
+  const action = actionForPhase(phase);
+  const kicker = state.host.querySelector('[data-cv-stage-kicker]');
+  const title = state.host.querySelector('[data-cv-stage-title]');
+  const actions = state.host.querySelector('[data-cv-stage-actions]');
+  const controls = state.host.querySelector('[data-cv-stage-controls]');
+  if (kicker) kicker.textContent = phaseLabel(phase);
+  if (title) title.textContent = displayCandidateName(model);
+  if (actions) {
+    actions.innerHTML = `
+      <button class="ctox-pane-icon${model.print?.anonymize ? ' is-active' : ''}" type="button" data-cv-toggle-anon title="${escapeAttr(tr('Anonymisieren', 'Anonymize'))}" aria-label="${escapeAttr(tr('Anonymisieren', 'Anonymize'))}" ${controlsDisabled || approved ? 'disabled' : ''}>${iconEyeOff()}</button>
+      <button class="ctox-pane-icon${model.print?.showLogo ? ' is-active' : ''}" type="button" data-cv-logo-control title="${escapeAttr(model.print?.logoDataUrl ? tr('Logo anzeigen', 'Show logo') : tr('Logo wählen', 'Choose logo'))}" aria-label="${escapeAttr(model.print?.logoDataUrl ? tr('Logo anzeigen', 'Show logo') : tr('Logo wählen', 'Choose logo'))}" ${controlsDisabled || approved ? 'disabled' : ''}>${iconImage()}</button>
+      <button class="ctox-pane-icon is-primary" type="button" data-cv-action title="${escapeAttr(action.title)}" aria-label="${escapeAttr(action.title)}" ${phase === 'parsing' ? 'disabled' : ''}>${action.icon}</button>
+      <button class="ctox-pane-icon" type="button" data-toggle-stage title="${escapeAttr(tr('Bühne ausblenden', 'Hide stage'))}" aria-label="${escapeAttr(tr('Bühne ausblenden', 'Hide stage'))}" aria-pressed="false">${iconCollapse()}</button>
+    `;
+  }
+  if (controls) {
+    const template = normalizeTemplateId(model.print?.template || 'modern');
+    const templateOptions = TEMPLATES.map((entry) => `<option value="${escapeHtml(entry.id)}"${entry.id === template ? ' selected' : ''}>${escapeHtml(templateLabel(entry.id))}</option>`).join('');
+    controls.innerHTML = `
+      <div class="ctox-pane-tabs cv-view-switch-tabs" role="tablist" aria-label="${escapeAttr(tr('Ansicht', 'View'))}">
+        ${Object.entries(VIEW_LABELS).map(([key, label]) => `<button type="button" role="tab" data-cv-view="${key}" class="ctox-pane-tab${state.viewMode === key ? ' is-active' : ''}" aria-selected="${state.viewMode === key ? 'true' : 'false'}" ${viewAllowed(model, key) && !approved ? '' : 'disabled'}>${escapeHtml(key === 'split' ? tr('Beide', 'Both') : label)}</button>`).join('')}
+      </div>
+      <select class="ctox-select cv-template-select" data-cv-template ${controlsDisabled || approved ? 'disabled' : ''} aria-label="${escapeAttr(tr('Print Template', 'Print template'))}">${templateOptions}</select>
+      <div class="cv-stage-foot">${phaseFootnoteHtml(model)}</div>
+    `;
+  }
 }
 
 function renderOriginalPane(state, item) {
@@ -1353,6 +1486,7 @@ async function importPdfs(state, files) {
     if (imported.length) {
       const selectedId = imported[imported.length - 1].documentId;
       state.selectedId = selectedId;
+      state.userCollapsed = false;
       state.lastSelectedId = '';
       state.lastSelectedPhase = '';
       state.viewMode = 'original';
@@ -1510,6 +1644,126 @@ async function saveDesktopFile(ctx, input) {
     };
   }));
   await writeChunkDocuments(getCollection(ctx, 'desktop_file_chunks'), chunkRows);
+}
+
+// Export/import the structured candidate PROFILES as JSON (honest and small):
+// export downloads the models; import re-creates each profile as a document +
+// version (no PDF bytes are carried — those stay in desktop_files). No command
+// flow or schema changes; the print pipeline is untouched.
+function exportCandidates(state) {
+  const items = visibleItems(state);
+  const source = items.length ? items : state.items;
+  const payload = {
+    format: 'ctox.cv_print_profile.export.v1',
+    exported_at_ms: Date.now(),
+    count: source.length,
+    profiles: source.map((item) => ({
+      id: item.record.id,
+      title: item.record.title || displayCandidateName(item.model),
+      model: item.model,
+    })),
+  };
+  let url = '';
+  try {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `cv-profiles-${source.length}.json`;
+    anchor.rel = 'noopener';
+    state.host.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    notify(state, 'success', tr('Profile exportiert', 'Profiles exported'), tr(`${source.length} CV-Profil(e) als JSON geladen.`, `${source.length} CV profile(s) downloaded as JSON.`));
+  } catch (error) {
+    notify(state, 'error', tr('Export fehlgeschlagen', 'Export failed'), String(error?.message || error));
+  } finally {
+    if (url) setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 4000);
+  }
+}
+
+async function importCandidates(state, file) {
+  requireCollections(state.ctx, ['documents', 'document_versions']);
+  let parsed;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch {
+    throw new Error(tr('Ungültige JSON-Datei.', 'Invalid JSON file.'));
+  }
+  const entries = Array.isArray(parsed) ? parsed
+    : Array.isArray(parsed?.profiles) ? parsed.profiles
+      : parsed?.model || parsed?.candidate || parsed?.workflow ? [parsed] : [];
+  if (!entries.length) throw new Error(tr('Keine Profile in der Datei gefunden.', 'No profiles found in the file.'));
+  let lastId = '';
+  let count = 0;
+  for (const entry of entries) {
+    const id = await persistImportedProfile(state, entry);
+    if (id) { lastId = id; count += 1; }
+  }
+  if (!count) throw new Error(tr('Keine gültigen Profile importiert.', 'No valid profiles imported.'));
+  if (lastId) {
+    state.selectedId = lastId;
+    state.userCollapsed = false;
+    state.lastSelectedId = '';
+    state.lastSelectedPhase = '';
+  }
+  await refresh(state);
+  notify(state, 'success', tr('Profile importiert', 'Profiles imported'), tr(`${count} CV-Profil(e) angelegt.`, `${count} CV profile(s) created.`));
+}
+
+async function persistImportedProfile(state, entry) {
+  const source = entry?.model && typeof entry.model === 'object' ? entry.model : entry;
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+  const now = Date.now();
+  const documentId = `cv_${crypto.randomUUID()}`;
+  const versionId = `${documentId}_v1`;
+  const model = structuredClone(source);
+  // Drop live tracking ids so the fresh profile does not adopt another CV's
+  // command/task projection.
+  model.workflow = { ...(model.workflow || {}) };
+  delete model.workflow.command_id;
+  delete model.workflow.task_id;
+  delete model.workflow.tracking_id;
+  model.source = { ...(model.source || {}) };
+  delete model.source.desktop_file_id;
+  delete model.source.generation_id;
+  const title = displayCandidateName(model) || tr('Importierter CV', 'Imported CV');
+  const phase = workflowPhase(model);
+  await getCollection(state.ctx, 'document_versions').insert({
+    id: versionId,
+    document_id: documentId,
+    version: 1,
+    source_kind: 'cv_profile_import',
+    blob_id: '',
+    model_json: model,
+    diagnostics: [],
+    created_at_ms: now,
+    updated_at_ms: now,
+  });
+  await getCollection(state.ctx, 'documents').insert({
+    id: documentId,
+    title,
+    filename: String(model.source?.filename || ''),
+    mime_type: PROFILE_MIME,
+    status: phase,
+    document_type: 'cv_print_profile',
+    owner_id: '',
+    current_version_id: versionId,
+    source_sha256: '',
+    page_count: 0,
+    diagnostics_count: 0,
+    linked_records: [],
+    display_cache: {
+      candidate_name: title,
+      phase,
+      template: normalizeTemplateId(model.print?.template),
+    },
+    index_text: title,
+    is_deleted: false,
+    created_at_ms: now,
+    updated_at_ms: now,
+  });
+  return documentId;
 }
 
 async function startParsing(state, item) {
@@ -2231,16 +2485,6 @@ function phaseLabel(phase) {
   })[phase] || phase;
 }
 
-function statusShort(phase) {
-  return ({
-    uploaded: 'PDF',
-    parsing: 'Parsing',
-    review: tr('Korrektur', 'Review'),
-    approved: tr('Freigabe', 'Approved'),
-    error: tr('Fehler', 'Error'),
-  })[phase] || 'CV';
-}
-
 function phaseFootnoteHtml(model) {
   const phase = workflowPhase(model);
   if (phase === 'uploaded') return tr('PDF geladen. Als Nächstes Parsing starten.', 'PDF uploaded. Start parsing next.');
@@ -2300,10 +2544,11 @@ function openCtoxTask(taskId, commandId) {
     parent.dispatchEvent(new CustomEvent('ctox-business-os-focus-task', { detail: focus }));
     parent.location.hash = hash;
   } catch {
+    // Cross-origin parent: fall back to the local session handoff + hash
+    // navigation, which the shell observes via hashchange.
     try {
       sessionStorage.setItem('ctox.businessOs.focusTask', JSON.stringify(focus));
     } catch {}
-    window.dispatchEvent(new CustomEvent('ctox-business-os-focus-task', { detail: focus }));
     location.hash = hash;
   }
 }
@@ -2579,4 +2824,8 @@ function iconImage() {
 
 function iconEyeOff() {
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 3 18 18"/><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"/><path d="M9.5 5.3A10.4 10.4 0 0 1 12 5c5 0 8.5 4.5 9.5 7a12 12 0 0 1-3 4.1"/><path d="M6.2 6.8A12 12 0 0 0 2.5 12c1 2.5 4.5 7 9.5 7a10 10 0 0 0 4-.8"/></svg>';
+}
+
+function iconCollapse() {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 5l-6 7 6 7"/><path d="M19 5v14"/></svg>';
 }

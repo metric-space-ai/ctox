@@ -38,8 +38,8 @@ const sourceArray = (name) => {
 const requiredCollections = sourceArray('REQUIRED_COLLECTIONS');
 const liveCollections = sourceArray('LIVE_COLLECTIONS');
 assert.match(markup, /multiple\s+data-cv-upload/);
-assert.match(markup, /data-cv-search/);
-assert.match(markup, /data-cv-sort/);
+assert.match(markup, /data-pg-search/);
+assert.match(markup, /data-pg-filter\s+data-pg-name="sort"/);
 assert.match(markup, /data-cv-reparse-all/);
 assert.match(source, /label:\s*'Minimal'/);
 assert.match(source, /label:\s*'Klassisch'/);
@@ -132,5 +132,72 @@ assert.match(source, /dispatching parser task with native source fallback/);
 assert.match(source, /timeoutAfter\(60000/);
 assert.doesNotMatch(source, /Parser-Task wird trotzdem gestartet/);
 assert.doesNotMatch(source, /ctx\.sync\.startCollection\('desktop_file_chunks'\)/);
+
+// ---------------------------------------------------------------------------
+// IA-Karte: candidate selector (left) + CV stage (main) on the shell-owned
+// canonical column grammar.
+// ---------------------------------------------------------------------------
+const css = read('index.css');
+
+// Canonical column grammar — shell-wired data-pg-* chrome, no bespoke chrome.
+assert.match(markup, /data-pg-search/);
+assert.match(markup, /data-pg-view="cards"/);
+assert.match(markup, /data-pg-view="list"/);
+assert.match(markup, /data-pg-tray-toggle/);
+assert.match(markup, /data-pg-tray\b/);
+assert.match(markup, /data-pg-reset/);
+assert.match(markup, /class="ctox-filterbar"/);
+assert.match(markup, /class="ctox-view-switch"/);
+assert.match(markup, /ctox-pane-body ctox-well/);
+assert.match(markup, /class="ctox-pane-footer"/);
+assert.match(markup, /data-pg-footer/);
+
+// Standing header actions include create + import + export (JSON round-trip).
+assert.match(markup, /data-action="new"/);
+assert.match(markup, /data-action="import"/);
+assert.match(markup, /data-action="export"/);
+
+// Counted view band with >= 2 real views (status partition), zeros included.
+for (const band of ['all', 'progress', 'review', 'approved']) {
+  assert.match(markup, new RegExp(`data-pg-band="${band}"`), `band ${band} present`);
+  assert.match(markup, new RegExp(`data-pg-count="${band}"`), `band count ${band} present`);
+}
+const bandTabCount = (markup.match(/data-pg-band="/g) || []).length;
+assert.ok(bandTabCount >= 2, 'view band has at least two real views');
+assert.match(source, /function bandOf\(model\)/);
+assert.match(source, /function bandCounts\(state\)/);
+assert.match(source, /writeCounts\(state,\s*bandCounts\(state\)\)/);
+
+// No standing status badge / legacy bespoke chrome anymore.
+assert.doesNotMatch(markup, /data-cv-count/);
+assert.doesNotMatch(markup, /data-toggle-bulk/);
+assert.doesNotMatch(markup, /cv-new-card/);
+assert.doesNotMatch(css, /box-shadow:\s*inset/);
+
+// Import / export handlers (JSON via Blob / file-input, honest and small).
+assert.match(markup, /data-cv-import/);
+assert.match(source, /function exportCandidates\(state\)/);
+assert.match(source, /function importCandidates\(state,\s*file\)/);
+assert.match(source, /function persistImportedProfile\(state,\s*entry\)/);
+assert.match(source, /new Blob\(\[JSON\.stringify\(payload/);
+assert.match(source, /source_kind:\s*'cv_profile_import'/);
+
+// In-place selection flip — selecting a candidate must NOT rebuild the list.
+assert.match(source, /function applyListSelection\(state\)/);
+assert.match(source, /row\.classList\.toggle\('is-selected'/);
+assert.match(source, /function selectCandidate\(state,\s*id\)/);
+const selectBody = source.slice(source.indexOf('function selectCandidate(state, id)'), source.indexOf('function selectCandidate(state, id)') + 500);
+assert.match(selectBody, /applyListSelection\(state\)/);
+assert.match(selectBody, /renderStage\(state\)/);
+assert.doesNotMatch(selectBody, /renderList\(state\)/);
+
+// Auto-reveal stage on select: visible = hasSelection && !userCollapsed.
+assert.match(source, /function stageVisible\(state\)/);
+assert.match(source, /Boolean\(getSelectedItem\(state\)\)\s*&&\s*!state\.userCollapsed/);
+assert.match(source, /data-toggle-stage/);
+
+// Markup + CSS carry the JS cache-buster (fresh JS over stale cached assets).
+assert.match(source, /index\.html'\s*,\s*import\.meta\.url\)\.pathname\}\?v=\$\{BUILD\}/);
+assert.match(source, /index\.css'\s*,\s*import\.meta\.url\)\.pathname\}\?v=\$\{BUILD\}/);
 
 console.log('cv-print-builder module contract OK');
