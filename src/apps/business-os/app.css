@@ -8176,3 +8176,27 @@ button.shell-window-header-meta:focus-visible,
 .ctox-record-approval-actions .is-confirm { color: var(--accent); }
 .ctox-record-approval-actions .is-danger { color: var(--danger, #e5484d); }
 
+
+/* Threads attention badge on the taskbar tab: "N brauchen mich". Hidden at
+   zero; the count is the session user's user_thread_states rows with a
+   positive server-authoritative attention_score. */
+.module-tab-icon { position: relative; }
+.module-tab-attention {
+  position: absolute;
+  top: -5px;
+  right: -7px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-foreground, var(--surface));
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+}
+.module-tab-attention[hidden] { display: none !important; }

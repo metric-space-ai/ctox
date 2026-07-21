@@ -38,7 +38,7 @@ import {
   shouldRenderModuleSourceAction,
 } from './shared/shell-permissions-ui.js?v=20260714-chat-queue-v56';
 import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260717-chat-overlay-v126';
-import { createDocumentsFacade } from './shared/documents.js?v=20260717-documents-facade-v13';
+import { createDocumentsFacade } from './shared/documents.js?v=20260721-documents-facade-v15';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -290,6 +290,7 @@ function resolveDataPlaneReady() {
   state.dataPlaneReadyResolve = null;
   state.dataPlaneReadyReject = null;
   if (resolve) resolve(true);
+  initThreadsAttentionBadge();
 }
 
 function rejectDataPlaneReady(error) {
@@ -4322,6 +4323,48 @@ function isSameOriginFrame(frame) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Threads attention badge: "N brauchen mich" on the Threads taskbar tab.
+// Source of truth is the server-authoritative user_thread_states projection
+// (attention_score written natively on every thread mutation); the shell only
+// counts the session user's rows. Zero rows keep the badge hidden.
+// ---------------------------------------------------------------------------
+function updateThreadsAttentionBadge(count) {
+  state.threadsAttentionCount = count;
+  for (const node of document.querySelectorAll('[data-threads-attention]')) {
+    node.hidden = !count;
+    node.textContent = count > 9 ? '9+' : String(count);
+  }
+  for (const tab of document.querySelectorAll('.module-tab[data-module="threads"], .module-tab[data-target="threads"]')) {
+    const base = tab.querySelector('.module-tab-label')?.textContent || 'Threads';
+    tab.title = count ? `${base} · ${count} brauchen dich` : base;
+  }
+}
+
+async function initThreadsAttentionBadge() {
+  try {
+    const me = String(state.session?.user?.id || '').trim();
+    if (!me || !state.db?.collection) return;
+    await state.sync?.startCollection?.('user_thread_states');
+    const collection = await state.db.collection('user_thread_states');
+    if (!collection) return;
+    const apply = (docs) => {
+      const rows = (docs || []).map((doc) => (doc?.toJSON ? doc.toJSON() : doc));
+      const count = rows.filter((row) => row
+        && String(row.user_id || '') === me
+        && row.is_deleted !== true
+        && Number(row.attention_score) > 0).length;
+      updateThreadsAttentionBadge(count);
+    };
+    try { state.threadsAttentionSub?.unsubscribe?.(); } catch {}
+    const query = collection.find();
+    state.threadsAttentionSub = query.$?.subscribe?.(apply) || null;
+    apply(await query.exec());
+  } catch (error) {
+    console.warn('[business-os] threads attention badge unavailable', error);
+  }
+}
+
 function renderTabs() {
   els.tabs.replaceChildren();
   state.moduleLayout = normalizeModuleLayout(state.moduleLayout || readModuleLayout(), state.modules);
@@ -4352,6 +4395,7 @@ function renderTabs() {
     if (!els.tabs) return;
     els.tabs.classList.toggle('is-scrollable', els.tabs.scrollWidth > els.tabs.clientWidth + 1);
   });
+  updateThreadsAttentionBadge(state.threadsAttentionCount || 0);
 }
 
 function renderModuleTab(target, options = {}) {
@@ -4377,7 +4421,7 @@ function renderModuleTab(target, options = {}) {
     })
     : null;
   button.innerHTML = `
-    <span class="module-tab-icon" aria-hidden="true">${svgHtml || escapeHtml(target.glyph || '◻︎')}</span>
+    <span class="module-tab-icon" aria-hidden="true">${svgHtml || escapeHtml(target.glyph || '◻︎')}${target.id === 'threads' ? '<span class="module-tab-attention" data-threads-attention hidden></span>' : ''}</span>
     <span class="module-tab-label">${escapeHtml(target.title || target.id)}</span>
     ${lifecycle?.runtimeInstalled ? `<span class="module-tab-lifecycle" data-app-lifecycle-badge="${escapeHtml(target.id)}" data-state="${escapeHtml(lifecycle.state)}" title="${escapeHtml(lifecycle.title)}" aria-label="${escapeHtml(`${target.title || target.id}: ${lifecycle.version} ${lifecycle.text}`)}">${escapeHtml(lifecycle.text)}</span>` : ''}
     ${lifecycle?.version && !lifecycle.runtimeInstalled ? `<span class="module-tab-version">${escapeHtml(lifecycle.version)}</span>` : ''}
@@ -4433,7 +4477,7 @@ function renderLegacyModuleTab(mod, options = {}) {
   button.dataset.module = mod.id;
   const svgHtml = getRegisteredSvgIcon(mod.id, 16, 1.8);
   button.innerHTML = `
-    <span class="module-tab-icon" aria-hidden="true">${svgHtml || escapeHtml(taskbarMarkForModule(mod))}</span>
+    <span class="module-tab-icon" aria-hidden="true">${svgHtml || escapeHtml(taskbarMarkForModule(mod))}${mod.id === 'threads' ? '<span class="module-tab-attention" data-threads-attention hidden></span>' : ''}</span>
     <span class="module-tab-label">${escapeHtml(moduleDisplayTitle(mod))}</span>
   `;
   if (!options.locked) {
@@ -9628,12 +9672,12 @@ function getOfflineFallbackCatalog() {
           "focus"
         ],
         "initial_size": {
-          "width": 1040,
-          "height": 720
+          "width": 860,
+          "height": 600
         },
         "minimum_size": {
-          "width": 720,
-          "height": 520
+          "width": 640,
+          "height": 480
         },
         "multi_instance": false,
         "auto_restore": false
