@@ -155,6 +155,8 @@ export async function mount(ctx) {
     });
     try { chatView?.destroy?.(); } catch (err) { console.warn('[coding-agents] chat-ui destroy failed', err); }
     chatView = null;
+    railChip?.remove();
+    railChip = null;
     styleLink.remove();
   };
 }
@@ -319,18 +321,57 @@ function renderAppList() {
   state.modules.forEach((mod) => {
     const item = document.createElement('button');
     item.type = 'button';
-    // Kit list row; `is-selected` drives the kit selection styling.
-    item.className = `ctox-list-item ${state.activeModuleId === mod.id ? 'is-selected' : ''}`;
+    // Kit list row; `is-selected` drives the kit selection styling. The rail
+    // shows the app icon only; the title lives in the hover chip (and inline
+    // once the operator drags the rail wide enough for labels).
+    item.className = `ctox-list-item coding-agents-app-item ${state.activeModuleId === mod.id ? 'is-selected' : ''}`;
     item.dataset.moduleId = mod.id;
+    item.setAttribute('aria-label', mod.title);
+    const initial = (mod.title.trim().charAt(0) || '?').toUpperCase();
     item.innerHTML = `
+      <span class="coding-agents-app-icon"><img src="${escapeHtml(moduleIconUrl(mod.id))}" alt="" loading="lazy"><span class="coding-agents-app-monogram" hidden>${escapeHtml(initial)}</span></span>
       <span class="coding-agents-app-row">
         <span class="coding-agents-app-title">${escapeHtml(mod.title)}</span>
         <span class="coding-agents-app-id">${escapeHtml(mod.id)}</span>
       </span>
     `;
+    const img = item.querySelector('img');
+    img.addEventListener('error', () => {
+      img.remove();
+      item.querySelector('.coding-agents-app-monogram').hidden = false;
+    });
     item.addEventListener('click', () => selectApp(mod.id));
+    item.addEventListener('mouseenter', () => showRailChip(item, mod.title));
+    item.addEventListener('mouseleave', hideRailChip);
+    item.addEventListener('focus', () => showRailChip(item, mod.title));
+    item.addEventListener('blur', hideRailChip);
     box.appendChild(item);
   });
+}
+
+function moduleIconUrl(moduleId) {
+  return new URL(`../${moduleId}/icon.svg`, import.meta.url).pathname;
+}
+
+// One shared floating name chip for the narrow rail. position:fixed so the
+// pane's overflow clipping cannot swallow it; skipped once inline labels show.
+let railChip = null;
+function showRailChip(item, title) {
+  const rail = item.closest('.coding-agents-left');
+  if (!rail || rail.getBoundingClientRect().width >= 150) return;
+  if (!railChip) {
+    railChip = document.createElement('div');
+    railChip.className = 'coding-agents-rail-chip';
+    document.body.appendChild(railChip);
+  }
+  const rect = item.getBoundingClientRect();
+  railChip.textContent = title;
+  railChip.style.left = `${Math.round(rect.right + 8)}px`;
+  railChip.style.top = `${Math.round(rect.top + rect.height / 2)}px`;
+  railChip.hidden = false;
+}
+function hideRailChip() {
+  if (railChip) railChip.hidden = true;
 }
 
 function selectApp(moduleId) {

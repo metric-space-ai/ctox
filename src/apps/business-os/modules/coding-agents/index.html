@@ -3,10 +3,13 @@
 <main class="ctox-workspace coding-agents-module" data-coding-agents-root data-resize-frame>
 
   <!-- Column 1: projects (Business OS apps the pi agent can work on) -->
+  <!-- Narrow icon rail by default (Claude-Desktop pattern): app icons only,
+       names as hover chips; drag the resizer wider for permanent labels. -->
   <section class="ctox-pane coding-agents-left" aria-label="Projekte">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
+          <span class="coding-agents-rail-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="8 6 3 12 8 18"/><polyline points="16 6 21 12 16 18"/></svg></span>
           <span class="ctox-pane-kicker" data-ca-left-kicker>pi Coding Agent</span>
           <h2 class="ctox-pane-title" data-ca-left-title>Projekte</h2>
         </div>
@@ -21,7 +24,7 @@
     <footer class="coding-agents-footer"><span id="ca-footer"></span></footer>
   </section>
 
-  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="220" data-resizer-max="400" aria-label="Projekt-Spalte anpassen"></button>
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="56" data-resizer-max="320" aria-label="Projekt-Spalte anpassen"></button>
 
   <!-- Column 2: the conversation with the agent -->
   <section class="ctox-pane coding-agents-center" aria-label="Agent-Chat">

@@ -37,6 +37,15 @@ test('presentation layer stays compact and shell-native', () => {
   assert.doesNotMatch(css, /--coding-agents-left-width/);
   assert.match(css, /\.coding-agents-workbench/);
   assert.match(css, /\.coding-agents-turn-controls/);
+  // Project column is a narrow icon rail by default: 56px resizer floor,
+  // app icons with a monogram fallback, names via the floating hover chip,
+  // inline labels only once the rail is dragged wide (container query).
+  assert.match(html, /data-resizer="left"[^>]*data-resizer-min="56"/);
+  assert.match(css, /container: coding-agents-rail \/ inline-size/);
+  assert.match(css, /@container coding-agents-rail \(min-width: 150px\)/);
+  assert.match(js, /coding-agents-app-icon/);
+  assert.match(js, /coding-agents-app-monogram/);
+  assert.match(js, /coding-agents-rail-chip/);
 });
 
 test('task validation requires a meaningful instruction', () => {

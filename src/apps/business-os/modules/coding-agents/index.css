@@ -57,15 +57,91 @@
   overflow-wrap: anywhere;
 }
 
-/* custom: app picker rows — title plus mono module id; the kit list item is
-   a single-line row, the two-line record look is module-specific. */
-.coding-agents-app-row { display: flex; flex-direction: column; gap: 2px; }
-.coding-agents-app-title { font-weight: 600; }
+/* custom: app picker — an icon rail by default. The pane is a size container:
+   below 150px only the 40px app icons render (names via the floating hover
+   chip); once the operator drags the rail wider the text labels come back. */
+.coding-agents-left { container: coding-agents-rail / inline-size; }
+.coding-agents-app-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px;
+}
+.coding-agents-app-icon {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--control-radius);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.coding-agents-app-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.coding-agents-app-monogram {
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--accent);
+}
+.coding-agents-app-item.is-selected .coding-agents-app-icon {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.coding-agents-app-row { display: none; flex-direction: column; gap: 2px; min-width: 0; }
+.coding-agents-app-title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .coding-agents-app-id {
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 11px;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@container coding-agents-rail (min-width: 150px) {
+  .coding-agents-app-item { justify-content: flex-start; }
+  .coding-agents-app-row { display: flex; }
+}
+/* Rail header: only the glyph fits at 56px; kicker/title return when wide. */
+.coding-agents-rail-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--accent);
+}
+.coding-agents-rail-mark svg { width: 20px; height: 20px; }
+.coding-agents-left .ctox-pane-kicker,
+.coding-agents-left .ctox-pane-title,
+.coding-agents-left .coding-agents-footer span { display: none; }
+@container coding-agents-rail (min-width: 150px) {
+  .coding-agents-left .ctox-pane-kicker,
+  .coding-agents-left .ctox-pane-title { display: block; }
+  .coding-agents-left .coding-agents-footer span { display: inline; }
+  .coding-agents-rail-mark { display: none; }
+}
+/* Floating name chip (document.body child, fixed — pane clipping can't eat it). */
+.coding-agents-rail-chip {
+  position: fixed;
+  transform: translateY(-50%);
+  z-index: 1000;
+  padding: 4px 10px;
+  border-radius: var(--control-radius);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text-strong, var(--text));
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 /* Recent turns: section stacking plus per-row meta line. */
@@ -114,11 +190,13 @@
    Explicit grid pins — hidden resizers must never shift panes.
    ========================================================================== */
 .coding-agents-module {
-  /* Chat keeps a hard minimum: side maxes must never starve the center track. */
-  grid-template-columns: minmax(200px, var(--ctox-left-width, 280px)) 12px minmax(300px, 1fr) 12px minmax(220px, var(--ctox-right-width, 380px));
+  /* Chat keeps a hard minimum: side maxes must never starve the center track.
+     The project column is a narrow icon rail by default; dragging its resizer
+     widens it into a labelled list. */
+  grid-template-columns: minmax(56px, var(--ctox-left-width, 56px)) 12px minmax(300px, 1fr) 12px minmax(220px, var(--ctox-right-width, 380px));
 }
 @container business-app-window (max-width: 860px) {
-  .coding-agents-module { grid-template-columns: minmax(180px, 240px) 12px minmax(0, 1fr); }
+  .coding-agents-module { grid-template-columns: 56px 12px minmax(0, 1fr); }
   .coding-agents-right,
   .coding-agents-module > [data-resizer="right"] { display: none; }
 }
