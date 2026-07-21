@@ -6,7 +6,7 @@ import { CtoxResizer } from '../../shared/resizer.js';
 // source-of-truth shape; the contact-centric list and channel-tabbed detail
 // view bucket them client-side by participant_keys_json.
 
-const STYLE_BUILD = '20260717-kit-migration2';
+const STYLE_BUILD = '20260721-ia-grammar';
 const SUPPORTED_CHANNELS = [
   'whatsapp',
   'email',
@@ -66,6 +66,10 @@ const FALLBACK_LABELS = {
   de: {
     moduleTitle: 'Conversations',
     moduleSubtitle: 'Audit aus CTOX-Sicht',
+    footerEntries: 'Konversationen',
+    importInvalid: 'Ungültige JSON-Datei.',
+    importEmpty: 'Keine Konversationen in der Datei.',
+    importedLocal: '{count} Konversationen geladen (nur lokal)',
     channelAll: 'Alle Channels',
     channelWhatsapp: 'WhatsApp',
     channelEmail: 'E-Mail',
@@ -187,6 +191,10 @@ const FALLBACK_LABELS = {
   en: {
     moduleTitle: 'Conversations',
     moduleSubtitle: 'Audit from CTOX’s perspective',
+    footerEntries: 'conversations',
+    importInvalid: 'Invalid JSON file.',
+    importEmpty: 'No conversations in the file.',
+    importedLocal: '{count} conversations loaded (local only)',
     channelAll: 'All channels',
     channelWhatsapp: 'WhatsApp',
     channelEmail: 'Email',
@@ -318,13 +326,12 @@ export async function mount(ctx) {
   ctx.left?.replaceChildren?.();
   ctx.right?.replaceChildren?.();
 
-  // Right pane (Kontext & Status) collapses the workspace to two columns so
-  // the timeline gets the full width; toggled from the left pane header
-  // (data-toggle-actions). Secondary filters (account/direction/date) are
-  // collapsed on mount and re-revealed on demand (data-toggle-filters).
-  const toggleActionsEl = root?.querySelector('[data-toggle-actions]');
-  const toggleFiltersEl = root?.querySelector('[data-toggle-filters]');
-  const secondaryFiltersEl = root?.querySelector('[data-conv-secondary-filters-wrap]');
+  // Third column = context pane (participant/record context). It is hidden by
+  // default and auto-reveals on selection: visible = hasSelection &&
+  // !userCollapsed (design-guide "Progressive Disclosure", outbound idiom). The
+  // toggle lives in the CENTER detail header so it only appears once a
+  // conversation is selected — i.e. once there is something to reveal.
+  const toggleContextEl = root?.querySelector('[data-conv-toggle-context]');
 
   // Standardised 3-column resizer system
   const leftResizerEl = ctx.host.querySelector('[data-resizer="left"]');
@@ -350,26 +357,12 @@ export async function mount(ctx) {
   void rightResizerEl;
   void CtoxResizer;
 
-  // Wire the right-pane and secondary-filter header toggles.
-  if (toggleActionsEl) {
-    toggleActionsEl.addEventListener('click', () => {
-      const hidden = root?.classList.toggle('is-actions-hidden');
-      toggleActionsEl.setAttribute('aria-pressed', String(!hidden));
-      toggleActionsEl.setAttribute(
-        'aria-label',
-        hidden ? 'Kontext einblenden' : 'Kontext ausblenden',
-      );
-    });
-  }
-  if (toggleFiltersEl && secondaryFiltersEl) {
-    toggleFiltersEl.addEventListener('click', () => {
-      const willShow = secondaryFiltersEl.hidden;
-      secondaryFiltersEl.hidden = !willShow;
-      toggleFiltersEl.setAttribute('aria-pressed', String(willShow));
-      toggleFiltersEl.setAttribute(
-        'aria-label',
-        willShow ? 'Filter ausblenden' : 'Filter einblenden',
-      );
+  // Wire the context-pane reveal toggle (auto-reveal model). Collapsing only
+  // sets userCollapsed; re-selecting a conversation clears it.
+  if (toggleContextEl) {
+    toggleContextEl.addEventListener('click', () => {
+      view.userCollapsedContext = !view.userCollapsedContext;
+      applyContextReveal();
     });
   }
 
@@ -395,6 +388,10 @@ export async function mount(ctx) {
     direction: 'any',
     dateRange: 'any',
     search: '',
+    listView: 'cards',
+    userCollapsedContext: false,
+    importedThreads: [],
+    importedMessagesByThread: new Map(),
     threads: [],
     accountsById: new Map(),
     messageProbeCount: null,
@@ -428,25 +425,17 @@ export async function mount(ctx) {
   markMissingCollections();
   ensureCommunicationCollectionsSync();
 
-  wireChannelFilters(refs.channelFilterButtons, view, renderList);
-  refs.search.addEventListener('input', () => {
-    view.search = refs.search.value.trim().toLowerCase();
-    renderList();
-  });
-  refs.accountFilter.addEventListener('change', () => {
-    view.account = refs.accountFilter.value;
-    renderList();
-  });
-  refs.directionFilter.addEventListener('change', () => {
-    view.direction = refs.directionFilter.value;
-    renderList();
-    if (view.selectedBucketKey) refreshTimelineForActiveBucket();
-  });
-  refs.dateFilter.addEventListener('change', () => {
-    view.dateRange = refs.dateFilter.value;
-    renderList();
-    if (view.selectedBucketKey) refreshTimelineForActiveBucket();
-  });
+  // The left column chrome (search / shard-list toggle / filter tray / reset /
+  // active-dot / channel band) is SHELL-wired from the data-pg-* markup. The
+  // module owns NO chrome wiring: it listens for the bubbling grammar-change
+  // event and re-renders the list from data. Selecting a band/filter/search is
+  // an intentional reset (rebuilding the list is expected there); selecting a
+  // ROW stays an in-place class flip (see markActiveBucket).
+  root.addEventListener('ctox-pane-grammar-change', onLeftGrammarChange);
+  cleanups.push(() => root.removeEventListener('ctox-pane-grammar-change', onLeftGrammarChange));
+
+  root.querySelector('[data-action="import"]')?.addEventListener('click', importConversations);
+  root.querySelector('[data-action="export"]')?.addEventListener('click', exportConversations);
 
   // A module window must become usable independently of the first native/RxDB
   // snapshot. Render the empty/loading-capable frame now and hydrate it in the
@@ -601,30 +590,36 @@ export async function mount(ctx) {
   }
 
   async function loadTimelineForBucket(bucket) {
-    if (!messagesCollection || !bucket) {
+    if (!bucket) {
       view.timelineMessages = [];
       view.timelineTotal = 0;
       return view.timelineMessages;
     }
-    try {
-      const threadKeys = [...bucket.threadKeys];
-      const docs = await messagesCollection
-        .find({ selector: { thread_key: { $in: threadKeys } } })
-        .exec();
-      let all = docs.map((doc) => doc.toJSON());
-      all = applyMessageFilters(all);
-      all.sort((a, b) => compareIsoDesc(a.external_created_at, b.external_created_at));
-      view.timelineTotal = all.length;
-      const trimmed = all.slice(0, view.timelineLimit);
-      trimmed.reverse();
-      view.timelineMessages = trimmed;
-      view.collectionErrors.delete('communication_messages');
-    } catch (error) {
-      console.error('[conversations] loadTimeline failed:', error);
-      view.collectionErrors.set('communication_messages', error);
-      view.timelineMessages = [];
-      view.timelineTotal = 0;
+    const threadKeys = [...bucket.threadKeys];
+    let all = [];
+    // Local-only imported snapshot messages (offline audit review) come first.
+    for (const key of threadKeys) {
+      const imported = view.importedMessagesByThread.get(key);
+      if (imported?.length) all = all.concat(imported);
     }
+    if (messagesCollection) {
+      try {
+        const docs = await messagesCollection
+          .find({ selector: { thread_key: { $in: threadKeys } } })
+          .exec();
+        all = all.concat(docs.map((doc) => doc.toJSON()));
+        view.collectionErrors.delete('communication_messages');
+      } catch (error) {
+        console.error('[conversations] loadTimeline failed:', error);
+        view.collectionErrors.set('communication_messages', error);
+      }
+    }
+    all = applyMessageFilters(all);
+    all.sort((a, b) => compareIsoDesc(a.external_created_at, b.external_created_at));
+    view.timelineTotal = all.length;
+    const trimmed = all.slice(0, view.timelineLimit);
+    trimmed.reverse();
+    view.timelineMessages = trimmed;
     return view.timelineMessages;
   }
 
@@ -681,11 +676,7 @@ export async function mount(ctx) {
     if (hasOutboundDeepLink(link)) ensureOutboundContextCollectionsSync();
     if (link.channel && (SUPPORTED_CHANNELS.includes(link.channel) || link.channel === 'all')) {
       view.channel = link.channel === 'all' ? 'all' : link.channel;
-      for (const btn of refs.channelFilterButtons) {
-        const active = btn.dataset.channel === view.channel;
-        btn.classList.toggle('is-active', active);
-        btn.setAttribute('aria-pressed', String(active));
-      }
+      setActiveBandTab(view.channel);
     }
     if (link.account_key) {
       view.account = link.account_key;
@@ -823,7 +814,9 @@ export async function mount(ctx) {
 
   function rebuildBuckets() {
     const byKey = new Map();
-    for (const thread of view.threads) {
+    // Imported threads (local-only snapshot) are merged with the live projection
+    // so they appear in the list without being persisted.
+    for (const thread of [...view.threads, ...view.importedThreads]) {
       const participants = participantsOf(thread);
       const key = bucketKeyFor(participants);
       let bucket = byKey.get(key);
@@ -905,10 +898,93 @@ export async function mount(ctx) {
 
   // ----- renderers -----
 
+  function onLeftGrammarChange(event) {
+    const pane = leftPane();
+    const state = event?.detail || pane?.__ctoxPaneGrammar?.state?.() || {};
+    const filters = state.filters || {};
+    view.search = String(state.search || '').trim().toLowerCase();
+    view.listView = state.view === 'list' ? 'list' : 'cards';
+    view.channel = state.band || 'all';
+    view.account = filters.account || '';
+    const nextDirection = filters.direction || 'any';
+    const nextDate = filters.dateRange || 'any';
+    const timelineFilterChanged = nextDirection !== view.direction || nextDate !== view.dateRange;
+    view.direction = nextDirection;
+    view.dateRange = nextDate;
+    renderList();
+    if (timelineFilterChanged && view.selectedBucketKey) refreshTimelineForActiveBucket();
+  }
+
+  function leftPane() {
+    return root.querySelector('.conv-left');
+  }
+
+  function writeBandCounts(counts) {
+    const pg = leftPane()?.__ctoxPaneGrammar;
+    if (pg?.setCounts) { pg.setCounts(counts); return; }
+    for (const [key, value] of Object.entries(counts || {})) {
+      const node = root.querySelector(`[data-pg-count="${key}"]`);
+      if (node) node.textContent = ` (${value})`;
+    }
+  }
+
+  function writeFooter(text) {
+    const pg = leftPane()?.__ctoxPaneGrammar;
+    if (pg?.setFooter) { pg.setFooter(text); return; }
+    if (refs.footer) refs.footer.textContent = text || '';
+  }
+
+  function setActiveBandTab(channel) {
+    for (const tab of refs.channelBand?.querySelectorAll('[data-pg-band]') || []) {
+      const active = tab.dataset.pgBand === channel;
+      tab.classList.toggle('is-active', active);
+      tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    }
+  }
+
+  function renderChannelBand() {
+    if (!refs.channelBand) return;
+    // Band counts reflect every filter EXCEPT channel (the band is the channel
+    // selector); zeros are rendered, never hidden.
+    const base = filterBuckets(view.buckets, view, t, { ignoreChannel: true });
+    writeBandCounts(channelBandCounts(base));
+    // A channel is a real view only when it appears in the full dataset. Tabs
+    // for channels that never appear are hidden; the band itself needs >= 2 real
+    // channels, otherwise the count lives in the footer (grammar fallback).
+    const fullCounts = channelBandCounts(view.buckets);
+    const presentChannels = SUPPORTED_CHANNELS.filter((channel) => Number(fullCounts[channel]) > 0);
+    refs.channelBand.hidden = presentChannels.length < 2;
+    for (const tab of refs.channelBand.querySelectorAll('[data-pg-band]')) {
+      const channel = tab.dataset.pgBand;
+      tab.hidden = channel !== 'all' && !presentChannels.includes(channel);
+    }
+    if (view.channel !== 'all' && !presentChannels.includes(view.channel)) {
+      view.channel = 'all';
+      setActiveBandTab('all');
+    }
+  }
+
+  function applyContextReveal() {
+    const hasSelection = Boolean(view.selectedBucketKey);
+    const visible = conversationContextVisible(hasSelection, view.userCollapsedContext);
+    root.classList.toggle('is-context-hidden', !visible);
+    if (toggleContextEl) {
+      toggleContextEl.setAttribute('aria-pressed', String(visible));
+      toggleContextEl.setAttribute('aria-label', visible ? 'Kontext ausblenden' : 'Kontext einblenden');
+    }
+  }
+
+  function footerScopeLabel() {
+    if (view.channel && view.channel !== 'all') return labelForChannel(view.channel, t);
+    return t('channelAll', 'Alle Channels');
+  }
+
   function renderList() {
     const filtered = filterBuckets(view.buckets, view, t);
     refs.threadList.replaceChildren();
-    updateChannelCounts(view.buckets);
+    refs.threadList.classList.toggle('is-list-view', view.listView === 'list');
+    renderChannelBand();
+    writeFooter(`${filtered.length} ${t('footerEntries', 'Konversationen')} · ${footerScopeLabel()}`);
     if (!filtered.length) {
       renderListEmptyState(filtered);
       refs.emptyList.hidden = false;
@@ -918,6 +994,7 @@ export async function mount(ctx) {
         renderDetail();
       } else {
         renderRightPane();
+        applyContextReveal();
       }
       return;
     }
@@ -938,6 +1015,66 @@ export async function mount(ctx) {
     } else {
       markActiveBucket();
     }
+  }
+
+  function exportConversations() {
+    const rows = filterBuckets(view.buckets, view, t);
+    downloadJson(buildConversationsExport(rows, view.timelineMessages, Date.now()), 'conversations.json');
+  }
+
+  function downloadJson(payload, filename) {
+    let url = '';
+    try {
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.rel = 'noopener';
+      (root || document.body)?.appendChild?.(a);
+      a.click();
+      a.remove?.();
+    } catch (error) {
+      console.error('[conversations] export failed:', error);
+    } finally {
+      if (url) setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 4000);
+    }
+  }
+
+  function importConversations() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json,.json';
+    input.addEventListener('change', async () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      let parsed;
+      try {
+        parsed = JSON.parse(await file.text());
+      } catch {
+        ctx.notifications?.show?.({ type: 'error', title: t('moduleTitle', 'Conversations'), message: t('importInvalid', 'Ungültige JSON-Datei.') });
+        return;
+      }
+      const { threads, messagesByThread } = parseConversationsImport(parsed);
+      if (!threads.length) {
+        ctx.notifications?.show?.({ type: 'warning', title: t('moduleTitle', 'Conversations'), message: t('importEmpty', 'Keine Konversationen in der Datei.') });
+        return;
+      }
+      // Local-only overlay: imported conversations are shown for offline review
+      // and never persisted (this is a read-only audit projection synced from
+      // CTOX-Core, not a browser authoring path).
+      view.importedThreads = threads;
+      view.importedMessagesByThread = messagesByThread;
+      rebuildBuckets();
+      populateAccountFilter();
+      renderList();
+      ctx.notifications?.show?.({
+        type: 'info',
+        title: t('moduleTitle', 'Conversations'),
+        message: t('importedLocal', '{count} Konversationen geladen (nur lokal)').replace('{count}', String(threads.length)),
+      });
+    });
+    input.click();
   }
 
   function renderListEmptyState(filtered) {
@@ -1020,7 +1157,9 @@ export async function mount(ctx) {
     view.timelineLimit = MESSAGE_PAGE_SIZE;
     view.outboundContext = null;
     view.highlightedMessageKey = '';
+    view.userCollapsedContext = false;
     markActiveBucket();
+    applyContextReveal();
     renderDetail();
   }
 
@@ -1034,6 +1173,7 @@ export async function mount(ctx) {
   }
 
   async function renderDetail() {
+    applyContextReveal();
     const bucket = view.buckets.find((b) => b.key === view.selectedBucketKey);
     if (!bucket) {
       refs.detailHeader.hidden = true;
@@ -2406,23 +2546,6 @@ export async function mount(ctx) {
     }
   }
 
-  function updateChannelCounts(buckets) {
-    const counts = new Map();
-    counts.set('all', buckets.length);
-    for (const channel of SUPPORTED_CHANNELS) counts.set(channel, 0);
-    for (const bucket of buckets) {
-      for (const channel of bucket.channels) {
-        counts.set(channel, (counts.get(channel) || 0) + 1);
-      }
-    }
-    for (const btn of refs.channelFilterButtons) {
-      const channel = btn.dataset.channel;
-      const countEl = btn.querySelector('[data-channel-count]');
-      const count = counts.get(channel) || 0;
-      countEl.textContent = count > 0 ? String(count) : '';
-    }
-  }
-
   function countMessagesByChannel(bucket) {
     const counts = new Map();
     for (const thread of bucket.threads) {
@@ -2450,12 +2573,10 @@ export async function mount(ctx) {
 function collectRefs(root) {
   return {
     threadList: root.querySelector('[data-conv-thread-list]'),
-    search: root.querySelector('[data-conv-search]'),
-    channelFilterButtons: Array.from(root.querySelectorAll('[data-conv-channel-filters] [data-channel]')),
+    channelBand: root.querySelector('[data-conv-channel-band]'),
+    footer: root.querySelector('[data-conv-footer]'),
     accountFilter: root.querySelector('[data-conv-account-filter]'),
     accountFilterStatus: root.querySelector('[data-conv-account-filter-status]'),
-    directionFilter: root.querySelector('[data-conv-direction-filter]'),
-    dateFilter: root.querySelector('[data-conv-date-filter]'),
     emptyList: root.querySelector('[data-conv-empty-list]'),
     emptyDetail: root.querySelector('[data-conv-empty-detail]'),
     detailHeader: root.querySelector('[data-conv-detail-header]'),
@@ -2506,7 +2627,7 @@ function applyStaticLabels(root, t) {
     const el = root.querySelector(selector);
     if (el) el.textContent = t(key);
   }
-  const search = root.querySelector('[data-conv-search]');
+  const search = root.querySelector('[data-pg-search]');
   if (search) search.placeholder = t('searchPlaceholder', 'Suche');
   const labelByChannel = {
     all: t('channelAll', 'Alle Channels'),
@@ -2523,9 +2644,10 @@ function applyStaticLabels(root, t) {
     zulip: t('channelZulip', 'Zulip'),
     google_chat: t('channelGoogleChat', 'Google Chat'),
   };
-  for (const btn of root.querySelectorAll('[data-conv-channel-filters] [data-channel]')) {
-    const channel = btn.dataset.channel;
-    const labelEl = btn.querySelector('[data-channel-label]');
+  // Channel band tab labels (data-pg-band → data-band-label).
+  for (const tab of root.querySelectorAll('[data-pg-band]')) {
+    const channel = tab.dataset.pgBand;
+    const labelEl = tab.querySelector('[data-band-label]');
     if (labelEl) labelEl.textContent = labelByChannel[channel] || channel;
   }
   const directionLabels = {
@@ -2547,35 +2669,30 @@ function applyStaticLabels(root, t) {
   }
 }
 
-function wireChannelFilters(buttons, view, onChange) {
-  for (const btn of buttons) {
-    btn.setAttribute('aria-pressed', String(btn.classList.contains('is-active')));
-    btn.addEventListener('click', () => {
-      const channel = btn.dataset.channel || 'all';
-      if (view.channel === channel) return;
-      view.channel = channel;
-      for (const other of buttons) {
-        const active = other === btn;
-        other.classList.toggle('is-active', active);
-        other.setAttribute('aria-pressed', String(active));
-      }
-      onChange();
-    });
-  }
+function bucketHasChannel(bucket, channel) {
+  const channels = bucket.channels;
+  if (channels instanceof Set) return channels.has(channel);
+  return Array.isArray(channels) && channels.includes(channel);
 }
 
-function filterBuckets(buckets, view, t) {
+function bucketHasAccount(bucket, account) {
+  const keys = bucket.accountKeys;
+  if (keys instanceof Set) return keys.has(account);
+  return Array.isArray(keys) && keys.includes(account);
+}
+
+function filterBuckets(buckets, view, t, { ignoreChannel = false } = {}) {
   const cutoff = dateCutoff(view.dateRange);
-  return buckets.filter((bucket) => {
-    if (view.channel !== 'all' && !bucket.channels.has(view.channel)) return false;
-    if (view.account && !bucket.accountKeys.has(view.account)) return false;
+  return (Array.isArray(buckets) ? buckets : []).filter((bucket) => {
+    if (!ignoreChannel && view.channel && view.channel !== 'all' && !bucketHasChannel(bucket, view.channel)) return false;
+    if (view.account && !bucketHasAccount(bucket, view.account)) return false;
     if (cutoff && isoToMs(bucket.lastMessageAt) < cutoff) return false;
     if (view.search) {
       const hay = [
         bucket.displayName,
-        ...bucket.participants,
-        ...[...bucket.subjects],
-        ...bucket.threads.map((th) => th.account_key),
+        ...(bucket.participants || []),
+        ...[...(bucket.subjects || [])],
+        ...(bucket.threads || []).map((th) => th.account_key),
       ].filter(Boolean).join(' ').toLowerCase();
       if (!hay.includes(view.search)) return false;
     }
@@ -3136,10 +3253,91 @@ async function ensureStyles() {
   document.head.append(link);
 }
 
+// Auto-reveal model (design-guide "Progressive Disclosure", outbound idiom):
+// the context pane is shown only when a conversation is selected and the user
+// has not collapsed it.
+function conversationContextVisible(hasSelection, userCollapsed) {
+  return Boolean(hasSelection) && !userCollapsed;
+}
+
+// Counted channel band: `all` = bucket count; every supported channel gets its
+// own count with zeros included (never hidden), so the band reads honestly.
+function channelBandCounts(buckets) {
+  const rows = Array.isArray(buckets) ? buckets : [];
+  const counts = { all: rows.length };
+  for (const channel of SUPPORTED_CHANNELS) counts[channel] = 0;
+  for (const bucket of rows) {
+    const channels = bucket.channels instanceof Set ? [...bucket.channels] : (bucket.channels || []);
+    for (const channel of channels) {
+      if (Object.prototype.hasOwnProperty.call(counts, channel)) counts[channel] += 1;
+    }
+  }
+  return counts;
+}
+
+// Export = JSON of the visible conversations (honest and small — the actual
+// thread records plus whatever timeline messages are loaded locally).
+function buildConversationsExport(buckets, messages, nowMs) {
+  const rows = Array.isArray(buckets) ? buckets : [];
+  const byThread = {};
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const key = message && message.thread_key;
+    if (!key) continue;
+    (byThread[key] ||= []).push(message);
+  }
+  return {
+    kind: 'ctox-conversations-export',
+    exported_at_ms: Number(nowMs) || 0,
+    conversations: rows.map((bucket) => ({
+      key: bucket.key,
+      display_name: bucket.displayName,
+      participants: [...(bucket.participants || [])],
+      channels: bucket.channels instanceof Set ? [...bucket.channels] : [...(bucket.channels || [])],
+      account_keys: bucket.accountKeys instanceof Set ? [...bucket.accountKeys] : [...(bucket.accountKeys || [])],
+      threads: (bucket.threads || []).map((thread) => ({ ...thread })),
+    })),
+    messages: byThread,
+  };
+}
+
+// Import → a LOCAL-ONLY review overlay (never persisted). Accepts an exported
+// snapshot ({ conversations: [...], messages: {...} }) or a bare conversations
+// array; keeps only threads with a thread_key.
+function parseConversationsImport(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const conversations = Array.isArray(raw)
+    ? raw
+    : (Array.isArray(src.conversations) ? src.conversations : []);
+  const threads = [];
+  for (const conversation of conversations) {
+    if (!conversation || typeof conversation !== 'object') continue;
+    const list = Array.isArray(conversation.threads) ? conversation.threads : [];
+    for (const thread of list) {
+      if (thread && typeof thread === 'object' && thread.thread_key) {
+        threads.push({ ...thread, __imported: true });
+      }
+    }
+  }
+  const messagesByThread = new Map();
+  const rawMessages = src.messages && typeof src.messages === 'object' ? src.messages : {};
+  for (const [threadKey, list] of Object.entries(rawMessages)) {
+    if (!Array.isArray(list)) continue;
+    messagesByThread.set(
+      threadKey,
+      list.filter((message) => message && typeof message === 'object').map((message) => ({ ...message, __imported: true })),
+    );
+  }
+  return { threads, messagesByThread };
+}
+
 export const __conversationsTestHooks = {
   buildConversationDataDiagnostics,
   conversationEmptyState,
   filterBuckets,
   hasActiveListFilters,
   hasLocalCommunicationData,
+  conversationContextVisible,
+  channelBandCounts,
+  buildConversationsExport,
+  parseConversationsImport,
 };

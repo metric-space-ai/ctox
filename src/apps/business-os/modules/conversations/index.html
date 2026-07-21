@@ -1,5 +1,12 @@
-<main class="ctox-workspace conv-module is-actions-hidden" data-conv-root data-resize-frame>
+<main class="ctox-workspace conv-module is-context-hidden" data-conv-root data-resize-frame>
   <aside class="ctox-pane conv-pane conv-left" aria-label="Conversations">
+    <!-- LEFT = channels + threads. Canonical column grammar (SHELL-wired via
+         data-pg-*): title + collected header icons (import/export) → filterbar
+         (search + shard/list toggle + filter tray) → counted channel band
+         (>= 2 real views, zeros included) → recessed well → one-line footer.
+         The module writes NO chrome CSS/JS; it re-renders on the bubbling
+         ctox-pane-grammar-change event and writes counts/footer via
+         pane.__ctoxPaneGrammar (null-guarded) or plain textContent. -->
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
@@ -7,109 +14,70 @@
           <h2 class="ctox-pane-title" data-conv-title>Conversations</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button type="button" class="ctox-pane-icon conv-toggle-actions" data-toggle-actions title="Kontext &amp; Status" aria-label="Kontext einblenden" aria-pressed="false">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
+          <button type="button" class="ctox-pane-icon" data-action="import" aria-label="Importieren" title="Importieren">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg>
+          </button>
+          <button type="button" class="ctox-pane-icon" data-action="export" aria-label="Exportieren" title="Exportieren">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21V9M12 9l-4 4M12 9l4 4M5 3h14"/></svg>
           </button>
         </div>
       </div>
-      <div class="ctox-pane-tools">
-        <input class="ctox-pane-search" type="search" data-conv-search placeholder="Suche" />
-        <button type="button" class="ctox-pane-icon conv-toggle-filters" data-toggle-filters title="Filter" aria-label="Filter einblenden" aria-pressed="false">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16l-6 8v8l-4-2v-6z"/></svg>
-        </button>
+      <div class="ctox-filterbar">
+        <input class="ctox-pane-search" type="search" data-pg-search placeholder="Suche" aria-label="Konversationen suchen" />
+        <div class="ctox-view-toggle" role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
+        <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="ctox-filter-tray" data-pg-tray hidden>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" data-pg-filter data-pg-name="account" data-pg-default="" data-conv-account-filter aria-label="Account">
+            <option value="">Alle Accounts</option>
+          </select>
+          <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+        </div>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" data-pg-filter data-pg-name="direction" data-pg-default="any" data-conv-direction-filter aria-label="Richtung">
+            <option value="any" data-direction-label="any">Alle Richtungen</option>
+            <option value="inbound" data-direction-label="inbound">Eingang</option>
+            <option value="outbound" data-direction-label="outbound">Ausgang</option>
+          </select>
+          <select class="ctox-select" data-pg-filter data-pg-name="dateRange" data-pg-default="any" data-conv-date-filter aria-label="Zeitraum">
+            <option value="any" data-date-label="any">Alle Zeiträume</option>
+            <option value="today" data-date-label="today">Heute</option>
+            <option value="7d" data-date-label="7d">7 Tage</option>
+            <option value="30d" data-date-label="30d">30 Tage</option>
+          </select>
+        </div>
+        <div class="conv-filter-status" data-conv-account-filter-status role="status" aria-live="polite"></div>
       </div>
     </header>
-    <nav class="conv-channel-filters" data-conv-channel-filters aria-label="Channels">
-      <button type="button" class="ctox-chip is-active" data-channel="all" aria-pressed="true">
-        <span class="conv-channel-dot"></span>
-        <span data-channel-label>Alle</span>
-        <span class="ctox-chip-count" data-channel-count></span>
-      </button>
-      <button type="button" class="ctox-chip" data-channel="whatsapp" aria-pressed="false">
-        <span class="conv-channel-dot" data-dot="whatsapp"></span>
-        <span data-channel-label>WhatsApp</span>
-        <span class="ctox-chip-count" data-channel-count></span>
-      </button>
-      <button type="button" class="ctox-chip" data-channel="email" aria-pressed="false">
-        <span class="conv-channel-dot" data-dot="email"></span>
-        <span data-channel-label>E-Mail</span>
-        <span class="ctox-chip-count" data-channel-count></span>
-      </button>
-      <button type="button" class="ctox-chip" data-channel="jami" aria-pressed="false">
-        <span class="conv-channel-dot" data-dot="jami"></span>
-        <span data-channel-label>Jami</span>
-        <span class="ctox-chip-count" data-channel-count></span>
-      </button>
-      <button type="button" class="ctox-chip" data-channel="teams" aria-pressed="false">
-        <span class="conv-channel-dot" data-dot="teams"></span>
-        <span data-channel-label>Teams</span>
-        <span class="ctox-chip-count" data-channel-count></span>
-      </button>
-      <button type="button" class="ctox-chip" data-channel="meeting" aria-pressed="false">
-        <span class="conv-channel-dot" data-dot="meeting"></span>
-        <span data-channel-label>Meeting</span>
-        <span class="ctox-chip-count" data-channel-count></span>
-      </button>
-      <button type="button" class="ctox-chip" data-channel="slack" aria-pressed="false">
-        <span class="conv-channel-dot" data-dot="slack"></span>
-        <span data-channel-label>Slack</span>
-        <span class="ctox-chip-count" data-channel-count></span>
-      </button>
-      <button type="button" class="ctox-chip" data-channel="discord" aria-pressed="false">
-        <span class="conv-channel-dot" data-dot="discord"></span>
-        <span data-channel-label>Discord</span>
-        <span class="ctox-chip-count" data-channel-count></span>
-      </button>
-      <button type="button" class="ctox-chip" data-channel="telegram" aria-pressed="false">
-        <span class="conv-channel-dot" data-dot="telegram"></span>
-        <span data-channel-label>Telegram</span>
-        <span class="ctox-chip-count" data-channel-count></span>
-      </button>
-      <button type="button" class="ctox-chip" data-channel="matrix" aria-pressed="false">
-        <span class="conv-channel-dot" data-dot="matrix"></span>
-        <span data-channel-label>Matrix</span>
-        <span class="ctox-chip-count" data-channel-count></span>
-      </button>
-      <button type="button" class="ctox-chip" data-channel="mattermost" aria-pressed="false">
-        <span class="conv-channel-dot" data-dot="mattermost"></span>
-        <span data-channel-label>Mattermost</span>
-        <span class="ctox-chip-count" data-channel-count></span>
-      </button>
-      <button type="button" class="ctox-chip" data-channel="zulip" aria-pressed="false">
-        <span class="conv-channel-dot" data-dot="zulip"></span>
-        <span data-channel-label>Zulip</span>
-        <span class="ctox-chip-count" data-channel-count></span>
-      </button>
-      <button type="button" class="ctox-chip" data-channel="google_chat" aria-pressed="false">
-        <span class="conv-channel-dot" data-dot="google_chat"></span>
-        <span data-channel-label>Google Chat</span>
-        <span class="ctox-chip-count" data-channel-count></span>
-      </button>
+    <nav class="ctox-view-switch" data-conv-channel-band aria-label="Channels">
+      <div class="ctox-pane-tabs">
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="all" aria-selected="true"><span data-band-label>Alle</span><span class="view-count" data-pg-count="all"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="whatsapp" aria-selected="false"><span class="conv-channel-dot" data-dot="whatsapp"></span><span data-band-label>WhatsApp</span><span class="view-count" data-pg-count="whatsapp"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="email" aria-selected="false"><span class="conv-channel-dot" data-dot="email"></span><span data-band-label>E-Mail</span><span class="view-count" data-pg-count="email"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="jami" aria-selected="false"><span class="conv-channel-dot" data-dot="jami"></span><span data-band-label>Jami</span><span class="view-count" data-pg-count="jami"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="teams" aria-selected="false"><span class="conv-channel-dot" data-dot="teams"></span><span data-band-label>Teams</span><span class="view-count" data-pg-count="teams"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="meeting" aria-selected="false"><span class="conv-channel-dot" data-dot="meeting"></span><span data-band-label>Meeting</span><span class="view-count" data-pg-count="meeting"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="slack" aria-selected="false"><span class="conv-channel-dot" data-dot="slack"></span><span data-band-label>Slack</span><span class="view-count" data-pg-count="slack"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="discord" aria-selected="false"><span class="conv-channel-dot" data-dot="discord"></span><span data-band-label>Discord</span><span class="view-count" data-pg-count="discord"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="telegram" aria-selected="false"><span class="conv-channel-dot" data-dot="telegram"></span><span data-band-label>Telegram</span><span class="view-count" data-pg-count="telegram"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="matrix" aria-selected="false"><span class="conv-channel-dot" data-dot="matrix"></span><span data-band-label>Matrix</span><span class="view-count" data-pg-count="matrix"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="mattermost" aria-selected="false"><span class="conv-channel-dot" data-dot="mattermost"></span><span data-band-label>Mattermost</span><span class="view-count" data-pg-count="mattermost"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="zulip" aria-selected="false"><span class="conv-channel-dot" data-dot="zulip"></span><span data-band-label>Zulip</span><span class="view-count" data-pg-count="zulip"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="google_chat" aria-selected="false"><span class="conv-channel-dot" data-dot="google_chat"></span><span data-band-label>Google Chat</span><span class="view-count" data-pg-count="google_chat"></span></button>
+      </div>
     </nav>
-    <div class="conv-secondary-filters" data-conv-secondary-filters-wrap hidden>
-      <select class="ctox-pane-filter" data-conv-account-filter aria-label="Account">
-        <option value="">Alle Accounts</option>
-      </select>
-      <select class="ctox-pane-filter" data-conv-direction-filter aria-label="Richtung">
-        <option value="any" data-direction-label="any">Alle Richtungen</option>
-        <option value="inbound" data-direction-label="inbound">Eingang</option>
-        <option value="outbound" data-direction-label="outbound">Ausgang</option>
-      </select>
-      <select class="ctox-pane-filter" data-conv-date-filter aria-label="Zeitraum">
-        <option value="any" data-date-label="any">Alle Zeiträume</option>
-        <option value="today" data-date-label="today">Heute</option>
-        <option value="7d" data-date-label="7d">7 Tage</option>
-        <option value="30d" data-date-label="30d">30 Tage</option>
-      </select>
-      <div class="conv-filter-status" data-conv-account-filter-status role="status" aria-live="polite"></div>
-    </div>
-    <div class="ctox-pane-body conv-left-body">
+    <div class="ctox-pane-body ctox-well conv-left-body">
       <div class="ctox-list conv-thread-list" data-conv-thread-list role="listbox" aria-label="Konversationen"></div>
       <div class="ctox-empty conv-empty" data-conv-empty-list hidden>
         <strong data-empty-list-title>Keine Konversationen</strong>
         <span data-empty-list-body>Hier erscheinen Kommunikationen, die CTOX über WhatsApp, E-Mail, Jami oder MS Teams führt.</span>
       </div>
     </div>
+    <footer class="ctox-pane-footer"><span data-pg-footer data-conv-footer></span></footer>
   </aside>
 
   <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--conversations-left-width" data-resizer-min="260" data-resizer-max="550" aria-label="Linke Spaltenbreite anpassen"></button>
@@ -122,6 +90,11 @@
           <strong data-conv-detail-name></strong>
           <span data-conv-detail-handle></span>
         </div>
+      </div>
+      <div class="ctox-pane-actions">
+        <button type="button" class="ctox-pane-icon conv-toggle-context" data-conv-toggle-context title="Kontext" aria-label="Kontext ausblenden" aria-pressed="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
+        </button>
       </div>
     </header>
     <nav class="conv-channel-tabs" data-conv-channel-tabs role="tablist" hidden></nav>
@@ -136,7 +109,7 @@
 
   <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--conversations-right-width" data-resizer-min="260" data-resizer-max="550" aria-label="Rechte Spaltenbreite anpassen"></button>
 
-  <aside class="ctox-pane conv-pane conv-right" aria-label="Conversation Context">
+  <aside class="ctox-pane conv-pane conv-right" aria-label="Conversation Context" data-right-content>
     <div class="ctox-pane-body conv-right-body">
       <div class="ctox-empty conv-right-empty" data-conv-right-empty>
         <strong data-right-empty-title></strong>

@@ -12,21 +12,36 @@
 .conv-module {
   --ctox-left-width: var(--conversations-left-width, 320px);
   --ctox-right-width: var(--conversations-right-width, 320px);
+  /* Explicit tracks: left(1) resizer(2) center(3) resizer(4) right(5). The
+     primary column (the timeline) keeps a hard minimum so the side panes yield
+     to it in a narrow window instead of collapsing the main view to 0. */
+  grid-template-columns:
+    var(--conversations-left-width, 320px)
+    12px
+    minmax(300px, 1fr)
+    12px
+    var(--conversations-right-width, 320px);
 }
+
+.conv-pane.conv-left { grid-column: 1; }
+.conv-module > [data-resizer="left"] { grid-column: 2; }
+.conv-pane.conv-center { grid-column: 3; }
+.conv-module > [data-resizer="right"] { grid-column: 4; }
+.conv-pane.conv-right { grid-column: 5; }
 
 /* Column resizer styling handled by global [data-resizer] in app.css */
 
+/* Grammar column rows: header / channel band / recessed well / footer. The
+   band track (row 2) collapses to 0 when the band is hidden ([hidden]); the
+   well stays pinned to the 1fr track so it always fills the space. */
 .conv-pane.conv-left {
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
-/* Pin the thread list to row 4 so it always fills the remaining vertical
-   space, even when the secondary-filters row (row 3) is collapsed via
-   [hidden]. Without this, auto-placement would put the list in row 3 when
-   the filters are display:none and the row 4 (1fr) would stay empty. */
-.conv-left-body {
-  grid-row: 4;
-}
+.conv-pane.conv-left > .ctox-pane-header { grid-row: 1; }
+.conv-pane.conv-left > [data-conv-channel-band] { grid-row: 2; }
+.conv-left-body { grid-row: 3; }
+.conv-pane.conv-left > .ctox-pane-footer { grid-row: 4; }
 
 .conv-pane.conv-center {
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -36,15 +51,7 @@
   grid-template-rows: minmax(0, 1fr);
 }
 
-/* Left pane — channel filter chips (.ctox-chip) with brand-colored dots */
-.conv-channel-filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--hairline, var(--line));
-}
-
+/* Left pane channel band + message meta use brand-colored channel dots. */
 /* custom: channel brand dots (deliberately hardcoded brand colors) */
 .conv-channel-dot {
   width: 8px;
@@ -67,29 +74,25 @@
 .conv-channel-dot[data-dot="zulip"]    { background: #52c2af; }
 .conv-channel-dot[data-dot="google_chat"] { background: #34a853; }
 
-/* Secondary filter row: kit .ctox-pane-filter selects on a module grid. */
-.conv-secondary-filters {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 4px;
-  padding: 0 10px 8px;
-  border-bottom: 1px solid var(--hairline, var(--line));
-}
-
-.conv-secondary-filters .ctox-pane-filter:first-child {
-  grid-column: 1 / -1;
-}
-
+/* Account-sync status line inside the shell-wired filter tray. */
 .conv-filter-status {
-  grid-column: 1 / -1;
   min-height: 14px;
   color: var(--muted);
   font-size: 11px;
   line-height: 1.25;
 }
 
+.conv-filter-status:empty {
+  min-height: 0;
+}
+
 .conv-filter-status[data-state="error"] {
   color: var(--danger);
+}
+
+/* Channel band tabs carry a brand dot before their label. */
+.conv-pane.conv-left [data-conv-channel-band] .ctox-pane-tab {
+  gap: 5px;
 }
 
 /* Thread list: kit .ctox-list rows; the module class only adds the
@@ -181,6 +184,23 @@
 .conv-thread-channels .conv-channel-dot {
   width: 6px;
   height: 6px;
+}
+
+/* Compact "list" view of the shard column (shard/list toggle): one dense row
+   per conversation — drop the channel-dot row and the avatar to a smaller
+   footprint. Where there are shards there is a list view. */
+.conv-thread-list.is-list-view .conv-thread-item {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+}
+
+.conv-thread-list.is-list-view .conv-thread-item .ctox-avatar,
+.conv-thread-list.is-list-view .conv-thread-channels {
+  display: none;
+}
+
+.conv-thread-list.is-list-view .conv-thread-preview {
+  font-size: 11px;
 }
 
 /* custom: accent unread counter — an attention marker, not a status badge */
@@ -537,10 +557,9 @@ details[open] > .conv-message-details-summary::before {
 
 /* Right pane — inspector cards use the kit .ctox-card/.ctox-card-body
    (border, radius, surface, uppercase header label). Only the stacked
-   content layout inside the body is local. The right pane itself is
-   collapsible (data-toggle-actions / is-actions-hidden) so the timeline
-   gets the full width by default; the kit's surface card supplies the
-   grouping, no local frame needed around the rows below. */
+   content layout inside the body is local. The right pane auto-reveals on
+   selection (data-conv-toggle-context / is-context-hidden); the kit's surface
+   card supplies the grouping, no local frame needed around the rows below. */
 .conv-right-empty span {
   overflow-wrap: anywhere;
 }
@@ -720,26 +739,28 @@ details[open] > .conv-message-details-summary::before {
   margin-bottom: 16px;
 }
 
-/* Right pane (Kontext/Status) is collapsible and hidden by default so the
-   conversation timeline gets the full width; the left-pane header toggle
-   (data-toggle-actions) re-reveals it on demand. Mirrors threads' UX
-   reduction pattern. */
-.conv-module.is-actions-hidden {
-  grid-template-columns: var(--ctox-left-width, 320px) 12px minmax(0, 1fr);
+/* Third column (context pane) auto-reveals on selection: visible =
+   hasSelection && !userCollapsed. When hidden the workspace collapses to two
+   columns so the timeline gets the full width. The reveal toggle lives in the
+   center detail header (data-conv-toggle-context) and only appears once a
+   conversation is selected. */
+.conv-module.is-context-hidden {
+  grid-template-columns: var(--conversations-left-width, 320px) 12px minmax(300px, 1fr);
 }
 
-.conv-module.is-actions-hidden .conv-right,
-.conv-module.is-actions-hidden > [data-resizer="right"] {
+.conv-module.is-context-hidden .conv-right,
+.conv-module.is-context-hidden > [data-resizer="right"] {
   display: none;
 }
 
-.conv-toggle-actions[aria-pressed="true"] {
+.conv-toggle-context[aria-pressed="true"] {
   color: var(--accent);
   background: var(--accent-soft);
 }
 
 @container business-app-window (max-width: 1080px) {
-  .conv-module {
+  .conv-module,
+  .conv-module.is-context-hidden {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(200px, 32vh) minmax(320px, 1fr) minmax(220px, 34vh);
     height: auto;
@@ -747,6 +768,12 @@ details[open] > .conv-message-details-summary::before {
     overflow-y: auto;
     gap: 8px;
     padding: 8px;
+  }
+  /* Stacked single-column: panes flow by source order, not the wide grid pins. */
+  .conv-pane.conv-left,
+  .conv-pane.conv-center,
+  .conv-pane.conv-right {
+    grid-column: auto;
   }
   .conv-pane.conv-left,
   .conv-pane.conv-center,
@@ -766,16 +793,6 @@ details[open] > .conv-message-details-summary::before {
 
   .conv-pane.conv-left {
     display: grid !important;
-  }
-
-  .conv-channel-filters {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .conv-channel-filters::-webkit-scrollbar {
-    display: none;
   }
 
   .conv-message {

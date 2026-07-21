@@ -1,6 +1,10 @@
 {
   "moduleTitle": "Conversations",
   "moduleSubtitle": "Audit aus CTOX-Sicht",
+  "footerEntries": "Konversationen",
+  "importInvalid": "Ungültige JSON-Datei.",
+  "importEmpty": "Keine Konversationen in der Datei.",
+  "importedLocal": "{count} Konversationen geladen (nur lokal)",
   "channelAll": "Alle Channels",
   "channelWhatsapp": "WhatsApp",
   "channelEmail": "E-Mail",
