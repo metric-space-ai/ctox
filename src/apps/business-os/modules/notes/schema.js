@@ -1,23 +1,3 @@
-const commandSchema = {
-  version: 1,
-  primaryKey: 'id',
-  type: 'object',
-  properties: {
-    id: { type: 'string', maxLength: 128 },
-    command_id: { type: 'string' },
-    module: { type: 'string' },
-    command_type: { type: 'string' },
-    record_id: { type: 'string' },
-    status: { type: 'string' },
-    inbound_channel: { type: 'string' },
-    payload: { type: 'object', additionalProperties: true },
-    client_context: { type: 'object', additionalProperties: true },
-    updated_at_ms: { type: 'number' }
-  },
-  required: ['id', 'command_id', 'module', 'command_type', 'status', 'updated_at_ms'],
-  additionalProperties: true
-};
-
 const noteRecordSchema = {
   version: 1,
   primaryKey: 'id',
@@ -43,18 +23,13 @@ const noteRecordSchema = {
 // §8.2): concurrent edits to different fields (title/notebook/tags vs.
 // content) both survive. The wrapper is a sibling of `schema` and is
 // hash-neutral (all consumers read `definition.schema || definition`).
+// business_commands is shell-registered — a module schema must not redefine it
+// (module.json still declares it for ACCESS; the shell owns the schema).
 export const collections = {
-  business_commands: commandSchema,
   notes: { schema: noteRecordSchema, conflictStrategy: 'field-merge' }
 };
 
 export const migrationStrategies = {
-  business_commands: {
-    1: (oldDoc) => ({
-      ...oldDoc,
-      inbound_channel: oldDoc.inbound_channel || oldDoc.module || ''
-    })
-  },
   notes: {
     1: (oldDoc) => ({
       ...oldDoc,
