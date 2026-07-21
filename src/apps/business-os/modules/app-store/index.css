@@ -729,3 +729,160 @@
     white-space: normal;
   }
 }
+
+/* ============================================================================
+   Canonical column grammar rows + the retail-box shelf (press.stripe-style,
+   vendored three.js). The shelf is this app's "cards" rendering; the list is
+   the compact counterpart. Canvas artwork draws its own colors; everything in
+   DOM/CSS stays on shell tokens.
+   ========================================================================== */
+.store-filterbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px 8px;
+}
+.store-filterbar .ctox-pane-search { flex: 1 1 auto; min-width: 0; }
+.store-filter-toggle { position: relative; flex: 0 0 auto; }
+.store-filter-toggle.has-active-filters::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.store-filter-advanced { padding: 0 12px 8px; }
+.store-filter-advanced[hidden] { display: none !important; }
+.store-filter-row { display: flex; align-items: center; gap: 6px; }
+.store-select { flex: 1 1 auto; min-width: 0; height: 28px; font-size: 12px; }
+.store-sort-dir {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+}
+.store-sort-dir:hover { color: var(--text); background: var(--surface-2); }
+.store-sort-dir svg { width: 14px; height: 14px; }
+.store-view-switch { padding: 0 12px 8px; border-bottom: 1px solid var(--line); }
+.store-view-switch .view-count { color: var(--muted); font-weight: 500; }
+.store-footer {
+  padding: 6px 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10px;
+}
+
+/* Recessed element well hosting shelf, list, and the detail panel. */
+.store-well {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: color-mix(in srgb, var(--text) 6%, var(--surface));
+}
+.store-shelf-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.store-shelf-stage[hidden] { display: none !important; }
+.store-shelf-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.store-shelf-scroll {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.store-shelf-track { width: 1px; }
+.store-shelf-hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 8px;
+  margin: 0;
+  text-align: center;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+.store-card-grid[hidden] { display: none !important; }
+
+/* Detail panel: right half over the well (the selected box poses on the left). */
+.store-detail {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(46%, 460px);
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  background: var(--surface);
+  z-index: 8;
+}
+.store-detail[hidden] { display: none !important; }
+.store-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.store-detail-title { margin: 0; font-size: 15px; }
+.store-detail-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+}
+.store-detail-capture { margin: 0 0 12px; }
+.store-detail-capture img {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  display: block;
+}
+.store-detail-capture figcaption {
+  margin-top: 4px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.store-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+@container business-app-window (max-width: 900px) {
+  .store-detail { width: 100%; }
+}
+
+/* Explicit pane rows — header, view band, well (1fr), footer. Without these
+   the kit default rows collapse the well and the shelf canvas ends up 1px. */
+.store-center { grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.store-left { grid-template-rows: auto minmax(0, 1fr) auto; }

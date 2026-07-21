@@ -599,3 +599,35 @@ test('presentation layer stays compact and shell-native', () => {
   assert.match(css, /\.store-loading-overlay[\s\S]*border-radius: var\(--panel-radius\)/);
   assert.match(css, /\.app-release-data-row[\s\S]*border-radius: var\(--panel-radius\)/);
 });
+
+test('center column carries the canonical grammar and the shelf contract', () => {
+  const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('./index.css', import.meta.url), 'utf8');
+  const js = readFileSync(new URL('./index.js', import.meta.url), 'utf8');
+  // Filter section: search + canonical shelf/list toggle IN the filterbar +
+  // collapsed tray with reset; active-dot rule present.
+  assert.match(html, /store-filterbar/);
+  assert.match(html, /data-store-filter-advanced[^>]*hidden/);
+  assert.match(html, /data-reset-store-filters/);
+  assert.match(html, /data-view="shelf"/);
+  assert.match(html, /data-view="list"/);
+  assert.match(css, /\.store-filter-toggle\.has-active-filters::after/);
+  // Counted view band with two real views (zeros included via JS counts).
+  assert.match(html, /data-center-band="catalog"/);
+  assert.match(html, /data-center-band="updates"/);
+  // Recessed well + per-column one-line footers.
+  assert.match(css, /\.store-well/);
+  assert.match(html, /data-left-footer/);
+  assert.match(html, /data-center-footer/);
+  // No standing count badge in the pane actions (counts live in footer/band).
+  assert.doesNotMatch(html, /data-apps-count/);
+  // Shelf: vendored three-based library loaded lazily with a list fallback;
+  // scroll rides the pane well, never the window.
+  assert.match(js, /import\('\.\.\/\.\.\/vendor\/store-shelf\/store-shelf\.mjs'\)/);
+  assert.match(js, /shelfUnavailable/);
+  assert.match(html, /data-shelf-canvas/);
+  assert.match(html, /data-shelf-track/);
+  // Detail panel keeps real store actions (shared builder with the cards).
+  assert.match(js, /cardActionsHtml\(item, operation, statusForCard\(item, operation\), \{ includeDetails: false \}\)/);
+  assert.match(html, /data-detail-capture/);
+});

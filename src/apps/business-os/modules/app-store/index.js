@@ -51,9 +51,26 @@ const state = {
   status: null,
   operations: {},
   unsubscribe: null,
-  viewMode: 'grid',
+  viewMode: 'shelf',
   drawerOpen: false,
+  // Canonical grammar state + the retail-box shelf (vendor/store-shelf).
+  centerBand: 'catalog',
+  categoryFilter: 'all',
+  sortKey: 'title',
+  shelf: null,
+  shelfUnavailable: false,
+  shelfSignature: '',
 };
+
+// Apps with a real product capture shipped in assets/previews (same captures
+// as the public site). Box fronts and the detail panel use them; every other
+// app renders the motif/monogram box art.
+const PREVIEW_IDS = new Set(['app-store', 'browser', 'buchhaltung', 'calendar', 'coding-agents',
+  'conversations', 'creator', 'ctox', 'customers', 'documents', 'files', 'knowledge', 'matching',
+  'notes', 'outbound', 'reports', 'research', 'shiftflow', 'spreadsheets', 'tickets']);
+function previewUrlFor(id) {
+  return PREVIEW_IDS.has(id) ? new URL(`./assets/previews/${id}.png`, import.meta.url).pathname : '';
+}
 
 const els = {};
 
@@ -129,11 +146,30 @@ function bindElements(root) {
   els.marketplaceState = root.querySelector('[data-marketplace-state]');
   els.toggleExtras = root.querySelector('[data-toggle-sidebar-extras]');
   els.sidebarExtras = root.querySelector('[data-sidebar-extras]');
+  els.filterToggle = root.querySelector('[data-toggle-store-filters]');
+  els.filterTray = root.querySelector('[data-store-filter-advanced]');
+  els.categoryFilter = root.querySelector('[data-category-filter]');
+  els.sortSelect = root.querySelector('[data-sort-select]');
+  els.filterReset = root.querySelector('[data-reset-store-filters]');
+  els.bandTabs = [...root.querySelectorAll('[data-center-band]')];
+  els.countCatalog = root.querySelector('[data-count-catalog]');
+  els.countUpdates = root.querySelector('[data-count-updates]');
+  els.leftFooter = root.querySelector('[data-left-footer]');
+  els.centerFooter = root.querySelector('[data-center-footer]');
+  els.shelfStage = root.querySelector('[data-shelf-stage]');
+  els.shelfCanvas = root.querySelector('[data-shelf-canvas]');
+  els.shelfScroll = root.querySelector('[data-shelf-scroll]');
+  els.shelfTrack = root.querySelector('[data-shelf-track]');
+  els.shelfHint = root.querySelector('[data-shelf-hint]');
+  els.detailActions = root.querySelector('[data-detail-actions]');
+  els.detailCapture = root.querySelector('[data-detail-capture]');
+  els.detailCaptureImg = root.querySelector('[data-detail-capture-img]');
 }
 
 function wireEvents() {
   els.search?.addEventListener('input', () => {
     state.query = els.search.value.trim().toLowerCase();
+    syncStoreFilterIndicator();
     render();
   });
   els.scopes?.addEventListener('click', (event) => {
@@ -173,6 +209,51 @@ function wireEvents() {
     state.drawerOpen = false;
     render();
   });
+  state.ctx.host.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && state.drawerOpen) {
+      state.drawerOpen = false;
+      render();
+    }
+  });
+  els.detail?.addEventListener('click', (event) => {
+    const actionBtn = event.target.closest('[data-card-action]');
+    if (!actionBtn || !state.selectedId) return;
+    triggerCardAction(state.selectedId, actionBtn.dataset.cardAction);
+  });
+
+  // Filter section: collapsed tray with category + sort + reset; active-dot
+  // on the toggle whenever a non-default filter is set.
+  els.filterToggle?.addEventListener('click', () => {
+    if (!els.filterTray) return;
+    const open = els.filterTray.hidden;
+    els.filterTray.hidden = !open;
+    els.filterToggle.setAttribute('aria-expanded', String(open));
+  });
+  els.categoryFilter?.addEventListener('change', () => {
+    state.categoryFilter = els.categoryFilter.value;
+    syncStoreFilterIndicator();
+    render();
+  });
+  els.sortSelect?.addEventListener('change', () => {
+    state.sortKey = els.sortSelect.value;
+    syncStoreFilterIndicator();
+    render();
+  });
+  els.filterReset?.addEventListener('click', () => {
+    state.categoryFilter = 'all';
+    state.sortKey = 'title';
+    state.query = '';
+    if (els.categoryFilter) els.categoryFilter.value = 'all';
+    if (els.sortSelect) els.sortSelect.value = 'title';
+    if (els.search) els.search.value = '';
+    syncStoreFilterIndicator();
+    render();
+  });
+  els.bandTabs.forEach((tab) => tab.addEventListener('click', () => {
+    state.centerBand = tab.dataset.centerBand;
+    els.bandTabs.forEach((other) => other.setAttribute('aria-selected', String(other === tab)));
+    render();
+  }));
 
   els.viewToggle?.addEventListener('click', (event) => {
     const btn = event.target.closest('[data-view]');
@@ -569,11 +650,51 @@ function sourceLabel(item, kind) {
   return item.source || kind;
 }
 
-function filteredItems() {
+function syncCategoryOptions() {
+  if (!els.categoryFilter) return;
+  const categories = categoriesOf(scopedCatalogItems(state.scope));
+  const wanted = ['all', ...categories];
+  const current = [...els.categoryFilter.options].map((option) => option.value);
+  if (wanted.join('|') !== current.join('|')) {
+    els.categoryFilter.innerHTML = '<option value="all">Alle Kategorien</option>'
+      + categories.map((category) => `<option value="${escapeAttr(category)}">${escapeHtml(category)}</option>`).join('');
+  }
+  els.categoryFilter.value = wanted.includes(state.categoryFilter) ? state.categoryFilter : 'all';
+}
+
+function syncStoreFilterIndicator() {
+  const active = Boolean(state.query) || state.categoryFilter !== 'all' || state.sortKey !== 'title';
+  els.filterToggle?.classList.toggle('has-active-filters', active);
+}
+
+// Updates band: installed apps whose catalog counterpart advertises a newer
+// version (plus anything the lifecycle projection already flags).
+function itemHasUpdate(item) {
+  if (!isInstalledCatalogItem(item)) return false;
+  if (item.update_available === true || item.lifecycle?.updateAvailable === true) return true;
+  const installed = String(item.installed_version || '').replace(/^v/, '');
+  const available = String(item.available_version || '').replace(/^v/, '');
+  return Boolean(installed && available && installed !== '-' && available !== '-' && installed !== available);
+}
+
+function categoriesOf(items) {
+  return [...new Set(items.map((item) => String(item.category || '').trim()).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }));
+}
+
+function searchedItems() {
   return scopedCatalogItems(state.scope).filter((item) => {
     const haystack = `${item.title} ${item.description} ${item.category} ${item.repo} ${item.source}`.toLowerCase();
-    return !state.query || haystack.includes(state.query);
+    if (state.query && !haystack.includes(state.query)) return false;
+    return state.categoryFilter === 'all' || String(item.category || '').trim() === state.categoryFilter;
   });
+}
+
+function filteredItems() {
+  let items = searchedItems();
+  if (state.centerBand === 'updates') items = items.filter(itemHasUpdate);
+  const key = state.sortKey === 'category' ? 'category' : 'title';
+  return [...items].sort((left, right) => String(left[key] || '').localeCompare(String(right[key] || ''), undefined, { sensitivity: 'base' }));
 }
 
 function scopedCatalogItems(scope) {
@@ -634,29 +755,129 @@ function chooseCanonicalCatalogItem(existing, candidate) {
 
 function render() {
   const items = filteredItems();
+  const searched = searchedItems();
   updateScopeButtons();
   renderMarketplaceState();
   renderMessage();
   if (els.title) els.title.textContent = scopeTitle(state.scope);
-  if (els.count) els.count.textContent = appCountLabel(items.length, state.scope, state.marketplaceStatus);
 
-  if (els.grid) {
-    els.grid.className = `store-card-grid ${state.viewMode === 'list' ? 'is-list-view' : ''}`;
-    els.grid.replaceChildren(...renderCatalogBody(items));
+  // Counted view band (zeros included) + tray options + footers.
+  if (els.countCatalog) els.countCatalog.textContent = ` (${searched.length})`;
+  if (els.countUpdates) els.countUpdates.textContent = ` (${searched.filter(itemHasUpdate).length})`;
+  syncCategoryOptions();
+  if (els.leftFooter) els.leftFooter.textContent = `${catalogItems().length} Apps insgesamt`;
+  if (els.centerFooter) {
+    els.centerFooter.textContent = appCountLabel(items.length, state.scope, state.marketplaceStatus);
   }
+
+  const shelfMode = state.viewMode === 'shelf' && !state.shelfUnavailable;
+  if (els.shelfStage) els.shelfStage.hidden = !shelfMode;
+  if (els.grid) {
+    els.grid.hidden = shelfMode;
+    if (!shelfMode) {
+      els.grid.className = 'store-card-grid is-list-view';
+      els.grid.replaceChildren(...renderCatalogBody(items));
+    }
+  }
+  if (shelfMode) syncShelf(items);
 
   if (els.viewToggle) {
     for (const btn of els.viewToggle.querySelectorAll('[data-view]')) {
-      const active = btn.dataset.view === state.viewMode;
+      const active = btn.dataset.view === (shelfMode ? 'shelf' : 'list');
       btn.classList.toggle('is-active', active);
       btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+      if (btn.dataset.view === 'shelf') btn.disabled = state.shelfUnavailable;
     }
   }
 
-  if (!items.some((item) => item.id === state.selectedId)) {
-    state.selectedId = items.length ? (items[0]?.id || '') : '';
+  if (state.selectedId && !items.some((item) => item.id === state.selectedId)) {
+    state.selectedId = '';
+    state.drawerOpen = false;
   }
   renderDetails();
+}
+
+// ---------------------------------------------------------------------------
+// Retail-box shelf (vendor/store-shelf): the "cards" rendering of this app.
+// Load lazily; a WebGL/import failure falls back to the list rendering.
+// ---------------------------------------------------------------------------
+async function ensureShelf() {
+  if (state.shelf || state.shelfUnavailable) return state.shelf;
+  if (!els.shelfCanvas || !els.shelfStage || !els.shelfScroll || !els.shelfTrack) return null;
+  // Single-flight: every render calls this; concurrent imports must never
+  // create competing shelf instances on the same canvas (the empty last one
+  // would own the WebGL context and the boxes would never show).
+  if (state.shelfPromise) return state.shelfPromise;
+  state.shelfPromise = buildShelf();
+  return state.shelfPromise;
+}
+
+async function buildShelf() {
+  try {
+    const mod = await import('../../vendor/store-shelf/store-shelf.mjs');
+    state.shelf = mod.createStoreShelf(els.shelfCanvas, {
+      apps: [],
+      locale: (state.ctx?.locale || 'de').startsWith('en') ? 'en' : 'de',
+      scrollContainer: els.shelfScroll,
+      track: els.shelfTrack,
+      stage: els.shelfStage,
+      onSelect: (id) => {
+        state.selectedId = id;
+        state.drawerOpen = true;
+        render();
+      },
+    });
+  } catch (err) {
+    console.warn('[app-store] shelf unavailable, falling back to list', err);
+    state.shelfUnavailable = true;
+    state.viewMode = 'list';
+  }
+  return state.shelf;
+}
+
+function shelfAppFor(item) {
+  const locallyServed = ['installed', 'system', 'local'].includes(item.kind) || isInstalledCatalogItem(item);
+  const preview = previewUrlFor(item.id);
+  return {
+    id: item.id,
+    title: item.title || item.id,
+    category: item.category || 'App',
+    description: item.description || '',
+    iconUrl: locallyServed ? new URL(`../${item.id}/icon.svg`, import.meta.url).pathname : '',
+    screenshots: preview ? [preview] : [],
+  };
+}
+
+async function syncShelf(items) {
+  const shelf = await ensureShelf();
+  if (!shelf) {
+    if (state.shelfUnavailable) render();
+    return;
+  }
+  const apps = items.filter((item) => item.id !== 'create-scratch').map(shelfAppFor);
+  const signature = JSON.stringify(apps.map((app) => [app.id, app.title, app.category, app.screenshots.length]));
+  if (signature !== state.shelfSignature) {
+    try {
+      shelf.setApps(apps);
+      state.shelfSignature = signature;
+    } catch (err) {
+      // A poisoned catalog entry must not leave the shelf permanently empty:
+      // log, reset the signature and retry once on the next tick.
+      console.error('[app-store] shelf setApps failed, retrying once', err);
+      state.shelfSignature = '';
+      if (!state.shelfRetryPending) {
+        state.shelfRetryPending = true;
+        setTimeout(() => { state.shelfRetryPending = false; render(); }, 600);
+      }
+      return;
+    }
+    if (els.shelfTrack && els.shelfScroll) {
+      els.shelfTrack.style.height = `${Math.max(els.shelfScroll.clientHeight + 1, apps.length * 170 + els.shelfScroll.clientHeight * 0.6)}px`;
+    }
+  }
+  if (state.drawerOpen && state.selectedId) shelf.select(state.selectedId);
+  else shelf.deselect();
+  if (els.shelfHint) els.shelfHint.hidden = state.drawerOpen || !apps.length;
 }
 
 function renderCatalogBody(items) {
@@ -678,22 +899,7 @@ function renderEmptyCatalogState({ title, body }) {
   return empty;
 }
 
-function renderCard(item) {
-  const operation = operationForItem(item);
-  const cardStatus = statusForCard(item, operation);
-  const card = document.createElement('article');
-  card.className = 'app-card';
-  card.dataset.appId = item.id;
-  card.dataset.contextRecordId = item.id;
-  card.dataset.contextRecordType = 'business_app';
-  card.dataset.contextLabel = item.title || item.id;
-  if (operation?.kind) card.dataset.operation = operation.kind;
-  card.classList.toggle('active', item.id === state.selectedId);
-  card.classList.toggle('is-operating', operation?.kind === 'running');
-  card.tabIndex = 0;
-  card.setAttribute('aria-selected', item.id === state.selectedId ? 'true' : 'false');
-  card.setAttribute('aria-label', `${item.title}. ${statusLabel(cardStatus)}. ${item.category}.`);
-
+function cardActionsHtml(item, operation, cardStatus, { includeDetails = true } = {}) {
   let actionsHtml = `<div class="app-card-actions">`;
 
   if (operation?.kind === 'running') {
@@ -728,11 +934,31 @@ function renderCard(item) {
     `;
   }
 
-  if (item.id !== 'create-scratch') {
+  if (includeDetails && item.id !== 'create-scratch') {
     actionsHtml += `<button type="button" class="ctox-button ctox-button--sm ctox-button--ghost" data-card-action="details" aria-label="Details zu ${escapeHtml(item.title)} anzeigen">${escapeHtml(state.t('actionDetails', 'Details'))}</button>`;
   }
 
   actionsHtml += `</div>`;
+  return actionsHtml;
+}
+
+function renderCard(item) {
+  const operation = operationForItem(item);
+  const cardStatus = statusForCard(item, operation);
+  const card = document.createElement('article');
+  card.className = 'app-card';
+  card.dataset.appId = item.id;
+  card.dataset.contextRecordId = item.id;
+  card.dataset.contextRecordType = 'business_app';
+  card.dataset.contextLabel = item.title || item.id;
+  if (operation?.kind) card.dataset.operation = operation.kind;
+  card.classList.toggle('active', item.id === state.selectedId);
+  card.classList.toggle('is-operating', operation?.kind === 'running');
+  card.tabIndex = 0;
+  card.setAttribute('aria-selected', item.id === state.selectedId ? 'true' : 'false');
+  card.setAttribute('aria-label', `${item.title}. ${statusLabel(cardStatus)}. ${item.category}.`);
+
+  const actionsHtml = cardActionsHtml(item, operation, cardStatus);
   const operationHtml = operationMessageHtml(operation);
 
   card.innerHTML = `
@@ -843,11 +1069,8 @@ function operationMessageHtml(operation) {
 
 function renderDetails() {
   const item = catalogItems().find((candidate) => candidate.id === state.selectedId);
-  if (!state.drawerOpen) {
-    if (els.detail) els.detail.classList.remove('is-open');
-    return;
-  }
-  if (els.detail) els.detail.classList.add('is-open');
+  if (els.detail) els.detail.hidden = !state.drawerOpen;
+  if (!state.drawerOpen) return;
   if (!item) {
     renderEmptyDetails();
     return;
@@ -860,6 +1083,18 @@ function renderDetails() {
   if (els.detailLicense) els.detailLicense.textContent = item.license;
   if (els.detailSource) els.detailSource.textContent = item.source;
   if (els.detailStatus) els.detailStatus.textContent = statusLabel(item.status);
+  if (els.detailActions) {
+    const operation = operationForItem(item);
+    els.detailActions.innerHTML = cardActionsHtml(item, operation, statusForCard(item, operation), { includeDetails: false });
+  }
+  if (els.detailCapture && els.detailCaptureImg) {
+    const preview = previewUrlFor(item.id);
+    els.detailCapture.hidden = !preview;
+    if (preview) {
+      els.detailCaptureImg.src = preview;
+      els.detailCaptureImg.alt = `${item.title} – Produktaufnahme`;
+    }
+  }
   if (els.readme) {
     els.readme.replaceChildren(renderDocumentation(item));
   }

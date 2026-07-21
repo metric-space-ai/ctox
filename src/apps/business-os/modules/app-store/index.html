@@ -12,9 +12,6 @@
           </button>
         </div>
       </div>
-      <div class="ctox-pane-tools">
-        <input class="ctox-pane-search" data-search type="search" placeholder="Module, Templates, Apps suchen..." data-t-placeholder="searchPlaceholder" aria-label="App Store durchsuchen" data-t-aria="searchAria" />
-      </div>
     </header>
 
     <div class="ctox-pane-body">
@@ -77,6 +74,7 @@
         </div>
       </div>
     </div>
+    <footer class="store-footer"><span data-left-footer></span></footer>
   </aside>
 
   <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="240" data-resizer-max="500" aria-label="Spaltenbreite anpassen"></button>
@@ -88,68 +86,96 @@
           <span class="ctox-pane-kicker" data-t="discoverKicker">Entdecken</span>
           <h2 class="ctox-pane-title" data-visible-category-title>GitHub Marketplace</h2>
         </div>
-        <div class="ctox-pane-actions store-pane-actions">
-          <div class="store-view-toggle" data-view-toggle role="group" aria-label="App-Store Ansicht" data-t-aria="viewToggleAria">
-            <button type="button" class="ctox-pane-icon is-active" data-view="grid" title="Rasteransicht" data-t-title="viewGrid" aria-label="Rasteransicht" data-t-aria="viewGrid" aria-pressed="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg>
-            </button>
-            <button type="button" class="ctox-pane-icon" data-view="list" title="Listenansicht" data-t-title="viewList" aria-label="Listenansicht" data-t-aria="viewList" aria-pressed="false">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>
-            </button>
-          </div>
-          <span class="ctox-badge" data-apps-count>0 Apps</span>
+        <div class="ctox-pane-actions store-pane-actions"></div>
+      </div>
+      <!-- Row 2: filter section — search + shelf/list toggle + collapsed tray. -->
+      <div class="store-filterbar">
+        <input class="ctox-pane-search" data-search type="search" placeholder="Module, Templates, Apps suchen..." data-t-placeholder="searchPlaceholder" aria-label="App Store durchsuchen" data-t-aria="searchAria" />
+        <div class="store-view-toggle" data-view-toggle role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-view="shelf" aria-pressed="true" aria-label="Regal-Ansicht" title="Regal-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
+        <button type="button" class="ctox-pane-icon store-filter-toggle" data-toggle-store-filters aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="store-filter-advanced" data-store-filter-advanced hidden>
+        <div class="store-filter-row">
+          <select class="ctox-select store-select" data-category-filter aria-label="Kategorie">
+            <option value="all">Alle Kategorien</option>
+          </select>
+          <select class="ctox-select store-select" data-sort-select aria-label="Sortieren nach">
+            <option value="title">Name</option>
+            <option value="category">Kategorie</option>
+          </select>
+          <button type="button" class="store-sort-dir store-filter-reset" data-reset-store-filters aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
         </div>
       </div>
     </header>
+    <!-- Row 3: counted view band — catalog vs. pending updates. -->
+    <nav class="store-view-switch" aria-label="Katalog Ansichten">
+      <div class="ctox-pane-tabs">
+        <button type="button" class="ctox-pane-tab" role="tab" data-center-band="catalog" aria-selected="true">Katalog<span class="view-count" data-count-catalog></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-center-band="updates" aria-selected="false">Updates<span class="view-count" data-count-updates></span></button>
+      </div>
+    </nav>
 
-    <div class="ctox-pane-body">
-      <div class="store-center-body">
-        <div class="ctox-callout store-message" data-store-message hidden></div>
+    <div class="ctox-pane-body store-well">
+      <div class="ctox-callout store-message" data-store-message hidden></div>
 
-        <div class="store-grid-workspace">
-          <div class="store-card-grid" data-apps-grid></div>
-          <div class="store-loading-overlay" data-loading-spinner hidden>
-            <span class="store-loading-dot"></span>
-            <span data-loading-text data-t="loadingText">GitHub Discovery wird synchronisiert.</span>
-          </div>
+      <!-- Shelf rendering: WebGL retail boxes; scroll on the well drives the shelf. -->
+      <div class="store-shelf-stage" data-shelf-stage>
+        <canvas class="store-shelf-canvas" data-shelf-canvas aria-label="App-Pakete als Regal" role="img"></canvas>
+        <div class="store-shelf-scroll" data-shelf-scroll>
+          <div class="store-shelf-track" data-shelf-track></div>
+        </div>
+        <p class="store-shelf-hint" data-shelf-hint>Scrollen zum Entdecken · Hülle auswählen</p>
+      </div>
 
-          <!-- Sliding Bottom Details Drawer -->
-          <div class="ctox-bottom-drawer" data-detail-drawer>
-            <div class="ctox-drawer-handle"><div class="ctox-drawer-handle-bar"></div></div>
-            <header class="ctox-drawer-header">
-              <div class="store-detail-title-row">
-                <div class="app-logo-large" data-detail-icon>?</div>
-                <div class="store-detail-heading">
-                  <span class="ctox-drawer-kicker" data-t="drawerKicker">Catalog</span>
-                  <h3 class="ctox-drawer-title" data-detail-title data-t="drawerNoSelection">Keine App ausgewählt</h3>
-                  <div class="store-detail-badges">
-                    <span class="ctox-badge" data-detail-version>-</span>
-                    <span class="ctox-badge is-info" data-detail-category>Empty</span>
-                    <span class="ctox-badge" data-detail-status data-t="statusNoSelection">No selection</span>
-                  </div>
-                </div>
-              </div>
-              <button type="button" class="ctox-drawer-close" data-close-drawer title="Details schließen" data-t-title="drawerCloseTitle" aria-label="Details schließen" data-t-aria="drawerCloseTitle">&times;</button>
-            </header>
+      <!-- List rendering (canonical compact counterpart). -->
+      <div class="store-card-grid" data-apps-grid hidden></div>
 
-            <div class="ctox-drawer-body">
-              <dl class="ctox-fields store-detail-fields">
-                <dt data-t="labelDeveloper">Developer</dt>
-                <dd data-detail-developer>CTOX</dd>
-                <dt data-t="labelLicense">License</dt>
-                <dd data-detail-license>AGPL-3.0-only</dd>
-                <dt data-t="labelSource">Source</dt>
-                <dd data-detail-source>GitHub</dd>
-              </dl>
+      <div class="store-loading-overlay" data-loading-spinner hidden>
+        <span class="store-loading-dot"></span>
+        <span data-loading-text data-t="loadingText">GitHub Discovery wird synchronisiert.</span>
+      </div>
 
-              <div class="store-readme-section">
-                <h4 data-t="readmeTitle">Module Contract</h4>
-                <article class="markdown-document" data-readme-content></article>
+      <!-- Detail: box flies into pose (shelf) / plain panel (list); real actions live here. -->
+      <aside class="store-detail" data-detail-drawer hidden aria-label="App Details">
+        <header class="store-detail-header">
+          <div class="store-detail-title-row">
+            <div class="app-logo-large" data-detail-icon>?</div>
+            <div class="store-detail-heading">
+              <span class="ctox-pane-kicker" data-t="drawerKicker">Catalog</span>
+              <h3 class="store-detail-title" data-detail-title data-t="drawerNoSelection">Keine App ausgewählt</h3>
+              <div class="store-detail-badges">
+                <span class="ctox-badge" data-detail-version>-</span>
+                <span class="ctox-badge is-info" data-detail-category>Empty</span>
+                <span class="ctox-badge" data-detail-status data-t="statusNoSelection">No selection</span>
               </div>
             </div>
           </div>
+          <button type="button" class="ctox-pane-icon" data-close-drawer title="Zurück zu allen Apps" aria-label="Zurück zu allen Apps"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+        </header>
+        <div class="store-detail-body">
+          <div class="store-detail-actions" data-detail-actions></div>
+          <dl class="ctox-fields store-detail-fields">
+            <dt data-t="labelDeveloper">Developer</dt>
+            <dd data-detail-developer>CTOX</dd>
+            <dt data-t="labelLicense">License</dt>
+            <dd data-detail-license>AGPL-3.0-only</dd>
+            <dt data-t="labelSource">Source</dt>
+            <dd data-detail-source>GitHub</dd>
+          </dl>
+          <figure class="store-detail-capture" data-detail-capture hidden>
+            <img alt="" data-detail-capture-img loading="lazy">
+            <figcaption data-detail-capture-caption>Reale Produktaufnahme · aktueller Build</figcaption>
+          </figure>
+          <div class="store-readme-section">
+            <h4 data-t="readmeTitle">Module Contract</h4>
+            <article class="markdown-document" data-readme-content></article>
+          </div>
         </div>
-      </div>
+      </aside>
     </div>
+    <footer class="store-footer"><span data-center-footer></span></footer>
   </section>
 </main>
