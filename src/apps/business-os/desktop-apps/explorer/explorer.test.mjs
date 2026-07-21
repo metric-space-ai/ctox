@@ -89,11 +89,13 @@ describe('Explorer app helpers', () => {
   });
 
   it('offers discoverable recent-file views and explicit sort choices', () => {
-    assert.match(explorerSource, /label: 'Zuletzt erstellt'[\s\S]*?recentSort: 'created'/);
-    assert.match(explorerSource, /label: 'Zuletzt geändert'[\s\S]*?recentSort: 'modified'/);
-    assert.match(explorerSource, /data-explorer-sort aria-label="Sortieren"/);
-    assert.match(explorerSource, /<option value="created">Erstellt: neueste<\/option>/);
+    assert.match(explorerSource, /get label\(\) \{ return T\.recentCreated; \}[\s\S]*?recentSort: 'created'/);
+    assert.match(explorerSource, /get label\(\) \{ return T\.recentModified; \}[\s\S]*?recentSort: 'modified'/);
+    assert.match(explorerSource, /data-explorer-sort aria-label="\$\{T\.sortBy\}"/);
+    assert.match(explorerSource, /<option value="created">\$\{T\.sortCreated\}<\/option>/);
     assert.match(explorerSource, /activeData\.filter\(\(item\) => item\.kind !== 'folder'\)\.map\(normalizeFileRow\)/);
+    assert.match(explorerSource, /requireRevision: `files-search:/);
+    assert.match(explorerSource, /\{ name: \{ \$regex: pattern \} \}/);
   });
 
   it('registers installed source schemas before mounting Files', () => {

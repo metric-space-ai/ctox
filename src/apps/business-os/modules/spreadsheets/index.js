@@ -295,6 +295,7 @@ async function refreshSpreadsheetsFromLocal(state) {
 
 async function refreshSpreadsheets(state) {
   const collection = spreadsheetCollection(state.ctx, 'spreadsheets');
+  const selectedBeforeRefresh = selectedRecord(state);
   const rawSpreadsheets = collection
     ? await collection.find({ sort: [{ updated_at_ms: 'desc' }] }).exec()
     : [];
@@ -303,10 +304,27 @@ async function refreshSpreadsheets(state) {
     .filter(isActiveSpreadsheetRecord);
 
   if (state.selectedId && !state.spreadsheets.some((record) => record.id === state.selectedId)) {
-    state.selectedId = state.spreadsheets[0]?.id || '';
-    state.selectedVersion = null;
+    const selectedDoc = collection
+      ? await collection.findOne({
+        selector: { id: state.selectedId },
+        requireRevision: spreadsheetRecordRevision(state.selectedId, selectedBeforeRefresh?.updated_at_ms),
+      }).exec().catch(() => null)
+      : null;
+    const selected = selectedDoc
+      ? normalizeSpreadsheetRecord(typeof selectedDoc.toJSON === 'function' ? selectedDoc.toJSON() : selectedDoc)
+      : selectedBeforeRefresh;
+    if (selected && isActiveSpreadsheetRecord(selected)) {
+      state.spreadsheets.unshift(selected);
+    } else {
+      state.selectedId = state.spreadsheets[0]?.id || '';
+      state.selectedVersion = null;
+    }
   }
   if (!state.selectedId && state.spreadsheets[0]) state.selectedId = state.spreadsheets[0].id;
+}
+
+function spreadsheetRecordRevision(recordId, updatedAtMs = 0) {
+  return `spreadsheet:${String(recordId || '')}:${Number(updatedAtMs || 0) || 'current'}`;
 }
 
 async function refreshRunbooks(state) {
