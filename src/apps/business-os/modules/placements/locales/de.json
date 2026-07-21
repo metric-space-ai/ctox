@@ -2,5 +2,15 @@
   "title": "Vermittlungen",
   "subtitle": "Angebots-/Vermittlungs-Lifecycle mit Garantie-Uhr und Honorar.",
   "add": "Anlegen",
-  "empty": "Noch keine Einträge."
+  "empty": "Noch keine Einträge.",
+  "kicker": "VERMITTLUNGEN",
+  "listTitle": "Vermittlungen",
+  "new": "Neu",
+  "import": "Importieren",
+  "export": "Exportieren",
+  "viewAll": "Alle",
+  "viewActive": "Aktiv",
+  "viewEnded": "Beendet",
+  "composerTitle": "Vermittlung anlegen",
+  "earlyLeave": "Frühausstieg"
 }

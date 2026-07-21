@@ -2,5 +2,15 @@
   "title": "Vermittlungen",
   "subtitle": "Angebots-/Vermittlungs-Lifecycle mit Garantie-Uhr und Honorar.",
   "add": "Create",
-  "empty": "No entries yet."
+  "empty": "No entries yet.",
+  "kicker": "PLACEMENTS",
+  "listTitle": "Placements",
+  "new": "New",
+  "import": "Import",
+  "export": "Export",
+  "viewAll": "All",
+  "viewActive": "Active",
+  "viewEnded": "Ended",
+  "composerTitle": "Create placement",
+  "earlyLeave": "Early leave"
 }

@@ -1,35 +1,91 @@
-<section class="ats-placements ctox-record-workbench" data-ats-root>
-  <header class="ctox-pane-header ctox-pane-band ctox-record-workbench__header">
-    <div class="ctox-pane-title-row">
-      <div class="ctox-pane-titles">
-        <span class="ctox-pane-kicker" data-copy="kicker">Vermittlungen</span>
-        <h1 class="ctox-pane-title" data-ats-title></h1>
-      </div>
-    </div>
-    <p class="ctox-record-workbench__subtitle" data-ats-sub></p>
-  </header>
-  <div class="ctox-record-workbench__body">
-    <form class="ctox-compact-form" data-ats-form>
-      <div class="ctox-compact-form__fields">
-        <label class="ctox-compact-field"><span data-copy="candidate">Kandidat-ID</span><input class="ctox-input" type="text" name="candidate_id" required data-f /></label>
-        <label class="ctox-compact-field"><span data-copy="client">Kunden-Account-ID</span><input class="ctox-input" type="text" name="client_account_id" data-f /></label>
-        <label class="ctox-compact-field"><span data-copy="placementType">Vermittlungsart</span><select class="ctox-select" name="placement_type" data-f>
-          <option value="" data-copy="directHire">Festanstellung (Personalvermittlung)</option>
-          <option value="arbeitnehmerueberlassung" data-copy="temporary">Arbeitnehmerüberlassung (Zeitarbeit)</option>
-        </select></label>
-      </div>
-      <div class="ctox-compact-form__actions"><button class="ctox-button is-primary" type="submit" data-copy="create">Anlegen</button></div>
-      <details class="ats-more">
-        <summary data-copy="more">Weitere Angaben</summary>
-        <div class="ctox-compact-form__fields">
-          <label class="ctox-compact-field"><span data-copy="qualifications">Pflicht-Qualifikationen</span><input class="ctox-input" type="text" name="required_types" data-f /></label>
-          <label class="ctox-compact-field"><span data-copy="fee">Honorar</span><input class="ctox-input" type="number" name="fee" data-f /></label>
-          <label class="ctox-compact-field"><span data-copy="guarantee">Garantie (Tage)</span><input class="ctox-input" type="number" name="guarantee_days" data-f /></label>
+<main class="ctox-workspace ctox-workspace--two-pane ats-placements placements-module" data-ats-root data-resize-frame>
+  <!-- LEFT: record list (persistence/selector column) — canonical column
+       grammar (data-pg-*). The shell auto-wires search/tray/reset/active-dot/
+       view-toggle/band; this module writes only markup + counts/footer. -->
+  <aside class="ctox-pane placements-left" aria-label="Vermittlungen" data-placements-list-pane data-left-content>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-copy="kicker">Vermittlungen</span>
+          <h2 class="ctox-pane-title" data-copy="listTitle">Vermittlungen</h2>
         </div>
-      </details>
-    </form>
-    <div class="ctox-callout" data-ats-gate></div>
-    <div class="ctox-record-workbench__status" data-ats-count></div>
-    <div class="ctox-record-list" data-ats-list></div>
-  </div>
-</section>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon" data-action="new" aria-label="Neu" title="Neu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-action="import" aria-label="Importieren" title="Importieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-action="export" aria-label="Exportieren" title="Exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21V9M12 9l-4 4M12 9l4 4M5 3h14"/></svg></button>
+        </div>
+      </div>
+      <div class="ctox-filterbar">
+        <input class="ctox-pane-search" type="search" data-pg-search placeholder="Suchen..." aria-label="Vermittlungen suchen" />
+        <div class="ctox-view-toggle" role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
+        <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="ctox-filter-tray" data-pg-tray hidden>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" data-pg-filter data-pg-name="placement_type" data-pg-default="all" aria-label="Vermittlungsart filtern">
+            <option value="all" data-copy="allTypes">Alle Arten</option>
+            <option value="direct" data-copy="directHire">Festanstellung (Personalvermittlung)</option>
+            <option value="arbeitnehmerueberlassung" data-copy="temporary">Arbeitnehmerüberlassung (Zeitarbeit)</option>
+          </select>
+          <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+        </div>
+      </div>
+    </header>
+    <nav class="ctox-view-switch" aria-label="Ansichten">
+      <div class="ctox-pane-tabs">
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="all" aria-selected="true"><span data-copy="viewAll">Alle</span><span class="view-count" data-pg-count="all"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="active" aria-selected="false"><span data-copy="viewActive">Aktiv</span><span class="view-count" data-pg-count="active"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="ended" aria-selected="false"><span data-copy="viewEnded">Beendet</span><span class="view-count" data-pg-count="ended"></span></button>
+      </div>
+    </nav>
+    <div class="ctox-pane-body ctox-well">
+      <div class="ctox-list" data-ats-list></div>
+    </div>
+    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
+  </aside>
+
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="260" data-resizer-max="520" aria-label="Spaltenbreite anpassen"></button>
+
+  <!-- MAIN: record-bound workbench. The create composer stays as-is; selecting
+       a placement prefills it and auto-reveals the record detail + early-leave. -->
+  <section class="ctox-pane placements-center" aria-label="Workbench" data-placements-workbench>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-ats-wb-kicker data-copy="composerKicker">NEUE VERMITTLUNG</span>
+          <h2 class="ctox-pane-title" data-ats-wb-title data-copy="composerTitle">Vermittlung anlegen</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon" data-ats-collapse aria-pressed="false" aria-label="Detail einklappen" title="Detail einklappen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
+        </div>
+      </div>
+    </header>
+    <div class="ctox-pane-scroll placements-workbench-scroll">
+      <form class="ctox-compact-form" data-ats-form>
+        <div class="ctox-compact-form__fields">
+          <label class="ctox-compact-field"><span data-copy="candidate">Kandidat-ID</span><input class="ctox-input" type="text" name="candidate_id" required data-ats-field="candidate_id" /></label>
+          <label class="ctox-compact-field"><span data-copy="client">Kunden-Account-ID</span><input class="ctox-input" type="text" name="client_account_id" data-ats-field="client_account_id" /></label>
+          <label class="ctox-compact-field"><span data-copy="placementType">Vermittlungsart</span><select class="ctox-select" name="placement_type" data-ats-field="placement_type">
+            <option value="" data-copy="directHire">Festanstellung (Personalvermittlung)</option>
+            <option value="arbeitnehmerueberlassung" data-copy="temporary">Arbeitnehmerüberlassung (Zeitarbeit)</option>
+          </select></label>
+        </div>
+        <div class="ctox-compact-form__actions"><button class="ctox-button is-primary" type="submit" data-copy="create">Anlegen</button></div>
+        <details class="ats-more">
+          <summary data-copy="more">Weitere Angaben</summary>
+          <div class="ctox-compact-form__fields">
+            <label class="ctox-compact-field"><span data-copy="qualifications">Pflicht-Qualifikationen</span><input class="ctox-input" type="text" name="required_types" data-ats-field="required_types" /></label>
+            <label class="ctox-compact-field"><span data-copy="fee">Honorar</span><input class="ctox-input" type="number" name="fee" data-ats-field="fee" /></label>
+            <label class="ctox-compact-field"><span data-copy="guarantee">Garantie (Tage)</span><input class="ctox-input" type="number" name="guarantee_days" data-ats-field="guarantee_days" /></label>
+          </div>
+        </details>
+      </form>
+      <div class="ctox-callout" data-ats-gate></div>
+      <div class="placements-detail" data-ats-detail></div>
+    </div>
+    <footer class="ctox-pane-footer"><span data-ats-wb-footer></span></footer>
+  </section>
+</main>
