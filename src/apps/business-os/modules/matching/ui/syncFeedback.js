@@ -2,7 +2,6 @@ const DEFAULT_TIMEOUT_MS = 2800;
 const DEFAULT_COOLDOWN_MS = 1500;
 const DATA_SYNC_COOLDOWN_MS = 3500;
 const MUTATION_SYNC_COOLDOWN_MS = 1400;
-const SHOW_PASSIVE_SYNC_TOASTS_KEY = 'ctox.businessOs.matching.showPassiveSyncToasts';
 
 const COLLECTION_ALIASES = Object.freeze({
   source: 'sources',
@@ -60,11 +59,7 @@ function clampProgress(value) {
 }
 
 function passiveSyncToastsEnabled() {
-  try {
-    return localStorage.getItem(SHOW_PASSIVE_SYNC_TOASTS_KEY) === '1';
-  } catch {
-    return false;
-  }
+  return false;
 }
 
 export function createSyncFeedback({ scope = 'default' } = {}) {

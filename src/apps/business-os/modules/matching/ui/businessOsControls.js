@@ -14,6 +14,17 @@ const IMPORT_STATUS_KEY = 'ctox.businessOs.matching.importStatus';
 const COMMAND_TIMEOUT_MS = 8000;
 const SUPPORTED_LANGUAGES = ['de', 'en'];
 const pendingTranslationRequests = new Set();
+let runtimeContext = null;
+let controlsInitialized = false;
+
+function storageGet(key) {
+  try { return runtimeContext?.storageScope?.get?.(key) || null; } catch { return null; }
+}
+
+function storageSet(key, value) {
+  try { runtimeContext?.storageScope?.set?.(key, String(value)); } catch {}
+}
+
 const MATCHING_DEFINITION = getActiveMatchingDefinition();
 const MATCHING_LABELS = MATCHING_DEFINITION.labels || {};
 const MATCHING_DEFINITION_ID = MATCHING_DEFINITION.id || 'generic_matching.v1';
@@ -610,11 +621,17 @@ All other existing rules still apply:
   }
 };
 
-initTheme();
-initLanguage();
-initColumnLabels();
-initColumnDrawers();
-renderImportStatuses();
+export function setBusinessOsRuntimeContext(ctx = {}) {
+  runtimeContext = ctx;
+  setBusinessOsCommandBus(ctx.commandBus);
+  if (controlsInitialized) return;
+  controlsInitialized = true;
+  initTheme();
+  initLanguage();
+  initColumnLabels();
+  initColumnDrawers();
+  renderImportStatuses();
+}
 
 function getMatchingRoot() {
   return document.querySelector('[data-matching-module="native"]') || document.body;
@@ -629,12 +646,12 @@ function initTheme() {
   const requested = params.get('theme');
   const saved = requested === 'light' || requested === 'dark'
     ? requested
-    : document.documentElement.dataset.theme || localStorage.getItem(THEME_KEY) || 'system';
+    : document.documentElement.dataset.theme || storageGet(THEME_KEY) || 'system';
   applyTheme(saved);
   for (const button of queryMatchingAll('[data-theme-choice]')) {
     button.addEventListener('click', () => {
       const theme = button.dataset.themeChoice || 'system';
-      localStorage.setItem(THEME_KEY, theme);
+      storageSet(THEME_KEY, theme);
       applyTheme(theme);
     });
   }
@@ -663,13 +680,13 @@ function initLanguage() {
   const params = new URLSearchParams(window.location.search);
   const requestedRaw = String(params.get('lang') || '').toLowerCase();
   const requested = SUPPORTED_LANGUAGES.includes(requestedRaw) ? requestedRaw : '';
-  if (requested) localStorage.setItem(LANG_KEY, requested);
-  const saved = requested || document.documentElement.lang || localStorage.getItem(LANG_KEY) || 'de';
+  if (requested) storageSet(LANG_KEY, requested);
+  const saved = requested || document.documentElement.lang || storageGet(LANG_KEY) || 'de';
   applyLanguage(saved, { reloadForGerman: false });
   for (const button of queryMatchingAll('[data-lang-choice]')) {
     button.addEventListener('click', () => {
       const lang = button.dataset.langChoice || 'de';
-      localStorage.setItem(LANG_KEY, lang);
+      storageSet(LANG_KEY, lang);
       applyLanguage(lang, { reloadForGerman: true });
     });
   }
@@ -748,7 +765,7 @@ function translatePhrase(value, kind = 'text') {
   const raw = String(value || '');
   const trimmed = raw.trim();
   if (!trimmed) return '';
-  const lang = normalizeLanguage(localStorage.getItem(LANG_KEY) || 'de');
+  const lang = normalizeLanguage(storageGet(LANG_KEY) || 'de');
   if (lang === 'de') return trimmed;
   const runtime = readRuntimeTranslations();
   const runtimeValue = runtime?.[lang]?.[kind]?.[trimmed];
@@ -761,7 +778,7 @@ function translatePhrase(value, kind = 'text') {
 
 function readRuntimeTranslations() {
   try {
-    const parsed = JSON.parse(localStorage.getItem(TRANSLATION_SETTINGS_KEY) || '{}');
+    const parsed = JSON.parse(storageGet(TRANSLATION_SETTINGS_KEY) || '{}');
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
@@ -842,7 +859,7 @@ function commandContextFromElement(target) {
 
 function readColumnSettings() {
   try {
-    const parsed = JSON.parse(localStorage.getItem(COLUMN_SETTINGS_KEY) || '{}');
+    const parsed = JSON.parse(storageGet(COLUMN_SETTINGS_KEY) || '{}');
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
@@ -851,7 +868,7 @@ function readColumnSettings() {
 
 function readSearchSortSettings() {
   try {
-    const parsed = JSON.parse(localStorage.getItem(SEARCH_SORT_SETTINGS_KEY) || '{}');
+    const parsed = JSON.parse(storageGet(SEARCH_SORT_SETTINGS_KEY) || '{}');
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
@@ -859,7 +876,7 @@ function readSearchSortSettings() {
 }
 
 function writeSearchSortSettings(settings) {
-  localStorage.setItem(SEARCH_SORT_SETTINGS_KEY, JSON.stringify(settings || {}));
+  storageSet(SEARCH_SORT_SETTINGS_KEY, JSON.stringify(settings || {}));
 }
 
 function updateSearchSortSettings(column, patch) {
@@ -874,7 +891,7 @@ function updateSearchSortSettings(column, patch) {
 }
 
 function writeColumnSettings(settings) {
-  localStorage.setItem(COLUMN_SETTINGS_KEY, JSON.stringify(settings || {}));
+  storageSet(COLUMN_SETTINGS_KEY, JSON.stringify(settings || {}));
 }
 
 function getColumnMeta(column) {
@@ -1019,7 +1036,7 @@ function initColumnDrawers() {
         }
         const command = {
           module: 'matching',
-          type: commandType,
+          command_type: commandType,
           record_id: payload.record_id,
           payload,
           client_context: {
@@ -1084,7 +1101,7 @@ async function buildImportCommandPayload(drawer, column) {
 
 function readImportStatuses() {
   try {
-    const parsed = JSON.parse(localStorage.getItem(IMPORT_STATUS_KEY) || '[]');
+    const parsed = JSON.parse(storageGet(IMPORT_STATUS_KEY) || '[]');
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(isVisibleImportStatus);
   } catch {
@@ -1093,7 +1110,7 @@ function readImportStatuses() {
 }
 
 function writeImportStatuses(items) {
-  localStorage.setItem(IMPORT_STATUS_KEY, JSON.stringify((items || []).filter(isVisibleImportStatus).slice(0, 30)));
+  storageSet(IMPORT_STATUS_KEY, JSON.stringify((items || []).filter(isVisibleImportStatus).slice(0, 30)));
 }
 
 function isVisibleImportStatus(item) {
@@ -1324,33 +1341,31 @@ function renderContextMenu(menu, context, x, y) {
     status.textContent = 'Gesendet.';
 
     const title = `${mode === 'app' ? 'Matching App modifizieren' : 'Matching bearbeiten'} · ${context.column || 'Matching'}`;
-    window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
-      detail: {
-        text: instruction,
-        module: 'matching',
-        source_title: 'Matching',
-        command_type: mode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
-        record_id: context.fieldId || context.column || 'matching',
+    runtimeContext?.businessChat?.submitTask?.({
+      text: instruction,
+      module: 'matching',
+      command_type: mode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
+      record_id: context.fieldId || context.column || 'matching',
+      title,
+      instruction,
+      payload: {
         title,
         instruction,
-        payload: {
-          title,
-          instruction,
-          prompt: instruction,
-          user_message: instruction,
-          mode,
-          target: mode === 'app' ? 'app' : 'data',
-          context,
-          thread_key: 'business-os/matching',
-        },
-        client_context: {
-          action: 'context-chat',
-          mode,
-          column: context.column,
-          entity_type: context.entityType,
-        },
+        prompt: instruction,
+        user_message: instruction,
+        mode,
+        target: mode === 'app' ? 'app' : 'data',
+        context,
+        thread_key: 'business-os/matching',
+        record_snapshot: context,
       },
-    }));
+      client_context: {
+        action: 'context-chat',
+        mode,
+        column: context.column,
+        entity_type: context.entityType,
+      },
+    }).catch?.(() => {});
 
     setTimeout(() => { menu.hidden = true; }, 650);
   });

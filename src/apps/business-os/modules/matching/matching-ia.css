@@ -1,0 +1,217 @@
+/* Matching L-class IA overrides.
+   Repeating filter/search/view chrome remains in shared/base.css + pane-grammar. */
+.module-root[data-module-root="matching"] .matching-app {
+  display: grid;
+  grid-template-columns: minmax(240px, var(--ctox-left-width, 300px)) 8px minmax(360px, 1fr) 8px minmax(260px, var(--ctox-right-width, 340px));
+  grid-template-rows: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.module-root[data-module-root="matching"] .matching-left {
+  grid-column: 1;
+  grid-row: 1;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.module-root[data-module-root="matching"] [data-resizer="left"] { grid-column: 2; grid-row: 1; }
+
+.module-root[data-module-root="matching"] .matching-main {
+  grid-column: 3;
+  grid-row: 1;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  min-width: 360px;
+}
+
+.module-root[data-module-root="matching"] [data-resizer="right"] { grid-column: 4; grid-row: 1; }
+
+.module-root[data-module-root="matching"] .matching-objects {
+  grid-column: 5;
+  grid-row: 1;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.module-root[data-module-root="matching"] .matching-app.is-objects-hidden {
+  grid-template-columns: minmax(240px, var(--ctox-left-width, 300px)) 8px minmax(360px, 1fr) 0 0;
+}
+
+.module-root[data-module-root="matching"] .matching-app.is-objects-hidden > [data-resizer="right"],
+.module-root[data-module-root="matching"] .matching-app.is-objects-hidden > .matching-objects {
+  display: none;
+}
+
+.module-root[data-module-root="matching"] [hidden] { display: none !important; }
+
+.module-root[data-module-root="matching"] .source-grid,
+.module-root[data-module-root="matching"] .requirement-list {
+  display: grid;
+  align-content: start;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2, 8px);
+  min-height: 0;
+  padding: 0;
+  overflow: auto;
+}
+
+.module-root[data-module-root="matching"] .matching-workbench-well {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.module-root[data-module-root="matching"] .matching-workbench-well > .map-wrap,
+.module-root[data-module-root="matching"] .matching-workbench-well > .map-wrap > .map {
+  min-height: 0;
+  height: 100%;
+}
+
+.module-root[data-module-root="matching"] .matching-workbench-well > .map-wrap { overflow: auto; }
+
+.module-root[data-module-root="matching"] .matching-requirement-row,
+.module-root[data-module-root="matching"] .matching-candidate-row {
+  position: relative;
+  display: grid;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  min-width: 0;
+  padding: var(--space-3, 12px);
+  border: 0;
+  border-radius: var(--panel-radius);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.module-root[data-module-root="matching"] .matching-requirement-row { grid-template-columns: minmax(0, 1fr) auto; }
+.module-root[data-module-root="matching"] .matching-candidate-row { grid-template-columns: 28px 32px minmax(0, 1fr) auto auto; }
+
+.module-root[data-module-root="matching"] .matching-requirement-row::before,
+.module-root[data-module-root="matching"] .matching-candidate-row::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 2px;
+  border-radius: var(--panel-radius) 0 0 var(--panel-radius);
+  background: transparent;
+}
+
+.module-root[data-module-root="matching"] .matching-requirement-row.is-selected,
+.module-root[data-module-root="matching"] .matching-candidate-row.is-selected { background: var(--accent-soft); }
+
+.module-root[data-module-root="matching"] .matching-requirement-row.is-selected::before,
+.module-root[data-module-root="matching"] .matching-candidate-row.is-selected::before { background: var(--accent); }
+
+.module-root[data-module-root="matching"] .matching-row-copy {
+  display: grid;
+  gap: var(--space-1, 4px);
+  min-width: 0;
+}
+
+.module-root[data-module-root="matching"] .matching-row-copy strong,
+.module-root[data-module-root="matching"] .matching-row-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.module-root[data-module-root="matching"] .matching-row-copy strong {
+  color: var(--text-strong);
+  font-size: var(--fs-body, 13px);
+}
+
+.module-root[data-module-root="matching"] .matching-row-copy span {
+  color: var(--muted);
+  font-size: var(--fs-caption, 11px);
+}
+
+.module-root[data-module-root="matching"] .matching-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1, 4px);
+}
+
+.module-root[data-module-root="matching"] .matching-rank,
+.module-root[data-module-root="matching"] .matching-score {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.module-root[data-module-root="matching"] .matching-rank {
+  color: var(--muted);
+  font-size: var(--fs-caption, 11px);
+}
+
+.module-root[data-module-root="matching"] .matching-score {
+  min-width: 44px;
+  color: var(--text-strong);
+  font-weight: 700;
+}
+
+.module-root[data-module-root="matching"] .matching-score.is-unscored { color: var(--muted); }
+
+.module-root[data-module-root="matching"] .is-list-view .matching-requirement-row,
+.module-root[data-module-root="matching"] .is-list-view .matching-candidate-row {
+  min-height: 32px;
+  padding-block: var(--space-1, 4px);
+  border-radius: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+}
+
+.module-root[data-module-root="matching"] .matching-object-evidence {
+  display: grid;
+  gap: var(--space-3, 12px);
+  margin-bottom: var(--space-3, 12px);
+}
+
+.module-root[data-module-root="matching"] .matching-evidence-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3, 12px);
+}
+
+.module-root[data-module-root="matching"] .matching-evidence-summary > div:last-child {
+  display: grid;
+  gap: var(--space-1, 4px);
+  min-width: 0;
+}
+
+.module-root[data-module-root="matching"] .matching-evidence-summary span {
+  color: var(--muted);
+  font-size: var(--fs-caption, 11px);
+}
+
+.module-root[data-module-root="matching"] .matching-evidence-card { margin-bottom: var(--space-3, 12px); }
+.module-root[data-module-root="matching"] .matching-evidence-card .ctox-fields dd { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+@container business-app-window (max-width: 900px) {
+  .module-root[data-module-root="matching"] .matching-app,
+  .module-root[data-module-root="matching"] .matching-app.is-objects-hidden {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(150px, 34%) minmax(300px, 1fr) auto;
+    overflow: auto;
+  }
+
+  .module-root[data-module-root="matching"] .matching-left,
+  .module-root[data-module-root="matching"] .matching-main,
+  .module-root[data-module-root="matching"] .matching-objects {
+    grid-column: 1;
+    min-width: 0;
+  }
+
+  .module-root[data-module-root="matching"] .matching-left { grid-row: 1; }
+  .module-root[data-module-root="matching"] .matching-main { grid-row: 2; }
+  .module-root[data-module-root="matching"] .matching-objects { grid-row: 3; min-height: 260px; }
+  .module-root[data-module-root="matching"] .matching-app > .ctox-column-resizer { display: none; }
+
+  .module-root[data-module-root="matching"] .matching-candidate-row { grid-template-columns: 24px 28px minmax(0, 1fr) auto; }
+  .module-root[data-module-root="matching"] .matching-candidate-row .matching-row-actions {
+    grid-column: 3 / -1;
+    justify-self: end;
+  }
+}

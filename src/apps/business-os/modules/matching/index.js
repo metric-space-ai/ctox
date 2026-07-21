@@ -17,7 +17,7 @@ export async function mount(ctx) {
       definitionModule.setActiveMatchingDefinition?.(ctx.matchingDefinition || globalThis.CTOX_MATCHING_DEFINITION);
     }
     const controls = await import(`./ui/businessOsControls.js?v=${MATCHING_BUILD}`);
-    controls.setBusinessOsCommandBus?.(ctx.commandBus);
+    controls.setBusinessOsRuntimeContext?.(ctx);
     if (disposed) return;
     const matchingUi = await import(`./ui/index.js?v=${MATCHING_BUILD}`);
     if (disposed) return;

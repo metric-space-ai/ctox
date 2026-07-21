@@ -1,174 +1,130 @@
-<main class="ctox-workspace app" data-resize-frame>
-    <!-- LEFT: Anforderungen -->
-    <section class="ctox-pane" id="left">
-      <header class="ctox-pane-header ctox-pane-band">
-        <div class="ctox-pane-title-row">
-          <div class="ctox-pane-titles">
-            <span class="ctox-pane-kicker">Matching-Engine</span>
-            <h2 class="ctox-pane-title column-title">Anforderungen</h2>
-          </div>
-          <div class="ctox-pane-actions">
-            <button class="ctox-pane-icon" type="button" id="createRequirementBtn" aria-label="Anforderung anlegen" title="Anforderung anlegen">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-            </button>
-            <div class="matching-overflow">
-              <button class="ctox-pane-icon" type="button" data-toggle-pane-options="requirements" aria-label="Spaltenoptionen" title="Spaltenoptionen" aria-expanded="false" aria-haspopup="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg>
-              </button>
-              <div class="matching-overflow-menu" data-pane-menu="requirements" role="menu" hidden>
-                <button class="matching-overflow-item" type="button" role="menuitem" data-column="requirements" data-column-action="configure" data-drawer-side="left">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
-                  <span>Konfigurieren</span>
-                </button>
-                <button class="matching-overflow-item" type="button" role="menuitem" data-column="requirements" data-column-action="import" data-drawer-side="left">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg>
-                  <span>Importieren</span>
-                </button>
-                <button class="matching-overflow-item" type="button" role="menuitem" data-column="requirements" data-column-action="export" data-drawer-side="left">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M12 4 8 8M12 4l4 4M5 19h14"/></svg>
-                  <span>Exportieren</span>
-                </button>
-                <button class="matching-overflow-item" type="button" role="menuitem" data-column="requirements" data-column-action="search-sort" data-drawer-side="left">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
-                  <span>Suche &amp; Sortierung</span>
-                </button>
-              </div>
-            </div>
-          </div>
+<main class="ctox-workspace matching-app is-objects-hidden" data-matching-workspace data-resize-frame>
+  <aside class="ctox-pane matching-left" id="left" data-left-content aria-label="Anforderungen">
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">Matching</span>
+          <h2 class="ctox-pane-title column-title">Anforderungen</h2>
         </div>
-        <div class="ctox-pane-tools">
-          <input class="ctox-pane-search" id="sourceSearch" type="search" placeholder="Anforderung, Quellen oder Bereich suchen…" aria-label="Anforderungen suchen" />
-          <select class="ctox-pane-filter" id="sourceGroupMode" aria-label="Anforderungen gruppieren und sortieren">
-            <option value="source">Gruppe: Quellen</option>
-            <option value="area">Gruppe: Bereiche</option>
-            <option value="recent">Neueste zuerst</option>
-          </select>
+        <div class="ctox-pane-actions">
+          <button class="ctox-pane-icon" type="button" id="createRequirementBtn" aria-label="Anforderung anlegen" title="Anforderung anlegen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+          <button class="ctox-pane-icon" type="button" id="requirementImportBtn" aria-label="Anforderungen importieren" title="Anforderungen importieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg></button>
+          <button class="ctox-pane-icon" type="button" id="requirementExportBtn" aria-label="Anforderungen exportieren" title="Anforderungen exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20V9M12 9 8 13M12 9l4 4M5 4h14"/></svg></button>
         </div>
-      </header>
-      <div class="sources">
-        <div class="source-grid" id="sourceGrid"></div>
       </div>
-    </section>
-
-    <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="260" data-resizer-max="560" aria-label="Spaltenbreite links anpassen"></button>
-
-    <!-- MIDDLE: Matches -->
-    <section class="ctox-pane requirements-wrap" id="center">
-      <header class="ctox-pane-header ctox-pane-band">
-        <div class="ctox-pane-title-row">
-          <div class="ctox-pane-titles">
-            <span class="ctox-pane-kicker">Kompilierung</span>
-            <h2 class="ctox-pane-title column-title">Matches</h2>
-          </div>
-          <div class="ctox-pane-actions">
-            <div class="ctox-pane-tabs" role="tablist" aria-label="Match-Darstellung">
-              <button class="ctox-pane-tab active" type="button" id="tabList" role="tab" aria-selected="true" aria-pressed="true">Liste</button>
-              <button class="ctox-pane-tab" type="button" id="tabMap" role="tab" aria-selected="false" aria-pressed="false">Tabelle</button>
-            </div>
-            <div class="matching-overflow">
-              <button class="ctox-pane-icon" type="button" data-toggle-pane-options="matches" aria-label="Spaltenoptionen" title="Spaltenoptionen" aria-expanded="false" aria-haspopup="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg>
-              </button>
-              <div class="matching-overflow-menu" data-pane-menu="matches" role="menu" hidden>
-                <button class="matching-overflow-item" type="button" role="menuitem" data-column="matches" data-column-action="configure" data-drawer-side="bottom">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
-                  <span>Konfigurieren</span>
-                </button>
-                <button class="matching-overflow-item" type="button" role="menuitem" data-column="matches" data-column-action="import" data-drawer-side="bottom">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg>
-                  <span>Importieren</span>
-                </button>
-                <button class="matching-overflow-item" type="button" role="menuitem" data-column="matches" data-column-action="export" data-drawer-side="bottom">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M12 4 8 8M12 4l4 4M5 19h14"/></svg>
-                  <span>Exportieren</span>
-                </button>
-                <button class="matching-overflow-item" type="button" role="menuitem" data-column="matches" data-column-action="search-sort" data-drawer-side="bottom">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
-                  <span>Suche &amp; Sortierung</span>
-                </button>
-              </div>
-            </div>
-          </div>
+      <div class="ctox-filterbar">
+        <input class="ctox-pane-search" id="sourceSearch" type="search" data-pg-search placeholder="Anforderungen suchen…" aria-label="Anforderungen suchen">
+        <div class="ctox-view-toggle" role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
         </div>
-        <div class="ctox-pane-tools" id="listTools">
-          <input class="ctox-pane-search" id="requirementSearch" type="search" placeholder="Match, Kriterium oder Quelle suchen…" />
-          <select class="ctox-pane-filter" id="requirementFilter">
-            <option value="all">Alle Matches</option>
-          </select>
-          <span class="muted matching-pane-tools-source" id="sourceName">Alle Quellen</span>
-        </div>
-      </header>
-      <div class="requirement-list" id="requirementList"></div>
-
-      <!-- Map Tab Content -->
-      <div class="map-wrap" id="mapWrap">
-        <div class="map" id="map"></div>
+        <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
       </div>
-    </section>
-
-    <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="260" data-resizer-max="560" aria-label="Spaltenbreite rechts anpassen"></button>
-
-    <!-- RIGHT: Objekte -->
-    <section class="ctox-pane object-panel" id="right">
-      <header class="ctox-pane-header ctox-pane-band">
-        <div class="ctox-pane-title-row">
-          <div class="ctox-pane-titles">
-            <span class="ctox-pane-kicker">Kandidaten</span>
-            <h2 class="ctox-pane-title column-title">Objekte</h2>
-          </div>
-          <div class="ctox-pane-actions">
-            <button class="ctox-pane-icon" type="button" id="objectImportPdfBtn" aria-label="Objekte importieren" title="Objekte importieren" hidden>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg>
-            </button>
-            <div class="matching-overflow">
-              <button class="ctox-pane-icon" type="button" data-toggle-pane-options="objects" aria-label="Spaltenoptionen" title="Spaltenoptionen" aria-expanded="false" aria-haspopup="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg>
-              </button>
-              <div class="matching-overflow-menu" data-pane-menu="objects" role="menu" hidden>
-                <button class="matching-overflow-item" type="button" role="menuitem" data-column="objects" data-column-action="configure" data-drawer-side="right">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
-                  <span>Konfigurieren</span>
-                </button>
-                <button class="matching-overflow-item" type="button" role="menuitem" data-column="objects" data-column-action="import" data-drawer-side="right">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg>
-                  <span>Importieren</span>
-                </button>
-                <button class="matching-overflow-item" type="button" role="menuitem" data-column="objects" data-column-action="export" data-drawer-side="right">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M12 4 8 8M12 4l4 4M5 19h14"/></svg>
-                  <span>Exportieren</span>
-                </button>
-                <button class="matching-overflow-item" type="button" role="menuitem" data-column="objects" data-column-action="search-sort" data-drawer-side="right">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
-                  <span>Suche &amp; Sortierung</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="ctox-pane-tools">
-          <input class="ctox-pane-search" id="objectSearch" type="search" placeholder="Objekt, Skill, Ort oder Stichwort suchen…" />
-          <select class="ctox-pane-filter" id="objectSort">
-            <option value="best">Sortieren: Bester Match</option>
-            <option value="created_desc">Sortieren: Neueste zuerst</option>
-            <option value="created_asc">Sortieren: Älteste zuerst</option>
-            <option value="name">Sortieren: Name</option>
-            <option value="tax">Sortieren: Taxonomie</option>
+      <div class="ctox-filter-tray" data-pg-tray hidden>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" id="sourceGroupMode" data-pg-filter data-pg-name="activity" data-pg-default="all" aria-label="Aktivität">
+            <option value="all">Alle Aktivitäten</option>
+            <option value="active">Aktive Quellen</option>
+            <option value="inactive">Inaktive Quellen</option>
           </select>
+          <select class="ctox-select" data-pg-filter data-pg-name="sort" data-pg-default="updated" aria-label="Sortierung">
+            <option value="updated">Zuletzt geändert</option>
+            <option value="title">Titel</option>
+            <option value="source">Quelle</option>
+            <option value="matches">Meiste Matches</option>
+          </select>
+          <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
         </div>
-      </header>
+      </div>
+    </header>
+    <nav class="ctox-view-switch" aria-label="Anforderungsansichten">
+      <div class="ctox-pane-tabs">
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="all" aria-selected="true">Alle<span class="view-count" data-pg-count="all"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="open" aria-selected="false">Offen<span class="view-count" data-pg-count="open"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="matched" aria-selected="false">Mit Matches<span class="view-count" data-pg-count="matched"></span></button>
+      </div>
+    </nav>
+    <div class="ctox-pane-body ctox-well">
+      <div class="ctox-list source-grid" id="sourceGrid" role="listbox" aria-label="Anforderungen"></div>
+    </div>
+    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
+    <input type="file" id="requirementImportInput" accept="application/json,.json" hidden>
+  </aside>
 
-      <input type="file" id="objectImportPdfInput" accept="application/pdf,.pdf,image/*,.png,.jpg,.jpeg,.webp,.gif,.bmp,.avif" style="display:none" />
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="240" data-resizer-max="480" aria-label="Spaltenbreite links anpassen"></button>
 
-      <div class="object-list" id="objectList"></div>
+  <section class="ctox-pane matching-main" id="center" aria-label="Match Workbench">
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" id="sourceName">Match Workbench</span>
+          <h2 class="ctox-pane-title column-title" id="workbenchTitle">Anforderung auswählen</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button class="ctox-pane-icon" type="button" id="runMatchingBtn" aria-label="Matching berechnen" title="Matching berechnen" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5.5v13l10-6.5-10-6.5Z"/></svg></button>
+          <button class="ctox-pane-icon" type="button" id="toggleObjectsPane" data-toggle-objects aria-pressed="false" aria-label="Objekt-Nachweise einblenden" title="Objekt-Nachweise einblenden" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button>
+        </div>
+      </div>
+      <div class="ctox-filterbar" id="listTools">
+        <input class="ctox-pane-search" id="requirementSearch" type="search" data-pg-search placeholder="Kandidaten und Nachweise suchen…" aria-label="Matches durchsuchen">
+        <div class="ctox-view-toggle" role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="true" aria-label="Karten-Ansicht" title="Karten-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
+        <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Match-Filter" title="Match-Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="ctox-filter-tray" data-pg-tray hidden>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" id="requirementFilter" data-pg-filter data-pg-name="score" data-pg-default="all" aria-label="Mindestscore">
+            <option value="all">Alle Scores</option>
+            <option value="80">80% und mehr</option>
+            <option value="60">60% und mehr</option>
+            <option value="scored">Nur bewertet</option>
+          </select>
+          <select class="ctox-select" data-pg-filter data-pg-name="status" data-pg-default="all" aria-label="Prozessstatus">
+            <option value="all">Alle Prozesse</option>
+            <option value="active">Aktiv</option>
+            <option value="paused">Pausiert</option>
+          </select>
+          <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+        </div>
+      </div>
+    </header>
+    <nav class="ctox-view-switch" aria-label="Workbench Ansichten">
+      <div class="ctox-pane-tabs">
+        <button class="ctox-pane-tab is-active" type="button" id="tabList" role="tab" data-pg-band="ranking" aria-selected="true">Rangliste<span class="view-count" data-pg-count="ranking"></span></button>
+        <button class="ctox-pane-tab" type="button" id="tabMap" role="tab" data-pg-band="matrix" aria-selected="false">Matrix<span class="view-count" data-pg-count="matrix"></span></button>
+      </div>
+    </nav>
+    <div class="ctox-pane-body ctox-well matching-workbench-well">
+      <div class="ctox-list requirement-list" id="requirementList" role="listbox" aria-label="Gerankte Kandidaten"></div>
+      <div class="map-wrap" id="mapWrap" hidden><div class="map" id="map"></div></div>
+    </div>
+    <footer class="ctox-pane-footer"><span id="matchFooter">Anforderung auswählen</span></footer>
+  </section>
 
-    </section>
+  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="260" data-resizer-max="480" aria-label="Spaltenbreite rechts anpassen"></button>
 
-  </main>
+  <aside class="ctox-pane matching-objects" id="right" data-right-content aria-label="Objekt-Nachweise">
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">Objekt-Nachweise</span>
+          <h2 class="ctox-pane-title column-title" id="objectEvidenceTitle">Kein Match ausgewählt</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button class="ctox-pane-icon" type="button" id="objectImportPdfBtn" aria-label="Objekte importieren" title="Objekte importieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg></button>
+          <button class="ctox-pane-icon" type="button" id="objectExportBtn" aria-label="Objekt-Nachweise exportieren" title="Objekt-Nachweise exportieren" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20V9M12 9 8 13M12 9l4 4M5 4h14"/></svg></button>
+          <button class="ctox-pane-icon" type="button" id="collapseObjectsPane" aria-label="Objekt-Nachweise ausblenden" title="Objekt-Nachweise ausblenden"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>
+        </div>
+      </div>
+    </header>
+    <input type="file" id="objectImportPdfInput" accept="application/pdf,.pdf,image/*,.png,.jpg,.jpeg,.webp,.gif,.bmp,.avif,application/json,.json" multiple hidden>
+    <div class="ctox-pane-body ctox-pane-scroll" id="objectList"></div>
+    <footer class="ctox-pane-footer"><span id="objectFooter">Match auswählen · Pane ist standardmäßig verborgen</span></footer>
+  </aside>
+</main>
 
-  <div class="column-drawer-backdrop" data-column-drawer-backdrop hidden></div>
-  <aside class="column-drawer column-drawer-left" data-column-drawer="left" aria-hidden="true"></aside>
-  <section class="column-drawer column-drawer-bottom" data-column-drawer="bottom" aria-hidden="true"></section>
-  <aside class="column-drawer column-drawer-right" data-column-drawer="right" aria-hidden="true"></aside>
 
   <!-- Modal: Notizen & Fortschritt (pro Objekt & Anforderung) -->
   <div class="ctox-modal" id="noteModal" hidden role="dialog" aria-modal="true" aria-labelledby="noteTitle" aria-hidden="true">

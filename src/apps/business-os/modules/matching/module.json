@@ -18,7 +18,8 @@
       "left": "Column import and source configuration",
       "right": "Object pool configuration and selected record detail",
       "bottom": "Matching prompt, schema, task status, and evidence"
-    }
+    },
+    "third_pane_justification": "Matching is an evidence app (IA-Karte): left = requirements, main = ranked match workbench; the third pane is the parsed CV/object evidence for the selected match — hidden by default, auto-reveals on selection."
   },
   "category": "Operations",
   "version": "v1",

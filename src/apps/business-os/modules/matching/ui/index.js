@@ -3,7 +3,6 @@
 // Datenquellen & Zustand
 // ---------------------------
 
-import { CtoxResizer } from '../../../shared/resizer.js';
 import {
   computeRequirementMatch,
   computeTotalMatchScoreFromItems,
@@ -11,7 +10,7 @@ import {
   shortlistObjectsForRequirement,
   shortlistRequirementsForObject
 } from './matchingTools.js';
-import { readViewState, patchViewState } from './viewState.js';
+import { readViewState, patchViewState, setViewStateStorageScope } from './viewState.js';
 import { normalizeCandidateStage } from '../core/pipeline.js';
 window.recomputeAllMatchScoresOnce = recomputeAllMatchScoresOnce;
 
@@ -43,6 +42,7 @@ const MATCHING_VIEW_STATE_DEFAULTS = {
   activeRequirementForScoring: null,
   selectedObject: null,
   matrixSelectedObjectId: null,
+  objectsPaneUserCollapsed: true,
   activeTab: 'list',
   sourceGroupMode: 'source',
   sourceSearch: '',
@@ -2986,61 +2986,6 @@ function _isDesktopThreeColumnLayout(appEl) {
   return !!_readGridTrackPixels(appEl);
 }
 
-function setupMatchingColumnResizing() {
-  const appEl = getMatchingModuleHost().querySelector('.app');
-  if (!appEl) return;
-  appEl.querySelectorAll('.col-resizer').forEach((node) => node.remove());
-
-  const leftHandle = document.createElement('div');
-  leftHandle.className = 'col-resizer col-resizer-left';
-  leftHandle.dataset.resizer = 'left';
-  leftHandle.setAttribute('role', 'separator');
-  leftHandle.setAttribute('aria-orientation', 'vertical');
-  leftHandle.setAttribute('aria-label', 'Spaltenbreite links/mittig anpassen');
-
-  const rightHandle = document.createElement('div');
-  rightHandle.className = 'col-resizer col-resizer-right';
-  rightHandle.dataset.resizer = 'right';
-  rightHandle.setAttribute('role', 'separator');
-  rightHandle.setAttribute('aria-orientation', 'vertical');
-  rightHandle.setAttribute('aria-label', 'Spaltenbreite mittig/rechts anpassen');
-
-  appEl.appendChild(leftHandle);
-  appEl.appendChild(rightHandle);
-
-  const resizerL = new CtoxResizer({
-    resizerEl: leftHandle,
-    containerEl: appEl,
-    cssVar: '--matching-left-width',
-    side: 'left',
-    minWidth: 260,
-    maxWidth: 560,
-    onResize: (width) => localStorage.setItem('ctox.matching.layout.leftWidth', width)
-  });
-
-  const resizerR = new CtoxResizer({
-    resizerEl: rightHandle,
-    containerEl: appEl,
-    cssVar: '--matching-right-width',
-    side: 'right',
-    minWidth: 260,
-    maxWidth: 560,
-    onResize: (width) => localStorage.setItem('ctox.matching.layout.rightWidth', width)
-  });
-
-  const safeStoredWidth = (key, fallback) => {
-    const value = Number.parseFloat(localStorage.getItem(key) || '');
-    return Number.isFinite(value) ? Math.max(260, Math.min(560, value)) : fallback;
-  };
-  const leftWidth = safeStoredWidth('ctox.matching.layout.leftWidth', 300);
-  const rightWidth = safeStoredWidth('ctox.matching.layout.rightWidth', 300);
-  appEl.style.setProperty('--matching-left-width', `${leftWidth}px`);
-  appEl.style.setProperty('--matching-right-width', `${rightWidth}px`);
-
-  leftHandle.style.display = 'flex';
-  rightHandle.style.display = 'flex';
-}
-
 function reconcilePersistedMatchingSelection() {
   const sourceIds = new Set((sources || []).map(c => c.id));
   if (activeSource && !sourceIds.has(activeSource)) {
@@ -5287,7 +5232,547 @@ function renderAreaGroupedSources(grid, visibleSources) {
   }
 }
 
+const matchingPaneState = {
+  left: { search: '', view: 'cards', band: 'all', filters: { activity: 'all', sort: 'updated' } },
+  main: { search: '', view: 'cards', band: 'ranking', filters: { score: 'all', status: 'all' } }
+};
+let objectsPaneUserCollapsed = matchingViewState.objectsPaneUserCollapsed !== false;
+let matchingIaWired = false;
+
+function allRequirementRows() {
+  return (sources || []).flatMap((source) => (source.requirements || []).map((requirement) => ({ source, requirement })));
+}
+
+function requirementMatchRows(requirementId) {
+  return (matches || [])
+    .filter((match) => match.requirementId === requirementId && !match.removed)
+    .map((match) => ({ match, object: getObject(match.objectId) }))
+    .filter((entry) => entry.object);
+}
+
+function requirementIsOpen(requirement) {
+  const status = String(requirement?.status || 'active').toLowerCase();
+  return !['closed', 'done', 'archived', 'inactive'].includes(status);
+}
+
+function requirementUpdatedAt(requirement) {
+  return Date.parse(requirement?.updatedAt || requirement?.createdAt || '') || 0;
+}
+
+function updateGrammarSummary(pane, counts, footer) {
+  if (!pane) return;
+  if (pane.__ctoxPaneGrammar) {
+    pane.__ctoxPaneGrammar.setCounts?.(counts);
+    pane.__ctoxPaneGrammar.setFooter?.(footer);
+    return;
+  }
+  Object.entries(counts || {}).forEach(([keyName, value]) => {
+    const node = pane.querySelector(`[data-pg-count="${keyName}"]`);
+    if (node) node.textContent = ` (${value})`;
+  });
+  const footerNode = pane.querySelector('[data-pg-footer]');
+  if (footerNode) footerNode.textContent = footer || '';
+}
+
+function currentSelectedRequirement() {
+  return findRequirementAndSource(activeRequirementForScoring || '');
+}
+
+function selectedMatchEntry() {
+  if (!activeRequirementForScoring || !selectedObject) return null;
+  const match = findMatch(activeRequirementForScoring, selectedObject);
+  const object = getObject(selectedObject);
+  if (!match || !object) return null;
+  return { match, object, ...currentSelectedRequirement() };
+}
+
+function applyRequirementSelectionInPlace() {
+  const selectedId = String(activeRequirementForScoring || '');
+  getMatchingModuleHost().querySelectorAll('#sourceGrid [data-requirement-id]').forEach((row) => {
+    const selected = row.dataset.requirementId === selectedId;
+    row.classList.toggle('is-selected', selected);
+    row.classList.toggle('selected', selected);
+    row.setAttribute('aria-selected', String(selected));
+  });
+}
+
+function applyCandidateSelectionInPlace() {
+  const selectedId = String(selectedObject || '');
+  getMatchingModuleHost().querySelectorAll('#requirementList [data-object-id]').forEach((row) => {
+    const selected = row.dataset.objectId === selectedId;
+    row.classList.toggle('is-selected', selected);
+    row.classList.toggle('selected', selected);
+    row.setAttribute('aria-selected', String(selected));
+  });
+}
+
+function setObjectsPaneVisibility() {
+  const root = getMatchingModuleHost().querySelector('[data-matching-workspace]');
+  const toggle = getMatchingModuleHost().querySelector('[data-toggle-objects]');
+  const hasSelection = Boolean(selectedMatchEntry());
+  const visible = hasSelection && !objectsPaneUserCollapsed;
+  root?.classList.toggle('is-objects-hidden', !visible);
+  if (toggle) {
+    toggle.hidden = !hasSelection;
+    toggle.setAttribute('aria-pressed', String(visible));
+    toggle.setAttribute('aria-label', visible ? 'Objekt-Nachweise ausblenden' : 'Objekt-Nachweise einblenden');
+    toggle.title = visible ? 'Objekt-Nachweise ausblenden' : 'Objekt-Nachweise einblenden';
+  }
+  return visible;
+}
+
+function selectRequirementInPlace(requirementId, sourceId) {
+  activeRequirementForScoring = requirementId;
+  activeSource = sourceId || null;
+  selectedObject = null;
+  currentMatchDetail = null;
+  objectsPaneUserCollapsed = true;
+  persistMatchingRuntimeState({ objectsPaneUserCollapsed });
+  applyRequirementSelectionInPlace();
+  renderRequirements();
+  renderObjects({ reason: 'requirement-select' });
+  renderMap();
+}
+
+function selectCandidateInPlace(requirementId, objectId) {
+  activeRequirementForScoring = requirementId;
+  selectedObject = objectId;
+  matrixSelectedObjectId = null;
+  const entry = selectedMatchEntry();
+  if (entry) {
+    currentMatchDetail = {
+      sourceId: entry.source?.id || entry.match.sourceId || '',
+      requirementId,
+      objectId,
+      items: Array.isArray(entry.match.items) ? entry.match.items : [],
+      colorByRequirement: {}
+    };
+    objectsPaneUserCollapsed = false;
+  }
+  persistMatchingRuntimeState({ objectsPaneUserCollapsed });
+  applyCandidateSelectionInPlace();
+  renderObjects({ reason: 'candidate-select' });
+}
+
+function filteredRequirementRows() {
+  const state = matchingPaneState.left;
+  const query = state.search || '';
+  const activity = state.filters?.activity || 'all';
+  const band = state.band || 'all';
+  const sort = state.filters?.sort || 'updated';
+  let rows = allRequirementRows().filter(({ source, requirement }) => {
+    if (!matchesFullTextSearch(buildRequirementSearchPayload(requirement, source), query)) return false;
+    if (activity === 'active' && !isSourceActive(source.id)) return false;
+    if (activity === 'inactive' && isSourceActive(source.id)) return false;
+    const matchCount = requirementMatchRows(requirement.id).length;
+    if (band === 'open' && !requirementIsOpen(requirement)) return false;
+    if (band === 'matched' && matchCount === 0) return false;
+    return true;
+  });
+  rows.sort((a, b) => {
+    if (sort === 'title') return String(a.requirement.title || '').localeCompare(String(b.requirement.title || ''), 'de');
+    if (sort === 'source') return String(a.source.name || '').localeCompare(String(b.source.name || ''), 'de');
+    if (sort === 'matches') return requirementMatchRows(b.requirement.id).length - requirementMatchRows(a.requirement.id).length;
+    return requirementUpdatedAt(b.requirement) - requirementUpdatedAt(a.requirement);
+  });
+  return rows;
+}
+
+function renderRequirementSelector() {
+  const pane = getMatchingModuleHost().querySelector('#left');
+  const grid = getMatchingModuleHost().querySelector('#sourceGrid');
+  if (!pane || !grid) return;
+  const previousScroll = grid.scrollTop;
+  const allRows = allRequirementRows();
+  const visibleRows = filteredRequirementRows();
+  const counts = {
+    all: allRows.length,
+    open: allRows.filter(({ requirement }) => requirementIsOpen(requirement)).length,
+    matched: allRows.filter(({ requirement }) => requirementMatchRows(requirement.id).length > 0).length
+  };
+  grid.classList.toggle('is-list-view', matchingPaneState.left.view === 'list');
+  grid.replaceChildren();
+  if (!visibleRows.length) {
+    const empty = el('div', 'ctox-empty');
+    empty.textContent = allRows.length ? 'Keine Anforderungen im aktuellen Filter.' : renderCollectionDiagnostic('matching_requirements', 'Noch keine Anforderungen verfügbar.');
+    grid.appendChild(empty);
+  } else {
+    visibleRows.forEach(({ source, requirement }) => {
+      const row = el('article', 'ctox-list-item matching-requirement-row');
+      row.tabIndex = 0;
+      row.setAttribute('role', 'option');
+      row.dataset.requirementId = String(requirement.id || '');
+      row.dataset.sourceId = String(source.id || '');
+      row.dataset.contextRecordId = String(requirement.id || '');
+      row.dataset.contextRecordType = 'matching_requirement';
+      row.dataset.contextLabel = String(requirement.title || 'Anforderung');
+      const matchCount = requirementMatchRows(requirement.id).length;
+      const location = requirement.location || 'Remote';
+      row.innerHTML = `
+        <div class="matching-row-copy">
+          <strong>${escapeHtml(requirement.title || 'Anforderung')}</strong>
+          <span>${escapeHtml(source.name || 'Quelle')} · ${escapeHtml(location)} · ${matchCount} Match${matchCount === 1 ? '' : 'es'}</span>
+        </div>
+        <div class="matching-row-actions">
+          <button type="button" class="ctox-pane-icon" data-delete-requirement aria-label="Anforderung löschen" title="Anforderung löschen">${actionIcon('trash')}</button>
+        </div>`;
+      const select = () => selectRequirementInPlace(requirement.id, source.id);
+      row.addEventListener('click', (event) => {
+        if (event.target.closest('[data-delete-requirement]')) return;
+        select();
+      });
+      row.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(); }
+      });
+      row.querySelector('[data-delete-requirement]')?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        handleDeleteRequirement(requirement.id);
+      });
+      grid.appendChild(row);
+    });
+  }
+  applyRequirementSelectionInPlace();
+  if (previousScroll) grid.scrollTop = previousScroll;
+  const scopeLabel = matchingPaneState.left.band === 'all' ? 'Alle' : matchingPaneState.left.band === 'open' ? 'Offen' : 'Mit Matches';
+  updateGrammarSummary(pane, counts, `${visibleRows.length} Einträge · ${scopeLabel}`);
+}
+
+function candidateRowsForSelectedRequirement() {
+  const requirementId = activeRequirementForScoring;
+  if (!requirementId) return [];
+  const state = matchingPaneState.main;
+  const query = state.search || '';
+  const scoreFilter = state.filters?.score || 'all';
+  const statusFilter = state.filters?.status || 'all';
+  return requirementMatchRows(requirementId)
+    .filter(({ match, object }) => {
+      if (!matchesFullTextSearch({ match, object }, query)) return false;
+      const score = scoreFromMatchItems(match.items);
+      if (scoreFilter === 'scored' && score == null) return false;
+      if (/^\d+$/.test(scoreFilter) && (score == null || score < Number(scoreFilter))) return false;
+      const proc = processes.get(key(requirementId, object.id));
+      const active = proc ? proc.active !== false : match.active !== false;
+      if (statusFilter === 'active' && !active) return false;
+      if (statusFilter === 'paused' && active) return false;
+      return true;
+    })
+    .sort((a, b) => (scoreFromMatchItems(b.match.items) ?? -1) - (scoreFromMatchItems(a.match.items) ?? -1));
+}
+
+function renderMatchWorkbench() {
+  const root = getMatchingModuleHost();
+  const list = root.querySelector('#requirementList');
+  const title = root.querySelector('#workbenchTitle');
+  const kicker = root.querySelector('#sourceName');
+  const runButton = root.querySelector('#runMatchingBtn');
+  const footer = root.querySelector('#matchFooter');
+  const pane = root.querySelector('#center');
+  if (!list || !title || !kicker || !runButton || !footer || !pane) return;
+  const previousScroll = list.scrollTop;
+  const { requirement, source } = currentSelectedRequirement();
+  list.classList.toggle('is-list-view', matchingPaneState.main.view === 'list');
+  list.replaceChildren();
+  if (!requirement || !source) {
+    title.textContent = 'Anforderung auswählen';
+    kicker.textContent = 'Match Workbench';
+    runButton.disabled = true;
+    const empty = el('div', 'ctox-empty');
+    empty.innerHTML = '<strong>Keine Anforderung ausgewählt</strong><span>Wähle links eine Anforderung, um Scores und gerankte Kandidaten zu sehen.</span>';
+    list.appendChild(empty);
+    footer.textContent = 'Anforderung auswählen';
+    updateGrammarSummary(pane, { ranking: 0, matrix: 0 }, 'Anforderung auswählen');
+    setObjectsPaneVisibility();
+    return;
+  }
+  title.textContent = requirement.title || 'Anforderung';
+  kicker.textContent = source.name || 'Quelle';
+  runButton.disabled = bulkMatchingRequirements.has(requirement.id) || !objects.some((object) => !object.isPlaceholder);
+  runButton.classList.toggle('is-running', bulkMatchingRequirements.has(requirement.id));
+  const rows = candidateRowsForSelectedRequirement();
+  if (!rows.length) {
+    const empty = el('div', 'ctox-empty');
+    empty.innerHTML = '<strong>Noch keine sichtbaren Matches</strong><span>Starte Matching, um den Objektpool für diese Anforderung zu bewerten.</span>';
+    list.appendChild(empty);
+  } else {
+    rows.forEach(({ match, object }, index) => {
+      const score = scoreFromMatchItems(match.items);
+      const proc = processes.get(key(requirement.id, object.id));
+      const active = proc ? proc.active !== false : match.active !== false;
+      const row = el('article', 'ctox-list-item matching-candidate-row');
+      row.tabIndex = 0;
+      row.setAttribute('role', 'option');
+      row.dataset.objectId = String(object.id || '');
+      row.dataset.requirementId = String(requirement.id || '');
+      row.dataset.matchId = String(match.id || key(requirement.id, object.id));
+      row.dataset.contextRecordId = String(match.id || key(requirement.id, object.id));
+      row.dataset.contextRecordType = 'matching_result';
+      row.dataset.contextLabel = `${requirement.title || 'Anforderung'} × ${object.name || 'Objekt'}`;
+      row.innerHTML = `
+        <div class="matching-rank" aria-label="Rang ${index + 1}">${index + 1}</div>
+        <div class="ctox-avatar ctox-avatar--sm">${safeImgHtml({ src: normalizeImageSrc(object.photo) || '', fallbackSrc: getObjectFallbackAvatarUrl(object.id, object.name), alt: object.name })}</div>
+        <div class="matching-row-copy">
+          <strong>${escapeHtml(object.name || 'Objekt')}</strong>
+          <span>${escapeHtml(object.tax || 'Profil')} · ${(match.items || []).length} Nachweise · ${active ? 'aktiv' : 'pausiert'}</span>
+        </div>
+        <div class="matching-score ${score == null ? 'is-unscored' : ''}" data-match-key="${escapeHtml(key(requirement.id, object.id))}">${score == null ? '—' : `${score}%`}</div>
+        <div class="matching-row-actions">
+          <button type="button" class="ctox-pane-icon" data-open-notes aria-label="Notizen und Fortschritt" title="Notizen und Fortschritt">${actionIcon('file')}</button>
+          <button type="button" class="ctox-pane-icon" data-remove-match aria-label="Match entfernen" title="Match entfernen">${actionIcon('trash')}</button>
+        </div>`;
+      const select = () => selectCandidateInPlace(requirement.id, object.id);
+      row.addEventListener('click', (event) => {
+        if (event.target.closest('button')) return;
+        select();
+      });
+      row.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(); }
+      });
+      row.querySelector('[data-open-notes]')?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        select();
+        openNoteModal(requirement.id, object.id);
+      });
+      row.querySelector('[data-remove-match]')?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        removeMatch(requirement.id, object.id);
+      });
+      list.appendChild(row);
+    });
+    hydrateImages(list);
+  }
+  applyCandidateSelectionInPlace();
+  if (previousScroll) list.scrollTop = previousScroll;
+  footer.textContent = `${rows.length} Kandidaten · ${source.name || 'Quelle'}`;
+  updateGrammarSummary(pane, { ranking: rows.length, matrix: requirementMatchRows(requirement.id).length }, footer.textContent);
+  setObjectsPaneVisibility();
+}
+
+function evidenceValue(value) {
+  if (Array.isArray(value)) return value.filter(Boolean).join(' · ');
+  if (value && typeof value === 'object') return Object.entries(value).map(([keyName, item]) => `${keyName}: ${evidenceValue(item)}`).filter((item) => !item.endsWith(': ')).join(' · ');
+  return String(value ?? '').trim();
+}
+
+function appendEvidenceCard(host, title, entries) {
+  const useful = (entries || []).filter(([, value]) => evidenceValue(value));
+  if (!useful.length) return;
+  const card = el('section', 'ctox-card matching-evidence-card');
+  card.innerHTML = `<header><h3>${escapeHtml(title)}</h3></header><div class="ctox-card-body"><dl class="ctox-fields">${useful.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(evidenceValue(value))}</dd></div>`).join('')}</dl></div>`;
+  host.appendChild(card);
+}
+
+function renderSelectedObjectEvidence() {
+  const root = getMatchingModuleHost();
+  const host = root.querySelector('#objectList');
+  const title = root.querySelector('#objectEvidenceTitle');
+  const footer = root.querySelector('#objectFooter');
+  const exportButton = root.querySelector('#objectExportBtn');
+  if (!host || !title || !footer || !exportButton) return;
+  host.replaceChildren();
+  const entry = selectedMatchEntry();
+  if (!entry) {
+    title.textContent = 'Kein Match ausgewählt';
+    footer.textContent = 'Match auswählen · Pane ist standardmäßig verborgen';
+    exportButton.disabled = true;
+    const empty = el('div', 'ctox-empty');
+    empty.textContent = 'Wähle einen Kandidaten in der Rangliste.';
+    host.appendChild(empty);
+    setObjectsPaneVisibility();
+    return;
+  }
+  const { match, object, requirement } = entry;
+  title.textContent = object.name || 'Objekt';
+  exportButton.disabled = false;
+  const record = el('article', 'matching-object-evidence');
+  record.dataset.contextRecordId = String(object.id || '');
+  record.dataset.contextRecordType = 'matching_object';
+  record.dataset.contextLabel = String(object.name || 'Objekt');
+  record.innerHTML = `
+    <div class="matching-evidence-summary">
+      <div class="ctox-avatar ctox-avatar--lg">${safeImgHtml({ src: normalizeImageSrc(object.photo) || '', fallbackSrc: getObjectFallbackAvatarUrl(object.id, object.name), alt: object.name })}</div>
+      <div><strong>${escapeHtml(object.name || 'Objekt')}</strong><span>${escapeHtml(object.tax || 'Profil')} · ${scoreFromMatchItems(match.items) ?? '—'}%</span></div>
+    </div>`;
+  host.appendChild(record);
+  appendEvidenceCard(host, 'Match-Nachweise', (match.items || []).map((item, index) => [item.title || item.requirement || `Nachweis ${index + 1}`, item.explanation || item.evidence || item.objectSnippet || item.requirementSnippet]));
+  appendEvidenceCard(host, 'Profil', [
+    ['Fachliche Qualifikation', object.executiveInfo?.fachlicheQualifikation],
+    ['Methodenkompetenz', object.executiveInfo?.methodenKompetenz],
+    ['Leadership', object.executiveInfo?.leadershipFaehigkeit],
+    ['Wunsch & Ort', object.executiveInfo?.gehaltswunschUndOrt],
+    ['Skills', object.skillsSummary || object.skills]
+  ]);
+  appendEvidenceCard(host, 'Parsed CV / Objekt', [
+    ['Ausbildung', object.object?.education],
+    ['Erfahrung', object.object?.experience],
+    ['Sprachen', object.object?.meta?.languages],
+    ['Dokumente', object.documents],
+    ['Rohtext', object.rawText]
+  ]);
+  hydrateImages(host);
+  footer.textContent = `${(match.items || []).length} Nachweise · ${requirement?.title || 'Anforderung'}`;
+  setObjectsPaneVisibility();
+}
+
+function renderSelectedRequirementMatrix() {
+  const mapHost = getMatchingModuleHost().querySelector('#map');
+  if (!mapHost) return;
+  mapHost.replaceChildren();
+  const { requirement } = currentSelectedRequirement();
+  if (!requirement) {
+    const empty = el('div', 'ctox-empty');
+    empty.textContent = 'Wähle zuerst eine Anforderung.';
+    mapHost.appendChild(empty);
+    return;
+  }
+  const rows = requirementMatchRows(requirement.id).sort((a, b) => (scoreFromMatchItems(b.match.items) ?? -1) - (scoreFromMatchItems(a.match.items) ?? -1));
+  if (!rows.length) {
+    const empty = el('div', 'ctox-empty');
+    empty.textContent = 'Noch keine Matches für die Matrix.';
+    mapHost.appendChild(empty);
+    return;
+  }
+  const wrap = el('div', 'ctox-table-wrap');
+  wrap.innerHTML = `<table class="ctox-table"><thead><tr><th>Kandidat</th><th class="is-num">Score</th><th class="is-num">Nachweise</th><th>Status</th></tr></thead><tbody>${rows.map(({ match, object }) => `<tr tabindex="0" data-object-id="${escapeHtml(object.id)}" data-context-record-id="${escapeHtml(match.id || key(requirement.id, object.id))}" data-context-record-type="matching_result" data-context-label="${escapeHtml(`${requirement.title} × ${object.name}`)}"><td>${escapeHtml(object.name)}</td><td class="is-num">${scoreFromMatchItems(match.items) ?? '—'}%</td><td class="is-num">${(match.items || []).length}</td><td>${match.active === false ? 'Pausiert' : 'Aktiv'}</td></tr>`).join('')}</tbody></table>`;
+  wrap.querySelectorAll('[data-object-id]').forEach((row) => row.addEventListener('click', () => selectCandidateInPlace(requirement.id, row.dataset.objectId)));
+  mapHost.appendChild(wrap);
+}
+
+function downloadMatchingJson(filename, payload) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+async function collectionJsonRows(collection) {
+  if (!collection?.find) return [];
+  const docs = await collection.find().exec();
+  return (docs || []).map((doc) => doc?.toJSON ? doc.toJSON() : doc).filter(Boolean);
+}
+
+async function importJsonRecords(file, collection, label) {
+  if (!file || !collection) return;
+  const parsed = JSON.parse(await file.text());
+  const records = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.records) ? parsed.records : [];
+  if (!records.length) throw new Error(`${label}: keine Datensätze im JSON gefunden.`);
+  let imported = 0;
+  for (const record of records) {
+    if (!record || typeof record !== 'object' || !String(record.id || '').trim()) continue;
+    if (typeof collection.atomicUpsert === 'function') await collection.atomicUpsert(record);
+    else if (typeof collection.upsert === 'function') await collection.upsert(record);
+    else await collection.insert(record);
+    imported += 1;
+  }
+  if (!imported) throw new Error(`${label}: kein Datensatz mit ID importiert.`);
+  await loadFromRxdb();
+  renderSources();
+  renderRequirements();
+  renderObjects({ reason: 'json-import' });
+}
+
+async function exportRequirementsJson() {
+  const records = await collectionJsonRows(rxdb?.requirements);
+  downloadMatchingJson('matching-requirements.json', {
+    module: 'matching',
+    collection: 'matching_requirements',
+    exported_at: new Date().toISOString(),
+    records
+  });
+}
+
+async function exportSelectedObjectJson() {
+  const entry = selectedMatchEntry();
+  if (!entry) return;
+  const requirementDoc = await rxdb?.requirements?.findOne({ selector: { id: entry.requirement.id } }).exec();
+  const objectDoc = await rxdb?.objects?.findOne({ selector: { id: entry.object.id } }).exec();
+  const matchDoc = await rxdb?.matches?.findOne({ selector: { requirementId: entry.requirement.id, objectId: entry.object.id } }).exec();
+  downloadMatchingJson(`matching-evidence-${entry.object.id}.json`, {
+    module: 'matching',
+    exported_at: new Date().toISOString(),
+    data: {
+      requirement: requirementDoc?.toJSON?.() || entry.requirement,
+      object: objectDoc?.toJSON?.() || entry.object,
+      match: matchDoc?.toJSON?.() || entry.match
+    }
+  });
+}
+
+function setupMatchingIaControls() {
+  if (matchingIaWired) return;
+  matchingIaWired = true;
+  const root = getMatchingModuleHost();
+  const leftPane = root.querySelector('#left');
+  const mainPane = root.querySelector('#center');
+  const workspace = root.querySelector('[data-matching-workspace]');
+
+  const readPaneState = (pane, fallback) => ({
+    search: String(pane?.querySelector('[data-pg-search]')?.value || '').trim().toLowerCase(),
+    view: pane?.querySelector('[data-pg-view][aria-pressed="true"]')?.dataset.pgView || fallback.view,
+    band: pane?.querySelector('[data-pg-band][aria-selected="true"]')?.dataset.pgBand || fallback.band,
+    filters: Object.fromEntries(Array.from(pane?.querySelectorAll('[data-pg-filter]') || []).map((control) => [control.dataset.pgName, control.value]))
+  });
+  Object.assign(matchingPaneState.left, readPaneState(leftPane, matchingPaneState.left));
+  Object.assign(matchingPaneState.main, readPaneState(mainPane, matchingPaneState.main));
+
+  leftPane?.addEventListener('ctox-pane-grammar-change', (event) => {
+    Object.assign(matchingPaneState.left, event.detail || {});
+    renderSources();
+  });
+  mainPane?.addEventListener('ctox-pane-grammar-change', (event) => {
+    Object.assign(matchingPaneState.main, event.detail || {});
+    const matrix = matchingPaneState.main.band === 'matrix';
+    const list = root.querySelector('#requirementList');
+    const map = root.querySelector('#mapWrap');
+    if (list) list.hidden = matrix;
+    if (map) map.hidden = !matrix;
+    if (matrix) renderMap(); else renderRequirements();
+  });
+
+  root.querySelector('#runMatchingBtn')?.addEventListener('click', () => {
+    if (activeRequirementForScoring) handleBulkAutoMatch(activeRequirementForScoring, 5);
+  });
+  root.querySelector('[data-toggle-objects]')?.addEventListener('click', () => {
+    objectsPaneUserCollapsed = !workspace?.classList.contains('is-objects-hidden');
+    if (workspace?.classList.contains('is-objects-hidden')) objectsPaneUserCollapsed = false;
+    persistMatchingRuntimeState({ objectsPaneUserCollapsed });
+    setObjectsPaneVisibility();
+  });
+  root.querySelector('#collapseObjectsPane')?.addEventListener('click', () => {
+    objectsPaneUserCollapsed = true;
+    persistMatchingRuntimeState({ objectsPaneUserCollapsed });
+    setObjectsPaneVisibility();
+  });
+
+  const requirementInput = root.querySelector('#requirementImportInput');
+  root.querySelector('#requirementImportBtn')?.addEventListener('click', () => {
+    if (requirementInput) { requirementInput.value = ''; requirementInput.click(); }
+  });
+  requirementInput?.addEventListener('change', async () => {
+    try { await importJsonRecords(requirementInput.files?.[0], rxdb?.requirements, 'Anforderungen'); }
+    catch (error) { matchingRuntimeCtx?.notifications?.show?.({ type: 'error', title: 'Import fehlgeschlagen', message: String(error?.message || error) }); }
+    finally { requirementInput.value = ''; }
+  });
+  root.querySelector('#requirementExportBtn')?.addEventListener('click', () => exportRequirementsJson().catch((error) => {
+    matchingRuntimeCtx?.notifications?.show?.({ type: 'error', title: 'Export fehlgeschlagen', message: String(error?.message || error) });
+  }));
+  root.querySelector('#objectExportBtn')?.addEventListener('click', () => exportSelectedObjectJson().catch((error) => {
+    matchingRuntimeCtx?.notifications?.show?.({ type: 'error', title: 'Export fehlgeschlagen', message: String(error?.message || error) });
+  }));
+  root.querySelector('#objectImportPdfInput')?.addEventListener('change', async (event) => {
+    const jsonFile = Array.from(event.target.files || []).find((file) => file.type === 'application/json' || file.name.toLowerCase().endsWith('.json'));
+    if (!jsonFile) return;
+    try { await importJsonRecords(jsonFile, rxdb?.objects, 'Objekte'); }
+    catch (error) { matchingRuntimeCtx?.notifications?.show?.({ type: 'error', title: 'Import fehlgeschlagen', message: String(error?.message || error) }); }
+  });
+}
+
 function renderSources(){
+
+  renderRequirementSelector();
+  return;
   const grid = $('#sourceGrid'); if (!grid) return;
   grid.innerHTML = '';
 
@@ -5437,6 +5922,8 @@ function renderSources(){
 }
 
 function renderRequirements(){
+  renderMatchWorkbench();
+  return;
   const compNameEl = $('#sourceName');
   const list = $('#requirementList');
   const searchEl = $('#requirementSearch');
@@ -7334,6 +7821,8 @@ let __objectEmptyStateEl = null;          // optional: leeres State-Element
 
 /* --------- Objekte rechts (✅ Incremental) --------- */
 function renderObjects(opts = {}){
+  renderSelectedObjectEvidence(opts);
+  return;
   const list = document.getElementById('objectList');
   const qEl  = document.getElementById('objectSearch');
   const sortEl = document.getElementById('objectSort');
@@ -7976,58 +8465,7 @@ function cleanupMatrixViewArtifacts() {
   // matrixSelectedObjectId = null;
 }
 
-// Optional: Checkbox "nur aktive Objekte anzeigen" o.ä.
-if (toggleUnknown) toggleUnknown.addEventListener('change', renderMap);
-
-if (tabList && tabMap && mapWrap && requirementListEl && listTools) {
-  const setActiveMatchingTab = (tabName, { persist = true } = {}) => {
-    const nextTab = tabName === 'matrix' ? 'matrix' : 'list';
-    const showMatrix = nextTab === 'matrix';
-
-    if (mapWrap) {
-      mapWrap.style.display = showMatrix ? 'block' : 'none';
-    }
-
-    if (nextTab === 'matrix') {
-      tabMap.classList.add('active');
-      tabList.classList.remove('active');
-      tabMap.setAttribute('aria-pressed', 'true');
-      tabList.setAttribute('aria-pressed', 'false');
-      tabMap.setAttribute('aria-selected', 'true');
-      tabList.setAttribute('aria-selected', 'false');
-      mapWrap.classList.add('active');
-      requirementListEl.style.display = 'none';
-      listTools.style.display = 'none';
-      renderMap();
-    } else {
-      tabList.classList.add('active');
-      tabMap.classList.remove('active');
-      tabList.setAttribute('aria-pressed', 'true');
-      tabMap.setAttribute('aria-pressed', 'false');
-      tabList.setAttribute('aria-selected', 'true');
-      tabMap.setAttribute('aria-selected', 'false');
-      cleanupMatrixViewArtifacts();
-      mapWrap.classList.remove('active');
-      requirementListEl.style.display = 'block';
-      listTools.style.display = '';
-    }
-
-    if (persist) {
-      persistMatchingRuntimeState({ activeTab: nextTab });
-    }
-  };
-
-  tabList.addEventListener('click', () => {
-    setActiveMatchingTab('list', { persist: true });
-  });
-
-  tabMap.addEventListener('click', () => {
-    setActiveMatchingTab('matrix', { persist: true });
-  });
-
-  const savedTab = matchingViewState.activeTab === 'matrix' ? 'matrix' : 'list';
-  setActiveMatchingTab(savedTab, { persist: false });
-}
+// Tab and view-switch behaviour is shell-owned through data-pg-*.
 
 
 
@@ -8071,6 +8509,8 @@ function setMatrixSelectedObject(objectId){
 
 
 function renderMap() {
+  renderSelectedRequirementMatrix();
+  return;
   if (!mapWrap || !mapEl) return;
 
   // ✅ FIX: Wenn Matrix nicht aktiv ist, IMMER aufräumen (verhindert Artefakte beim View-Wechsel)
@@ -8523,57 +8963,10 @@ function renderMap() {
 
 
 
-/* --------- Events --------- */
-const sourceGroupModeEl = $('#sourceGroupMode');
-const sourceSearchEl = $('#sourceSearch');
-const requirementSearchEl = $('#requirementSearch');
-const requirementFilterEl = $('#requirementFilter');
-const objectSearchEl = $('#objectSearch');
-const objectSortEl = $('#objectSort');
-
-applyPersistedMatchingControls();
-setupMatchingColumnResizing();
-
-if (sourceGroupModeEl) {
-  sourceGroupModeEl.addEventListener('change', () => {
-    renderSources();
-    renderRequirements();
-    renderMap();
-    renderObjects();
-    persistMatchingRuntimeState();
-  });
-}
-if (sourceSearchEl) {
-  sourceSearchEl.addEventListener('input', () => {
-    renderSources();
-    persistMatchingRuntimeState();
-  });
-}
-if (requirementSearchEl) {
-  requirementSearchEl.addEventListener('input', () => {
-    renderRequirements();
-    persistMatchingRuntimeState();
-  });
-}
-if (requirementFilterEl) {
-  requirementFilterEl.addEventListener('change', () => {
-    requirementFilterEl.dataset.persistedValue = requirementFilterEl.value || 'all';
-    renderRequirements();
-    persistMatchingRuntimeState();
-  });
-}
-if (objectSearchEl) {
-  objectSearchEl.addEventListener('input', () => {
-    renderObjects();
-    persistMatchingRuntimeState();
-  });
-}
-if (objectSortEl) {
-  objectSortEl.addEventListener('change', () => {
-    renderObjects();
-    persistMatchingRuntimeState();
-  });
-}
+/* --------- Events ---------
+ * Search, view, band, tray, reset and filter changes are shell-owned through
+ * data-pg-*; setupMatchingIaControls listens only to the bubbling grammar event.
+ */
 
 // --- NEU: Objekte-Import (PDF, LinkedIn, Freitext) ---
 
@@ -8860,6 +9253,13 @@ function applyMatchingDefinitionUi(root = getMatchingModuleHost()) {
 // Initial: erst RxDB laden, dann rendern, dann Live-Sync aktivieren
 export async function mountMatchingDashboard(ctx = {}){
   matchingRuntimeCtx = ctx;
+  setViewStateStorageScope(ctx.storageScope);
+  matchingViewState = readViewState(MATCHING_VIEW_STATE_KEY, MATCHING_VIEW_STATE_DEFAULTS);
+  activeSource = matchingViewState.activeSource || null;
+  activeRequirementForScoring = matchingViewState.activeRequirementForScoring || null;
+  selectedObject = matchingViewState.selectedObject || null;
+  matrixSelectedObjectId = matchingViewState.matrixSelectedObjectId || null;
+  objectsPaneUserCollapsed = matchingViewState.objectsPaneUserCollapsed !== false;
   setCtoxCommandBus(ctx.commandBus);
   matchingModuleHost = ctx.host || document.querySelector('[data-matching-module="native"]') || null;
   if (ctx.matchingDefinition || globalThis.CTOX_MATCHING_DEFINITION) {
@@ -8873,13 +9273,13 @@ export async function mountMatchingDashboard(ctx = {}){
   await loadFromRxdb();
   updateMatchingInitialSyncFeedback();
 
+  setupMatchingIaControls();
   renderSources();
   renderRequirements();
   renderObjects();
   renderMap();
-  persistMatchingRuntimeState();
+  persistMatchingRuntimeState({ objectsPaneUserCollapsed });
   bindCreateRequirementButton();
-  setupMatchingOverflowMenus();
 
   // ✅ Live UI Sync: reagiert auf Background-Sync/Replication automatisch
   try {
@@ -9118,13 +9518,13 @@ if (!document.querySelector('[data-matching-module="native"]')) {
 
 async function ensureMatchScoreFormulaUpdate() {
   try {
-    const storedVersion = Number(localStorage.getItem(MATCH_SCORE_FORMULA_VERSION_KEY) || 0);
+    const storedVersion = Number(matchingRuntimeCtx?.storageScope?.get?.(MATCH_SCORE_FORMULA_VERSION_KEY) || 0);
     if (storedVersion >= MATCH_SCORE_FORMULA_VERSION) {
       return { updated: false, total: 0 };
     }
 
     const result = await recomputeAllMatchScoresOnce();
-    localStorage.setItem(MATCH_SCORE_FORMULA_VERSION_KEY, String(MATCH_SCORE_FORMULA_VERSION));
+    matchingRuntimeCtx?.storageScope?.set?.(MATCH_SCORE_FORMULA_VERSION_KEY, String(MATCH_SCORE_FORMULA_VERSION));
     console.info('[matching] Match-Scores mit neuer Formel neu berechnet:', result);
     return { ...result, updated: true };
   } catch (e) {
