@@ -16,7 +16,6 @@ const { collections, migrationStrategies } = schemaModule;
 const schemaOf = (definition) => definition.schema || definition;
 
 const expectedCollections = [
-  'business_commands',
   'customer_accounts',
   'customer_contacts',
   'customer_opportunities',
@@ -60,7 +59,7 @@ assert.ok(schemaOf(collections.customer_contacts).indexes.includes('email'));
 assert.ok(schemaOf(collections.customer_opportunities).indexes.some((index) => Array.isArray(index) && index.join('|') === 'stage|position'));
 assert.ok(schemaOf(collections.customer_activities).indexes.some((index) => Array.isArray(index) && index.join('|') === 'account_id|happens_at_ms'));
 assert.ok(schemaOf(collections.customer_dedupe_candidates).indexes.some((index) => Array.isArray(index) && index.join('|') === 'object_type|match_key'));
-assert.equal(typeof migrationStrategies.business_commands[1], 'function');
+assert.deepEqual(migrationStrategies, {});
 
 const moduleJson = JSON.parse(await readFile(new URL('./module.json', import.meta.url), 'utf8'));
 const registryJson = JSON.parse(await readFile(new URL('../registry.json', import.meta.url), 'utf8'));
@@ -254,9 +253,9 @@ assert.equal(hooks.isClosedOpportunity({ stage: 'closed_won' }), true);
 assert.equal(hooks.isActivationKey('Enter'), true);
 assert.equal(hooks.isActivationKey(' '), true);
 assert.equal(hooks.isActivationKey('Escape'), false);
-assert.equal(hooks.nextDetailTab('overview', 1), 'tasks');
-assert.equal(hooks.nextDetailTab('apps', 1), 'overview');
-assert.equal(hooks.nextDetailTab('overview', -1), 'apps');
+assert.equal(hooks.nextDetailTab('overview', 1), 'contacts');
+assert.equal(hooks.nextDetailTab('apps', 1), 'handoff');
+assert.equal(hooks.nextDetailTab('overview', -1), 'dedupe');
 assert.deepEqual(hooks.filterCustomerCommands(customerFixtures.business_commands).map((item) => item.id), ['cmd-c', 'cmd-b', 'cmd-a']);
 assert.deepEqual(hooks.filterCustomerCommands(customerFixtures.business_commands, accountContext).map((item) => item.id), ['cmd-a']);
 assert.deepEqual(hooks.filterCustomerCommands(customerFixtures.business_commands, opportunityContext).map((item) => item.id), ['cmd-b', 'cmd-a']);
@@ -413,4 +412,97 @@ assert.equal(hooks.buildSaveViewCommand({
   sort: { field: 'name', direction: 'asc' },
 }).payload.filters.length, 3);
 
-console.log('customers schema smoke OK');
+// IA-Karte: L-class account selector + account workbench, no third column.
+const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
+const css = await readFile(new URL('./index.css', import.meta.url), 'utf8');
+const indexSource = await readFile(new URL('./index.js', import.meta.url), 'utf8');
+assert.match(html, /ctox-workspace--two-pane/);
+assert.match(html, /class="ctox-pane customers-left"/);
+assert.match(html, /class="ctox-pane customers-main"/);
+assert.doesNotMatch(html, /customers-right|data-resizer="right"|data-customers-right/);
+
+// Full canonical grammar on the account list: search, view toggle, tray/reset,
+// >= 2 real lifecycle views with zero-capable counters, well and one-line footer.
+assert.match(html, /class="ctox-filterbar"/);
+assert.match(html, /data-pg-search/);
+assert.match(html, /data-pg-view="cards"/);
+assert.match(html, /data-pg-view="list"/);
+assert.match(html, /data-pg-tray-toggle/);
+assert.match(html, /data-pg-tray\b/);
+assert.match(html, /data-pg-reset/);
+assert.match(html, /data-pg-name="stage"/);
+assert.match(html, /data-pg-name="health"/);
+assert.match(html, /data-pg-name="sort"/);
+assert.match(html, /data-pg-name="direction"/);
+assert.match(html, /class="ctox-pane-body ctox-well"/);
+assert.match(html, /class="ctox-pane-footer"/);
+assert.match(html, /data-pg-footer/);
+const lifecycleBands = html.match(/data-pg-band="[^"]+"/g) || [];
+assert.ok(lifecycleBands.length >= 2, 'lifecycle band needs at least two real views');
+for (const key of ['all', 'active', 'renewal', 'risk']) {
+  assert.match(html, new RegExp(`data-pg-band="${key}"`));
+  assert.match(html, new RegExp(`data-pg-count="${key}"`));
+}
+
+// Collected header actions: creation plus honest JSON import/export via file input.
+assert.match(html, /data-customers-action="create-account"/);
+assert.match(html, /data-customers-action="import-customers"/);
+assert.match(html, /data-customers-action="export-customers"/);
+assert.match(html, /data-customers-import-input[^>]*accept="application\/json,\.json"[^>]*hidden/);
+assert.doesNotMatch(html, /data-customers-action="refresh"/);
+assert.match(indexSource, /addEventListener\('ctox-pane-grammar-change'/);
+assert.match(indexSource, /__ctoxPaneGrammar/);
+assert.match(indexSource, /importCustomersJsonFile/);
+assert.match(indexSource, /exportCustomerSnapshot/);
+assert.match(indexSource, /new Blob/);
+assert.match(indexSource, /file\.text\(\)/);
+assert.doesNotMatch(indexSource, /localStorage|sessionStorage|indexedDB/);
+
+// Explicit tracks and hard primary minimum; left grammar rows are pinned.
+assert.match(css, /\.customers-left\s*\{\s*grid-column:\s*1/);
+assert.match(css, /\.customers-main\s*\{\s*grid-column:\s*3/);
+assert.match(css, /grid-template-columns:\s*var\(--customers-left-width, 312px\) 12px minmax\(360px, 1fr\)/);
+assert.match(css, /\.customers-left\s*\{[^}]*grid-template-rows:\s*auto auto minmax\(0, 1fr\) auto/s);
+
+// Lifecycle counts are real account-stage projections and include zeros.
+assert.deepEqual(hooks.accountLifecycleCounts(customerFixtures.customer_accounts, {
+  search: '', stage: 'all', health: 'all', sort: { field: 'name', direction: 'asc' },
+}), { all: 2, active: 1, renewal: 1, risk: 0 });
+assert.deepEqual(hooks.accountLifecycleCounts([], {}), { all: 0, active: 0, renewal: 0, risk: 0 });
+assert.equal(hooks.accountLifecycleBand({ customer_stage: 'at_risk' }), 'risk');
+assert.equal(hooks.accountLifecycleBand({ customer_stage: 'expansion' }), 'active');
+assert.deepEqual(
+  hooks.filterAndSortAccounts(customerFixtures.customer_accounts, { band: 'renewal' }).map((item) => item.id),
+  ['acct-b'],
+);
+
+// JSON export/import is a small round-trippable account snapshot.
+const customerExport = hooks.buildCustomerExport(customerFixtures.customer_accounts, 1234);
+assert.equal(customerExport.kind, 'ctox-customers-export');
+assert.equal(customerExport.exported_at_ms, 1234);
+assert.deepEqual(hooks.parseCustomerImport(customerExport).map((item) => item.id), ['acct-a', 'acct-b']);
+assert.deepEqual(hooks.parseCustomerImport({ accounts: [{ name: 'Missing id' }] }), []);
+
+// Auto-reveal model: detail/workbench is visible only with a selection and no
+// explicit user collapse. Selecting an account clears the collapse in source.
+assert.equal(hooks.accountWorkbenchVisible(true, false), true);
+assert.equal(hooks.accountWorkbenchVisible(true, true), false);
+assert.equal(hooks.accountWorkbenchVisible(false, false), false);
+assert.match(indexSource, /state\.workbenchCollapsed = false;[\s\S]*?markSelectedAccountRows\(accountId\);[\s\S]*?renderMain\(\)/);
+
+// Hard interaction pin: selection flips existing rows in place. The selector
+// never invokes renderAccountList(), so a scrolled account list cannot reset.
+const selectStart = indexSource.indexOf('function selectFromElement');
+const selectEnd = indexSource.indexOf('\nfunction isActivationKey', selectStart);
+const selectSource = indexSource.slice(selectStart, selectEnd);
+assert.ok(selectStart >= 0 && selectEnd > selectStart, 'selectFromElement source found');
+assert.match(selectSource, /markSelectedAccountRows\(accountId\)/);
+assert.match(selectSource, /markSelectedRowsInPlace\('contact', contactId\)/);
+assert.doesNotMatch(selectSource, /renderAccountList\(/);
+assert.match(indexSource, /function markSelectedAccountRows[\s\S]*?classList\.toggle\('is-selected', selected\)[\s\S]*?setAttribute\('aria-selected'/);
+assert.match(indexSource, /list\.dataset\.sig !== signature[\s\S]*?list\.innerHTML = accounts\.map\(accountShardMarkup\)/);
+const sigA = hooks.accountListSignature(customerFixtures.customer_accounts, 'cards');
+assert.equal(sigA, hooks.accountListSignature(customerFixtures.customer_accounts, 'cards'));
+assert.notEqual(sigA, hooks.accountListSignature(customerFixtures.customer_accounts, 'list'));
+
+console.log('customers schema and IA smoke OK');

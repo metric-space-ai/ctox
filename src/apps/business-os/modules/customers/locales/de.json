@@ -155,5 +155,10 @@
   "selectDedupe": "Dublette auswählen: {0}",
   "sortBy": "Sortieren nach {0}",
   "sortAscending": "Aufsteigend sortiert",
-  "sortDescending": "Absteigend sortiert"
+  "sortDescending": "Absteigend sortiert",
+  "customerList": "Kundenkonten",
+  "entries": "Einträge",
+  "invalidImport": "Die JSON-Datei ist ungültig.",
+  "emptyImport": "Die JSON-Datei enthält keine Kundenkonten.",
+  "importComplete": "{0} Kundenkonten importiert."
 }

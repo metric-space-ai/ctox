@@ -155,5 +155,10 @@
   "selectDedupe": "Select dedupe case: {0}",
   "sortBy": "Sort by {0}",
   "sortAscending": "Sorted ascending",
-  "sortDescending": "Sorted descending"
+  "sortDescending": "Sorted descending",
+  "customerList": "Customer accounts",
+  "entries": "entries",
+  "invalidImport": "The JSON file is invalid.",
+  "emptyImport": "The JSON file contains no customer accounts.",
+  "importComplete": "Imported {0} customer accounts."
 }

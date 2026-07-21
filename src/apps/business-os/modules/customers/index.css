@@ -1,49 +1,105 @@
-/* Reference migration to the shared design system (shared/base.css + app.css):
-   frame (.ctox-workspace + .ctox-pane + declarative .ctox-column-resizer),
-   pane headers (kicker/title/actions/icons), search, filter selects,
-   segmented tabs (.ctox-pane-tabs), toolbar (.ctox-toolbar), buttons
-   (.ctox-button / ctox-button--sm / is-danger), status badges
-   (.ctox-badge + is-* variants), tables (.ctox-table + .ctox-table-sort +
-   .is-num, selection via [aria-selected]), nav rows (.ctox-list-item +
-   .is-selected), field labels (.ctox-field-label), compact form fields
-   (.ctox-compact-field), empty states (.ctox-empty), callouts
-   (.ctox-callout), avatars (.ctox-avatar) and key/value fields
-   (.ctox-fields) all come from the kit. This file only keeps what is
-   customers-specific: the injected pane-body wrappers, the left-nav row
-   content, the dense fixed-layout tables, the opportunity pipeline board,
-   the inspector detail blocks, the record/link/mini rows, the activity
-   timeline, the command audit rows and the responsive stacking.
-   The width aliases keep the persisted resizer layout working — the shell
-   resizer writes --customers-*-width onto the frame element. */
+/* Customers IA: a shell-native two-pane account selector + account workbench.
+   Shared base.css owns the canonical pane grammar, header/action chrome,
+   controls, tables, wells, footers and resizer behavior. This sheet only
+   describes customer-specific records and the workbench content. */
 .customers-module {
-  --ctox-left-width: var(--customers-left-width, 292px);
-  --ctox-right-width: var(--customers-right-width, 340px);
+  --ctox-left-width: var(--customers-left-width, 312px);
+  grid-template-columns: var(--customers-left-width, 312px) 12px minmax(360px, 1fr);
 }
 
-/* The panes render into a single injected wrapper div ([data-customers-*]),
-   so the pane grid is one track and the wrapper is the flex column body
-   (header + scroll region) inside the kit .ctox-pane. */
-.customers-pane {
+.customers-left { grid-column: 1; }
+.customers-module > [data-resizer="left"] { grid-column: 2; }
+.customers-main { grid-column: 3; }
+
+/* Explicit grammar and workbench rows keep the primary track stable. */
+.customers-left {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.customers-main {
   grid-template-rows: minmax(0, 1fr);
 }
 
-.customers-pane > div {
-  display: flex;
-  flex-direction: column;
+.customers-main > [data-customers-main] {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  min-width: 0;
   min-height: 0;
 }
 
-/* The inspector (right) pane is the primary detail view but can dominate
-   the layout when a user is scanning lists. A header toggle re-claims the
-   width for the center pane; default is open so the most common flow
-   (click a row, see details) stays one click. Persists per browser. */
-.customers-module.is-inspector-hidden {
-  grid-template-columns: var(--customers-left-width, 292px) 12px minmax(0, 1fr);
+.customers-main > [data-customers-main].is-form {
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
-.customers-module.is-inspector-hidden .customers-right,
-.customers-module.is-inspector-hidden > [data-resizer="right"] {
+.customers-account-list.is-list-view .customers-account-meta {
   display: none;
+}
+
+.customers-account-shard {
+  position: relative;
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.customers-account-shard::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 2px;
+  background: transparent;
+}
+
+.customers-account-shard.is-selected::before {
+  background: var(--accent);
+}
+
+.customers-account-title,
+.customers-account-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.customers-account-title {
+  color: var(--text-strong);
+  font-weight: 650;
+}
+
+.customers-account-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.customers-workbench-scroll {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.customers-workbench-tabs {
+  overflow-x: auto;
+}
+
+.customers-active-record {
+  margin: 12px;
+}
+
+.customers-active-record .ctox-card-body {
+  display: grid;
+  gap: 10px;
+}
+
+.customers-workbench-section {
+  padding: 12px;
+}
+
+.customers-workbench-footer {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Standard focus ring for the module's custom interactive rows. */
@@ -557,38 +613,33 @@
   line-height: 1.35;
 }
 
-/* Responsive stacking: panes pile vertically instead of squashing. */
-@container business-app-window (max-width: 980px) {
+/* Compact windows and the mobile sheet keep both master and workbench
+   reachable in one vertical flow. The workspace owns the only outer scroll. */
+@container business-app-window (max-width: 820px) {
   .customers-module {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(240px, 32svh) minmax(420px, 1fr) minmax(300px, 38svh);
+    grid-template-rows: minmax(220px, 34svh) minmax(420px, 1fr);
     height: auto;
     min-height: 100%;
-    overflow: auto;
+    overflow-y: auto;
+    gap: 8px;
   }
 
   .customers-left,
-  .customers-center,
-  .customers-right {
-    min-height: 260px;
+  .customers-main {
+    grid-column: auto;
+    min-height: 220px;
   }
 
-  .customers-module .ctox-column-resizer {
-    display: none;
-  }
-
-  .customers-center-scroll {
-    overscroll-behavior: contain;
+  .customers-module > [data-resizer] {
+    display: none !important;
   }
 }
 
-@container business-app-window (max-width: 720px) {
+@container business-app-window (max-width: 600px) {
   .customers-module {
-    grid-template-rows: minmax(220px, 30svh) minmax(420px, 1fr) minmax(320px, 42svh);
-  }
-
-  .customers-left-scroll {
-    padding: 8px;
+    grid-template-rows: minmax(210px, 32svh) minmax(440px, 1fr);
+    padding: 6px;
   }
 
   .customers-detail-block {
@@ -604,26 +655,9 @@
   .customers-link-row .customers-row-actions {
     justify-content: flex-start;
   }
-}
-
-@container business-app-window (max-width: 480px) {
-  .customers-center .ctox-pane-tools {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .customers-center .ctox-pane-search {
-    grid-column: 1 / -1;
-    width: 100%;
-  }
-
-  .customers-center .ctox-pane-filter {
-    width: 100%;
-    min-width: 0;
-  }
 
   .customers-board {
-    grid-auto-columns: minmax(220px, 86vw);
+    grid-auto-columns: minmax(220px, 86cqi);
   }
 
   .customers-command-grid {

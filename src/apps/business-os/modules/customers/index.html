@@ -1,13 +1,93 @@
-<main class="ctox-workspace customers-module" data-customers-root data-resize-frame>
-  <section class="ctox-pane customers-pane customers-left" aria-label="Kunden Navigation">
-    <div data-customers-left></div>
-  </section>
-  <button class="ctox-column-resizer" type="button" data-customers-column-resizer data-resizer="left" data-resizer-var="--customers-left-width" data-resizer-min="236" data-resizer-max="520" aria-label="Linke Spalte anpassen"></button>
-  <section class="ctox-pane customers-pane customers-center" aria-label="Kunden Arbeitsbereich">
-    <div data-customers-center></div>
-  </section>
-  <button class="ctox-column-resizer" type="button" data-customers-column-resizer data-resizer="right" data-resizer-var="--customers-right-width" data-resizer-min="286" data-resizer-max="620" aria-label="Rechte Spalte anpassen"></button>
-  <section class="ctox-pane customers-pane customers-right" aria-label="Kunden Details">
-    <div data-customers-right></div>
+<main class="ctox-workspace ctox-workspace--two-pane customers-module" data-customers-root data-resize-frame>
+  <!-- LEFT = customer/account selector. Canonical column grammar is declarative
+       and SHELL-wired through data-pg-*; the module only reacts to the bubbling
+       ctox-pane-grammar-change event and writes counts/footer through the
+       null-guarded pane.__ctoxPaneGrammar handle. -->
+  <aside class="ctox-pane customers-left" aria-label="Kundenkonten" data-left-content>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">CRM</span>
+          <h2 class="ctox-pane-title" data-customers-list-title>Kundenkonten</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon" data-customers-action="create-account" aria-label="Kunde anlegen" title="Kunde anlegen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-customers-action="save-view" aria-label="Ansicht speichern" title="Ansicht speichern"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h12l2 2v14H5z"/><path d="M8 4v6h8V4M8 20v-6h8v6"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-customers-action="import-customers" aria-label="Kunden importieren" title="Kunden importieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-customers-action="export-customers" aria-label="Kunden exportieren" title="Kunden exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21V9M12 9l-4 4M12 9l4 4M5 3h14"/></svg></button>
+          <input type="file" data-customers-import-input accept="application/json,.json" hidden />
+        </div>
+      </div>
+      <div class="ctox-filterbar">
+        <input class="ctox-pane-search" type="search" data-pg-search placeholder="Kunden suchen..." aria-label="Kunden suchen" />
+        <div class="ctox-view-toggle" role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
+        <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="ctox-filter-tray" data-pg-tray hidden>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" data-pg-filter data-pg-name="stage" data-pg-default="all" aria-label="Lifecycle filtern">
+            <option value="all">Alle Lifecycle-Phasen</option>
+            <option value="prospect">Prospect</option>
+            <option value="onboarding">Onboarding</option>
+            <option value="active">Aktiv</option>
+            <option value="renewal">Renewal</option>
+            <option value="expansion">Expansion</option>
+            <option value="at_risk">Gefährdet</option>
+            <option value="churned">Churned</option>
+          </select>
+          <select class="ctox-select" data-pg-filter data-pg-name="health" data-pg-default="all" aria-label="Gesundheit filtern">
+            <option value="all">Alle Gesundheitswerte</option>
+            <option value="healthy">Healthy</option>
+            <option value="neutral">Neutral</option>
+            <option value="at_risk">At Risk</option>
+            <option value="critical">Kritisch</option>
+            <option value="unknown">Unbekannt</option>
+          </select>
+          <select class="ctox-select" data-pg-filter data-pg-name="sort" data-pg-default="last_activity_at_ms" aria-label="Sortierung">
+            <option value="last_activity_at_ms">Letzte Aktivität</option>
+            <option value="name">Name</option>
+            <option value="customer_stage">Lifecycle</option>
+            <option value="health_status">Gesundheit</option>
+            <option value="annual_recurring_revenue_cents">ARR</option>
+          </select>
+          <select class="ctox-select" data-pg-filter data-pg-name="direction" data-pg-default="desc" aria-label="Sortierrichtung">
+            <option value="desc">Absteigend</option>
+            <option value="asc">Aufsteigend</option>
+          </select>
+          <select class="ctox-select" data-customers-saved-view aria-label="Gespeicherte Ansicht">
+            <option value="">Gespeicherte Ansicht</option>
+          </select>
+          <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+        </div>
+      </div>
+    </header>
+    <nav class="ctox-view-switch" aria-label="Kunden Lifecycle">
+      <div class="ctox-pane-tabs">
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="all" aria-selected="true">Alle<span class="view-count" data-pg-count="all"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="active" aria-selected="false">Aktiv<span class="view-count" data-pg-count="active"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="renewal" aria-selected="false">Renewal<span class="view-count" data-pg-count="renewal"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="risk" aria-selected="false">Risiko<span class="view-count" data-pg-count="risk"></span></button>
+      </div>
+    </nav>
+    <div class="ctox-pane-body ctox-well">
+      <div class="ctox-list customers-account-list" data-customers-account-list></div>
+      <div class="ctox-empty" data-customers-account-empty hidden>
+        <strong>Keine Kundenkonten</strong>
+        <span>Filter ändern oder ein Kundenkonto anlegen.</span>
+      </div>
+    </div>
+    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
+  </aside>
+
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--customers-left-width" data-resizer-min="250" data-resizer-max="480" aria-label="Linke Spalte anpassen"></button>
+
+  <!-- MAIN = selected account workbench. Contacts, activity, deals, tasks,
+       notes, linked files/apps and existing handoff/dedupe command flows stay
+       inside this single primary surface; there is deliberately no third pane. -->
+  <section class="ctox-pane customers-main" aria-label="Kunden Arbeitsbereich">
+    <div data-customers-main></div>
   </section>
 </main>

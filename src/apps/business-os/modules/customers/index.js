@@ -1,14 +1,11 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
-import { CtoxResizer } from '../../shared/resizer.js';
 import {
   decodeBase64Utf8,
   extractCompanyRowsFromText,
   openUniversalImporter,
 } from '../../shared/universal-importer.js';
 
-const BUILD = '20260718-reduction-2';
-const CUSTOMERS_LAYOUT_KEY = 'ctox.businessOs.customers.columnLayout';
-const CUSTOMERS_INSPECTOR_KEY = 'ctox.businessOs.customers.inspectorHidden';
+const BUILD = '20260721-account-workbench-1';
 const CUSTOMERS_COLLECTIONS = Object.freeze([
   'business_commands',
   'customer_accounts',
@@ -449,6 +446,8 @@ const state = {
   dedupeStatus: 'open',
   stage: 'all',
   health: 'all',
+  accountBand: 'all',
+  accountView: 'cards',
   centerView: 'accounts',
   opportunityMode: 'board',
   detailTab: 'overview',
@@ -472,7 +471,7 @@ const state = {
   },
   cleanup: [],
   renderTimer: 0,
-  inspectorHidden: false,
+  workbenchCollapsed: false,
 };
 
 export async function mount(ctx) {
@@ -492,6 +491,7 @@ export async function mount(ctx) {
   ctx.right.replaceChildren();
 
   const root = ctx.host.querySelector('[data-customers-root]');
+  applyCustomersStaticLabels(root);
   applyInspectorVisibility(root);
   wireUi(root);
   state.cleanup.push(setupResizers(root));
@@ -541,6 +541,8 @@ function resetState(ctx) {
   state.dedupeStatus = 'open';
   state.stage = 'all';
   state.health = 'all';
+  state.accountBand = 'all';
+  state.accountView = 'cards';
   state.centerView = 'accounts';
   state.opportunityMode = 'board';
   state.detailTab = 'overview';
@@ -559,7 +561,7 @@ function resetState(ctx) {
   state.cleanup = [];
   state.renderTimer = 0;
   state.presenceRemote = [];
-  state.inspectorHidden = readInspectorHidden();
+  state.workbenchCollapsed = readInspectorHidden();
 }
 
 function translateFallback(lang) {
@@ -589,90 +591,85 @@ async function loadModuleMarkup() {
   return doc.body.innerHTML;
 }
 
-function setupResizers(root) {
-  // Column resizing is now owned by the shell-global resizer (setupModuleResizers
-  // in app.js), wired declaratively from the `.ctox-column-resizer[data-resizer-var]`
-  // handles inside the `[data-resize-frame]` root. This DIY wiring is neutralised to
-  // avoid double-binding the handles; call sites keep their no-op teardown ref.
-  return () => {};
-  // eslint-disable-next-line no-unreachable
-  if (!root) return null;
-  const saved = readLayout();
-  if (saved.left) root.style.setProperty('--customers-left-width', `${saved.left}px`);
-  if (saved.right) root.style.setProperty('--customers-right-width', `${saved.right}px`);
-  const cleanups = [];
-  const left = root.querySelector('[data-resizer="left"]');
-  const right = root.querySelector('[data-resizer="right"]');
-  if (left) {
-    const resizer = new CtoxResizer({
-      resizerEl: left,
-      containerEl: root,
-      cssVar: '--customers-left-width',
-      side: 'left',
-      minWidth: 236,
-      maxWidth: 520,
-      onResize: (width) => saveLayout({ left: width }),
-    });
-    cleanups.push(() => resizer.destroy());
+function applyCustomersStaticLabels(root) {
+  if (!root) return;
+  const title = root.querySelector('[data-customers-list-title]');
+  if (title) title.textContent = state.t('customerList', 'Kundenkonten');
+  const search = root.querySelector('[data-pg-search]');
+  if (search) {
+    const label = state.t('search', labels.de.search);
+    search.placeholder = label;
+    search.setAttribute('aria-label', label);
   }
-  if (right) {
-    const resizer = new CtoxResizer({
-      resizerEl: right,
-      containerEl: root,
-      cssVar: '--customers-right-width',
-      side: 'right',
-      minWidth: 286,
-      maxWidth: 620,
-      onResize: (width) => saveLayout({ right: width }),
-    });
-    cleanups.push(() => resizer.destroy());
+  const actionLabels = {
+    'create-account': state.t('newCustomer', labels.de.newCustomer),
+    'save-view': state.t('saveView', labels.de.saveView),
+    'import-customers': state.t('importCustomers', labels.de.importCustomers),
+    'export-customers': state.t('exportCustomers', labels.de.exportCustomers),
+  };
+  for (const [action, label] of Object.entries(actionLabels)) {
+    const button = root.querySelector(`[data-customers-action="${action}"]`);
+    if (!button) continue;
+    button.title = label;
+    button.setAttribute('aria-label', label);
   }
-  return () => cleanups.forEach((cleanup) => cleanup());
+  const bandLabels = {
+    all: state.t('allAccounts', labels.de.allAccounts),
+    active: state.t('activeCustomers', labels.de.activeCustomers),
+    renewal: state.t('renewal', labels.de.renewal),
+    risk: state.t('atRisk', labels.de.atRisk),
+  };
+  for (const [key, label] of Object.entries(bandLabels)) {
+    const tab = root.querySelector(`[data-pg-band="${key}"]`);
+    if (tab?.firstChild) tab.firstChild.textContent = label;
+  }
 }
 
-function readLayout() {
-  try {
-    return JSON.parse(localStorage.getItem(CUSTOMERS_LAYOUT_KEY) || '{}') || {};
-  } catch {
-    return {};
-  }
+function setupResizers() {
+  // Width persistence and pointer wiring are shell-owned through data-resizer-*.
+  return () => {};
 }
 
 function readInspectorHidden() {
-  try { return localStorage.getItem(CUSTOMERS_INSPECTOR_KEY) === '1'; } catch { return false; }
+  return false;
 }
 
-function writeInspectorHidden(hidden) {
-  try { localStorage.setItem(CUSTOMERS_INSPECTOR_KEY, hidden ? '1' : '0'); } catch {}
+function writeInspectorHidden() {
+  // The account workbench is session state only; browser persistence is forbidden.
 }
 
-// The inspector is a detail pane: it only holds something when a record is
-// selected or a form is open. Mirrors renderRight()'s non-empty branches.
+function accountWorkbenchVisible(hasSelection, userCollapsed) {
+  return Boolean(hasSelection) && !Boolean(userCollapsed);
+}
+
 function inspectorHasContent() {
   if (state.formMode) return true;
-  if (state.selectedOutboundCompanyId && state.centerView === 'handoff') return true;
-  if (state.selectedDedupeCandidateId && state.centerView === 'dedupe') return true;
+  if (state.selectedOutboundCompanyId && state.detailTab === 'handoff') return true;
+  if (state.selectedDedupeCandidateId && state.detailTab === 'dedupe') return true;
   return !!selectedAccount();
 }
 
-// Show the inspector only when it has content AND the user hasn't collapsed it
-// (an open form always wins). So the empty state stays clean, selecting a
-// record auto-reveals the detail, and the toggle can still tuck it away.
 function applyInspectorVisibility(root) {
   const el = root || state.ctx?.host?.querySelector('[data-customers-root]');
   if (!el) return;
-  const visible = state.formMode || (inspectorHasContent() && !state.inspectorHidden);
-  el.classList.toggle('is-inspector-hidden', !visible);
-}
-
-function saveLayout(patch) {
-  try {
-    localStorage.setItem(CUSTOMERS_LAYOUT_KEY, JSON.stringify({ ...readLayout(), ...patch }));
-  } catch {}
+  const visible = state.formMode || accountWorkbenchVisible(inspectorHasContent(), state.workbenchCollapsed);
+  el.classList.toggle('is-workbench-empty', !visible);
 }
 
 function wireUi(root) {
   if (!root) return;
+  root.addEventListener('ctox-pane-grammar-change', (event) => {
+    if (!(event.target instanceof Element) || !event.target.matches('.customers-left')) return;
+    onAccountGrammarChange(event);
+  });
+  root.querySelector('[data-customers-import-input]')?.addEventListener('change', (event) => {
+    importCustomersJsonFile(event.target?.files?.[0]).catch((error) => {
+      state.ctx?.notifications?.notify?.({
+        title: state.t('importCustomers', labels.de.importCustomers),
+        body: error?.message || String(error),
+      });
+    }).finally(() => { if (event.target) event.target.value = ''; });
+  });
   root.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target : null;
     const actionEl = target?.closest('[data-customers-action]');
@@ -716,7 +713,16 @@ function wireUi(root) {
     const detailTab = target?.closest('[data-customers-detail-tab]')?.getAttribute('data-customers-detail-tab');
     if (detailTab) {
       state.detailTab = detailTab;
-      renderRight();
+      state.centerView = detailTab === 'contacts'
+        ? 'contacts'
+        : detailTab === 'opportunities'
+          ? 'opportunities'
+          : detailTab === 'handoff'
+            ? 'handoff'
+            : detailTab === 'dedupe'
+              ? 'dedupe'
+              : 'accounts';
+      renderMain();
       return;
     }
     const appLink = target?.closest('[data-customers-app-link]');
@@ -787,6 +793,21 @@ function wireUi(root) {
   root.addEventListener('change', (event) => {
     const target = event.target;
     if (!(target instanceof HTMLSelectElement)) return;
+    if (target.matches('[data-customers-saved-view]')) {
+      if (target.value) {
+        applySavedView(target.value);
+        syncGrammarControlsFromState();
+        renderAccountList();
+        renderMain();
+      }
+      return;
+    }
+    if (target.matches('[data-customers-dedupe-status-inline]')) {
+      state.dedupeStatus = target.value || 'open';
+      state.selectedDedupeCandidateId = '';
+      renderMain();
+      return;
+    }
     if (target.matches('[data-customers-stage-filter]')) {
       state.stage = target.value || 'all';
       syncSelection();
@@ -824,15 +845,13 @@ function wireUi(root) {
 }
 
 async function handleAction(action, element) {
-  if (action === 'refresh') {
-    await refreshData({ restartSync: true, renderLoading: true });
-  } else if (action === 'export-customers') {
-    exportCurrentView();
+  if (action === 'export-customers') {
+    exportCustomerSnapshot();
   } else if (action === 'toggle-inspector') {
-    state.inspectorHidden = !state.inspectorHidden;
-    writeInspectorHidden(state.inspectorHidden);
+    state.workbenchCollapsed = !state.workbenchCollapsed;
+    writeInspectorHidden(state.workbenchCollapsed);
     applyInspectorVisibility();
-    renderCenter();
+    renderMain();
   } else if (action === 'clear-filters') {
     state.stage = 'all';
     state.health = 'all';
@@ -848,7 +867,7 @@ async function handleAction(action, element) {
   } else if (!guardMutableAction(action)) {
     return;
   } else if (action === 'import-customers') {
-    await openCustomerImporter();
+    state.ctx?.host?.querySelector('[data-customers-import-input]')?.click();
   } else if (action === 'center-accounts') {
     state.centerView = 'accounts';
     renderCenter();
@@ -968,7 +987,8 @@ function selectFromElement(element) {
     state.selectedOutboundCompanyId = outboundCompanyId;
     state.selectedDedupeCandidateId = '';
     state.formMode = '';
-    render();
+    markSelectedRowsInPlace('outbound', outboundCompanyId);
+    renderActiveRecordInspector();
     return true;
   }
   const candidateId = element?.closest?.('[data-customers-dedupe-candidate-id]')?.getAttribute('data-customers-dedupe-candidate-id');
@@ -976,27 +996,36 @@ function selectFromElement(element) {
     state.selectedDedupeCandidateId = candidateId;
     state.selectedOutboundCompanyId = '';
     state.formMode = '';
-    render();
+    markSelectedRowsInPlace('dedupe', candidateId);
+    renderActiveRecordInspector();
     return true;
   }
   const contactId = element?.closest?.('[data-customers-contact-id]')?.getAttribute('data-customers-contact-id');
   if (contactId) {
     const contact = state.collections.customer_contacts.find((item) => item.id === contactId);
-    if (contact?.account_id) state.selectedAccountId = contact.account_id;
+    if (contact?.account_id && contact.account_id !== state.selectedAccountId) {
+      state.selectedAccountId = contact.account_id;
+      markSelectedAccountRows(contact.account_id);
+    }
     state.selectedContactId = contactId;
     state.selectedOpportunityId = '';
     state.formMode = '';
-    render();
+    markSelectedRowsInPlace('contact', contactId);
+    renderActiveRecordInspector();
     return true;
   }
   const opportunityId = element?.closest?.('[data-customers-opportunity-id]')?.getAttribute('data-customers-opportunity-id');
   if (opportunityId) {
     const opportunity = state.collections.customer_opportunities.find((item) => item.id === opportunityId);
-    if (opportunity?.account_id) state.selectedAccountId = opportunity.account_id;
+    if (opportunity?.account_id && opportunity.account_id !== state.selectedAccountId) {
+      state.selectedAccountId = opportunity.account_id;
+      markSelectedAccountRows(opportunity.account_id);
+    }
     state.selectedOpportunityId = opportunityId;
     state.selectedContactId = '';
     state.formMode = '';
-    render();
+    markSelectedRowsInPlace('opportunity', opportunityId);
+    renderActiveRecordInspector();
     return true;
   }
   const accountId = element?.closest?.('[data-customers-account-id]')?.getAttribute('data-customers-account-id');
@@ -1004,8 +1033,13 @@ function selectFromElement(element) {
     state.selectedAccountId = accountId;
     state.selectedContactId = '';
     state.selectedOpportunityId = '';
+    state.selectedOutboundCompanyId = '';
+    state.selectedDedupeCandidateId = '';
     state.formMode = '';
-    render();
+    state.workbenchCollapsed = false;
+    markSelectedAccountRows(accountId);
+    renderMain();
+    applyInspectorVisibility();
     return true;
   }
   return false;
@@ -1032,7 +1066,7 @@ function moveDetailTab(delta) {
 }
 
 function nextDetailTab(current, delta) {
-  const tabs = ['overview', 'tasks', 'notes', 'timeline', 'files', 'apps'];
+  const tabs = ['overview', 'contacts', 'opportunities', 'timeline', 'tasks', 'notes', 'files', 'apps', 'handoff', 'dedupe'];
   const currentIndex = Math.max(0, tabs.indexOf(current));
   const nextIndex = (currentIndex + delta + tabs.length) % tabs.length;
   return tabs[nextIndex];
@@ -1104,6 +1138,51 @@ function toggleSort(field) {
   if (state.centerView === 'contacts') state.contactSort = next;
   else if (state.centerView === 'opportunities') state.opportunitySort = next;
   else state.accountSort = next;
+}
+
+function onAccountGrammarChange(event) {
+  const pane = event?.target instanceof Element ? event.target : customersLeftPane();
+  const detail = event?.detail || pane?.__ctoxPaneGrammar?.state?.() || {};
+  const filters = detail.filters || {};
+  state.search = String(detail.search || '').trim().toLowerCase();
+  state.accountView = detail.view === 'list' ? 'list' : 'cards';
+  state.accountBand = ['active', 'renewal', 'risk'].includes(detail.band) ? detail.band : 'all';
+  state.stage = filters.stage || 'all';
+  state.health = filters.health || 'all';
+  state.accountSort = {
+    field: filters.sort || 'last_activity_at_ms',
+    direction: filters.direction === 'asc' ? 'asc' : 'desc',
+  };
+  syncSelection();
+  renderAccountList();
+  renderMain();
+}
+
+function customersLeftPane() {
+  return state.ctx?.host?.querySelector('.customers-left') || null;
+}
+
+function syncGrammarControlsFromState() {
+  const pane = customersLeftPane();
+  if (!pane) return;
+  const search = pane.querySelector('[data-pg-search]');
+  if (search) search.value = state.search || '';
+  const values = {
+    stage: state.stage,
+    health: state.health,
+    sort: state.accountSort?.field || 'last_activity_at_ms',
+    direction: state.accountSort?.direction || 'desc',
+  };
+  for (const [name, value] of Object.entries(values)) {
+    const control = pane.querySelector(`[data-pg-filter][data-pg-name="${name}"]`);
+    if (control) control.value = value || control.dataset.pgDefault || 'all';
+  }
+  for (const tab of pane.querySelectorAll('[data-pg-band]')) {
+    const active = tab.dataset.pgBand === state.accountBand;
+    tab.classList.toggle('is-active', active);
+    tab.setAttribute('aria-selected', String(active));
+  }
+  pane.__ctoxPaneGrammar?.refreshDot?.();
 }
 
 function wireRealtime() {
@@ -1214,9 +1293,8 @@ function render() {
   const root = state.ctx?.host?.querySelector('[data-customers-root]');
   if (!root) return;
   syncPresence();
-  renderLeft();
-  renderCenter();
-  renderRight();
+  renderAccountList();
+  renderMain();
   applyInspectorVisibility(root);
 }
 
@@ -1278,7 +1356,374 @@ function presenceChip(collection, recordId) {
   return `<span class="ctox-badge ${editing.length ? 'is-danger' : 'is-info'}" title="${escapeAttribute(label)}">${escapeHtml(label)}</span>`;
 }
 
+function accountLifecycleBand(account) {
+  const stage = String(account?.customer_stage || 'prospect');
+  if (stage === 'renewal') return 'renewal';
+  if (stage === 'at_risk' || stage === 'churned') return 'risk';
+  if (stage === 'active' || stage === 'onboarding' || stage === 'expansion') return 'active';
+  return 'all';
+}
+
+function accountLifecycleCounts(accounts = [], options = {}) {
+  const scoped = filterAndSortAccounts(accounts, { ...options, band: 'all' });
+  return {
+    all: scoped.length,
+    active: scoped.filter((account) => accountLifecycleBand(account) === 'active').length,
+    renewal: scoped.filter((account) => accountLifecycleBand(account) === 'renewal').length,
+    risk: scoped.filter((account) => accountLifecycleBand(account) === 'risk').length,
+  };
+}
+
+function accountListSignature(accounts = [], view = 'cards') {
+  return JSON.stringify({
+    view,
+    rows: accounts.map((account) => [
+      account.id,
+      account.name,
+      account.domain,
+      account.customer_stage,
+      account.health_status,
+      account.updated_at_ms,
+      account.last_activity_at_ms,
+    ]),
+  });
+}
+
+function accountShardMarkup(account) {
+  const related = relatedRecords(account.id, state.collections);
+  const meta = [
+    labelFor(STAGE_LABELS, account.customer_stage),
+    `${related.contacts.length} ${state.t('contacts', labels.de.contacts)}`,
+    `${related.opportunities.length} ${state.t('opportunities', labels.de.opportunities)}`,
+  ].join(' · ');
+  return `
+    <button type="button" class="ctox-list-item customers-account-shard" data-customers-selectable data-customers-account-id="${escapeAttribute(account.id)}"
+      data-context-record-id="${escapeAttribute(account.id)}"
+      data-context-record-type="customer_account"
+      data-context-label="${escapeAttribute(account.name || account.id)}"
+      role="option" tabindex="0" aria-selected="false"
+      aria-label="${escapeAttribute(state.t('selectAccount', labels.de.selectAccount, account.name || account.id))}">
+      <span class="customers-account-title">${escapeHtml(account.name || account.id)}</span>
+      <span class="customers-account-meta">${escapeHtml(meta)}</span>
+    </button>
+  `;
+}
+
+function writeAccountGrammarCounts(counts) {
+  const pane = customersLeftPane();
+  const grammar = pane?.__ctoxPaneGrammar;
+  if (grammar?.setCounts) {
+    grammar.setCounts(counts);
+    return;
+  }
+  for (const [key, value] of Object.entries(counts || {})) {
+    const node = pane?.querySelector(`[data-pg-count="${key}"]`);
+    if (node) node.textContent = ` (${value})`;
+  }
+}
+
+function writeAccountGrammarFooter(text) {
+  const pane = customersLeftPane();
+  const grammar = pane?.__ctoxPaneGrammar;
+  if (grammar?.setFooter) {
+    grammar.setFooter(text);
+    return;
+  }
+  const node = pane?.querySelector('[data-pg-footer]');
+  if (node) node.textContent = text || '';
+}
+
+function syncSavedViewOptions() {
+  const select = state.ctx?.host?.querySelector('[data-customers-saved-view]');
+  if (!select) return;
+  const selected = select.value;
+  const views = (state.collections.customer_views || []).filter((view) => view.object_type === 'account');
+  const signature = JSON.stringify(views.map((view) => [view.id, view.name, view.updated_at_ms]));
+  if (select.dataset.sig === signature) return;
+  select.dataset.sig = signature;
+  select.innerHTML = `<option value="">${escapeHtml(state.t('savedViews', labels.de.savedViews))}</option>${views.map((view) => `<option value="${escapeAttribute(view.id)}">${escapeHtml(view.name || view.id)}</option>`).join('')}`;
+  if (views.some((view) => view.id === selected)) select.value = selected;
+}
+
+function markSelectedAccountRows(accountId = state.selectedAccountId) {
+  const list = state.ctx?.host?.querySelector('[data-customers-account-list]');
+  for (const row of list?.querySelectorAll('[data-customers-account-id]') || []) {
+    const selected = row.dataset.customersAccountId === accountId;
+    row.classList.toggle('is-selected', selected);
+    row.setAttribute('aria-selected', String(selected));
+  }
+}
+
+function markSelectedRowsInPlace(type, id) {
+  const attribute = {
+    contact: 'data-customers-contact-id',
+    opportunity: 'data-customers-opportunity-id',
+    outbound: 'data-customers-outbound-company-id',
+    dedupe: 'data-customers-dedupe-candidate-id',
+  }[type];
+  if (!attribute) return;
+  const main = state.ctx?.host?.querySelector('[data-customers-main]');
+  for (const row of main?.querySelectorAll(`[${attribute}]`) || []) {
+    const selected = row.getAttribute(attribute) === id;
+    row.classList.toggle('is-selected', selected);
+    row.setAttribute('aria-selected', String(selected));
+  }
+}
+
+function renderAccountList() {
+  const pane = customersLeftPane();
+  const list = pane?.querySelector('[data-customers-account-list]');
+  if (!pane || !list) return;
+  const accounts = visibleAccountsForState();
+  const counts = accountLifecycleCounts(state.collections.customer_accounts || [], {
+    search: state.search,
+    stage: state.stage,
+    health: state.health,
+    sort: state.accountSort,
+  });
+  writeAccountGrammarCounts(counts);
+  const bandLabel = {
+    active: state.t('activeCustomers', labels.de.activeCustomers),
+    renewal: state.t('renewal', labels.de.renewal),
+    risk: state.t('atRisk', labels.de.atRisk),
+    all: state.t('allAccounts', labels.de.allAccounts),
+  }[state.accountBand] || state.t('allAccounts', labels.de.allAccounts);
+  writeAccountGrammarFooter(`${accounts.length} ${state.t('entries', 'Einträge')} · ${bandLabel}`);
+  syncSavedViewOptions();
+  list.classList.toggle('is-list-view', state.accountView === 'list');
+  const signature = accountListSignature(accounts, state.accountView);
+  if (list.dataset.sig !== signature) {
+    list.dataset.sig = signature;
+    list.innerHTML = accounts.map(accountShardMarkup).join('');
+  }
+  const empty = pane.querySelector('[data-customers-account-empty]');
+  if (empty) empty.hidden = accounts.length > 0;
+  markSelectedAccountRows();
+}
+
 function renderLeft() {
+  renderAccountList();
+}
+
+function workbenchTabButton(tab, label) {
+  return `<button class="ctox-pane-tab${state.detailTab === tab ? ' is-active' : ''}" type="button" role="tab" aria-selected="${state.detailTab === tab ? 'true' : 'false'}" data-customers-detail-tab="${escapeAttribute(tab)}">${escapeHtml(label)}</button>`;
+}
+
+function renderMainHeaderActions(account) {
+  const actions = [];
+  if (account) {
+    actions.push(`<button class="ctox-pane-icon" type="button" data-customers-action="edit-account" data-account-id="${escapeAttribute(account.id)}" aria-label="${escapeAttribute(state.t('editCustomer', labels.de.editCustomer))}" title="${escapeAttribute(state.t('editCustomer', labels.de.editCustomer))}"${mutableDisabledAttr()}>${actionIcon('edit')}</button>`);
+    actions.push(`<button class="ctox-pane-icon is-danger" type="button" data-customers-action="archive-account" data-account-id="${escapeAttribute(account.id)}" aria-label="${escapeAttribute(state.t('archiveCustomer', labels.de.archiveCustomer))}" title="${escapeAttribute(state.t('archiveCustomer', labels.de.archiveCustomer))}"${mutableDisabledAttr()}>${actionIcon('archive')}</button>`);
+  }
+  const create = {
+    contacts: ['create-contact', state.t('newContact', labels.de.newContact)],
+    opportunities: ['create-opportunity', state.t('newOpportunity', labels.de.newOpportunity)],
+    tasks: ['create-task', state.t('newTask', labels.de.newTask)],
+    notes: ['create-note', state.t('newNote', labels.de.newNote)],
+  }[state.detailTab];
+  if (create && account) {
+    actions.unshift(`<button class="ctox-pane-icon" type="button" data-customers-action="${create[0]}" aria-label="${escapeAttribute(create[1])}" title="${escapeAttribute(create[1])}"${mutableDisabledAttr()}>${actionIcon('add')}</button>`);
+  }
+  if (state.detailTab === 'handoff' && state.selectedOutboundCompanyId) {
+    const row = outboundHandoffRowByCompanyId(state.selectedOutboundCompanyId);
+    if (row?.status === 'ready') actions.unshift(`<button class="ctox-pane-icon" type="button" data-customers-action="import-outbound" data-outbound-company-id="${escapeAttribute(row.company.id)}" aria-label="${escapeAttribute(state.t('importFromOutbound', labels.de.importFromOutbound))}" title="${escapeAttribute(state.t('importFromOutbound', labels.de.importFromOutbound))}"${mutableDisabledAttr()}>${actionIcon('download')}</button>`);
+  }
+  return `<div class="ctox-pane-actions">${actions.join('')}</div>`;
+}
+
+function renderMain() {
+  const target = state.ctx?.host?.querySelector('[data-customers-main]');
+  if (!target) return;
+  target.classList.toggle('is-form', Boolean(state.formMode));
+  if (state.formMode) {    target.innerHTML = renderForm();
+    return;
+  }
+  const account = selectedAccount();
+  const globalView = state.detailTab === 'handoff' || state.detailTab === 'dedupe';
+  const visible = globalView || accountWorkbenchVisible(Boolean(account), state.workbenchCollapsed);
+  const title = account?.name || state.t('workbench', labels.de.workbench);
+  const subtitle = account ? [account.domain, account.industry].filter(Boolean).join(' · ') : '';
+  target.innerHTML = `
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(state.t('workbench', labels.de.workbench))}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(title)}</h2>
+          ${subtitle ? `<p class="customers-detail-subtitle">${escapeHtml(subtitle)}</p>` : ''}
+        </div>
+        ${renderMainHeaderActions(account)}
+      </div>
+    </header>
+    <nav class="ctox-pane-band customers-workbench-tabs" aria-label="${escapeAttribute(state.t('workbench', labels.de.workbench))}">
+      <div class="ctox-pane-tabs" role="tablist">
+        ${workbenchTabButton('overview', state.t('overview', labels.de.overview))}
+        ${workbenchTabButton('contacts', state.t('contacts', labels.de.contacts))}
+        ${workbenchTabButton('opportunities', state.t('opportunities', labels.de.opportunities))}
+        ${workbenchTabButton('timeline', state.t('activities', labels.de.activities))}
+        ${workbenchTabButton('tasks', state.t('tasks', labels.de.tasks))}
+        ${workbenchTabButton('notes', state.t('notes', labels.de.notes))}
+        ${workbenchTabButton('files', state.t('files', labels.de.files))}
+        ${workbenchTabButton('apps', state.t('apps', labels.de.apps))}
+        ${workbenchTabButton('handoff', state.t('handoff', labels.de.handoff))}
+        ${workbenchTabButton('dedupe', state.t('dedupe', labels.de.dedupe))}
+      </div>
+    </nav>
+    <div class="ctox-pane-scroll customers-workbench-scroll">
+      ${renderPermissionNotice()}
+      ${visible ? `<div data-customers-record-inspector>${renderActiveRecordInspectorMarkup()}</div>${renderWorkbenchTabContent()}` : `
+        <div class="ctox-empty">
+          <strong>${escapeHtml(state.t('inspectorEmpty', labels.de.inspectorEmpty))}</strong>
+          <span>${escapeHtml(state.t('inspectorEmptyBody', labels.de.inspectorEmptyBody))}</span>
+        </div>
+      `}
+    </div>
+    <footer class="ctox-pane-footer customers-workbench-footer">${escapeHtml(workbenchFooterText())}</footer>
+  `;
+}
+
+function workbenchFooterText() {
+  if (state.detailTab === 'handoff') return `${visibleOutboundHandoffRowsForState().length} ${state.t('entries', 'Einträge')} · ${state.t('handoff', labels.de.handoff)}`;
+  if (state.detailTab === 'dedupe') return `${visibleDedupeCandidatesForState().length} ${state.t('entries', 'Einträge')} · ${state.t('dedupe', labels.de.dedupe)}`;
+  const account = selectedAccount();
+  return account ? [account.name, labelFor(STAGE_LABELS, account.customer_stage), labelFor(HEALTH_LABELS, account.health_status)].filter(Boolean).join(' · ') : '';
+}
+
+function renderWorkbenchTabContent() {
+  const account = selectedAccount();
+  if (state.detailTab === 'handoff') return renderWorkbenchHandoff();
+  if (state.detailTab === 'dedupe') return renderWorkbenchDedupe();
+  if (!account) return '';
+  const context = activeRecordContext() || { type: 'account', id: account.id, account };
+  if (state.detailTab === 'contacts') return renderWorkbenchContacts(account.id);
+  if (state.detailTab === 'opportunities') return renderWorkbenchOpportunities(account.id);
+  if (state.detailTab === 'tasks') return renderTasksTab(context);
+  if (state.detailTab === 'notes') return renderNotesTab(context);
+  if (state.detailTab === 'timeline') return renderTimelineTab(context);
+  if (state.detailTab === 'files') return renderFilesTab(context);
+  if (state.detailTab === 'apps') return renderAppsTab(context);
+  return renderOverviewTab({ type: 'account', id: account.id, account });
+}
+
+function renderWorkbenchContacts(accountId) {
+  const contacts = filterAndSortContacts(state.collections.customer_contacts || [], state.collections.customer_accounts || [], {
+    search: state.contactSearch,
+    accountId,
+    sort: state.contactSort,
+  });
+  return `
+    <section class="customers-workbench-section">
+      <div class="ctox-toolbar">
+        <input class="ctox-pane-search" type="search" data-customers-contact-search value="${escapeAttribute(state.contactSearch)}" placeholder="${escapeAttribute(state.t('searchContacts', labels.de.searchContacts))}" aria-label="${escapeAttribute(state.t('searchContacts', labels.de.searchContacts))}">
+      </div>
+      <div class="ctox-table-wrap">${renderContactTable(contacts)}</div>
+    </section>
+  `;
+}
+
+function renderWorkbenchOpportunities(accountId) {
+  const opportunities = filterAndSortOpportunities(state.collections.customer_opportunities || [], state.collections.customer_accounts || [], {
+    search: state.opportunitySearch,
+    accountId,
+    preset: state.opportunityPreset,
+    sort: state.opportunitySort,
+  });
+  return `
+    <section class="customers-workbench-section">
+      <div class="ctox-toolbar customers-toolbar">
+        <input class="ctox-pane-search" type="search" data-customers-opportunity-search value="${escapeAttribute(state.opportunitySearch)}" placeholder="${escapeAttribute(state.t('searchOpportunities', labels.de.searchOpportunities))}" aria-label="${escapeAttribute(state.t('searchOpportunities', labels.de.searchOpportunities))}">
+        <div class="ctox-pane-tabs" role="tablist" aria-label="${escapeAttribute(state.t('opportunityView', labels.de.opportunityView))}">
+          <button class="ctox-pane-tab" type="button" role="tab" aria-selected="${state.opportunityMode === 'board'}" data-customers-action="opportunity-board">${escapeHtml(state.t('board', labels.de.board))}</button>
+          <button class="ctox-pane-tab" type="button" role="tab" aria-selected="${state.opportunityMode === 'table'}" data-customers-action="opportunity-table">${escapeHtml(state.t('table', labels.de.table))}</button>
+        </div>
+      </div>
+      ${renderOpportunityWorkbench(opportunities)}
+    </section>
+  `;
+}
+
+function renderWorkbenchHandoff() {
+  const rows = visibleOutboundHandoffRowsForState();
+  return `
+    <section class="customers-workbench-section">
+      <div class="ctox-toolbar">
+        <input class="ctox-pane-search" type="search" data-customers-outbound-search value="${escapeAttribute(state.outboundSearch)}" placeholder="${escapeAttribute(state.t('searchOutbound', labels.de.searchOutbound))}" aria-label="${escapeAttribute(state.t('searchOutbound', labels.de.searchOutbound))}">
+      </div>
+      <div class="ctox-table-wrap">${renderOutboundHandoffTable(rows)}</div>
+    </section>
+  `;
+}
+
+function renderWorkbenchDedupe() {
+  const rows = visibleDedupeCandidatesForState();
+  return `
+    <section class="customers-workbench-section">
+      <div class="ctox-toolbar">
+        <input class="ctox-pane-search" type="search" data-customers-dedupe-search value="${escapeAttribute(state.dedupeSearch)}" placeholder="${escapeAttribute(state.t('searchDedupe', labels.de.searchDedupe))}" aria-label="${escapeAttribute(state.t('searchDedupe', labels.de.searchDedupe))}">
+        <select class="ctox-select" data-customers-dedupe-status-inline aria-label="${escapeAttribute(state.t('status', labels.de.status))}">
+          ${filterOption('open', state.t('needsReview', labels.de.needsReview), state.dedupeStatus)}
+          ${filterOption('resolved', state.t('commandCompletedStatus', labels.de.commandCompletedStatus), state.dedupeStatus)}
+          ${filterOption('all', state.t('allAccounts', labels.de.allAccounts), state.dedupeStatus)}
+        </select>
+      </div>
+      <div class="ctox-table-wrap">${renderDedupeTable(rows)}</div>
+    </section>
+  `;
+}
+
+function renderActiveRecordInspector() {
+  const node = state.ctx?.host?.querySelector('[data-customers-record-inspector]');
+  if (node) node.innerHTML = renderActiveRecordInspectorMarkup();
+  const account = selectedAccount();
+  const title = state.ctx?.host?.querySelector('[data-customers-main] .ctox-pane-title');
+  if (title) title.textContent = account?.name || state.t('workbench', labels.de.workbench);
+}
+
+function renderActiveRecordInspectorMarkup() {
+  if (state.detailTab === 'handoff' && state.selectedOutboundCompanyId) {
+    const row = outboundHandoffRowByCompanyId(state.selectedOutboundCompanyId);
+    if (!row) return '';
+    return `
+      <section class="ctox-card customers-active-record" data-context-record-id="${escapeAttribute(row.company.id)}" data-context-record-type="outbound_company" data-context-label="${escapeAttribute(row.company.name || row.company.id)}">
+        <header><strong>${escapeHtml(row.company.name || row.company.id)}</strong></header>
+        <div class="ctox-card-body"><dl class="ctox-fields">${metric(state.t('domain', labels.de.domain), row.domain || '—')}${metric('Fit', Number(row.company.fit_score || 0) ? `${Number(row.company.fit_score)}%` : '—')}${metric(state.t('status', labels.de.status), row.status)}</dl></div>
+      </section>`;
+  }
+  if (state.detailTab === 'dedupe' && state.selectedDedupeCandidateId) {
+    const candidate = (state.collections.customer_dedupe_candidates || []).find((item) => item.id === state.selectedDedupeCandidateId);
+    if (!candidate) return '';
+    return `
+      <section class="ctox-card customers-active-record" data-context-record-id="${escapeAttribute(candidate.id)}" data-context-record-type="customer_dedupe_candidate" data-context-label="${escapeAttribute(candidate.match_key || candidate.id)}">
+        <header><strong>${escapeHtml(candidate.match_key || candidate.id)}</strong></header>
+        <div class="ctox-card-body"><dl class="ctox-fields">${metric(state.t('matchType', labels.de.matchType), candidate.match_type || '—')}${metric(state.t('confidence', labels.de.confidence), `${Math.round(Number(candidate.confidence || 0) * 100)}%`)}${metric(state.t('status', labels.de.status), candidate.status || 'open')}</dl>${candidate.status === 'open' ? `<div class="customers-row-actions">${dedupeActions(candidate)}</div>` : ''}</div>
+      </section>`;
+  }
+  const context = activeRecordContext();
+  if (!context || context.type === 'account') return '';
+  if (context.type === 'contact') {
+    const contact = context.contact;
+    return `
+      <section class="ctox-card customers-active-record" data-context-record-id="${escapeAttribute(contact.id)}" data-context-record-type="customer_contact" data-context-label="${escapeAttribute(contactDisplayName(contact))}">
+        <header><strong>${escapeHtml(contactDisplayName(contact))}</strong>${renderRecordHeaderActions(context)}</header>
+        <div class="ctox-card-body"><dl class="ctox-fields">${metric(state.t('jobTitle', labels.de.jobTitle), contact.job_title || '—')}${metric(state.t('email', labels.de.email), contact.email || '—')}${metric(state.t('phone', labels.de.phone), contact.phone || '—')}</dl></div>
+      </section>`;
+  }
+  const opportunity = context.opportunity;
+  return `
+    <section class="ctox-card customers-active-record" data-context-record-id="${escapeAttribute(opportunity.id)}" data-context-record-type="customer_opportunity" data-context-label="${escapeAttribute(opportunity.name || opportunity.id)}">
+      <header><strong>${escapeHtml(opportunity.name || opportunity.id)}</strong>${renderRecordHeaderActions(context)}</header>
+      <div class="ctox-card-body"><dl class="ctox-fields">${metric(state.t('stage', labels.de.stage), labelFor(OPPORTUNITY_STAGE_LABELS, opportunity.stage))}${metric(state.t('amount', labels.de.amount), formatMoney(opportunity.amount_cents, opportunity.currency))}${metric(state.t('closeDate', labels.de.closeDate), formatDate(opportunity.close_date_ms, state.lang))}${metric(state.t('probability', labels.de.probability), `${Number(opportunity.probability || 0)}%`)}</dl></div>
+    </section>`;
+}
+
+function renderCenter() {
+  renderMain();
+}
+
+function renderRight() {
+  renderMain();
+}
+
+function renderLegacyLeft() {
   const target = state.ctx.host.querySelector('[data-customers-left]');
   if (!target) return;
   const scrollTop = target.querySelector('.customers-left-scroll')?.scrollTop || 0;
@@ -1293,9 +1738,7 @@ function renderLeft() {
           <span class="ctox-pane-kicker">CRM</span>
           <h2 class="ctox-pane-title">${escapeHtml(state.t('title', labels.de.title))}</h2>
         </div>
-        <div class="ctox-pane-actions">
-          <button class="ctox-pane-icon" type="button" data-customers-action="refresh" title="${escapeAttribute(state.t('refresh', labels.de.refresh))}" aria-label="${escapeAttribute(state.t('refresh', labels.de.refresh))}">${actionIcon('refresh')}</button>
-        </div>
+        <div class="ctox-pane-actions"></div>
       </div>
     </header>
     <div class="ctox-pane-scroll customers-left-scroll">
@@ -1380,7 +1823,7 @@ function dedupeStatusButton(status, label, count) {
   `;
 }
 
-function renderCenter() {
+function renderLegacyCenter() {
   const target = state.ctx.host.querySelector('[data-customers-center]');
   if (!target) return;
   const accounts = visibleAccountsForState();
@@ -1403,7 +1846,7 @@ function renderCenter() {
           <button class="ctox-pane-icon" type="button" data-customers-action="import-customers" aria-label="${escapeAttribute(state.t('importCustomers', labels.de.importCustomers))}" title="${escapeAttribute(state.t('importCustomers', labels.de.importCustomers))}"${mutableDisabledAttr()}>${actionIcon('upload')}</button>
           <button class="ctox-pane-icon" type="button" data-customers-action="export-customers" aria-label="${escapeAttribute(state.t('exportCustomers', labels.de.exportCustomers))}" title="${escapeAttribute(state.t('exportCustomers', labels.de.exportCustomers))}">${actionIcon('export')}</button>
           ${primaryAction ? `<button class="ctox-pane-icon" type="button" data-customers-action="${escapeAttribute(primaryAction.action)}"${primaryAction.recordAttr || ''} aria-label="${escapeAttribute(primaryAction.label)}" title="${escapeAttribute(primaryAction.label)}"${mutableDisabledAttr()}>${actionIcon(primaryAction.icon || 'add')}</button>` : ''}
-          ${inspectorHasContent() ? `<button class="ctox-pane-icon${state.inspectorHidden ? ' is-active' : ''}" type="button" data-customers-action="toggle-inspector" aria-pressed="${state.inspectorHidden ? 'true' : 'false'}" aria-label="${escapeAttribute(state.t(state.inspectorHidden ? 'showInspector' : 'toggleInspector', labels.de[state.inspectorHidden ? 'showInspector' : 'toggleInspector']))}" title="${escapeAttribute(state.t(state.inspectorHidden ? 'showInspector' : 'toggleInspector', labels.de[state.inspectorHidden ? 'showInspector' : 'toggleInspector']))}">${actionIcon('columns')}</button>` : ''}
+          ${inspectorHasContent() ? `<button class="ctox-pane-icon${state.workbenchCollapsed ? ' is-active' : ''}" type="button" data-customers-action="toggle-inspector" aria-pressed="${state.workbenchCollapsed ? 'true' : 'false'}" aria-label="${escapeAttribute(state.t(state.workbenchCollapsed ? 'showInspector' : 'toggleInspector', labels.de[state.workbenchCollapsed ? 'showInspector' : 'toggleInspector']))}" title="${escapeAttribute(state.t(state.workbenchCollapsed ? 'showInspector' : 'toggleInspector', labels.de[state.workbenchCollapsed ? 'showInspector' : 'toggleInspector']))}">${actionIcon('columns')}</button>` : ''}
         </div>
       </div>
       <div class="ctox-pane-tools">
@@ -1833,7 +2276,7 @@ function contactTableRow(contact) {
   `;
 }
 
-function renderRight() {
+function renderLegacyRight() {
   const target = state.ctx.host.querySelector('[data-customers-right]');
   if (!target) return;
   if (state.formMode) {
@@ -2628,6 +3071,63 @@ async function importCustomerRowsFromPayload(payload = {}) {
   };
 }
 
+function buildCustomerExport(accounts = [], exportedAtMs = Date.now()) {
+  return {
+    kind: 'ctox-customers-export',
+    version: 1,
+    exported_at_ms: exportedAtMs,
+    accounts: (accounts || []).map((account) => ({ ...account })),
+  };
+}
+
+function parseCustomerImport(value) {
+  const payload = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
+  return accounts
+    .filter((account) => account && typeof account === 'object' && account.id && account.name)
+    .map((account) => ({ ...account }));
+}
+
+function exportCustomerSnapshot() {
+  const payload = buildCustomerExport(visibleAccountsForState());
+  const filename = `kundenkonten-${new Date().toISOString().slice(0, 10)}.json`;
+  downloadTextFile(filename, `${JSON.stringify(payload, null, 2)}\n`, 'application/json;charset=utf-8');
+}
+
+async function importCustomersJsonFile(file) {
+  if (!file) return { imported: 0 };
+  if (!canWriteCustomerCollection('customer_accounts')) {
+    throw new Error(state.t('permissionDenied', labels.de.permissionDenied));
+  }
+  const collection = resolveCollection('customer_accounts');
+  if (!collection?.findOne) throw new Error(state.t('commandUnavailable', labels.de.commandUnavailable));
+  let payload;
+  try {
+    payload = JSON.parse(await file.text());
+  } catch {
+    throw new Error(state.t('invalidImport', 'Die JSON-Datei ist ungültig.'));
+  }
+  const accounts = parseCustomerImport(payload);
+  if (!accounts.length) throw new Error(state.t('emptyImport', 'Die JSON-Datei enthält keine Kundenkonten.'));
+  const now = Date.now();
+  for (const account of accounts) {
+    await upsertLocalDoc(collection, account.id, {
+      ...account,
+      id: String(account.id),
+      name: String(account.name),
+      is_deleted: false,
+      updated_at_ms: Math.max(now, Number(account.updated_at_ms || 0)),
+      created_at_ms: Number(account.created_at_ms || now),
+    });
+  }
+  await refreshData();
+  state.ctx?.notifications?.notify?.({
+    title: state.t('importCustomers', labels.de.importCustomers),
+    body: state.t('importComplete', '{0} Kundenkonten importiert.', accounts.length),
+  });
+  return { imported: accounts.length };
+}
+
 function exportCurrentView() {
   const fileBase = `kunden-${state.centerView}-${new Date().toISOString().slice(0, 10)}`;
   const rows = state.centerView === 'contacts'
@@ -3004,6 +3504,7 @@ function visibleAccountsForState() {
     search: state.search,
     stage: state.stage,
     health: state.health,
+    band: state.accountBand,
     sort: state.accountSort,
   });
 }
@@ -3042,10 +3543,12 @@ function filterAndSortAccounts(accounts, options = {}) {
   const query = normalizeSearch(options.search);
   const stage = options.stage || 'all';
   const health = options.health || 'all';
+  const band = options.band || 'all';
   return sortRows(
     accounts
       .filter((account) => stage === 'all' || account.customer_stage === stage)
       .filter((account) => health === 'all' || account.health_status === health)
+      .filter((account) => band === 'all' || accountLifecycleBand(account) === band)
       .filter((account) => {
         if (!query) return true;
         return normalizeSearch([
@@ -3703,12 +4206,7 @@ function renderOperationalAuditPanel(context) {
 
 function isCustomersDebugMode() {
   const user = state.ctx?.session?.user || {};
-  return Boolean(
-    state.ctx?.debug === true
-    || new URLSearchParams(location.search).has('customersDebug')
-    || localStorage.getItem('ctox.businessOs.customers.debug') === '1'
-    || user.is_admin === true && localStorage.getItem('ctox.businessOs.debugPanels') === '1'
-  );
+  return Boolean(state.ctx?.debug === true && (user.is_admin === true || user.is_owner === true));
 }
 
 function commandAuditRow(command) {
@@ -3804,7 +4302,7 @@ function opportunityRow(opportunity) {
 function taskRow(task) {
   const isDone = ['completed', 'cancelled'].includes(task.status);
   return `
-    <article class="customers-record-row ${isDone ? 'is-muted' : ''}">
+    <article class="customers-record-row ${isDone ? 'is-muted' : ''}" data-context-record-id="${escapeAttribute(task.id)}" data-context-record-type="customer_task" data-context-label="${escapeAttribute(task.title || task.id)}">
       <div>
         <strong>${escapeHtml(task.title || task.id)}</strong>
         <span>${escapeHtml([labelFor(TASK_STATUS_LABELS, task.status), formatDate(task.due_at_ms, state.lang), task.assignee_id].filter((item) => item && item !== '—').join(' · ') || '—')}</span>
@@ -3820,7 +4318,7 @@ function taskRow(task) {
 
 function noteRow(note) {
   return `
-    <article class="customers-record-row">
+    <article class="customers-record-row" data-context-record-id="${escapeAttribute(note.id)}" data-context-record-type="customer_note" data-context-label="${escapeAttribute(note.title || note.id)}">
       <div>
         <strong>${escapeHtml(note.title || 'Notiz')}</strong>
         <span>${escapeHtml(formatDate(note.updated_at_ms || note.created_at_ms, state.lang))}</span>
@@ -3833,7 +4331,7 @@ function noteRow(note) {
 
 function fileRow(file) {
   return `
-    <div class="customers-mini-row">
+    <div class="customers-mini-row" data-context-record-id="${escapeAttribute(file.id)}" data-context-record-type="customer_file" data-context-label="${escapeAttribute(file.name || file.filename || file.id)}">
       <span>${escapeHtml(file.name || file.filename || file.id)}</span>
       <span>${escapeHtml(file.mime_type || file.file_type || formatDate(file.updated_at_ms, state.lang))}</span>
     </div>
@@ -3854,7 +4352,7 @@ function linkedAppRow(row) {
 
 function timelineRow(row) {
   return `
-    <div class="customers-timeline-item">
+    <div class="customers-timeline-item" data-context-record-id="${escapeAttribute(row.id)}" data-context-record-type="customer_${escapeAttribute(row.kind)}" data-context-label="${escapeAttribute(row.title || row.id)}">
       <div>
         <strong>${escapeHtml(row.title)}</strong>
         <span>${escapeHtml([row.kind, formatDate(row.at, state.lang)].filter(Boolean).join(' · '))}</span>
@@ -4061,6 +4559,12 @@ function healthBadgeClass(health) {
 }
 
 export const __customersTestHooks = {
+  accountLifecycleBand,
+  accountLifecycleCounts,
+  accountListSignature,
+  accountWorkbenchVisible,
+  buildCustomerExport,
+  parseCustomerImport,
   buildAccountArchiveCommand,
   buildAccountUpdateCommand,
   buildContactArchiveCommand,
