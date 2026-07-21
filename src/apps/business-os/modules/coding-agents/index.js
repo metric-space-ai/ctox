@@ -38,6 +38,7 @@ const state = {
   appSearch: '',
   appSort: 'title',
   appSortDir: 'asc',
+  appViewMode: 'cards',
   chatSearch: '',
   chatRoleFilter: 'all',
   chatViewMode: 'cards',
@@ -221,12 +222,12 @@ function bindElements(root) {
   els.appSort = root.querySelector('[data-app-sort]');
   els.appSortDir = root.querySelector('[data-app-sort-dir]');
   els.appFilterReset = root.querySelector('[data-reset-app-filters]');
-  els.countApps = root.querySelector('[data-count-apps]');
   els.chatSearch = root.querySelector('[data-chat-search]');
   els.chatFilterToggle = root.querySelector('[data-toggle-chat-filters]');
   els.chatFilterTray = root.querySelector('[data-chat-filter-advanced]');
   els.chatRoleFilter = root.querySelector('[data-chat-role-filter]');
   els.chatFilterReset = root.querySelector('[data-reset-chat-filters]');
+  els.appViewButtons = [...root.querySelectorAll('[data-app-view]')];
   els.chatViewButtons = [...root.querySelectorAll('[data-chat-view]')];
   els.centerTabs = [...root.querySelectorAll('[data-center-tab]')];
   els.countEvents = root.querySelector('[data-count-events]');
@@ -327,6 +328,11 @@ function wireEvents() {
     syncFilterIndicators();
     renderRecentTurns();
   });
+  els.appViewButtons.forEach((button) => button.addEventListener('click', () => {
+    state.appViewMode = button.dataset.appView;
+    els.appViewButtons.forEach((other) => other.setAttribute('aria-pressed', String(other === button)));
+    renderAppList();
+  }));
   els.chatViewButtons.forEach((button) => button.addEventListener('click', () => {
     state.chatViewMode = button.dataset.chatView;
     els.chatViewButtons.forEach((other) => other.setAttribute('aria-pressed', String(other === button)));
@@ -417,7 +423,6 @@ function renderAppList() {
     return;
   }
   if (state.listState === 'error' || state.modules.length === 0) {
-    if (els.countApps) els.countApps.textContent = ' (0)';
     box.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(t('emptyApps'))}</strong><span>${escapeHtml(t('emptyAppsHint'))}</span></div>`;
     return;
   }
@@ -428,18 +433,20 @@ function renderAppList() {
   const visible = state.modules
     .filter((mod) => !query || mod.title.toLowerCase().includes(query) || mod.id.toLowerCase().includes(query))
     .sort((left, right) => direction * left[key].localeCompare(right[key], undefined, { sensitivity: 'base' }));
-  if (els.countApps) els.countApps.textContent = ` (${visible.length})`;
   if (!visible.length) {
     box.innerHTML = `<div class="ctox-empty"><strong>Keine Treffer.</strong></div>`;
     return;
   }
 
+  const listMode = state.appViewMode === 'list';
+  box.classList.toggle('is-list-view', listMode);
   visible.forEach((mod) => {
     const item = document.createElement('button');
     item.type = 'button';
     // Kit list row; `is-selected` drives the kit selection styling. The rail
     // shows the app icon only; the title lives in the hover chip (and inline
-    // once the operator drags the rail wide enough for labels).
+    // once the operator drags the rail wide enough for labels). List mode is
+    // the compact one-line rendering (canonical shard/list toggle).
     item.className = `ctox-list-item coding-agents-app-item ${state.activeModuleId === mod.id ? 'is-selected' : ''}`;
     item.dataset.moduleId = mod.id;
     item.setAttribute('aria-label', mod.title);
@@ -463,6 +470,14 @@ function renderAppList() {
     item.addEventListener('blur', hideRailChip);
     box.appendChild(item);
   });
+}
+
+function appFooterText() {
+  const total = state.modules.length;
+  const query = state.appSearch;
+  if (!query) return `${total} Apps`;
+  const shown = state.modules.filter((mod) => mod.title.toLowerCase().includes(query) || mod.id.toLowerCase().includes(query)).length;
+  return `${shown} von ${total} Apps`;
 }
 
 function moduleIconUrl(moduleId) {
@@ -835,7 +850,7 @@ function renderRecentTurns() {
   }
 
   const footer = els.root?.querySelector('#ca-footer');
-  if (footer) footer.textContent = `${state.modules.length} Apps`;
+  if (footer) footer.textContent = appFooterText();
   if (els.centerFooter) {
     els.centerFooter.textContent = state.activeModuleId
       ? `${state.recentTurns.length} Delegationen · ${state.activeModuleId}${running ? ' · Agent arbeitet' : ''}`
@@ -966,10 +981,15 @@ function renderArtifact() {
   if (typeof metadata === 'string') { try { metadata = JSON.parse(metadata); } catch { metadata = null; } }
   const html = metadata && typeof metadata === 'object' ? String(metadata.artifact_html || '') : '';
   if (html.trim()) {
-    frame.srcdoc = html;
+    if (state.artifactHtml !== html) {
+      state.artifactHtml = html;
+      applyArtifactSrcdoc(frame, html);
+    }
     frame.hidden = false;
     empty.hidden = true;
   } else {
+    state.artifactHtml = '';
+    frame.removeAttribute('srcdoc');
     frame.hidden = true;
     empty.hidden = false;
   }
@@ -977,6 +997,23 @@ function renderArtifact() {
     const updatedMs = Number(state.activeSession?.updated_at_ms || 0);
     els.artifactFooter.textContent = html.trim() && updatedMs ? `Aktualisiert ${relativeTime(updatedMs)}` : '';
   }
+}
+
+// Chromium can swallow the very first srcdoc assignment while the module
+// fragment is still binding; without a later content change the frame then
+// stays blank forever. Verify the load fired and re-apply once if not.
+function applyArtifactSrcdoc(frame, html) {
+  let loaded = false;
+  const onLoad = () => { loaded = true; frame.removeEventListener('load', onLoad); };
+  frame.addEventListener('load', onLoad);
+  frame.setAttribute('srcdoc', html);
+  setTimeout(() => {
+    frame.removeEventListener('load', onLoad);
+    if (!loaded && frame.isConnected) {
+      frame.removeAttribute('srcdoc');
+      frame.setAttribute('srcdoc', html);
+    }
+  }, 600);
 }
 
 function renderSessionBanner() {

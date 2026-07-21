@@ -239,6 +239,18 @@ Rules that go with it:
   resizer 2, center 3, resizer 4, right 5). The kit hides column resizers on
   narrow windows; with auto-flow placement the center pane slides onto the
   empty 12px resizer track and the main view visually disappears.
+- **The shard/list toggle sits IN the filterbar row** — between the search
+  field and the filter-tray toggle, exactly like Threads/Knowledge, using ONLY
+  the canonical glyphs (two stacked rounded rects / three lines). Never invent
+  substitute icons and never park the toggle in the pane-actions top-right.
+- **A view band needs at least two real views.** A band with a single counted
+  tab reads as a stray filter chip (an illegal standing badge); a single
+  view's count belongs in the pane footer.
+- **Sandboxed `srcdoc` iframes need a load watchdog.** Chromium can swallow
+  the very first `srcdoc` assignment while a module fragment is still binding;
+  if the value never changes again the frame stays blank forever. Assign only
+  on content change, listen for `load`, and re-apply once after a short
+  timeout when it never fired (see coding-agents `applyArtifactSrcdoc`).
 - **Icon-rail variant for selector-only left panes.** When the left pane is a
   pure switcher (projects/apps, no metadata to scan), it may collapse to a
   56px icon rail BY DEFAULT: 40px app icons (module `icon.svg`, monogram

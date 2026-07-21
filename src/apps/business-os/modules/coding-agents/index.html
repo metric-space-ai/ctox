@@ -18,6 +18,10 @@
       <!-- Row 2 (wide rail only): filter section — search + collapsed tray. -->
       <div class="coding-agents-filterbar" data-rail-wide>
         <input class="ctox-pane-search" type="search" data-app-search placeholder="Apps suchen" aria-label="Apps suchen">
+        <div class="coding-agents-view-toggle" role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-app-view="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-app-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
         <button type="button" class="ctox-pane-icon coding-agents-filter-toggle" data-toggle-app-filters aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
       </div>
       <div class="coding-agents-filter-advanced" data-app-filter-advanced hidden>
@@ -31,12 +35,6 @@
         </div>
       </div>
     </header>
-    <!-- Row 3 (wide rail only): counted view band. -->
-    <nav class="coding-agents-view-switch" data-rail-wide aria-label="App Ansichten">
-      <div class="ctox-pane-tabs">
-        <button type="button" class="ctox-pane-tab" role="tab" aria-selected="true">Apps<span class="view-count" data-count-apps></span></button>
-      </div>
-    </nav>
     <div class="ctox-pane-body coding-agents-well">
       <div class="ctox-list" id="ca-app-list">
         <div class="ctox-empty"><strong>Apps werden geladen…</strong></div>
@@ -56,12 +54,6 @@
           <h2 class="ctox-pane-title" id="ca-active-app-title">Kein Projekt gewählt</h2>
         </div>
         <div class="ctox-pane-actions">
-          <!-- View toggle: chat bubbles vs. compact protocol list — every main
-               view that lists elements offers both renderings. -->
-          <div class="coding-agents-view-toggle" role="group" aria-label="Verlauf-Darstellung">
-            <button type="button" class="ctox-pane-icon" data-chat-view="cards" aria-pressed="true" aria-label="Chat-Ansicht" title="Chat-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/></svg></button>
-            <button type="button" class="ctox-pane-icon" data-chat-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
-          </div>
           <button type="button" class="ctox-pane-icon" id="ca-open-editor" title="Im Source-Editor öffnen" aria-label="Im Source-Editor öffnen" disabled>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M9 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3"/></svg>
           </button>
@@ -70,6 +62,10 @@
       <!-- Row 2: filter section — transcript search + collapsed tray. -->
       <div class="coding-agents-filterbar">
         <input class="ctox-pane-search" type="search" data-chat-search placeholder="Im Verlauf suchen" aria-label="Im Verlauf suchen">
+        <div class="coding-agents-view-toggle" role="group" aria-label="Verlauf-Darstellung">
+          <button type="button" class="ctox-pane-icon" data-chat-view="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-chat-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
         <button type="button" class="ctox-pane-icon coding-agents-filter-toggle" data-toggle-chat-filters aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
       </div>
       <div class="coding-agents-filter-advanced" data-chat-filter-advanced hidden>

@@ -108,18 +108,22 @@
 @container coding-agents-rail (min-width: 150px) {
   .coding-agents-app-item { justify-content: flex-start; }
   .coding-agents-app-row { display: flex; }
+  /* List mode: compact one-line rows — no icon tile, title only. */
+  .is-list-view .coding-agents-app-icon { display: none; }
+  .is-list-view .coding-agents-app-item { padding: 4px 10px; }
+  .is-list-view .coding-agents-app-row { flex-direction: row; align-items: baseline; gap: 8px; }
+  .is-list-view .coding-agents-app-id { flex: 0 1 auto; }
 }
 /* hidden must always win — the chat/turns/tray classes set display values. */
 .coding-agents-chat[hidden],
 .coding-agents-turns[hidden],
 .coding-agents-filter-advanced[hidden] { display: none !important; }
-/* Narrow rail: search row + view band collapse with the labels; the full
-   column grammar (search, tray, counted band, footer) returns when wide. */
+/* Narrow rail: the search/filter row collapses with the labels; the full
+   column grammar (search, toggle, tray, footer) returns when wide. */
 .coding-agents-left [data-rail-wide],
 .coding-agents-left .coding-agents-filter-advanced { display: none; }
 @container coding-agents-rail (min-width: 150px) {
   .coding-agents-left .coding-agents-filterbar[data-rail-wide] { display: flex; }
-  .coding-agents-left .coding-agents-view-switch[data-rail-wide] { display: block; }
   .coding-agents-left .coding-agents-filter-advanced { display: block; }
 }
 /* Rail header: only the glyph fits at 56px; kicker/title return when wide. */
@@ -213,7 +217,7 @@
   .coding-agents-right,
   .coding-agents-module > [data-resizer="right"] { display: none; }
 }
-.coding-agents-left { grid-column: 1; grid-row: 1; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.coding-agents-left { grid-column: 1; grid-row: 1; grid-template-rows: auto minmax(0, 1fr) auto; }
 .coding-agents-module > [data-resizer="left"] { grid-column: 2; grid-row: 1; }
 .coding-agents-center { grid-column: 3; grid-row: 1; grid-template-rows: auto auto minmax(0, 1fr) auto auto auto; }
 .coding-agents-module > [data-resizer="right"] { grid-column: 4; grid-row: 1; }
@@ -238,6 +242,11 @@
   height: 6px;
   border-radius: 50%;
   background: var(--accent);
+}
+.coding-agents-view-toggle { display: flex; gap: 2px; flex: 0 0 auto; }
+.coding-agents-view-toggle .ctox-pane-icon[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 .coding-agents-filter-advanced { padding: 0 12px 8px; }
 .coding-agents-filter-row { display: flex; align-items: center; gap: 6px; }
