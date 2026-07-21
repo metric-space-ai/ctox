@@ -1,3 +1,4 @@
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -14,6 +15,7 @@ import {
   mergeSupportTimeline,
   supportQueueCounts,
 } from '../support-reducers.mjs';
+import { __supportTestHooks as hooks } from '../index.js';
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const moduleDir = resolve(testDir, '..');
@@ -22,6 +24,7 @@ const schemaDocument = JSON.parse(readFileSync(resolve(moduleDir, 'collections.s
 const collections = schemaDocument.collections || {};
 const css = readFileSync(resolve(moduleDir, 'index.css'), 'utf8');
 const html = readFileSync(resolve(moduleDir, 'index.html'), 'utf8');
+const indexJs = readFileSync(resolve(moduleDir, 'index.js'), 'utf8');
 const source = `${css}\n${html}`;
 const forbiddenSurfacePattern = new RegExp(['ctox-pane--gla' + 'ss', 'Prem' + 'ium', 'gla' + 'ss'].join('|'), 'i');
 
@@ -112,5 +115,132 @@ const timeline = mergeSupportTimeline({
   suggestions: [{ id: 'suggestion_1', created_at_ms: 40, suggestion_kind: 'summary' }],
 });
 assert.deepEqual(timeline.map((row) => row.id), ['event_1', 'note_1', 'suggestion_1']);
+
+// --- Canonical column grammar / IA (queues + conversation + customer context) ---
+
+test('left column carries the full shell-wired grammar (data-pg-*)', () => {
+  // Row 1: header actions collected top-right — Import + Export are standing.
+  assert.match(html, /data-support-import/);
+  assert.match(html, /data-support-export/);
+  // Row 2: search + shard/list toggle + collapsed tray with reset.
+  assert.match(html, /class="ctox-filterbar"/);
+  assert.match(html, /data-pg-search/);
+  assert.match(html, /data-pg-view="cards"/);
+  assert.match(html, /data-pg-view="list"/);
+  assert.match(html, /data-pg-tray-toggle/);
+  assert.match(html, /data-pg-tray\b/);
+  assert.match(html, /data-pg-reset/);
+  // Status / priority / focus refinements live in the tray as dropdowns.
+  assert.match(html, /data-pg-filter[^>]*data-pg-name="status"/);
+  assert.match(html, /data-pg-filter[^>]*data-pg-name="priority"/);
+  assert.match(html, /data-pg-filter[^>]*data-pg-name="focus"/);
+  // Recessed well + one-line footer.
+  assert.match(html, /ctox-pane-body ctox-well/);
+  assert.match(html, /class="ctox-pane-footer"[^>]*>\s*<span data-pg-footer>/);
+  // Module writes NO chrome CSS: no per-app filterbar/tray/switch/band/well rules.
+  assert.doesNotMatch(css, /\.ctox-filterbar\s*\{/);
+  assert.doesNotMatch(css, /\.ctox-filter-tray\s*\{/);
+  assert.doesNotMatch(css, /\.ctox-view-switch\s*\{/);
+  assert.doesNotMatch(css, /\.ctox-pane-tabs\s*\{/);
+  assert.doesNotMatch(css, /\.ctox-well\s*\{/);
+});
+
+test('the counted queue band has >= 2 real views with counts (zeros included)', () => {
+  const band = html.match(/class="[^"]*ctox-pane-tabs[^"]*"[\s\S]*?<\/nav>/);
+  assert.ok(band, 'ctox-pane-tabs band present');
+  const tabs = band[0].match(/class="[^"]*ctox-pane-tab[^"]*"/g) || [];
+  assert.ok(tabs.length >= 2, `band needs >= 2 tabs, found ${tabs.length}`);
+  for (const key of ['open', 'mine', 'unassigned', 'slaRisk']) {
+    assert.match(html, new RegExp(`data-pg-band="${key}"`));
+    assert.match(html, new RegExp(`data-pg-count="${key}"`));
+  }
+});
+
+test('workspace pins panes to explicit grid tracks with a hard center minimum', () => {
+  assert.match(css, /\.support-center\s*\{\s*grid-column:\s*3;\s*\}/);
+  assert.match(css, /\.support-left\s*\{\s*grid-column:\s*1;\s*\}/);
+  assert.match(css, /minmax\(320px,\s*1fr\)/);
+  // Left grammar column declares its explicit rows (header/band/well/footer).
+  assert.match(css, /\.ctox-pane\.support-left\s*\{[\s\S]*?grid-template-rows:\s*auto auto minmax\(0, 1fr\) auto/);
+});
+
+test('band counts derive from the reducer, include zeros, honour the queue predicates', () => {
+  const nowMs = 1000;
+  const convs = [
+    { id: 'a', status: 'open', assignee_id: '' },
+    { id: 'b', status: 'open', assignee_id: 'user-1' },
+    { id: 'c', status: 'resolved', assignee_id: 'user-1' },
+    { id: 'd', status: 'open', assignee_id: '', sla_due_at_ms: nowMs + 30 * 60 * 1000 },
+  ];
+  assert.deepEqual(hooks.bandCountsFor(convs, nowMs, 'user-1'), { open: 3, mine: 1, unassigned: 2, slaRisk: 1 });
+  // Zeros are rendered, never hidden.
+  assert.deepEqual(hooks.bandCountsFor([], nowMs, ''), { open: 0, mine: 0, unassigned: 0, slaRisk: 0 });
+});
+
+test('export is an honest, small JSON snapshot of the visible queue', () => {
+  const rows = hooks.buildSupportExport([
+    { id: 'c1', status: 'open', priority: 'high', assignee_id: 'u1', inbox_id: 'inbox-1', primary_thread_key: 't/1', updated_at_ms: 5 },
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].id, 'c1');
+  assert.equal(rows[0].priority, 'high');
+  assert.equal(rows[0].inbox_id, 'inbox-1');
+  assert.equal(rows[0].primary_thread_key, 't/1');
+  assert.equal(rows[0].updated_at_ms, 5);
+});
+
+test('import keeps only thread-linked entries and accepts an array or a single object', () => {
+  const parsed = hooks.parseSupportImport([
+    { primary_thread_key: 't/1', inbox_id: 'inbox-1' },
+    { thread_key: 't/2' },
+    { id: 'no-thread' },      // dropped: no thread key
+    { primary_thread_key: '   ' }, // dropped: blank thread key
+  ]);
+  assert.equal(parsed.length, 2);
+  assert.equal(parsed[0].thread_key, 't/1');
+  assert.equal(parsed[0].inbox_id, 'inbox-1');
+  assert.equal(parsed[1].thread_key, 't/2');
+  assert.equal(parsed[1].inbox_id, '');
+  // A single object is accepted too; garbage yields nothing.
+  assert.equal(hooks.parseSupportImport({ thread_key: 't/9' }).length, 1);
+  assert.deepEqual(hooks.parseSupportImport('nonsense'), []);
+});
+
+test('import dispatches only the existing open_from_thread command (schemas untouched)', () => {
+  // The import path re-opens conversations from their threads via a real,
+  // already-declared command — it never writes a record directly.
+  const importFn = indexJs.match(/async function handleImport\(\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(importFn, 'handleImport present');
+  assert.match(importFn[0], /support\.conversation\.open_from_thread/);
+});
+
+test('selecting a conversation is an in-place flip, never a list rebuild', () => {
+  const selectFn = indexJs.match(/function selectConversation\(id\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(selectFn, 'selectConversation present');
+  const body = selectFn[0];
+  // Flip + main/context surfaces only — no queue-list innerHTML rebuild.
+  assert.match(body, /applyListSelection\(\)/);
+  assert.match(body, /renderTimeline\(\)/);
+  assert.doesNotMatch(body, /renderConversationList\(\)/);
+  // applyListSelection toggles the class across existing rows in place.
+  const flip = indexJs.match(/function applyListSelection\(\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(flip, 'applyListSelection present');
+  assert.match(flip[0], /classList\.toggle\('is-selected'/);
+  assert.doesNotMatch(flip[0], /innerHTML/);
+  // The list click handler routes to the in-place selectConversation, not render.
+  const wire = indexJs.match(/list\?\.addEventListener\('click'[\s\S]*?\}\);/);
+  assert.ok(wire, 'list click handler present');
+  assert.match(wire[0], /selectConversation\(/);
+});
+
+test('auto-reveal: context visible only with a selection that is not collapsed', () => {
+  assert.equal(hooks.computeContextVisible({ hasSelection: true, userCollapsed: false }), true);
+  assert.equal(hooks.computeContextVisible({ hasSelection: false, userCollapsed: false }), false);
+  assert.equal(hooks.computeContextVisible({ hasSelection: true, userCollapsed: true }), false);
+  // The module keys visibility off .is-context-hidden and seeds collapsed=true
+  // (hidden by default until an explicit selection reveals it).
+  assert.match(indexJs, /is-context-hidden/);
+  assert.match(indexJs, /contextCollapsed:\s*true/);
+});
 
 console.log('support module phase-0 smoke OK');

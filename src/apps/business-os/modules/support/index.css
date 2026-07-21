@@ -1,20 +1,36 @@
-/* Migration to the shared design system: the frame (.ctox-workspace +
-   [data-resize-frame] with declarative .ctox-column-resizer handles), panes
-   (.ctox-pane), pane headers/bands, search (.ctox-pane-search), filter chips
-   (.ctox-chip/.ctox-chip-count), list rows (.ctox-list-item with
-   .is-selected), inspector cards (.ctox-card/.ctox-card-body), key/value
-   fields (.ctox-fields), status pills (.ctox-badge + is-* variants), buttons
-   (.ctox-button), inputs (.ctox-select/.ctox-textarea/.ctox-field-label) and
-   empty states (.ctox-empty) all come from shared/base.css + app.css. This
-   file only keeps what is support-specific: the chat-style timeline, the
-   note composer, the row/card content grids, and the responsive
+/* Support desk — the frame (.ctox-workspace + [data-resize-frame] with
+   declarative .ctox-column-resizer handles), panes (.ctox-pane), pane
+   headers/bands, and the ENTIRE left-column grammar chrome
+   (.ctox-filterbar / .ctox-view-toggle / .ctox-filter-tray /
+   .ctox-view-switch / .ctox-pane-tabs / .ctox-well / .ctox-pane-footer) are
+   SHELL-owned in shared/base.css. The shell auto-wires search / view-toggle /
+   tray / reset / active-dot / counted band / footer from the data-pg-*
+   markup; this module writes NO chrome CSS or chrome JS. What is left here is
+   only support-specific: the workspace column pins, the chat-style timeline,
+   the note composer, the conversation-row content grids, and the auto-reveal
    context-pane swap. */
 
 /* Standard frame defaults for the declarative resizers — the shell writes
-   inline --ctox-*-width onto the frame while dragging. */
+   inline --ctox-*-width onto the frame while dragging. The primary (center)
+   column keeps a hard minimum so side panes never squeeze it to zero. */
 .support-module {
   --ctox-left-width: 300px;
   --ctox-right-width: 340px;
+  grid-template-columns:
+    var(--ctox-left-width) 12px minmax(320px, 1fr) 12px var(--ctox-right-width);
+}
+
+/* Pin the workspace panes to explicit grid tracks so a hidden resizer never
+   lets the center pane slide onto an empty resizer track (design-guide). */
+.support-left { grid-column: 1; }
+.support-module [data-resizer="left"] { grid-column: 2; }
+.support-center { grid-column: 3; }
+.support-module [data-resizer="right"] { grid-column: 4; }
+.support-right { grid-column: 5; }
+
+/* Left grammar column: explicit rows header / counted band / well / footer. */
+.ctox-pane.support-left {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
 /* Center pane stacks header + timeline body + composer footer. */
@@ -22,13 +38,15 @@
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
-/* Queue filter strip: kit .ctox-chip buttons; only the strip layout is local. */
-.support-queue-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 4px 10px 10px;
-  border-bottom: 1px solid var(--hairline, var(--line));
+/* Context pane hidden by default — no selection, or the operator collapsed it.
+   Selecting a conversation flips .is-context-hidden off (auto-reveal). */
+.support-module.is-context-hidden {
+  grid-template-columns: var(--ctox-left-width) 12px minmax(320px, 1fr);
+}
+
+.support-module.is-context-hidden .support-right,
+.support-module.is-context-hidden [data-resizer="right"] {
+  display: none;
 }
 
 /* custom: conversation-row content (inbox/priority meta, subject, status
@@ -55,6 +73,23 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+
+/* Compact list view: the shard/list toggle collapses each row to its subject
+   line + status badges (the meta and status word drop away). */
+.support-conversation-list.is-list-view .support-conversation-row {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.support-conversation-list.is-list-view .support-row-meta,
+.support-conversation-list.is-list-view .support-row-foot > span:first-child {
+  display: none;
+}
+
+.support-conversation-list.is-list-view .support-conversation-row strong {
+  margin: 0;
+  font-size: 12px;
 }
 
 /* custom: support timeline — note/event/agent-suggestion entries with
@@ -195,67 +230,77 @@
   color: var(--danger);
 }
 
-/* custom: responsive context-pane swap. Below 1180px the right inspector
-   pane is hidden behind the .ctox-pane-icon context toggle instead of
-   squeezing three columns. */
-.support-context-toggle {
-  display: none;
-}
-
+/* Responsive: never three real columns in a narrow window. The revealed
+   context pane overlays the center track (the collapse toggle in its header is
+   the return path); otherwise only the queue + conversation columns show. */
 @container business-app-window (max-width: 1180px) {
-  .support-module {
-    grid-template-columns: var(--ctox-left-width, 300px) 12px minmax(0, 1fr);
+  .support-module,
+  .support-module.is-context-hidden {
+    grid-template-columns: var(--ctox-left-width) 12px minmax(0, 1fr);
   }
 
-  .support-module .support-right,
   .support-module [data-resizer="right"] {
     display: none;
   }
 
-  .support-context-toggle {
-    display: inline-flex;
-  }
-
-  .support-module.is-context-open .support-center {
+  .support-module:not(.is-context-hidden) .support-center {
     display: none;
   }
 
-  .support-module.is-context-open .support-right {
+  .support-module:not(.is-context-hidden) .support-right {
     display: grid;
+    grid-column: 3;
+    grid-row: 1;
     min-width: 0;
   }
 }
 
 @container business-app-window (max-width: 760px) {
-  .support-module {
+  .support-module,
+  .support-module.is-context-hidden {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(200px, 34vh) minmax(320px, 1fr) minmax(220px, 36vh);
+    grid-template-rows: minmax(200px, 40vh) minmax(280px, 1fr);
     height: auto;
     min-height: 100%;
     overflow-y: auto;
     gap: 8px;
   }
 
-  .support-left,
-  .support-center,
-  .support-right {
-    min-height: 220px;
-  }
-
   .support-module [data-resizer] {
     display: none !important;
+  }
+
+  .support-left {
+    grid-column: 1;
+    grid-row: 1;
+    min-height: 200px;
+  }
+
+  .support-center {
+    grid-column: 1;
+    grid-row: 2;
+    min-height: 240px;
   }
 
   .support-composer {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .support-module.is-context-open {
+  /* Revealed context takes over the whole sheet; the collapse toggle returns. */
+  .support-module:not(.is-context-hidden) {
     grid-template-rows: minmax(0, 1fr);
   }
 
-  .support-module.is-context-open .support-left {
+  .support-module:not(.is-context-hidden) .support-left,
+  .support-module:not(.is-context-hidden) .support-center {
     display: none;
+  }
+
+  .support-module:not(.is-context-hidden) .support-right {
+    display: grid;
+    grid-column: 1;
+    grid-row: 1;
+    min-width: 0;
   }
 }
 

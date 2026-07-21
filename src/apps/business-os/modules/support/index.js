@@ -60,6 +60,15 @@ const labels = {
     notePlaceholder: 'Interne Notiz',
     noteAction: 'Notiz hinzufügen',
     searchPlaceholder: 'Suche nach Kunde, Ticket oder Nachricht',
+    importAction: 'Queue importieren',
+    exportAction: 'Queue exportieren',
+    openContext: 'Kontext öffnen',
+    closeContext: 'Kontext schließen',
+    entries: 'Einträge',
+    importInvalid: 'Ungültige JSON-Datei.',
+    importEmpty: 'Keine Konversationen mit Thread-Bezug in der Datei.',
+    importDone: 'Konversationen aus Threads geöffnet.',
+    exportDone: 'Queue exportiert.',
     allOpen: 'Offen',
     mine: 'Meine',
     unassigned: 'Unassigned',
@@ -117,6 +126,15 @@ const labels = {
     notePlaceholder: 'Internal note',
     noteAction: 'Add note',
     searchPlaceholder: 'Search customer, ticket, or message',
+    importAction: 'Import queue',
+    exportAction: 'Export queue',
+    openContext: 'Open context',
+    closeContext: 'Close context',
+    entries: 'entries',
+    importInvalid: 'Invalid JSON file.',
+    importEmpty: 'No thread-linked conversations in the file.',
+    importDone: 'Conversations opened from threads.',
+    exportDone: 'Queue exported.',
     allOpen: 'Open',
     mine: 'Mine',
     unassigned: 'Unassigned',
@@ -166,13 +184,24 @@ const labels = {
   },
 };
 
+// Canonical grammar axes (shell-wired): the counted band selects the queue
+// (ownership/urgency partition); the collapsed tray narrows it (status /
+// priority / focus); search + view-toggle apply last. All are reported on the
+// bubbling ctox-pane-grammar-change event.
+const BAND_QUEUES = ['open', 'mine', 'unassigned', 'slaRisk'];
+
 const state = {
   ctx: null,
   t: (key, fallback) => fallback || key,
   lang: 'de',
   queue: 'open',
+  viewMode: 'cards',
   search: '',
+  filters: { status: 'open', priority: 'all', focus: 'all' },
   selectedId: '',
+  // Third pane (customer context) is hidden by default and auto-revealed on an
+  // explicit selection: visible = hasSelection && !contextCollapsed.
+  contextCollapsed: true,
   loading: false,
   renderTimer: null,
   cleanup: null,
@@ -199,7 +228,10 @@ export async function mount(ctx) {
   state.loading = true;
   state.selectedId = '';
   state.queue = 'open';
+  state.viewMode = 'cards';
   state.search = '';
+  state.filters = { status: 'open', priority: 'all', focus: 'all' };
+  state.contextCollapsed = true;
   state.conversationOverrides = new Map();
   state.localNotes = [];
   state.data = Object.fromEntries(COLLECTIONS.map((name) => [name, []]));
@@ -210,6 +242,9 @@ export async function mount(ctx) {
   ctx.right?.replaceChildren?.();
   applyStaticLabels();
   wireUi();
+  // Seed the module's mirror of the grammar state from the DOM defaults before
+  // the shell wires the pane and fires its first change event.
+  seedGrammarState();
   render();
   let disposed = false;
   let collectionStartCleanup = null;
@@ -255,6 +290,12 @@ function applyStaticLabels() {
     const key = node.getAttribute('data-i18n-placeholder') || '';
     node.setAttribute('placeholder', state.t(key, node.getAttribute('placeholder') || key));
   });
+  root.querySelectorAll('[data-i18n-title]').forEach((node) => {
+    const key = node.getAttribute('data-i18n-title') || '';
+    const value = state.t(key, node.getAttribute('title') || key);
+    node.setAttribute('title', value);
+    node.setAttribute('aria-label', value);
+  });
   const ask = root.querySelector('[data-support-ask-ctox]');
   ask?.setAttribute('title', state.t('askCtox', 'CTOX fragen'));
   ask?.setAttribute('aria-label', state.t('askCtox', 'CTOX fragen'));
@@ -262,32 +303,33 @@ function applyStaticLabels() {
 
 function wireUi() {
   const root = rootEl();
-  root.querySelector('[data-support-search]')?.addEventListener('input', (event) => {
-    state.search = event.target.value || '';
-    render();
+  // Chrome (search / view-toggle / tray / reset / active-dot / counted band) is
+  // SHELL-wired from the data-pg-* markup; the module only listens for the
+  // resulting bubbling change event and re-renders.
+  leftPane()?.addEventListener('ctox-pane-grammar-change', handleGrammarChange);
+  // Selection is an in-place class flip, never a list rebuild (design-guide
+  // "Re-renders never move the operator").
+  const list = root.querySelector('[data-support-list]');
+  list?.addEventListener('click', (event) => {
+    const row = event.target instanceof Element ? event.target.closest('[data-support-conversation-id]') : null;
+    if (!row || !list.contains(row)) return;
+    selectConversation(row.getAttribute('data-support-conversation-id') || '');
+  });
+  list?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const row = event.target instanceof Element ? event.target.closest('[data-support-conversation-id]') : null;
+    if (!row || !list.contains(row)) return;
+    event.preventDefault();
+    selectConversation(row.getAttribute('data-support-conversation-id') || '');
+  });
+  root.querySelector('[data-support-import]')?.addEventListener('click', () => {
+    handleImport().catch((error) => showToast(error?.message || String(error), true));
+  });
+  root.querySelector('[data-support-export]')?.addEventListener('click', () => {
+    handleExport();
   });
   root.querySelectorAll('[data-support-toggle-context]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const open = !root.classList.contains('is-context-open');
-      root.classList.toggle('is-context-open', open);
-      root.querySelectorAll('[data-support-toggle-context]').forEach((entry) => {
-        entry.setAttribute('aria-expanded', open ? 'true' : 'false');
-      });
-    });
-  });
-  root.querySelector('[data-support-filters]')?.addEventListener('click', (event) => {
-    const target = event.target instanceof Element ? event.target : null;
-    const filter = target?.closest('[data-support-filter]');
-    const row = target?.closest('[data-support-conversation-id]');
-    if (filter) {
-      state.queue = filter.getAttribute('data-support-filter') || 'open';
-      render();
-      return;
-    }
-    if (row) {
-      state.selectedId = row.getAttribute('data-support-conversation-id') || '';
-      render();
-    }
+    button.addEventListener('click', () => toggleContext());
   });
   root.querySelector('[data-support-note-submit]')?.addEventListener('click', () => {
     createNote().catch((error) => setStatus(error?.message || String(error), true));
@@ -388,68 +430,175 @@ function collectionFor(name) {
 }
 
 function render() {
-  renderQueues();
+  renderConversationList();
+  renderBandCountsAndFooter();
   renderTimeline();
   renderContext();
   renderComposerState();
+  applyContextVisibility();
 }
 
-function renderQueues() {
-  const container = rootEl().querySelector('[data-support-filters]');
+// Rebuild the conversation well. Called on data / grammar changes (intentional
+// resets — the shell's scroll guard clears its offsets on the grammar-change
+// event); NOT called on selection, which is an in-place flip.
+function renderConversationList() {
+  const container = rootEl().querySelector('[data-support-list]');
   if (!container) return;
-  const conversations = conversationsWithOverrides();
-  const counts = supportQueueCounts(conversations, Date.now(), currentUserId());
-  const filters = [
-    ['open', state.t('allOpen', 'Offen'), counts.open],
-    ['mine', state.t('mine', 'Meine'), counts.mine],
-    ['unassigned', state.t('unassigned', 'Unassigned'), counts.unassigned],
-    ['needsReply', state.t('needsReply', 'Antwort nötig'), counts.needsReply],
-    ['slaRisk', state.t('slaRisk', 'SLA-Risiko'), counts.slaRisk],
-    ['snoozed', state.t('snoozed', 'Snoozed'), counts.snoozed],
-    ['agentDrafts', state.t('agentDrafts', 'CTOX Entwürfe'), counts.agentDrafts],
-  ];
-  container.innerHTML = `
-    <div class="support-queue-chips">
-      ${filters.map(([id, label, count]) => `
-        <button type="button" class="ctox-chip ${id === state.queue ? 'is-active' : ''}" aria-pressed="${id === state.queue ? 'true' : 'false'}" data-support-filter="${escapeAttr(id)}">
-          <span>${escapeHtml(label)}</span>
-          <span class="ctox-chip-count">${Number(count || 0)}</span>
-        </button>
-      `).join('')}
-    </div>
-    <div class="support-conversation-list">
-      ${renderConversationRows()}
-    </div>
-  `;
-}
-
-function renderConversationRows() {
+  container.classList.toggle('is-list-view', state.viewMode === 'list');
   if (state.loading && !state.data.support_conversations?.length) {
-    return renderEmptyState(state.t('loadingTitle', 'Support wird synchronisiert'), state.t('loadingBody', ''));
+    container.innerHTML = renderEmptyState(state.t('loadingTitle', 'Support wird synchronisiert'), state.t('loadingBody', ''));
+    return;
   }
   const rows = visibleConversations();
   if (!rows.length) {
-    return renderEmptyState(state.t('emptyListTitle', 'Keine Support-Konversationen'), state.t('emptyListBody', ''));
+    container.innerHTML = renderEmptyState(state.t('emptyListTitle', 'Keine Support-Konversationen'), state.t('emptyListBody', ''));
+    return;
   }
-  return rows.map((item) => {
-    const selected = item.id === state.selectedId ? 'is-selected' : '';
-    const label = conversationLabel(item);
-    const risk = isSlaRisk(item) ? `<span class="ctox-badge is-warning">${escapeHtml(state.t('slaRisk', 'SLA'))}</span>` : '';
-    const agent = Number(item.agent_draft_count || 0) > 0 ? `<span class="ctox-badge is-info">${escapeHtml(state.t('agentDrafts', 'CTOX'))}</span>` : '';
-    return `
-      <button type="button" class="ctox-list-item support-conversation-row ${selected}" data-support-conversation-id="${escapeAttr(item.id)}" data-context-record-id="${escapeAttr(item.id)}" data-context-record-type="support_conversation" data-context-label="${escapeAttr(label)}">
-        <span class="support-row-meta">
-          <span>${escapeHtml(item.inbox_id || state.t('inbox', 'Inbox'))}</span>
-          <span>${escapeHtml(item.priority || 'normal')}</span>
-        </span>
-        <strong>${escapeHtml(label)}</strong>
-        <span class="support-row-foot">
-          <span>${escapeHtml(displayStatus(item.status))}</span>
-          <span>${risk}${agent}</span>
-        </span>
-      </button>
-    `;
-  }).join('');
+  container.innerHTML = rows.map(renderConversationRow).join('');
+  applyListSelection();
+}
+
+function renderConversationRow(item) {
+  const selected = item.id === state.selectedId ? 'is-selected' : '';
+  const label = conversationLabel(item);
+  const risk = isSlaRisk(item) ? `<span class="ctox-badge is-warning">${escapeHtml(state.t('slaRisk', 'SLA'))}</span>` : '';
+  const agent = Number(item.agent_draft_count || 0) > 0 ? `<span class="ctox-badge is-info">${escapeHtml(state.t('agentDrafts', 'CTOX'))}</span>` : '';
+  return `
+    <button type="button" role="option" aria-selected="${item.id === state.selectedId ? 'true' : 'false'}" class="ctox-list-item support-conversation-row ${selected}" data-support-conversation-id="${escapeAttr(item.id)}" data-context-record-id="${escapeAttr(item.id)}" data-context-record-type="support_conversation" data-context-label="${escapeAttr(label)}">
+      <span class="support-row-meta">
+        <span>${escapeHtml(item.inbox_id || state.t('inbox', 'Inbox'))}</span>
+        <span>${escapeHtml(item.priority || 'normal')}</span>
+      </span>
+      <strong>${escapeHtml(label)}</strong>
+      <span class="support-row-foot">
+        <span>${escapeHtml(displayStatus(item.status))}</span>
+        <span>${risk}${agent}</span>
+      </span>
+    </button>
+  `;
+}
+
+// Selecting a conversation flips the selected class across the EXISTING rows —
+// never a list rebuild — so the operator's scroll position is preserved.
+function applyListSelection() {
+  rootEl().querySelector('[data-support-list]')?.querySelectorAll('[data-support-conversation-id]').forEach((rowEl) => {
+    const on = (rowEl.getAttribute('data-support-conversation-id') || '') === String(state.selectedId || '');
+    rowEl.classList.toggle('is-selected', on);
+    rowEl.setAttribute('aria-selected', String(on));
+  });
+}
+
+// Explicit selection auto-reveals the context pane and updates the main +
+// context surfaces in place, without rebuilding the queue list.
+function selectConversation(id) {
+  state.selectedId = id;
+  state.contextCollapsed = false;
+  applyListSelection();
+  renderTimeline();
+  renderContext();
+  renderComposerState();
+  applyContextVisibility();
+}
+
+// Band counts (zeros included) + one-line footer, written through the shell's
+// pane-grammar handle when it is wired, else directly onto the count/footer
+// nodes (the shell wires asynchronously after mount).
+function bandCountsFor(conversations, nowMs, userId) {
+  const counts = supportQueueCounts(conversations, nowMs, userId);
+  return { open: counts.open, mine: counts.mine, unassigned: counts.unassigned, slaRisk: counts.slaRisk };
+}
+
+function renderBandCountsAndFooter() {
+  const pane = leftPane();
+  const counts = bandCountsFor(conversationsWithOverrides(), Date.now(), currentUserId());
+  const pg = pane?.__ctoxPaneGrammar;
+  if (pg && typeof pg.setCounts === 'function') {
+    pg.setCounts(counts);
+  } else {
+    for (const [key, value] of Object.entries(counts)) {
+      const node = pane?.querySelector(`[data-pg-count="${key}"]`);
+      if (node) node.textContent = ` (${value})`;
+    }
+  }
+  const visible = visibleConversations().length;
+  const footerText = `${visible} ${state.t('entries', 'Einträge')} · ${queueLabel(state.queue)}`;
+  if (pg && typeof pg.setFooter === 'function') {
+    pg.setFooter(footerText);
+  } else {
+    const node = pane?.querySelector('[data-pg-footer]');
+    if (node) node.textContent = footerText;
+  }
+}
+
+function queueLabel(queue) {
+  const map = {
+    open: state.t('allOpen', 'Offen'),
+    mine: state.t('mine', 'Meine'),
+    unassigned: state.t('unassigned', 'Unassigned'),
+    slaRisk: state.t('slaRisk', 'SLA-Risiko'),
+  };
+  return map[queue] || map.open;
+}
+
+// Auto-reveal: the customer-context pane is visible only when a conversation is
+// selected and the operator has not collapsed it. Recomputed on every render.
+function computeContextVisible({ hasSelection, userCollapsed }) {
+  return Boolean(hasSelection) && !userCollapsed;
+}
+
+function applyContextVisibility() {
+  const root = rootEl();
+  const hasSelection = Boolean(selectedConversation());
+  const visible = computeContextVisible({ hasSelection, userCollapsed: state.contextCollapsed });
+  root.classList.toggle('is-context-hidden', !visible);
+  root.querySelectorAll('[data-support-toggle-context]').forEach((button) => {
+    button.setAttribute('aria-expanded', visible ? 'true' : 'false');
+    button.disabled = !hasSelection;
+  });
+}
+
+function toggleContext() {
+  if (!selectedConversation()) return;
+  state.contextCollapsed = !state.contextCollapsed;
+  applyContextVisibility();
+}
+
+// The shell reports search / view / tray / band changes here; map them onto
+// module state and re-render (an intentional reset — the scroll guard clears
+// its offsets first). Selection is kept valid within the new scope.
+function handleGrammarChange(event) {
+  const detail = event?.detail || {};
+  state.search = String(detail.search ?? '').trim().toLowerCase();
+  state.viewMode = detail.view || 'cards';
+  state.queue = BAND_QUEUES.includes(detail.band) ? detail.band : 'open';
+  const filters = detail.filters || {};
+  state.filters = {
+    status: filters.status || 'open',
+    priority: filters.priority || 'all',
+    focus: filters.focus || 'all',
+  };
+  const visible = visibleConversations();
+  if (!state.selectedId || !visible.some((item) => item.id === state.selectedId)) {
+    state.selectedId = visible[0]?.id || '';
+  }
+  render();
+}
+
+function seedGrammarState() {
+  const pane = leftPane();
+  if (!pane) return;
+  state.search = String(pane.querySelector('[data-pg-search]')?.value || '').trim().toLowerCase();
+  state.viewMode = pane.querySelector('[data-pg-view][aria-pressed="true"]')?.dataset.pgView || 'cards';
+  state.queue = pane.querySelector('[data-pg-band][aria-selected="true"]')?.dataset.pgBand || 'open';
+  state.filters = {
+    status: pane.querySelector('[data-pg-filter][data-pg-name="status"]')?.value || 'open',
+    priority: pane.querySelector('[data-pg-filter][data-pg-name="priority"]')?.value || 'all',
+    focus: pane.querySelector('[data-pg-filter][data-pg-name="focus"]')?.value || 'all',
+  };
+}
+
+function leftPane() {
+  return rootEl()?.querySelector('.support-left') || null;
 }
 
 function renderTimeline() {
@@ -844,28 +993,134 @@ async function dispatchSupportCommand(command) {
   return state.ctx.commandBus.dispatch(command);
 }
 
-function visibleConversations() {
-  const userId = currentUserId();
-  if (state.queue === 'mine' && !userId) return [];
-  const base = filterSupportConversations(conversationsWithOverrides(), {
-    status: queueStatusFilter(state.queue),
-    assigneeId: state.queue === 'mine' ? userId : state.queue === 'unassigned' ? 'unassigned' : '',
-    query: state.search,
-  });
-  if (state.queue === 'needsReply') {
-    return base.filter((item) => Number(item.unread_count || 0) > 0 || Number(item.waiting_since_ms || 0) > 0);
-  }
-  if (state.queue === 'slaRisk') return base.filter(isSlaRisk);
-  if (state.queue === 'agentDrafts') {
-    const suggestionIds = new Set((state.data.support_agent_suggestions || []).map((item) => item.conversation_id));
-    return base.filter((item) => suggestionIds.has(item.id) || Number(item.agent_draft_count || 0) > 0);
-  }
-  return base;
+// Export the visible queue as an honest, small JSON snapshot of the projection
+// (the column's own records) — read-only, no invented fields.
+function buildSupportExport(conversations) {
+  return (conversations || []).map((item) => ({
+    id: item.id,
+    status: item.status || 'open',
+    priority: item.priority || 'normal',
+    assignee_id: item.assignee_id || '',
+    team_id: item.team_id || '',
+    inbox_id: item.inbox_id || '',
+    customer_account_id: item.customer_account_id || '',
+    customer_contact_id: item.customer_contact_id || '',
+    ticket_case_id: item.ticket_case_id || '',
+    primary_thread_key: item.primary_thread_key || '',
+    updated_at_ms: Number(item.updated_at_ms || item.last_activity_at_ms || 0),
+  }));
 }
 
-function queueStatusFilter(queue) {
-  if (!queue || ['mine', 'unassigned', 'needsReply', 'slaRisk', 'agentDrafts'].includes(queue)) return 'open';
-  return queue;
+function handleExport() {
+  const rows = buildSupportExport(visibleConversations());
+  let url = '';
+  try {
+    const blob = new Blob([JSON.stringify(rows, null, 2)], { type: 'application/json' });
+    url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'support-queue.json';
+    anchor.rel = 'noopener';
+    rootEl()?.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    showToast(`${rows.length} · ${state.t('exportDone', 'Queue exportiert.')}`);
+  } catch (error) {
+    console.error('[support] export failed', error);
+    showToast(state.t('commandFailed', 'Befehl konnte nicht übergeben werden.'), true);
+  } finally {
+    if (url) window.setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 4000);
+  }
+}
+
+// Import honestly re-opens conversations from their source threads: each entry
+// that carries a thread key is dispatched through the existing
+// support.conversation.open_from_thread command. No schema is invented and no
+// record is written directly.
+function parseSupportImport(parsed) {
+  const items = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : []);
+  return items
+    .filter((item) => item && typeof item === 'object')
+    .map((item) => ({
+      thread_key: String(item.primary_thread_key || item.thread_key || '').trim(),
+      inbox_id: String(item.inbox_id || '').trim(),
+    }))
+    .filter((item) => item.thread_key);
+}
+
+async function handleImport() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/json,.json';
+  input.addEventListener('change', async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    let parsed;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch {
+      showToast(state.t('importInvalid', 'Ungültige JSON-Datei.'), true);
+      return;
+    }
+    const candidates = parseSupportImport(parsed);
+    if (!candidates.length) {
+      showToast(state.t('importEmpty', 'Keine Konversationen mit Thread-Bezug in der Datei.'), true);
+      return;
+    }
+    let count = 0;
+    for (const candidate of candidates) {
+      try {
+        await dispatchSupportCommand(buildSupportCommand({
+          commandType: 'support.conversation.open_from_thread',
+          payload: { thread_key: candidate.thread_key, inbox_id: candidate.inbox_id },
+          surface: 'support.conversation.open_from_thread',
+        }));
+        count += 1;
+      } catch (error) {
+        console.warn('[support] open_from_thread import failed', error);
+      }
+    }
+    showToast(`${count} · ${state.t('importDone', 'Konversationen aus Threads geöffnet.')}`, count === 0);
+  });
+  input.click();
+}
+
+function showToast(message, isError = false) {
+  const show = state.ctx?.notifications?.show;
+  if (typeof show === 'function') {
+    show({ type: isError ? 'error' : 'success', title: state.t('kicker', 'Support Desk'), message: String(message || ''), time: 6000 });
+    return;
+  }
+  setStatus(message, isError);
+}
+
+// Compose the three grammar axes: band (ownership/urgency queue) selects the
+// base partition; the tray narrows it (status / priority / focus); search
+// applies inside filterSupportConversations. All predicates are the existing
+// reducer helpers — command flows and schemas are untouched.
+function visibleConversations() {
+  const userId = currentUserId();
+  const queue = state.queue;
+  if (queue === 'mine' && !userId) return [];
+  const status = state.filters.status || 'open';
+  const priority = state.filters.priority && state.filters.priority !== 'all' ? state.filters.priority : '';
+  let rows = filterSupportConversations(conversationsWithOverrides(), {
+    status,
+    priority,
+    assigneeId: queue === 'mine' ? userId : queue === 'unassigned' ? 'unassigned' : '',
+    query: state.search,
+  });
+  if (queue === 'slaRisk') rows = rows.filter(isSlaRisk);
+  const focus = state.filters.focus;
+  if (focus === 'needsReply') {
+    rows = rows.filter((item) => Number(item.unread_count || 0) > 0 || Number(item.waiting_since_ms || 0) > 0);
+  } else if (focus === 'snoozed') {
+    rows = rows.filter((item) => Number(item.snoozed_until_ms || 0) > Date.now());
+  } else if (focus === 'agentDrafts') {
+    const suggestionIds = new Set((state.data.support_agent_suggestions || []).map((suggestion) => suggestion.conversation_id));
+    rows = rows.filter((item) => suggestionIds.has(item.id) || Number(item.agent_draft_count || 0) > 0);
+  }
+  return rows;
 }
 
 function selectedConversation() {
@@ -1245,4 +1500,8 @@ export const __supportTestHooks = {
   supportSnapshot,
   timelineRows,
   visibleConversations,
+  bandCountsFor,
+  computeContextVisible,
+  buildSupportExport,
+  parseSupportImport,
 };

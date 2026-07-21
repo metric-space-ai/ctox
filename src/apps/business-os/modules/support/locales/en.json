@@ -7,5 +7,15 @@
   "contextTitle": "Customer and ticket",
   "notePlaceholder": "Internal note",
   "noteAction": "Add note",
+  "searchPlaceholder": "Search customer, ticket, or message",
+  "importAction": "Import queue",
+  "exportAction": "Export queue",
+  "openContext": "Open context",
+  "closeContext": "Close context",
+  "allOpen": "Open",
+  "mine": "Mine",
+  "unassigned": "Unassigned",
+  "slaRisk": "SLA risk",
+  "entries": "entries",
   "askCtox": "Ask CTOX"
 }

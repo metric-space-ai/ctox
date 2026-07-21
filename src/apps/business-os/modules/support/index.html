@@ -1,23 +1,77 @@
-<main class="ctox-workspace support-module" data-support-root data-resize-frame>
-  <aside class="ctox-pane support-left" aria-label="Support queues">
+<main class="ctox-workspace support-module is-context-hidden" data-support-root data-resize-frame>
+  <!-- LEFT: queues — the canonical column grammar column. Ownership/urgency
+       queues are the counted band; status/priority/focus refinements live in
+       the collapsed tray. All chrome behaviour (search / view-toggle / tray /
+       reset / active-dot / counted band / footer) is SHELL-wired from the
+       data-pg-* attributes; this module writes NO chrome CSS/JS. The header
+       collects the standing Import / Export icon actions (support conversations
+       are opened from threads, tickets, and connectors — never hand-created —
+       so there is no "Neu" action). -->
+  <aside class="ctox-pane support-left" aria-label="Support Queues" data-left-content>
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker" data-i18n="kicker">Support Desk</span>
           <h2 class="ctox-pane-title" data-i18n="queueTitle">Queues</h2>
         </div>
+        <div class="ctox-pane-actions">
+          <button class="ctox-pane-icon" type="button" data-support-import data-i18n-title="importAction" title="Queue importieren" aria-label="Queue importieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg></button>
+          <button class="ctox-pane-icon" type="button" data-support-export data-i18n-title="exportAction" title="Queue exportieren" aria-label="Queue exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21V9M12 9l-4 4M12 9l4 4M5 3h14"/></svg></button>
+        </div>
       </div>
-      <div class="ctox-pane-tools">
-        <input class="ctox-pane-search" type="search" data-support-search data-i18n-placeholder="searchPlaceholder" placeholder="Suche nach Kunde, Ticket oder Nachricht">
+      <div class="ctox-filterbar">
+        <input class="ctox-pane-search" type="search" data-pg-search data-i18n-placeholder="searchPlaceholder" placeholder="Suche nach Kunde, Ticket oder Nachricht" aria-label="Support durchsuchen">
+        <div class="ctox-view-toggle" role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
+        <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="ctox-filter-tray" data-pg-tray hidden>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" data-pg-filter data-pg-name="status" data-pg-default="open" aria-label="Status filtern">
+            <option value="open">Offen</option>
+            <option value="waiting">Wartet</option>
+            <option value="resolved">Gelöst</option>
+            <option value="all">Alle Status</option>
+          </select>
+          <select class="ctox-select" data-pg-filter data-pg-name="priority" data-pg-default="all" aria-label="Priorität filtern">
+            <option value="all">Alle Prioritäten</option>
+            <option value="low">Niedrig</option>
+            <option value="normal">Normal</option>
+            <option value="high">Hoch</option>
+            <option value="urgent">Dringend</option>
+          </select>
+        </div>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" data-pg-filter data-pg-name="focus" data-pg-default="all" aria-label="Fokus filtern">
+            <option value="all">Ganze Queue</option>
+            <option value="needsReply">Antwort nötig</option>
+            <option value="snoozed">Snoozed</option>
+            <option value="agentDrafts">CTOX Entwürfe</option>
+          </select>
+          <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+        </div>
       </div>
     </header>
-    <div class="ctox-pane-body">
-      <div class="ctox-pane-scroll support-filter-list" data-support-filters></div>
+    <nav class="ctox-view-switch" aria-label="Queues">
+      <div class="ctox-pane-tabs">
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="open" aria-selected="true"><span data-i18n="allOpen">Offen</span><span class="view-count" data-pg-count="open"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="mine" aria-selected="false"><span data-i18n="mine">Meine</span><span class="view-count" data-pg-count="mine"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="unassigned" aria-selected="false"><span data-i18n="unassigned">Unassigned</span><span class="view-count" data-pg-count="unassigned"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="slaRisk" aria-selected="false"><span data-i18n="slaRisk">SLA-Risiko</span><span class="view-count" data-pg-count="slaRisk"></span></button>
+      </div>
+    </nav>
+    <div class="ctox-pane-body ctox-well">
+      <div class="ctox-list support-conversation-list" data-support-list></div>
     </div>
+    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
   </aside>
 
   <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="240" data-resizer-max="420" aria-label="Linke Spaltenbreite anpassen"></button>
 
+  <!-- MAIN: the selected conversation timeline + composer — the unique work
+       surface. All reply/note/dispatch flows are unchanged. -->
   <section class="ctox-pane support-center" aria-label="Support conversation">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
@@ -26,7 +80,7 @@
           <h2 class="ctox-pane-title" data-support-title data-i18n="emptyTitle">No support conversation selected</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button class="ctox-pane-icon support-context-toggle" type="button" data-support-toggle-context aria-expanded="false" title="Kontext öffnen" aria-label="Kontext öffnen">
+          <button class="ctox-pane-icon support-context-toggle" type="button" data-support-toggle-context aria-expanded="false" data-i18n-title="openContext" title="Kontext öffnen" aria-label="Kontext öffnen">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
           </button>
           <button class="ctox-pane-icon" type="button" data-support-ask-ctox title="Ask CTOX" aria-label="Ask CTOX" disabled>
@@ -46,8 +100,10 @@
 
   <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="260" data-resizer-max="440" aria-label="Rechte Spaltenbreite anpassen"></button>
 
-  <!-- third_pane_justification: Support operators need customer identity, linked tickets, SLA state, and CTOX suggestions visible while reading and replying. -->
-  <aside class="ctox-pane support-right" aria-label="Support context">
+  <!-- THIRD (customer context): hidden by default, auto-revealed on selection
+       (visible = hasSelection && !userCollapsed) and re-collapsible via the
+       header toggles. third_pane_justification is declared in module.json. -->
+  <aside class="ctox-pane support-right" aria-label="Support context" data-right-content>
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
@@ -55,7 +111,7 @@
           <h2 class="ctox-pane-title" data-i18n="contextTitle">Customer and ticket context</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button class="ctox-pane-icon support-context-toggle" type="button" data-support-toggle-context aria-expanded="true" title="Zur Unterhaltung" aria-label="Zur Unterhaltung">
+          <button class="ctox-pane-icon support-context-toggle" type="button" data-support-toggle-context aria-expanded="true" data-i18n-title="closeContext" title="Kontext schließen" aria-label="Kontext schließen">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
           </button>
         </div>
