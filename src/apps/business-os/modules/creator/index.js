@@ -17,6 +17,10 @@ const state = {
   streamGeneration: 0,
   installedApps: [],
   creatorRequests: [],
+  importedRequests: [],
+  selectedLibraryId: null,
+  selectedLibraryKind: null,
+  composer: null,
   isDeploying: false
 };
 
@@ -203,6 +207,66 @@ export function normalizeCreatorRequestSuggestions(commands, limit = 5) {
     .slice(0, limit);
 }
 
+// The two real views of the left column, counted (zeros included). Apps are
+// installed custom apps; Aufträge are recent CTOX app requests plus any locally
+// imported request drafts.
+export function creatorLibraryCounts(apps, requests) {
+  return {
+    apps: Array.isArray(apps) ? apps.length : 0,
+    auftraege: Array.isArray(requests) ? requests.length : 0,
+  };
+}
+
+// Apply the shell-wired grammar state (band + search + request status) to the
+// left column. Returns the tagged items for the active band. The status filter
+// only constrains Aufträge (apps carry no status).
+export function filterCreatorLibrary({ apps = [], requests = [] } = {}, { band = 'apps', search = '', status = 'all' } = {}) {
+  const needle = String(search || '').trim().toLowerCase();
+  if (band === 'auftraege') {
+    return (Array.isArray(requests) ? requests : [])
+      .filter((r) => {
+        if (status && status !== 'all' && String(r.status || '') !== status) return false;
+        if (needle && ![r.title, r.request, r.status, r.id].filter(Boolean).join(' ').toLowerCase().includes(needle)) return false;
+        return true;
+      })
+      .map((r) => ({ kind: 'request', ...r }));
+  }
+  return (Array.isArray(apps) ? apps : [])
+    .filter((a) => {
+      if (needle && ![a.title, a.description, a.category, a.id].filter(Boolean).join(' ').toLowerCase().includes(needle)) return false;
+      return true;
+    })
+    .map((a) => ({ kind: 'app', ...a }));
+}
+
+// Distinct request statuses present in the data — used to populate the tray
+// status filter with only statuses that actually exist (no dead options).
+export function creatorRequestStatuses(requests) {
+  const seen = [];
+  for (const r of Array.isArray(requests) ? requests : []) {
+    const status = String(r?.status || '').trim();
+    if (status && !seen.includes(status)) seen.push(status);
+  }
+  return seen;
+}
+
+// Normalize a raw imported request into a local draft. Local drafts render in
+// the Aufträge band and can be adopted into the composer, but are never
+// dispatched as CTOX commands — they carry status 'lokal' and imported: true.
+export function prepareCreatorRequestImport(raw, index = 0) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const request = String(src.request || src.instruction || src.prompt || '').trim();
+  if (!request) return null;
+  return {
+    id: String(src.id || `import-${index}`),
+    title: String(src.title || 'Importierter Auftrag').trim() || 'Importierter Auftrag',
+    request,
+    status: 'lokal',
+    imported: true,
+    updated_at_ms: Number(src.updated_at_ms) || 0,
+  };
+}
+
 export async function mount(ctx) {
   const streamGeneration = ++state.streamGeneration;
   state.ctx = ctx;
@@ -229,10 +293,11 @@ export async function mount(ctx) {
 
   // 3. Wire UI events
   wireUi(ctx.host);
+  wireLibrary(ctx.host);
 
   // 4. Render the operable shell immediately. Catalog and command hydration
   // can wait for a cold WebRTC lease without blocking the window from opening.
-  renderCreatorRightRail(ctx.host);
+  renderLibrary(ctx.host);
   void startCreatorDataStreams(ctx, ctx.host, streamGeneration).catch((error) => {
     if (streamGeneration !== state.streamGeneration) return;
     addConsoleLog(`[WARN] Creator-Daten konnten nicht geladen werden: ${error.message}`, 'warning');
@@ -287,16 +352,16 @@ async function startCreatorDataStreams(ctx, host, streamGeneration) {
   state.catalogSubscription = catalogColl?.findOne?.('module-catalog')?.$?.subscribe?.((doc) => {
     if (streamGeneration !== state.streamGeneration || !host.isConnected) return;
     state.installedApps = normalizeCreatorInstalledApps(doc?.toJSON?.() || {});
-    renderCreatorRightRail(host);
+    renderLibrary(host);
   }) || null;
 
   state.commandSubscription = commandColl?.find?.()?.$?.subscribe?.((docs) => {
     if (streamGeneration !== state.streamGeneration || !host.isConnected) return;
     state.creatorRequests = normalizeCreatorRequestSuggestions(docs?.map((doc) => doc?.toJSON?.() || doc) || []);
-    renderCreatorRightRail(host);
+    renderLibrary(host);
   }) || null;
 
-  renderCreatorRightRail(host);
+  renderLibrary(host);
 }
 
 function getCollection(ctx, name) {
@@ -311,43 +376,245 @@ function cleanupSubscription(subscription) {
   subscription?.unsubscribe?.();
 }
 
-function renderCreatorRightRail(host) {
-  const installedList = host.querySelector('[data-creator-installed-list]');
-  const installedEmpty = host.querySelector('[data-creator-installed-empty]');
-  const requestsList = host.querySelector('[data-creator-requests-list]');
-  const requestsEmpty = host.querySelector('[data-creator-requests-empty]');
+// Merge server-synced requests with locally imported drafts (imports never
+// masquerade as dispatched requests; a server request with the same id wins).
+function allCreatorRequests() {
+  const server = Array.isArray(state.creatorRequests) ? state.creatorRequests : [];
+  const imported = (Array.isArray(state.importedRequests) ? state.importedRequests : [])
+    .filter((i) => !server.some((r) => r.id === i.id));
+  return [...server, ...imported];
+}
 
-  if (installedList && installedEmpty) {
-    installedList.innerHTML = state.installedApps.map(renderInstalledAppCard).join('');
-    installedEmpty.hidden = state.installedApps.length > 0;
-    installedList.hidden = state.installedApps.length === 0;
-  }
+function libraryRail(host) {
+  return host?.querySelector?.('.creator-library') || null;
+}
 
-  if (requestsList && requestsEmpty) {
-    requestsList.innerHTML = state.creatorRequests.map(renderCreatorRequestCard).join('');
-    requestsEmpty.hidden = state.creatorRequests.length > 0;
-    requestsList.hidden = state.creatorRequests.length === 0;
+// Read the SHELL-wired grammar state straight from the pane DOM (band default
+// is Apps). Mirrors the consent/reports reference modules.
+function readLibraryGrammar(rail) {
+  return {
+    search: (rail?.querySelector('[data-pg-search]')?.value || '').trim().toLowerCase(),
+    view: rail?.querySelector('[data-pg-view][aria-pressed="true"]')?.dataset.pgView || 'cards',
+    band: rail?.querySelector('[data-pg-band][aria-selected="true"]')?.dataset.pgBand || 'apps',
+    status: rail?.querySelector('[data-creator-status-filter]')?.value || 'all',
+  };
+}
+
+// Counts/footer via the shell handle when it has wired the pane, else plain
+// textContent (the shell wires asynchronously after mount).
+function writeLibraryCounts(rail, counts) {
+  const pg = rail?.__ctoxPaneGrammar;
+  if (pg && typeof pg.setCounts === 'function') { pg.setCounts(counts); return; }
+  for (const [key, value] of Object.entries(counts)) {
+    const node = rail?.querySelector(`[data-pg-count="${key}"]`);
+    if (node) node.textContent = ` (${value})`;
   }
 }
 
-function renderInstalledAppCard(app) {
-  return `
-    <article class="ctox-list-item creator-mini-card" data-creator-installed-app="${escapeHtml(app.id)}" data-context-record-id="${escapeHtml(app.id)}" data-context-record-type="application" data-context-label="${escapeHtml(app.title || app.id)}">
-      <div class="creator-mini-card-main">
-        <strong>${escapeHtml(app.title)}</strong>
-        <span class="creator-mini-card-meta">${escapeHtml(app.category)} · ${escapeHtml(app.version)}</span>
-        ${app.description ? `<p>${escapeHtml(app.description)}</p>` : ''}
-      </div>
-      <div class="creator-mini-actions">
-        <button type="button" class="ctox-icon-button" data-open-installed-app="${escapeHtml(app.id)}" title="App öffnen" aria-label="${escapeHtml(app.title)} öffnen">
-          ${creatorActionIcon('open')}
-        </button>
-        <button type="button" class="ctox-icon-button" data-upgrade-installed-app="${escapeHtml(app.id)}" title="Upgrade vorbereiten" aria-label="${escapeHtml(app.title)} Upgrade vorbereiten">
-          ${creatorActionIcon('upload')}
-        </button>
-      </div>
-    </article>
-  `;
+function writeLibraryFooter(rail, str) {
+  const pg = rail?.__ctoxPaneGrammar;
+  if (pg && typeof pg.setFooter === 'function') { pg.setFooter(str); return; }
+  const node = rail?.querySelector('[data-pg-footer]');
+  if (node) node.textContent = str || '';
+}
+
+// Populate the tray status filter with only the statuses that actually exist,
+// preserving the current selection (never removes the neutral "Alle Status").
+function syncStatusOptions(rail, requests) {
+  const select = rail?.querySelector('[data-creator-status-filter]');
+  if (!select) return;
+  const wanted = creatorRequestStatuses(requests);
+  const current = select.value || 'all';
+  const existing = new Set([...select.options].map((o) => o.value));
+  for (const status of wanted) {
+    if (existing.has(status)) continue;
+    const option = document.createElement('option');
+    option.value = status;
+    option.textContent = creatorStatusLabel(status);
+    select.append(option);
+    existing.add(status);
+  }
+  // Drop stale options (except the neutral default) that no longer exist.
+  for (const option of [...select.options]) {
+    if (option.value !== 'all' && !wanted.includes(option.value)) option.remove();
+  }
+  select.value = existing.has(current) && (current === 'all' || wanted.includes(current)) ? current : 'all';
+}
+
+function creatorStatusLabel(status) {
+  const key = `status_${String(status || '')}`;
+  return state.t(key, String(status || ''));
+}
+
+function renderLibrary(host) {
+  const rail = libraryRail(host);
+  const listEl = host.querySelector('[data-creator-list]');
+  if (!rail || !listEl) return;
+
+  const apps = Array.isArray(state.installedApps) ? state.installedApps : [];
+  const requests = allCreatorRequests();
+  syncStatusOptions(rail, requests);
+
+  const g = readLibraryGrammar(rail);
+  const items = filterCreatorLibrary({ apps, requests }, g);
+
+  const bandTotal = g.band === 'auftraege' ? requests.length : apps.length;
+  const emptyKey = g.band === 'auftraege' ? 'requestsEmpty' : 'installedEmpty';
+  const emptyText = bandTotal === 0 ? state.t(emptyKey) : state.t('libEmptyFiltered', 'Kein Eintrag passt zum Filter.');
+  listEl.innerHTML = items.length
+    ? items.map((item) => renderLibraryShard(item, g.view)).join('')
+    : `<div class="ctox-empty"><strong>${escapeHtml(emptyText)}</strong></div>`;
+
+  applyLibrarySelection(listEl);
+  writeLibraryCounts(rail, creatorLibraryCounts(apps, requests));
+  const bandLabel = g.band === 'auftraege' ? state.t('bandAuftraege', 'Aufträge') : state.t('bandApps', 'Apps');
+  writeLibraryFooter(rail, `${items.length} ${state.t('libEntries', 'Einträge')} · ${bandLabel}`);
+}
+
+// A shard is a pure selector: title + ONE muted meta line, no per-row buttons.
+function renderLibraryShard(item, view) {
+  return item.kind === 'request' ? renderRequestShard(item, view) : renderAppShard(item, view);
+}
+
+function renderAppShard(app, view) {
+  const selected = state.selectedLibraryKind === 'app' && state.selectedLibraryId === app.id;
+  const meta = [state.t('rightKicker', 'Deine Apps'), app.category, app.version].filter(Boolean).join(' · ');
+  const attrs = `class="ctox-list-item creator-shard creator-shard--${view === 'list' ? 'list' : 'cards'}${selected ? ' is-selected' : ''}"`
+    + ' role="button" tabindex="0"'
+    + ` aria-selected="${selected ? 'true' : 'false'}"`
+    + ` data-creator-library-kind="app" data-creator-library-id="${escapeHtml(app.id)}"`
+    + ` data-context-record-id="${escapeHtml(app.id)}" data-context-record-type="application" data-context-label="${escapeHtml(app.title || app.id)}"`;
+  if (view === 'list') {
+    return `<div ${attrs}><span class="creator-shard-title">${escapeHtml(app.title)}</span></div>`;
+  }
+  return `<div ${attrs}><div class="creator-shard-head"><span class="creator-shard-title">${escapeHtml(app.title)}</span></div>`
+    + `<div class="creator-shard-meta">${escapeHtml(meta)}</div></div>`;
+}
+
+function renderRequestShard(item, view) {
+  const selected = state.selectedLibraryKind === 'request' && state.selectedLibraryId === item.id;
+  const badge = `<span class="ctox-badge">${escapeHtml(creatorStatusLabel(item.status))}</span>`;
+  const meta = [state.t('requestKicker', 'Auftrag'), item.imported ? state.t('status_lokal', 'lokal') : creatorStatusLabel(item.status)].filter(Boolean).join(' · ');
+  const attrs = `class="ctox-list-item creator-shard creator-shard--${view === 'list' ? 'list' : 'cards'}${selected ? ' is-selected' : ''}"`
+    + ' role="button" tabindex="0"'
+    + ` aria-selected="${selected ? 'true' : 'false'}"`
+    + ` data-creator-library-kind="request" data-creator-library-id="${escapeHtml(item.id)}"`
+    + ` data-context-record-id="${escapeHtml(item.id)}" data-context-record-type="app-request" data-context-label="${escapeHtml(item.title || item.id)}"`;
+  if (view === 'list') {
+    return `<div ${attrs}><span class="creator-shard-title">${escapeHtml(item.title)}</span>${badge}</div>`;
+  }
+  return `<div ${attrs}><div class="creator-shard-head"><span class="creator-shard-title">${escapeHtml(item.title)}</span>${badge}</div>`
+    + `<div class="creator-shard-meta">${escapeHtml(meta)}</div></div>`;
+}
+
+// Selection is an in-place class flip across existing rows — never a list
+// rebuild (design-guide: re-renders never move the operator). Only data changes
+// re-render the well.
+function applyLibrarySelection(listEl) {
+  listEl?.querySelectorAll('[data-creator-library-id]').forEach((row) => {
+    const on = row.getAttribute('data-creator-library-kind') === state.selectedLibraryKind
+      && (row.getAttribute('data-creator-library-id') || '') === String(state.selectedLibraryId || '');
+    row.classList.toggle('is-selected', on);
+    row.setAttribute('aria-selected', String(on));
+  });
+}
+
+function selectLibraryItem(host, kind, id) {
+  state.selectedLibraryKind = kind;
+  state.selectedLibraryId = id || null;
+  // In-place flip only — do NOT re-render the list (would reset scroll).
+  applyLibrarySelection(host.querySelector('[data-creator-list]'));
+  if (kind === 'app') {
+    void state.composer?.prefillUpgrade?.(id);
+  } else if (kind === 'request') {
+    const request = allCreatorRequests().find((item) => item.id === id);
+    if (request) state.composer?.adoptRequest?.(request);
+  }
+}
+
+function wireLibrary(host) {
+  const rail = libraryRail(host);
+  const listEl = host.querySelector('[data-creator-list]');
+  if (!rail || !listEl) return;
+
+  const selectFromEvent = (event) => {
+    const row = event.target?.closest?.('[data-creator-library-id]');
+    if (!row || !listEl.contains(row)) return false;
+    selectLibraryItem(host, row.getAttribute('data-creator-library-kind'), row.getAttribute('data-creator-library-id'));
+    return true;
+  };
+  listEl.addEventListener('click', selectFromEvent);
+  listEl.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const row = event.target?.closest?.('[data-creator-library-id]');
+    if (!row || !listEl.contains(row)) return;
+    event.preventDefault();
+    selectFromEvent(event);
+  });
+
+  // Header icon actions: import / export the Aufträge list (JSON).
+  rail.addEventListener('click', (event) => {
+    const btn = event.target?.closest?.('[data-action]');
+    if (!btn || !rail.contains(btn)) return;
+    if (btn.dataset.action === 'import') importCreatorRequests(host);
+    else if (btn.dataset.action === 'export') exportCreatorRequests();
+  });
+
+  // Re-render the well when the shell reports a grammar change (search / view /
+  // tray / band). The event bubbles from the wired pane.
+  rail.addEventListener('ctox-pane-grammar-change', () => renderLibrary(host));
+}
+
+// Export the current Aufträge list (server requests + local drafts) as JSON.
+function exportCreatorRequests() {
+  const payload = allCreatorRequests().map((r) => ({ id: r.id, title: r.title, request: r.request, status: r.status }));
+  let url = '';
+  try {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'creator-app-requests.json';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    addConsoleLog(`[INFO] ${payload.length} App-Auftraege exportiert.`, 'info');
+  } catch (error) {
+    addConsoleLog(`[FEHLER] Export fehlgeschlagen: ${error.message}`, 'error');
+  } finally {
+    if (url) setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 4000);
+  }
+}
+
+// Import request drafts from a JSON file into the local Aufträge list. Drafts
+// are display-only (never dispatched); select one to adopt it into the composer.
+function importCreatorRequests(host) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/json,.json';
+  input.addEventListener('change', async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    let parsed;
+    try { parsed = JSON.parse(await file.text()); } catch {
+      addConsoleLog('[FEHLER] Ungültige JSON-Datei.', 'error');
+      return;
+    }
+    const rawItems = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : []);
+    const base = state.importedRequests.length;
+    const drafts = rawItems.map((raw, index) => prepareCreatorRequestImport(raw, base + index)).filter(Boolean);
+    if (!drafts.length) {
+      addConsoleLog('[WARN] Keine Auftraege in der Datei gefunden.', 'warning');
+      return;
+    }
+    for (const draft of drafts) {
+      if (!state.importedRequests.some((r) => r.id === draft.id)) state.importedRequests.push(draft);
+    }
+    addConsoleLog(`[INFO] ${drafts.length} App-Auftraege importiert (lokal).`, 'info');
+    renderLibrary(host);
+  });
+  input.click();
 }
 
 // Monochrome stroke icon in the shared action-icon style. Falls back to the
@@ -363,24 +630,6 @@ function creatorActionIcon(name, size = 16) {
   };
   const d = paths[name] || paths.close;
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
-}
-
-function renderCreatorRequestCard(item) {
-  const request = item.request.length > 140 ? `${item.request.slice(0, 137)}...` : item.request;
-  return `
-    <article class="ctox-list-item creator-mini-card" data-creator-request="${escapeHtml(item.id)}" data-context-record-id="${escapeHtml(item.id)}" data-context-record-type="app-request" data-context-label="${escapeHtml(item.title || item.id)}">
-      <div class="creator-mini-card-main">
-        <strong>${escapeHtml(item.title)}</strong>
-        <span class="ctox-badge">${escapeHtml(item.status)}</span>
-        <p>${escapeHtml(request)}</p>
-      </div>
-      <div class="creator-mini-actions">
-        <button type="button" class="ctox-icon-button" data-use-creator-request="${escapeHtml(item.id)}" title="Auftrag uebernehmen" aria-label="Auftrag uebernehmen">
-          ${creatorActionIcon('download')}
-        </button>
-      </div>
-    </article>
-  `;
 }
 
 function wireUi(host) {
@@ -525,30 +774,62 @@ function wireUi(host) {
     btnAddColl.click();
   });
 
-  host.querySelector('[data-creator-right-body]')?.addEventListener('click', (event) => {
-    const openButton = event.target.closest('[data-open-installed-app]');
-    const upgradeButton = event.target.closest('[data-upgrade-installed-app]');
-    const requestButton = event.target.closest('[data-use-creator-request]');
-
-    if (openButton) {
-      window.location.hash = `#${encodeURIComponent(openButton.dataset.openInstalledApp || '')}`;
-      return;
-    }
-
-    if (upgradeButton) {
-      window.location.hash = `#creator?upgrade=${encodeURIComponent(upgradeButton.dataset.upgradeInstalledApp || '')}`;
-      return;
-    }
-
-    if (requestButton) {
-      const request = state.creatorRequests.find((item) => item.id === requestButton.dataset.useCreatorRequest);
+  // Composer controller: the LEFT column drives the composer context. Selecting
+  // an app prefills upgrade mode; selecting an Auftrag adopts its request text.
+  // The hash-based upgrade entry point reuses the same prefill path.
+  state.composer = {
+    adoptRequest(request) {
       if (!request) return;
-      inputRequest.value = request.request;
+      inputRequest.value = request.request || '';
       updateCreatorActionState();
-      addConsoleLog(`[INFO] CTOX App-Auftrag '${request.title}' uebernommen.`, 'info');
+      const status = request.imported ? state.t('status_lokal', 'lokal') : String(request.status || '');
+      addConsoleLog(`[INFO] App-Auftrag '${request.title}' übernommen${status ? ` (Status: ${status})` : ''}.`, 'info');
       inputRequest.focus();
-    }
-  });
+    },
+    async prefillUpgrade(appId) {
+      const id = String(appId || '').trim();
+      if (!id) return;
+      addConsoleLog(`[INFO] Lade bestehende App für Änderung von '${id}'...`, 'info');
+      try {
+        const manifest = await fetch(`installed-modules/${id}/module.json`).then((res) => {
+          if (!res.ok) throw new Error(`App '${id}' konnte nicht geladen werden.`);
+          return res.json();
+        });
+        inputId.value = manifest.id || id;
+        inputTitle.value = manifest.title || '';
+        inputDesc.value = manifest.description || '';
+        selectCategory.value = manifest.category || 'Management';
+        selectArchetype.value = manifest.archetype || manifest.store?.archetype || 'record-workbench';
+        selectLayout.value = manifest.layout?.shell || 'windowed';
+        inputRequest.value = `Ändere ${manifest.title || id}: ${manifest.description || ''}`;
+        state.appVersion = /^\d+\.\d+\.\d+$/.test(String(manifest.version || '')) ? String(manifest.version) : '0.1.0';
+        state.appCollections = Array.isArray(manifest.collections) ? manifest.collections : [];
+        renderCollectionsList(host);
+        syncStateFromInputs();
+        addConsoleLog(`[SUCCESS] App-Kontext für '${manifest.title || id}' geladen. Passe den Auftrag an und starte CTOX.`, 'success');
+      } catch (err) {
+        // Fall back to the catalog entry we already hold (source apps are not
+        // always fetchable as an installed manifest).
+        const app = state.installedApps.find((entry) => entry.id === id);
+        if (app) {
+          inputId.value = app.id;
+          inputTitle.value = app.title || '';
+          inputDesc.value = app.description || '';
+          if (app.category) selectCategory.value = app.category;
+          inputRequest.value = `Ändere ${app.title || id}: ${app.description || ''}`;
+          state.appVersion = /^\d+\.\d+\.\d+$/.test(String(app.version || '')) ? String(app.version) : '0.1.0';
+          state.appCollections = [];
+          renderCollectionsList(host);
+          syncStateFromInputs();
+          addConsoleLog(`[INFO] App-Kontext für '${app.title || id}' aus dem Katalog geladen.`, 'info');
+        } else {
+          addConsoleLog(`[ERROR] Fehler beim Laden des Upgrades: ${err.message}`, 'error');
+        }
+      }
+      updateCreatorActionState();
+      inputRequest.focus();
+    },
+  };
 
   renderCollectionsList(host);
   updateCreatorActionState();
@@ -631,46 +912,12 @@ function wireUi(host) {
     }
   });
 
-  // Intercept and parse hash parameters for Upgrade preloading
-  (async () => {
-    const hash = window.location.hash || '';
-    const queryStr = hash.includes('?') ? hash.split('?')[1] : '';
-    const params = new URLSearchParams(queryStr);
-    const upgradeAppId = state.ctx?.args?.upgrade || params.get('upgrade');
-
-    if (upgradeAppId) {
-      try {
-        addConsoleLog(`[INFO] Lade bestehende App für Änderung von '${upgradeAppId}'...`, 'info');
-        const manifestUrl = `installed-modules/${upgradeAppId}/module.json`;
-        const manifest = await fetch(manifestUrl).then(res => {
-          if (!res.ok) throw new Error(`App '${upgradeAppId}' konnte nicht geladen werden.`);
-          return res.json();
-        });
-
-        if (inputId) inputId.value = manifest.id || upgradeAppId;
-        if (inputTitle) inputTitle.value = manifest.title || '';
-        if (inputDesc) inputDesc.value = manifest.description || '';
-        if (selectCategory) selectCategory.value = manifest.category || 'Management';
-        if (selectArchetype) selectArchetype.value = manifest.archetype || manifest.store?.archetype || 'record-workbench';
-        if (selectLayout) selectLayout.value = manifest.layout?.shell || 'windowed';
-        if (inputRequest) inputRequest.value = `Ändere ${manifest.title || upgradeAppId}: ${manifest.description || ''}`;
-        state.appVersion = /^\d+\.\d+\.\d+$/.test(String(manifest.version || ''))
-          ? String(manifest.version)
-          : '0.1.0';
-        const baseCollections = Array.isArray(manifest.collections) ? manifest.collections : [];
-        state.appCollections = baseCollections;
-
-        renderCollectionsList(host);
-        syncStateFromInputs();
-
-        addConsoleLog(`[SUCCESS] App-Kontext für '${manifest.title || upgradeAppId}' geladen. Passe den Auftrag an und starte CTOX.`, 'success');
-        updateCreatorActionState();
-      } catch (err) {
-        addConsoleLog(`[ERROR] Fehler beim Laden des Upgrades: ${err.message}`, 'error');
-        updateCreatorActionState();
-      }
-    }
-  })();
+  // Hash-based upgrade entry point (e.g. #creator?upgrade=<id>) reuses the same
+  // composer prefill path as selecting an app shard in the left column.
+  const hash = window.location.hash || '';
+  const queryStr = hash.includes('?') ? hash.split('?')[1] : '';
+  const upgradeAppId = state.ctx?.args?.upgrade || new URLSearchParams(queryStr).get('upgrade');
+  if (upgradeAppId) void state.composer.prefillUpgrade(upgradeAppId);
 }
 
 function addConsoleLog(text, type = '') {

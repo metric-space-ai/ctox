@@ -14,10 +14,15 @@ const {
   normalizeInspirationUrl,
   normalizeModuleId,
   validateCreatorSpec,
+  creatorLibraryCounts,
+  filterCreatorLibrary,
+  creatorRequestStatuses,
+  prepareCreatorRequestImport,
 } = await import('./index.js');
 
 const css = await readFile(new URL('./index.css', import.meta.url), 'utf8');
 const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
+const js = await readFile(new URL('./index.js', import.meta.url), 'utf8');
 const presentationSource = `${css}\n${html}`;
 const forbiddenSurfacePattern = new RegExp(['ctox-pane--gla' + 'ss', 'Prem' + 'ium', 'gla' + 'ss'].join('|'), 'i');
 
@@ -194,4 +199,127 @@ test('presentation layer stays compact and shell-native', () => {
   assert.match(css, /@container business-app-window \(max-width: 520px\)/);
   assert.match(html, /data-example-prompts/);
   assert.match(html, /id="creator-inspiration-url"/);
+});
+
+// --- IA-Karte: apps + requests selector column on the shell chrome block ------
+
+test('left column carries the shell-wired canonical grammar pins', () => {
+  // Search + shard/list toggle + collapsed filter tray with a status filter and
+  // reset — all shell-wired via data-pg-*, no module chrome JS/CSS.
+  assert.match(html, /data-pg-search/);
+  assert.match(html, /data-pg-view="cards"/);
+  assert.match(html, /data-pg-view="list"/);
+  assert.match(html, /data-pg-tray-toggle/);
+  assert.match(html, /data-pg-tray\b/);
+  assert.match(html, /data-pg-reset/);
+  assert.match(html, /data-pg-filter[^>]*data-pg-name="status"/);
+  assert.match(html, /data-pg-footer/);
+  assert.match(html, /data-creator-list/);
+  // Left pane is annotated as a side pane so the agent learns the column.
+  assert.match(html, /class="ctox-pane creator-library"[^>]*data-left-content/);
+});
+
+test('view band has exactly the two real views Apps + Aufträge, counted', () => {
+  const band = html.match(/<div class="ctox-pane-tabs">([\s\S]*?)<\/div>/);
+  assert.ok(band, 'ctox-pane-tabs band exists');
+  const tabs = band[1].match(/class="[^"]*ctox-pane-tab[^"]*"/g) || [];
+  assert.equal(tabs.length, 2, 'a band needs >= 2 real views (Apps / Aufträge)');
+  assert.match(band[1], /data-pg-band="apps"[^>]*aria-selected="true"/);
+  assert.match(band[1], /data-pg-band="auftraege"/);
+  assert.match(band[1], /data-pg-count="apps"/);
+  assert.match(band[1], /data-pg-count="auftraege"/);
+});
+
+test('left column header collects import and export icon actions (no refresh)', () => {
+  assert.match(html, /data-action="import"/);
+  assert.match(html, /data-action="export"/);
+  // Reactive-only: no manual refresh/reload button in the pane.
+  assert.doesNotMatch(html, /data-action="(?:refresh|reload)"/);
+});
+
+test('creatorLibraryCounts counts both views, zeros included', () => {
+  assert.deepEqual(creatorLibraryCounts([], []), { apps: 0, auftraege: 0 });
+  assert.deepEqual(
+    creatorLibraryCounts([{ id: 'a' }, { id: 'b' }], [{ id: 'r' }]),
+    { apps: 2, auftraege: 1 },
+  );
+});
+
+test('filterCreatorLibrary segments Apps/Aufträge and applies search + status', () => {
+  const apps = [
+    { id: 'crm', title: 'CRM', category: 'Management', version: '1.0.0' },
+    { id: 'lager', title: 'Lager', category: 'Utilities', version: '0.2.0' },
+  ];
+  const requests = [
+    { id: 'r1', title: 'Support', request: 'Support desk bauen', status: 'pending' },
+    { id: 'r2', title: 'Invoice', request: 'Rechnungen', status: 'completed' },
+  ];
+
+  // Apps band, default grammar → both apps, tagged kind app.
+  const appItems = filterCreatorLibrary({ apps, requests }, { band: 'apps' });
+  assert.deepEqual(appItems.map((i) => i.id), ['crm', 'lager']);
+  assert.ok(appItems.every((i) => i.kind === 'app'));
+
+  // Apps band search filters app fields; status is ignored for apps.
+  assert.deepEqual(
+    filterCreatorLibrary({ apps, requests }, { band: 'apps', search: 'lager', status: 'completed' }).map((i) => i.id),
+    ['lager'],
+  );
+
+  // Aufträge band, status filter constrains requests.
+  const reqItems = filterCreatorLibrary({ apps, requests }, { band: 'auftraege', status: 'completed' });
+  assert.deepEqual(reqItems.map((i) => i.id), ['r2']);
+  assert.ok(reqItems.every((i) => i.kind === 'request'));
+
+  // Aufträge band search over title/request.
+  assert.deepEqual(
+    filterCreatorLibrary({ apps, requests }, { band: 'auftraege', search: 'desk' }).map((i) => i.id),
+    ['r1'],
+  );
+});
+
+test('creatorRequestStatuses lists only distinct statuses that exist', () => {
+  assert.deepEqual(
+    creatorRequestStatuses([{ status: 'pending' }, { status: 'pending' }, { status: 'completed' }, {}]),
+    ['pending', 'completed'],
+  );
+});
+
+test('prepareCreatorRequestImport builds a local draft or rejects empty input', () => {
+  const draft = prepareCreatorRequestImport({ title: 'Aus Datei', request: 'Baue eine App' }, 3);
+  assert.equal(draft.request, 'Baue eine App');
+  assert.equal(draft.status, 'lokal');
+  assert.equal(draft.imported, true);
+  assert.equal(prepareCreatorRequestImport({ title: 'Leer' }, 0), null);
+  // Falls back to instruction/prompt keys and a synthetic id.
+  assert.equal(prepareCreatorRequestImport({ instruction: 'x'.repeat(3) }, 5).id, 'import-5');
+});
+
+test('import/export handlers are honest and small (Blob download + file input)', () => {
+  assert.match(js, /=== 'import'/);
+  assert.match(js, /=== 'export'/);
+  assert.match(js, /URL\.createObjectURL/);
+  assert.match(js, /input\.type = 'file'/);
+});
+
+test('selecting a shard is an in-place flip, never a list rebuild', () => {
+  // Selection toggles is-selected / aria-selected across existing rows and does
+  // NOT call renderLibrary (which would rebuild the well and reset scroll).
+  assert.match(js, /function applyLibrarySelection/);
+  assert.match(js, /classList\.toggle\('is-selected'/);
+  const selectBody = js.match(/function selectLibraryItem\([\s\S]*?\n}/);
+  assert.ok(selectBody, 'selectLibraryItem exists');
+  assert.match(selectBody[0], /applyLibrarySelection/);
+  assert.doesNotMatch(selectBody[0], /renderLibrary/);
+});
+
+test('composer flow is preserved: app select prefills upgrade, request adopts text', () => {
+  assert.match(js, /prefillUpgrade/);
+  assert.match(js, /adoptRequest/);
+  // The signature composer surface (request textarea + advanced options
+  // collapsed by default + deploy footer) is untouched.
+  assert.match(html, /creator-request-textarea/);
+  assert.match(html, /<details class="creator-options">/);
+  assert.doesNotMatch(html, /<details class="creator-options" open>/);
+  assert.match(html, /id="btn-deploy-app"/);
 });

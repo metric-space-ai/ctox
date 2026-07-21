@@ -207,54 +207,42 @@
 .console-log-entry.warning { color: var(--warning); }
 .console-log-entry.error { color: var(--danger); }
 
-/* Library rail content layout (pane frame/header/scroll/list/empty are kit). */
-.creator-right-body {
-  display: grid;
-  align-content: start;
-  gap: 18px;
-  padding: 12px;
-}
+/* Library shards — pure selectors inside the kit .ctox-list well (frame,
+   header, filterbar, tray, view band, well, footer and selection accent bar
+   are all kit/shell-owned). A shard is title + ONE muted meta line. */
+.creator-shard { cursor: pointer; }
 
-.creator-right-block { display: grid; gap: 8px; }
-
-/* custom: record rows with inline actions inside the kit list — the row is
-   not itself clickable (actions are the icon buttons), so it keeps the kit
-   row padding/hover but a grid layout and default cursor. */
-.creator-mini-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
+.creator-shard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  cursor: default;
-}
-
-.creator-mini-card-main {
-  display: grid;
-  justify-items: start;
-  gap: 3px;
   min-width: 0;
 }
 
-.creator-mini-card-main strong {
-  display: block;
-  max-width: 100%;
+.creator-shard-title {
+  min-width: 0;
   overflow: hidden;
+  color: var(--text-strong, var(--text));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.creator-mini-card-meta { color: var(--muted); }
-
-.creator-mini-card-main p {
-  display: -webkit-box;
-  margin: 2px 0 0;
+.creator-shard-meta {
+  margin-top: 3px;
   overflow: hidden;
   color: var(--muted);
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.creator-mini-actions { display: flex; gap: 5px; }
+.creator-shard--list {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 
 /* The kit collapses the workspace frame to one column at 760px; these are
    the creator-specific inner adjustments for the stacked layout. */

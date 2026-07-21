@@ -1,26 +1,49 @@
 <main class="ctox-workspace ctox-workspace--two-pane creator-module" data-creator-root data-resize-frame>
-  <aside class="ctox-pane creator-library" aria-label="Existing apps and recent requests">
+  <!-- LEFT: existing apps + recent app requests — canonical column grammar.
+       All chrome behaviour (search / view-toggle / tray / reset / active-dot /
+       band) is SHELL-wired from the data-pg-* attributes; this module writes no
+       chrome JS/CSS. Selecting an app prefills upgrade mode in the composer;
+       selecting an Auftrag adopts its request text. A shard is a pure selector
+       (no per-row buttons). Pane grid rows: auto auto minmax(0,1fr) auto. -->
+  <aside class="ctox-pane creator-library" aria-label="Existing apps and recent requests" data-left-content>
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker" data-t="rightKicker">Deine Apps</span>
           <h2 class="ctox-pane-title" data-t="rightTitle">Weiterarbeiten</h2>
         </div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon" data-action="import" data-t-title="libImport" data-t-aria="libImport" aria-label="Aufträge importieren" title="Aufträge importieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-action="export" data-t-title="libExport" data-t-aria="libExport" aria-label="Aufträge exportieren" title="Aufträge exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21V9M12 9l-4 4M12 9l4 4M5 3h14"/></svg></button>
+        </div>
+      </div>
+      <div class="ctox-filterbar">
+        <input class="ctox-pane-search" type="search" data-pg-search placeholder="Apps und Aufträge suchen..." data-t-placeholder="libSearch" aria-label="Apps und Aufträge suchen" />
+        <div class="ctox-view-toggle" role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht" data-t-title="libViewCards" data-t-aria="libViewCards"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht" data-t-title="libViewList" data-t-aria="libViewList"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
+        <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter" data-t-title="libFilter" data-t-aria="libFilter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="ctox-filter-tray" data-pg-tray hidden>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" data-pg-filter data-pg-name="status" data-pg-default="all" aria-label="Auftragsstatus filtern" data-creator-status-filter>
+            <option value="all" data-t="statusAll">Alle Status</option>
+          </select>
+          <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen" data-t-title="libReset" data-t-aria="libReset"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+        </div>
       </div>
     </header>
-    <div class="ctox-pane-body">
-      <div class="ctox-pane-scroll creator-right-body" data-creator-right-body>
-        <section class="creator-right-block">
-          <div class="ctox-list creator-right-list" data-creator-installed-list></div>
-          <div class="ctox-empty creator-right-empty" data-creator-installed-empty data-t="installedEmpty">Noch keine eigenen Apps.</div>
-        </section>
-        <details class="creator-requests-details">
-          <summary data-t="requestsHeading">Letzte App-Aufträge</summary>
-          <div class="ctox-list creator-right-list" data-creator-requests-list></div>
-          <div class="ctox-empty creator-right-empty" data-creator-requests-empty data-t="requestsEmpty">Noch keine App-Aufträge.</div>
-        </details>
+    <nav class="ctox-view-switch" aria-label="Ansichten">
+      <div class="ctox-pane-tabs">
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="apps" aria-selected="true"><span data-t="bandApps">Apps</span><span class="view-count" data-pg-count="apps"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="auftraege" aria-selected="false"><span data-t="bandAuftraege">Aufträge</span><span class="view-count" data-pg-count="auftraege"></span></button>
       </div>
+    </nav>
+    <div class="ctox-pane-body ctox-well">
+      <div class="ctox-list creator-library-list" data-creator-list></div>
     </div>
+    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
   </aside>
 
   <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="240" data-resizer-max="420" title="Spaltenbreite anpassen" aria-label="Spaltenbreite anpassen"></button>
