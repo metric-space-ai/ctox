@@ -1,44 +1,50 @@
-<!-- Canonical column grammar block. Replace `APP` with the module prefix and
-     wire it with shared/pane-grammar.js:
-       import { wirePaneGrammar } from '../../shared/pane-grammar.js';
-       const grammar = wirePaneGrammar(paneEl, { onChange: render });
-       grammar.setCounts({ all: n, ... }); grammar.setFooter('n Einträge');
-     CSS: reuse the tokens-only patterns from knowledge/reports (filterbar,
-     tray, sort-dir, view-switch, well, footer) — pane rows need explicit
-     grid-template-rows: auto auto minmax(0,1fr) auto. -->
+<!-- Canonical column grammar block — SHELL-WIRED. The shell detects
+     data-pg-* markup in any mounted .ctox-pane and wires search/tray/reset/
+     active-dot/view-toggle/band behaviour automatically; the kit classes
+     below live in shared/base.css. A module writes NO chrome CSS and NO
+     chrome JS: it listens for the bubbling `ctox-pane-grammar-change`
+     CustomEvent (detail = {search, view, band, filters}) to re-render, and
+     writes counts/footers via pane.__ctoxPaneGrammar.setCounts(...)/
+     setFooter(...) or plain textContent on [data-pg-count]/[data-pg-footer].
+     Pane grid rows: auto [auto] minmax(0,1fr) auto. Header actions always
+     include IMPORT and EXPORT icon actions for the column's records. -->
 <header class="ctox-pane-header ctox-pane-band">
   <div class="ctox-pane-title-row">
     <div class="ctox-pane-titles">
       <span class="ctox-pane-kicker">KICKER</span>
       <h2 class="ctox-pane-title">Titel</h2>
     </div>
-    <div class="ctox-pane-actions"><!-- collected icon actions only --></div>
+    <div class="ctox-pane-actions">
+      <button type="button" class="ctox-pane-icon" data-action="import" aria-label="Importieren" title="Importieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg></button>
+      <button type="button" class="ctox-pane-icon" data-action="export" aria-label="Exportieren" title="Exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21V9M12 9l-4 4M12 9l4 4M5 3h14"/></svg></button>
+      <!-- + domain icon actions -->
+    </div>
   </div>
-  <div class="APP-filterbar">
+  <div class="ctox-filterbar">
     <input class="ctox-pane-search" type="search" data-pg-search placeholder="Suchen..." aria-label="Suchen">
-    <div class="APP-view-toggle" role="group" aria-label="Darstellung">
+    <div class="ctox-view-toggle" role="group" aria-label="Darstellung">
       <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
       <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
     </div>
-    <button type="button" class="ctox-pane-icon APP-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+    <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
   </div>
-  <div class="APP-filter-advanced" data-pg-tray hidden>
-    <div class="APP-filter-row">
-      <select class="ctox-select APP-select" data-pg-filter data-pg-name="status" data-pg-default="all" aria-label="Status">
+  <div class="ctox-filter-tray" data-pg-tray hidden>
+    <div class="ctox-filter-row">
+      <select class="ctox-select " data-pg-filter data-pg-name="status" data-pg-default="all" aria-label="Status">
         <option value="all">Alle Status</option>
       </select>
-      <button type="button" class="APP-sort-dir APP-filter-reset" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+      <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
     </div>
   </div>
 </header>
-<nav class="APP-view-switch" aria-label="Ansichten">
+<nav class="ctox-view-switch" aria-label="Ansichten">
   <div class="ctox-pane-tabs">
     <!-- >= 2 REAL views; a single counted tab is a validator failure -->
     <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="all" aria-selected="true">Alle<span class="view-count" data-pg-count="all"></span></button>
     <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="x" aria-selected="false">X<span class="view-count" data-pg-count="x"></span></button>
   </div>
 </nav>
-<div class="ctox-pane-body APP-well">
+<div class="ctox-pane-body ctox-well">
   <div class="ctox-list" data-APP-list></div>
 </div>
-<footer class="APP-footer"><span data-pg-footer></span></footer>
+<footer class="ctox-pane-footer"><span data-pg-footer></span></footer>

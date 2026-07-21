@@ -1619,3 +1619,66 @@
   color: var(--muted);
   cursor: pointer;
 }
+
+/* ============================================================================
+   Canonical column grammar chrome (kit-owned). Modules write the declarative
+   markup (assets/snippets/pane-grammar.html, data-pg-* attributes) and the
+   SHELL wires behaviour; these classes replace the per-app copies of
+   filterbar/tray/band/well/footer styling. Tokens only.
+   ========================================================================== */
+.ctox-filterbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px 8px;
+}
+.ctox-filterbar .ctox-pane-search { flex: 1 1 auto; min-width: 0; }
+.ctox-view-toggle { display: flex; gap: 2px; flex: 0 0 auto; }
+.ctox-view-toggle .ctox-pane-icon[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.ctox-filter-toggle { position: relative; flex: 0 0 auto; }
+.ctox-filter-toggle.has-active-filters::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.ctox-filter-tray { padding: 0 12px 8px; }
+.ctox-filter-tray[hidden] { display: none !important; }
+.ctox-filter-row { display: flex; align-items: center; gap: 6px; }
+.ctox-filter-row .ctox-select { flex: 1 1 auto; min-width: 0; height: 28px; font-size: 12px; }
+.ctox-sort-dir {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+}
+.ctox-sort-dir:hover { color: var(--text); background: var(--surface-2); }
+.ctox-sort-dir svg { width: 14px; height: 14px; }
+.ctox-view-switch { padding: 0 12px 8px; border-bottom: 1px solid var(--line); }
+.ctox-view-switch .view-count { color: var(--muted); font-weight: 500; }
+.ctox-well {
+  min-height: 0;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--text) 6%, var(--surface));
+}
+.ctox-pane-footer {
+  padding: 6px 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10px;
+}

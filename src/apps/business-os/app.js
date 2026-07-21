@@ -1,4 +1,5 @@
 import { CtoxResizer } from './shared/resizer.js?v=20260714-chat-queue-v56';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260721-pane-grammar-v1';
 import { createAppActions } from './shared/app-actions.js?v=20260715-runtime-v2';
 import {
   appLifecycleBadge,
@@ -38,7 +39,7 @@ import {
   shouldRenderModuleSourceAction,
 } from './shared/shell-permissions-ui.js?v=20260714-chat-queue-v56';
 import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260717-chat-overlay-v126';
-import { createDocumentsFacade } from './shared/documents.js?v=20260721-documents-facade-v15';
+import { createDocumentsFacade } from './shared/documents.js?v=20260721-documents-facade-v16';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -291,6 +292,7 @@ function resolveDataPlaneReady() {
   state.dataPlaneReadyReject = null;
   if (resolve) resolve(true);
   initThreadsAttentionBadge();
+  initPaneGrammarObserver();
 }
 
 function rejectDataPlaneReady(error) {
@@ -4329,6 +4331,26 @@ function isSameOriginFrame(frame) {
 // (attention_score written natively on every thread mutation); the shell only
 // counts the session user's rows. Zero rows keep the badge hidden.
 // ---------------------------------------------------------------------------
+// Shell-owned wiring for the canonical column chrome: any mounted module pane
+// carrying data-pg-* markup gets its search/tray/reset/dot/toggle/band
+// behaviour wired here — modules never re-code the chrome (declarative, like
+// the column resizers).
+let paneGrammarTimer = null;
+function schedulePaneGrammarWiring() {
+  if (paneGrammarTimer) return;
+  paneGrammarTimer = window.setTimeout(() => {
+    paneGrammarTimer = null;
+    try { autoWirePaneGrammar(document); } catch (error) {
+      console.warn('[business-os] pane grammar wiring failed', error);
+    }
+  }, 120);
+}
+function initPaneGrammarObserver() {
+  schedulePaneGrammarWiring();
+  new MutationObserver(schedulePaneGrammarWiring)
+    .observe(document.body, { childList: true, subtree: true });
+}
+
 function updateThreadsAttentionBadge(count) {
   state.threadsAttentionCount = count;
   for (const node of document.querySelectorAll('[data-threads-attention]')) {

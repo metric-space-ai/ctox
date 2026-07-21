@@ -250,12 +250,15 @@ Rules that go with it:
   different per app (dashboard, editor, flow console, table workbench) —
   and whether a THIRD column is genuinely needed (usually it is not).
   Only the chrome repeats; the main view never does.
-- **The repeating chrome is a kit building block, not per-app handiwork.**
-  Use `shared/pane-grammar.js` (`wirePaneGrammar(pane, { onChange })` +
-  `setCounts`/`setFooter`) with the canonical markup from
-  `assets/snippets/pane-grammar.html` (`data-pg-*` attributes). It owns
-  search/tray/reset/active-dot/view-toggle/band wiring and count/footer
-  rendering; hand-rewiring that chrome in a module is a review finding.
+- **The repeating chrome is SHELL-owned.** Modules write the declarative
+  markup from `assets/snippets/pane-grammar.html` (`data-pg-*` attributes,
+  kit classes `.ctox-filterbar/.ctox-filter-tray/.ctox-view-switch/
+  .ctox-well/.ctox-pane-footer` from base.css) and NOTHING else: the shell
+  auto-wires search/tray/reset/active-dot/view-toggle/band behaviour on
+  mount (like the column resizers). Modules re-render on the bubbling
+  `ctox-pane-grammar-change` event and write counts/footers via
+  `pane.__ctoxPaneGrammar` or plain textContent. Per-app chrome CSS or
+  chrome wiring JS is a review finding.
 - **The shard/list toggle sits IN the filterbar row** — between the search
   field and the filter-tray toggle, exactly like Threads/Knowledge, using ONLY
   the canonical glyphs (two stacked rounded rects / three lines). Never invent

@@ -49,7 +49,13 @@ export function wirePaneGrammar(pane, { onChange } = {}) {
 
   const emit = () => {
     refreshDot();
-    onChange?.(state());
+    const current = state();
+    onChange?.(current);
+    // Declarative consumers (shell-wired panes) listen for this instead of
+    // owning any wiring code.
+    try {
+      pane.dispatchEvent?.(new CustomEvent('ctox-pane-grammar-change', { detail: current, bubbles: true }));
+    } catch {}
   };
 
   search?.addEventListener('input', emit);
@@ -92,4 +98,21 @@ export function wirePaneGrammar(pane, { onChange } = {}) {
     },
     refreshDot,
   };
+}
+
+// Shell entry point: wire every not-yet-wired grammar pane under `root`.
+// Idempotent (marks panes data-pg-wired); the handle is exposed on the pane
+// element so a module can call setCounts/setFooter without importing anything.
+export function autoWirePaneGrammar(root) {
+  const wired = [];
+  for (const pane of root?.querySelectorAll?.('.ctox-pane') || []) {
+    if (pane.dataset.pgWired === 'true') continue;
+    const hasGrammar = pane.querySelector('[data-pg-search], [data-pg-tray-toggle], [data-pg-view], [data-pg-band]');
+    if (!hasGrammar) continue;
+    pane.dataset.pgWired = 'true';
+    const handle = wirePaneGrammar(pane);
+    pane.__ctoxPaneGrammar = handle;
+    wired.push(handle);
+  }
+  return wired;
 }
