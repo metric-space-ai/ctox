@@ -1,24 +1,3 @@
-const commandSchema = {
-  version: 1,
-  primaryKey: 'id',
-  type: 'object',
-  properties: {
-    id: { type: 'string', maxLength: 160 },
-    command_id: { type: 'string' },
-    module: { type: 'string' },
-    command_type: { type: 'string' },
-    record_id: { type: 'string' },
-    status: { type: 'string' },
-    inbound_channel: { type: 'string' },
-    payload: { type: 'object', additionalProperties: true },
-    client_context: { type: 'object', additionalProperties: true },
-    updated_at_ms: { type: 'number' },
-  },
-  required: ['id', 'command_id', 'module', 'command_type', 'status', 'updated_at_ms'],
-  indexes: ['module', 'command_type', 'status', 'updated_at_ms'],
-  additionalProperties: true,
-};
-
 const customerAccountSchema = {
   version: 0,
   primaryKey: 'id',
@@ -449,8 +428,7 @@ const customerDedupeCandidateSchema = {
 // unaffected (the shell, the hash generator, and the native peer all read
 // `definition.schema || definition`).
 export const collections = {
-  business_commands: commandSchema,
-  customer_accounts: { schema: customerAccountSchema, conflictStrategy: 'field-merge' },
+    customer_accounts: { schema: customerAccountSchema, conflictStrategy: 'field-merge' },
   customer_contacts: { schema: customerContactSchema, conflictStrategy: 'field-merge' },
   customer_opportunities: { schema: customerOpportunitySchema, conflictStrategy: 'field-merge' },
   customer_tasks: { schema: customerTaskSchema, conflictStrategy: 'field-merge' },
@@ -465,10 +443,4 @@ export const collections = {
 };
 
 export const migrationStrategies = {
-  business_commands: {
-    1: (oldDoc) => ({
-      ...oldDoc,
-      inbound_channel: oldDoc.inbound_channel || oldDoc.module || '',
-    }),
-  },
-};
+  };
