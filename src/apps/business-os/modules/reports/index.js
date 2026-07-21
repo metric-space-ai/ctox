@@ -510,7 +510,10 @@ function openDelegateDialog(report) {
   const host = state.ctx.host;
   host.querySelector('[data-delegate-modal]')?.remove();
   const actorId = state.ctx.session?.user_id || state.ctx.session?.userId || '';
-  const reviewers = (state.users || []).filter((user) => (user.id || user.user_id) !== actorId);
+  // The reviewer must themselves be authorized to run coding turns for the
+  // module (server policy refuses otherwise) — offer only admin/chef roles.
+  const reviewers = (state.users || []).filter((user) => (user.id || user.user_id) !== actorId
+    && ['admin', 'chef'].includes(String(user.role || '').toLowerCase()));
   const targets = editableTargetModules();
   const preferred = targets.some((mod) => mod.id === report.moduleId) ? report.moduleId : (targets[0]?.id || '');
   const wrap = document.createElement('div');
