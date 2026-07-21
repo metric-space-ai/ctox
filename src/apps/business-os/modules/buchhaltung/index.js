@@ -36,6 +36,9 @@ const state = {
   activeReportTab: 'bilanz',
   activeRightTab: 'ocr',
   skrName: 'SKR03', // Default
+  bookingGrammar: { search: '', view: 'cards', band: 'all', filters: { kind: 'all', sort: 'date', direction: 'desc' } },
+  selectedBookingKey: null,
+  evidenceUserCollapsed: false,
 
   // Data lists loaded from RxDB
   accounts: [],
@@ -171,11 +174,19 @@ const labels = {
 
 let t = (key) => labels.de[key] ?? key;
 
+const BUCHHALTUNG_ASSET_REVISION = new URL(import.meta.url).searchParams.get('v') || 'ia-l1';
+
+function moduleAssetUrl(relativePath) {
+  const asset = new URL(relativePath, import.meta.url);
+  asset.searchParams.set('v', BUCHHALTUNG_ASSET_REVISION);
+  return asset;
+}
+
 async function ensureStyles() {
   if (document.querySelector('link[data-module-styles="buchhaltung"]')) return;
   const link = document.createElement('link');
   link.rel = 'stylesheet';
-  link.href = new URL('./index.css', import.meta.url).href;
+  link.href = moduleAssetUrl('./index.css').href;
   link.dataset.moduleStyles = 'buchhaltung';
   document.head.append(link);
 }
@@ -187,6 +198,8 @@ export async function mount(ctx) {
   const mountGeneration = ++state.mountGeneration;
   state.ctx = ctx;
   state.lang = ctx.locale === 'en' ? 'en' : 'de';
+  state.selectedBookingKey = null;
+  state.evidenceUserCollapsed = false;
 
   await ensureStyles();
   if (state.mountGeneration !== mountGeneration) return () => {};
@@ -196,7 +209,7 @@ export async function mount(ctx) {
   t = (key) => messages[key] ?? labels.de[key] ?? key;
 
   // 1. Inject HTML Structure
-  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  const html = await fetch(moduleAssetUrl('./index.html')).then((res) => res.text());
   if (state.mountGeneration !== mountGeneration) return () => {};
   ctx.host.innerHTML = html;
   ctx.left.replaceChildren();
@@ -221,7 +234,9 @@ export async function mount(ctx) {
   // optional seed writes must never hold the shell's window-open lifecycle.
   wireEvents();
   if (state.els.root) state.els.root.dataset.mountReady = 'true';
+  renderBookingList();
   switchView(state.activeNav);
+  updateEvidencePaneVisibility();
   let disposed = false;
   Promise.resolve()
     .then(async () => {
@@ -232,6 +247,7 @@ export async function mount(ctx) {
       await seedMockDataIfEmpty();
       if (disposed || state.ctx !== ctx) return;
       state.rxCleanup = wireRealtimeSubscriptions();
+      renderBookingList();
       renderActiveView();
     })
     .catch((error) => {
@@ -262,12 +278,17 @@ export async function mount(ctx) {
 function bindElements(host) {
   state.els = {
     root: host.querySelector('[data-fibu-root]'),
-    navContainer: host.querySelector('[data-fibu-nav]'),
+    bookingPane: host.querySelector('[data-booking-pane]'),
+    bookingList: host.querySelector('[data-booking-list]'),
+    bookingImportInput: host.querySelector('[data-booking-import-input]'),
+    workbenchView: host.querySelector('[data-workbench-view]'),
     navItems: host.querySelectorAll('[data-nav]'),
     skrSelect: host.querySelector('#skr-select'),
     centerCategory: host.querySelector('[data-active-category]'),
     centerTitle: host.querySelector('[data-active-title]'),
     centerActions: host.querySelector('[data-center-actions]'),
+    evidenceToggle: host.querySelector('[data-toggle-evidence]'),
+    evidenceCollapse: host.querySelector('[data-collapse-evidence]'),
 
     // View panels
     panels: {
@@ -535,6 +556,7 @@ function wireRealtimeSubscriptions() {
   // Subscribe to all changes in our Fibu RxDB collections to trigger reactivity
   const triggerReload = () => {
     loadAllFibuData().then(() => {
+      renderBookingList();
       renderActiveView();
     });
   };
@@ -641,36 +663,35 @@ function wireEvents() {
   const els = state.els;
   if (!els.root) return;
 
-  // Right Companion pane toggle — hidden by default so the center workbench
-  // gets the full width; persistence is per-shell-window via storageScope so
-  // the operator's chosen layout survives across mounts.
-  const toggleActions = els.root.querySelector('[data-toggle-actions]');
-  const storageKey = 'ctox.buchhaltung.layout.actionsHidden';
-  if (toggleActions) {
-    const saved = state.ctx?.storageScope?.get?.(storageKey);
-    if (saved === 'false') {
-      els.root.classList.remove('is-actions-hidden');
-      toggleActions.setAttribute('aria-pressed', 'true');
-    }
-    toggleActions.addEventListener('click', () => {
-      const willHide = els.root.classList.toggle('is-actions-hidden');
-      toggleActions.setAttribute('aria-pressed', String(!willHide));
-      toggleActions.setAttribute(
-        'aria-label',
-        willHide ? 'Assistent einblenden' : 'Assistent ausblenden'
-      );
-      state.ctx?.storageScope?.set?.(storageKey, String(willHide));
-    });
-  }
+  // Shell-owned pane grammar reports its current filter/view state. Only data
+  // or grammar changes rebuild this list; selecting a row never does.
+  els.bookingPane?.addEventListener('ctox-pane-grammar-change', (event) => {
+    state.bookingGrammar = event.detail || state.bookingGrammar;
+    renderBookingList();
+  });
 
-  // Left Nav Click Events
-  els.navItems.forEach(item => {
-    item.addEventListener('click', () => {
-      els.navItems.forEach(i => i.classList.remove('active'));
-      item.classList.add('active');
-      const target = item.getAttribute('data-nav');
-      switchView(target);
-    });
+  els.bookingList?.addEventListener('click', (event) => {
+    const row = event.target.closest('[data-booking-key]');
+    if (row) selectBookingRecord(row.dataset.bookingKey);
+  });
+
+  els.root.querySelector('[data-action="new-booking"]')?.addEventListener('click', () => {
+    switchView('journal');
+    openManualJournalDrawer();
+  });
+  els.root.querySelector('[data-action="import-bookings"]')?.addEventListener('click', () => els.bookingImportInput?.click());
+  els.root.querySelector('[data-action="export-bookings"]')?.addEventListener('click', exportBookingRecords);
+  els.bookingImportInput?.addEventListener('change', importBookingRecords);
+
+  els.workbenchView?.addEventListener('change', (event) => switchView(event.target.value));
+
+  els.evidenceToggle?.addEventListener('click', () => {
+    state.evidenceUserCollapsed = !state.evidenceUserCollapsed;
+    updateEvidencePaneVisibility();
+  });
+  els.evidenceCollapse?.addEventListener('click', () => {
+    state.evidenceUserCollapsed = true;
+    updateEvidencePaneVisibility();
   });
 
   // SKR Selector change
@@ -782,6 +803,7 @@ function unbindEvents() {
 // =========================================================================
 function switchView(navId) {
   state.activeNav = navId;
+  if (state.els.workbenchView) state.els.workbenchView.value = navId;
 
   // Update active navigation items styling
   if (state.els.navItems) {
@@ -879,6 +901,234 @@ function renderActiveView() {
   }
 }
 
+function bookingRecords() {
+  const receipts = state.receipts.map((receipt) => ({
+    key: `receipt:${receipt.id}`,
+    id: receipt.id,
+    kind: 'receipt',
+    status: receipt.status === 'posted' ? 'posted' : 'draft',
+    date: receipt.invoice_date || '',
+    label: receipt.filename || receipt.invoice_number || receipt.id,
+    description: receipt.supplier_name || 'Unbekannter Lieferant',
+    amount: Number(receipt.gross_amount || 0),
+    source: receipt,
+  }));
+  const bookings = state.journalEntries.map((entry) => ({
+    key: `booking:${entry.id}`,
+    id: entry.id,
+    kind: 'booking',
+    status: entry.posted_at ? 'posted' : 'draft',
+    date: entry.posting_date || '',
+    label: entry.number || 'Buchungsentwurf',
+    description: entry.narration || 'Unbenannte Buchung',
+    amount: state.journalEntryLines
+      .filter((line) => line.journal_entry_id === entry.id)
+      .reduce((sum, line) => sum + Number(line.debit || 0), 0),
+    source: entry,
+  }));
+  return [...receipts, ...bookings];
+}
+
+function bookingStatusLabel(status) {
+  return status === 'posted' ? 'Gebucht' : 'Offen';
+}
+
+function bookingKindLabel(kind) {
+  return kind === 'receipt' ? 'Beleg' : 'Buchung';
+}
+
+function renderBookingList() {
+  const pane = state.els.bookingPane;
+  const container = state.els.bookingList;
+  if (!pane || !container) return;
+
+  const grammar = state.bookingGrammar || {};
+  const filters = grammar.filters || {};
+  const allRecords = bookingRecords();
+  const scoped = filters.kind && filters.kind !== 'all'
+    ? allRecords.filter((record) => record.kind === filters.kind)
+    : allRecords;
+  const counts = {
+    all: scoped.length,
+    draft: scoped.filter((record) => record.status === 'draft').length,
+    posted: scoped.filter((record) => record.status === 'posted').length,
+  };
+  const search = String(grammar.search || '').trim().toLowerCase();
+  const band = grammar.band || 'all';
+  const filtered = scoped.filter((record) => {
+    if (band !== 'all' && record.status !== band) return false;
+    if (!search) return true;
+    return `${record.label} ${record.description} ${record.date}`.toLowerCase().includes(search);
+  });
+  const sortField = filters.sort || 'date';
+  const direction = filters.direction === 'asc' ? 1 : -1;
+  filtered.sort((left, right) => {
+    const a = sortField === 'amount' ? left.amount : String(left[sortField] || '');
+    const b = sortField === 'amount' ? right.amount : String(right[sortField] || '');
+    return direction * (typeof a === 'number' ? a - b : a.localeCompare(b, state.lang));
+  });
+
+  container.classList.toggle('is-compact', grammar.view === 'list');
+  if (filtered.length === 0) {
+    container.innerHTML = '<div class="ctox-empty">Keine Belege oder Buchungen in dieser Ansicht.</div>';
+  } else {
+    container.innerHTML = filtered.map((record) => `
+      <button type="button" class="ctox-list-item fibu-booking-row ${grammar.view === 'list' ? 'is-compact' : ''} ${state.selectedBookingKey === record.key ? 'is-selected' : ''}"
+        data-booking-key="${escapeHtml(record.key)}"
+        data-context-record-id="${escapeHtml(record.id)}"
+        data-context-record-type="${record.kind === 'receipt' ? 'accounting_receipt' : 'accounting_journal_entry'}"
+        data-context-label="${escapeHtml(record.label)}"
+        aria-selected="${state.selectedBookingKey === record.key ? 'true' : 'false'}">
+        <strong>${escapeHtml(record.label)}</strong>
+        <span>${escapeHtml(record.description)} · ${bookingKindLabel(record.kind)} · ${record.date || 'ohne Datum'} · ${bookingStatusLabel(record.status)} · ${formatCents(record.amount)}</span>
+      </button>
+    `).join('');
+  }
+
+  const grammarHandle = pane.__ctoxPaneGrammar;
+  grammarHandle?.setCounts?.(counts);
+  if (!grammarHandle) {
+    Object.entries(counts).forEach(([key, value]) => {
+      const node = pane.querySelector(`[data-pg-count="${key}"]`);
+      if (node) node.textContent = ` (${value})`;
+    });
+  }
+  const scopeLabel = filters.kind === 'receipt'
+    ? 'Nur Belege'
+    : filters.kind === 'booking'
+      ? 'Nur Buchungen'
+      : 'Belege und Buchungen';
+  const footer = `${filtered.length} Einträge · ${scopeLabel}`;
+  grammarHandle?.setFooter?.(footer);
+  if (!grammarHandle) {
+    const footerNode = pane.querySelector('[data-pg-footer]');
+    if (footerNode) footerNode.textContent = footer;
+  }
+}
+
+function setSelectedBookingRow(selectedKey) {
+  state.els.bookingList?.querySelectorAll('[data-booking-key]').forEach((row) => {
+    const selected = row.dataset.bookingKey === selectedKey;
+    row.classList.toggle('is-selected', selected);
+    row.setAttribute('aria-selected', String(selected));
+  });
+}
+
+function selectBookingRecord(key) {
+  const record = bookingRecords().find((item) => item.key === key);
+  if (!record) return;
+  state.selectedBookingKey = key;
+  setSelectedBookingRow(key);
+  if (record.kind === 'receipt') {
+    switchView('receipts');
+    selectReceipt(record.id);
+  } else {
+    switchView('journal');
+    selectJournalEntry(record.id);
+  }
+}
+
+function hasEvidenceSelection() {
+  return Boolean(state.selectedBookingKey);
+}
+
+function updateEvidencePaneVisibility() {
+  const hasSelection = hasEvidenceSelection();
+  const visible = hasSelection && !state.evidenceUserCollapsed;
+  state.els.root?.classList.toggle('is-evidence-hidden', !visible);
+  if (state.els.evidenceToggle) {
+    state.els.evidenceToggle.hidden = !hasSelection;
+    state.els.evidenceToggle.setAttribute('aria-pressed', String(visible));
+    state.els.evidenceToggle.setAttribute('aria-label', visible ? 'OCR-Evidenz ausblenden' : 'OCR-Evidenz einblenden');
+    state.els.evidenceToggle.setAttribute('title', visible ? 'OCR-Evidenz ausblenden' : 'OCR-Evidenz einblenden');
+  }
+}
+
+function renderJournalEvidence(entry) {
+  const receipt = entry?.ref_type === 'receipt'
+    ? state.receipts.find((candidate) => candidate.id === entry.ref_id)
+    : null;
+  if (receipt) {
+    renderOcrInvoicePreview(receipt);
+    return;
+  }
+  const container = state.els.ocrPreviewContainer;
+  if (!container || !entry) return;
+  const lines = state.journalEntryLines.filter((line) => line.journal_entry_id === entry.id);
+  container.innerHTML = `
+    <section class="ctox-card fibu-evidence-summary">
+      <header><h3>${escapeHtml(entry.number || 'Buchungsentwurf')}</h3></header>
+      <div class="ctox-card-body">
+        <dl class="ctox-fields">
+          <div><dt>Buchungstext</dt><dd>${escapeHtml(entry.narration || '—')}</dd></div>
+          <div><dt>Datum</dt><dd>${escapeHtml(entry.posting_date || '—')}</dd></div>
+          <div><dt>Prüfstatus</dt><dd>${entry.posted_at ? 'GoBD-festgeschrieben' : 'Entwurf'}</dd></div>
+          <div><dt>Evidenz</dt><dd>${lines.length} Buchungszeilen · kein Belegdokument verknüpft</dd></div>
+        </dl>
+      </div>
+    </section>`;
+}
+
+function downloadJson(filename, value) {
+  const blob = new Blob([JSON.stringify(value, null, 2)], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function exportBookingRecords() {
+  downloadJson(`buchhaltung-${new Date().toISOString().slice(0, 10)}.json`, {
+    format: 'ctox-buchhaltung-records-v1',
+    exported_at: new Date().toISOString(),
+    journal_entries: state.journalEntries,
+    journal_entry_lines: state.journalEntryLines,
+    receipts: state.receipts,
+  });
+}
+
+async function insertMissingRecords(collectionName, records) {
+  if (!Array.isArray(records) || !canWriteCollection(collectionName)) return 0;
+  const collection = fibuCollection(collectionName);
+  if (!collection) return 0;
+  let inserted = 0;
+  for (const record of records) {
+    if (!record?.id) continue;
+    const existing = await collection.findOne(record.id).exec();
+    if (existing) continue;
+    await collection.insert(record);
+    inserted += 1;
+  }
+  return inserted;
+}
+
+async function importBookingRecords(event) {
+  const input = event.currentTarget;
+  const file = input?.files?.[0];
+  if (!file) return;
+  try {
+    const payload = JSON.parse(await file.text());
+    if (payload?.format !== 'ctox-buchhaltung-records-v1') throw new Error('Unbekanntes Buchhaltungsformat.');
+    const inserted = await Promise.all([
+      insertMissingRecords('accounting_journal_entries', payload.journal_entries),
+      insertMissingRecords('accounting_journal_entry_lines', payload.journal_entry_lines),
+      insertMissingRecords('accounting_receipts', payload.receipts),
+    ]);
+    await loadAllFibuData();
+    renderBookingList();
+    renderActiveView();
+    alert(`${inserted.reduce((sum, value) => sum + value, 0)} Datensätze importiert.`);
+  } catch (error) {
+    alert(`Import fehlgeschlagen: ${error?.message || error}`);
+  } finally {
+    input.value = '';
+  }
+}
+
 // =========================================================================
 // 📊 Rendering View: SKR Accounts Explorer
 // =========================================================================
@@ -903,7 +1153,7 @@ function renderAccountsList(acctsArray) {
     const taxRate = acct.tax_rate_id ? (acct.tax_rate_id === 'DE_19' ? '19% Vor/USt' : '7% Vor/USt') : '—';
 
     html += `
-      <tr class="${isGroup ? 'group-row' : 'regular-row'} ${state.selectedAccountId === acct.id ? 'is-selected' : ''}" data-account-click-id="${acct.id}" aria-selected="${state.selectedAccountId === acct.id ? 'true' : 'false'}" tabindex="0">
+      <tr class="${isGroup ? 'group-row' : 'regular-row'} ${state.selectedAccountId === acct.id ? 'is-selected' : ''}" data-account-click-id="${acct.id}" data-context-record-id="${escapeHtml(acct.id)}" data-context-record-type="accounting_account" data-context-label="${escapeHtml(`${acct.code} ${acct.name}`)}" aria-selected="${state.selectedAccountId === acct.id ? 'true' : 'false'}" tabindex="0">
         <td><span class="fibu-mono">${acct.code}</span></td>
         <td>
           <span style="padding-left: ${acct.parent_id ? '16px' : '0px'};">
@@ -1029,7 +1279,7 @@ function renderJournalRows(entries) {
     const receiptLabel = receipt ? `📄 ${receipt.filename}` : '—';
 
     html += `
-      <tr class="${isStorno ? 'fibu-storno-indicator' : ''} ${state.selectedEntryId === entry.id ? 'is-selected' : ''}" data-entry-click-id="${entry.id}" aria-selected="${state.selectedEntryId === entry.id ? 'true' : 'false'}" tabindex="0">
+      <tr class="${isStorno ? 'fibu-storno-indicator' : ''} ${state.selectedEntryId === entry.id ? 'is-selected' : ''}" data-entry-click-id="${entry.id}" data-context-record-id="${escapeHtml(entry.id)}" data-context-record-type="accounting_journal_entry" data-context-label="${escapeHtml(entry.number || entry.narration || entry.id)}" aria-selected="${state.selectedEntryId === entry.id ? 'true' : 'false'}" tabindex="0">
         <td><span class="fibu-mono">${entry.posting_date}</span></td>
         <td><span class="fibu-mono">${entry.number || 'Entwurf'}</span></td>
         <td>${escapeHtml(entry.narration || 'Unbenannte Buchung')}</td>
@@ -1064,7 +1314,13 @@ function renderJournalRows(entries) {
 
 function selectJournalEntry(id) {
   state.selectedEntryId = id;
+  state.selectedBookingKey = `booking:${id}`;
+  state.evidenceUserCollapsed = false;
+  setSelectedBookingRow(state.selectedBookingKey);
   setSelectedRow(state.els.journalList, 'data-entry-click-id', id);
+  const entry = state.journalEntries.find((candidate) => candidate.id === id);
+  renderJournalEvidence(entry);
+  updateEvidencePaneVisibility();
   openJournalEntryDrawer(id);
 }
 
@@ -1102,7 +1358,7 @@ function renderReceiptsList() {
     const suggestedLabel = suggestedAcct ? `${suggestedAcct.code} ${suggestedAcct.name}` : '—';
 
     html += `
-      <tr class="${state.selectedReceiptId === r.id ? 'is-selected' : ''}" data-receipt-click-id="${r.id}" aria-selected="${state.selectedReceiptId === r.id ? 'true' : 'false'}" tabindex="0">
+      <tr class="${state.selectedReceiptId === r.id ? 'is-selected' : ''}" data-receipt-click-id="${r.id}" data-context-record-id="${escapeHtml(r.id)}" data-context-record-type="accounting_receipt" data-context-label="${escapeHtml(r.filename || r.invoice_number || r.id)}" aria-selected="${state.selectedReceiptId === r.id ? 'true' : 'false'}" tabindex="0">
         <td style="font-weight: 500; color: var(--text-strong);">📄 ${escapeHtml(r.filename)}</td>
         <td>${escapeHtml(r.supplier_name || 'Unbekannt')}</td>
         <td><span class="fibu-mono">${r.invoice_date || '—'}</span></td>
@@ -1137,21 +1393,18 @@ function renderReceiptsList() {
 
 function selectReceipt(id) {
   state.selectedReceiptId = id;
+  state.selectedBookingKey = `receipt:${id}`;
+  state.evidenceUserCollapsed = false;
   const receipt = state.receipts.find(r => r.id === id);
   if (!receipt) return;
 
-  // Highlight row in Center
-  state.els.receiptsList.querySelectorAll('tr').forEach(tr => {
-    tr.classList.remove('is-selected');
-    tr.setAttribute('aria-selected', 'false');
-    if (tr.getAttribute('data-receipt-click-id') === id) {
-      tr.classList.add('is-selected');
-      tr.setAttribute('aria-selected', 'true');
-    }
-  });
+  // Selection is an in-place flip in both existing lists; neither list is rebuilt.
+  setSelectedBookingRow(state.selectedBookingKey);
+  setSelectedRow(state.els.receiptsList, 'data-receipt-click-id', id);
 
   // Render Simulated OCR in the Right Auxiliary pane!
   renderOcrInvoicePreview(receipt);
+  updateEvidencePaneVisibility();
   openReceiptDrawer(receipt);
 }
 
@@ -1246,7 +1499,7 @@ function renderBankingList() {
     const proposedLabel = matchedReceipt ? `📄 Vorschlag: ${matchedReceipt.filename}` : 'Keine Belegübereinstimmung';
 
     html += `
-      <tr class="${state.selectedBankLineId === line.id ? 'is-selected' : ''}" data-bankline-click-id="${line.id}" aria-selected="${state.selectedBankLineId === line.id ? 'true' : 'false'}" tabindex="0">
+      <tr class="${state.selectedBankLineId === line.id ? 'is-selected' : ''}" data-bankline-click-id="${line.id}" data-context-record-id="${escapeHtml(line.id)}" data-context-record-type="accounting_bank_statement_line" data-context-label="${escapeHtml(line.counterparty_name || line.narration || line.id)}" aria-selected="${state.selectedBankLineId === line.id ? 'true' : 'false'}" tabindex="0">
         <td><span class="fibu-mono">${line.value_date}</span></td>
         <td>
           <div style="font-weight:600; color:var(--text-strong);">${escapeHtml(line.counterparty_name || 'Unbekannter Empfänger')}</div>
@@ -1292,7 +1545,19 @@ function renderBankingList() {
 
 function selectBankLine(id) {
   state.selectedBankLineId = id;
+  state.selectedBookingKey = `bank:${id}`;
+  state.evidenceUserCollapsed = false;
+  setSelectedBookingRow(state.selectedBookingKey);
   setSelectedRow(state.els.bankingList, 'data-bankline-click-id', id);
+  const line = state.bankStatementLines.find((candidate) => candidate.id === id);
+  const receipt = line
+    ? state.receipts.find((candidate) => candidate.gross_amount === Math.abs(line.amount || 0))
+    : null;
+  if (receipt) renderOcrInvoicePreview(receipt);
+  else if (state.els.ocrPreviewContainer) {
+    state.els.ocrPreviewContainer.innerHTML = '<div class="ctox-empty">Keine Belegevidenz für diese Banktransaktion verknüpft.</div>';
+  }
+  updateEvidencePaneVisibility();
   openBankReconciliationDrawer(id);
 }
 
@@ -1663,7 +1928,7 @@ function renderAssetsList() {
   let html = '';
   ASSETS_MOCK.forEach(as => {
     html += `
-      <tr class="${state.selectedAssetId === as.nr ? 'is-selected' : ''}" data-asset-click-nr="${as.nr}" aria-selected="${state.selectedAssetId === as.nr ? 'true' : 'false'}" tabindex="0">
+      <tr class="${state.selectedAssetId === as.nr ? 'is-selected' : ''}" data-asset-click-nr="${as.nr}" data-context-record-id="${escapeHtml(as.nr)}" data-context-record-type="accounting_asset" data-context-label="${escapeHtml(as.name)}" aria-selected="${state.selectedAssetId === as.nr ? 'true' : 'false'}" tabindex="0">
         <td><span class="fibu-mono">${as.nr}</span></td>
         <td style="font-weight: 500; color: var(--text-strong);">🏢 ${escapeHtml(as.name)}</td>
         <td><span class="fibu-mono">${as.date}</span></td>

@@ -1,1 +1,9 @@
-{}
+{
+  "bookingListTitle": "Documents & Bookings",
+  "bookingStatusAll": "All",
+  "bookingStatusDraft": "Open",
+  "bookingStatusPosted": "Posted",
+  "bookingImport": "Import bookings",
+  "bookingExport": "Export bookings",
+  "evidenceTitle": "OCR evidence"
+}

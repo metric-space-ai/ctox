@@ -4,126 +4,95 @@
    This file keeps only what is genuinely module-specific (marked /* custom */). */
 
 .fibu-module {
-  /* Map the module's persisted column widths onto the standard workspace grid
-     (resizers write --fibu-left/right-width via data-resizer-var). */
-  --ctox-left-width: var(--fibu-left-width, 284px);
-  --ctox-right-width: var(--fibu-right-width, 330px);
-
-  /* Module-local specials: the blue mileage "commute" dot and the dark
-     phosphor E2E terminal palette. Everything else resolves to shell tokens. */
-  --fibu-info: #2563eb;
+  --ctox-left-width: var(--fibu-left-width, 300px);
+  --ctox-right-width: var(--fibu-right-width, 340px);
+  --fibu-info: var(--accent);
   --fibu-terminal-bg: var(--surface-2);
   --fibu-terminal-line: var(--line);
   --fibu-terminal-ink: var(--text);
+  grid-template-columns: var(--ctox-left-width) 12px minmax(360px, 1fr) 12px var(--ctox-right-width);
 }
 
-:root[data-theme="dark"] .fibu-module {
-  --fibu-info: #3b82f6;
-  --fibu-terminal-bg: #05070f;
-  --fibu-terminal-line: rgba(255, 255, 255, 0.05);
-  --fibu-terminal-ink: #a3e635;
+/* Explicit pane tracks keep the workbench off shell-resizer columns. */
+.fibu-left {
+  grid-column: 1;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  min-width: 240px;
 }
 
-/* The slide-up drawer is positioned against the center pane. */
+.fibu-module > [data-resizer="left"] { grid-column: 2; }
+
 .fibu-center {
+  grid-column: 3;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 360px;
   position: relative;
 }
 
-/* --------------------------------------------------------------------------
-   Right "Assistent" pane is collapsible — hidden by default so the center
-   workbench gets the full width. Toggled from the center pane header
-   (data-toggle-actions). Mirrors threads / conversations UX pattern.
-   -------------------------------------------------------------------------- */
-.fibu-module.is-actions-hidden {
-  grid-template-columns: var(--ctox-left-width, 284px) 12px minmax(0, 1fr);
+.fibu-module > [data-resizer="right"] { grid-column: 4; }
+
+.fibu-right {
+  grid-column: 5;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-width: 280px;
 }
 
-.fibu-module.is-actions-hidden .fibu-right,
-.fibu-module.is-actions-hidden > [data-resizer="right"] {
+.fibu-module.is-evidence-hidden {
+  grid-template-columns: var(--ctox-left-width) 12px minmax(360px, 1fr);
+}
+
+.fibu-module.is-evidence-hidden .fibu-right,
+.fibu-module.is-evidence-hidden > [data-resizer="right"] {
   display: none;
 }
 
-.fibu-toggle-actions[aria-pressed="true"] {
+.fibu-toggle-evidence[aria-pressed="true"] {
   background: var(--accent-soft);
-  color: color-mix(in srgb, var(--accent) 78%, var(--text));
+  color: var(--accent);
 }
 
-/* --------------------------------------------------------------------------
-   custom: gruppierte Navigationsrail mit Sektionstiteln und Monogramm-Kacheln.
-   Kit-Listen (.ctox-list-item) sind flache Record-Listen ohne Sektionen und
-   ohne Kürzel-Kacheln — diese Rail hat kein Kit-Pendant.
-   -------------------------------------------------------------------------- */
-.fibu-nav-list {
-  padding: 10px 8px;
+.fibu-workbench-tools {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(92px, auto);
+  gap: 6px;
 }
 
-.fibu-nav-section-title {
-  font-size: var(--fs-micro);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.15em;
+.fibu-booking-row {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  text-align: left;
+}
+
+.fibu-booking-row strong,
+.fibu-booking-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fibu-booking-row span {
   color: var(--muted);
-  margin: 12px 8px 5px;
+  font-size: var(--fs-meta);
 }
 
-.fibu-nav-item {
-  width: 100%;
-  display: flex;
+.fibu-booking-row.is-compact {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
   align-items: center;
   gap: 8px;
-  min-height: 30px;
-  padding: 5px 8px;
-  border-radius: var(--control-radius);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--muted);
-  font-size: var(--fs-base);
-  font-weight: 500;
-  cursor: pointer;
-  text-align: left;
-  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
-  margin-bottom: 2px;
 }
 
-.fibu-nav-item:hover {
-  background: var(--kit-hover);
-  color: var(--text-strong);
+.fibu-evidence-tabs {
+  min-width: 0;
+  overflow: hidden;
 }
 
-.fibu-nav-item.active {
-  background: var(--accent-soft);
-  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
-  color: var(--accent);
-  font-weight: 600;
+.fibu-evidence-tabs .ctox-pane-tabs {
+  width: 100%;
 }
 
-/* Monogramm-Kacheln (SKR, J, OCR, BA …) in Navigation und Buttons. */
-.fibu-nav-icon {
-  width: 22px;
-  min-width: 22px;
-  height: 20px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--control-radius);
-  background: var(--kit-fill);
-  color: var(--text-strong);
-  font-family: var(--font-mono);
-  font-size: var(--fs-micro);
-  font-weight: 700;
-  letter-spacing: 0;
-  line-height: 1;
-}
-
-.fibu-nav-icon::before,
 .fibu-action-icon::before {
   content: attr(data-icon);
-}
-
-.fibu-summary-icon {
-  width: 22px;
-  min-width: 22px;
-  height: 20px;
 }
 
 .fibu-action-icon {
@@ -142,59 +111,6 @@
   height: 20px;
   padding: 0 5px;
   opacity: 0.86;
-}
-
-.fibu-sidebar-footer {
-  padding: 10px 14px;
-  border-top: 1px solid var(--hairline, var(--line));
-  display: grid;
-  gap: 4px;
-}
-
-/* custom: einklappbare "System & QS"-Sektion (<details>) in der Nav-Rail. */
-.fibu-nav-details {
-  margin-top: 16px;
-  border-top: 1px solid var(--hairline);
-  padding-top: 12px;
-}
-
-.fibu-details-summary {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  cursor: pointer;
-  outline: none;
-  user-select: none;
-  list-style: none;
-  margin: 0 12px 6px;
-  font-size: var(--fs-micro);
-  font-weight: 700;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.fibu-details-summary::-webkit-details-marker {
-  display: none;
-}
-
-.fibu-details-summary::after {
-  content: "▾";
-  font-size: var(--fs-micro);
-  color: var(--muted);
-  transition: transform 0.12s ease;
-  margin-left: auto;
-}
-
-.fibu-nav-details[open] .fibu-details-summary::after {
-  transform: rotate(180deg);
-  color: var(--text-strong);
-}
-
-.fibu-nav-details .fibu-nav-item {
-  margin-left: 6px;
-  width: calc(100% - 6px);
 }
 
 /* --------------------------------------------------------------------------
@@ -668,25 +584,8 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 }
 
 /* --------------------------------------------------------------------------
-   Right pane: OCR preview + AI chat companion. Tabs sind die Kit-Segmented-
-   Control; das Modul lässt sie in der schmalen Spalte nur umbrechen.
+   Right pane: OCR document, extraction evidence and the existing agent trail.
    -------------------------------------------------------------------------- */
-.fibu-right-tabs {
-  flex-wrap: wrap;
-}
-
-.fibu-right .ctox-pane-title-row {
-  align-items: flex-start;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.fibu-right .ctox-pane-actions {
-  width: 100%;
-  min-width: 0;
-  justify-content: flex-start;
-}
-
 .fibu-right-subpanel {
   display: flex;
   flex-direction: column;
@@ -1046,12 +945,20 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
     align-content: start;
   }
 
+  .fibu-left,
+  .fibu-center,
+  .fibu-right,
+  .fibu-module > [data-resizer] {
+    grid-column: 1;
+  }
+
   .fibu-col-resizer {
     display: none !important;
   }
 
   .fibu-module .ctox-pane {
     height: auto;
+    min-width: 0;
     min-height: 220px;
   }
 
@@ -1151,20 +1058,13 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
     flex-wrap: wrap;
   }
 
-  .fibu-right .ctox-pane-title-row {
-    display: block;
+  .fibu-workbench-tools {
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .fibu-right-tabs {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 2px;
-    margin-top: 8px;
-  }
-
-  .fibu-right-tabs .ctox-pane-tab {
-    justify-content: flex-start;
-    width: 100%;
+  .fibu-booking-row.is-compact {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
   }
 
   .fibu-module .ctox-bottom-drawer,

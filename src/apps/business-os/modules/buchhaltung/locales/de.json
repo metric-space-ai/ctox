@@ -1,1 +1,9 @@
-{}
+{
+  "bookingListTitle": "Belege & Buchungen",
+  "bookingStatusAll": "Alle",
+  "bookingStatusDraft": "Offen",
+  "bookingStatusPosted": "Gebucht",
+  "bookingImport": "Buchungen importieren",
+  "bookingExport": "Buchungen exportieren",
+  "evidenceTitle": "OCR-Evidenz"
+}

@@ -1,76 +1,65 @@
-<main class="ctox-workspace fibu-module is-actions-hidden" data-fibu-root data-resize-frame>
-  <!-- Left Spalte: Selector & Navigation (Strictly links and filters only) -->
-  <aside class="ctox-pane fibu-left" aria-label="Fibu Navigation">
+<main class="ctox-workspace fibu-module is-evidence-hidden" data-fibu-root data-resize-frame>
+  <!-- Left: canonical shell-wired selector grammar for documents + bookings. -->
+  <aside class="ctox-pane fibu-left" aria-label="Belege und Buchungen" data-booking-pane>
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">CTOX</span>
-          <h2 class="ctox-pane-title">Finanzwesen</h2>
+          <span class="ctox-pane-kicker">Finanzwesen</span>
+          <h2 class="ctox-pane-title">Belege &amp; Buchungen</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon" data-action="new-booking" aria-label="Neue Buchung" title="Neue Buchung"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-action="import-bookings" aria-label="Buchungen importieren" title="Buchungen importieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-action="export-bookings" aria-label="Buchungen exportieren" title="Buchungen exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21V9M12 9l-4 4M12 9l4 4M5 3h14"/></svg></button>
+          <input type="file" data-booking-import-input accept="application/json,.json" hidden />
+        </div>
+      </div>
+      <div class="ctox-filterbar">
+        <input class="ctox-pane-search" type="search" data-pg-search placeholder="Belege oder Buchungen suchen..." aria-label="Belege und Buchungen suchen" />
+        <div class="ctox-view-toggle" role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
+        <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="ctox-filter-tray" data-pg-tray hidden>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" data-pg-filter data-pg-name="kind" data-pg-default="all" aria-label="Datensatztyp">
+            <option value="all">Belege und Buchungen</option>
+            <option value="receipt">Nur Belege</option>
+            <option value="booking">Nur Buchungen</option>
+          </select>
+          <select class="ctox-select" data-pg-filter data-pg-name="sort" data-pg-default="date" aria-label="Sortierung">
+            <option value="date">Datum</option>
+            <option value="label">Bezeichnung</option>
+            <option value="amount">Betrag</option>
+            <option value="status">Status</option>
+          </select>
+          <select class="ctox-select" data-pg-filter data-pg-name="direction" data-pg-default="desc" aria-label="Sortierrichtung">
+            <option value="desc">Absteigend</option>
+            <option value="asc">Aufsteigend</option>
+          </select>
+          <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
         </div>
       </div>
     </header>
-
-    <div class="ctox-pane-scroll fibu-nav-list" data-fibu-nav>
-      <div class="fibu-nav-section-title">Kontenrahmen</div>
-      <button type="button" class="fibu-nav-item active" data-nav="skr">
-        <span class="fibu-nav-icon" data-icon="SKR" aria-hidden="true"></span> Kontenrahmen (SKR)
-      </button>
-
-      <div class="fibu-nav-section-title">Buchungen</div>
-      <button type="button" class="fibu-nav-item" data-nav="journal">
-        <span class="fibu-nav-icon" data-icon="J" aria-hidden="true"></span> Journal & Hauptbuch
-      </button>
-      <button type="button" class="fibu-nav-item" data-nav="receipts">
-        <span class="fibu-nav-icon" data-icon="OCR" aria-hidden="true"></span> Belege (OCR & Vorrat)
-      </button>
-
-      <div class="fibu-nav-section-title">Bank & Kasse</div>
-      <button type="button" class="fibu-nav-item" data-nav="banking">
-        <span class="fibu-nav-icon" data-icon="BA" aria-hidden="true"></span> Bankabgleich
-      </button>
-
-      <div class="fibu-nav-section-title">Reisen & PKW</div>
-      <button type="button" class="fibu-nav-item" data-nav="travel">
-        <span class="fibu-nav-icon" data-icon="RK" aria-hidden="true"></span> Reisekosten (VMA)
-      </button>
-      <button type="button" class="fibu-nav-item" data-nav="mileage">
-        <span class="fibu-nav-icon" data-icon="KM" aria-hidden="true"></span> Fahrtenbuch
-      </button>
-
-      <div class="fibu-nav-section-title">Auswertungen</div>
-      <button type="button" class="fibu-nav-item" data-nav="reports">
-        <span class="fibu-nav-icon" data-icon="AV" aria-hidden="true"></span> Bilanz / GuV / UStVA
-      </button>
-
-      <div class="fibu-nav-section-title">Anlagen (AfA)</div>
-      <button type="button" class="fibu-nav-item" data-nav="assets">
-        <span class="fibu-nav-icon" data-icon="AA" aria-hidden="true"></span> Anlagenspiegel
-      </button>
-
-      <details class="fibu-nav-details">
-        <summary class="fibu-details-summary">
-          <span class="fibu-nav-icon fibu-summary-icon" data-icon="QS" aria-hidden="true"></span>
-          System & QS
-        </summary>
-        <button type="button" class="fibu-nav-item" data-nav="tests">
-          <span class="fibu-nav-icon" data-icon="E2E" aria-hidden="true"></span> E2E Test Suite (UI)
-        </button>
-      </details>
+    <nav class="ctox-view-switch" aria-label="Buchungsstatus">
+      <div class="ctox-pane-tabs">
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="all" aria-selected="true">Alle<span class="view-count" data-pg-count="all"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="draft" aria-selected="false">Offen<span class="view-count" data-pg-count="draft"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="posted" aria-selected="false">Gebucht<span class="view-count" data-pg-count="posted"></span></button>
+      </div>
+    </nav>
+    <div class="ctox-pane-body ctox-well">
+      <div class="ctox-list" data-booking-list></div>
     </div>
-
-    <footer class="fibu-sidebar-footer">
-      <label class="ctox-field-label" for="skr-select">Kontenrahmen:</label>
-      <select id="skr-select" class="ctox-select">
-        <option value="SKR03">SKR 03 (Prozessgliederung)</option>
-        <option value="SKR04">SKR 04 (Abschlussgliederung)</option>
-      </select>
-    </footer>
+    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
   </aside>
   <button class="fibu-col-resizer ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--fibu-left-width" data-resizer-min="240" data-resizer-max="450" title="Spaltenbreite anpassen" aria-label="Linke Spaltenbreite anpassen"></button>
 
   <!-- Center Spalte: Active Workbench (Main Workbench views) -->
   <section class="ctox-pane fibu-center" aria-label="Fibu Arbeitsbereich">
-    <!-- Header dynamically changed by controller -->
+    <!-- Main: the accounting workbench; only its IA selector moved here. -->
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
@@ -78,11 +67,27 @@
           <h2 class="ctox-pane-title" data-active-title>SKR03 Kontenrahmen-Explorer</h2>
         </div>
         <div class="ctox-pane-actions" data-center-actions>
-          <button type="button" class="ctox-pane-icon fibu-toggle-actions" data-toggle-actions title="Assistent einblenden" aria-label="Assistent einblenden" aria-pressed="false">
+          <button type="button" class="ctox-pane-icon fibu-toggle-evidence" data-toggle-evidence title="OCR-Evidenz einblenden" aria-label="OCR-Evidenz einblenden" aria-pressed="false" hidden>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
           </button>
-          <!-- Dynamic actions based on view -->
         </div>
+      </div>
+      <div class="ctox-pane-tools fibu-workbench-tools">
+        <select class="ctox-select" data-workbench-view aria-label="Arbeitsbereich">
+          <option value="skr">Kontenrahmen</option>
+          <option value="journal">Journal &amp; Hauptbuch</option>
+          <option value="receipts">Belege &amp; OCR</option>
+          <option value="banking">Bankabgleich</option>
+          <option value="travel">Reisekosten</option>
+          <option value="mileage">Fahrtenbuch</option>
+          <option value="reports">Bilanz / GuV / UStVA</option>
+          <option value="assets">Anlagenspiegel</option>
+          <option value="tests">System &amp; QS</option>
+        </select>
+        <select id="skr-select" class="ctox-select" aria-label="Kontenrahmen">
+          <option value="SKR03">SKR 03</option>
+          <option value="SKR04">SKR 04</option>
+        </select>
       </div>
     </header>
 
@@ -479,22 +484,25 @@
   </section>
   <button class="fibu-col-resizer ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--fibu-right-width" data-resizer-min="280" data-resizer-max="500" title="Spaltenbreite anpassen" aria-label="Rechte Spaltenbreite anpassen"></button>
 
-  <!-- Right Spalte: Companion & Auxiliary Functions (Complementary OCR viewer & AI chat, completely independent) -->
-  <section class="ctox-pane fibu-right" aria-label="Belege & Agenten-Begleiter">
+  <!-- Third: justified OCR/agent evidence, selection-driven and re-collapsible. -->
+  <aside class="ctox-pane fibu-right" aria-label="OCR und Agenten-Evidenz">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">Companion</span>
-          <h2 class="ctox-pane-title">Assistent</h2>
+          <span class="ctox-pane-kicker">Prüfspur</span>
+          <h2 class="ctox-pane-title">OCR-Evidenz</h2>
         </div>
         <div class="ctox-pane-actions">
-          <div class="ctox-pane-tabs fibu-right-tabs" role="tablist">
-            <button type="button" class="ctox-pane-tab" role="tab" data-right-tab="ocr" aria-selected="true">Beleg-Vorschau</button>
-            <button type="button" class="ctox-pane-tab" role="tab" data-right-tab="agent" aria-selected="false">CTOX AI Agent</button>
-          </div>
+          <button type="button" class="ctox-pane-icon" data-collapse-evidence aria-label="OCR-Evidenz ausblenden" title="OCR-Evidenz ausblenden"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/><path d="m11 9-3 3 3 3"/></svg></button>
         </div>
       </div>
     </header>
+    <nav class="ctox-pane-band fibu-evidence-tabs" aria-label="Evidenzansicht">
+      <div class="ctox-pane-tabs" role="tablist">
+        <button type="button" class="ctox-pane-tab" role="tab" data-right-tab="ocr" aria-selected="true">Dokument &amp; Extraktion</button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-right-tab="agent" aria-selected="false">Agentenprotokoll</button>
+      </div>
+    </nav>
 
     <div class="ctox-pane-body">
       <!-- OCR Document Preview -->
@@ -531,5 +539,5 @@
         </div>
       </div>
     </div>
-  </section>
+  </aside>
 </main>
