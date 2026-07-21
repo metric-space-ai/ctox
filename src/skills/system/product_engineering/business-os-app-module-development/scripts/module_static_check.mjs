@@ -1225,11 +1225,17 @@ if (runtimeModuleMode && !catalogInstalledMode && schemaDoc?.collections) {
   for (const message of await collectRecordHelperSchemaFailures(moduleDir, schemaDoc)) fail(message);
 }
 
+// System modules the server registers directly (src/core/service/business_os.rs
+// serves them without a registry.json entry).
+const SERVER_REGISTERED_MODULES = new Set([
+  'app-store', 'browser', 'coding-agents', 'creator', 'credentials', 'ctox',
+]);
+
 if (!runtimeModuleMode && manifest && existsSync(registryPath)) {
   const registry = readJson(registryPath);
   const entry = (registry?.modules || []).find((item) => item.id === moduleId);
-  if (!entry) fail(`registry.json missing module ${moduleId}`);
-  else {
+  if (!entry && !SERVER_REGISTERED_MODULES.has(moduleId)) fail(`registry.json missing module ${moduleId}`);
+  else if (entry) {
     if (entry.entry !== manifest.entry) fail(`registry entry mismatch for ${moduleId}: entry`);
     if (entry.install_scope !== manifest.install_scope) {
       fail(`registry entry mismatch for ${moduleId}: install_scope`);
