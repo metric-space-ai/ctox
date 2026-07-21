@@ -239,6 +239,17 @@ Rules that go with it:
   resizer 2, center 3, resizer 4, right 5). The kit hides column resizers on
   narrow windows; with auto-flow placement the center pane slides onto the
   empty 12px resizer track and the main view visually disappears.
+- **Standing header actions: import and export.** Every element-listing
+  column's header carries the collected icon set top-right, and that set
+  always includes an IMPORT and an EXPORT icon action for the column's
+  records (CSV/JSON as the domain dictates) alongside the domain actions.
+  Icons follow the shared glyph rules (aria-label + title, stroke 1.8).
+- **Column IA is a per-app decision, never templated.** Before touching an
+  app, decide explicitly: what belongs in the LEFT (persistence/selector)
+  column, what the MAIN view is — the actual work surface, completely
+  different per app (dashboard, editor, flow console, table workbench) —
+  and whether a THIRD column is genuinely needed (usually it is not).
+  Only the chrome repeats; the main view never does.
 - **The repeating chrome is a kit building block, not per-app handiwork.**
   Use `shared/pane-grammar.js` (`wirePaneGrammar(pane, { onChange })` +
   `setCounts`/`setFooter`) with the canonical markup from
