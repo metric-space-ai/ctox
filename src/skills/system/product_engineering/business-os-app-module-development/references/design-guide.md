@@ -239,6 +239,12 @@ Rules that go with it:
   resizer 2, center 3, resizer 4, right 5). The kit hides column resizers on
   narrow windows; with auto-flow placement the center pane slides onto the
   empty 12px resizer track and the main view visually disappears.
+- **The repeating chrome is a kit building block, not per-app handiwork.**
+  Use `shared/pane-grammar.js` (`wirePaneGrammar(pane, { onChange })` +
+  `setCounts`/`setFooter`) with the canonical markup from
+  `assets/snippets/pane-grammar.html` (`data-pg-*` attributes). It owns
+  search/tray/reset/active-dot/view-toggle/band wiring and count/footer
+  rendering; hand-rewiring that chrome in a module is a review finding.
 - **The shard/list toggle sits IN the filterbar row** — between the search
   field and the filter-tray toggle, exactly like Threads/Knowledge, using ONLY
   the canonical glyphs (two stacked rounded rects / three lines). Never invent
