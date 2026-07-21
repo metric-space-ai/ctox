@@ -7968,14 +7968,24 @@ fn start_prompt_worker(
                 }
             }
             let queued_outcome_recovery = outcome_recovery_prompt.is_some();
-            if let Some(queued) = outcome_recovery_prompt {
+            if let Some(mut queued) = outcome_recovery_prompt {
                 worker_activity.set_phase(&job.source_label, "queueing-recovery");
-                enqueue_prompt(
-                    &root,
-                    &state,
-                    queued,
-                    "Queued outcome-witness recovery for reviewed send".to_string(),
-                );
+                match preserve_systematic_research_binding(&job, &mut queued) {
+                    Ok(()) => enqueue_prompt(
+                        &root,
+                        &state,
+                        queued,
+                        "Queued outcome-witness recovery for reviewed send".to_string(),
+                    ),
+                    Err(err) => push_event(
+                        &state,
+                        format!(
+                            "Refused malformed systematic-research recovery for {}: {}",
+                            job.source_label,
+                            clip_text(&err.to_string(), 180)
+                        ),
+                    ),
+                }
             }
             if !queued_outcome_recovery {
                 if let Some(queued) = next_prompt {
@@ -10858,7 +10868,7 @@ fn business_os_app_validation_may_own_completion(job: &QueuedPrompt) -> bool {
         && business_os_app_module_target_from_prompt(&job.prompt).is_some()
 }
 
-fn systematic_research_binding(job: &QueuedPrompt) -> Result<(&str, &str)> {
+fn systematic_research_binding_from_prompt(prompt: &str) -> Result<(&str, &str)> {
     fn prompt_value<'a>(prompt: &'a str, label: &str) -> Option<&'a str> {
         prompt.lines().find_map(|line| {
             line.trim()
@@ -10868,11 +10878,44 @@ fn systematic_research_binding(job: &QueuedPrompt) -> Result<(&str, &str)> {
         })
     }
 
-    let run_id = prompt_value(&job.prompt, "Research Run ID:")
+    let run_id = prompt_value(prompt, "Research Run ID:")
         .context("systematic research task is missing an explicit Research Run ID")?;
-    let command_id = prompt_value(&job.prompt, "Research Command ID:")
+    let command_id = prompt_value(prompt, "Research Command ID:")
         .context("systematic research task is missing an explicit Research Command ID")?;
     Ok((run_id, command_id))
+}
+
+fn systematic_research_binding(job: &QueuedPrompt) -> Result<(&str, &str)> {
+    systematic_research_binding_from_prompt(&job.prompt)
+}
+
+fn preserve_systematic_research_binding(
+    original: &QueuedPrompt,
+    recovery: &mut QueuedPrompt,
+) -> Result<()> {
+    if !is_systematic_research_job(original) {
+        return Ok(());
+    }
+
+    let (run_id, command_id) = systematic_research_binding(original)?;
+    if let Ok((recovery_run_id, recovery_command_id)) =
+        systematic_research_binding_from_prompt(&recovery.prompt)
+    {
+        anyhow::ensure!(
+            recovery_run_id == run_id && recovery_command_id == command_id,
+            "systematic research recovery attempted to change its immutable run binding"
+        );
+        return Ok(());
+    }
+
+    recovery.prompt = format!(
+        "{}\n\nImmutable systematic research binding:\nResearch Run ID: {}\nResearch Command ID: {}",
+        recovery.prompt.trim_end(),
+        run_id,
+        command_id
+    );
+    recovery.preview = clip_text(&recovery.prompt, 180);
+    Ok(())
 }
 
 fn systematic_research_started_at(
@@ -13902,7 +13945,33 @@ fn outcome_witness_rejection_count(root: &Path, job: &QueuedPrompt) -> Result<us
     Ok(count.max(0) as usize)
 }
 
-fn queue_review_checkpoint_attempt_count(root: &Path, message_key: &str) -> Result<usize> {
+fn queue_manual_retry_floor(root: &Path, message_key: &str) -> Result<Option<String>> {
+    let db_path = crate::paths::core_db(root);
+    let conn = channels::open_channel_db(&db_path)?;
+    ensure_core_transition_guard_schema(&conn)?;
+    conn.query_row(
+        r#"
+        SELECT MAX(updated_at)
+        FROM ctox_core_transition_proofs
+        WHERE entity_type = 'QueueItem'
+          AND entity_id = ?1
+          AND from_state = 'Failed'
+          AND to_state = 'Pending'
+          AND core_event = 'Release'
+          AND actor = 'ctox-queue-update'
+          AND accepted = 1
+        "#,
+        params![message_key],
+        |row| row.get(0),
+    )
+    .map_err(anyhow::Error::from)
+}
+
+fn queue_review_checkpoint_attempt_count(
+    root: &Path,
+    message_key: &str,
+    retry_floor: Option<&str>,
+) -> Result<usize> {
     let db_path = crate::paths::core_db(root);
     let conn = channels::open_channel_db(&db_path)?;
     ensure_core_transition_guard_schema(&conn)?;
@@ -13916,14 +13985,19 @@ fn queue_review_checkpoint_attempt_count(root: &Path, message_key: &str) -> Resu
           AND accepted = 1
           AND request_json LIKE '%"review_checkpoint":"true"%'
           AND request_json LIKE '%"feedback_owner":"main_agent"%'
+          AND (?2 IS NULL OR julianday(updated_at) > julianday(?2))
         "#,
-        params![message_key],
+        params![message_key, retry_floor],
         |row| row.get(0),
     )?;
     Ok(count.max(0) as usize)
 }
 
-fn queue_review_unavailable_attempt_count(root: &Path, message_key: &str) -> Result<usize> {
+fn queue_review_unavailable_attempt_count(
+    root: &Path,
+    message_key: &str,
+    retry_floor: Option<&str>,
+) -> Result<usize> {
     let db_path = crate::paths::core_db(root);
     let conn = channels::open_channel_db(&db_path)?;
     ensure_core_transition_guard_schema(&conn)?;
@@ -13935,8 +14009,9 @@ fn queue_review_unavailable_attempt_count(root: &Path, message_key: &str) -> Res
           AND entity_id = ?1
           AND accepted = 1
           AND request_json LIKE '%"review_unavailable_retry":"true"%'
+          AND (?2 IS NULL OR julianday(updated_at) > julianday(?2))
         "#,
-        params![message_key],
+        params![message_key, retry_floor],
         |row| row.get(0),
     )?;
     Ok(count.max(0) as usize)
@@ -13990,6 +14065,7 @@ fn queue_legacy_verification_review_attempt_count(
     root: &Path,
     job: &QueuedPrompt,
     message_key: &str,
+    retry_floor: Option<&str>,
 ) -> Result<usize> {
     let db_path = root.join("runtime/ctox.sqlite3");
     if !db_path.exists() {
@@ -14000,9 +14076,12 @@ fn queue_legacy_verification_review_attempt_count(
     {
         return Ok(0);
     }
-    let Some(floor_ms) = queue_message_review_floor_millis(&conn, message_key)? else {
+    let Some(mut floor_ms) = queue_message_review_floor_millis(&conn, message_key)? else {
         return Ok(0);
     };
+    if let Some(retry_floor_ms) = retry_floor.and_then(parse_rfc3339_millis) {
+        floor_ms = floor_ms.max(retry_floor_ms);
+    }
     if let Some(workspace_root) = job
         .workspace_root
         .as_deref()
@@ -14051,9 +14130,17 @@ fn queue_review_budget_attempt_count(
     job: &QueuedPrompt,
     message_key: &str,
 ) -> Result<usize> {
-    let checkpoint_count = queue_review_checkpoint_attempt_count(root, message_key)?;
-    let unavailable_count = queue_review_unavailable_attempt_count(root, message_key)?;
-    let legacy_count = queue_legacy_verification_review_attempt_count(root, job, message_key)?;
+    let retry_floor = queue_manual_retry_floor(root, message_key)?;
+    let checkpoint_count =
+        queue_review_checkpoint_attempt_count(root, message_key, retry_floor.as_deref())?;
+    let unavailable_count =
+        queue_review_unavailable_attempt_count(root, message_key, retry_floor.as_deref())?;
+    let legacy_count = queue_legacy_verification_review_attempt_count(
+        root,
+        job,
+        message_key,
+        retry_floor.as_deref(),
+    )?;
     Ok(checkpoint_count.max(unavailable_count).max(legacy_count))
 }
 
@@ -18633,8 +18720,11 @@ fn communication_review_budget_exhausted_for_message_key(
     message_key: &str,
 ) -> Result<bool> {
     let threshold = review_checkpoint_requeue_block_threshold(root);
-    let attempts = queue_review_checkpoint_attempt_count(root, message_key)?
-        .max(queue_review_unavailable_attempt_count(root, message_key)?);
+    let retry_floor = queue_manual_retry_floor(root, message_key)?;
+    let attempts =
+        queue_review_checkpoint_attempt_count(root, message_key, retry_floor.as_deref())?.max(
+            queue_review_unavailable_attempt_count(root, message_key, retry_floor.as_deref())?,
+        );
     Ok(attempts >= threshold)
 }
 
@@ -24521,6 +24611,41 @@ mod tests {
                 && line.contains("status=pass")
                 && line.contains("manifests=1")
         ));
+    }
+
+    #[test]
+    fn systematic_research_recovery_preserves_immutable_run_binding() {
+        let root = temp_root("research-recovery-binding");
+        let original = systematic_research_test_job(&root);
+        let mut recovery = original.clone();
+        recovery.prompt = "Create the remaining reviewed artifacts.".to_string();
+        recovery.preview = recovery.prompt.clone();
+
+        preserve_systematic_research_binding(&original, &mut recovery).unwrap();
+
+        assert_eq!(
+            systematic_research_binding(&recovery).unwrap(),
+            ("run-1", "command-1")
+        );
+        assert!(recovery
+            .prompt
+            .contains("Immutable systematic research binding:"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn systematic_research_recovery_rejects_changed_run_binding() {
+        let root = temp_root("research-recovery-binding-conflict");
+        let original = systematic_research_test_job(&root);
+        let mut recovery = original.clone();
+        recovery.prompt = "Research Run ID: run-2\nResearch Command ID: command-2".to_string();
+
+        let error = preserve_systematic_research_binding(&original, &mut recovery).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("attempted to change its immutable run binding"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -34052,6 +34177,33 @@ Business OS command:
             )
             .expect("failed to count pre-dispatch terminal proof");
         assert_eq!(proof_count, 1);
+
+        drop(conn);
+        channels::update_queue_task(
+            &root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task.message_key.clone(),
+                route_status: Some("pending".to_string()),
+                status_note: Some("operator-authorized bounded retry".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("operator should be able to release terminally failed work");
+        assert_eq!(
+            queue_review_budget_attempt_count(&root, &job, &task.message_key)
+                .expect("manual retry budget should be readable"),
+            0,
+            "an explicit Failed -> Pending operator release starts a new finite review cycle"
+        );
+
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease manually retried queue task");
+        assert!(
+            terminalize_exhausted_queue_review_budget_before_run(&root, &job)
+                .expect("manual retry budget check should not fail")
+                .is_none(),
+            "manual retry must reach the worker instead of immediately re-terminalizing"
+        );
     }
 
     #[test]
