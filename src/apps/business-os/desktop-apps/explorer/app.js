@@ -197,6 +197,7 @@ export async function mount(container, ctx) {
     previewUrl: '',
     dragExports: new Map(),
     lastLoad: null,
+    searchTimer: null,
   };
 
   container.innerHTML = `
@@ -268,6 +269,12 @@ export async function mount(container, ctx) {
   refs.search.addEventListener('input', () => {
     state.query = refs.search.value.trim();
     renderRows();
+    if (!isFileCollectionSource()) return;
+    if (state.searchTimer) window.clearTimeout(state.searchTimer);
+    state.searchTimer = window.setTimeout(() => {
+      state.searchTimer = null;
+      void loadRows();
+    }, 220);
   });
   refs.sort.addEventListener('change', () => {
     state.sort = refs.sort.value || 'modified';
@@ -369,7 +376,7 @@ export async function mount(container, ctx) {
       return;
     }
     try {
-      const docs = await collection.find(activeDocumentQueryForSource(state.activeSource)).exec();
+      const docs = await collection.find(activeDocumentQueryForSource(state.activeSource, state.query)).exec();
       if (disposed) return;
       const data = docs.map((doc) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc));
       const activeData = data.filter((item) => !item.is_deleted);
@@ -378,7 +385,7 @@ export async function mount(container, ctx) {
       } else {
         state.folderDocs = new Map();
       }
-      state.rows = state.activeSource.recentSort
+      state.rows = state.activeSource.recentSort || (isFilesystemSource() && state.query)
         ? activeData.filter((item) => item.kind !== 'folder').map(normalizeFileRow)
         : normalizeRowsForSource(data, state.activeSource, state.currentFolderId);
       state.lastLoad = {
@@ -491,7 +498,7 @@ export async function mount(container, ctx) {
   function filteredRows() {
     const query = state.query.toLowerCase();
     const rows = query
-      ? state.rows.filter((row) => `${row.label} ${row.kind} ${row.status}`.toLowerCase().includes(query))
+      ? state.rows.filter((row) => `${row.label} ${row.kind} ${row.status} ${row.path || ''} ${row.localPath || ''}`.toLowerCase().includes(query))
       : state.rows;
     return [...rows].sort(SORTERS[state.sort] || SORTERS.modified);
   }
@@ -994,8 +1001,22 @@ export async function mount(container, ctx) {
     return source.collectionId || source.id;
   }
 
-  function activeDocumentQueryForSource(source) {
-    return {};
+  function activeDocumentQueryForSource(source, searchQuery = '') {
+    const query = String(searchQuery || '').trim();
+    if (!source?.fileCollection || !query) return {};
+    const pattern = escapeRegex(query);
+    return {
+      selector: {
+        $or: [
+          { name: { $regex: pattern } },
+          { path: { $regex: pattern } },
+          { virtual_path: { $regex: pattern } },
+        ],
+      },
+      sort: [{ updated_at_ms: 'desc' }],
+      limit: 250,
+      requireRevision: `files-search:${query.toLocaleLowerCase()}`,
+    };
   }
 
   function renderFooter(rows = filteredRows()) {
@@ -1022,6 +1043,7 @@ export async function mount(container, ctx) {
 
   return () => {
     disposed = true;
+    if (state.searchTimer) window.clearTimeout(state.searchTimer);
     revokePreviewUrl();
     for (const entry of state.dragExports.values()) {
       if (entry?.url) URL.revokeObjectURL(entry.url);
@@ -1029,6 +1051,10 @@ export async function mount(container, ctx) {
     state.dragExports.clear();
     container.replaceChildren();
   };
+}
+
+function escapeRegex(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 async function ensureFileSystem(db) {

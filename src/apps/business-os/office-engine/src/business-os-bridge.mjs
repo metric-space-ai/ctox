@@ -32,7 +32,7 @@ export function createBusinessOsOfficeBridge(ctx, kind) {
 
   return Object.freeze({
     async loadVersion({ recordId, versionId } = {}) {
-      await awaitNativeSync(ctx, [config.records, config.versions]);
+      await ensureNativeCollectionsStarted(ctx, [config.records, config.versions]);
       return withChunkLease(ctx, config, `${config.module}-load-version`, async (lease) => {
         const fileLoader = demandFileLoaderFromLease(lease);
         const recordDoc = await collection(config.records).findOne(String(recordId || '')).exec();
@@ -52,7 +52,7 @@ export function createBusinessOsOfficeBridge(ctx, kind) {
     },
 
     async prepare({ recordId, versionId } = {}) {
-      await awaitNativeSync(ctx, [config.records, config.versions]);
+      await ensureNativeCollectionsStarted(ctx, [config.records, config.versions]);
       return withChunkLease(ctx, config, `${config.module}-prepare`, async () => {
         const outcome = await dispatch(ctx, config, 'prepare', recordId, {
           [`${kind}_id`]: recordId,
@@ -91,7 +91,7 @@ export function createBusinessOsOfficeBridge(ctx, kind) {
     },
 
     async export({ recordId, versionId, format } = {}) {
-      await awaitNativeSync(ctx, [config.records, config.versions]);
+      await ensureNativeCollectionsStarted(ctx, [config.records, config.versions]);
       return withChunkLease(ctx, config, `${config.module}-export`, async (lease) => {
         const result = await dispatch(ctx, config, 'export', recordId, {
           [`${kind}_id`]: recordId,
@@ -325,10 +325,9 @@ async function sha256Hex(bytes) {
 function permissionError(message) { const error = new Error(message); error.code = 'permission_denied'; return error; }
 function integrityError(message, code) { const error = new Error(message); error.code = code; return error; }
 
-async function awaitNativeSync(ctx, collectionNames) {
+async function ensureNativeCollectionsStarted(ctx, collectionNames) {
   for (const collectionName of collectionNames) {
-    const bridge = await ctx?.sync?.startCollection?.(collectionName);
-    await awaitBridgeSync(bridge, collectionName);
+    await ctx?.sync?.startCollection?.(collectionName);
   }
 }
 

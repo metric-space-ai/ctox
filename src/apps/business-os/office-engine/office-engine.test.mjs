@@ -185,7 +185,7 @@ test('bridge blocks writes without collection permission before staging any byte
   assert.equal(commands, 0);
 });
 
-test('bridge preserves native stale-base conflicts and waits for RxDB reconnect before dispatch', async () => {
+test('bridge preserves native stale-base conflicts without waiting for full metadata replication', async () => {
   const events = [];
   const bridge = createBusinessOsOfficeBridge({
     db: { collection() { return {}; } },
@@ -210,8 +210,8 @@ test('bridge preserves native stale-base conflicts and waits for RxDB reconnect 
   await assert.rejects(bridge.prepare({ recordId: 'sheet_1', versionId: 'v1' }),
     (error) => error.code === 'version_conflict');
   assert.deepEqual(events, [
-    'start:spreadsheets', 'synced:spreadsheets',
-    'start:spreadsheet_versions', 'synced:spreadsheet_versions',
+    'start:spreadsheets',
+    'start:spreadsheet_versions',
     'lease:spreadsheet_blob_chunks:spreadsheets-prepare', 'synced:spreadsheet_blob_chunks',
     'dispatch',
     'release:spreadsheet_blob_chunks',
