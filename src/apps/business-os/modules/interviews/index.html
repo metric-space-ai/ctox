@@ -1,36 +1,109 @@
-<section class="ats-interviews ctox-record-workbench is-form-hidden" data-ats-root>
-  <header class="ctox-pane-header ctox-pane-band ctox-record-workbench__header">
-    <div class="ctox-pane-title-row">
-      <div class="ctox-pane-titles">
-        <span class="ctox-pane-kicker" data-ats-sub></span>
-        <h1 class="ctox-pane-title" data-ats-title></h1>
+<main class="ctox-workspace ats-interviews is-workbench-hidden" data-ats-root data-resize-frame>
+  <!-- LEFT: record list — persistence/selector column over interview_meetings.
+       Canonical column grammar; the shell auto-wires the data-pg-* chrome. -->
+  <aside class="ctox-pane ats-list-pane" aria-label="Interviews" data-left-content>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-i18n="listKicker">Recruiting</span>
+          <h2 class="ctox-pane-title" data-ats-title>Interviews</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon is-primary" data-action="new" data-i18n-title="newMeeting" title="Neuer Termin" aria-label="Neuer Termin">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
+          </button>
+          <button type="button" class="ctox-pane-icon" data-action="import" data-i18n-title="importLabel" title="Importieren" aria-label="Importieren">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg>
+          </button>
+          <button type="button" class="ctox-pane-icon" data-action="export" data-i18n-title="exportLabel" title="Exportieren" aria-label="Exportieren">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21V9M12 9l-4 4M12 9l4 4M5 3h14"/></svg>
+          </button>
+        </div>
       </div>
-      <div class="ctox-pane-actions">
-        <button type="button" class="ctox-pane-icon" data-toggle-form data-i18n-title="toggleForm" title="Neuer Termin" aria-label="Neuer Termin" aria-pressed="false">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
-        </button>
+      <!-- Row 2: filter section — search + shard/list toggle + collapsed tray. -->
+      <div class="ctox-filterbar">
+        <input class="ctox-pane-search" type="search" data-pg-search data-i18n-placeholder="searchPlaceholder" placeholder="Suchen..." aria-label="Interviews suchen" />
+        <div class="ctox-view-toggle" role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="true" data-i18n-title="viewCards" title="Shard-Ansicht" aria-label="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="false" data-i18n-title="viewList" title="Listen-Ansicht" aria-label="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
+        <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" data-i18n-title="filterLabel" title="Filter" aria-label="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="ctox-filter-tray" data-pg-tray hidden>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" data-pg-filter data-pg-name="status" data-pg-default="all" data-i18n-title="statusFilterLabel" aria-label="Status filtern">
+            <option value="all" data-i18n="statusAll">Alle Status</option>
+            <option value="proposed" data-i18n="stateProposed">Vorgeschlagen</option>
+            <option value="confirmed" data-i18n="stateConfirmed">Bestätigt</option>
+            <option value="rescheduled" data-i18n="stateRescheduled">Verschoben</option>
+            <option value="completed" data-i18n="stateCompleted">Stattgefunden</option>
+            <option value="no_show" data-i18n="stateNoShow">No-Show</option>
+            <option value="cancelled" data-i18n="stateCancelled">Abgesagt</option>
+          </select>
+          <button type="button" class="ctox-sort-dir" data-pg-reset data-i18n-title="resetLabel" title="Filter zurücksetzen" aria-label="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+        </div>
+      </div>
+    </header>
+    <!-- Row 3: counted view band — >= 2 real views derived from meeting state. -->
+    <nav class="ctox-view-switch" aria-label="Ansichten">
+      <div class="ctox-pane-tabs">
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="all" aria-selected="true"><span data-i18n="viewAll">Alle</span><span class="view-count" data-pg-count="all"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="open" aria-selected="false"><span data-i18n="viewOpen">Offen</span><span class="view-count" data-pg-count="open"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="done" aria-selected="false"><span data-i18n="viewDone">Erledigt</span><span class="view-count" data-pg-count="done"></span></button>
+      </div>
+    </nav>
+    <!-- Row 4: recessed well holding the shard/list. -->
+    <div class="ctox-pane-body ctox-well">
+      <div class="ctox-list" data-ats-list></div>
+    </div>
+    <!-- Row 5: one-line footer. -->
+    <footer class="ctox-pane-footer"><span data-pg-footer data-ats-footer></span></footer>
+  </aside>
+
+  <button class="ctox-column-resizer ats-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="280" data-resizer-max="480" aria-label="Spaltenbreite anpassen"></button>
+
+  <!-- MAIN: record-bound workbench. Default hidden; auto-revealed on selection
+       or Neu (visible = (hasSelection || creating) && !userCollapsed). -->
+  <section class="ctox-pane ats-workbench-pane" aria-label="Interview" data-ats-workbench>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-ats-wb-kicker></span>
+          <h2 class="ctox-pane-title" data-ats-wb-title></h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon is-primary" data-action="new" data-i18n-title="newMeeting" title="Neuer Termin" aria-label="Neuer Termin">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
+          </button>
+          <button type="button" class="ctox-pane-icon" data-toggle-workbench data-i18n-title="collapseLabel" title="Einklappen" aria-label="Einklappen" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l6 6-6 6M13 6l6 6-6 6"/></svg>
+          </button>
+        </div>
+      </div>
+    </header>
+    <div class="ctox-pane-body">
+      <div class="ctox-pane-scroll ats-workbench-scroll" data-ats-wb-scroll>
+        <form class="ctox-compact-form" data-ats-form>
+          <div class="ctox-compact-form__fields">
+            <label class="ctox-compact-field"><span data-i18n="candidatePlaceholder">Kandidat-ID</span><input class="ctox-input" type="text" name="candidate_id" required data-f /></label>
+            <label class="ctox-compact-field"><span data-i18n="vacancyPlaceholder">Vakanz-ID</span><input class="ctox-input" type="text" name="vacancy_id" data-f /></label>
+            <label class="ctox-compact-field"><span data-i18n="partiesLabel">Parteien</span><input class="ctox-input" type="text" name="parties" placeholder="Komma-getrennt" data-i18n-placeholder="partiesPlaceholder" data-f /></label>
+            <label class="ctox-compact-field"><span data-i18n="startLabel">Start</span><input class="ctox-input" type="datetime-local" name="start" data-f /></label>
+            <label class="ctox-compact-field"><span data-i18n="durationPlaceholder">Dauer (Min)</span><input class="ctox-input" type="number" name="duration_min" data-f /></label>
+            <label class="ctox-compact-field"><span data-i18n="locationLabel">Ort</span><select class="ctox-select" name="location_mode" data-f>
+              <option value="video" data-i18n="modeVideo">Video</option>
+              <option value="onsite" data-i18n="modeOnsite">Vor Ort</option>
+              <option value="phone" data-i18n="modePhone">Telefon</option>
+            </select></label>
+            <label class="ctox-compact-field"><span data-i18n="videoLinkPlaceholder">Video-Link</span><input class="ctox-input" type="text" name="video_link" data-f /></label>
+          </div>
+          <div class="ctox-compact-form__actions"><button class="ctox-button is-primary" type="submit" data-ats-submit data-i18n="createMeeting">Termin anlegen</button></div>
+        </form>
+        <div class="ctox-callout" data-ats-gate hidden></div>
+        <div class="ats-meeting-actions" data-ats-meeting-actions hidden></div>
+        <div class="ats-scorecards" data-ats-scorecards hidden></div>
       </div>
     </div>
-  </header>
-  <div class="ctox-record-workbench__body">
-    <form class="ctox-compact-form" data-ats-form>
-      <div class="ctox-compact-form__fields">
-        <label class="ctox-compact-field"><span data-i18n="candidatePlaceholder">Kandidat-ID</span><input class="ctox-input" type="text" name="candidate_id" required data-f /></label>
-        <label class="ctox-compact-field"><span data-i18n="vacancyPlaceholder">Vakanz-ID</span><input class="ctox-input" type="text" name="vacancy_id" data-f /></label>
-        <label class="ctox-compact-field"><span data-i18n="partiesLabel">Parteien</span><input class="ctox-input" type="text" name="parties" placeholder="Komma-getrennt" data-i18n-placeholder="partiesPlaceholder" data-f /></label>
-        <label class="ctox-compact-field"><span data-i18n="startLabel">Start</span><input class="ctox-input" type="datetime-local" name="start" data-f /></label>
-        <label class="ctox-compact-field"><span data-i18n="durationPlaceholder">Dauer (Min)</span><input class="ctox-input" type="number" name="duration_min" data-f /></label>
-        <label class="ctox-compact-field"><span data-i18n="locationLabel">Ort</span><select class="ctox-select" name="location_mode" data-f>
-          <option value="video" data-i18n="modeVideo">Video</option>
-          <option value="onsite" data-i18n="modeOnsite">Vor Ort</option>
-          <option value="phone" data-i18n="modePhone">Telefon</option>
-        </select></label>
-        <label class="ctox-compact-field"><span data-i18n="videoLinkPlaceholder">Video-Link</span><input class="ctox-input" type="text" name="video_link" data-f /></label>
-      </div>
-      <div class="ctox-compact-form__actions"><button class="ctox-button is-primary" type="submit" data-i18n="createMeeting">Termin anlegen</button></div>
-    </form>
-    <div class="ctox-callout" data-ats-gate hidden></div>
-    <div class="ctox-record-workbench__status" data-ats-count></div>
-    <div class="ctox-record-list" data-ats-list></div>
-  </div>
-</section>
+  </section>
+  <input class="ats-import-input" type="file" accept="application/json,.json" data-ats-import-input hidden aria-hidden="true" tabindex="-1" />
+</main>

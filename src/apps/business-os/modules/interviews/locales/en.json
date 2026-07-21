@@ -2,5 +2,12 @@
   "title": "Interviews",
   "subtitle": "Mehr-Parteien-Interview-Koordination mit strukturierten Scorecards.",
   "add": "Create",
-  "empty": "No entries yet."
+  "empty": "No entries yet.",
+  "new": "New meeting",
+  "import": "Import",
+  "export": "Export",
+  "search": "Search...",
+  "viewAll": "All",
+  "viewOpen": "Open",
+  "viewDone": "Done"
 }
