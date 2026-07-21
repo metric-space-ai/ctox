@@ -1,0 +1,12 @@
+{
+  "name": "CTOX Business OS store shelf",
+  "purpose": "Self-contained browser-ESM retail-box artwork and three.js shelf renderer for the Business OS App Store.",
+  "sourceFiles": [
+    "ctox-dev/components/marketing/app-store-showcase.tsx",
+    "ctox-dev/components/marketing/app-package-template.ts"
+  ],
+  "provenance": "adapted from the ctox-dev marketing showcase (same project ownership)",
+  "license": "AGPL-3.0-only",
+  "date": "2026-07-21",
+  "modifications": "React removed, scroll container parameterized, palette fallback added; converted to no-build vanilla browser ESM using the vendored three.js r185 modules. Website asset paths and overlay/detail DOM were removed in favor of caller-provided URLs and callbacks."
+}
