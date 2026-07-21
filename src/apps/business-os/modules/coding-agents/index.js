@@ -419,6 +419,9 @@ function normalizeCatalogModules(modules) {
 function renderAppList() {
   const box = els.appList;
   if (!box) return;
+  // Re-renders must never move the operator: keep the scroll offset across the
+  // rebuild (data refreshes re-enter here; selection alone never re-renders).
+  const prevScroll = box.scrollTop;
   box.innerHTML = '';
 
   if (state.listState === 'loading') {
@@ -473,6 +476,7 @@ function renderAppList() {
     item.addEventListener('blur', hideRailChip);
     box.appendChild(item);
   });
+  box.scrollTop = prevScroll;
 }
 
 function appFooterText() {
@@ -510,7 +514,11 @@ function hideRailChip() {
 
 function selectApp(moduleId) {
   state.activeModuleId = moduleId;
-  renderAppList();
+  // Selection is an in-place class flip, never a list rebuild — a rebuild
+  // resets the scroll position under the operator's pointer.
+  els.appList?.querySelectorAll('.coding-agents-app-item').forEach((el) => {
+    el.classList.toggle('is-selected', el.dataset.moduleId === moduleId);
+  });
   updateWorkbenchHeader();
   updateFormState();
   setHint('');

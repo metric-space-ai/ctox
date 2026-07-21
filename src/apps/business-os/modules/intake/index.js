@@ -302,7 +302,18 @@ export async function mount(ctx) {
     userCollapsed = false;
     const rec = selectedId ? rowsCache.find((r) => r.id === selectedId) : null;
     if (rec) fillForm(rec);
-    render();
+    // Selection is an in-place class flip — a list rebuild resets the
+    // operator's scroll (design-guide: re-renders never move the operator).
+    applyListSelection();
+    renderDetail();
+  }
+
+  function applyListSelection() {
+    listEl?.querySelectorAll('[data-context-record-id]').forEach((row) => {
+      const on = (row.getAttribute('data-context-record-id') || '') === String(selectedId || '');
+      row.classList.toggle('is-selected', on);
+      row.setAttribute('aria-selected', String(on));
+    });
   }
 
   function startNew() {

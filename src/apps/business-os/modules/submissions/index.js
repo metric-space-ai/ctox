@@ -103,8 +103,18 @@ export async function mount(ctx) {
     const rec = selectedRecord();
     if (rec) fillForm(rec);
     setGate('');
-    renderListRegion();
+    // Selection is an in-place class flip — a list rebuild resets the
+    // operator's scroll (design-guide: re-renders never move the operator).
+    applyListSelection();
     renderWorkbench();
+  }
+
+  function applyListSelection() {
+    listEl?.querySelectorAll('[data-subs-row]').forEach((row) => {
+      const on = (row.getAttribute('data-subs-row') || '') === String(state.selectedId || '');
+      row.classList.toggle('is-selected', on);
+      row.setAttribute('aria-selected', String(on));
+    });
   }
 
   function startNew() {

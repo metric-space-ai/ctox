@@ -300,6 +300,17 @@ Rules that go with it:
   against stale cached markup silently loses every new control (a
   `loadModuleMarkup()` fetch without the buster is the same bug).
 - Module version is always three-part semver (`1.2.3`) in `module.json`.
+- **Re-renders never move the operator (learned on Coding Agents, 2026-07-21).**
+  Selecting an element must NOT rebuild the list it lives in — a rebuild
+  (`innerHTML = ''`) clamps the container's `scrollTop` to 0 and yanks the
+  operator back to the top mid-click. Selection is an in-place class flip
+  (`is-selected` toggled across existing rows). Data-driven re-renders keep
+  the scroll offset. The shell's pane-grammar scroll guard
+  (`guardPaneScroll`, wired automatically on every `data-pg-wired` pane)
+  restores clamped offsets as a safety net, but it only covers grammar-wired
+  panes — treat it as a seatbelt, not as permission to rebuild on select.
+  Intentional resets (search/view/band/filter change) stay intentional: the
+  guard clears its offsets on `ctox-pane-grammar-change`.
 
 ## Anti-Patterns
 
@@ -328,5 +339,7 @@ Rules that go with it:
   cluster — the top-right is for element actions; switchers live in their
   own band or the filter row.
 - A sync/maintenance banner that displaces the layout instead of floating.
+- Rebuilding a scrolled list on selection (scroll position jumps to top) —
+  selection is an in-place class flip, never a re-render.
 - Count badges as pill chrome costing extra rows — counts are inline text in
   parentheses, zeros included.

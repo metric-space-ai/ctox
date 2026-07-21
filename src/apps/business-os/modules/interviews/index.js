@@ -241,8 +241,18 @@ export async function mount(ctx) {
     ui.selectedId = id; ui.creating = false; ui.collapsed = false;
     setGate('');
     renderWorkbench();
-    renderList();
+    // Selection is an in-place class flip — a list rebuild resets the
+    // operator's scroll (design-guide: re-renders never move the operator).
+    applyListSelection();
     applyReveal();
+  }
+
+  function applyListSelection() {
+    listEl?.querySelectorAll('[data-ats-select]').forEach((row) => {
+      const on = (row.getAttribute('data-ats-select') || '') === String(ui.selectedId || '');
+      row.classList.toggle('is-selected', on);
+      row.setAttribute('aria-selected', String(on));
+    });
   }
 
   function startCreate() {

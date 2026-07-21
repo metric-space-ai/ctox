@@ -100,6 +100,45 @@ export function wirePaneGrammar(pane, { onChange } = {}) {
   };
 }
 
+// Scroll guard: re-renders must never move the operator. Modules rebuild list
+// wells with `innerHTML = ''`, which clamps the container's scrollTop to 0; the
+// shell records the last user scroll offset per scroll container and restores
+// it after such a rebuild. Intentional resets (search/view/band/filter changes)
+// are exempt: the grammar-change event clears the recorded offsets first.
+const paneScrollOffsets = new WeakMap();
+
+export function recordPaneScroll(pane, target) {
+  if (!target || target === pane || typeof target.scrollTop !== 'number') return;
+  let offsets = paneScrollOffsets.get(pane);
+  if (!offsets) { offsets = new Map(); paneScrollOffsets.set(pane, offsets); }
+  offsets.set(target, target.scrollTop);
+}
+
+export function clearPaneScroll(pane) {
+  paneScrollOffsets.get(pane)?.clear();
+}
+
+export function restorePaneScroll(pane) {
+  const offsets = paneScrollOffsets.get(pane);
+  if (!offsets) return;
+  for (const [el, top] of offsets) {
+    if (!el.isConnected || !top) { if (!el.isConnected) offsets.delete(el); continue; }
+    if (el.scrollTop === 0 && el.scrollHeight > el.clientHeight) el.scrollTop = top;
+  }
+}
+
+export function guardPaneScroll(pane) {
+  if (!pane || pane.__ctoxScrollGuard) return;
+  pane.__ctoxScrollGuard = true;
+  // Capture phase: scroll events do not bubble, but they do capture.
+  pane.addEventListener('scroll', (event) => recordPaneScroll(pane, event.target), { capture: true, passive: true });
+  pane.addEventListener('ctox-pane-grammar-change', () => clearPaneScroll(pane));
+  if (typeof MutationObserver === 'function') {
+    const observer = new MutationObserver(() => restorePaneScroll(pane));
+    observer.observe(pane, { childList: true, subtree: true });
+  }
+}
+
 // Shell entry point: wire every not-yet-wired grammar pane under `root`.
 // Idempotent (marks panes data-pg-wired); the handle is exposed on the pane
 // element so a module can call setCounts/setFooter without importing anything.
@@ -112,6 +151,7 @@ export function autoWirePaneGrammar(root) {
     pane.dataset.pgWired = 'true';
     const handle = wirePaneGrammar(pane);
     pane.__ctoxPaneGrammar = handle;
+    guardPaneScroll(pane);
     wired.push(handle);
   }
   return wired;

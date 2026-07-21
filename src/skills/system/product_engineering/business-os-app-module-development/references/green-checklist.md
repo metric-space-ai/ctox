@@ -21,6 +21,10 @@ Use this before claiming a Business OS app is done.
   cache-buster and the module version is three-part semver.
 - Any sandboxed `srcdoc` iframe assigns only on content change and re-applies
   once via a load watchdog (first assignment can be swallowed at mount).
+- Interaction proof, not just render proof: scroll a filled list well past the
+  fold, select a lower element — the scroll offset stays and the selection
+  applies (selection = in-place class flip, never a list rebuild). Repeat the
+  interaction after a data refresh re-render.
 
 - The target directory is correct for runtime or source mode.
 - Three relevant shipped Business OS apps were chosen and inspected.

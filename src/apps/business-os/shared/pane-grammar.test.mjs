@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { wirePaneGrammar } from './pane-grammar.js';
+import { wirePaneGrammar, recordPaneScroll, clearPaneScroll, restorePaneScroll } from './pane-grammar.js';
 
 // Minimal DOM stand-ins: enough surface for the helper's queries + events.
 function el(attrs = {}, tag = 'DIV') {
@@ -99,4 +99,44 @@ test('pane grammar wires search, tray, reset, dot, band and counts', () => {
   assert.equal(countAll.textContent, ' (0)');
   grammar.setFooter('12 Einträge');
   assert.equal(footer.textContent, '12 Einträge');
+});
+
+test('scroll guard restores a clamped rebuild but honors intentional resets', () => {
+  const pane = {};
+  const well = { isConnected: true, scrollTop: 800, scrollHeight: 1400, clientHeight: 360 };
+
+  // Rebuild clamps scrollTop to 0 → the recorded offset is restored.
+  recordPaneScroll(pane, well);
+  well.scrollTop = 0;
+  restorePaneScroll(pane);
+  assert.equal(well.scrollTop, 800);
+
+  // A recorded 0 (operator scrolled to top) is never "restored" anywhere.
+  well.scrollTop = 0;
+  recordPaneScroll(pane, well);
+  well.scrollTop = 0;
+  restorePaneScroll(pane);
+  assert.equal(well.scrollTop, 0);
+
+  // Grammar change (search/view/band/filter) clears offsets → reset stays.
+  well.scrollTop = 500;
+  recordPaneScroll(pane, well);
+  clearPaneScroll(pane);
+  well.scrollTop = 0;
+  restorePaneScroll(pane);
+  assert.equal(well.scrollTop, 0);
+
+  // A non-zero current position (module scrolled somewhere on purpose,
+  // e.g. transcript pinned to bottom) is left alone.
+  well.scrollTop = 700;
+  recordPaneScroll(pane, well);
+  well.scrollTop = 340;
+  restorePaneScroll(pane);
+  assert.equal(well.scrollTop, 340);
+
+  // Disconnected containers are dropped, not touched.
+  const gone = { isConnected: false, scrollTop: 0, scrollHeight: 900, clientHeight: 300 };
+  recordPaneScroll(pane, gone);
+  restorePaneScroll(pane);
+  assert.equal(gone.scrollTop, 0);
 });

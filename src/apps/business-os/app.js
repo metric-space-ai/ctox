@@ -1,5 +1,5 @@
 import { CtoxResizer } from './shared/resizer.js?v=20260714-chat-queue-v56';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260721-pane-grammar-v1';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260721-pane-grammar-v2';
 import { createAppActions } from './shared/app-actions.js?v=20260715-runtime-v2';
 import {
   appLifecycleBadge,
@@ -39,7 +39,7 @@ import {
   shouldRenderModuleSourceAction,
 } from './shared/shell-permissions-ui.js?v=20260714-chat-queue-v56';
 import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260717-chat-overlay-v126';
-import { createDocumentsFacade } from './shared/documents.js?v=20260721-documents-facade-v16';
+import { createDocumentsFacade } from './shared/documents.js?v=20260721-documents-facade-v17';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
