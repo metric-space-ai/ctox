@@ -49,6 +49,16 @@
   --win-radius: 16px;
   --win-border: color-mix(in srgb, var(--line) 92%, transparent);
   --win-border-focus: color-mix(in srgb, var(--accent) 62%, var(--line));
+  /* Brand hues that stay constant across themes (channel identity, startup
+     loader) and the theme-calibrated inner light edges consumed by the ctox
+     chrome layer at file end. Dark edge values live on the dark :root. */
+  --brand-whatsapp: #25d366;
+  --startup-gradient-from: #10b981;
+  --startup-gradient-to: #06b6d4;
+  --chrome-edge-header: rgba(255, 255, 255, 0.75);
+  --chrome-edge-header-focus: rgba(255, 255, 255, 0.8);
+  --chrome-edge-island: rgba(255, 255, 255, 0.55);
+  --chrome-edge-inset: rgba(255, 255, 255, 0.45);
   --win-elev:
     0 1px 0 oklch(1 0 0 / 0.55) inset,
     0 1px 2px oklch(0.22 0.015 235 / 0.1),
@@ -99,6 +109,10 @@
   --win-radius: 16px;
   --win-border: #363d47;
   --win-border-focus: color-mix(in srgb, var(--accent) 68%, #363d47);
+  --chrome-edge-header: rgba(255, 255, 255, 0.06);
+  --chrome-edge-header-focus: rgba(255, 255, 255, 0.08);
+  --chrome-edge-island: rgba(255, 255, 255, 0.07);
+  --chrome-edge-inset: rgba(255, 255, 255, 0.07);
   --win-elev:
     0 0 0 1px rgba(255, 255, 255, 0.05) inset,
     0 1px 2px rgba(0, 0, 0, 0.55),
@@ -422,7 +436,7 @@ body[data-maintenance-status="stale"] .ctox-maintenance-banner {
 .topbar-triad-button.ctox-button svg {
   fill: none;
   stroke: none;
-  filter: drop-shadow(0 1px 2px rgba(16, 185, 129, 0.3));
+  filter: drop-shadow(0 1px 2px color-mix(in srgb, var(--startup-gradient-from) 30%, transparent));
 }
 
 .topbar-status-bar {
@@ -502,9 +516,9 @@ body[data-maintenance-status="stale"] .ctox-maintenance-banner {
 }
 
 .topbar-status-bar .ctox-shell-warning {
-  border: 1px solid color-mix(in srgb, #f59e0b 45%, transparent);
-  background: color-mix(in srgb, #f59e0b 13%, var(--surface));
-  color: #ffd89a;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  background: var(--warning-soft);
+  color: var(--warning);
   font-size: var(--fs-sm);
   font-weight: 800;
   padding: var(--space-1) var(--space-2);
@@ -517,9 +531,9 @@ body[data-maintenance-status="stale"] .ctox-maintenance-banner {
 }
 
 .topbar-status-bar .ctox-shell-warning--danger {
-  border-color: color-mix(in srgb, #ef4444 55%, transparent);
-  background: color-mix(in srgb, #ef4444 15%, var(--surface));
-  color: #fecaca;
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .recovery-conflicts-dialog {
@@ -527,7 +541,7 @@ body[data-maintenance-status="stale"] .ctox-maintenance-banner {
   max-height: min(760px, calc(100vh - 48px));
   padding: 0;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--line) 85%, #ef4444);
+  border: 1px solid color-mix(in srgb, var(--line) 85%, var(--danger));
   border-radius: 14px;
   background: var(--surface);
   color: var(--text);
@@ -623,11 +637,11 @@ body[data-maintenance-status="stale"] .ctox-maintenance-banner {
   align-items: center;
   min-width: 0;
   max-width: min(34vw, 360px);
-  border: 1px solid color-mix(in srgb, #f59e0b 45%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
   border-radius: 999px;
   padding: 3px var(--space-2) 2px;
-  background: color-mix(in srgb, #f59e0b 13%, var(--surface));
-  color: #ffd89a;
+  background: var(--warning-soft);
+  color: var(--warning);
   box-shadow: none;
   font-size: var(--fs-meta);
   font-weight: 800;
@@ -640,12 +654,6 @@ body[data-maintenance-status="stale"] .ctox-maintenance-banner {
 
 .ctox-shell-warning[hidden] {
   display: none;
-}
-
-:root[data-theme="light"] .ctox-shell-warning {
-  background: #fff7ed;
-  color: #92400e;
-  box-shadow: none;
 }
 
 .module-nav {
@@ -2072,13 +2080,13 @@ body[data-auth-state="locked"] .topbar {
 }
 
 .module-loading-shell {
-  --loading-bg: var(--bg, #101416);
-  --loading-surface: var(--surface, #171d20);
-  --loading-surface-muted: var(--surface-2, #20282c);
-  --loading-line: var(--line, #303b40);
-  --loading-text: var(--text, #eef4f6);
-  --loading-muted: var(--muted, #9aa8ae);
-  --loading-accent: var(--accent, #6cb8aa);
+  --loading-bg: var(--bg);
+  --loading-surface: var(--surface);
+  --loading-surface-muted: var(--surface-2);
+  --loading-line: var(--line);
+  --loading-text: var(--text);
+  --loading-muted: var(--muted);
+  --loading-accent: var(--accent);
   display: grid;
   grid-template-columns: minmax(260px, 0.72fr) minmax(420px, 1.9fr) minmax(260px, 0.9fr);
   gap: var(--space-3);
@@ -2687,17 +2695,13 @@ body[data-auth-state="locked"] .topbar {
   height: 44px;
   border: none;
   border-radius: 10px;
-  background: linear-gradient(135deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 70%, #06b6d4) 100%);
-  color: #0e1417; /* Slate dark text on emerald gradient */
+  background: linear-gradient(135deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 70%, var(--startup-gradient-to)) 100%);
+  color: var(--accent-foreground);
   font-size: var(--fs-base);
   font-weight: 700;
   cursor: pointer;
   box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 25%, transparent);
   transition: transform var(--motion-base) var(--ease-standard), box-shadow var(--motion-base) var(--ease-standard), filter var(--motion-base) var(--ease-standard);
-}
-
-:root[data-theme="light"] .auth-gate-button {
-  color: #ffffff; /* White text on light theme */
 }
 
 .auth-gate-button:hover {
@@ -2746,10 +2750,10 @@ body[data-auth-state="locked"] .topbar {
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
-  border: 1px solid color-mix(in srgb, #ff3b30 30%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
   border-radius: 10px;
-  background: color-mix(in srgb, #ff3b30 8%, transparent);
-  color: #ff9a91;
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  color: color-mix(in srgb, var(--danger) 82%, var(--text));
   font-size: var(--fs-base);
   font-weight: 500;
   line-height: 1.4;
@@ -2758,11 +2762,6 @@ body[data-auth-state="locked"] .topbar {
 
 .auth-gate-error[hidden] {
   display: none !important;
-}
-
-:root[data-theme="light"] .auth-gate-error {
-  color: #b42318;
-  background: color-mix(in srgb, #ff3b30 6%, transparent);
 }
 
 .auth-gate-panel.has-error {
@@ -2947,7 +2946,7 @@ body[data-auth-state="locked"] .topbar {
 }
 
 .sync-diagnostics-collection .is-error {
-  color: #ff9b9b;
+  color: color-mix(in srgb, var(--danger) 82%, var(--text));
 }
 
 .account-role-card {
@@ -3224,8 +3223,8 @@ body[data-auth-state="locked"] .topbar {
 }
 
 .settings-section.is-danger {
-  border-color: color-mix(in srgb, #ff3b30 62%, var(--line));
-  box-shadow: 0 0 0 1px color-mix(in srgb, #ff3b30 14%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 62%, var(--line));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 14%, transparent);
 }
 
 .settings-section header {
@@ -3315,16 +3314,12 @@ body[data-auth-state="locked"] .topbar {
 }
 
 .settings-alert.is-danger {
-  border-color: color-mix(in srgb, #ff3b30 64%, var(--line));
-  background: color-mix(in srgb, #ff3b30 11%, var(--surface));
+  border-color: color-mix(in srgb, var(--danger) 64%, var(--line));
+  background: color-mix(in srgb, var(--danger) 11%, var(--surface));
 }
 
 .settings-alert.is-danger strong {
-  color: #ff9a91;
-}
-
-:root[data-theme="light"] .settings-alert.is-danger strong {
-  color: #b42318;
+  color: color-mix(in srgb, var(--danger) 82%, var(--text));
 }
 
 .settings-alert.is-ok strong {
@@ -3367,11 +3362,7 @@ body[data-auth-state="locked"] .topbar {
 }
 
 .runtime-pill.is-danger strong {
-  color: #ff9a91;
-}
-
-:root[data-theme="light"] .runtime-pill.is-danger strong {
-  color: #b42318;
+  color: color-mix(in srgb, var(--danger) 82%, var(--text));
 }
 
 .runtime-auth-status {
@@ -3439,25 +3430,21 @@ body[data-auth-state="locked"] .topbar {
 
 .subscription-device-error {
   padding: var(--space-2) var(--space-2);
-  border: 1px solid color-mix(in srgb, #ff3b30 58%, var(--line));
+  border: 1px solid color-mix(in srgb, var(--danger) 58%, var(--line));
   border-radius: 8px;
-  color: #ffb3ad;
+  color: color-mix(in srgb, var(--danger) 82%, var(--text));
   font-size: var(--fs-sm);
   line-height: 1.35;
-  background: color-mix(in srgb, #ff3b30 10%, var(--surface));
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
 }
 
 .runtime-auth-status.is-danger {
-  border-color: color-mix(in srgb, #ff3b30 64%, var(--line));
-  background: color-mix(in srgb, #ff3b30 9%, var(--surface));
+  border-color: color-mix(in srgb, var(--danger) 64%, var(--line));
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface));
 }
 
 .runtime-auth-status.is-danger strong {
-  color: #ff9a91;
-}
-
-:root[data-theme="light"] .runtime-auth-status.is-danger strong {
-  color: #b42318;
+  color: color-mix(in srgb, var(--danger) 82%, var(--text));
 }
 
 .runtime-actions {
@@ -3852,13 +3839,13 @@ body[data-auth-state="locked"] .topbar {
 }
 
 .channel-row-status--ok {
-  background: color-mix(in srgb, #25d366 18%, transparent);
-  color: #25d366;
+  background: color-mix(in srgb, var(--brand-whatsapp) 18%, transparent);
+  color: var(--brand-whatsapp);
 }
 
 .channel-row-status--warn {
-  background: color-mix(in srgb, #f6a050 18%, transparent);
-  color: #f6a050;
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  color: var(--warning);
 }
 
 .channel-row-status--bad {
@@ -4086,8 +4073,8 @@ body[data-auth-state="locked"] .topbar {
 }
 
 .channels-qr-status.is-waiting {
-  background: color-mix(in srgb, #f6a050 18%, transparent);
-  color: #f6a050;
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  color: var(--warning);
 }
 
 .channels-qr-status.is-ok {
@@ -6093,30 +6080,30 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
 .friendly-error-title {
   font-size: var(--fs-title);
   font-weight: 600;
-  color: #fca5a5;
+  color: var(--danger);
   margin: 0 0 var(--space-2) 0;
 }
 
 .friendly-error-description {
   font-size: var(--fs-base);
   line-height: 1.5;
-  color: #d1d5db;
+  color: var(--muted);
   margin: 0 0 var(--space-3) 0;
 }
 
 .friendly-error-advice {
   font-size: var(--fs-base);
   line-height: 1.55;
-  background: rgba(239, 68, 68, 0.08);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--danger) 34%, transparent);
   border-radius: 6px;
   padding: var(--space-3) var(--space-4);
-  color: #fecaca;
+  color: color-mix(in srgb, var(--danger) 82%, var(--text));
   margin: var(--space-4) 0;
 }
 
 .friendly-error-advice strong {
-  color: #fca5a5;
+  color: var(--danger);
   display: block;
   margin-bottom: var(--space-1);
   text-transform: uppercase;
@@ -6127,13 +6114,13 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
 /* Collapsible technical details panel */
 .technical-details-toggle {
   margin-top: var(--space-4);
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
   padding-top: var(--space-3);
 }
 
 .technical-details-toggle summary {
   font-size: var(--fs-sm);
-  color: #9ca3af;
+  color: var(--muted);
   cursor: pointer;
   user-select: none;
   font-weight: 500;
@@ -6142,11 +6129,11 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
 }
 
 .technical-details-toggle summary:hover {
-  color: #d1d5db;
+  color: var(--text);
 }
 
 .technical-details-toggle[open] summary {
-  color: #fca5a5;
+  color: var(--danger);
   margin-bottom: var(--space-3);
 }
 
@@ -6330,8 +6317,8 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   padding: var(--space-2) var(--space-4);
   min-height: 44px;
   flex: none;
-  border-bottom: 1px solid var(--line, #303b40);
-  background: var(--surface, #171d20);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
 }
 .module-appbar-title {
   display: flex;
@@ -6339,7 +6326,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   gap: var(--space-2);
   min-width: 0;
   font-weight: 700;
-  color: var(--text, #eef4f6);
+  color: var(--text);
 }
 .module-appbar-title > span:last-of-type {
   overflow: hidden;
@@ -6351,7 +6338,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   width: 18px;
   height: 18px;
   flex: none;
-  color: var(--accent, #6cb8aa);
+  color: var(--accent);
 }
 .module-appbar-icon svg { width: 100%; height: 100%; }
 .module-appbar-actions { display: flex; align-items: center; gap: var(--space-2); flex: none; }
@@ -6362,13 +6349,13 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   width: 30px;
   height: 30px;
   padding: 0;
-  border: 1px solid var(--line, #303b40);
+  border: 1px solid var(--line);
   border-radius: 8px;
   background: transparent;
-  color: var(--muted, #9aa8ae);
+  color: var(--muted);
   cursor: pointer;
 }
-.module-appbar-button:hover { color: var(--text, #eef4f6); border-color: var(--accent, #6cb8aa); }
+.module-appbar-button:hover { color: var(--text); border-color: var(--accent); }
 .module-appbar-button svg {
   width: 16px;
   height: 16px;
@@ -6390,7 +6377,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   inset: 0;
   overflow: hidden;
   padding: var(--space-3);
-  background: var(--bg, #101416);
+  background: var(--bg);
   pointer-events: none;
   z-index: 4;
 }
@@ -6407,7 +6394,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
 }
 .module-loading-shadow :is(h1, h2, h3, h4, h5, p, span, a, b, strong, li, button,
   label, td, th, input, textarea, select, img, svg, .mls-head, .mls-row, .mls-icon, .mls-icon-label) {
-  background-color: color-mix(in srgb, var(--surface-2, #20282c) 78%, var(--text, #eef4f6) 7%) !important;
+  background-color: color-mix(in srgb, var(--surface-2) 78%, var(--text) 7%) !important;
   border-radius: 6px !important;
   position: relative;
   overflow: hidden;
@@ -6418,7 +6405,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   position: absolute;
   inset: 0;
   background: linear-gradient(90deg, transparent 0%,
-    color-mix(in srgb, var(--text, #eef4f6) 12%, transparent) 50%, transparent 100%);
+    color-mix(in srgb, var(--text) 12%, transparent) 50%, transparent 100%);
   transform: translateX(-100%);
   animation: ctox-mls-shimmer 1.4s ease-in-out infinite;
 }
@@ -6434,9 +6421,9 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   height: 100%;
 }
 .module-loading-shadow-pane {
-  border: 1px solid var(--line, #303b40);
+  border: 1px solid var(--line);
   border-radius: 14px;
-  background: var(--surface, #171d20);
+  background: var(--surface);
   padding: var(--space-4);
   min-height: 0;
   overflow: hidden;
@@ -6489,10 +6476,10 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   align-items: center;
   gap: 2px;
   text-align: center;
-  color: var(--muted, #9aa8ae);
+  color: var(--muted);
   pointer-events: none;
 }
-.module-loading-note strong { color: var(--text, #eef4f6); font-size: var(--fs-base); }
+.module-loading-note strong { color: var(--text); font-size: var(--fs-base); }
 .module-loading-note span { font-size: var(--fs-sm); }
 .module-loading-shadow:not(.is-pending) ~ .module-loading-note { opacity: 0 !important; animation: none !important; }
 
@@ -6523,7 +6510,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   transform: translateX(-50%);
   width: 2px;
   border-radius: 2px;
-  background: var(--line, #303b40);
+  background: var(--line);
   transition: background var(--motion-fast) var(--ease-standard), width var(--motion-fast) var(--ease-standard);
 }
 .ctox-column-resizer:hover::before,
@@ -6558,7 +6545,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   transform: translateY(-50%);
   height: 2px;
   border-radius: 2px;
-  background: var(--line, #303b40);
+  background: var(--line);
   transition: background var(--motion-fast) var(--ease-standard), height var(--motion-fast) var(--ease-standard);
 }
 .ctox-row-resizer:hover::before,
@@ -6743,7 +6730,7 @@ button.shell-window-header-meta:focus-visible,
 .shell-window-header-meta[data-state="preview"],
 .shell-window-header-meta[data-state="private"],
 .shell-window-header-meta[data-state="restricted"] {
-  color: var(--warning, #d8a657);
+  color: var(--warning);
 }
 
 /* The version chip is read-mostly metadata: no frame, mono digits, one step
@@ -7485,7 +7472,7 @@ button.shell-window-header-meta:focus-visible,
   ) !important;
   border-bottom: 1px solid var(--hairline, var(--line)) !important;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.75),
+    inset 0 1px 0 var(--chrome-edge-header),
     inset 0 -1px 0 color-mix(in srgb, var(--bg) 26%, transparent) !important;
 }
 
@@ -7496,7 +7483,7 @@ button.shell-window-header-meta:focus-visible,
     color-mix(in srgb, var(--surface-2) 58%, var(--surface)) 100%
   ) !important;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    inset 0 1px 0 var(--chrome-edge-header-focus),
     inset 0 -1px 0 color-mix(in srgb, var(--accent) 20%, transparent) !important;
 }
 
@@ -7574,7 +7561,7 @@ button.shell-window-header-meta:focus-visible,
   backdrop-filter: blur(24px) saturate(180%) !important;
   -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    inset 0 1px 0 var(--chrome-edge-island),
     0 10px 28px color-mix(in srgb, var(--bg) 22%, transparent),
     0 2px 8px color-mix(in srgb, var(--bg) 10%, transparent) !important;
 }
@@ -7618,7 +7605,7 @@ button.shell-window-header-meta:focus-visible,
   color: var(--accent);
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent),
-    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    inset 0 1px 0 var(--chrome-edge-inset),
     0 3px 10px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
@@ -7635,11 +7622,11 @@ button.shell-window-header-meta:focus-visible,
   box-shadow:
     0 28px 72px rgba(0, 0, 0, 0.2),
     0 4px 14px rgba(0, 0, 0, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+    inset 0 1px 0 var(--chrome-edge-inset);
 }
 
-/* Dark theme: the white inner light edges above are calibrated for light
-   surfaces; on dark chrome they drop to a whisper, the glass tints deepen,
+/* Dark theme: the inner light edges above come from --chrome-edge-*, which
+   drops them to a whisper on dark surfaces; below, the glass tints deepen,
    shadows grow, and the focused window's accent aura gains presence. */
 :root[data-shell-style="ctox"][data-theme="dark"] .shell-window::before {
   background: color-mix(in srgb, var(--shell-desktop-bg) 32%, transparent);
@@ -7659,23 +7646,10 @@ button.shell-window-header-meta:focus-visible,
     0 0 56px color-mix(in srgb, var(--accent) 14%, transparent) !important;
 }
 
-:root[data-shell-style="ctox"][data-theme="dark"] .shell-window-header {
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.35) !important;
-}
-
-:root[data-shell-style="ctox"][data-theme="dark"] .shell-window.is-focused .shell-window-header {
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    inset 0 -1px 0 color-mix(in srgb, var(--accent) 26%, transparent) !important;
-}
-
 :root[data-shell-style="ctox"][data-theme="dark"] .topbar {
   background: color-mix(in srgb, var(--shell-topbar-bg) 50%, transparent) !important;
   border-color: color-mix(in srgb, var(--line) 42%, transparent) !important;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.07),
     0 12px 32px rgba(0, 0, 0, 0.38),
     0 2px 8px rgba(0, 0, 0, 0.24) !important;
 }
@@ -7687,7 +7661,6 @@ button.shell-window-header-meta:focus-visible,
 :root[data-shell-style="ctox"][data-theme="dark"] .module-tab[aria-current="page"] {
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
     0 3px 12px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
@@ -7695,8 +7668,7 @@ button.shell-window-header-meta:focus-visible,
   background: color-mix(in srgb, var(--surface) 68%, transparent);
   box-shadow:
     0 28px 72px rgba(0, 0, 0, 0.56),
-    0 4px 14px rgba(0, 0, 0, 0.3),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    0 4px 14px rgba(0, 0, 0, 0.3);
 }
 
 /* Reduced motion is handled once by the global prefers-reduced-motion
@@ -7726,7 +7698,7 @@ button.shell-window-header-meta:focus-visible,
 .ctox-record-approval-copy span { font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .ctox-record-approval-actions { display: flex; gap: var(--space-1); flex: 0 0 auto; }
 .ctox-record-approval-actions .is-confirm { color: var(--accent); }
-.ctox-record-approval-actions .is-danger { color: var(--danger, #e5484d); }
+.ctox-record-approval-actions .is-danger { color: var(--danger); }
 
 
 /* Threads attention badge on the taskbar tab: "N brauchen mich". Hidden at
