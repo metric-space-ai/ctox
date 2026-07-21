@@ -113,6 +113,28 @@ test('systematic research pins every write to one immutable run and command', ()
   assert.match(targetedSource, /id: researchRunId/);
 });
 
+test('systematic research command context references knowledge tables without embedding rows', () => {
+  const refs = hooks.compactKnowledgeTableReferences([
+    {
+      id: 'table:source_catalog',
+      table_key: 'source_catalog',
+      domain: 'drone_bearing_design_verified',
+      knowledge_version_id: 'knowledge-v2',
+      rows: Array.from({ length: 68 }, (_, index) => ({ index, body: 'x'.repeat(10_000) })),
+    },
+  ]);
+
+  assert.deepEqual(refs, [{
+    id: 'table:source_catalog',
+    table_key: 'source_catalog',
+    domain: 'drone_bearing_design_verified',
+    row_count: 68,
+    knowledge_version_id: 'knowledge-v2',
+  }]);
+  assert.doesNotMatch(researchSource, /knowledge_tables:\s*base\?\.tables/);
+  assert.match(researchSource, /knowledge_table_refs:\s*knowledgeTableRefs/);
+});
+
 test('systematic research keeps discovery candidates out of the verified source registry', () => {
   assert.match(researchSource, /source_candidates:\s*\{\s*title: 'Discovery Candidates'/);
   assert.match(researchSource, /source_catalog:\s*\{\s*title: 'Verified Source Registry'/);

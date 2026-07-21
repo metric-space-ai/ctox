@@ -174,6 +174,32 @@ test('command bus rejects conflicting legacy and canonical command types', async
   );
 });
 
+test('command bus rejects an unsynchronizable command before inserting it', async () => {
+  let inserted = false;
+  const bus = createCommandBus({
+    db: {
+      raw: {
+        business_commands: {
+          async insert() { inserted = true; },
+        },
+      },
+    },
+  });
+
+  await assert.rejects(
+    bus.submit({
+      id: 'cmd-oversized',
+      module: 'research',
+      command_type: 'research.systematic.run',
+      client_context: { embedded_rows: 'x'.repeat(6 * 1024 * 1024) },
+    }),
+    (error) => error?.code === 'command_payload_too_large'
+      && error?.retryable === false
+      && error?.size_bytes > error?.max_bytes,
+  );
+  assert.equal(inserted, false);
+});
+
 test('command bus returns direct control-command result after projection pull', async () => {
   let stored = null;
   const collection = {

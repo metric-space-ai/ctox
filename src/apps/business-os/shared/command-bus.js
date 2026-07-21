@@ -11,6 +11,7 @@ const COMMAND_SYNC_FLUSH_TIMEOUT_MS = 15000;
 const COMMAND_FOLLOWER_SYNC_FLUSH_TIMEOUT_MS = 45000;
 const COMMAND_CAPABILITY_TIMEOUT_MS = 5000;
 const COMMAND_CAPABILITY_NEGATIVE_CACHE_MS = 10000;
+const MAX_COMMAND_DOCUMENT_BYTES = 6 * 1024 * 1024;
 const MAX_SIMULTANEOUS_COMMAND_WATCHERS = 128;
 let activeCommandWatcherCount = 0;
 const DEMAND_ONLY_SYNC_COLLECTIONS = new Set([
@@ -234,6 +235,7 @@ async function submitRxdbCommand({ db, sync, session, command }) {
     resolveActorContext(command, session),
     capabilityToken,
   );
+  assertCommandDocumentTransportBudget(doc, commandId);
   const currentDb = await resolveCommandDb(db);
   emitCommandLifecycle(commandId, command.command_type || command.type, 'database_resolved', submitStartedAt);
   const collection = currentDb?.raw?.business_commands;
@@ -259,6 +261,19 @@ async function submitRxdbCommand({ db, sync, session, command }) {
   } finally {
     await releaseSyncPlan(syncPlan);
   }
+}
+
+export function assertCommandDocumentTransportBudget(doc, commandId = '') {
+  const serializedBytes = new TextEncoder().encode(JSON.stringify(doc)).byteLength;
+  if (serializedBytes <= MAX_COMMAND_DOCUMENT_BYTES) return serializedBytes;
+  const error = commandError(
+    commandId,
+    `Der Auftrag ist mit ${serializedBytes} Bytes zu gross fuer den CTOX Sync. Uebergib grosse Daten als Files oder persistierte Datensaetze und referenziere nur deren IDs.`,
+    { code: 'command_payload_too_large', retryable: false },
+  );
+  error.size_bytes = serializedBytes;
+  error.max_bytes = MAX_COMMAND_DOCUMENT_BYTES;
+  throw error;
 }
 
 function emitCommandLifecycle(commandId, commandType, phase, startedAt = 0) {

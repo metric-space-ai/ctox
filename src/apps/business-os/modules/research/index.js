@@ -7,7 +7,7 @@ import {
   sliceResearchGraphProjection,
 } from './research-graph-data.mjs';
 
-const BUILD = '20260720-source-candidate-separation-v1';
+const BUILD = '20260721-command-reference-context-v2';
 const DEFAULT_AXIS_X = 'evidence_strength';
 const DEFAULT_AXIS_Y = 'topic_fit';
 const ROW_LIMIT = 5000;
@@ -3666,6 +3666,7 @@ async function runSelectedResearch() {
   const missingTables = Object.keys(tableContract).filter((key) => !existingTables.has(key));
   const candidateTable = tableForKey(base, task.candidate_catalog_key || 'source_candidates');
   const candidateRows = candidateTable ? await fetchTableRows(candidateTable.id) : [];
+  const knowledgeTableRefs = compactKnowledgeTableReferences(base?.tables || []);
   const verifiedSourceUrls = sourceUrlsFromRows((state.sourceModels || [])
     .filter((source) => source.evidenceEligible)
     .map((source) => source.row));
@@ -3769,7 +3770,7 @@ async function runSelectedResearch() {
         knowledge_domain: task.knowledge_domain,
         research_run_id: researchRunId,
         research_command_id: commandId,
-        knowledge_tables: base?.tables || [],
+        knowledge_table_refs: knowledgeTableRefs,
       },
   });
   const result = {
@@ -3804,6 +3805,16 @@ async function runSelectedResearch() {
   });
   setStatus(state.t('researchChatQueued', 'Research-Aufgabe im Chat gestartet.'));
   render();
+}
+
+function compactKnowledgeTableReferences(tables = []) {
+  return (tables || []).slice(0, 100).map((table) => ({
+    id: String(table?.id || ''),
+    table_key: String(table?.table_key || table?.key || ''),
+    domain: String(table?.domain || table?.knowledge_domain || ''),
+    row_count: Number(table?.row_count ?? table?.total_rows ?? table?.rows?.length ?? 0),
+    knowledge_version_id: String(table?.knowledge_version_id || table?.knowledge_version?.version_id || ''),
+  }));
 }
 
 function sourceUrlsFromRows(rows = []) {
@@ -5411,6 +5422,7 @@ export const __researchTestHooks = {
   mergeKnowledgeTableChunks,
   knowledgeLineageForPayload,
   knowledgeRefreshPayload,
+  compactKnowledgeTableReferences,
   graphDocumentLineage,
   latestEvidenceRunForTask,
   researchScoringContract,
