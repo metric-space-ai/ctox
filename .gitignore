@@ -84,3 +84,4 @@ tmp_intersolar_*.js
 !/docs/pilot-monitoring.md
 !/docs/harness-operating-model.md
 !/docs/ctox-office-port-plan.md
+src/apps/business-os-desktop/resources/ctox/
