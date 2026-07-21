@@ -2968,6 +2968,7 @@ pub fn list_stalled_inbound_messages(
             r.lease_owner,
             r.leased_at,
             r.acked_at,
+            r.last_error,
             COALESCE(r.updated_at, m.observed_at)
         FROM communication_messages m
         JOIN communication_routing_state r ON r.message_key = m.message_key
@@ -3027,6 +3028,7 @@ pub fn list_unreviewed_handled_inbound_messages(
             r.lease_owner,
             r.leased_at,
             r.acked_at,
+            r.last_error,
             COALESCE(r.updated_at, m.observed_at)
         FROM communication_messages m
         JOIN communication_routing_state r ON r.message_key = m.message_key
@@ -6659,6 +6661,7 @@ struct RoutingView {
     lease_owner: Option<String>,
     leased_at: Option<String>,
     acked_at: Option<String>,
+    last_error: Option<String>,
     updated_at: String,
 }
 
@@ -7417,6 +7420,7 @@ fn load_message_from_conn(
             r.lease_owner,
             r.leased_at,
             r.acked_at,
+            r.last_error,
             COALESCE(r.updated_at, m.observed_at)
         FROM communication_messages m
         LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
@@ -11945,6 +11949,7 @@ fn list_messages(
             r.lease_owner,
             r.leased_at,
             r.acked_at,
+            r.last_error,
             COALESCE(r.updated_at, m.observed_at)
         FROM communication_messages m
         LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
@@ -11976,6 +11981,7 @@ fn list_messages(
             r.lease_owner,
             r.leased_at,
             r.acked_at,
+            r.last_error,
             COALESCE(r.updated_at, m.observed_at)
         FROM communication_messages m
         LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
@@ -12022,6 +12028,7 @@ fn list_thread_messages(
             r.lease_owner,
             r.leased_at,
             r.acked_at,
+            r.last_error,
             COALESCE(r.updated_at, m.observed_at)
         FROM communication_messages m
         LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
@@ -12070,6 +12077,7 @@ fn search_messages(
             r.lease_owner,
             r.leased_at,
             r.acked_at,
+            r.last_error,
             COALESCE(r.updated_at, m.observed_at)
         FROM communication_messages m
         LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
@@ -12269,7 +12277,8 @@ fn map_channel_message_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChannelM
             lease_owner: row.get(18)?,
             leased_at: row.get(19)?,
             acked_at: row.get(20)?,
-            updated_at: row.get(21)?,
+            last_error: row.get(21)?,
+            updated_at: row.get(22)?,
         },
     })
 }
@@ -12324,6 +12333,7 @@ fn list_queue_tasks_from_conn(conn: &Connection, limit: usize) -> Result<Vec<Que
             r.lease_owner,
             r.leased_at,
             r.acked_at,
+            r.last_error,
             COALESCE(r.updated_at, m.observed_at)
         FROM communication_messages m
         LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
@@ -12388,6 +12398,7 @@ fn list_queue_tasks_from_conn_with_statuses(
             r.lease_owner,
             r.leased_at,
             r.acked_at,
+            r.last_error,
             COALESCE(r.updated_at, m.observed_at)
         FROM communication_messages m
         LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
@@ -12475,6 +12486,7 @@ fn load_queue_message_from_conn(
             r.lease_owner,
             r.leased_at,
             r.acked_at,
+            r.last_error,
             COALESCE(r.updated_at, m.observed_at)
         FROM communication_messages m
         LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
@@ -12536,6 +12548,7 @@ pub(crate) fn load_queue_tasks_by_message_key_from_conn(
                 r.lease_owner,
                 r.leased_at,
                 r.acked_at,
+                r.last_error,
                 COALESCE(r.updated_at, m.observed_at)
             FROM communication_messages m
             LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
@@ -12585,6 +12598,7 @@ fn load_queue_task_for_business_os_command_from_conn(
             r.lease_owner,
             r.leased_at,
             r.acked_at,
+            r.last_error,
             COALESCE(r.updated_at, m.observed_at)
         FROM communication_messages m
         LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
@@ -12657,10 +12671,16 @@ fn queue_task_from_message(message: ChannelMessageView) -> Result<QueueTaskView>
             .map(ToOwned::to_owned),
         route_status: message.routing.route_status,
         status_note: message
-            .metadata
-            .get("status_note")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
+            .routing
+            .last_error
+            .filter(|_| message.routing.route_status == "failed")
+            .or_else(|| {
+                message
+                    .metadata
+                    .get("status_note")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            }),
         lease_owner: message.routing.lease_owner,
         leased_at: message.routing.leased_at,
         acked_at: message.routing.acked_at,
@@ -15451,6 +15471,13 @@ mod tests {
         assert_eq!(route_status, "failed");
         assert_eq!(
             last_error.as_deref(),
+            Some("worker execution failed before completion review")
+        );
+        let reloaded = load_queue_task(&root, &task.message_key)
+            .expect("failed to reload failed queue task")
+            .expect("failed queue task should remain inspectable");
+        assert_eq!(
+            reloaded.status_note.as_deref(),
             Some("worker execution failed before completion review")
         );
 
