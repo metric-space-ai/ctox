@@ -1,73 +1,99 @@
-/* nachweise/index.css — module-specific styling on top of shared/base.css.
-   Frame, pane, header, subtitle, body, compact form/fields, inputs, buttons,
-   badges, status line, record list, callout and empty state all come from
-   the kit (.ctox-record-workbench, .ctox-compact-form, .ctox-input/.ctox-select,
-   .ctox-button, .ctox-badge, .ctox-callout, .ctox-empty). Only the rich
-   record rows and the gate-callout detail content live here. */
+/* nachweise/index.css — module-specific layer on top of shared/base.css.
+   The workspace frame, panes, canonical column grammar (filterbar, view
+   toggle, filter tray, counted band, .ctox-well, .ctox-pane-footer), list,
+   cards, badges, form controls, callout and empty state all come from the kit
+   (base.css) and are wired by the shell. This file only pins the pane grid
+   tracks/rows and styles the genuinely nachweise-specific bits: the shard
+   selector rows, the auto-reveal detail card, and the gate result rows. */
+
+/* Default track width for the shell-owned resizer (it writes inline
+   --ctox-left-width onto the frame while dragging). */
+.nachweise-module { --ctox-left-width: 320px; }
+
+/* Explicit column pins so the center pane never slides onto the resizer track
+   when the kit hides resizers on narrow windows. Pane grid rows:
+   auto [band] minmax(0,1fr) [well] auto [footer]. */
+.nachweise-rail { grid-column: 1; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.nachweise-module > [data-resizer="left"] { grid-column: 2; }
+.nachweise-main { grid-column: 3; grid-template-rows: auto minmax(0, 1fr); }
+
+/* Main workbench: header subtitle + scroll rhythm. */
+.nachweise-main .nachweise-sub { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+.nachweise-workbench {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
 
 /* Einsatz-Gate and Entleiher-Sign-off are rare server-command actions: hidden
    by default (is-actions-hidden on root), revealed on demand via the header
    toggle [data-toggle-actions] — threads' / consent's idiom. All form hooks
    stay intact; only visibility changes. */
-.ats-nachweise.is-actions-hidden [data-ats-advanced] { display: none; }
-.ats-nachweise [data-toggle-actions][aria-pressed="true"] { color: var(--accent); }
+.nachweise-module.is-actions-hidden [data-ats-advanced] { display: none; }
+.nachweise-main [data-toggle-actions][aria-pressed="true"] { color: var(--accent); }
 
-/* Detail lines inside the gate callout (sign-off result summary). */
-.ats-nachweise .ats-result-row {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-/* Blocker list inside the gate callout (deployment check / sign-off). */
-.ats-nachweise .ats-blockers {
-  margin: 6px 0 0;
-  padding-left: 18px;
-}
-
-.ats-nachweise .ats-blockers li {
-  font-size: 12px;
-  margin: 2px 0;
-}
-
-/* custom: rich record rows — credential title + subject, a meta line, and a
-   trailing side cluster (status badges + deployment-check action). Richer
-   than .ctox-list-item, so they stay module-owned (on kit tokens/radii). */
-.ats-nachweise .ats-item {
-  padding: 8px 12px;
-  border: 1px solid var(--hairline, var(--line));
-  border-radius: var(--panel-radius);
-  margin-bottom: 6px;
-  background: var(--surface);
-}
-
-.ats-nachweise .ats-item--rich {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 4px 12px;
+/* Auto-reveal detail readout for the selected credential. */
+.nachweise-detail { margin: 0; }
+.nachweise-detail-head {
+  display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
 }
+.nachweise-detail-titles { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.nachweise-detail-actions { display: flex; align-items: center; gap: 4px; }
+.nachweise-detail-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-strong);
+}
+.nachweise-detail .ats-tag { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); }
 
-.ats-nachweise .ats-item-main {
+/* Shard / compact selector rows (both are the kit .ctox-list-item button). */
+.nachweise-row { display: grid; gap: 4px; }
+.nachweise-row--list {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.nachweise-row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.nachweise-row-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
 }
+.nachweise-row-meta { color: var(--muted); font-size: 11px; }
 
-.ats-nachweise .ats-item-main .ats-item-sub {
-  font-weight: 400;
-  color: var(--muted);
-}
+/* The kit callout has no :empty collapse; the gate starts empty and is cleared
+   between runs, so hide it until JS fills it. */
+.nachweise-main .ctox-callout:empty { display: none; }
 
-.ats-nachweise .ats-item-meta {
-  grid-column: 1 / 2;
-  font-size: 12px;
-  color: var(--muted);
-}
+/* custom: result rows and blocker list inside the gate callout — the kit has
+   no list-in-callout component. */
+.nachweise-main .ats-result-row { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.nachweise-main .ats-blockers { margin: 6px 0 0; padding-left: 18px; }
+.nachweise-main .ats-blockers li { font-size: 12px; margin: 2px 0; }
 
-.ats-nachweise .ats-item-side {
-  grid-column: 2 / 3;
-  grid-row: 1 / 3;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
+/* Narrow windows: stack the two panes and drop the resizer. */
+@container business-app-window (max-width: 760px) {
+  .nachweise-module {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(200px, 40vh) minmax(320px, 1fr);
+    height: auto;
+    min-height: 100%;
+    overflow-y: auto;
+    gap: 8px;
+  }
+  .nachweise-module > [data-resizer] { display: none !important; }
+  .nachweise-rail { grid-column: 1; }
+  .nachweise-main { grid-column: 1; }
 }
