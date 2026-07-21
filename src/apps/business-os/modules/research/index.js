@@ -41,7 +41,7 @@ const RESEARCH_OPTIONAL_COLLECTIONS = Object.freeze([
 const RESEARCH_DEMAND_ONLY_COLLECTIONS = new Set(['document_blob_chunks']);
 const STOP_TERMS = new Set(['eine', 'einen', 'einer', 'eines', 'und', 'oder', 'auf', 'basis', 'nutze', 'score', 'quellen', 'source', 'sources', 'dashboard', 'research', 'knowledge', 'base', 'table', 'data', 'fuer', 'from', 'with', 'that', 'this', 'the']);
 const RECEIPT_URL_ROLES = new Set(['original_content', 'original_data', 'publisher_full_text', 'dataset_archive']);
-const RECEIPT_CONTENT_SCOPES = new Set(['full_text', 'original_data', 'full_dataset', 'dataset_archive']);
+const RECEIPT_CONTENT_SCOPES = new Set(['full_text', 'original_data', 'data_file', 'full_dataset', 'dataset_archive']);
 
 const BASE_AXES = Object.freeze([
   { id: 'evidence_strength', label: 'Evidence strength' },
