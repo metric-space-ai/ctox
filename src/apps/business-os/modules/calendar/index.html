@@ -1,6 +1,13 @@
-<main class="ctox-workspace calendar-app is-right-hidden" data-calendar-root data-resize-frame>
-  <!-- LEFT PANEL: Calendars List & Booking Pages -->
-  <aside class="ctox-pane ctox-pane--glass" id="calendar-left">
+<main class="ctox-workspace calendar-app is-context-hidden" data-calendar-root data-resize-frame>
+  <!-- LEFT = calendars + booking pages. Canonical column grammar, SHELL-wired
+       via data-pg-*: title + collected header icons (Neu / Import / Export) →
+       filterbar (search + shard/list toggle + collapsed filter tray with
+       reset + active-dot) → counted view band (Kalender / Buchungsseiten,
+       zeros included) → recessed well → one-line footer. The module writes NO
+       chrome CSS/JS; it re-renders on the bubbling ctox-pane-grammar-change
+       event and writes counts/footer via pane.__ctoxPaneGrammar (null-guarded)
+       or plain textContent. -->
+  <aside class="ctox-pane calendar-left" id="calendar-left" aria-label="Kalender und Buchungsseiten">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
@@ -8,44 +15,60 @@
           <h2 class="ctox-pane-title" data-t="myCalendars">Meine Kalender</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button class="ctox-pane-icon" id="addNewCalendarBtn" type="button" title="Kalender hinzufügen" aria-label="Kalender hinzufügen">
+          <button type="button" class="ctox-pane-icon" id="btnLeftNew" data-t-title="newRecord" data-t-aria="newRecord" title="Neu" aria-label="Neu">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <button type="button" class="ctox-pane-icon" data-action="import" data-t-title="import" data-t-aria="import" title="Importieren" aria-label="Importieren">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg>
+          </button>
+          <button type="button" class="ctox-pane-icon" data-action="export" data-t-title="export" data-t-aria="export" title="Exportieren" aria-label="Exportieren">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21V9M12 9l-4 4M12 9l4 4M5 3h14"/></svg>
           </button>
         </div>
       </div>
-    </header>
-
-    <div class="ctox-pane-body">
-      <div class="ctox-pane-scroll os-scrollbar">
-        <div class="calendar-sidebar-section">
-          <div id="calendarListContainer">
-            <!-- Dynamic Calendars List -->
-          </div>
+      <div class="ctox-filterbar">
+        <input class="ctox-pane-search" type="search" data-pg-search data-t-placeholder="searchPlaceholder" placeholder="Suchen..." aria-label="Kalender und Buchungsseiten suchen" />
+        <div class="ctox-view-toggle" role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
         </div>
-
-        <hr class="calendar-separator" />
-
-        <!-- Booking Links / Pages section -->
-        <div class="calendar-sidebar-section">
-          <div class="calendar-section-title-bar">
-            <span class="ctox-field-label" data-t="bookingPages">Buchungsseiten</span>
-            <button class="ctox-pane-icon" id="addBookingPageBtn" type="button" title="Buchungsseite hinzufügen" aria-label="Buchungsseite hinzufügen">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-            </button>
-          </div>
-          <div id="bookingPagesListContainer">
-            <!-- Dynamic Booking Links -->
-          </div>
+        <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="ctox-filter-tray" data-pg-tray hidden>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" data-pg-filter data-pg-name="status" data-pg-default="all" data-calendar-status-filter aria-label="Status filtern">
+            <option value="all" data-t="allStatus">Alle</option>
+            <option value="active" data-t="active">Aktiv / Sichtbar</option>
+            <option value="inactive" data-t="inactive">Inaktiv / Ausgeblendet</option>
+          </select>
+          <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
         </div>
       </div>
+    </header>
+    <nav class="ctox-view-switch" data-calendar-left-band aria-label="Kalender oder Buchungsseiten">
+      <div class="ctox-pane-tabs">
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="calendars" aria-selected="true"><span data-t="calendars">Kalender</span><span class="view-count" data-pg-count="calendars"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="pages" aria-selected="false"><span data-t="bookingPages">Buchungsseiten</span><span class="view-count" data-pg-count="pages"></span></button>
+      </div>
+    </nav>
+    <div class="ctox-pane-body ctox-well calendar-left-body">
+      <div class="ctox-list calendar-left-list" data-calendar-left-list></div>
+      <div class="ctox-empty calendar-left-empty" data-calendar-left-empty hidden>
+        <strong data-empty-title>Keine Einträge</strong>
+        <span data-empty-body>Lege einen Kalender oder eine Buchungsseite an.</span>
+      </div>
     </div>
+    <footer class="ctox-pane-footer"><span data-pg-footer data-calendar-left-footer></span></footer>
   </aside>
 
   <!-- LEFT RESIZER (shell-global, app.js setupModuleResizers) -->
   <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="250" data-resizer-max="450" aria-label="Linke Spaltenbreite anpassen"></button>
 
-  <!-- CENTER PANEL: EventCalendar View -->
-  <section class="ctox-pane" id="calendar-center">
+  <!-- CENTER = the EventCalendar surface. Its counted band is the Monat / Woche
+       / Tag view switch (module-wired: it drives the calendar engine, not a
+       list selection). The calendar engine and one-click book/claim/release
+       flows are unchanged. -->
+  <section class="ctox-pane calendar-center" id="calendar-center" aria-label="Kalenderansicht">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
@@ -67,12 +90,20 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
             </button>
           </div>
-          <button class="ctox-pane-icon calendar-toggle-right" data-toggle-right type="button" title="Buchungen einblenden" aria-label="Buchungen einblenden" aria-pressed="false">
+          <button class="ctox-pane-icon calendar-toggle-context" data-calendar-toggle-context type="button" title="Buchungen einblenden" aria-label="Buchungen einblenden" aria-pressed="false">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
           </button>
         </div>
       </div>
     </header>
+
+    <nav class="ctox-view-switch calendar-view-band" data-calendar-view-band aria-label="Zeitraum">
+      <div class="ctox-pane-tabs">
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-calendar-view="month" aria-selected="true"><span data-t="month">Monat</span><span class="view-count" data-count-view-month></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-calendar-view="week" aria-selected="false"><span data-t="week">Woche</span><span class="view-count" data-count-view-week></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-calendar-view="day" aria-selected="false"><span data-t="day">Tag</span><span class="view-count" data-count-view-day></span></button>
+      </div>
+    </nav>
 
     <!-- EventCalendar Mount Point -->
     <div class="calendar-grid-container">
@@ -81,42 +112,44 @@
   </section>
 
   <!-- RIGHT RESIZER (shell-global, app.js setupModuleResizers) -->
-  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="200" data-resizer-max="400" aria-label="Rechte Spaltenbreite anpassen"></button>
+  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="240" data-resizer-max="420" aria-label="Rechte Spaltenbreite anpassen"></button>
 
-  <!-- RIGHT PANEL: Bookings & Active Holds Auditing -->
-  <aside class="ctox-pane" id="calendar-right">
+  <!-- THIRD = bookings & holds context for the selected booking page. Hidden by
+       default; auto-reveals on selection (visible = hasSelection &&
+       !userCollapsed) and can be re-collapsed from the center header toggle. -->
+  <aside class="ctox-pane calendar-right" id="calendar-right" aria-label="Buchungen und Holds" data-right-content>
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <h2 class="ctox-pane-title" data-t="bookings">Buchungen</h2>
+          <span class="ctox-pane-kicker" data-t="bookings">Buchungen</span>
+          <h2 class="ctox-pane-title" data-calendar-context-title data-t="bookingContextTitle">Kontext</h2>
         </div>
       </div>
     </header>
-
     <div class="ctox-pane-body">
       <div class="ctox-pane-scroll os-scrollbar">
-        <div id="bookingContext" class="calendar-sidebar-section" aria-live="polite"></div>
-        <!-- Active Holds -->
-        <div class="calendar-sidebar-section">
-          <div class="calendar-section-title-bar">
-            <span class="ctox-field-label">Temporäre Holds</span>
-          </div>
-          <div id="bookingHoldsList">
-            <!-- Dynamic Holds -->
-            <div class="ctox-empty">Keine aktiven Holds.</div>
-          </div>
+        <div class="ctox-empty calendar-context-empty" data-calendar-context-empty>
+          <strong data-context-empty-title>Keine Buchungsseite gewählt</strong>
+          <span data-context-empty-body>Wähle links eine Buchungsseite, um Holds und Buchungen zu sehen.</span>
         </div>
-
-        <hr class="calendar-separator" />
-
-        <!-- Confirmed Bookings -->
-        <div class="calendar-sidebar-section">
-          <div class="calendar-section-title-bar">
-            <span class="ctox-field-label">Bestätigte Buchungen</span>
+        <div class="calendar-context-detail" data-calendar-context-detail hidden>
+          <div id="bookingContext" class="calendar-sidebar-section" aria-live="polite"></div>
+          <div class="calendar-sidebar-section">
+            <div class="calendar-section-title-bar">
+              <span class="ctox-field-label" data-t="bookingHolds">Temporäre Holds</span>
+            </div>
+            <div id="bookingHoldsList">
+              <div class="ctox-empty">Keine aktiven Holds.</div>
+            </div>
           </div>
-          <div id="bookingsList">
-            <!-- Dynamic Bookings -->
-            <div class="ctox-empty">Keine bestätigten Buchungen.</div>
+          <hr class="calendar-separator" />
+          <div class="calendar-sidebar-section">
+            <div class="calendar-section-title-bar">
+              <span class="ctox-field-label" data-t="confirmedBookings">Bestätigte Buchungen</span>
+            </div>
+            <div id="bookingsList">
+              <div class="ctox-empty">Keine bestätigten Buchungen.</div>
+            </div>
           </div>
         </div>
       </div>

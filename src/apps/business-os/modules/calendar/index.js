@@ -13,6 +13,13 @@ const CALENDAR_COLLECTIONS = [
   'calendar_bookings',
 ];
 
+// EventCalendar view keys mapped from the Monat/Woche/Tag band.
+const CALENDAR_VIEW_MAP = {
+  month: 'dayGridMonth',
+  week: 'timeGridWeek',
+  day: 'timeGridDay',
+};
+
 const labels = {
   de: {
     calendar: 'Kalender',
@@ -22,15 +29,30 @@ const labels = {
     month: 'Monat',
     list: 'Liste',
     myCalendars: 'Meine Kalender',
-    bookingLinks: 'Buchungslinks',
-    externalSources: 'Externe Quellen',
+    calendars: 'Kalender',
+    bookingPages: 'Buchungsseiten',
+    bookings: 'Buchungen',
+    bookingHolds: 'Temporäre Holds',
+    confirmedBookings: 'Bestätigte Buchungen',
+    bookingContextTitle: 'Kontext',
     newEvent: 'Neuer Termin',
+    newRecord: 'Neu',
     editEvent: 'Termin bearbeiten',
+    import: 'Importieren',
+    export: 'Exportieren',
+    searchPlaceholder: 'Suchen...',
+    allStatus: 'Alle',
+    active: 'Aktiv / Sichtbar',
+    inactive: 'Inaktiv / Ausgeblendet',
     dataReady: 'Daten geladen',
     noDatabase: 'Keine lokale Datenbank verbunden',
+    importInvalid: 'Ungültige JSON-Datei.',
+    importEmpty: 'Keine Kalenderdaten in der Datei.',
+    importUnavailable: 'Import ist gerade nicht möglich (keine Datenbank).',
+    imported: '{count} Datensätze importiert',
     save: 'Speichern',
     delete: 'Löschen',
-    cancel: 'Abbrechen'
+    cancel: 'Abbrechen',
   },
   en: {
     calendar: 'Calendar',
@@ -40,16 +62,31 @@ const labels = {
     month: 'Month',
     list: 'List',
     myCalendars: 'My Calendars',
-    bookingLinks: 'Booking Links',
-    externalSources: 'External Sources',
+    calendars: 'Calendars',
+    bookingPages: 'Booking Pages',
+    bookings: 'Bookings',
+    bookingHolds: 'Temporary Holds',
+    confirmedBookings: 'Confirmed Bookings',
+    bookingContextTitle: 'Context',
     newEvent: 'New Event',
+    newRecord: 'New',
     editEvent: 'Edit Event',
+    import: 'Import',
+    export: 'Export',
+    searchPlaceholder: 'Search...',
+    allStatus: 'All',
+    active: 'Active / Visible',
+    inactive: 'Inactive / Hidden',
     dataReady: 'Data loaded',
     noDatabase: 'No local database connected',
+    importInvalid: 'Invalid JSON file.',
+    importEmpty: 'No calendar data in the file.',
+    importUnavailable: 'Import is unavailable right now (no database).',
+    imported: '{count} records imported',
     save: 'Save',
     delete: 'Delete',
-    cancel: 'Cancel'
-  }
+    cancel: 'Cancel',
+  },
 };
 
 const state = {
@@ -64,21 +101,31 @@ const state = {
   holds: [],
   bookings: [],
 
-  // Active calendar view state
-  activeView: 'timeGridWeek', // dayGridMonth, timeGridWeek, timeGridDay, listWeek
+  // Left grammar column state (SHELL-wired via data-pg-*, mirrored here).
+  leftBand: 'calendars', // 'calendars' | 'pages'
+  search: '',
+  listView: 'cards', // 'cards' | 'list'
+  statusFilter: 'all', // 'all' | 'active' | 'inactive'
+
+  // Active EventCalendar view (month/week/day band).
+  calendarView: 'month',
+  activeView: 'dayGridMonth',
   selectedCalendarIds: new Set(),
+
+  // Third pane (bookings/holds context) — auto-reveal on selection.
+  selectedBookingPageId: null,
+  userCollapsedContext: false,
 
   // Active editing item in Drawer
   editingType: null, // 'event' | 'bookingPage' | 'calendar'
   editingItem: null,
-  selectedBookingPageId: null,
 
   // Subscriptions & Cleanups
   rxSubscriptions: [],
   activeFormSubscription: null,
   calendarViewInstance: null,
   renderTimer: null,
-  domHandlers: null
+  domHandlers: null,
 };
 
 const els = {};
@@ -111,6 +158,16 @@ function isBusinessOsPermissionDenied(error) {
     || error?.name === 'BusinessOsPermissionError';
 }
 
+function notify({ type = 'info', message }) {
+  const notifications = state.ctx?.notifications;
+  const title = state.t('calendar', labels[state.lang].calendar);
+  if (typeof notifications?.show === 'function') {
+    notifications.show({ type, title, message });
+  } else if (typeof notifications?.notify === 'function') {
+    notifications.notify({ title, body: message });
+  }
+}
+
 export async function mount(ctx) {
   state.ctx = ctx;
   state.lang = ctx.locale === 'en' ? 'en' : 'de';
@@ -135,6 +192,10 @@ export async function mount(ctx) {
 
   // Column resizing is declarative: the shell (app.js setupModuleResizers)
   // wires the `.ctox-column-resizer[data-resizer-var]` handles from index.html.
+  // The left column chrome (search / shard-list toggle / filter tray / reset /
+  // active-dot / view band) is SHELL-wired from the data-pg-* markup by
+  // app.js autoWirePaneGrammar; this module owns NO chrome wiring and only
+  // listens for the bubbling `ctox-pane-grammar-change` event to re-render.
 
   // Initialize EventCalendar View Instance
   initCalendarView();
@@ -294,22 +355,33 @@ async function loadModuleMarkup() {
 
 function bindElements(host) {
   els.root = host.querySelector('[data-calendar-root]');
-  els.calendarList = host.querySelector('#calendarListContainer');
-  els.bookingPagesList = host.querySelector('#bookingPagesListContainer');
+
+  // Left grammar column (the band, filter tray and search are SHELL-wired).
+  els.leftList = host.querySelector('[data-calendar-left-list]');
+  els.leftEmpty = host.querySelector('[data-calendar-left-empty]');
+
+  // Center
   els.calendarDataStatus = host.querySelector('#calendarDataStatus');
   els.eventCalendarMount = host.querySelector('#eventCalendarView');
+  els.viewBand = host.querySelector('[data-calendar-view-band]');
 
+  // Third pane (bookings/holds context)
+  els.contextEmpty = host.querySelector('[data-calendar-context-empty]');
+  els.contextDetail = host.querySelector('[data-calendar-context-detail]');
+  els.contextTitle = host.querySelector('[data-calendar-context-title]');
   els.bookingContext = host.querySelector('#bookingContext');
   els.bookingHoldsList = host.querySelector('#bookingHoldsList');
   els.bookingsList = host.querySelector('#bookingsList');
 
   // Buttons
   els.btnNewEvent = host.querySelector('#btnNewEvent');
+  els.btnLeftNew = host.querySelector('#btnLeftNew');
   els.btnPrev = host.querySelector('#prevPeriodBtn');
   els.btnNext = host.querySelector('#nextPeriodBtn');
   els.btnToday = host.querySelector('#todayPeriodBtn');
-  els.btnAddNewCalendar = host.querySelector('#addNewCalendarBtn');
-  els.btnAddBookingPage = host.querySelector('#addBookingPageBtn');
+  els.btnImport = host.querySelector('[data-action="import"]');
+  els.btnExport = host.querySelector('[data-action="export"]');
+  els.toggleContext = host.querySelector('[data-calendar-toggle-context]');
 
   // Drawer / Inspector
   els.drawer = host.querySelector('#calendarInspectorDrawer');
@@ -317,20 +389,33 @@ function bindElements(host) {
   els.drawerTitle = host.querySelector('#drawerTitle');
   els.drawerContent = host.querySelector('#drawerContent');
   els.closeDrawerBtn = host.querySelector('#closeDrawerBtn');
+}
 
-  // Pane visibility toggles
-  els.toggleRight = host.querySelector('[data-toggle-right]');
+function leftPane() {
+  return els.root?.querySelector('.calendar-left') || null;
 }
 
 function wireEvents() {
   state.domHandlers = {
     newEvent: () => openEventForm(),
+    leftNew: () => (state.leftBand === 'pages' ? openBookingPageForm() : openCalendarForm()),
     prev: () => state.calendarViewInstance?.prev(),
     next: () => state.calendarViewInstance?.next(),
     today: () => state.calendarViewInstance?.today(),
-    newCalendar: () => openCalendarForm(),
-    newBookingPage: () => openBookingPageForm(),
-    toggleRight: () => toggleRightPane(),
+    importClick: () => importCalendarData(),
+    exportClick: () => exportCalendarData(),
+    toggleContext: () => {
+      state.userCollapsedContext = !state.userCollapsedContext;
+      applyContextReveal();
+    },
+    grammarChange: (event) => onLeftGrammarChange(event),
+    viewBandClick: (event) => {
+      const tab = event.target?.closest?.('[data-calendar-view]');
+      if (!tab || !els.viewBand?.contains(tab)) return;
+      setCalendarView(tab.dataset.calendarView);
+    },
+    leftListClick: (event) => onLeftListClick(event),
+    leftListChange: (event) => onLeftListChange(event),
     renderedEventClick: (event) => {
       const eventEl = event.target?.closest?.('.ec-event');
       if (!eventEl || !els.eventCalendarMount?.contains(eventEl)) return;
@@ -350,14 +435,23 @@ function wireEvents() {
   };
 
   els.btnNewEvent?.addEventListener('click', state.domHandlers.newEvent);
+  els.btnLeftNew?.addEventListener('click', state.domHandlers.leftNew);
   els.btnPrev?.addEventListener('click', state.domHandlers.prev);
   els.btnNext?.addEventListener('click', state.domHandlers.next);
   els.btnToday?.addEventListener('click', state.domHandlers.today);
-  els.btnAddNewCalendar?.addEventListener('click', state.domHandlers.newCalendar);
-  els.btnAddBookingPage?.addEventListener('click', state.domHandlers.newBookingPage);
-  els.toggleRight?.addEventListener('click', state.domHandlers.toggleRight);
+  els.btnImport?.addEventListener('click', state.domHandlers.importClick);
+  els.btnExport?.addEventListener('click', state.domHandlers.exportClick);
+  els.toggleContext?.addEventListener('click', state.domHandlers.toggleContext);
+  els.viewBand?.addEventListener('click', state.domHandlers.viewBandClick);
+  // Selection / row actions are delegated so the handlers survive every
+  // data-driven list rebuild (selection itself stays an in-place class flip).
+  els.leftList?.addEventListener('click', state.domHandlers.leftListClick);
+  els.leftList?.addEventListener('change', state.domHandlers.leftListChange);
   els.eventCalendarMount?.addEventListener('click', state.domHandlers.renderedEventClick, true);
   els.closeDrawerBtn?.addEventListener('click', state.domHandlers.closeDrawer);
+  // The canonical column grammar reports search/toggle/tray/band changes via a
+  // bubbling CustomEvent from the shell-wired pane.
+  els.root?.addEventListener('ctox-pane-grammar-change', state.domHandlers.grammarChange);
   document.addEventListener('keydown', state.domHandlers.keydown);
 }
 
@@ -365,34 +459,48 @@ function unbindEvents() {
   const handlers = state.domHandlers;
   if (!handlers) return;
   els.btnNewEvent?.removeEventListener('click', handlers.newEvent);
+  els.btnLeftNew?.removeEventListener('click', handlers.leftNew);
   els.btnPrev?.removeEventListener('click', handlers.prev);
   els.btnNext?.removeEventListener('click', handlers.next);
   els.btnToday?.removeEventListener('click', handlers.today);
-  els.btnAddNewCalendar?.removeEventListener('click', handlers.newCalendar);
-  els.btnAddBookingPage?.removeEventListener('click', handlers.newBookingPage);
-  els.toggleRight?.removeEventListener('click', handlers.toggleRight);
+  els.btnImport?.removeEventListener('click', handlers.importClick);
+  els.btnExport?.removeEventListener('click', handlers.exportClick);
+  els.toggleContext?.removeEventListener('click', handlers.toggleContext);
+  els.viewBand?.removeEventListener('click', handlers.viewBandClick);
+  els.leftList?.removeEventListener('click', handlers.leftListClick);
+  els.leftList?.removeEventListener('change', handlers.leftListChange);
   els.eventCalendarMount?.removeEventListener('click', handlers.renderedEventClick, true);
   els.closeDrawerBtn?.removeEventListener('click', handlers.closeDrawer);
+  els.root?.removeEventListener('ctox-pane-grammar-change', handlers.grammarChange);
   document.removeEventListener('keydown', handlers.keydown);
   state.domHandlers = null;
 }
 
-function toggleRightPane() {
-  const root = els.root;
-  const toggle = els.toggleRight;
-  if (!root || !toggle) return;
-  const hidden = root.classList.toggle('is-right-hidden');
-  toggle.setAttribute('aria-pressed', hidden ? 'false' : 'true');
-  toggle.setAttribute(
-    'aria-label',
-    hidden ? 'Buchungen einblenden' : 'Buchungen ausblenden',
-  );
-  toggle.setAttribute(
-    'title',
-    hidden ? 'Buchungen einblenden' : 'Buchungen ausblenden',
-  );
-  // EventCalendar observes its own root; the grid re-flows on its own once the
-  // pane resizes, no extra resize call required.
+// The left column band/search/filter/view are SHELL-wired. Reading them back
+// from the grammar-change event keeps the module free of chrome wiring; a
+// band/search/filter change is an intentional list reset (rebuild expected),
+// while selecting a ROW stays an in-place class flip (markActiveBookingPage).
+function onLeftGrammarChange(event) {
+  const pane = leftPane();
+  const detail = event?.detail || pane?.__ctoxPaneGrammar?.state?.() || {};
+  const filters = detail.filters || {};
+  state.search = String(detail.search || '').trim().toLowerCase();
+  state.listView = detail.view === 'list' ? 'list' : 'cards';
+  state.leftBand = detail.band === 'pages' ? 'pages' : 'calendars';
+  state.statusFilter = filters.status || 'all';
+  renderLeftList();
+}
+
+function setCalendarView(view) {
+  const next = CALENDAR_VIEW_MAP[view] ? view : 'month';
+  state.calendarView = next;
+  state.activeView = CALENDAR_VIEW_MAP[next];
+  state.calendarViewInstance?.setView(state.activeView);
+  for (const tab of els.viewBand?.querySelectorAll('[data-calendar-view]') || []) {
+    const active = tab.dataset.calendarView === next;
+    tab.classList.toggle('is-active', active);
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+  }
 }
 
 // ----------------------------------------------------
@@ -588,9 +696,10 @@ function scheduleRender() {
 }
 
 function renderAll() {
-  renderCalendarsSidebar();
-  renderBookingPagesSidebar();
-  renderAuditingLists();
+  renderLeftList();
+  renderMainBandCounts();
+  renderContextPane();
+  applyContextReveal();
   renderDataStatus();
 
   // Refresh Calendar adapter events
@@ -616,153 +725,229 @@ function renderDataStatus() {
 }
 
 // ----------------------------------------------------
-// UI RENDERING METHODS
+// LEFT GRAMMAR COLUMN RENDERING
 // ----------------------------------------------------
 
-function renderCalendarsSidebar() {
-  if (!els.calendarList) return;
-
-  if (state.calendars.length === 0) {
-    els.calendarList.innerHTML = `<div class="ctox-empty">Keine Kalender.</div>`;
-    return;
+function writeLeftCounts(counts) {
+  const pg = leftPane()?.__ctoxPaneGrammar;
+  if (pg?.setCounts) { pg.setCounts(counts); return; }
+  for (const [key, value] of Object.entries(counts || {})) {
+    const node = els.root?.querySelector(`[data-pg-count="${key}"]`);
+    if (node) node.textContent = ` (${value})`;
   }
-
-  let html = '';
-  state.calendars.forEach(cal => {
-    const checked = state.selectedCalendarIds.has(cal.id);
-    const checkboxId = `calendar-toggle-${safeDomId(cal.id)}`;
-    html += `
-      <div class="ctox-list-item calendar-item" data-id="${escapeHtml(cal.id)}" data-context-record-id="${escapeHtml(cal.id)}" data-context-record-type="calendar" data-context-label="${escapeHtml(cal.title || cal.id)}">
-        <div class="calendar-item-left">
-          <input id="${checkboxId}" type="checkbox" class="calendar-item-checkbox" data-action="toggle-cal" data-id="${escapeHtml(cal.id)}" aria-label="${escapeHtml(cal.title || 'Kalender')} anzeigen" ${checked ? 'checked' : ''} />
-          <span class="calendar-item-color-indicator" style="background-color: ${safeColor(cal.color)}"></span>
-          <span class="calendar-item-title" id="${checkboxId}-label">${escapeHtml(cal.title)}</span>
-        </div>
-        <div class="calendar-item-actions">
-          <button type="button" class="ctox-icon-button ctox-icon-button--sm" data-action="edit-cal" data-id="${escapeHtml(cal.id)}" title="Bearbeiten" aria-label="${escapeHtml(cal.title || 'Kalender')} bearbeiten">${actionIcon('edit')}</button>
-        </div>
-      </div>
-    `;
-  });
-
-  els.calendarList.innerHTML = html;
-
-  // Bind listeners
-  els.calendarList.querySelectorAll('[data-action="toggle-cal"]').forEach(el => {
-    el.addEventListener('change', (e) => {
-      const id = el.dataset.id;
-      if (e.target.checked) {
-        state.selectedCalendarIds.add(id);
-      } else {
-        state.selectedCalendarIds.delete(id);
-      }
-      scheduleRender();
-    });
-  });
-
-  els.calendarList.querySelectorAll('[data-action="edit-cal"]').forEach(el => {
-    el.addEventListener('click', (e) => {
-      e.stopPropagation();
-      openCalendarForm(el.dataset.id);
-    });
-  });
 }
 
-function renderBookingPagesSidebar() {
-  if (!els.bookingPagesList) return;
-
-  if (state.bookingPages.length === 0) {
-    els.bookingPagesList.innerHTML = `<div class="ctox-empty">Keine Buchungsseiten.</div>`;
-    return;
-  }
-
-  let html = '';
-  state.bookingPages.forEach(bp => {
-    const safeSlug = normalizeSlug(bp.slug) || String(bp.slug || '').replace(/[^a-zA-Z0-9-_]/g, '');
-    const publicUrl = `${window.location.origin}/book/${encodeURIComponent(safeSlug)}`;
-    const isActive = bp.status === 'active';
-    const isSelected = bp.id === state.selectedBookingPageId;
-    html += `
-      <div class="ctox-list-item booking-page-item ${isSelected ? 'is-selected' : ''}" data-action="select-bp" data-id="${escapeHtml(bp.id)}" data-context-record-id="${escapeHtml(bp.id)}" data-context-record-type="calendar_booking_page" data-context-label="${escapeHtml(bp.title || bp.id)}" role="button" tabindex="0" aria-pressed="${isSelected ? 'true' : 'false'}">
-        <div class="booking-page-item-left">
-          <div class="booking-page-item-title">
-            <span>${escapeHtml(bp.title)}</span>
-            <small>${Number(bp.duration_minutes) || 0} Min · /book/${escapeHtml(safeSlug)} · ${isActive ? 'Aktiv' : 'Inaktiv'}</small>
-          </div>
-        </div>
-        <div class="booking-page-item-actions">
-          <a class="ctox-icon-button ctox-icon-button--sm" href="${publicUrl}" target="_blank" rel="noreferrer" title="Öffnen" aria-label="${escapeHtml(bp.title || 'Buchungsseite')} öffnen">${actionIcon('open')}</a>
-          <button type="button" class="ctox-icon-button ctox-icon-button--sm" data-action="edit-bp" data-id="${escapeHtml(bp.id)}" title="Bearbeiten" aria-label="${escapeHtml(bp.title || 'Buchungsseite')} bearbeiten">${actionIcon('edit')}</button>
-        </div>
-      </div>
-    `;
-  });
-
-  els.bookingPagesList.innerHTML = html;
-
-  els.bookingPagesList.querySelectorAll('[data-action="select-bp"]').forEach(el => {
-    const select = () => {
-      state.selectedBookingPageId = el.dataset.id || null;
-      scheduleRender();
-    };
-    el.addEventListener('click', (event) => {
-      if (event.target.closest('a, button')) return;
-      select();
-    });
-    el.addEventListener('keydown', (event) => {
-      if (event.key !== 'Enter' && event.key !== ' ') return;
-      event.preventDefault();
-      select();
-    });
-  });
-
-  els.bookingPagesList.querySelectorAll('[data-action="edit-bp"]').forEach(el => {
-    el.addEventListener('click', (event) => {
-      event.stopPropagation();
-      openBookingPageForm(el.dataset.id);
-    });
-  });
+function writeLeftFooter(text) {
+  const pg = leftPane()?.__ctoxPaneGrammar;
+  if (pg?.setFooter) { pg.setFooter(text); return; }
+  const node = els.root?.querySelector('[data-calendar-left-footer]');
+  if (node) node.textContent = text || '';
 }
 
-function renderAuditingLists() {
+function calendarMatchesFilters(cal) {
+  if (state.search && !String(cal.title || '').toLowerCase().includes(state.search)) return false;
+  const visible = cal.visibility !== false;
+  if (state.statusFilter === 'active' && !visible) return false;
+  if (state.statusFilter === 'inactive' && visible) return false;
+  return true;
+}
+
+function bookingPageMatchesFilters(bp) {
+  if (state.search) {
+    const haystack = `${bp.title || ''} ${bp.slug || ''}`.toLowerCase();
+    if (!haystack.includes(state.search)) return false;
+  }
+  const active = bp.status === 'active';
+  if (state.statusFilter === 'active' && !active) return false;
+  if (state.statusFilter === 'inactive' && active) return false;
+  return true;
+}
+
+function renderLeftList() {
+  if (!els.leftList) return;
+
+  const calendars = state.calendars.filter(calendarMatchesFilters);
+  const pages = state.bookingPages.filter(bookingPageMatchesFilters);
+
+  // Band counts reflect search + status (but not the band selection itself);
+  // zeros are rendered, never hidden.
+  writeLeftCounts({ calendars: calendars.length, pages: pages.length });
+
+  const isPages = state.leftBand === 'pages';
+  const rows = isPages ? pages : calendars;
+  const scopeLabel = isPages ? state.t('bookingPages', 'Buchungsseiten') : state.t('calendars', 'Kalender');
+  writeLeftFooter(`${rows.length} ${state.t('entries', 'Einträge')} · ${scopeLabel}`);
+
+  els.leftList.classList.toggle('is-list-view', state.listView === 'list');
+
+  if (!rows.length) {
+    els.leftList.innerHTML = '';
+    if (els.leftEmpty) els.leftEmpty.hidden = false;
+    return;
+  }
+  if (els.leftEmpty) els.leftEmpty.hidden = true;
+
+  els.leftList.innerHTML = isPages
+    ? rows.map(bookingPageRowHtml).join('')
+    : rows.map(calendarRowHtml).join('');
+
+  if (isPages) markActiveBookingPage();
+}
+
+function calendarRowHtml(cal) {
+  const checked = state.selectedCalendarIds.has(cal.id);
+  const checkboxId = `calendar-toggle-${safeDomId(cal.id)}`;
+  return `
+    <div class="ctox-list-item calendar-item" data-calendar-id="${escapeHtml(cal.id)}" data-context-record-id="${escapeHtml(cal.id)}" data-context-record-type="calendar_calendar" data-context-label="${escapeHtml(cal.title || cal.id)}">
+      <div class="calendar-item-left">
+        <input id="${checkboxId}" type="checkbox" class="calendar-item-checkbox" data-action="toggle-cal" data-id="${escapeHtml(cal.id)}" aria-label="${escapeHtml(cal.title || 'Kalender')} anzeigen" ${checked ? 'checked' : ''} />
+        <span class="calendar-item-color-indicator" style="background-color: ${safeColor(cal.color)}"></span>
+        <span class="calendar-item-title" id="${checkboxId}-label">${escapeHtml(cal.title)}</span>
+      </div>
+      <div class="calendar-item-actions">
+        <button type="button" class="ctox-icon-button ctox-icon-button--sm" data-action="edit-cal" data-id="${escapeHtml(cal.id)}" title="Bearbeiten" aria-label="${escapeHtml(cal.title || 'Kalender')} bearbeiten">${actionIcon('edit')}</button>
+      </div>
+    </div>
+  `;
+}
+
+function bookingPageRowHtml(bp) {
+  const safeSlug = normalizeSlug(bp.slug) || String(bp.slug || '').replace(/[^a-zA-Z0-9-_]/g, '');
+  const publicUrl = `${window.location.origin}/book/${encodeURIComponent(safeSlug)}`;
+  const isActive = bp.status === 'active';
+  const isSelected = bp.id === state.selectedBookingPageId;
+  return `
+    <div class="ctox-list-item booking-page-item ${isSelected ? 'is-selected' : ''}" data-action="select-bp" data-id="${escapeHtml(bp.id)}" data-context-record-id="${escapeHtml(bp.id)}" data-context-record-type="calendar_booking_page" data-context-label="${escapeHtml(bp.title || bp.id)}" role="button" tabindex="0" aria-pressed="${isSelected ? 'true' : 'false'}">
+      <div class="booking-page-item-left">
+        <div class="booking-page-item-title">
+          <span>${escapeHtml(bp.title)}</span>
+          <small>${Number(bp.duration_minutes) || 0} Min · /book/${escapeHtml(safeSlug)} · ${isActive ? 'Aktiv' : 'Inaktiv'}</small>
+        </div>
+      </div>
+      <div class="booking-page-item-actions">
+        <a class="ctox-icon-button ctox-icon-button--sm" href="${publicUrl}" target="_blank" rel="noreferrer" title="Öffnen" aria-label="${escapeHtml(bp.title || 'Buchungsseite')} öffnen">${actionIcon('open')}</a>
+        <button type="button" class="ctox-icon-button ctox-icon-button--sm" data-action="edit-bp" data-id="${escapeHtml(bp.id)}" title="Bearbeiten" aria-label="${escapeHtml(bp.title || 'Buchungsseite')} bearbeiten">${actionIcon('edit')}</button>
+      </div>
+    </div>
+  `;
+}
+
+// Selecting a booking page is an in-place class flip across existing rows —
+// never a list rebuild (a rebuild would clamp the well's scrollTop to 0 and
+// yank the operator to the top mid-click).
+function markActiveBookingPage() {
+  for (const node of els.leftList?.querySelectorAll('.booking-page-item') || []) {
+    const active = node.dataset.id === state.selectedBookingPageId;
+    node.classList.toggle('is-selected', active);
+    node.setAttribute('aria-pressed', active ? 'true' : 'false');
+  }
+}
+
+function selectBookingPage(id) {
+  if (state.selectedBookingPageId === id) {
+    markActiveBookingPage();
+    return;
+  }
+  state.selectedBookingPageId = id || null;
+  state.userCollapsedContext = false;
+  markActiveBookingPage();
+  applyContextReveal();
+  renderContextPane();
+}
+
+function onLeftListClick(event) {
+  const target = event.target instanceof Element ? event.target : null;
+  if (!target) return;
+
+  const editCal = target.closest('[data-action="edit-cal"]');
+  if (editCal) {
+    event.stopPropagation();
+    openCalendarForm(editCal.dataset.id);
+    return;
+  }
+  const editBp = target.closest('[data-action="edit-bp"]');
+  if (editBp) {
+    event.stopPropagation();
+    openBookingPageForm(editBp.dataset.id);
+    return;
+  }
+  if (target.closest('a')) return; // let the open-link anchor work
+
+  const row = target.closest('.booking-page-item[data-action="select-bp"]');
+  if (row) {
+    selectBookingPage(row.dataset.id || null);
+  }
+}
+
+function onLeftListChange(event) {
+  const toggle = event.target instanceof Element ? event.target.closest('[data-action="toggle-cal"]') : null;
+  if (!toggle) return;
+  const id = toggle.dataset.id;
+  if (toggle.checked) state.selectedCalendarIds.add(id);
+  else state.selectedCalendarIds.delete(id);
+  // In-place: the checkbox already reflects the new state — refresh the grid
+  // and the main-band counts without rebuilding the left list.
+  const filteredEvents = state.events.filter(e => state.selectedCalendarIds.has(e.calendar_id));
+  state.calendarViewInstance?.setEvents(filteredEvents, state.calendars);
+  renderMainBandCounts();
+}
+
+// ----------------------------------------------------
+// THIRD PANE (bookings / holds context, auto-reveal)
+// ----------------------------------------------------
+
+function applyContextReveal() {
+  const hasSelection = Boolean(state.selectedBookingPageId);
+  const visible = calendarContextVisible(hasSelection, state.userCollapsedContext);
+  els.root?.classList.toggle('is-context-hidden', !visible);
+  if (els.toggleContext) {
+    // Only show the reveal control when there is something to reveal.
+    els.toggleContext.hidden = !hasSelection;
+    els.toggleContext.setAttribute('aria-pressed', String(visible));
+    const label = visible ? 'Buchungen ausblenden' : 'Buchungen einblenden';
+    els.toggleContext.setAttribute('aria-label', label);
+    els.toggleContext.setAttribute('title', label);
+  }
+}
+
+function renderContextPane() {
   const selectedPage = state.bookingPages.find(page => page.id === state.selectedBookingPageId) || null;
+
+  if (!selectedPage) {
+    if (els.contextDetail) els.contextDetail.hidden = true;
+    if (els.contextEmpty) els.contextEmpty.hidden = false;
+    return;
+  }
+  if (els.contextEmpty) els.contextEmpty.hidden = true;
+  if (els.contextDetail) els.contextDetail.hidden = false;
+  if (els.contextTitle) els.contextTitle.textContent = selectedPage.title || state.t('bookingContextTitle', 'Kontext');
+
+  const safeSlug = normalizeSlug(selectedPage.slug) || String(selectedPage.slug || '').replace(/[^a-zA-Z0-9-_]/g, '');
   if (els.bookingContext) {
-    if (selectedPage) {
-      const safeSlug = normalizeSlug(selectedPage.slug) || String(selectedPage.slug || '').replace(/[^a-zA-Z0-9-_]/g, '');
-      els.bookingContext.innerHTML = `
-        <div class="ctox-callout calendar-context-card">
-          <span class="ctox-field-label">Ausgewählte Buchungsseite</span>
-          <strong>${escapeHtml(selectedPage.title)}</strong>
-          <span>${Number(selectedPage.duration_minutes) || 0} Min · /book/${escapeHtml(safeSlug)}</span>
-          <button type="button" class="ctox-button ctox-button--sm" data-action="clear-booking-selection">Alle Buchungen anzeigen</button>
-        </div>
-      `;
-      els.bookingContext.querySelector('[data-action="clear-booking-selection"]')?.addEventListener('click', () => {
-        state.selectedBookingPageId = null;
-        scheduleRender();
-      });
-    } else {
-      els.bookingContext.innerHTML = `<div class="ctox-callout calendar-context-card">Buchungsseite wählen, um Holds und Buchungen zu filtern.</div>`;
-    }
+    els.bookingContext.innerHTML = `
+      <div class="ctox-callout calendar-context-card">
+        <span class="ctox-field-label">Ausgewählte Buchungsseite</span>
+        <strong>${escapeHtml(selectedPage.title)}</strong>
+        <span>${Number(selectedPage.duration_minutes) || 0} Min · /book/${escapeHtml(safeSlug)}</span>
+      </div>
+    `;
   }
 
   // 1. Holds List
   if (els.bookingHoldsList) {
-    const activeHolds = state.holds.filter(h => {
-      const active = h.status === 'active' && h.expires_at_ms > Date.now();
-      return active && (!selectedPage || h.booking_page_id === selectedPage.id);
-    });
+    const activeHolds = state.holds.filter(h => (
+      h.status === 'active' && h.expires_at_ms > Date.now() && h.booking_page_id === selectedPage.id
+    ));
     if (activeHolds.length === 0) {
-      els.bookingHoldsList.innerHTML = `<div class="ctox-empty">${selectedPage ? 'Keine aktiven Holds für diese Buchungsseite.' : 'Keine aktiven Holds.'}</div>`;
+      els.bookingHoldsList.innerHTML = `<div class="ctox-empty">Keine aktiven Holds für diese Buchungsseite.</div>`;
     } else {
       els.bookingHoldsList.innerHTML = activeHolds.map(hold => {
-        const bp = state.bookingPages.find(p => p.id === hold.booking_page_id);
         const startStr = new Date(hold.slot_start_ms).toLocaleString();
         const expiresStr = new Date(hold.expires_at_ms).toLocaleTimeString();
         return `
           <div class="ctox-list-item calendar-audit-item">
             <div class="calendar-audit-head">
-              <strong>${escapeHtml(bp?.title || 'Buchung hold')}</strong>
+              <strong>${escapeHtml(selectedPage.title || 'Buchung hold')}</strong>
               <span class="ctox-badge is-warning">Hold</span>
             </div>
             <small>Zeit: ${startStr}</small>
@@ -776,13 +961,12 @@ function renderAuditingLists() {
   // 2. Bookings List
   if (els.bookingsList) {
     const sortedBookings = state.bookings
-      .filter(booking => !selectedPage || booking.booking_page_id === selectedPage.id)
+      .filter(booking => booking.booking_page_id === selectedPage.id)
       .sort((a, b) => b.slot_start_ms - a.slot_start_ms);
     if (sortedBookings.length === 0) {
-      els.bookingsList.innerHTML = `<div class="ctox-empty">${selectedPage ? 'Keine bestätigten Buchungen für diese Buchungsseite.' : 'Keine bestätigten Buchungen.'}</div>`;
+      els.bookingsList.innerHTML = `<div class="ctox-empty">Keine bestätigten Buchungen für diese Buchungsseite.</div>`;
     } else {
       els.bookingsList.innerHTML = sortedBookings.map(bk => {
-        const bp = state.bookingPages.find(p => p.id === bk.booking_page_id);
         const startStr = new Date(bk.slot_start_ms).toLocaleString();
         const statusBadge = bk.status === 'confirmed' ? 'is-success' : 'is-danger';
         return `
@@ -791,7 +975,7 @@ function renderAuditingLists() {
               <strong>${escapeHtml(bk.attendee_name)}</strong>
               <span class="ctox-badge ${statusBadge}">${bk.status === 'confirmed' ? 'Bestätigt' : 'Storniert'}</span>
             </div>
-            <small>Event: ${escapeHtml(bp?.title || 'Beratung')}</small>
+            <small>Event: ${escapeHtml(selectedPage.title || 'Beratung')}</small>
             <small>Zeit: ${startStr}</small>
             <small>E-Mail: ${escapeHtml(bk.attendee_email)}</small>
           </div>
@@ -808,6 +992,156 @@ function renderAuditingLists() {
 }
 
 // ----------------------------------------------------
+// MAIN VIEW BAND COUNTS (Monat / Woche / Tag)
+// ----------------------------------------------------
+
+function renderMainBandCounts() {
+  const counts = computeViewBandCounts(state.events, state.selectedCalendarIds, new Date());
+  const write = (view, value) => {
+    const node = els.root?.querySelector(`[data-count-view-${view}]`);
+    if (node) node.textContent = ` (${value})`;
+  };
+  write('month', counts.month);
+  write('week', counts.week);
+  write('day', counts.day);
+}
+
+// Counts events (from visible calendars) whose start falls in the month/week/
+// day around the reference date. Zeros are rendered, never hidden. Pure so the
+// band-count behaviour is unit-testable without the vendor calendar engine.
+function computeViewBandCounts(events, selectedCalendarIds, refDate) {
+  const ref = refDate instanceof Date ? refDate : new Date(refDate || Date.now());
+  const ranges = { month: monthRange(ref), week: weekRange(ref), day: dayRange(ref) };
+  const counts = { month: 0, week: 0, day: 0 };
+  const selected = selectedCalendarIds instanceof Set ? selectedCalendarIds : null;
+  for (const event of Array.isArray(events) ? events : []) {
+    if (selected && selected.size > 0 && !selected.has(event.calendar_id)) continue;
+    const start = Number(event.start_time);
+    if (!Number.isFinite(start)) continue;
+    for (const key of ['month', 'week', 'day']) {
+      const [from, to] = ranges[key];
+      if (start >= from && start < to) counts[key] += 1;
+    }
+  }
+  return counts;
+}
+
+function dayRange(ref) {
+  const start = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate()).getTime();
+  return [start, start + 24 * 60 * 60 * 1000];
+}
+
+function weekRange(ref) {
+  const day = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
+  const weekday = (day.getDay() + 6) % 7; // Monday = 0
+  const start = day.getTime() - weekday * 24 * 60 * 60 * 1000;
+  return [start, start + 7 * 24 * 60 * 60 * 1000];
+}
+
+function monthRange(ref) {
+  const start = new Date(ref.getFullYear(), ref.getMonth(), 1).getTime();
+  const end = new Date(ref.getFullYear(), ref.getMonth() + 1, 1).getTime();
+  return [start, end];
+}
+
+// ----------------------------------------------------
+// IMPORT / EXPORT (JSON via Blob / file-input, honest and small)
+// ----------------------------------------------------
+
+function exportCalendarData() {
+  const payload = buildCalendarExport({
+    calendars: state.calendars,
+    bookingPages: state.bookingPages,
+    events: state.events,
+  }, Date.now());
+  downloadJson(payload, 'calendar.json');
+}
+
+function buildCalendarExport(sources, nowMs) {
+  const src = sources && typeof sources === 'object' ? sources : {};
+  return {
+    kind: 'ctox-calendar-export',
+    exported_at_ms: Number(nowMs) || 0,
+    calendars: (Array.isArray(src.calendars) ? src.calendars : []).map((cal) => ({ ...cal })),
+    booking_pages: (Array.isArray(src.bookingPages) ? src.bookingPages : []).map((bp) => ({ ...bp })),
+    events: (Array.isArray(src.events) ? src.events : []).map((ev) => ({ ...ev })),
+  };
+}
+
+// Accepts an exported snapshot ({ calendars, booking_pages, events }); keeps
+// only records that carry an id so a re-import is a clean round-trip.
+function parseCalendarImport(raw) {
+  const src = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const keepById = (list) => (Array.isArray(list) ? list : [])
+    .filter((item) => item && typeof item === 'object' && item.id)
+    .map((item) => ({ ...item }));
+  return {
+    calendars: keepById(src.calendars),
+    bookingPages: keepById(src.booking_pages),
+    events: keepById(src.events),
+  };
+}
+
+function downloadJson(payload, filename) {
+  let url = '';
+  try {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.rel = 'noopener';
+    (els.root || document.body)?.appendChild?.(a);
+    a.click();
+    a.remove?.();
+  } catch (error) {
+    console.error('[calendar] export failed:', error);
+  } finally {
+    if (url) setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 4000);
+  }
+}
+
+function importCalendarData() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/json,.json';
+  input.addEventListener('change', async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    let parsed;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch {
+      notify({ type: 'error', message: state.t('importInvalid', 'Ungültige JSON-Datei.') });
+      return;
+    }
+    const { calendars, bookingPages, events } = parseCalendarImport(parsed);
+    if (!calendars.length && !bookingPages.length && !events.length) {
+      notify({ type: 'warning', message: state.t('importEmpty', 'Keine Kalenderdaten in der Datei.') });
+      return;
+    }
+    const db = calendarDb();
+    if (!db) {
+      notify({ type: 'error', message: state.t('importUnavailable', 'Import ist gerade nicht möglich (keine Datenbank).') });
+      return;
+    }
+    let count = 0;
+    try {
+      for (const cal of calendars) { await db.calendar_calendars.upsert({ ...cal, updated_at_ms: Date.now() }); count++; }
+      for (const bp of bookingPages) { await db.calendar_booking_pages.upsert({ ...bp, updated_at_ms: Date.now() }); count++; }
+      for (const ev of events) { await db.calendar_events.upsert({ ...ev, updated_at_ms: Date.now() }); count++; }
+    } catch (error) {
+      console.error('[calendar] import failed:', error);
+      notify({ type: 'error', message: state.t('importUnavailable', 'Import ist gerade nicht möglich (keine Datenbank).') });
+      return;
+    }
+    await loadDataFromDb();
+    notify({ type: 'info', message: state.t('imported', '{count} Datensätze importiert').replace('{count}', String(count)) });
+  });
+  input.click();
+}
+
+// ----------------------------------------------------
 // EVENT CALENDAR UI SETUP
 // ----------------------------------------------------
 
@@ -818,7 +1152,7 @@ function initCalendarView() {
     root: els.eventCalendarMount,
     events: state.events,
     calendars: state.calendars,
-    view: 'timeGridWeek',
+    view: CALENDAR_VIEW_MAP[state.calendarView] || 'dayGridMonth',
     onEventClick: ({ event, original }) => {
       openEventForm(original.id);
     },
@@ -1603,10 +1937,21 @@ function escapeHtml(value) {
   })[char]);
 }
 
+// Auto-reveal model (design-guide "Progressive Disclosure", outbound idiom):
+// the bookings/holds context pane is shown only when a booking page is
+// selected and the user has not collapsed it.
+function calendarContextVisible(hasSelection, userCollapsed) {
+  return Boolean(hasSelection) && !userCollapsed;
+}
+
 export const __calendarTestHooks = {
   findEventForRenderedCalendarElement,
   normalizeSlug,
   validateBookingPageFormValues,
   validateCalendarFormValues,
   validateEventFormValues,
+  calendarContextVisible,
+  computeViewBandCounts,
+  buildCalendarExport,
+  parseCalendarImport,
 };

@@ -86,6 +86,79 @@
   text-overflow: ellipsis;
 }
 
+/* Explicit workspace tracks: left(1) resizer(2) center(3) resizer(4) right(5).
+   The center (calendar grid) keeps a hard minimum so the side panes yield to
+   it in a narrow window instead of collapsing the main view to 0. */
+.calendar-app {
+  grid-template-columns:
+    var(--ctox-left-width, 320px)
+    12px
+    minmax(320px, 1fr)
+    12px
+    var(--ctox-right-width, 320px);
+}
+
+.calendar-left { grid-column: 1; }
+.calendar-app > [data-resizer="left"] { grid-column: 2; }
+.calendar-center { grid-column: 3; }
+.calendar-app > [data-resizer="right"] { grid-column: 4; }
+.calendar-right { grid-column: 5; }
+
+/* Grammar column rows: header / view band / recessed well / footer. The well
+   stays pinned to the 1fr track so it always fills the space. */
+.calendar-left {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+.calendar-left > .ctox-pane-header { grid-row: 1; }
+.calendar-left > [data-calendar-left-band] { grid-row: 2; }
+.calendar-left-body { grid-row: 3; }
+.calendar-left > .ctox-pane-footer { grid-row: 4; }
+
+/* Center rows: header / view band / calendar grid. */
+.calendar-center {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.calendar-right {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+/* Third pane hidden by default; auto-reveals on selection. Collapsed = the
+   center grid takes the freed width. */
+.calendar-app.is-context-hidden {
+  grid-template-columns:
+    var(--ctox-left-width, 320px)
+    12px
+    minmax(320px, 1fr);
+}
+
+.calendar-app.is-context-hidden .calendar-right,
+.calendar-app.is-context-hidden > [data-resizer="right"] {
+  display: none;
+}
+
+.calendar-toggle-context[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: color-mix(in srgb, var(--accent) 78%, var(--text));
+}
+
+/* Left list: a compact single-line variant when the list view toggle is on. */
+.calendar-left-list.is-list-view .calendar-item-actions,
+.calendar-left-list.is-list-view .booking-page-item-actions {
+  opacity: 1;
+}
+.calendar-left-list.is-list-view .booking-page-item small {
+  display: none;
+}
+
+/* Left empty state stacks a title over a muted hint line. */
+.calendar-left-empty {
+  display: grid;
+  gap: 2px;
+  justify-items: start;
+  text-align: left;
+}
+
 /* custom: sidebar micro-layout — section stacking, label/action rows and the
    hairline separator between sections; the kit has no sidebar-section
    pattern, only full pane headers. */
@@ -122,25 +195,6 @@
    default and only revealed when there is a real status (no DB / error). */
 .calendar-data-status[hidden] {
   display: none;
-}
-
-/* Right-pane collapse: hidden by default so the calendar grid gets the full
-   width; the header toggle re-reveals it on demand for booking/hold auditing. */
-.calendar-app.is-right-hidden {
-  grid-template-columns:
-    var(--ctox-left-width, 320px)
-    12px
-    minmax(0, 1fr);
-}
-
-.calendar-app.is-right-hidden #calendar-right,
-.calendar-app.is-right-hidden > [data-resizer="right"] {
-  display: none;
-}
-
-.calendar-toggle-right[aria-pressed="true"] {
-  background: var(--accent-soft);
-  color: color-mix(in srgb, var(--accent) 78%, var(--text));
 }
 
 /* custom: calendar source rows — kit .ctox-list-item extended with the
@@ -393,21 +447,30 @@
    default 760px breakpoint assumes, so this module stacks its panes earlier
    and gives the calendar grid a real minimum height. */
 @container business-app-window (max-width: 1024px) {
-  .calendar-app[data-calendar-root] {
+  .calendar-app[data-calendar-root],
+  .calendar-app.is-context-hidden {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(420px, 1fr) auto;
+    grid-template-rows: minmax(200px, 30vh) minmax(360px, 1fr) minmax(200px, 32vh);
     height: auto;
     min-height: 100%;
     overflow-y: auto;
+    gap: 8px;
+  }
+  /* Stacked single column: panes flow by source order, not the wide grid pins. */
+  .calendar-left,
+  .calendar-center,
+  .calendar-right {
+    grid-column: auto;
+    height: auto;
+    min-height: 220px;
   }
   .calendar-app[data-calendar-root] [data-resizer] {
     display: none !important;
   }
-  #calendar-left,
-  #calendar-center,
-  #calendar-right {
-    height: auto;
-    min-height: 220px;
+  /* In compact mode the context pane stays reachable (stacked) even when the
+     wide-mode auto-reveal has it collapsed. */
+  .calendar-app.is-context-hidden .calendar-right {
+    display: flex;
   }
 }
 
