@@ -22,5 +22,17 @@
   "frameClosed": "Browser window closed",
   "frameStarting": "Browser is starting",
   "frameLoading": "Loading browser content",
-  "frameRenderFailed": "The page could not be displayed."
+  "frameRenderFailed": "The page could not be displayed.",
+  "sessionsKicker": "CTOX computer",
+  "sessionsTitle": "Sessions",
+  "sessionsNew": "New session",
+  "sessionsImport": "Import sessions",
+  "sessionsExport": "Export sessions",
+  "sessionsEmpty": "No browser session yet. Open a new one at the top right.",
+  "bandAll": "All",
+  "bandActive": "Active",
+  "bandClosed": "Closed",
+  "filterProfileAll": "All profiles",
+  "filterProfilePersistent": "Personal",
+  "filterProfilePrivate": "Private"
 }

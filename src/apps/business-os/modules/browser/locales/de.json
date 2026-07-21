@@ -22,5 +22,17 @@
   "frameClosed": "Browser-Fenster geschlossen",
   "frameStarting": "Browser wird gestartet",
   "frameLoading": "Browser-Inhalt wird geladen",
-  "frameRenderFailed": "Die Seite konnte nicht angezeigt werden."
+  "frameRenderFailed": "Die Seite konnte nicht angezeigt werden.",
+  "sessionsKicker": "CTOX Computer",
+  "sessionsTitle": "Sitzungen",
+  "sessionsNew": "Neue Sitzung",
+  "sessionsImport": "Sitzungen importieren",
+  "sessionsExport": "Sitzungen exportieren",
+  "sessionsEmpty": "Noch keine Browser-Sitzung. Öffne oben rechts eine neue.",
+  "bandAll": "Alle",
+  "bandActive": "Aktiv",
+  "bandClosed": "Beendet",
+  "filterProfileAll": "Alle Profile",
+  "filterProfilePersistent": "Persönlich",
+  "filterProfilePrivate": "Privat"
 }

@@ -1,28 +1,86 @@
 /* ============================================================================
    Browser-Modul — nur Spezialfälle.
-   Alle normalen Elemente kommen aus dem Kit (shared/base.css + app.css):
-   Buttons (.ctox-button/.ctox-icon-button/.ctox-pane-icon), Eingaben
+   IA: LEFT = persistente Sitzungen (kanonische Grammatik-Spalte, SHELL-wired
+   über data-pg-*); MAIN = Remote-Canvas + Chrome-Leiste (die einzigartige
+   Arbeitsfläche). Die Grammatik-Chrome (Suche/Filter/Band/Toggle) kommt aus
+   dem Kit (shared/base.css); dieses Modul schreibt KEIN Chrome-CSS/JS.
+   Alle normalen Elemente kommen aus dem Kit: Buttons
+   (.ctox-button/.ctox-icon-button/.ctox-pane-icon), Eingaben
    (.ctox-input/.ctox-select), Tabs (.ctox-pane-tabs/.ctox-pane-tab),
    Statusanzeige (.ctox-badge), Hinweise (.ctox-callout), Toolbar
-   (.ctox-toolbar), Leerzustand (.ctox-empty), Kicker (.ctox-pane-kicker),
-   Aktionszeilen (.ctox-pane-tools/.ctox-choice/.ctox-compact-field).
-   Diese Datei enthält nur, was das Kit nicht ausdrücken kann: den
-   Remote-Viewport (Canvas), die Browser-Chrome-Struktur (Tab-Leiste,
-   einklappbarer Erweiterungsbereich, Adresszeile, Status-/Download-Leiste)
-   und die Diagnose-Ansicht innerhalb des Erweiterungsbereichs.
+   (.ctox-toolbar), Leerzustand (.ctox-empty), Listen (.ctox-list/
+   .ctox-list-item). Diese Datei enthält nur, was das Kit nicht ausdrücken
+   kann: die explizite Spalten-Grid-Pin, den Remote-Viewport (Canvas), die
+   Browser-Chrome-Struktur (Tab-Leiste, einklappbarer Erweiterungsbereich,
+   Adresszeile, Status-/Download-Leiste) und die Sitzungs-Shards.
    ========================================================================== */
 
-/* custom: App-Grundstruktur — Browser-Chrome oben, Remote-Viewport füllt den
-   Rest. Kein 3-Spalten-Workspace, weil die App eine einzelne Live-Ansicht
-   statt Record-Listen/Inspektor-Spalten hat. */
+/* custom: Spalten-Pins — LEFT (Sitzungen) = Spalte 1, Resizer = Spalte 2,
+   MAIN (Canvas) = Spalte 3. Der Workspace-Grid (2-Spalten-Template) kommt aus
+   .ctox-workspace--two-pane; MAIN ist die einzige flexible Spur und behält so
+   den Vorrang. */
 .browser-module {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  min-height: 100%;
-  height: 100%;
   background: var(--bg);
   color: var(--text);
+}
+
+.browser-sessions {
+  grid-column: 1;
+  /* Explizite Grammatik-Zeilen: Header · Band · Well (füllt) · Footer. */
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.browser-module > .ctox-column-resizer {
+  grid-column: 2;
+}
+
+.browser-canvas {
+  grid-column: 3;
+  /* Chrome (auto) über der Arbeitsfläche (füllt). */
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+/* custom: Sitzungs-Shards im Well — reiner Selektor: Titel + eine gedämpfte
+   Meta-Zeile. Auswahl = Akzent-Füllung + flacher 2px-Balken über ::before
+   (aus dem Kit über .ctox-list-item.is-selected). Kompakte Listen-Ansicht
+   reduziert nur die Innenabstände. */
+.browser-session-rail {
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+}
+
+.browser-session {
+  display: grid;
+  gap: 2px;
+  cursor: pointer;
+}
+
+.browser-session-title {
+  min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.browser-session-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.browser-session-rail.is-list {
+  gap: 0;
+  padding: 4px;
+}
+
+.browser-session-rail.is-list .browser-session {
+  padding-block: 6px;
 }
 
 .browser-chrome,
@@ -51,11 +109,7 @@
   background: var(--surface-2);
 }
 
-.browser-new-window {
-  flex: 0 0 auto;
-}
-
-/* custom: Toggle für erweiterte Aktionen rechts neben dem "+" Neues-Fenster.
+/* custom: Toggle für erweiterte Aktionen rechts in der Tab-Leiste.
    Standardzustand eingeklappt (aria-pressed="false"); sichtbare Markierung
    nur, wenn die Klappe offen ist. */
 .browser-toggle-advanced {
@@ -224,6 +278,14 @@
   white-space: nowrap;
 }
 
+/* custom: Auto-reveal — the status strip is chrome for a live session. With no
+   session selected the LEFT empty state and the canvas overlay carry the state,
+   so the strip stays hidden until a session is active (progressive disclosure).
+   The address bar above remains the always-available recovery path. */
+.browser-module:not(.is-session-active) .browser-status-strip {
+  display: none;
+}
+
 /* custom: Remote-Viewport — der Canvas zeigt den gestreamten Browser-Inhalt
    und ist die zentrale Spezialansicht dieser App. */
 .browser-frame-shell {
@@ -299,7 +361,30 @@
   }
 }
 
+/* custom: Schmales Fenster / Mobil-Sheet — der Remote-Canvas ist die Priorität,
+   also stapeln Sitzungs-Spalte (kurz) über der Arbeitsfläche und der Resizer
+   entfällt. Die Sitzungsspalte bleibt als kurze, scrollbare Leiste erreichbar
+   (Rückweg gewahrt), statt still verworfen zu werden. */
 @container business-app-window (max-width: 640px) {
+  .browser-module {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 40vh) minmax(0, 1fr);
+  }
+
+  .browser-sessions {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .browser-module > .ctox-column-resizer {
+    display: none;
+  }
+
+  .browser-canvas {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
   .browser-tabbar,
   .browser-toolbar {
     align-items: stretch;

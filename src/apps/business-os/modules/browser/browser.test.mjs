@@ -206,4 +206,114 @@ assert.doesNotMatch(
   'browser sync startup errors must reach the visible command error state',
 );
 
+// --- IA: two-pane sessions selector + remote canvas (2026-07-21) ---
+
+// LEFT column carries the full SHELL-wired canonical grammar (data-pg-*).
+assert.match(html, /ctox-workspace--two-pane/);
+assert.match(html, /class="ctox-pane browser-sessions"/);
+assert.match(html, /data-pg-search/);
+assert.match(html, /data-pg-view="cards"/);
+assert.match(html, /data-pg-view="list"/);
+assert.match(html, /data-pg-tray-toggle/);
+assert.match(html, /data-pg-reset/);
+assert.match(html, /data-pg-footer/);
+assert.match(html, /ctox-pane-body ctox-well/);
+// >= 2 real counted views (zeros included) — never a single-tab band.
+const sessionBands = html.match(/data-pg-band="[^"]+"/g) || [];
+assert.ok(sessionBands.length >= 2, 'sessions band needs >= 2 real views');
+for (const key of ['all', 'active', 'closed']) {
+  assert.match(html, new RegExp(`data-pg-band="${key}"`));
+  assert.match(html, new RegExp(`data-pg-count="${key}"`));
+}
+// Standing header actions: Neu (create), Import, Export as collected icons.
+assert.match(html, /class="ctox-pane-icon" data-browser-start/);
+assert.match(html, /data-action="import"/);
+assert.match(html, /data-action="export"/);
+// No manual refresh button on reactive data.
+assert.doesNotMatch(html, /data-browser-refresh/);
+// MAIN keeps the remote canvas + chrome bar (unique work surface).
+assert.match(html, /class="ctox-pane browser-canvas"/);
+assert.match(html, /data-browser-canvas/);
+assert.match(html, /data-browser-frame-shell/);
+
+// Explicit pane grid rows + grid-column pins (primary column keeps priority).
+assert.match(css, /\.browser-sessions\s*\{[^}]*grid-column:\s*1/);
+assert.match(css, /\.browser-canvas\s*\{[^}]*grid-column:\s*3/);
+assert.match(css, /\.browser-sessions\s*\{[^}]*grid-template-rows:\s*auto auto minmax\(0, 1fr\) auto/);
+
+// Grammar re-renders reactively on the shell event; no chrome wiring here.
+assert.match(js, /addEventListener\('ctox-pane-grammar-change', onLeftGrammarChange\)/);
+assert.match(js, /__ctoxPaneGrammar/);
+
+// In-place selection flip: selecting a session marks rows in place and must
+// NOT rebuild the list (a rebuild resets the well scroll to the top).
+assert.match(js, /refs\.sessions\?\.addEventListener\('click'[\s\S]*?markActiveSession\(refs, sessionId\)/);
+assert.match(js, /function markActiveSession[\s\S]*?classList\.toggle\('is-selected'/);
+assert.doesNotMatch(
+  js.match(/refs\.sessions\?\.addEventListener\('click'[\s\S]*?\}\);/)?.[0] || '',
+  /innerHTML/,
+  'selecting a session must not rebuild the list',
+);
+// renderSessions only rebuilds the well when the data signature changes.
+assert.match(js, /refs\.sessions\.dataset\.sig !== signature[\s\S]*?refs\.sessions\.innerHTML =/);
+
+// Import/export handlers wired to the header icons.
+assert.match(js, /\[data-action="import"\]/);
+assert.match(js, /\[data-action="export"\]/);
+assert.match(js, /importBrowserSessions\(ctx, state, refs\)/);
+assert.match(js, /exportBrowserSessions\(state, refs\)/);
+
+const hooks = __browserTestHooks;
+const sampleSessions = [
+  { id: 'browser_session_a', runtime_status: 'active', profile_mode: 'persistent', current_url: 'https://acme.example/app', updated_at_ms: 3 },
+  { id: 'browser_session_b', runtime_status: 'starting', profile_mode: 'private', title: 'Login', updated_at_ms: 2 },
+  { id: 'browser_session_c', runtime_status: 'stopped', profile_mode: 'persistent', current_url: 'https://old.example', updated_at_ms: 1 },
+];
+
+// Band counts: zeros included; the band ignores its own selection.
+assert.deepEqual(hooks.browserSessionViewCounts(sampleSessions, { band: 'active' }), { all: 3, active: 2, closed: 1 });
+assert.deepEqual(hooks.browserSessionViewCounts([], {}), { all: 0, active: 0, closed: 0 });
+assert.equal(hooks.browserSessionBand(sampleSessions[0]), 'active');
+assert.equal(hooks.browserSessionBand(sampleSessions[2]), 'closed');
+
+// Filtering by band / search / profile.
+assert.equal(hooks.filterSessionsForView(sampleSessions, { band: 'closed' }).length, 1);
+assert.equal(hooks.filterSessionsForView(sampleSessions, { search: 'acme' }).length, 1);
+assert.equal(hooks.filterSessionsForView(sampleSessions, { filters: { profile: 'private' } }).length, 1);
+assert.equal(hooks.filterSessionsForView(sampleSessions, { filters: { profile: 'all' } }).length, 3);
+
+// Signature is selection-independent (stable data => stable signature => no
+// rebuild on select) and changes only when the rendered data changes.
+const filtered = hooks.filterSessionsForView(sampleSessions, {});
+const sigA = hooks.sessionListSignature(filtered, 'cards', {});
+assert.equal(sigA, hooks.sessionListSignature(filtered, 'cards', {}), 'unchanged data => identical signature');
+const mutated = filtered.map((session, index) => index === 0 ? { ...session, runtime_status: 'stopped' } : session);
+assert.notEqual(hooks.sessionListSignature(mutated, 'cards', {}), sigA, 'status change => rebuild');
+assert.notEqual(hooks.sessionListSignature(filtered, 'list', {}), sigA, 'view change => rebuild');
+
+// Auto-reveal: the work surface shows only when a session is selected.
+assert.equal(hooks.browserWorkbenchVisible(true), true);
+assert.equal(hooks.browserWorkbenchVisible(true, true), false);
+assert.equal(hooks.browserWorkbenchVisible(false), false);
+assert.match(js, /is-session-active/);
+
+// Export/import round-trips honestly (read-only overlay, never persisted).
+const exported = hooks.buildBrowserSessionsExport(sampleSessions, 1234);
+assert.equal(exported.kind, 'browser_sessions');
+assert.equal(exported.exported_at_ms, 1234);
+assert.equal(exported.sessions.length, 3);
+const reimported = hooks.parseBrowserSessionsImport(exported);
+assert.equal(reimported.length, 3);
+assert.equal(reimported[0].__imported, true);
+assert.equal(reimported[0].id, 'browser_session_a');
+assert.deepEqual(hooks.parseBrowserSessionsImport({ sessions: [{ foo: 'bar' }] }), []);
+// Imported entries never override a real owned session in the render list.
+assert.equal(
+  hooks.sessionRenderList({ visibleSessions: [sampleSessions[0]], importedSessions: [{ id: 'browser_session_a', __imported: true }, { id: 'browser_session_z', __imported: true }] }).length,
+  2,
+);
+
+// Shard meta is a single muted selector line.
+assert.match(hooks.browserSessionShardMeta(sampleSessions[0], 2), /Persönlich · .+ · 2 Tabs/);
+
 console.log('browser module pure contract smoke OK');

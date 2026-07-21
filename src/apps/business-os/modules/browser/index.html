@@ -1,75 +1,134 @@
-<main class="browser-module" data-browser-root>
-  <section class="browser-chrome" aria-label="Browser Steuerung">
-    <div class="browser-tabbar">
-      <div class="ctox-callout" data-browser-auth-assist hidden></div>
-      <div class="browser-session-list ctox-pane-tabs" data-browser-session-list aria-label="Browser Fenster"></div>
-      <button type="button" class="ctox-icon-button browser-new-window" data-browser-start aria-label="Neues Browserfenster" title="Neues Browserfenster">+</button>
-      <button type="button" class="ctox-pane-icon browser-toggle-advanced" data-browser-toggle-advanced aria-label="Erweiterte Aktionen" title="Erweiterte Aktionen" aria-pressed="false">⋯</button>
-    </div>
-
-    <!-- Erweiterte Aktionen + Diagnose. Standardmäßig eingeklappt (is-advanced-hidden);
-         data-browser-toggle-advanced schaltet die Sichtbarkeit um. -->
-    <div class="browser-advanced is-advanced-hidden" data-browser-advanced>
-      <div class="browser-advanced-actions">
-        <label class="ctox-choice">
-          <input type="checkbox" data-browser-private> Privat-Modus
-        </label>
-        <label class="ctox-compact-field">
-          <span>Viewport</span>
-          <select class="ctox-select" data-browser-viewport>
-            <option value="1280x720">Desktop 1280×720</option>
-            <option value="390x844">Mobil 390×844</option>
+<main class="ctox-workspace ctox-workspace--two-pane browser-module" data-browser-root data-resize-frame>
+  <!-- LEFT = persistent browser sessions, the selector column. Canonical column
+       grammar (SHELL-wired via data-pg-*): title + collected header icons
+       (Neu/Import/Export) → filterbar (search + shard/list toggle + filter tray)
+       → counted view band (>= 2 real views, zeros included) → recessed well →
+       one-line footer. The module writes NO chrome CSS/JS: it re-renders on the
+       bubbling ctox-pane-grammar-change event and writes counts/footer via
+       pane.__ctoxPaneGrammar (null-guarded) or plain textContent. -->
+  <aside class="ctox-pane browser-sessions" data-left-content aria-label="Browser-Sitzungen">
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-t="sessionsKicker">CTOX Computer</span>
+          <h2 class="ctox-pane-title" data-t="sessionsTitle">Sitzungen</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon" data-browser-start aria-label="Neue Sitzung" data-t-aria="sessionsNew" title="Neue Sitzung"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 9v6M9 12h6"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-action="import" aria-label="Sitzungen importieren" data-t-aria="sessionsImport" title="Sitzungen importieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-action="export" aria-label="Sitzungen exportieren" data-t-aria="sessionsExport" title="Sitzungen exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21V9M12 9l-4 4M12 9l4 4M5 3h14"/></svg></button>
+        </div>
+      </div>
+      <div class="ctox-filterbar">
+        <input class="ctox-pane-search" type="search" data-pg-search placeholder="Sitzung suchen..." aria-label="Sitzung suchen" />
+        <div class="ctox-view-toggle" role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
+        <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="ctox-filter-tray" data-pg-tray hidden>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" data-pg-filter data-pg-name="profile" data-pg-default="all" aria-label="Profil filtern">
+            <option value="all" data-t="filterProfileAll">Alle Profile</option>
+            <option value="persistent" data-t="filterProfilePersistent">Persönlich</option>
+            <option value="private" data-t="filterProfilePrivate">Privat</option>
           </select>
-        </label>
-        <button type="button" class="ctox-button" data-browser-new-tab>Neuer Tab</button>
-        <button type="button" class="ctox-button" data-browser-upload>Upload</button>
-        <button type="button" class="ctox-button" data-browser-controller-acquire>Steuerung übernehmen</button>
-        <button type="button" class="ctox-button" data-browser-controller-release>Steuerung freigeben</button>
-        <button type="button" class="ctox-button" data-browser-observer-grant>Beobachter hinzufügen</button>
-        <button type="button" class="ctox-button" data-browser-observer-revoke>Beobachter entfernen</button>
-        <button type="button" class="ctox-button" data-browser-clipboard-copy>Clipboard kopieren</button>
-        <button type="button" class="ctox-button" data-browser-clipboard-paste>Clipboard einfügen</button>
-        <button type="button" class="ctox-button" data-browser-clipboard-clear>Clipboard leeren</button>
-        <button type="button" class="ctox-button" data-browser-send-to-ctox data-t="sendToCtox">An CTOX senden</button>
-        <button type="button" class="ctox-button is-danger" data-browser-stop data-t="close">Fenster schließen</button>
+          <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+        </div>
       </div>
-      <div class="browser-diagnostics" hidden aria-hidden="true">
-        <span data-browser-session-card></span>
-        <span data-browser-status-meta></span>
-        <span data-browser-frame-id></span>
-        <span data-browser-frame-seq></span>
-        <span data-browser-frame-size></span>
-        <span data-browser-frame-time></span>
-        <span data-browser-input-state></span>
-        <span data-browser-command-state></span>
-        <span data-browser-command-history></span>
-        <span data-browser-handoff-history></span>
-      </div>
-    </div>
-
-    <div class="ctox-callout" data-browser-notice hidden></div>
-    <header class="browser-toolbar ctox-toolbar">
-      <div class="browser-nav-actions" aria-label="Navigation">
-        <button type="button" class="ctox-icon-button" data-browser-back aria-label="Zurueck" data-t-aria="navBack">‹</button>
-        <button type="button" class="ctox-icon-button" data-browser-forward aria-label="Vor" data-t-aria="navForward">›</button>
-        <button type="button" class="ctox-icon-button" data-browser-reload aria-label="Neu laden" data-t-aria="navReload">↻</button>
-      </div>
-      <form class="browser-address-form" data-browser-address-form>
-        <input class="ctox-input" data-browser-address type="url" placeholder="https://example.com" autocomplete="off">
-        <button type="submit" class="ctox-button is-primary" data-browser-go data-t="go">Los</button>
-      </form>
     </header>
-    <div class="browser-status-strip" aria-label="Browser Status">
-      <span class="ctox-badge" data-browser-status-chip data-t="statusDisconnected">Nicht verbunden</span>
-      <span data-browser-status-title data-t="noWindowOpen">Kein Browser-Fenster geoeffnet</span>
+    <nav class="ctox-view-switch" aria-label="Sitzungsansichten">
+      <div class="ctox-pane-tabs">
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="all" aria-selected="true"><span data-t="bandAll">Alle</span><span class="view-count" data-pg-count="all"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="active" aria-selected="false"><span data-t="bandActive">Aktiv</span><span class="view-count" data-pg-count="active"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="closed" aria-selected="false"><span data-t="bandClosed">Beendet</span><span class="view-count" data-pg-count="closed"></span></button>
+      </div>
+    </nav>
+    <div class="ctox-pane-body ctox-well">
+      <div class="ctox-list browser-session-rail" data-browser-sessions role="listbox" aria-label="Browser-Sitzungen"></div>
+      <div class="ctox-empty" data-browser-sessions-empty hidden data-t="sessionsEmpty">Noch keine Browser-Sitzung. Öffne oben rechts eine neue.</div>
     </div>
-    <div class="browser-download-strip" data-browser-downloads hidden></div>
-  </section>
+    <footer class="ctox-pane-footer"><span data-pg-footer data-browser-sessions-footer></span></footer>
+  </aside>
 
-  <section class="browser-workbench" aria-label="Browser Inhalt">
-    <div class="browser-frame-shell" data-browser-frame-shell>
-      <canvas data-browser-canvas width="1280" height="720" tabindex="0" aria-label="Remote browser frame"></canvas>
-      <div class="browser-empty ctox-empty" data-browser-empty data-t="framePreparing">Browser-Fenster wird vorbereitet</div>
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="240" data-resizer-max="440" aria-label="Spaltenbreite anpassen"></button>
+
+  <!-- MAIN = remote canvas + chrome bar. The unique work surface of this app;
+       the remote/CDP session flow (address bar, navigation, controller lease,
+       input streaming, frame rendering, auth assist, downloads) is unchanged. -->
+  <section class="ctox-pane browser-canvas" aria-label="Browser Inhalt">
+    <div class="browser-chrome" aria-label="Browser Steuerung">
+      <div class="browser-tabbar">
+        <div class="ctox-callout" data-browser-auth-assist hidden></div>
+        <div class="browser-session-list ctox-pane-tabs" data-browser-session-list aria-label="Browser Tabs"></div>
+        <button type="button" class="ctox-pane-icon browser-toggle-advanced" data-browser-toggle-advanced aria-label="Erweiterte Aktionen" title="Erweiterte Aktionen" aria-pressed="false">⋯</button>
+      </div>
+
+      <!-- Erweiterte Aktionen + Diagnose. Standardmäßig eingeklappt (is-advanced-hidden);
+           data-browser-toggle-advanced schaltet die Sichtbarkeit um. -->
+      <div class="browser-advanced is-advanced-hidden" data-browser-advanced>
+        <div class="browser-advanced-actions">
+          <label class="ctox-choice">
+            <input type="checkbox" data-browser-private> Privat-Modus
+          </label>
+          <label class="ctox-compact-field">
+            <span>Viewport</span>
+            <select class="ctox-select" data-browser-viewport>
+              <option value="1280x720">Desktop 1280×720</option>
+              <option value="390x844">Mobil 390×844</option>
+            </select>
+          </label>
+          <button type="button" class="ctox-button" data-browser-new-tab>Neuer Tab</button>
+          <button type="button" class="ctox-button" data-browser-upload>Upload</button>
+          <button type="button" class="ctox-button" data-browser-controller-acquire>Steuerung übernehmen</button>
+          <button type="button" class="ctox-button" data-browser-controller-release>Steuerung freigeben</button>
+          <button type="button" class="ctox-button" data-browser-observer-grant>Beobachter hinzufügen</button>
+          <button type="button" class="ctox-button" data-browser-observer-revoke>Beobachter entfernen</button>
+          <button type="button" class="ctox-button" data-browser-clipboard-copy>Clipboard kopieren</button>
+          <button type="button" class="ctox-button" data-browser-clipboard-paste>Clipboard einfügen</button>
+          <button type="button" class="ctox-button" data-browser-clipboard-clear>Clipboard leeren</button>
+          <button type="button" class="ctox-button" data-browser-send-to-ctox data-t="sendToCtox">An CTOX senden</button>
+          <button type="button" class="ctox-button is-danger" data-browser-stop data-t="close">Fenster schließen</button>
+        </div>
+        <div class="browser-diagnostics" hidden aria-hidden="true">
+          <span data-browser-session-card></span>
+          <span data-browser-status-meta></span>
+          <span data-browser-frame-id></span>
+          <span data-browser-frame-seq></span>
+          <span data-browser-frame-size></span>
+          <span data-browser-frame-time></span>
+          <span data-browser-input-state></span>
+          <span data-browser-command-state></span>
+          <span data-browser-command-history></span>
+          <span data-browser-handoff-history></span>
+        </div>
+      </div>
+
+      <div class="ctox-callout" data-browser-notice hidden></div>
+      <header class="browser-toolbar ctox-toolbar">
+        <div class="browser-nav-actions" aria-label="Navigation">
+          <button type="button" class="ctox-icon-button" data-browser-back aria-label="Zurueck" data-t-aria="navBack">‹</button>
+          <button type="button" class="ctox-icon-button" data-browser-forward aria-label="Vor" data-t-aria="navForward">›</button>
+          <button type="button" class="ctox-icon-button" data-browser-reload aria-label="Neu laden" data-t-aria="navReload">↻</button>
+        </div>
+        <form class="browser-address-form" data-browser-address-form>
+          <input class="ctox-input" data-browser-address type="url" placeholder="https://example.com" autocomplete="off">
+          <button type="submit" class="ctox-button is-primary" data-browser-go data-t="go">Los</button>
+        </form>
+      </header>
+      <div class="browser-status-strip" aria-label="Browser Status">
+        <span class="ctox-badge" data-browser-status-chip data-t="statusDisconnected">Nicht verbunden</span>
+        <span data-browser-status-title data-t="noWindowOpen">Kein Browser-Fenster geoeffnet</span>
+      </div>
+      <div class="browser-download-strip" data-browser-downloads hidden></div>
+    </div>
+
+    <div class="browser-workbench" aria-label="Browser Inhalt">
+      <div class="browser-frame-shell" data-browser-frame-shell>
+        <canvas data-browser-canvas width="1280" height="720" tabindex="0" aria-label="Remote browser frame"></canvas>
+        <div class="browser-empty ctox-empty" data-browser-empty data-t="framePreparing">Browser-Fenster wird vorbereitet</div>
+      </div>
     </div>
   </section>
 </main>

@@ -1,6 +1,6 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 
-const STYLE_BUILD = '20260718-browser-reduction-v1';
+const STYLE_BUILD = '20260721-browser-ia-v1';
 
 // Module-level translator; set from locales/<lang>.json during mount.
 let t = (key, fallback) => fallback ?? key;
@@ -34,7 +34,11 @@ export async function mount(ctx) {
     root,
     sessionCard: root.querySelector('[data-browser-session-card]'),
     sessionList: root.querySelector('[data-browser-session-list]'),
-    refresh: root.querySelector('[data-browser-refresh]'),
+    sessionsPane: root.querySelector('.browser-sessions'),
+    sessions: root.querySelector('[data-browser-sessions]'),
+    sessionsEmpty: root.querySelector('[data-browser-sessions-empty]'),
+    sessionsImport: root.querySelector('[data-action="import"]'),
+    sessionsExport: root.querySelector('[data-action="export"]'),
     start: root.querySelector('[data-browser-start]'),
     toggleAdvanced: root.querySelector('[data-browser-toggle-advanced]'),
     advanced: root.querySelector('[data-browser-advanced]'),
@@ -95,6 +99,12 @@ export async function mount(ctx) {
     controllerLeaseId: '',
     addressDirty: false,
     requestedSessionStarts: new Set(),
+    // LEFT grammar column (SHELL-wired data-pg-*). The module only mirrors the
+    // shell state to filter/label the sessions list; it wires no chrome itself.
+    leftView: { search: '', view: 'cards', band: 'all', filters: {} },
+    // Imported sessions are a read-only local overlay for review (browser
+    // sessions are a read-only projection; the app never persists them).
+    importedSessions: [],
   };
 
   const cleanups = [];
@@ -152,7 +162,24 @@ export async function mount(ctx) {
     if (sub?.unsubscribe) cleanups.push(() => sub.unsubscribe());
   }
 
-  refs.refresh?.addEventListener('click', safeLoadAndRender);
+  // LEFT column grammar is SHELL-wired (search / shard-list toggle / filter
+  // tray / reset / active-dot / counted band). The module re-renders the
+  // sessions list on the bubbling change event; no manual refresh button —
+  // the sessions list is reactive (collection subscriptions above).
+  const onLeftGrammarChange = (event) => {
+    const detail = event?.detail || refs.sessionsPane?.__ctoxPaneGrammar?.state?.() || {};
+    state.leftView = {
+      search: String(detail.search || '').trim().toLowerCase(),
+      view: detail.view === 'list' ? 'list' : 'cards',
+      band: detail.band || 'all',
+      filters: detail.filters || {},
+    };
+    renderSessions(refs, sessionRenderList(state), state.latestSession, state.leftView, sessionTabCounts(state.tabs));
+  };
+  root.addEventListener('ctox-pane-grammar-change', onLeftGrammarChange);
+  cleanups.push(() => root.removeEventListener('ctox-pane-grammar-change', onLeftGrammarChange));
+  refs.sessionsImport?.addEventListener('click', () => importBrowserSessions(ctx, state, refs));
+  refs.sessionsExport?.addEventListener('click', () => exportBrowserSessions(state, refs));
   refs.toggleAdvanced?.addEventListener('click', () => {
     if (!refs.advanced) return;
     const hidden = refs.advanced.classList.toggle('is-advanced-hidden');
@@ -312,6 +339,22 @@ export async function mount(ctx) {
     state.selectedSessionId = item.dataset.browserSessionId || '';
     safeLoadAndRender();
   });
+  // LEFT sessions selector. Selecting a session is an in-place is-selected flip
+  // across existing rows — it must NOT rebuild the list (a rebuild would clamp
+  // the well's scrollTop to 0 and yank the operator to the top). Only the data
+  // that drives the MAIN canvas changes, so the reactive load re-renders the
+  // work surface while the signature guard leaves the list markup untouched.
+  refs.sessions?.addEventListener('click', (event) => {
+    const item = event.target?.closest?.('[data-browser-session-id]');
+    if (!item) return;
+    const sessionId = item.dataset.browserSessionId || '';
+    if (sessionId === state.selectedSessionId) return;
+    if (sessionId !== state.selectedSessionId) state.controllerLeaseId = '';
+    state.selectedSessionId = sessionId;
+    state.requestedSessionId = '';
+    markActiveSession(refs, sessionId);
+    safeLoadAndRender();
+  });
   const submitAddress = () => {
     const canNavigate = browserSurfaceCanControl(ctx, state);
     const url = refs.address?.value || 'https://example.com';
@@ -438,6 +481,24 @@ export async function mount(ctx) {
     const renderedTabs = state.latestTab?.id
       ? tabs.map((tab) => tab.id === state.latestTab.id ? { ...tab, ...state.latestTab } : tab)
       : tabs;
+    state.visibleSessions = visibleSessions;
+    state.tabs = tabs;
+    // Left = persistent sessions selector; syncs from the shell grammar state
+    // (may not be wired yet on the first paint — that is null-guarded).
+    const grammar = refs.sessionsPane?.__ctoxPaneGrammar?.state?.();
+    if (grammar) {
+      state.leftView = {
+        search: String(grammar.search || '').trim().toLowerCase(),
+        view: grammar.view === 'list' ? 'list' : 'cards',
+        band: grammar.band || 'all',
+        filters: grammar.filters || {},
+      };
+    }
+    renderSessions(refs, sessionRenderList(state), state.latestSession, state.leftView, sessionTabCounts(state.tabs));
+    // Auto-reveal: the remote work surface is meaningful once a session is
+    // selected (visible = hasSelection && !userCollapsed). No session -> the
+    // canvas shows its empty state instead of stale chrome.
+    refs.root.classList.toggle('is-session-active', browserWorkbenchVisible(Boolean(state.latestSession?.id)));
     renderSessionList(refs, visibleSessions, renderedTabs, state.latestSession);
     renderSession(refs, state.latestSession, state.latestTab, state.latestFrame, state.latestCommand, state);
     renderAuthAssist(refs, state.latestSession);
@@ -1097,6 +1158,265 @@ function renderSessionList(refs, sessions, tabs, activeSession) {
   refs.sessionList.innerHTML = tabMarkup;
 }
 
+// ----- LEFT sessions selector (canonical grammar column) -----
+
+// Owned sessions plus the read-only import overlay (imported entries that are
+// not already a real owned session). Imported sessions are marked and never
+// persisted — browser sessions are a read-only projection.
+function sessionRenderList(state) {
+  const owned = Array.isArray(state?.visibleSessions) ? state.visibleSessions : [];
+  const ownedIds = new Set(owned.map((session) => session.id));
+  const imported = (Array.isArray(state?.importedSessions) ? state.importedSessions : [])
+    .filter((session) => session?.id && !ownedIds.has(session.id));
+  return [...owned, ...imported];
+}
+
+function sessionTabCounts(tabs) {
+  const counts = {};
+  for (const tab of Array.isArray(tabs) ? tabs : []) {
+    if (tab.status === 'closed') continue;
+    counts[tab.session_id] = Number(counts[tab.session_id] || 0) + 1;
+  }
+  return counts;
+}
+
+// Rebuild the sessions well ONLY when the rendered data changed (signature
+// guard). Selection is applied in place via markActiveSession so a re-render
+// never clamps the well scroll or moves the operator.
+function renderSessions(refs, sessions, activeSession, view = {}, tabCounts = {}) {
+  if (!refs.sessions) return;
+  const all = Array.isArray(sessions) ? sessions : [];
+  const filtered = filterSessionsForView(all, view);
+  const listView = view?.view === 'list' ? 'list' : 'cards';
+  refs.sessions.classList.toggle('is-list', listView === 'list');
+
+  const signature = sessionListSignature(filtered, listView, tabCounts);
+  if (refs.sessions.dataset.sig !== signature) {
+    refs.sessions.dataset.sig = signature;
+    refs.sessions.innerHTML = filtered
+      .map((session) => sessionShardMarkup(session, tabCounts[session.id] || 0))
+      .join('');
+  }
+  if (refs.sessionsEmpty) refs.sessionsEmpty.hidden = filtered.length > 0;
+  markActiveSession(refs, activeSession?.id || '');
+
+  const counts = browserSessionViewCounts(all, view);
+  const pg = refs.sessionsPane?.__ctoxPaneGrammar;
+  if (pg?.setCounts) pg.setCounts(counts);
+  else writeSessionCounts(refs, counts);
+  const noun = filtered.length === 1 ? 'Sitzung' : 'Sitzungen';
+  const footer = `${filtered.length} ${noun} · ${bandLabel(view?.band)}`;
+  if (pg?.setFooter) pg.setFooter(footer);
+  else writeSessionFooter(refs, footer);
+}
+
+// In-place selection flip across existing rows — NEVER a rebuild.
+function markActiveSession(refs, sessionId) {
+  for (const node of refs.sessions?.querySelectorAll('[data-browser-session-id]') || []) {
+    const active = node.dataset.browserSessionId === sessionId;
+    node.classList.toggle('is-selected', active);
+    node.classList.toggle('is-active', active);
+    node.setAttribute('aria-selected', active ? 'true' : 'false');
+  }
+}
+
+function sessionShardMarkup(session, tabCount) {
+  const url = session.current_url || session.payload?.target_url || '';
+  const title = browserDisplayTitle(null, session, url);
+  const meta = browserSessionShardMeta(session, tabCount);
+  const importedClass = session.__imported ? ' browser-session--imported' : '';
+  return `
+    <div class="ctox-list-item browser-session${importedClass}" role="option" aria-selected="false" tabindex="0"
+      data-browser-session-id="${escapeHtml(session.id)}"
+      data-context-record-id="${escapeHtml(session.id)}"
+      data-context-record-type="browser_session"
+      data-context-label="${escapeHtml(title)}">
+      <span class="browser-session-title">${escapeHtml(title)}</span>
+      <span class="browser-session-meta">${escapeHtml(meta)}</span>
+    </div>`;
+}
+
+function browserSessionShardMeta(session, tabCount = 0) {
+  const status = browserStatusLabel(session);
+  const profile = (session.profile_mode || session.payload?.profile_mode) === 'private' ? 'Privat' : 'Persönlich';
+  const count = Number(tabCount || 0);
+  const parts = [profile, status, `${count} ${count === 1 ? 'Tab' : 'Tabs'}`];
+  if (session.__imported) parts.push('Import');
+  return parts.join(' · ');
+}
+
+function browserSessionBand(session) {
+  const uiState = browserUiState(session);
+  return ['ready', 'starting', 'waiting'].includes(uiState) ? 'active' : 'closed';
+}
+
+function browserSessionMatchesBand(session, band) {
+  if (!band || band === 'all') return true;
+  return browserSessionBand(session) === band;
+}
+
+function filterSessionsForView(sessions, view = {}) {
+  const search = String(view.search || '').trim().toLowerCase();
+  const profile = view.filters?.profile && view.filters.profile !== 'all' ? view.filters.profile : '';
+  const band = view.band || 'all';
+  return (Array.isArray(sessions) ? sessions : []).filter((session) => {
+    if (!browserSessionMatchesBand(session, band)) return false;
+    if (profile) {
+      const mode = session.profile_mode || session.payload?.profile_mode || 'persistent';
+      if (mode !== profile) return false;
+    }
+    if (search) {
+      const hay = `${session.id || ''} ${session.title || ''} ${session.current_url || ''} ${session.payload?.target_url || ''}`.toLowerCase();
+      if (!hay.includes(search)) return false;
+    }
+    return true;
+  });
+}
+
+// Band counts ignore the band selection (the band IS the selector) but honor
+// search + profile filters; zeros are rendered, never hidden.
+function browserSessionViewCounts(sessions, view = {}) {
+  const base = filterSessionsForView(sessions, { ...view, band: 'all' });
+  return {
+    all: base.length,
+    active: base.filter((session) => browserSessionBand(session) === 'active').length,
+    closed: base.filter((session) => browserSessionBand(session) === 'closed').length,
+  };
+}
+
+// Selection-independent signature: a pure selection change (not part of the
+// signature) leaves it identical, so renderSessions skips the rebuild.
+function sessionListSignature(filteredSessions, listView, tabCounts = {}) {
+  const rows = (Array.isArray(filteredSessions) ? filteredSessions : []).map((session) => [
+    session.id || '',
+    browserUiState(session),
+    String(session.title || session.current_url || ''),
+    session.profile_mode || session.payload?.profile_mode || '',
+    Number(tabCounts[session.id] || 0),
+    Number(session.updated_at_ms || 0),
+    session.__imported ? 'i' : '',
+  ].join(':'));
+  return `${listView}::${rows.join('|')}`;
+}
+
+// Auto-reveal model (design-guide "Progressive Disclosure"): the remote work
+// surface is the browser's "detail" — revealed once a session is selected and
+// not user-collapsed. Mirrors the outbound/conversations idiom.
+function browserWorkbenchVisible(hasSession, userCollapsed = false) {
+  return Boolean(hasSession) && !userCollapsed;
+}
+
+function bandLabel(band) {
+  if (band === 'active') return 'Aktiv';
+  if (band === 'closed') return 'Beendet';
+  return 'Alle';
+}
+
+function writeSessionCounts(refs, counts) {
+  for (const [key, value] of Object.entries(counts || {})) {
+    const node = refs.sessionsPane?.querySelector(`[data-pg-count="${key}"]`);
+    if (node) node.textContent = ` (${value})`;
+  }
+}
+
+function writeSessionFooter(refs, text) {
+  const node = refs.sessionsPane?.querySelector('[data-pg-footer]');
+  if (node) node.textContent = text || '';
+}
+
+// Export/import are honest and small: export writes owned sessions as JSON via a
+// Blob; import overlays sessions for local review only (never persisted).
+function buildBrowserSessionsExport(sessions, nowMs = Date.now()) {
+  return {
+    kind: 'browser_sessions',
+    schema_version: 1,
+    exported_at_ms: Number(nowMs) || 0,
+    sessions: (Array.isArray(sessions) ? sessions : []).map((session) => ({
+      id: session.id || '',
+      title: browserDisplayTitle(null, session, session.current_url || ''),
+      url: session.current_url || session.payload?.target_url || '',
+      status: session.runtime_status || session.status || '',
+      profile_mode: session.profile_mode || session.payload?.profile_mode || 'persistent',
+      owner_user_id: session.owner_user_id || '',
+      controller_user_id: session.controller_user_id || '',
+      updated_at_ms: Number(session.updated_at_ms || 0),
+    })),
+  };
+}
+
+function parseBrowserSessionsImport(parsed) {
+  const rows = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.sessions) ? parsed.sessions : [];
+  return rows
+    .map((row) => {
+      const id = String(row?.id || '').trim();
+      if (!id) return null;
+      const status = String(row.status || 'imported');
+      return {
+        id,
+        title: String(row.title || ''),
+        current_url: String(row.url || row.current_url || ''),
+        status,
+        runtime_status: status,
+        profile_mode: String(row.profile_mode || 'persistent'),
+        updated_at_ms: Number(row.updated_at_ms || 0),
+        __imported: true,
+      };
+    })
+    .filter(Boolean);
+}
+
+function downloadBrowserJson(payload, filename, root) {
+  let url = '';
+  try {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.rel = 'noopener';
+    (root || document.body)?.appendChild?.(anchor);
+    anchor.click();
+    anchor.remove?.();
+  } catch (error) {
+    console.error('[browser] session export failed', error);
+  } finally {
+    if (url) setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 4000);
+  }
+}
+
+function exportBrowserSessions(state, refs) {
+  const rows = sessionRenderList(state).filter((session) => !session.__imported);
+  downloadBrowserJson(buildBrowserSessionsExport(rows, Date.now()), 'browser-sessions.json', refs?.root);
+}
+
+function importBrowserSessions(ctx, state, refs) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/json,.json';
+  input.addEventListener('change', async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    let parsed;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch {
+      ctx.notifications?.show?.({ type: 'error', title: 'Browser', message: 'Ungültige JSON-Datei.' });
+      return;
+    }
+    const imported = parseBrowserSessionsImport(parsed);
+    if (!imported.length) {
+      ctx.notifications?.show?.({ type: 'warning', title: 'Browser', message: 'Keine Sitzungen in der Datei.' });
+      return;
+    }
+    state.importedSessions = imported;
+    renderSessions(refs, sessionRenderList(state), state.latestSession, state.leftView, sessionTabCounts(state.tabs));
+    ctx.notifications?.show?.({ type: 'info', title: 'Browser', message: `${imported.length} Sitzungen geladen (nur lokal).` });
+  });
+  input.click();
+}
+
 function renderSession(refs, session, tab, frame, command, state) {
   if (!session) {
     refs.sessionCard.innerHTML = '<span class="browser-muted">Kein Browserfenster</span>';
@@ -1596,6 +1916,16 @@ export const __browserTestHooks = {
   browserSurfaceIsFocused,
   browserSurfaceCanControl,
   newBrowserControllerLeaseId,
+  filterSessionsForView,
+  browserSessionViewCounts,
+  browserSessionBand,
+  sessionListSignature,
+  browserWorkbenchVisible,
+  browserSessionShardMeta,
+  buildBrowserSessionsExport,
+  parseBrowserSessionsImport,
+  sessionRenderList,
+  sessionTabCounts,
 };
 
 async function ensureStyles() {
