@@ -1,22 +1,81 @@
-<section class="ats-esign ctox-record-workbench" data-ats-root>
-  <header class="ctox-pane-header ctox-pane-band ctox-record-workbench__header">
-    <div class="ctox-pane-title-row">
-      <div class="ctox-pane-titles">
-        <h1 class="ctox-pane-title" data-ats-title></h1>
+<main class="ctox-workspace ctox-workspace--two-pane esign-module" data-esign-root data-resize-frame>
+  <!-- LEFT: record list (persistence/selector column) — canonical column
+       grammar (data-pg-*). The shell auto-wires search/tray/reset/active-dot/
+       view-toggle/band; this module writes only markup + counts/footer. -->
+  <aside class="ctox-pane esign-left" aria-label="Signatur-Anfragen" data-esign-list-pane data-left-content>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-copy="kicker">E-SIGNATUR</span>
+          <h2 class="ctox-pane-title" data-copy="listTitle">Anfragen</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon" data-action="new" aria-label="Neu" title="Neu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-action="import" aria-label="Importieren" title="Importieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-action="export" aria-label="Exportieren" title="Exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21V9M12 9l-4 4M12 9l4 4M5 3h14"/></svg></button>
+        </div>
       </div>
+      <div class="ctox-filterbar">
+        <input class="ctox-pane-search" type="search" data-pg-search placeholder="Suchen..." aria-label="Anfragen suchen" />
+        <div class="ctox-view-toggle" role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
+        <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="ctox-filter-tray" data-pg-tray hidden>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" data-pg-filter data-pg-name="subject_kind" data-pg-default="all" aria-label="Vertragstyp filtern">
+            <option value="all" data-copy="allKinds">Alle Typen</option>
+            <option value="arbeitsvertrag" data-copy="employment">Arbeitsvertrag</option>
+            <option value="vermittlungsvertrag" data-copy="placement">Vermittlungsvertrag</option>
+            <option value="ueberlassungsvertrag" data-copy="staffing">Überlassungsvertrag</option>
+          </select>
+          <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+        </div>
+      </div>
+    </header>
+    <nav class="ctox-view-switch" aria-label="Ansichten">
+      <div class="ctox-pane-tabs">
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="all" aria-selected="true"><span data-copy="viewAll">Alle</span><span class="view-count" data-pg-count="all"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="open" aria-selected="false"><span data-copy="viewOpen">Offen</span><span class="view-count" data-pg-count="open"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="done" aria-selected="false"><span data-copy="viewDone">Abgeschlossen</span><span class="view-count" data-pg-count="done"></span></button>
+      </div>
+    </nav>
+    <div class="ctox-pane-body ctox-well">
+      <div class="ctox-list" data-esign-list></div>
     </div>
-  </header>
-  <div class="ctox-record-workbench__body">
-    <form class="ctox-compact-form" data-ats-form>
-      <div class="ctox-compact-form__fields">
-        <label class="ctox-compact-field"><span data-copy="document">Dokument-ID</span><input class="ctox-input" type="text" name="document_id" required data-f /></label>
-        <label class="ctox-compact-field"><span data-copy="subjectKind">Vertragstyp</span><select class="ctox-select" name="subject_kind" data-f><option value="arbeitsvertrag" data-copy="employment">arbeitsvertrag</option><option value="vermittlungsvertrag" data-copy="placement">vermittlungsvertrag</option><option value="ueberlassungsvertrag" data-copy="staffing">ueberlassungsvertrag</option></select></label>
-        <label class="ctox-compact-field"><span data-copy="signers">Unterzeichner</span><input class="ctox-input" type="text" name="signers" data-f /></label>
+    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
+  </aside>
+
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="260" data-resizer-max="520" aria-label="Spaltenbreite anpassen"></button>
+
+  <!-- MAIN: record-bound workbench. The create composer stays as-is; selecting
+       a request prefills it and auto-reveals the record detail + signer flow. -->
+  <section class="ctox-pane esign-center" aria-label="Workbench" data-esign-workbench>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-esign-wb-kicker data-copy="composerKicker">NEUE ANFRAGE</span>
+          <h2 class="ctox-pane-title" data-esign-wb-title data-copy="composerTitle">Signatur anfordern</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon" data-esign-collapse aria-pressed="false" aria-label="Detail einklappen" title="Detail einklappen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
+        </div>
       </div>
-      <div class="ctox-compact-form__actions"><button class="ctox-button is-primary" type="submit" data-copy="create">Anlegen</button></div>
-    </form>
-    <div class="ctox-callout" data-ats-gate></div>
-    <div class="ctox-record-workbench__status" data-ats-count></div>
-    <div class="ctox-record-list" data-ats-list></div>
-  </div>
-</section>
+    </header>
+    <div class="ctox-pane-scroll esign-workbench-scroll">
+      <form class="ctox-compact-form" data-esign-form>
+        <div class="ctox-compact-form__fields">
+          <label class="ctox-compact-field"><span data-copy="document">Dokument-ID</span><input class="ctox-input" type="text" name="document_id" required data-esign-field="document_id" /></label>
+          <label class="ctox-compact-field"><span data-copy="subjectKind">Vertragstyp</span><select class="ctox-select" name="subject_kind" data-esign-field="subject_kind"><option value="arbeitsvertrag" data-copy="employment">Arbeitsvertrag</option><option value="vermittlungsvertrag" data-copy="placement">Vermittlungsvertrag</option><option value="ueberlassungsvertrag" data-copy="staffing">Überlassungsvertrag</option></select></label>
+          <label class="ctox-compact-field"><span data-copy="signers">Unterzeichner</span><input class="ctox-input" type="text" name="signers" data-esign-field="signers" /></label>
+        </div>
+        <div class="ctox-compact-form__actions"><button class="ctox-button is-primary" type="submit" data-copy="create">Anlegen</button></div>
+      </form>
+      <div class="ctox-callout" data-esign-gate></div>
+      <div class="esign-detail" data-esign-detail></div>
+    </div>
+    <footer class="ctox-pane-footer"><span data-esign-wb-footer></span></footer>
+  </section>
+</main>

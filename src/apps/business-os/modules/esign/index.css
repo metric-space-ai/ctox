@@ -1,70 +1,164 @@
 /* esign/index.css — module-specific layer on top of shared/base.css.
-   Frame, header, subtitle, compact form, inputs, selects, buttons, badges,
-   callout, status line, record list and empty state all come from the kit
-   (.ctox-record-workbench, .ctox-pane-*, .ctox-compact-form, .ctox-input,
-   .ctox-select, .ctox-button, .ctox-badge, .ctox-callout,
-   .ctox-record-workbench__status, .ctox-record-list, .ctox-empty).
-   Only the signature-request rows and small gate-content details live here. */
+   The two-pane frame, pane headers, canonical column grammar (filterbar, tray,
+   counted band, well, footer), list items, compact form, inputs, selects,
+   buttons, badges, callout and fields all come from the kit. This file keeps
+   only what is genuinely esign-specific: the explicit pane grid pins/rows, the
+   shard/compact row content, the workbench detail + signer flow, and the gate
+   callout details. Chrome wiring is shell-owned (data-pg-* auto-wired). */
 
-/* The gate callout starts empty and is cleared between actions — collapse it
-   so no padding/border ghost remains (the kit callout has no :empty rule). */
-.ats-esign [data-ats-gate]:empty {
+/* ---- Explicit workspace pins (design-guide: pin panes to grid tracks so a
+   hidden resizer never lets the main view slide onto an empty track). Pane
+   rows: header / band / well / footer (left) and header / body / footer. ---- */
+.esign-module {
+  --ctox-left-width: 320px;
+}
+
+.esign-left {
+  grid-column: 1;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.esign-module > [data-resizer="left"] {
+  grid-column: 2;
+}
+
+.esign-center {
+  grid-column: 3;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.esign-workbench-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+
+/* ---- Left column shard rows (cards + compact). A shard is a pure selector:
+   title + one muted meta line. Selection styling comes from .ctox-list-item. -- */
+.esign-shard {
+  display: grid;
+  gap: 4px;
+}
+
+.esign-shard-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.esign-shard-title strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.esign-shard-meta {
+  color: var(--muted);
+}
+
+.esign-row-compact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.esign-compact-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+/* ---- Workbench detail (auto-revealed on selection) + signer flow. ---- */
+.esign-detail:empty {
   display: none;
 }
 
-/* Secondary detail lines and blocker list inside the gate callout. */
-.ats-esign .ats-result-row {
+.esign-detail-card {
+  display: grid;
+  gap: 10px;
+}
+
+.esign-signers-head {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.esign-signers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.esign-signer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--control-radius);
+  background: var(--surface);
+}
+
+.esign-signer-id {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.esign-signer-state {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ---- Gate callout: collapse when empty (the kit callout has no :empty rule),
+   plus the secondary detail lines and blocker list rendered inside it. ---- */
+.esign-module [data-esign-gate]:empty {
+  display: none;
+}
+
+.esign-module .ats-result-row {
   margin-top: 4px;
   color: var(--muted);
 }
 
-.ats-esign .ats-blockers {
+.esign-module .ats-blockers {
   margin: 6px 0 0;
   padding-left: 18px;
   color: var(--muted);
 }
 
-.ats-esign .ats-blockers li {
+.esign-module .ats-blockers li {
   margin: 2px 0;
 }
 
-/* custom: Signatur-Anfrage-Zeile — Status-Badge + Dokumenttitel + Meta-Zeile
-   links, je ausstehendem Unterzeichner ein Sign-Button rechts. Das Kit hat
-   kein Zeilenmuster mit Inline-Aktionsgruppe (.ctox-list-item ist eine
-   selektierbare Button-Zeile). Nur Tokens und Kit-Radien; Typografie erbt. */
-.ats-esign .ats-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: center;
-  padding: 8px 10px;
-  border: 1px solid var(--hairline, var(--line));
-  border-radius: var(--panel-radius);
-  background: var(--surface);
-}
-
-.ats-esign .ats-item-main {
-  min-width: 0;
-}
-
-.ats-esign .ats-item-meta {
-  margin-top: 3px;
-  color: var(--muted);
-}
-
-.ats-esign .ats-item-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  justify-content: flex-end;
-}
-
-@container business-app-window (max-width: 720px) {
-  .ats-esign .ats-item {
+/* ---- Narrow windows: stack the two panes, drop the resizer. ---- */
+@container business-app-window (max-width: 760px) {
+  .esign-module {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(180px, 34vh) minmax(320px, 1fr);
+    height: auto;
+    min-height: 100%;
+    overflow-y: auto;
+    gap: 8px;
   }
 
-  .ats-esign .ats-item-actions {
-    justify-content: flex-start;
+  .esign-module > [data-resizer="left"] {
+    display: none !important;
+  }
+
+  .esign-left,
+  .esign-center {
+    grid-column: 1;
   }
 }

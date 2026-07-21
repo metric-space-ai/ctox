@@ -2,5 +2,15 @@
   "title": "E-Signatur",
   "subtitle": "Generische Signatur-Anfragen: Dokument an Unterzeichner routen und Status verfolgen.",
   "add": "Anlegen",
-  "empty": "Noch keine Einträge."
+  "empty": "Noch keine Einträge.",
+  "kicker": "E-SIGNATUR",
+  "listTitle": "Anfragen",
+  "new": "Neu",
+  "import": "Importieren",
+  "export": "Exportieren",
+  "viewAll": "Alle",
+  "viewOpen": "Offen",
+  "viewDone": "Abgeschlossen",
+  "composerTitle": "Signatur anfordern",
+  "signersHead": "Unterzeichner"
 }
