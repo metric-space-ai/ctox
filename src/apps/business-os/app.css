@@ -33,6 +33,15 @@
   --shell-app-bg: var(--bg);
   --shell-control-bg: var(--surface-2);
   --shell-topbar-shadow: none;
+  /* Unified motion system: --motion-fast for hovers and micro feedback,
+     --motion-base for windows, menus and toasts, --motion-slow for
+     drawers, popovers and shell-window elevation. --ease-spring keeps
+     the overshoot feel for drawers and popovers only. */
+  --motion-fast: 120ms;
+  --motion-base: 160ms;
+  --motion-slow: 200ms;
+  --ease-standard: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   /* CTOX shell-style elevation ladder: desktop sits one tonal step below
      window surfaces so stacked windows read as physical layers. Consumed
      only by the :root[data-shell-style="ctox"] chrome layer at file end. */
@@ -235,7 +244,7 @@ body[data-maintenance-active="true"] .app-shell {
   height: 100%;
   border-radius: inherit;
   background: var(--accent);
-  transition: width 180ms ease;
+  transition: width var(--motion-base) var(--ease-standard);
 }
 
 .ctox-maintenance-retry {
@@ -333,7 +342,7 @@ body[data-maintenance-status="stale"] .ctox-maintenance-banner {
   box-shadow:
     0 2px 10px rgba(0, 0, 0, 0.05),
     0 1px 0 rgba(255, 255, 255, 0.05) inset;
-  transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
+  transition: background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
 }
 
 .topbar-brand-triad:hover {
@@ -369,7 +378,7 @@ body[data-maintenance-status="stale"] .ctox-maintenance-banner {
   color: var(--text-muted, var(--text));
   cursor: pointer;
   outline: none;
-  transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+  transition: background-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
   position: relative;
   padding: 0;
 }
@@ -377,7 +386,7 @@ body[data-maintenance-status="stale"] .ctox-maintenance-banner {
 .topbar-triad-button svg {
   width: 18px;
   height: 18px;
-  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: transform var(--motion-fast) var(--ease-spring);
   stroke: currentColor;
   fill: none;
 }
@@ -1147,7 +1156,7 @@ body[data-maintenance-status="stale"] .ctox-maintenance-banner {
   border-radius: 999px;
   background: var(--line);
   opacity: 0.5;
-  transition: opacity 120ms ease, background 120ms ease, box-shadow 120ms ease;
+  transition: opacity var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
 }
 
 .workspace-col-resizer:hover::before,
@@ -1203,7 +1212,7 @@ body.is-workspace-col-resizing * {
   border-radius: 999px;
   background: var(--line);
   opacity: 0.5;
-  transition: opacity 120ms ease, background 120ms ease, box-shadow 120ms ease;
+  transition: opacity var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
   pointer-events: none;
 }
 
@@ -1240,7 +1249,7 @@ body.is-resizing * {
   opacity: 0;
   pointer-events: none;
   transform: translateY(-10px) scale(0.98);
-  transition: opacity 160ms ease, transform 160ms ease;
+  transition: opacity var(--motion-base) var(--ease-standard), transform var(--motion-base) var(--ease-standard);
   z-index: 9999;
 }
 
@@ -1340,7 +1349,7 @@ body.is-resizing * {
   background: transparent;
   cursor: pointer;
   user-select: none;
-  transition: background 120ms ease, transform 120ms ease;
+  transition: background var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
 }
 
 .start-menu-item:hover {
@@ -1438,7 +1447,7 @@ body.is-resizing * {
   color: var(--muted);
   opacity: 0;
   transform: scale(0.9);
-  transition: opacity 120ms ease, transform 120ms ease, background 120ms ease, color 120ms ease;
+  transition: opacity var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
 }
 
 .start-menu-item:hover .start-menu-item-pin-btn,
@@ -2626,7 +2635,7 @@ body[data-auth-state="locked"] .topbar {
   height: 18px;
   color: var(--muted);
   pointer-events: none;
-  transition: color 0.25s ease;
+  transition: color var(--motion-fast) var(--ease-standard);
 }
 
 .auth-gate-input {
@@ -2639,7 +2648,7 @@ body[data-auth-state="locked"] .topbar {
   color: var(--text) !important;
   font-size: 14px !important;
   font-weight: 500 !important;
-  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  transition: border-color var(--motion-base) var(--ease-standard), background-color var(--motion-base) var(--ease-standard), box-shadow var(--motion-base) var(--ease-standard) !important;
 }
 
 .auth-gate-input:focus {
@@ -2676,7 +2685,7 @@ body[data-auth-state="locked"] .topbar {
   font-weight: 700;
   cursor: pointer;
   box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 25%, transparent);
-  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform var(--motion-base) var(--ease-standard), box-shadow var(--motion-base) var(--ease-standard), filter var(--motion-base) var(--ease-standard);
 }
 
 :root[data-theme="light"] .auth-gate-button {
@@ -2709,7 +2718,7 @@ body[data-auth-state="locked"] .topbar {
   font-size: 14px;
   font-weight: 600;
   text-decoration: none;
-  transition: all 0.25s ease;
+  transition: background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
 }
 
 .auth-gate-external:hover {
@@ -3992,7 +4001,7 @@ body[data-auth-state="locked"] .topbar {
   color: var(--text);
   text-align: left;
   cursor: pointer;
-  transition: border-color 100ms ease, background-color 100ms ease;
+  transition: border-color var(--motion-fast) var(--ease-standard), background-color var(--motion-fast) var(--ease-standard);
 }
 
 .channels-provider-card:hover {
@@ -4515,7 +4524,7 @@ body[data-auth-state="locked"] .topbar {
     0 var(--win-shadow-y, 18px) var(--win-shadow-blur, 40px) color-mix(in srgb, var(--bg) 30%, transparent);
   pointer-events: auto;
   overflow: hidden;
-  transition: transform 200ms ease, opacity 200ms ease, box-shadow 240ms ease;
+  transition: transform var(--motion-base) var(--ease-standard), opacity var(--motion-base) var(--ease-standard), box-shadow var(--motion-slow) var(--ease-standard);
   will-change: transform, top, left, width, height;
 }
 .shell-window.is-focused {
@@ -4532,6 +4541,28 @@ body[data-auth-state="locked"] .topbar {
   transform: scale(0.95);
   opacity: 0;
   pointer-events: none;
+}
+.shell-window.is-minimizing {
+  transform: scale(0.8) translateY(20px);
+  opacity: 0;
+  pointer-events: none;
+}
+/* Window-open: visual-only keyframe, applied after final geometry (incl.
+   maximized/snap restore) is known and removed on animationend. It never
+   drives geometry persistence — the 50 ms transition suppression at
+   create() still guards restored geometry from animating. */
+.shell-window.is-opening {
+  animation: shell-window-open var(--motion-base) var(--ease-standard);
+}
+@keyframes shell-window-open {
+  from {
+    transform: scale(0.97);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 .shell-window-header {
   flex: 0 0 var(--shell-window-header-height);
@@ -4574,7 +4605,7 @@ body[data-auth-state="locked"] .topbar {
   height: 26px;
   border-radius: 4px;
   font-size: 12px;
-  transition: background-color 100ms ease, color 100ms ease, transform 100ms ease;
+  transition: background-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
 }
 .shell-window-control:hover { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
 .shell-window-control:active { transform: scale(0.95); }
@@ -4703,7 +4734,7 @@ body[data-auth-state="locked"] .topbar {
   height: 14px;
   cursor: nwse-resize;
   opacity: 0.55;
-  transition: opacity 120ms ease;
+  transition: opacity var(--motion-fast) var(--ease-standard);
   background:
     linear-gradient(135deg, transparent 56%, var(--hairline, var(--line)) 56%, var(--hairline, var(--line)) 64%, transparent 64%, transparent 74%, var(--hairline, var(--line)) 74%, var(--hairline, var(--line)) 82%, transparent 82%);
 }
@@ -4751,7 +4782,7 @@ body[data-auth-state="locked"] .topbar {
   border-radius: var(--shell-window-radius);
   z-index: 49;
   opacity: 0;
-  transition: opacity 120ms ease;
+  transition: opacity var(--motion-fast) var(--ease-standard);
 }
 .shell-snap-preview.is-visible { opacity: 1; }
 
@@ -4767,7 +4798,7 @@ body[data-auth-state="locked"] .topbar {
   border-left: 3px solid var(--accent);
   border-radius: var(--panel-radius, 16px);
   box-shadow: var(--panel-shadow);
-  transition: opacity 320ms ease, transform 320ms ease;
+  transition: opacity var(--motion-base) var(--ease-standard), transform var(--motion-base) var(--ease-standard);
 }
 .shell-toast.is-fading { opacity: 0; transform: translateY(-6px); }
 .shell-toast--success { border-left-color: var(--accent); }
@@ -4878,7 +4909,7 @@ body[data-auth-state="locked"] .topbar {
   height: 100%;
   border-radius: inherit;
   background: var(--accent);
-  transition: width 180ms ease;
+  transition: width var(--motion-base) var(--ease-standard);
 }
 @keyframes sync-toast-spin {
   to { transform: rotate(360deg); }
@@ -4896,7 +4927,7 @@ body[data-auth-state="locked"] .topbar {
   z-index: 300;
   opacity: 0;
   transform: translateY(-4px);
-  transition: opacity 120ms ease, transform 120ms ease;
+  transition: opacity var(--motion-base) var(--ease-standard), transform var(--motion-base) var(--ease-standard);
 }
 .shell-context-menu.is-active { opacity: 1; transform: translateY(0); }
 .shell-context-menu-item {
@@ -5031,7 +5062,7 @@ body[data-auth-state="locked"] .topbar {
   font-size: 18px;
   line-height: 1;
   cursor: pointer;
-  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+  transition: background-color var(--motion-base) var(--ease-standard), border-color var(--motion-base) var(--ease-standard), color var(--motion-base) var(--ease-standard);
 }
 
 .ctox-context-mode {
@@ -5187,7 +5218,7 @@ body[data-auth-state="locked"] .topbar {
   color: var(--text);
   font-family: inherit;
   outline: none;
-  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+  transition: border-color var(--motion-base) var(--ease-standard), box-shadow var(--motion-base) var(--ease-standard);
 }
 
 .ctox-context-user-input {
@@ -5236,7 +5267,7 @@ body[data-auth-state="locked"] .topbar {
   font-weight: 740;
   cursor: pointer;
   padding: 0 15px;
-  transition: background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease;
+  transition: background-color var(--motion-base) var(--ease-standard), color var(--motion-base) var(--ease-standard), border-color var(--motion-base) var(--ease-standard);
 }
 
 .ctox-context-submit-btn:hover {
@@ -5363,7 +5394,7 @@ body[data-auth-state="locked"] .topbar {
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: background-color 120ms ease, color 120ms ease, transform 80ms ease;
+  transition: background-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
 }
 .shell-taskbar-item:hover {
   background: color-mix(in srgb, var(--accent-soft) 70%, transparent);
@@ -5665,12 +5696,6 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
    ========================================================================== */
 
 :root {
-  --spring-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
-  --spring-snappy: cubic-bezier(0.16, 1, 0.3, 1);
-  --spring-ease: cubic-bezier(0.25, 0.8, 0.25, 1);
-  --spring-duration: 0.35s;
-  --spring-duration-fast: 0.2s;
-
   /* Button defaults */
   --os-btn-radius: 8px;
   --os-btn-padding: 8px 14px;
@@ -5700,7 +5725,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
 .os-scrollbar *::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--line) 40%, transparent);
   border-radius: 99px;
-  transition: background-color 0.25s ease;
+  transition: background-color var(--motion-fast) var(--ease-standard);
 }
 
 .os-scrollbar::-webkit-scrollbar-thumb:hover,
@@ -5717,8 +5742,8 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   backdrop-filter: blur(8px);
   opacity: 1;
   pointer-events: auto;
-  transition: opacity var(--spring-duration) var(--spring-ease),
-              backdrop-filter var(--spring-duration) var(--spring-ease);
+  transition: opacity var(--motion-slow) var(--ease-standard),
+              backdrop-filter var(--motion-slow) var(--ease-standard);
 }
 
 .drawer-backdrop[hidden] {
@@ -5736,9 +5761,9 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   overflow: auto;
   opacity: 1;
   pointer-events: auto;
-  transition: transform var(--spring-duration) var(--spring-snappy),
-              opacity var(--spring-duration) ease,
-              box-shadow var(--spring-duration) ease;
+  transition: transform var(--motion-slow) var(--ease-spring),
+              opacity var(--motion-slow) var(--ease-standard),
+              box-shadow var(--motion-slow) var(--ease-standard);
 }
 
 .drawer[hidden] {
@@ -5776,8 +5801,8 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   box-shadow: var(--shadow);
   transform: translateY(0) scale(1);
   transform-origin: top right;
-  transition: transform 0.25s var(--spring-bounce),
-              opacity 0.2s ease;
+  transition: transform var(--motion-slow) var(--ease-spring),
+              opacity var(--motion-slow) var(--ease-standard);
 }
 .drawer-right.account-popover[hidden] {
   transform: translateY(-10px) scale(0.96) !important;
@@ -5810,9 +5835,9 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   border: var(--os-btn-border, 1px solid var(--hairline, var(--line)));
   background: var(--os-btn-bg, var(--surface-2));
   color: var(--os-btn-color, var(--text));
-  transition: background-color 0.15s ease,
-              border-color 0.15s ease,
-              color 0.15s ease;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard);
   user-select: none;
   text-decoration: none;
 }
@@ -5852,8 +5877,8 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   padding: 8px 12px;
   font-size: 13px;
   color: var(--text);
-  transition: border-color 0.15s ease,
-              box-shadow 0.15s ease;
+  transition: border-color var(--motion-fast) var(--ease-standard),
+              box-shadow var(--motion-fast) var(--ease-standard);
 }
 
 .os-input:focus,
@@ -5872,9 +5897,9 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
 
 /* Dynamic active pins and links in topbar */
 .module-tab {
-  transition: transform 0.2s var(--spring-bounce),
-              background-color 0.2s var(--spring-ease),
-              color 0.2s var(--spring-ease);
+  transition: transform var(--motion-base) var(--ease-spring),
+              background-color var(--motion-base) var(--ease-standard),
+              color var(--motion-base) var(--ease-standard);
 }
 
 .module-tab:hover {
@@ -5891,10 +5916,10 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
 }
 
 .shell-taskbar-item {
-  transition: transform 0.2s var(--spring-bounce),
-              background-color 0.2s var(--spring-ease),
-              color 0.2s var(--spring-ease),
-              box-shadow 0.2s var(--spring-ease);
+  transition: transform var(--motion-base) var(--ease-spring),
+              background-color var(--motion-base) var(--ease-standard),
+              color var(--motion-base) var(--ease-standard),
+              box-shadow var(--motion-base) var(--ease-standard);
 }
 
 .shell-taskbar-item:hover {
@@ -5923,14 +5948,14 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   stroke-width: 2px;
   stroke-linecap: round;
   stroke-linejoin: round;
-  transition: transform 300ms cubic-bezier(0.34, 1.56, 0.64, 1), filter 200ms ease;
+  transition: transform var(--motion-slow) var(--ease-spring), filter var(--motion-slow) var(--ease-standard);
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.08));
 }
 
 .desktop-icon-glyph .svg-icon {
   width: 28px;
   height: 28px;
-  transition: transform 300ms cubic-bezier(0.34, 1.56, 0.64, 1), filter 300ms ease;
+  transition: transform var(--motion-slow) var(--ease-spring), filter var(--motion-slow) var(--ease-standard);
 }
 
 .desktop-icon:hover .desktop-icon-glyph .svg-icon {
@@ -5977,7 +6002,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   padding: 6px 14px !important;
   gap: 8px !important;
   font-weight: 600 !important;
-  transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1) !important;
+  transition: background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard) !important;
 }
 
 .module-tab:hover {
@@ -6018,7 +6043,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   border-radius: 12px !important;
   border: 1px solid transparent !important;
   background: transparent !important;
-  transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1) !important;
+  transition: background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard) !important;
   padding: 4px 12px !important;
 }
 
@@ -6063,7 +6088,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
 
 .shell-taskbar-popover-item {
   border-radius: 8px !important;
-  transition: all 150ms ease !important;
+  transition: background-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard) !important;
 }
 
 .shell-taskbar-popover-item:hover {
@@ -6183,7 +6208,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   );
   border-radius: 10px;
   box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 50%, transparent);
-  transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1), background 0.3s ease;
+  transition: width var(--motion-slow) var(--ease-standard), background var(--motion-slow) var(--ease-standard);
 }
 
 .startup-progress-bar.is-error {
@@ -6198,7 +6223,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   font-weight: 500;
   letter-spacing: 0.2px;
   min-height: 18px;
-  transition: color 0.3s ease;
+  transition: color var(--motion-base) var(--ease-standard);
 }
 
 .startup-status-text.is-error {
@@ -6306,7 +6331,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   font-weight: 600;
   cursor: pointer;
   box-shadow: 0 4px 14px color-mix(in srgb, var(--danger) 34%, transparent);
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform var(--motion-base) var(--ease-standard), box-shadow var(--motion-base) var(--ease-standard), background var(--motion-base) var(--ease-standard);
 }
 
 .error-retry-btn:hover {
@@ -6414,7 +6439,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   user-select: none;
   font-weight: 500;
   outline: none;
-  transition: color 0.2s ease;
+  transition: color var(--motion-fast) var(--ease-standard);
 }
 
 .technical-details-toggle summary:hover {
@@ -6813,7 +6838,7 @@ body[data-shell-taskbar-open] .drawer-bottom {
   width: 2px;
   border-radius: 2px;
   background: var(--line, #303b40);
-  transition: background 0.12s ease, width 0.12s ease;
+  transition: background var(--motion-fast) var(--ease-standard), width var(--motion-fast) var(--ease-standard);
 }
 .ctox-column-resizer:hover::before,
 .ctox-column-resizer:focus-visible::before,
@@ -6848,7 +6873,7 @@ body[data-shell-taskbar-open] .drawer-bottom {
   height: 2px;
   border-radius: 2px;
   background: var(--line, #303b40);
-  transition: background 0.12s ease, height 0.12s ease;
+  transition: background var(--motion-fast) var(--ease-standard), height var(--motion-fast) var(--ease-standard);
 }
 .ctox-row-resizer:hover::before,
 .ctox-row-resizer:focus-visible::before,
@@ -6960,7 +6985,7 @@ body.is-resizing-horizontal * { cursor: row-resize !important; }
   border-radius: var(--shell-window-radius) !important;
   background: var(--surface) !important;
   box-shadow: var(--shadow-md) !important;
-  transition: border-color 100ms ease, box-shadow 100ms ease !important;
+  transition: border-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-slow) var(--ease-standard) !important;
   container-type: inline-size;
   container-name: business-app-shell-window;
 }
@@ -7756,10 +7781,10 @@ button.shell-window-header-meta:focus-visible,
   background: var(--surface) !important;
   box-shadow: var(--win-elev) !important;
   transition:
-    border-color 140ms ease,
-    box-shadow 180ms ease,
-    transform 200ms ease,
-    opacity 200ms ease !important;
+    border-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-slow) var(--ease-standard),
+    transform var(--motion-base) var(--ease-standard),
+    opacity var(--motion-base) var(--ease-standard) !important;
 }
 
 :root[data-shell-style="ctox"] .shell-window.is-focused {
@@ -7799,7 +7824,7 @@ button.shell-window-header-meta:focus-visible,
   background: color-mix(in srgb, var(--shell-desktop-bg) 24%, transparent);
   border-radius: inherit;
   opacity: 1;
-  transition: opacity 220ms ease-out;
+  transition: opacity var(--motion-slow) var(--ease-standard);
 }
 
 :root[data-shell-style="ctox"] .shell-window.is-focused::before {
@@ -7847,7 +7872,7 @@ button.shell-window-header-meta:focus-visible,
 }
 
 :root[data-shell-style="ctox"] .shell-window-title {
-  transition: color 180ms ease;
+  transition: color var(--motion-base) var(--ease-standard);
 }
 
 :root[data-shell-style="ctox"] .shell-window-title-text {
@@ -7865,9 +7890,9 @@ button.shell-window-header-meta:focus-visible,
   font-size: 12px;
   font-weight: 600;
   transition:
-    background-color 120ms ease,
-    color 120ms ease,
-    transform 120ms ease;
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-standard);
 }
 
 :root[data-shell-style="ctox"] .shell-window-controls {
@@ -7941,9 +7966,9 @@ button.shell-window-header-meta:focus-visible,
 :root[data-shell-style="ctox"] .module-tab {
   border-radius: 999px;
   transition:
-    background-color 140ms ease,
-    color 140ms ease,
-    box-shadow 140ms ease;
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard);
 }
 
 :root[data-shell-style="ctox"] .module-tab:hover {
@@ -7987,10 +8012,10 @@ button.shell-window-header-meta:focus-visible,
   height: 34px;
   border-radius: 11px !important;
   transition:
-    background-color 140ms ease,
-    color 140ms ease,
-    box-shadow 140ms ease,
-    transform 180ms cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard),
+    transform var(--motion-base) var(--ease-spring) !important;
 }
 
 :root[data-shell-style="ctox"] body:not([data-shell-chat-dock-expanded]) .shell-taskbar-item:hover {
@@ -8139,17 +8164,9 @@ button.shell-window-header-meta:focus-visible,
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  :root[data-shell-style="ctox"] .shell-window,
-  :root[data-shell-style="ctox"] .shell-window::before,
-  :root[data-shell-style="ctox"] .shell-window-title,
-  :root[data-shell-style="ctox"] .shell-window-control,
-  :root[data-shell-style="ctox"] .module-tab,
-  :root[data-shell-style="ctox"] .shell-taskbar-item,
-  :root[data-shell-style="ctox"] .shell-start-menu-panel {
-    transition: none !important;
-  }
-}
+/* Reduced motion is handled once by the global prefers-reduced-motion
+   block earlier in this file; the former ctox-chrome subset here was
+   redundant and has been consolidated away. */
 
 /* Record-approval banner: the decision follows the user to the object. A
    floating strip at the bottom of the module host — never displaces layout. */

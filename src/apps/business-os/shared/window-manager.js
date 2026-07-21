@@ -9,6 +9,39 @@ const CONST = {
   WORKSPACE_BOTTOM_GAP: 8,
 };
 
+// Motion timing mirror. The single source of truth is --motion-base in
+// app.css; read it once and fall back to the token's value when computed
+// styles are unavailable (non-DOM test environments).
+const MOTION_BASE_FALLBACK_MS = 160;
+let motionBaseMsCache = null;
+
+function motionBaseMs() {
+  if (motionBaseMsCache != null) return motionBaseMsCache;
+  let value = MOTION_BASE_FALLBACK_MS;
+  try {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue('--motion-base').trim();
+    const parsed = raw.endsWith('ms')
+      ? parseFloat(raw)
+      : raw.endsWith('s')
+        ? parseFloat(raw) * 1000
+        : NaN;
+    if (Number.isFinite(parsed) && parsed >= 0) value = parsed;
+  } catch {
+    // Keep the fallback.
+  }
+  motionBaseMsCache = value;
+  return value;
+}
+
+function prefersReducedMotion() {
+  try {
+    return typeof globalThis.matchMedia === 'function'
+      && globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  } catch {
+    return false;
+  }
+}
+
 const CONTROL_KINDS_BY_STYLE = {
   windows: ['minimize', 'maximize', 'close'],
   macos: ['close', 'minimize', 'maximize'],
@@ -400,6 +433,19 @@ export function createWindowManager({
       snapTo(id, persisted.snapZone, { skipStore: true });
     }
 
+    // Window-open animation: plays once from the final geometry (after any
+    // maximized/snap restore above) and is purely visual — it never drives
+    // geometry persistence; the 50 ms transition suppression at create time
+    // still guards restored geometry from animating. Skipped for reduced
+    // motion and for windows restored into maximized/snapped state, where a
+    // scale-in reads as a glitch on an edge-docked surface.
+    if (!prefersReducedMotion() && win.state !== 'maximized' && !winEl.classList.contains('is-snapped')) {
+      winEl.classList.add('is-opening');
+      const clearOpening = () => winEl.classList.remove('is-opening');
+      winEl.addEventListener('animationend', clearOpening, { once: true });
+      setTimeout(clearOpening, motionBaseMs() + 60);
+    }
+
     bus.emit('window:opened', {
       id,
       ownerId: win.ownerId,
@@ -440,6 +486,7 @@ export function createWindowManager({
     win.element.classList.add('is-focused');
     const wasMinimized = win.state === 'minimized' || win.element.style.display === 'none';
     if (wasMinimized) {
+      win.element.classList.remove('is-minimizing');
       win.element.style.display = '';
       win.element.style.transform = '';
       win.element.style.opacity = '';
@@ -480,15 +527,16 @@ export function createWindowManager({
   function minimize(id) {
     const win = windows.find((w) => w.id === id);
     if (!win) return;
-    win.element.style.transform = 'scale(0.8) translateY(20px)';
-    win.element.style.opacity = '0';
+    const reduced = prefersReducedMotion();
+    if (!reduced) win.element.classList.add('is-minimizing');
     setTimeout(() => {
+      win.element.classList.remove('is-minimizing');
       win.element.style.display = 'none';
       win.state = 'minimized';
       focusNextAfter(id);
       bus.emit('window:minimized', { id, ownerId: win.ownerId });
       persistFor(win);
-    }, 180);
+    }, reduced ? 0 : motionBaseMs());
   }
 
   function toggleMaximize(id, { skipStore = false } = {}) {
@@ -600,7 +648,8 @@ export function createWindowManager({
     if (!win || win._destroying) return;
     win._destroying = true;
     clearTimeout(win._layoutSwitchTimer);
-    win.element.classList.add('is-closing');
+    const reduced = prefersReducedMotion();
+    if (!reduced) win.element.classList.add('is-closing');
     const stackIndex = stack.indexOf(id);
     if (stackIndex !== -1) stack.splice(stackIndex, 1);
     focusNextAfter(id);
@@ -609,7 +658,7 @@ export function createWindowManager({
       const idx = windows.findIndex((w) => w.id === id);
       if (idx !== -1) windows.splice(idx, 1);
       bus.emit('window:closed', { id, ownerId: win.ownerId });
-    }, 180);
+    }, reduced ? 0 : motionBaseMs());
   }
 
   function destroyAll() {
