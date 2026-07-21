@@ -872,6 +872,19 @@ fn maintenance_peer_owns_wait(state: &MaintenanceState, peer_healthy: bool) -> b
     state.service_active && peer_healthy
 }
 
+fn maintenance_target_is_active(layout: &InstallLayout, state: &MaintenanceState) -> Result<bool> {
+    let current_release = load_install_manifest(&layout.install_manifest_path())?
+        .and_then(|manifest| manifest.current_release);
+    if current_release.as_deref() == Some(state.target_release.as_str()) {
+        return Ok(true);
+    }
+    let active_release = fs::canonicalize(&layout.active_root).ok().and_then(|path| {
+        path.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+    });
+    Ok(active_release.as_deref() == Some(state.target_release.as_str()))
+}
+
 fn reconcile_maintenance_runtime(
     root: &Path,
     layout: &InstallLayout,
@@ -883,6 +896,30 @@ fn reconcile_maintenance_runtime(
         return Ok(Some(state));
     }
     let (peer_healthy, replication_up) = native_peer_maintenance_health(root);
+    if !state.service_active && peer_healthy && maintenance_target_is_active(layout, &state)? {
+        let lease_id = state.lease_id.clone();
+        state = update_maintenance(&layout.state_root, &lease_id, |state| {
+            state.service_active = true;
+            state.current_release = Some(state.target_release.clone());
+            state.status = "active".to_string();
+            state.phase = if replication_up {
+                "waiting_collections".to_string()
+            } else {
+                "waiting_replication".to_string()
+            };
+            state.progress = MaintenanceProgress {
+                percent: if replication_up { 96 } else { 92 },
+                message: if replication_up {
+                    "App-Daten werden nach dem Update synchronisiert".to_string()
+                } else {
+                    "CTOX-Dienst aktiv · Replikation wird verbunden".to_string()
+                },
+            };
+            state.retryable = false;
+            state.retry_action = None;
+            state.last_error = None;
+        })?;
+    }
     if state.status == "stale" {
         if !maintenance_peer_owns_wait(&state, peer_healthy) {
             return Ok(Some(state));
@@ -4433,6 +4470,66 @@ mod tests {
             .unwrap();
         assert_eq!(reconciled.status, "stale");
         assert!(reconciled.retryable);
+    }
+
+    #[test]
+    fn active_target_recovers_interrupted_service_activation() {
+        let temp = tempdir().unwrap();
+        let mut layout = maintenance_test_layout(temp.path());
+        layout.active_root = temp.path().join("branch-main-recovered");
+        fs::create_dir_all(&layout.active_root).unwrap();
+        let started = begin_maintenance(&layout, "branch-main-recovered").unwrap();
+        let manifest = InstallManifest {
+            schema_version: 1,
+            install_root: temp.path().join("install"),
+            state_root: layout.state_root.clone(),
+            current_release: Some("branch-main-previous".to_string()),
+            updated_at: now_rfc3339(),
+            ..InstallManifest::default()
+        };
+        persist_install_manifest(&layout.install_manifest_path(), &manifest).unwrap();
+
+        let mut interrupted = load_maintenance_state_from_root(&layout.state_root)
+            .unwrap()
+            .unwrap();
+        interrupted.status = "stale".to_string();
+        interrupted.phase = "stale".to_string();
+        interrupted.service_active = false;
+        interrupted.lease_expires_at_ms = 0;
+        persist_maintenance_state_to_root(&layout.state_root, &interrupted).unwrap();
+
+        assert!(maintenance_target_is_active(&layout, &interrupted).unwrap());
+        let mut recovered = interrupted;
+        let peer_healthy = true;
+        let replication_up = false;
+        if !recovered.service_active
+            && peer_healthy
+            && maintenance_target_is_active(&layout, &recovered).unwrap()
+        {
+            recovered = update_maintenance(&layout.state_root, &started.lease_id, |state| {
+                state.service_active = true;
+                state.current_release = Some(state.target_release.clone());
+                state.status = "active".to_string();
+                state.phase = if replication_up {
+                    "waiting_collections".to_string()
+                } else {
+                    "waiting_replication".to_string()
+                };
+                state.retryable = false;
+                state.retry_action = None;
+                state.last_error = None;
+            })
+            .unwrap();
+        }
+
+        assert!(recovered.service_active);
+        assert_eq!(recovered.status, "active");
+        assert_eq!(recovered.phase, "waiting_replication");
+        assert_eq!(
+            recovered.current_release.as_deref(),
+            Some("branch-main-recovered")
+        );
+        assert!(!recovered.retryable);
     }
 
     #[test]
