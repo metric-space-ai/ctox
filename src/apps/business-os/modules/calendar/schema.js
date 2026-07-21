@@ -1,23 +1,3 @@
-const commandSchema = {
-  version: 1,
-  primaryKey: 'id',
-  type: 'object',
-  properties: {
-    id: { type: 'string', maxLength: 128 },
-    command_id: { type: 'string' },
-    module: { type: 'string' },
-    command_type: { type: 'string' },
-    record_id: { type: 'string' },
-    status: { type: 'string' },
-    inbound_channel: { type: 'string' },
-    payload: { type: 'object', additionalProperties: true },
-    client_context: { type: 'object', additionalProperties: true },
-    updated_at_ms: { type: 'number' }
-  },
-  required: ['id', 'command_id', 'module', 'command_type', 'status', 'updated_at_ms'],
-  additionalProperties: true
-};
-
 const calendarSourceSchema = {
   version: 0,
   primaryKey: 'id',
@@ -189,8 +169,9 @@ const calendarBookingSchema = {
 // `calendar_events` opts into the field-merge conflict strategy
 // (docs/ctox-rxdb.md §8.2): concurrent edits to different fields (time vs.
 // title vs. description) both survive. Hash-neutral sibling wrapper.
+// business_commands is shell-registered — a module schema must not redefine it
+// (module.json still declares it for ACCESS; the shell owns the schema).
 export const collections = {
-  business_commands: commandSchema,
   calendar_sources: calendarSourceSchema,
   calendar_calendars: calendarCalendarSchema,
   calendar_events: { schema: calendarEventSchema, conflictStrategy: 'field-merge' },
@@ -201,11 +182,4 @@ export const collections = {
   calendar_bookings: calendarBookingSchema
 };
 
-export const migrationStrategies = {
-  business_commands: {
-    1: (oldDoc) => ({
-      ...oldDoc,
-      inbound_channel: oldDoc.inbound_channel || oldDoc.module || ''
-    })
-  }
-};
+export const migrationStrategies = {};
