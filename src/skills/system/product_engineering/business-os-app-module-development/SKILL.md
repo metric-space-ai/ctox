@@ -9,6 +9,21 @@ metadata:
 
 This file is a resource index. Use the linked contracts and checklists as the working source of truth.
 
+## Non-negotiable preflight (before writing ANY app surface)
+
+1. Open `references/design-guide.md` and re-read "Canonical Column Grammar"
+   and the anti-patterns — in THIS session, not from memory. A rebuilt or new
+   pane without the grammar (header row → search + collapsed filter tray with
+   reset + active-dot → counted view band (>= 2 views) → shard/list toggle in
+   the filterbar → recessed well → one-line footer) is a regression, not a
+   draft.
+2. Put a reference app beside your work and diff structurally before calling
+   it done: `threads` (hub/inbox columns) and `knowledge` (content columns)
+   are the binding reference implementations.
+3. Run `scripts/module_static_check.mjs <module-id>` — it enforces tokens,
+   kit usage, and the mechanical grammar rules (e.g. no single-tab view
+   bands). A red check is a finding, never an inconvenience.
+
 ## Tool Boundary
 
 - Remote MCP agents read advertised `business-os-skill://…` resources with

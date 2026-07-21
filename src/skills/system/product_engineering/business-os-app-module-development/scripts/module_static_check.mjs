@@ -1383,6 +1383,16 @@ for (const action of htmlDataActions(indexHtml)) {
   }
 }
 
+// Column grammar: a view band exists only with >= 2 real views. A band with a
+// single counted tab reads as a stray filter chip (an illegal standing badge);
+// a single view's count belongs in the pane footer.
+for (const band of String(indexHtml || '').matchAll(/<(?:div|nav)[^>]*class="[^"]*ctox-pane-tabs[^"]*"[^>]*>([\s\S]*?)<\/(?:div|nav)>/g)) {
+  const tabCount = (band[1].match(/class="[^"]*ctox-pane-tab[^"]*"/g) || []).length;
+  if (tabCount === 1) {
+    fail('a .ctox-pane-tabs view band with a single tab is a stray chip — bands need >= 2 real views; put a lone count into the pane footer');
+  }
+}
+
 if (manifest && runtimeModuleMode && !catalogInstalledMode) {
   const declaredCollections = new Set(Array.isArray(manifest.collections) ? manifest.collections : []);
   const schemaCollections = new Set(Object.keys(schemaDoc?.collections || {}));
