@@ -33738,6 +33738,40 @@ fn validate_systematic_research_csv(
     fn normalized_hash(value: &str) -> &str {
         value.trim().strip_prefix("sha256:").unwrap_or(value.trim())
     }
+    fn require_header(
+        headers: &csv::StringRecord,
+        output: &SystematicResearchCsvOutput,
+        field: &str,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            headers.iter().any(|header| header == field),
+            "{} is missing required column {field}",
+            output.file_name
+        );
+        Ok(())
+    }
+    fn require_any_header(
+        headers: &csv::StringRecord,
+        output: &SystematicResearchCsvOutput,
+        fields: &[&str],
+        purpose: &str,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            fields
+                .iter()
+                .any(|field| headers.iter().any(|header| header == *field)),
+            "{} is missing {purpose}; expected one of {}",
+            output.file_name,
+            fields.join(", ")
+        );
+        Ok(())
+    }
+    fn finite_number(value: Option<&str>) -> Option<f64> {
+        value
+            .filter(|value| !value.is_empty())
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|value| value.is_finite())
+    }
 
     let mut reader = csv::ReaderBuilder::new()
         .flexible(false)
@@ -33779,6 +33813,54 @@ fn validate_systematic_research_csv(
                 output.file_name
             );
         }
+    }
+
+    match output.table_key {
+        "measured_load_points" => {
+            for field in [
+                "source_row_ref",
+                "measurement_kind",
+                "is_derived",
+                "rpm",
+                "propeller_size",
+                "prop_diameter_in",
+                "prop_pitch_in",
+                "torque_Nm",
+            ] {
+                require_header(&headers, output, field)?;
+            }
+            require_any_header(
+                &headers,
+                output,
+                &["thrust_N", "force_N", "axial_load_N"],
+                "an axial force channel in newtons",
+            )?;
+            anyhow::ensure!(
+                !headers.iter().any(|header| header == "fact_label")
+                    && !headers.iter().any(|header| header == "fact_value"),
+                "{} uses generic fact columns instead of row-based measurements",
+                output.file_name
+            );
+        }
+        "derived_bearing_loads" => {
+            for field in ["source_row_ref", "derivation_method"] {
+                require_header(&headers, output, field)?;
+            }
+            require_any_header(
+                &headers,
+                output,
+                &[
+                    "bearing_radial_load_N",
+                    "radial_load_N",
+                    "axial_load_N",
+                    "torque_Nm",
+                    "moment_Nm",
+                    "value",
+                ],
+                "a derived physical load or moment channel",
+            )?;
+        }
+        _ => {}
     }
 
     let mut rows = 0usize;
@@ -33836,6 +33918,128 @@ fn validate_systematic_research_csv(
                 "{} row {rows} does not match validated lineage for claim {claim_id}",
                 output.file_name
             );
+        }
+
+        match output.table_key {
+            "measured_load_points" => {
+                let source_row_ref = record_value(&record, &headers, "source_row_ref")
+                    .filter(|value| !value.is_empty())
+                    .with_context(|| {
+                        format!(
+                            "{} row {rows} has no original source-row reference",
+                            output.file_name
+                        )
+                    })?;
+                anyhow::ensure!(
+                    !source_row_ref.eq_ignore_ascii_case("unknown")
+                        && !source_row_ref.eq_ignore_ascii_case("n/a"),
+                    "{} row {rows} has a non-auditable source-row reference",
+                    output.file_name
+                );
+                let measurement_kind = record_value(&record, &headers, "measurement_kind")
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                anyhow::ensure!(
+                    matches!(
+                        measurement_kind.as_str(),
+                        "measured" | "direct" | "experimental"
+                    ) && !matches!(
+                        record_value(&record, &headers, "is_derived")
+                            .unwrap_or_default()
+                            .to_ascii_lowercase()
+                            .as_str(),
+                        "true" | "1" | "yes"
+                    ),
+                    "{} row {rows} is derived or is not identified as a direct measurement",
+                    output.file_name
+                );
+                anyhow::ensure!(
+                    finite_number(record_value(&record, &headers, "rpm"))
+                        .is_some_and(|rpm| rpm > 0.0),
+                    "{} row {rows} has no positive machine-readable RPM value",
+                    output.file_name
+                );
+                anyhow::ensure!(
+                    ["thrust_N", "force_N", "axial_load_N"]
+                        .iter()
+                        .any(
+                            |field| finite_number(record_value(&record, &headers, field)).is_some()
+                        ),
+                    "{} row {rows} has no machine-readable axial force value in newtons",
+                    output.file_name
+                );
+                anyhow::ensure!(
+                    finite_number(record_value(&record, &headers, "prop_diameter_in"))
+                        .is_some_and(|value| value > 0.0)
+                        && finite_number(record_value(&record, &headers, "prop_pitch_in"))
+                            .is_some_and(|value| value > 0.0)
+                        && record_value(&record, &headers, "propeller_size")
+                            .is_some_and(|value| !value.is_empty()),
+                    "{} row {rows} has incomplete propeller diameter/pitch provenance",
+                    output.file_name
+                );
+                if let Some(torque) =
+                    record_value(&record, &headers, "torque_Nm").filter(|value| !value.is_empty())
+                {
+                    anyhow::ensure!(
+                        finite_number(Some(torque)).is_some(),
+                        "{} row {rows} has a non-numeric torque_Nm value",
+                        output.file_name
+                    );
+                }
+            }
+            "derived_bearing_loads" => {
+                for field in ["source_row_ref", "derivation_method"] {
+                    anyhow::ensure!(
+                        record_value(&record, &headers, field)
+                            .is_some_and(|value| !value.is_empty()),
+                        "{} row {rows} has no {field}",
+                        output.file_name
+                    );
+                }
+                let physical_value = [
+                    "bearing_radial_load_N",
+                    "radial_load_N",
+                    "axial_load_N",
+                    "torque_Nm",
+                    "moment_Nm",
+                    "value",
+                ]
+                .iter()
+                .find_map(|field| finite_number(record_value(&record, &headers, field)));
+                anyhow::ensure!(
+                    physical_value.is_some(),
+                    "{} row {rows} has no machine-readable derived load or moment value",
+                    output.file_name
+                );
+                let unit = record_value(&record, &headers, "unit")
+                    .or_else(|| record_value(&record, &headers, "units"));
+                if headers.iter().any(|header| header == "value") {
+                    anyhow::ensure!(
+                        unit.is_some_and(|value| {
+                            matches!(
+                                value.trim().to_ascii_lowercase().as_str(),
+                                "n" | "newton" | "nm" | "n m" | "n·m" | "newton metre"
+                            )
+                        }),
+                        "{} row {rows} generic value is not identified as a physical load or moment",
+                        output.file_name
+                    );
+                }
+                let row_text = record
+                    .iter()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .to_ascii_lowercase();
+                anyhow::ensure!(
+                    !["axis count", "axes", "directions", "direction count"]
+                        .iter()
+                        .any(|marker| row_text.contains(marker)),
+                    "{} row {rows} describes axes or directions, not a bearing load",
+                    output.file_name
+                );
+            }
+            _ => {}
         }
     }
     anyhow::ensure!(
@@ -42896,6 +43100,125 @@ fn room_secret_id(value: &str) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    fn research_csv_output(table_key: &'static str) -> SystematicResearchCsvOutput {
+        SystematicResearchCsvOutput {
+            file_name: match table_key {
+                "measured_load_points" => "measured_load_points.csv",
+                "derived_bearing_loads" => "derived_bearing_loads.csv",
+                _ => "test.csv",
+            },
+            table_key,
+            title: "Test",
+            require_manifest_evidence: true,
+            require_manifest_claim: table_key == "derived_bearing_loads",
+        }
+    }
+
+    #[test]
+    fn systematic_research_rejects_generic_facts_as_measured_load_points() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let path = temp.path().join("measured_load_points.csv");
+        fs::write(
+            &path,
+            "research_run_id,research_command_id,source_id,canonical_url,snapshot_hash,fact_label,fact_value\nrun,cmd,SRC,https://example.test/source,abc,axis count,3\n",
+        )?;
+        let eligible = HashMap::from([(
+            "SRC".to_string(),
+            ("https://example.test/source".to_string(), "abc".to_string()),
+        )]);
+
+        let error = validate_systematic_research_csv(
+            &path,
+            &research_csv_output("measured_load_points"),
+            "run",
+            "cmd",
+            &eligible,
+            &HashMap::new(),
+        )
+        .expect_err("generic facts must not pass as measured load points");
+
+        assert!(error.to_string().contains("missing required column"));
+        Ok(())
+    }
+
+    #[test]
+    fn systematic_research_accepts_auditable_measured_load_point() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let path = temp.path().join("measured_load_points.csv");
+        fs::write(
+            &path,
+            concat!(
+                "research_run_id,research_command_id,source_id,canonical_url,snapshot_hash,",
+                "source_row_ref,measurement_kind,is_derived,rpm,propeller_size,",
+                "prop_diameter_in,prop_pitch_in,thrust_N,torque_Nm\n",
+                "run,cmd,SRC,https://example.test/source,abc,row-42,measured,false,",
+                "11234.383560,9x5,9.000000,5.000000,12.978495,0.141293\n"
+            ),
+        )?;
+        let eligible = HashMap::from([(
+            "SRC".to_string(),
+            ("https://example.test/source".to_string(), "abc".to_string()),
+        )]);
+
+        let rows = validate_systematic_research_csv(
+            &path,
+            &research_csv_output("measured_load_points"),
+            "run",
+            "cmd",
+            &eligible,
+            &HashMap::new(),
+        )?;
+
+        assert_eq!(rows, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn systematic_research_rejects_axis_count_as_derived_bearing_load() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let path = temp.path().join("derived_bearing_loads.csv");
+        fs::write(
+            &path,
+            concat!(
+                "research_run_id,research_command_id,claim_id,evidence_id,source_id,",
+                "snapshot_id,canonical_url,snapshot_hash,quote,source_row_ref,",
+                "derivation_method,value,unit\n",
+                "run,cmd,CLM,EVD,SRC,SNAP,https://example.test/source,abc,",
+                "three orthogonal axes,row-7,counted axes,3,directions\n"
+            ),
+        )?;
+        let eligible = HashMap::from([(
+            "SRC".to_string(),
+            ("https://example.test/source".to_string(), "abc".to_string()),
+        )]);
+        let claims = HashMap::from([(
+            "CLM".to_string(),
+            (
+                "EVD".to_string(),
+                "SRC".to_string(),
+                "SNAP".to_string(),
+                "https://example.test/source".to_string(),
+                "abc".to_string(),
+                "three orthogonal axes".to_string(),
+            ),
+        )]);
+
+        let error = validate_systematic_research_csv(
+            &path,
+            &research_csv_output("derived_bearing_loads"),
+            "run",
+            "cmd",
+            &eligible,
+            &claims,
+        )
+        .expect_err("axis counts must not pass as bearing loads");
+
+        assert!(error
+            .to_string()
+            .contains("not identified as a physical load or moment"));
+        Ok(())
+    }
 
     #[test]
     fn appsec_findings_embed_bounded_state_scoped_evidence() -> anyhow::Result<()> {
