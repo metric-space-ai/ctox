@@ -246,6 +246,12 @@ Rules that go with it:
 - **A view band needs at least two real views.** A band with a single counted
   tab reads as a stray filter chip (an illegal standing badge); a single
   view's count belongs in the pane footer.
+- **Lazily imported vendor singletons need single-flight.** Every render may
+  call the lazy initializer; while the dynamic import is pending, concurrent
+  calls must all await ONE stored promise. Without it the App Store created
+  competing WebGL shelf instances on the same canvas and the newest (empty)
+  one owned the context — boxes existed but never showed (`ensureShelf`/
+  `state.shelfPromise` in app-store is the reference).
 - **Sandboxed `srcdoc` iframes need a load watchdog.** Chromium can swallow
   the very first `srcdoc` assignment while a module fragment is still binding;
   if the value never changes again the frame stays blank forever. Assign only
