@@ -18,3 +18,10 @@ test('sync runtime version-binds its nested sync contract import', async () => {
     'mutable nested sync contract imports must not use an unversioned CDN URL',
   );
 });
+
+test('slow collection startup remains pending instead of dereferencing an empty timeout result', async () => {
+  const source = await readFile(new URL('./sync.js', import.meta.url), 'utf8');
+  assert.match(source, /if \(!bridge\) \{/);
+  assert.match(source, /reason: 'startup-in-progress'/);
+  assert.match(source, /return pendingBridge;/);
+});

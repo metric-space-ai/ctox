@@ -650,6 +650,27 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
       publishResourceBudget();
       try {
         const bridge = await withTimeout(bridgePromise, 3000);
+        if (!bridge) {
+          const pendingBridge = {
+            mode: 'pending',
+            collection,
+            reason: 'startup-in-progress',
+            state: null,
+            stop: async () => {
+              const resolvedBridge = await bridgePromise.catch(() => null);
+              await resolvedBridge?.stop?.();
+            },
+          };
+          recordCollection(collection, {
+            status: 'pending',
+            connectionStatus: 'connecting',
+            reason: pendingBridge.reason,
+            lastError: null,
+            reconnectingSince: null,
+            connectedAt: null,
+          });
+          return pendingBridge;
+        }
         recordCollection(collection, {
           status: bridge.mode === 'pending' ? 'pending' : 'running',
           connectionStatus: bridge.mode === 'pending' ? 'pending' : 'connecting',
