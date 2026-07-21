@@ -239,6 +239,16 @@ Rules that go with it:
   resizer 2, center 3, resizer 4, right 5). The kit hides column resizers on
   narrow windows; with auto-flow placement the center pane slides onto the
   empty 12px resizer track and the main view visually disappears.
+- **Icon-rail variant for selector-only left panes.** When the left pane is a
+  pure switcher (projects/apps, no metadata to scan), it may collapse to a
+  56px icon rail BY DEFAULT: 40px app icons (module `icon.svg`, monogram
+  fallback on load error), names as a floating hover chip (`position: fixed`
+  on `document.body` so pane clipping can't swallow it; remove it on
+  unmount), selection as an accent outline on the icon. Make the pane a size
+  container (`container: <name> / inline-size`) and bring inline labels,
+  kicker/title and footer text back via `@container (min-width: 150px)` —
+  the shell resizer (min 56) is the expand affordance. Reference:
+  coding-agents.
 - **The primary column keeps a hard minimum; side panes yield.** Fixed/maxed
   side tracks (`minmax(220px, 280px) … minmax(260px, 380px)`) grow to their
   max BEFORE a `minmax(0, 1fr)` center gets anything — in a narrow window the
