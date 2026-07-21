@@ -59,6 +59,10 @@
   --chrome-edge-header-focus: rgba(255, 255, 255, 0.8);
   --chrome-edge-island: rgba(255, 255, 255, 0.55);
   --chrome-edge-inset: rgba(255, 255, 255, 0.45);
+  --win-elev-dim:
+    0 1px 0 oklch(1 0 0 / 0.35) inset,
+    0 1px 2px oklch(0.22 0.015 235 / 0.08),
+    0 8px 22px oklch(0.22 0.015 235 / 0.12);
   --win-elev:
     0 1px 0 oklch(1 0 0 / 0.55) inset,
     0 1px 2px oklch(0.22 0.015 235 / 0.1),
@@ -113,6 +117,10 @@
   --chrome-edge-header-focus: rgba(255, 255, 255, 0.08);
   --chrome-edge-island: rgba(255, 255, 255, 0.07);
   --chrome-edge-inset: rgba(255, 255, 255, 0.07);
+  --win-elev-dim:
+    0 0 0 1px rgba(255, 255, 255, 0.03) inset,
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 10px 28px rgba(0, 0, 0, 0.5);
   --win-elev:
     0 0 0 1px rgba(255, 255, 255, 0.05) inset,
     0 1px 2px rgba(0, 0, 0, 0.55),
@@ -7419,10 +7427,7 @@ button.shell-window-header-meta:focus-visible,
    focused window is the only one with a crisp, accent-kissed border. */
 :root[data-shell-style="ctox"] .shell-window:not(.is-focused) {
   border-color: color-mix(in srgb, var(--win-border) 62%, transparent) !important;
-  box-shadow:
-    0 1px 0 oklch(1 0 0 / 0.35) inset,
-    0 1px 2px oklch(0.22 0.015 235 / 0.08),
-    0 8px 22px oklch(0.22 0.015 235 / 0.12) !important;
+  box-shadow: var(--win-elev-dim) !important;
 }
 
 :root[data-shell-style="ctox"] .shell-window.is-maximized,
@@ -7630,13 +7635,6 @@ button.shell-window-header-meta:focus-visible,
    shadows grow, and the focused window's accent aura gains presence. */
 :root[data-shell-style="ctox"][data-theme="dark"] .shell-window::before {
   background: color-mix(in srgb, var(--shell-desktop-bg) 32%, transparent);
-}
-
-:root[data-shell-style="ctox"][data-theme="dark"] .shell-window:not(.is-focused) {
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.03) inset,
-    0 1px 2px rgba(0, 0, 0, 0.5),
-    0 10px 28px rgba(0, 0, 0, 0.5) !important;
 }
 
 :root[data-shell-style="ctox"][data-theme="dark"] .shell-window.is-focused {

@@ -803,6 +803,9 @@ export function createWindowManager({
       let dragging = true;
       let rAFQueued = false;
       let dragFrame = 0;
+      // Shell style can only change between drags (settings select), so
+      // cache the ctox check once per drag instead of per frame.
+      const trackDynamicShadow = dynamicShadowActive();
 
       function update() {
         const dx = initialX - currentX;
@@ -819,7 +822,7 @@ export function createWindowManager({
         el.style.top = `${top}px`;
         el.style.left = `${left}px`;
         applySnapPreview(currentX, currentY, { dragStartX, dragStartY });
-        updateDynamicShadow(el);
+        if (trackDynamicShadow) updateDynamicShadow(el);
       }
 
       function onMouseMove(moveEvent) {
@@ -1035,15 +1038,21 @@ export function createWindowManager({
     if (zone) snapTo(win.id, zone);
   }
 
+  // The ctox chrome pins window elevation to var(--win-elev*) !important, so
+  // the per-frame shadow vars are dead work there; the base windows/macos
+  // chrome still consumes --win-shadow-y/--win-shadow-blur. makeDraggable
+  // caches this check at drag start so the hot path never re-reads it.
+  function dynamicShadowActive() {
+    return document.documentElement.dataset.shellStyle !== 'ctox';
+  }
+
   function updateDynamicShadow(el) {
+    if (!dynamicShadowActive()) return;
     const surfaceRect = surfaceEl.getBoundingClientRect();
     const rect = el.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
-    const offX = (centerX - (surfaceRect.left + surfaceRect.width / 2)) / 18;
     const offY = (centerY - (surfaceRect.top + surfaceRect.height / 2)) / 18 + 8;
     const blur = 28 + Math.abs(offY) / 2;
-    el.style.setProperty('--win-shadow-x', `${offX.toFixed(1)}px`);
     el.style.setProperty('--win-shadow-y', `${offY.toFixed(1)}px`);
     el.style.setProperty('--win-shadow-blur', `${blur.toFixed(1)}px`);
   }
