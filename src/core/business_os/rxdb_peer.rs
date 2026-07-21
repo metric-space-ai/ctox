@@ -1837,8 +1837,10 @@ pub fn sync_desktop_files_from_workspace_root(
         .build()
         .context("failed to create Business OS workspace file sync runtime")?;
     if let Some(peer) = current_peer() {
-        return runtime
-            .block_on(async move { peer.sync_desktop_files_from_scan_roots(scan_roots).await });
+        return runtime.block_on(async move {
+            peer.sync_desktop_files_from_scan_roots_unbounded(scan_roots)
+                .await
+        });
     }
     let _database_guard = TEMPORARY_RXDB_DATABASE_LOCK
         .lock()
@@ -1850,7 +1852,8 @@ pub fn sync_desktop_files_from_workspace_root(
             .await
             .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
         let indexed =
-            sync_desktop_file_scan_roots_with_database(root, &database, scan_roots).await?;
+            sync_desktop_file_scan_roots_with_database_unbounded(root, &database, scan_roots)
+                .await?;
         database
             .close()
             .await
@@ -3783,6 +3786,14 @@ impl NativePeer {
         scan_roots: Vec<DesktopFileScanRoot>,
     ) -> anyhow::Result<usize> {
         sync_desktop_file_scan_roots_with_database(&self.root, &self.database, scan_roots).await
+    }
+
+    async fn sync_desktop_files_from_scan_roots_unbounded(
+        &self,
+        scan_roots: Vec<DesktopFileScanRoot>,
+    ) -> anyhow::Result<usize> {
+        sync_desktop_file_scan_roots_with_database_unbounded(&self.root, &self.database, scan_roots)
+            .await
     }
 }
 
@@ -12439,6 +12450,15 @@ async fn sync_desktop_file_scan_roots_with_database(
     sync_desktop_file_scan_with_database(root, database, scan).await
 }
 
+async fn sync_desktop_file_scan_roots_with_database_unbounded(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+    scan_roots: Vec<DesktopFileScanRoot>,
+) -> anyhow::Result<usize> {
+    let scan = collect_desktop_file_index_scan_unbounded(scan_roots).await?;
+    sync_desktop_file_scan_with_database(root, database, scan).await
+}
+
 async fn sync_desktop_file_scan_roots_with_database_if_changed(
     root: &Path,
     database: &Arc<RxDatabase>,
@@ -13459,6 +13479,14 @@ async fn collect_desktop_file_index_scan(
         .context("join native desktop file index scan")
 }
 
+async fn collect_desktop_file_index_scan_unbounded(
+    scan_roots: Vec<DesktopFileScanRoot>,
+) -> anyhow::Result<DesktopFileIndexScan> {
+    tokio::task::spawn_blocking(move || collect_desktop_file_index_scan_sync_unbounded(scan_roots))
+        .await
+        .context("join native desktop file index workspace scan")
+}
+
 fn collect_desktop_file_index_scan_sync(
     mut scan_roots: Vec<DesktopFileScanRoot>,
 ) -> DesktopFileIndexScan {
@@ -13474,6 +13502,57 @@ fn collect_desktop_file_index_scan_sync(
         scan_roots,
         candidates,
         stamp,
+    }
+}
+
+fn collect_desktop_file_index_scan_sync_unbounded(
+    mut scan_roots: Vec<DesktopFileScanRoot>,
+) -> DesktopFileIndexScan {
+    normalize_desktop_file_scan_roots(&mut scan_roots);
+    let mut candidates = Vec::new();
+    for scan_root in &scan_roots {
+        let mut paths = Vec::new();
+        collect_files_unbounded(&scan_root.path, &mut paths);
+        candidates.extend(paths.into_iter().map(|path| DesktopFileIndexCandidate {
+            path,
+            scan_root: scan_root.clone(),
+        }));
+    }
+    candidates.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then(left.scan_root.path.cmp(&right.scan_root.path))
+    });
+    let stamp = desktop_file_index_projection_stamp(&scan_roots, &candidates, false);
+    DesktopFileIndexScan {
+        scan_roots,
+        candidates,
+        stamp,
+    }
+}
+
+fn collect_files_unbounded(root: &Path, out: &mut Vec<PathBuf>) {
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    while let Some((dir, depth)) = stack.pop() {
+        if depth > DESKTOP_FILE_SCAN_MAX_DEPTH {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                if depth < DESKTOP_FILE_SCAN_MAX_DEPTH && !should_skip_scan_dir(&path) {
+                    stack.push((path, depth + 1));
+                }
+            } else if file_type.is_file() && !should_skip_scan_file(&path) {
+                out.push(path);
+            }
+        }
     }
 }
 
@@ -22721,6 +22800,33 @@ mod tests {
             .expect("removed file row still present");
         let row: Value = serde_json::from_str(&row_json).expect("removed row json");
         assert_eq!(row.get("is_deleted").and_then(Value::as_bool), Some(false));
+    }
+
+    #[test]
+    fn explicit_workspace_sync_indexes_beyond_background_scan_limit() {
+        let root = safe_business_os_tempdir("explicit-workspace-sync-");
+        let workspace = root.path().join("agent-workspace");
+        fs::create_dir_all(&workspace).expect("create workspace");
+        for idx in 0..=DESKTOP_FILE_SCAN_MAX_FILES {
+            fs::write(workspace.join(format!("file-{idx:03}.csv")), b"a,b\n1,2\n")
+                .expect("write workspace file");
+        }
+
+        let indexed = sync_desktop_files_from_workspace_root(root.path(), &workspace)
+            .expect("sync explicit workspace root");
+        assert_eq!(indexed, DESKTOP_FILE_SCAN_MAX_FILES + 1);
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
+        let active_files: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ctox_business_os__desktop_files__v0 \
+                 WHERE COALESCE(deleted, 0) = 0 \
+                   AND json_extract(data, '$.kind') = 'file'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("active desktop file count");
+        assert_eq!(active_files, (DESKTOP_FILE_SCAN_MAX_FILES + 1) as i64);
     }
 
     #[test]

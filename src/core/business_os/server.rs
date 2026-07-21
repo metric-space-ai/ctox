@@ -168,6 +168,11 @@ pub fn serve_business_os(root: &Path, options: BusinessOsServeOptions) -> anyhow
             app_root.display()
         );
     }
+    // Claim the HTTP surface before opening the store or starting the native
+    // peer. A legacy standalone shell may still own the address during an
+    // upgrade; failing here keeps that ownership conflict away from SQLite.
+    let server = Server::http(&options.addr)
+        .map_err(|err| anyhow::anyhow!("failed to bind Business OS server: {err}"))?;
     let _conn = store::open_store(root)?;
     match super::rxdb_peer::ensure_native_peer(root) {
         Ok(()) => {}
@@ -176,8 +181,6 @@ pub fn serve_business_os(root: &Path, options: BusinessOsServeOptions) -> anyhow
     if let Err(err) = store::write_module_catalog_projection_to_rxdb(root) {
         eprintln!("[business-os] module catalog refresh failed at serve start: {err:#}");
     }
-    let server = Server::http(&options.addr)
-        .map_err(|err| anyhow::anyhow!("failed to bind Business OS server: {err}"))?;
     println!("CTOX Business OS listening on http://{}", options.addr);
     println!("Serving {}", app_root.display());
     let (request_tx, request_rx) = sync_channel(BUSINESS_OS_HTTP_QUEUE_CAPACITY);

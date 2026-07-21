@@ -412,10 +412,7 @@ fn valid_canonical_url(value: &str) -> bool {
 }
 
 fn valid_snapshot_hash(value: &str) -> bool {
-    let Some(hex) = value.strip_prefix("sha256:") else {
-        return false;
-    };
-    hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+    normalized_sha256(value).is_some()
 }
 
 fn is_metadata_canonical_url(value: &str) -> bool {
@@ -2208,7 +2205,7 @@ mod tests {
             "evidence_relevance_score": 32,
             "metadata_only": false,
             "http_status": 200,
-            "snapshot_hash": format!("sha256:{}", "a".repeat(64)),
+            "snapshot_hash": "a".repeat(64),
             "source_tier": "primary",
             "provenance": "research-run-1",
             "evidence_eligible": false

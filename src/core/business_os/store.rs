@@ -33359,6 +33359,97 @@ struct SystematicResearchCsvOutput {
 
 type ValidatedResearchClaim = (String, String, String, String, String, String);
 
+fn load_systematic_research_validation_receipt(
+    workspace: &Path,
+    manifest_sha256: &str,
+    run_id: &str,
+    command_id: &str,
+) -> anyhow::Result<(PathBuf, Value)> {
+    let candidates = [
+        workspace
+            .join(".ctox")
+            .join("systematic-research-validation.json"),
+        workspace
+            .join("ctox")
+            .join("systematic-research-validation.json"),
+    ];
+    let mut failures = Vec::new();
+    for path in candidates.into_iter().filter(|path| path.is_file()) {
+        let receipt: Value = match fs::read(&path)
+            .with_context(|| {
+                format!(
+                    "read systematic research validation receipt {}",
+                    path.display()
+                )
+            })
+            .and_then(|bytes| {
+                serde_json::from_slice(&bytes).with_context(|| {
+                    format!(
+                        "parse systematic research validation receipt {}",
+                        path.display()
+                    )
+                })
+            }) {
+            Ok(receipt) => receipt,
+            Err(err) => {
+                failures.push(format!("{}: {err:#}", path.display()));
+                continue;
+            }
+        };
+        let status = receipt
+            .get("status")
+            .or_else(|| receipt.get("validation_status"))
+            .and_then(Value::as_str);
+        if receipt.get("schema_version").and_then(Value::as_str)
+            != Some("ctox.systematic-research.validation.v1")
+            || status != Some("pass")
+        {
+            failures.push(format!(
+                "{}: receipt is not a passing systematic-research validation",
+                path.display()
+            ));
+            continue;
+        }
+        if receipt.get("research_run_id").and_then(Value::as_str) != Some(run_id)
+            || receipt.get("research_command_id").and_then(Value::as_str) != Some(command_id)
+        {
+            failures.push(format!(
+                "{}: receipt is bound to another run or command",
+                path.display()
+            ));
+            continue;
+        }
+        if !systematic_research_receipt_covers_manifest(&receipt, manifest_sha256) {
+            failures.push(format!(
+                "{}: receipt does not cover current manifest sha256",
+                path.display()
+            ));
+            continue;
+        }
+        return Ok((path, receipt));
+    }
+    anyhow::bail!(
+        "systematic research writeback requires a passing validation receipt for the current manifest; checked {}",
+        if failures.is_empty() {
+            "no receipt files".to_string()
+        } else {
+            failures.join("; ")
+        }
+    );
+}
+
+fn systematic_research_receipt_covers_manifest(receipt: &Value, manifest_sha256: &str) -> bool {
+    receipt
+        .get("manifests")
+        .and_then(Value::as_array)
+        .is_some_and(|manifests| {
+            manifests.iter().any(|item| {
+                item.get("manifest_sha256").and_then(Value::as_str) == Some(manifest_sha256)
+            })
+        })
+        || receipt.pointer("/manifest/sha256").and_then(Value::as_str) == Some(manifest_sha256)
+}
+
 fn promote_systematic_research_workspace_outputs(
     root: &Path,
     command_id: &str,
@@ -33378,51 +33469,21 @@ fn promote_systematic_research_workspace_outputs(
         .or_else(|| first_string_field(&command.client_context, &["research_run_id", "run_id"]))
         .context("systematic research writeback requires an immutable research_run_id")?;
 
-    let validation_receipt_path = workspace
-        .join(".ctox")
-        .join("systematic-research-validation.json");
-    let validation_receipt: Value =
-        serde_json::from_slice(&fs::read(&validation_receipt_path).with_context(|| {
-            format!(
-                "read systematic research validation receipt {}",
-                validation_receipt_path.display()
-            )
-        })?)
-        .context("parse systematic research validation receipt")?;
-    anyhow::ensure!(
-        validation_receipt
-            .get("schema_version")
-            .and_then(Value::as_str)
-            == Some("ctox.systematic-research.validation.v1")
-            && validation_receipt.get("status").and_then(Value::as_str) == Some("pass"),
-        "systematic research writeback requires a passing native validation receipt"
-    );
-    anyhow::ensure!(
-        validation_receipt
-            .get("research_run_id")
-            .and_then(Value::as_str)
-            == Some(run_id.as_str())
-            && validation_receipt
-                .get("research_command_id")
-                .and_then(Value::as_str)
-                == Some(command_id),
-        "systematic research validation receipt is bound to another run or command"
-    );
-
     let manifest_path = workspace.join("validation/evidence-manifest.json");
     let manifest_bytes = fs::read(&manifest_path)
         .with_context(|| format!("read evidence manifest {}", manifest_path.display()))?;
     let manifest_sha256 = format!("{:x}", Sha256::digest(&manifest_bytes));
     let manifest: Value =
         serde_json::from_slice(&manifest_bytes).context("parse systematic research manifest")?;
+    let (_validation_receipt_path, validation_receipt) =
+        load_systematic_research_validation_receipt(
+            &workspace,
+            &manifest_sha256,
+            &run_id,
+            command_id,
+        )?;
     anyhow::ensure!(
-        validation_receipt
-            .get("manifests")
-            .and_then(Value::as_array)
-            .is_some_and(|manifests| manifests.iter().any(|item| {
-                item.get("manifest_sha256").and_then(Value::as_str)
-                    == Some(manifest_sha256.as_str())
-            })),
+        systematic_research_receipt_covers_manifest(&validation_receipt, &manifest_sha256),
         "systematic research validation receipt does not cover the current evidence manifest"
     );
     anyhow::ensure!(
