@@ -2,5 +2,20 @@
   "title": "Vorstellungen",
   "subtitle": "Kandidaten-Vorstellung an Kunden mit Doppel-Vorstellungs- und Consent-Schutz.",
   "add": "Create",
-  "empty": "No entries yet."
+  "empty": "No submissions yet.",
+  "kicker": "SUBMISSIONS",
+  "listTitle": "Candidates",
+  "viewAll": "All",
+  "viewOpen": "Open",
+  "viewDone": "Closed",
+  "allStatus": "All statuses",
+  "statusSent": "sent",
+  "statusHired": "hired",
+  "statusWithdrawn": "withdrawn",
+  "statusRejected": "rejected",
+  "composerKicker": "NEW SUBMISSION",
+  "composerTitle": "Present candidate",
+  "recordKicker": "SUBMISSION",
+  "importDone": "Import complete.",
+  "exportDone": "Export created."
 }

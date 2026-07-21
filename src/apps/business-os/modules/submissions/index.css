@@ -1,75 +1,150 @@
 /* submissions/index.css — module-specific layer on top of shared/base.css.
-   Frame, header, compact form, inputs, buttons, badges, callout, status
-   line, record-list container and empty state all come from the kit
-   (.ctox-record-workbench, .ctox-compact-form, .ctox-input, .ctox-button,
-   .ctox-badge, .ctox-callout, .ctox-empty); this file only keeps the gate
-   result rows and the rich submission rows. */
+   The two-pane frame, pane headers, canonical column grammar (filterbar, tray,
+   counted band, well, footer), list items, compact form, inputs, selects,
+   buttons, badges, callout and fields all come from the kit. This file keeps
+   only what is genuinely submissions-specific: the explicit pane grid pins/rows,
+   the shard/compact row content, the workbench detail, and the gate callout
+   details. Chrome wiring is shell-owned (data-pg-* auto-wired). */
 
-/* The kit callout has no :empty collapse; the gate starts empty and is
-   cleared between runs, so hide it until JS fills it. */
-.ats-submissions .ctox-callout:empty { display: none; }
-
-/* custom: Ergebnis-Zeilen und Blocker-Liste im Gate-Callout — das Kit hat
-   keine Listen-in-Callout-Komponente. */
-.ats-submissions .ats-result-row { margin-top: 4px; color: var(--muted); }
-.ats-submissions .ats-blockers { margin: 6px 0 0; padding-left: 18px; }
-.ats-submissions .ats-blockers li { margin: 2px 0; }
-
-/* custom: Submission-Zeile mit Status-Badge, Kandidat→Kunde-Zeile,
-   ID/Consent/Feedback-Metadaten und Zeilen-Aktion im Zweispalten-Grid — nicht
-   klick-/selektierbar, daher kein .ctox-list-item; das Kit hat kein
-   mehrzeiliges Record-Row-Muster. Nur Tokens und Kit-Radien; Typografie
-   erbt vom Kit. */
-.ats-submissions .ats-item {
-  padding: 8px 10px;
-  border: 1px solid var(--hairline, var(--line));
-  border-radius: var(--panel-radius);
-  background: var(--surface);
+/* ---- Explicit workspace pins (design-guide: pin panes to grid tracks so a
+   hidden resizer never lets the main view slide onto an empty track). Pane
+   rows: header / band / well / footer (left) and header / body / footer. ---- */
+.submissions-module {
+  --ctox-left-width: 320px;
 }
 
-.ats-submissions .ats-item--rich {
+.subs-left {
+  grid-column: 1;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.submissions-module > [data-resizer="left"] {
+  grid-column: 2;
+}
+
+.subs-center {
+  grid-column: 3;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.subs-workbench-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+
+/* ---- Left column shard rows (cards + compact). A shard is a pure selector:
+   title + one muted meta line. Selection styling comes from .ctox-list-item. -- */
+.subs-shard {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 4px 10px;
+  gap: 4px;
+}
+
+.subs-shard-title {
+  display: flex;
   align-items: center;
-}
-
-.ats-submissions .ats-item-main {
-  grid-column: 1;
+  gap: 8px;
   min-width: 0;
 }
 
-.ats-submissions .ats-item-meta {
-  grid-column: 1;
+.subs-shard-title strong {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subs-shard-meta {
   color: var(--muted);
 }
 
-/* Optionale Formularfelder (Vakanz, Kontakt) und interne Record-IDs
-   (Submission, Vakanz, Kontakt, Consent) sind nur bei Bedarf relevant —
-   native Disclosures, standardmäßig eingeklappt. */
-.ats-submissions .ats-more > summary,
-.ats-submissions .ats-item-details > summary {
+.subs-row-compact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.subs-compact-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+/* ---- Optional composer fields (Vakanz, Kontakt) behind a native disclosure. -- */
+.submissions-module .subs-more > summary {
   cursor: pointer;
   color: var(--muted);
   font-size: 11px;
 }
 
-.ats-submissions .ats-more[open] > summary { margin-bottom: 5px; }
-.ats-submissions .ats-item-details { grid-column: 1; min-width: 0; }
-
-/* Grid placement only — the button itself is a kit .ctox-button. The
-   copy-ID action is secondary: revealed on hover/focus instead of
-   permanently occupying every row. */
-.ats-submissions .ats-action {
-  grid-column: 2;
-  grid-row: 1 / -1;
-  opacity: 0;
+.submissions-module .subs-more[open] > summary {
+  margin-bottom: 5px;
 }
 
-.ats-submissions .ats-item:hover .ats-action,
-.ats-submissions .ats-item:focus-within .ats-action { opacity: 1; }
+/* ---- Workbench detail (auto-revealed on selection). ---- */
+.subs-detail:empty {
+  display: none;
+}
 
-@media (hover: none) {
-  .ats-submissions .ats-action { opacity: 1; }
+.subs-detail-card {
+  display: grid;
+  gap: 8px;
+}
+
+/* Element actions collected top-right of the card (icons only). */
+.subs-detail-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.subs-detail-actions:empty {
+  display: none;
+}
+
+/* ---- Gate callout: collapse when empty (the kit callout has no :empty rule),
+   plus the secondary detail lines and blocker list rendered inside it. ---- */
+.submissions-module [data-subs-gate]:empty {
+  display: none;
+}
+
+.submissions-module .ats-result-row {
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.submissions-module .ats-blockers {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+}
+
+.submissions-module .ats-blockers li {
+  margin: 2px 0;
+}
+
+/* ---- Narrow windows: stack the two panes, drop the resizer. ---- */
+@container business-app-window (max-width: 760px) {
+  .submissions-module {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(180px, 34vh) minmax(320px, 1fr);
+    height: auto;
+    min-height: 100%;
+    overflow-y: auto;
+    gap: 8px;
+  }
+
+  .submissions-module > [data-resizer="left"] {
+    display: none !important;
+  }
+
+  .subs-left,
+  .subs-center {
+    grid-column: 1;
+  }
 }

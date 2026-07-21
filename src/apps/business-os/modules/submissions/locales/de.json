@@ -2,5 +2,20 @@
   "title": "Vorstellungen",
   "subtitle": "Kandidaten-Vorstellung an Kunden mit Doppel-Vorstellungs- und Consent-Schutz.",
   "add": "Anlegen",
-  "empty": "Noch keine Einträge."
+  "empty": "Noch keine Vorstellungen.",
+  "kicker": "VORSTELLUNGEN",
+  "listTitle": "Kandidaten",
+  "viewAll": "Alle",
+  "viewOpen": "Offen",
+  "viewDone": "Erledigt",
+  "allStatus": "Alle Status",
+  "statusSent": "gesendet",
+  "statusHired": "eingestellt",
+  "statusWithdrawn": "zurückgezogen",
+  "statusRejected": "abgelehnt",
+  "composerKicker": "NEUE VORSTELLUNG",
+  "composerTitle": "Kandidat vorstellen",
+  "recordKicker": "VORSTELLUNG",
+  "importDone": "Import abgeschlossen.",
+  "exportDone": "Export erstellt."
 }
