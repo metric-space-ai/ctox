@@ -87,13 +87,19 @@ try {
   await page.evaluate(() => window.shellHarness.maximize());
   const maximized = await page.evaluate(() => window.shellHarness.collect());
   observations.push({ phase: 'expanded-maximized', ...maximized });
-  expect(maximized.overlap.windowDock === 0, 'maximized window must stop above the persistent chat dock');
+  // Window-neutral overlay contract (shared/shell-chat-composition.js,
+  // f0d376fbc 2026-07-17 "chat as window-neutral overlay"): the chat dock
+  // floats ABOVE app windows and reserves ZERO work-area inset, so a maximized
+  // window fills the full work area and the dock overlaps it by design. The
+  // real invariant to guard is that the dock steals no bottom space — a
+  // reintroduced inset would shrink the window and fail this.
+  expect(maximized.window.bottom >= maximized.viewport.height - 10, `maximized window must fill the full work area under the floating chat dock (no reserved bottom inset): ${JSON.stringify({ windowBottom: maximized.window.bottom, viewportHeight: maximized.viewport.height })}`);
   expect(maximized.window.right <= maximized.viewport.width, 'maximized window must use the full shell width');
 
   await page.evaluate(() => window.shellHarness.snapBottom());
   const snapped = await page.evaluate(() => window.shellHarness.collect());
   observations.push({ phase: 'expanded-bottom-snap', ...snapped });
-  expect(snapped.overlap.windowDock === 0, 'bottom-snapped window must stop above the persistent chat dock');
+  expect(snapped.window.bottom >= snapped.viewport.height - 10, `bottom-snapped window must reach the work-area bottom under the floating chat dock (no reserved inset): ${JSON.stringify({ windowBottom: snapped.window.bottom, viewportHeight: snapped.viewport.height })}`);
   expect(snapped.window.height >= 199, `bottom snap must preserve the minimum window height, got ${snapped.window.height}`);
 
   const layoutEventsBeforeResize = await page.evaluate(() => window.shellHarness.layoutEvents);
@@ -101,7 +107,7 @@ try {
   await page.waitForFunction((previous) => window.shellHarness.layoutEvents > previous, layoutEventsBeforeResize);
   const resized = await page.evaluate(() => window.shellHarness.collect());
   observations.push({ phase: 'expanded-resized-viewport', ...resized });
-  expect(resized.overlap.windowDock === 0, 'resized snapped window must retain zero window/dock overlap');
+  expect(resized.window.bottom >= resized.viewport.height - 10, `resized snapped window must keep filling the work area under the floating chat dock (no reserved inset): ${JSON.stringify({ windowBottom: resized.window.bottom, viewportHeight: resized.viewport.height })}`);
   expect(!resized.chatSide && !resized.chatCompact, 'resizing must not switch chat into an alternate rail mode');
   expect(resized.chat.right <= resized.viewport.width, 'resized chat must remain inside the viewport');
 
