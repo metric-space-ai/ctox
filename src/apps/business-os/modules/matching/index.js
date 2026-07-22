@@ -43,16 +43,22 @@ export async function mount(ctx) {
 }
 
 async function ensureStyles() {
-  const href = `${new URL('./index.css', import.meta.url).pathname}?v=${MATCHING_BUILD}`;
-  if (document.querySelector(`link[href="${href}"]`)) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = href;
-  document.head.append(link);
+  const cssVersion = String(import.meta.url).split('?v=')[1] || MATCHING_BUILD;
+  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
+  let link = document.querySelector('link[data-matching-style]');
+  if (!link) {
+    link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.dataset.matchingStyle = 'true';
+    document.head.append(link);
+  }
+  if (link.getAttribute('href') !== cssHref) link.href = cssHref;
 }
 
 async function loadModuleMarkup() {
-  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  const markupVersion = String(import.meta.url).split('?v=')[1] || MATCHING_BUILD;
+  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
+  const html = await fetch(markupHref).then((res) => res.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
   return doc.body.innerHTML;
