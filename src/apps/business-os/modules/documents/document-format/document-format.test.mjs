@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import JSZip from '../../../../../../archive/reorg-review/templates/business-basic/apps/web/vendor/jszip.mjs';
+import JSZip from '../../../vendor/jszip/jszip.mjs';
 import {
   materializeDocxMergeFields,
   materializeDocxTextReplacements,
