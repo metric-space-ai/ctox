@@ -2780,6 +2780,7 @@ fn scholarly_db_query(
             query: query.to_string(),
             provider: Some(provider),
             max_results: Some(limit),
+            with_oa_pdf: true,
             ..Default::default()
         },
     )?;
