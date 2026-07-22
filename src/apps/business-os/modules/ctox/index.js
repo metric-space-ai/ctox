@@ -1,4 +1,4 @@
-import { showBusinessConfirm } from '../../shared/dialogs.js';
+import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js';
 import { loadModuleMessages } from '../../shared/i18n.js';
 
 const FLOW_WIDTH = 1760;
@@ -111,6 +111,10 @@ const labels = {
     verifyRule: 'Regel prüfen',
     queueAction: 'CTOX Live Flow weiterführen',
     addTask: 'Aufgabe anlegen',
+    importTasks: 'Tasks importieren',
+    exportTasks: 'Tasks exportieren',
+    tasksImported: '{count} Tasks importiert.',
+    taskImportFailed: 'Import fehlgeschlagen — keine importierbaren Tasks in der Datei.',
     chatToCtox: 'Chat to CTOX',
     workWithData: 'Mit Daten arbeiten',
     modifyApp: 'App modifizieren',
@@ -283,6 +287,10 @@ const labels = {
     verifyRule: 'Verify rule',
     queueAction: 'Continue CTOX live flow',
     addTask: 'Add task',
+    importTasks: 'Import tasks',
+    exportTasks: 'Export tasks',
+    tasksImported: '{count} tasks imported.',
+    taskImportFailed: 'Import failed — no importable tasks in the file.',
     chatToCtox: 'Chat to CTOX',
     workWithData: 'Work with data',
     modifyApp: 'Modify app',
@@ -887,6 +895,16 @@ function wireTaskColumn(state) {
   left.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target : null;
     if (!target) return;
+    const importAction = target.closest('[data-task-import]');
+    if (importAction) {
+      openTaskImportPicker(state);
+      return;
+    }
+    const exportAction = target.closest('[data-task-export]');
+    if (exportAction) {
+      exportVisibleTasks(state);
+      return;
+    }
     const direction = target.closest('[data-task-sort-direction]');
     if (direction) {
       state.taskSortDirection = state.taskSortDirection === 'asc' ? 'desc' : 'asc';
@@ -986,6 +1004,89 @@ function renderTaskCountsAndFooter(state, left, tasks) {
   }
 }
 
+// Header actions: export serializes the currently visible (filtered + sorted)
+// task records as a JSON download. Import reads such a file (or a plain array
+// of {title, instruction|prompt}) and creates real work through the EXISTING
+// task creation path (business_os.chat.task via dispatchCtoxTaskMutation) —
+// the same command type the shared chat and the resume flow dispatch.
+function exportVisibleTasks(state) {
+  const visibleTasks = filterAndSortTasks(state.model?.tasks || [], state);
+  const exportedAt = new Date().toISOString();
+  const payload = {
+    format: 'ctox-task-export',
+    version: 1,
+    exportedAt,
+    module: 'ctox',
+    view: state.taskPrimaryView || 'all',
+    count: visibleTasks.length,
+    tasks: visibleTasks.map((task) => ({
+      taskId: String(task.id || ''),
+      commandId: String(task.commandId || ''),
+      title: taskDisplayTitle(task, state),
+      status: String(task.routeStatus || task.status || ''),
+      source: String(task.channel || task.source || task.moduleId || ''),
+      prompt: String(task.prompt || ''),
+      updatedAt: String(task.updatedAt || ''),
+      createdAt: String(task.createdAt || task.timestamp || ''),
+    })),
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `ctox-tasks-${exportedAt.slice(0, 19).replace(/[:T]/g, '-')}.json`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function openTaskImportPicker(state) {
+  const t = labels[state.lang];
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/json,.json';
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      const created = await importTasksFromFile(state, file);
+      showBusinessAlert(t.tasksImported.replace('{count}', String(created)));
+    } catch {
+      showBusinessAlert(t.taskImportFailed);
+    }
+  }, { once: true });
+  input.click();
+}
+
+async function importTasksFromFile(state, file) {
+  const parsed = JSON.parse(await file.text());
+  const items = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.tasks) ? parsed.tasks : null);
+  if (!items) throw new Error('unsupported task import format');
+  const entries = items
+    .map((item) => ({
+      title: String(item?.title || '').trim(),
+      instruction: String(item?.instruction || item?.prompt || '').trim(),
+    }))
+    .filter((item) => item.title)
+    .slice(0, 50);
+  if (!entries.length) throw new Error('no importable tasks in file');
+  for (const entry of entries) {
+    await dispatchCtoxTaskMutation(state, {
+      commandType: 'business_os.chat.task',
+      payload: {
+        title: entry.title,
+        instruction: entry.instruction || entry.title,
+        imported: true,
+        source: 'ctox-task-import',
+      },
+      commandPath: 'ctox_task_import',
+    });
+  }
+  refresh(state).catch(() => {});
+  return entries.length;
+}
+
 function taskListInner(tasks, state, options = {}) {
   const t = labels[state.lang];
   if (options.loading) return '<div class="ctox-loading-list" aria-hidden="true"><span></span><span></span><span></span></div>';
@@ -1011,7 +1112,10 @@ function taskColumnMarkup(tasks, state, options = {}) {
           <span class="ctox-pane-kicker">${escapeHtml(t.harnessKicker)}</span>
           <h2 class="ctox-pane-title">${escapeHtml(t.tasks)}</h2>
         </div>
-        <div class="ctox-pane-actions"></div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon" data-task-import aria-label="${escapeAttr(t.importTasks)}" title="${escapeAttr(t.importTasks)}">${actionIcon(state, 'download')}</button>
+          <button type="button" class="ctox-pane-icon" data-task-export aria-label="${escapeAttr(t.exportTasks)}" title="${escapeAttr(t.exportTasks)}">${actionIcon(state, 'export')}</button>
+        </div>
       </div>
       <div class="ctox-filterbar">
         <input class="ctox-pane-search" type="search" data-pg-search value="${escapeAttr(state.taskSearch || '')}" placeholder="${escapeAttr(t.taskSearch)}" aria-label="${escapeAttr(t.taskSearch)}">
