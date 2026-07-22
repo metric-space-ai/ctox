@@ -133,6 +133,19 @@ class EvidenceGuardTests(unittest.TestCase):
     def test_valid_manifest_passes(self) -> None:
         validate_manifest(self.manifest, self.base)
 
+    def test_prefixed_sha256_values_pass_after_strict_normalization(self) -> None:
+        item = self.manifest["evidence"][0]
+        item["snapshot_sha256"] = f"sha256:{item['snapshot_sha256']}"
+        item["snapshot"]["sha256"] = f"sha256:{item['snapshot']['sha256']}"
+        item["extracted_text"]["source_snapshot_sha256"] = (
+            f"sha256:{item['extracted_text']['source_snapshot_sha256']}"
+        )
+        item["retrieval_receipt"]["body_sha256"] = (
+            f"sha256:{item['retrieval_receipt']['body_sha256']}"
+        )
+        self._sync_receipt_artifact()
+        validate_manifest(self.manifest, self.base)
+
     def test_publisher_doi_fulltext_path_is_allowed(self) -> None:
         url = "https://onlinelibrary.wiley.com/doi/full/10.1002/example"
         self.manifest["sources"][0]["canonical_url"] = url

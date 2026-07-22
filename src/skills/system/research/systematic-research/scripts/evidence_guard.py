@@ -64,6 +64,15 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def normalized_sha256(value: Any, label: str) -> str:
+    if not isinstance(value, str):
+        raise GuardError(f"{label}_invalid")
+    digest = value.strip().lower().removeprefix("sha256:")
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise GuardError(f"{label}_invalid")
+    return digest
+
+
 def canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -119,7 +128,7 @@ def require_string(obj: dict[str, Any], key: str, label: str) -> str:
 def validate_artifact_receipt(value: Any, base_dir: Path, label: str) -> Path:
     receipt = require_dict(value, f"{label}_receipt")
     path = resolve_path(base_dir, receipt.get("path"))
-    expected_hash = require_string(receipt, "sha256", f"{label}_receipt")
+    expected_hash = normalized_sha256(receipt.get("sha256"), f"{label}_receipt_sha256")
     if not path.is_file() or path.stat().st_size == 0:
         raise GuardError(f"{label}_receipt_missing")
     if sha256_file(path) != expected_hash:
@@ -205,7 +214,9 @@ def data_claim_text(
     snapshot_path: Path,
 ) -> str:
     excerpt = require_dict(claim.get("data_excerpt"), "claim_data_excerpt")
-    if excerpt.get("source_snapshot_sha256") != item.get("snapshot_sha256"):
+    if normalized_sha256(
+        excerpt.get("source_snapshot_sha256"), "claim_data_excerpt_source_snapshot_sha256"
+    ) != normalized_sha256(item.get("snapshot_sha256"), "evidence_snapshot_sha256"):
         raise GuardError("claim_data_excerpt_snapshot_binding_mismatch")
     encoding = require_string(excerpt, "encoding", "claim_data_excerpt").lower()
     if encoding not in {"ascii", "utf-8"}:
@@ -245,7 +256,9 @@ def data_claim_text(
             member_hash = require_string(
                 member, "sha256", "claim_data_excerpt_member"
             )
-            if sha256_bytes(content) != member_hash:
+            if sha256_bytes(content) != normalized_sha256(
+                member_hash, "claim_data_excerpt_member_sha256_mismatch"
+            ):
                 raise GuardError("claim_data_excerpt_member_sha256_mismatch")
             if index < len(chain) - 1:
                 archive_input = io.BytesIO(content)
@@ -326,7 +339,11 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
         snapshot_path = resolve_path(base_dir, snapshot.get("path"))
         validate_content(snapshot_path, scope)
         actual_hash = sha256_file(snapshot_path)
-        if actual_hash != snapshot.get("sha256") or actual_hash != item.get("snapshot_sha256"):
+        if actual_hash != normalized_sha256(
+            snapshot.get("sha256"), "snapshot_sha256"
+        ) or actual_hash != normalized_sha256(
+            item.get("snapshot_sha256"), "evidence_snapshot_sha256"
+        ):
             raise GuardError("snapshot_sha256_mismatch")
         if snapshot.get("source_id") != source_id or snapshot.get("canonical_url") != url:
             raise GuardError("snapshot_source_lineage_mismatch")
@@ -343,7 +360,9 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
             raise GuardError("retrieval_receipt_url_mismatch")
         if retrieval.get("http_status") != item.get("http_status"):
             raise GuardError("retrieval_receipt_status_mismatch")
-        if retrieval.get("body_sha256") != actual_hash:
+        if normalized_sha256(
+            retrieval.get("body_sha256"), "retrieval_receipt_body_hash"
+        ) != actual_hash:
             raise GuardError("retrieval_receipt_body_hash_mismatch")
         if retrieval.get("byte_count") != snapshot_path.stat().st_size:
             raise GuardError("retrieval_receipt_byte_count_mismatch")
@@ -375,8 +394,8 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
         for field, expected in immutable_fields.items():
             actual = persisted_receipt.get(field)
             if field == "snapshot_sha256":
-                actual = str(actual or "").removeprefix("sha256:")
-                expected = str(expected or "").removeprefix("sha256:")
+                actual = normalized_sha256(actual, "receipt_snapshot_sha256")
+                expected = normalized_sha256(expected, "manifest_snapshot_sha256")
             if actual != expected:
                 raise GuardError(f"retrieval_receipt_artifact_{field}_mismatch")
         if item.get("content_kind") != "data_file":
@@ -384,7 +403,10 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
             text_path = validate_artifact_receipt(
                 extracted_text, base_dir, "extracted_text"
             )
-            if extracted_text.get("source_snapshot_sha256") != actual_hash:
+            if normalized_sha256(
+                extracted_text.get("source_snapshot_sha256"),
+                "extracted_text_source_snapshot_sha256",
+            ) != actual_hash:
                 raise GuardError("extracted_text_snapshot_binding_mismatch")
             text = text_path.read_text(encoding="utf-8", errors="strict")
             normalized_text = normalize_evidence_text(text)
@@ -421,7 +443,9 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
         check = require_dict(data.get("deterministic_check"), "deterministic_check")
         if check.get("status") != "pass" or not check.get("parser") or not check.get("parser_version"):
             raise GuardError("deterministic_data_check_required")
-        if check.get("sha256") != item.get("snapshot_sha256"):
+        if normalized_sha256(
+            check.get("sha256"), "deterministic_data_hash"
+        ) != normalized_sha256(item.get("snapshot_sha256"), "evidence_snapshot_sha256"):
             raise GuardError("deterministic_data_hash_missing")
         if not isinstance(check.get("columns"), list) or not check["columns"]:
             raise GuardError("deterministic_data_schema_missing")
@@ -437,7 +461,9 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
         ):
             raise GuardError("deterministic_data_encoding_delimiter_missing")
         data_path = resolve_path(base_dir, data.get("path"))
-        if not data_path.is_file() or sha256_file(data_path) != item.get("snapshot_sha256"):
+        if not data_path.is_file() or sha256_file(data_path) != normalized_sha256(
+            item.get("snapshot_sha256"), "evidence_snapshot_sha256"
+        ):
             raise GuardError("downloaded_data_snapshot_mismatch")
 
     for claim in claims:
