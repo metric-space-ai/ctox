@@ -1310,7 +1310,7 @@ body.is-resizing * {
 .start-menu-search-input:focus {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--surface) 60%, transparent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: var(--focus-ring);
 }
 
 .start-menu-search-icon {
@@ -2679,9 +2679,7 @@ body[data-auth-state="locked"] .topbar {
   outline: none !important;
   border-color: var(--accent) !important;
   background: var(--surface) !important;
-  box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent),
-    0 4px 12px rgba(0, 0, 0, 0.15) !important;
+  box-shadow: var(--focus-ring) !important;
 }
 
 .auth-gate-input:focus + svg,
@@ -3952,7 +3950,7 @@ body[data-auth-state="locked"] .topbar {
 .channels-field input:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: var(--focus-ring);
 }
 
 .channels-form-grid {
@@ -5669,7 +5667,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
 .os-input:focus,
 .os-select:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent);
+  box-shadow: var(--focus-ring);
 }
 
 .os-select {
@@ -6295,8 +6293,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
 
 .workspace-col-resizer:focus-visible,
 [data-resizer]:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline: none;
 }
 
 .workspace-col-resizer:focus-visible::before,
@@ -6528,7 +6525,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   background: var(--accent);
   width: 4px;
 }
-.ctox-column-resizer:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ctox-column-resizer:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .ctox-row-resizer {
   align-self: stretch;
   justify-self: stretch;
@@ -6563,7 +6560,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   background: var(--accent);
   height: 4px;
 }
-.ctox-row-resizer:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ctox-row-resizer:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 body.is-resizing { cursor: col-resize; user-select: none; }
 body.is-resizing * { cursor: col-resize !important; }
 body.is-resizing-horizontal,
