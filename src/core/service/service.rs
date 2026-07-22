@@ -6164,9 +6164,50 @@ fn start_prompt_worker(
                             if job.prompt.contains(
                                 "evidence receipt artifacts were not emitted by typed ctox_web_read calls",
                             ) {
-                                prompt.push_str(
-                                    "\n\nTyped evidence-receipt correction:\nThe completion reviewer rejected this attempt because one or more manifest receipts have no immutable typed `ctox_web_read` call in the durable harness rollout. Before any `exec_command`, inspection, manifest edit, or local guard run, invoke the model-visible `ctox_web_read` tool directly for every canonical evidence URL named by the current manifest/review feedback. Do not run `ctox web read` through the shell. Use each successful typed tool output's exact `workspace_evidence.receipt_path`, `receipt_sha256`, snapshot path, relevance score, and retrieval fields; then update the manifest only where those immutable outputs differ. Every evidence item must have its own successful typed call in this durable Research Run and Command before completion.\n",
-                                );
+                                let manifest_urls = workspace_root
+                                    .and_then(|workspace| {
+                                        std::fs::read(
+                                            workspace.join("validation/evidence-manifest.json"),
+                                        )
+                                        .ok()
+                                    })
+                                    .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                                    .and_then(|manifest| {
+                                        manifest.get("evidence").and_then(Value::as_array).cloned()
+                                    })
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .filter_map(|entry| {
+                                        entry
+                                            .get("canonical_url")
+                                            .and_then(Value::as_str)
+                                            .map(str::trim)
+                                            .filter(|url| !url.is_empty())
+                                            .map(str::to_string)
+                                    })
+                                    .fold(Vec::<String>::new(), |mut urls, url| {
+                                        if !urls.contains(&url) {
+                                            urls.push(url);
+                                        }
+                                        urls
+                                    });
+                                let exact_urls = if manifest_urls.is_empty() {
+                                    "The manifest did not expose a canonical URL list; fail closed instead of inventing diagnostic or placeholder URLs."
+                                        .to_string()
+                                } else {
+                                    format!(
+                                        "Canonical evidence URLs, in required read order:\n{}",
+                                        manifest_urls
+                                            .iter()
+                                            .enumerate()
+                                            .map(|(index, url)| format!("{}. {}", index + 1, url))
+                                            .collect::<Vec<_>>()
+                                            .join("\n")
+                                    )
+                                };
+                                prompt.push_str(&format!(
+                                    "\n\nTyped evidence-receipt correction:\nThe completion reviewer rejected this attempt because one or more manifest receipts have no immutable typed `ctox_web_read` call in the durable harness rollout. Before any `exec_command`, inspection, manifest edit, or local guard run, invoke the model-visible `ctox_web_read` tool directly for every canonical evidence URL listed below. The first tool call must read URL 1; never use example.com, placeholder.invalid, a diagnostic URL, or a URL not listed below. Do not run `ctox web read` through the shell. Use each successful typed tool output's exact `workspace_evidence.receipt_path`, `receipt_sha256`, snapshot path, relevance score, and retrieval fields; then replace every stale manifest receipt path and hash with the matching current typed output. Every evidence item must have its own successful typed call in this durable Research Run and Command before completion.\n{exact_urls}\n"
+                                ));
                             }
                         }
                         outbound_email_first_execution_prompt(&job, prompt)
