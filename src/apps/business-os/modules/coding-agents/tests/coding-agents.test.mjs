@@ -71,9 +71,25 @@ test('presentation layer stays compact and shell-native', () => {
   assert.doesNotMatch(html, /data-count-apps/);
   assert.match(html, /id="ca-center-footer"/);
   assert.match(html, /id="ca-artifact-footer"/);
+  assert.match(html, /class="ctox-pane-icon" id="ca-export-session"/);
+  assert.match(html, /id="ca-export-session"[^>]*title="[^"]+"[^>]*aria-label="[^"]+"/);
+  assert.match(js, /getActionIcon\?\.\('export'\)/);
+  assert.match(js, /new Blob\(\[JSON\.stringify\(payload, null, 2\)\]/);
   assert.match(css, /\.coding-agents-filter-toggle\.has-active-filters::after/);
   assert.match(css, /\.coding-agents-chat-well/);
   assert.match(js, /renderTranscriptList/);
+});
+
+test('secondary transcript and session records carry the canonical context trio', () => {
+  const js = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  const protoRow = js.match(/<div class="coding-agents-proto-row"[^>]*>/)?.[0] || '';
+  for (const attr of ['data-context-record-id', 'data-context-record-type', 'data-context-label']) {
+    assert.match(protoRow, new RegExp(attr), `transcript row carries ${attr}`);
+  }
+  assert.match(js, /recordType: 'coding_agent_event'/);
+  assert.match(js, /banner\.setAttribute\('data-context-record-id'/);
+  assert.match(js, /banner\.setAttribute\('data-context-record-type', 'coding_agent_session'\)/);
+  assert.match(js, /banner\.setAttribute\('data-context-label'/);
 });
 
 test('task validation requires a meaningful instruction', () => {
@@ -112,6 +128,38 @@ test('turn payload only carries a model for an explicit provider pick', () => {
     // CTOX default and must then omit the model entirely.
     assert.equal(explicit.model, undefined);
   }
+});
+
+test('JSON export serializes only the records in the visible center view', () => {
+  const common = {
+    module: { id: 'notes', title: 'Notes' },
+    session: { session_id: 'pi:notes', workspace_root: 'notes', status: 'running', updated_at_ms: 42 },
+    filters: { search: 'parser', role: 'assistant', viewMode: 'list' },
+    exportedAt: '2026-07-22T12:00:00.000Z',
+  };
+  const chat = hooks.buildCodingAgentsExport({
+    ...common,
+    view: 'chat',
+    events: [{ key: 'evt:2', role: 'assistant', text: 'Parser fixed', status: 'done' }],
+    turns: [{ id: 'ignored' }],
+  });
+  assert.equal(chat.format, 'ctox-coding-agents-export');
+  assert.equal(chat.view, 'chat');
+  assert.equal(chat.count, 1);
+  assert.equal(chat.records[0].text, 'Parser fixed');
+  assert.equal(chat.session.sessionId, 'pi:notes');
+  assert.equal(chat.filters.viewMode, 'list');
+
+  const turns = hooks.buildCodingAgentsExport({
+    ...common,
+    view: 'turns',
+    events: [{ key: 'ignored' }],
+    turns: [{ id: 'cmd_1', moduleId: 'notes', prompt: 'Fix parser', status: 'completed', ok: true, appliedCount: 2, timeMs: 99 }],
+  });
+  assert.equal(turns.view, 'turns');
+  assert.equal(turns.count, 1);
+  assert.equal(turns.records[0].id, 'cmd_1');
+  assert.equal('text' in turns.records[0], false);
 });
 
 test('app catalog normalization keeps visible editable modules sorted by title', () => {

@@ -2,6 +2,7 @@
   "leftKicker": "pi Coding Agent",
   "leftTitle": "Apps",
   "refresh": "Aktualisieren",
+  "exportVisible": "Sichtbare Session-Daten exportieren",
   "workbenchKicker": "pi Coding Agent",
   "workbenchEmptyTitle": "Workbench",
   "formTitle": "Neuer Coding-Turn",

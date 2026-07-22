@@ -919,6 +919,7 @@ function renderTimeline(thread) {
     const message = entry.item;
     const mine = message.author_user_id && message.author_user_id === me;
     const kind = message.event_type || message.kind || 'note';
+    const messageLabel = String(message.body || message.source_label || kind || message.id).replace(/\s+/g, ' ').slice(0, 160);
     const sourceLink = sourceDeepLinkFor(message);
     const linkHtml = sourceLink
       ? `<button type="button" class="threads-msg-link" data-thread-deep-link="${escapeAttr(sourceLink)}" title="Objekt öffnen">↗ ${escapeHtml(message.source_label || message.source_module || 'Quelle')}</button>`
@@ -931,7 +932,7 @@ function renderTimeline(thread) {
       const failed = /blockiert|fehlgeschlagen|failed/i.test(message.body || '');
       const head = String(message.body || '').split('\n')[0];
       return `
-        <div class="threads-message is-event" data-message-id="${escapeAttr(message.id)}">
+        <div class="threads-message is-event" data-message-id="${escapeAttr(message.id)}" data-context-record-id="${escapeAttr(message.id)}" data-context-record-type="thread_message" data-context-label="${escapeAttr(messageLabel)}">
           <span class="threads-event-text">${escapeHtml(head)}</span>
           <span class="threads-event-meta">${escapeHtml(relativeTime(message.created_at_ms || message.updated_at_ms))}</span>
           ${linkHtml}
@@ -940,7 +941,7 @@ function renderTimeline(thread) {
       `;
     }
     return `
-      <article class="threads-message ${mine ? 'is-mine' : ''}" data-message-id="${escapeAttr(message.id)}">
+      <article class="threads-message ${mine ? 'is-mine' : ''}" data-message-id="${escapeAttr(message.id)}" data-context-record-id="${escapeAttr(message.id)}" data-context-record-type="thread_message" data-context-label="${escapeAttr(messageLabel)}">
         <div class="threads-message-meta">${escapeHtml(message.actor_type === 'ai' ? 'CTOX' : (message.author_display_name || message.author_user_id || 'System'))} · ${escapeHtml(relativeTime(message.created_at_ms || message.updated_at_ms))}${linkHtml ? ' · ' : ''}${linkHtml}</div>
         <div class="threads-message-body">${escapeHtml(message.body || '')}</div>
       </article>
@@ -957,8 +958,9 @@ function renderApproval(approval) {
   const risk = approvalRisk(approval);
   const impact = approvalImpact(approval);
   const evidence = approvalEvidence(approval);
+  const approvalLabel = String(approval.prompt || approval.instruction || approval.source_label || approval.target_module || approval.id).replace(/\s+/g, ' ').slice(0, 160);
   return `
-    <article class="threads-approval-card" data-approval-id="${escapeAttr(approval.id)}">
+    <article class="threads-approval-card" data-approval-id="${escapeAttr(approval.id)}" data-context-record-id="${escapeAttr(approval.id)}" data-context-record-type="thread_approval" data-context-label="${escapeAttr(approvalLabel)}">
       <div class="threads-card-actions">
         ${sourceDeepLinkFor(approval) ? `<button type="button" class="ctox-pane-icon" data-thread-deep-link="${escapeAttr(sourceDeepLinkFor(approval))}" aria-label="Objekt in der Quell-App öffnen" title="Objekt in der Quell-App öffnen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M9 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3"/></svg></button>` : ''}
         ${(command?.status === 'failed' || task?.status === 'failed') ? `<button type="button" class="ctox-pane-icon" data-rework-context="${escapeAttr(approval.prompt || approval.instruction || '')}" aria-label="CTOX nacharbeiten lassen" title="CTOX nacharbeiten lassen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>` : ''}
@@ -1019,7 +1021,7 @@ function renderContext(thread) {
     : '<div class="ctox-empty">Kein verknüpfter App-Kontext.</div>';
   const notificationHtml = unread.length
     ? `<div class="threads-notification-list">${unread.map((item) => `
-        <div class="ctox-callout threads-notification-item">
+        <div class="ctox-callout threads-notification-item" data-context-record-id="${escapeAttr(item.id)}" data-context-record-type="thread_notification" data-context-label="${escapeAttr(item.title || item.body_preview || item.notification_type || item.id)}">
           <span>${escapeHtml(item.title || item.notification_type || 'Notification')}</span>
           <div class="threads-notification-actions">
             <button type="button" class="ctox-pane-icon" data-mark-notification="${escapeAttr(item.id)}" aria-label="Gelesen" title="Gelesen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l5 5L19 7"/></svg></button>

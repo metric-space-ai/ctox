@@ -309,7 +309,9 @@ function harnessHtml() {
     });
     ['window:minimized','window:restored','window:focused'].forEach((name) => eventBus.on(name, syncTopAppTab));
     syncTopAppTab();
-    const baselineWindow = box(document.querySelector('.shell-window'));
+    const shellWindow = document.querySelector('.shell-window');
+    await waitForOpeningToSettle(shellWindow);
+    const baselineWindow = box(shellWindow);
 
     initBusinessChat({
       session:{ authenticated:true, user:{ id:owner, name:'Composition User' } },
@@ -363,6 +365,19 @@ function harnessHtml() {
     function box(node){ const r=node?.getBoundingClientRect?.(); return r ? { x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom } : { x:0,y:0,width:0,height:0,right:0,bottom:0 }; }
     function intersection(a,b){ return Math.max(0,Math.min(a.right,b.right)-Math.max(a.x,b.x))*Math.max(0,Math.min(a.bottom,b.bottom)-Math.max(a.y,b.y)); }
     function localDateString(date){ return date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0'); }
+    async function waitForOpeningToSettle(node){
+      if(!node?.classList.contains('is-opening')) return;
+      await new Promise((resolve) => {
+        let poll;
+        let timeout;
+        const finish=()=>{ clearInterval(poll); clearTimeout(timeout); node.removeEventListener('animationend',onAnimationEnd); resolve(); };
+        const onAnimationEnd=(event)=>{ if(event.target===node) finish(); };
+        node.addEventListener('animationend',onAnimationEnd);
+        poll=setInterval(()=>{ if(!node.classList.contains('is-opening')) finish(); },16);
+        timeout=setTimeout(finish,500);
+      });
+      await new Promise((resolve)=>requestAnimationFrame(()=>resolve()));
+    }
     async function waitFor(predicate){ const end=Date.now()+4000; while(Date.now()<end){ if(predicate()) return; await new Promise((resolve)=>setTimeout(resolve,16)); } throw new Error('composition timeout'); }
   </script>
 </body>

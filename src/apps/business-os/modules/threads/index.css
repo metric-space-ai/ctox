@@ -351,7 +351,7 @@
 @container business-app-window (max-width: 600px) {
   .threads-module {
     display: block;
-    padding: 0 0 calc(var(--shell-taskbar-safe-area, 52px) + env(safe-area-inset-bottom, 0px));
+    padding: 0 0 calc(52px + env(safe-area-inset-bottom, 0px));
   }
 
   .threads-module > [data-resizer] {

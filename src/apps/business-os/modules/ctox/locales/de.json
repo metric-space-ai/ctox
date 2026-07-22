@@ -85,6 +85,7 @@
   "ticketsOpen": "Offene Tickets",
   "runtimePolicy": "Runtime / Policies",
   "queued": "Command angelegt",
+  "webStackCheckProjection": "Web-Stack-Projektion neu einlesen",
   "harnessHealth": "Harness Health",
   "harnessCriticalTitle": "CTOX Harness verarbeitet keine Queue",
   "harnessCriticalMessage": "{count} Aufgaben warten seit {age}; keine geleaste oder laufende Verarbeitung sichtbar.",
