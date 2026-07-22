@@ -1261,7 +1261,21 @@ fn score_evidence_doc_relevance(doc: &EvidenceDoc, query: &str) -> Option<i64> {
         .iter()
         .filter(|term| body.contains(term.as_str()))
         .count();
-    Some(normalized_relevance_score(matched_terms, terms.len()))
+    let denominator = if evidence_doc_is_data_file(doc) {
+        // Dataset read intents commonly include the engineering meaning of
+        // terse column names (for example CT/CP as thrust/power
+        // coefficients). Do not let that explanatory tail dilute an exact
+        // file/schema match below the evidence gate. Numeric identifiers are
+        // still required above, and at least the selective dataset terms must
+        // occur in the immutable source bytes, title, or canonical URL.
+        terms.len().min(7)
+    } else {
+        terms.len()
+    };
+    Some(normalized_relevance_score(
+        matched_terms.min(denominator),
+        denominator,
+    ))
 }
 
 fn normalized_relevance_score(matched_terms: usize, total_terms: usize) -> i64 {
@@ -3201,6 +3215,7 @@ fn build_evidence_doc(
                 extract_text_opened_page(query, hit, &String::from_utf8_lossy(&fetched.body))
             })
     } else if response_kind.starts_with("data_") {
+        let page_text = data_file_text_preview(&response_kind, &fetched.body);
         OpenedPage {
             title: hit.title.clone(),
             summary: "Immutable original data file retrieved.".to_string(),
@@ -3208,7 +3223,7 @@ fn build_evidence_doc(
             pdf_total_pages: None,
             page_sections: Vec::new(),
             excerpts: Vec::new(),
-            page_text: String::new(),
+            page_text,
         }
     } else if is_pdf {
         extract_pdf_opened_page(config, query, hit, &fetched)?
@@ -3229,6 +3244,19 @@ fn build_evidence_doc(
     }
     persist_response_artifact(config, &mut doc)?;
     Ok((doc, fetched.content_type))
+}
+
+fn data_file_text_preview(content_kind: &str, body: &[u8]) -> String {
+    const MAX_DATA_TEXT_PREVIEW_BYTES: usize = 256 * 1024;
+
+    if !matches!(
+        content_kind,
+        "data_table_text" | "data_delimited" | "data_json"
+    ) {
+        return String::new();
+    }
+    let end = body.len().min(MAX_DATA_TEXT_PREVIEW_BYTES);
+    String::from_utf8_lossy(&body[..end]).into_owned()
 }
 
 fn persist_response_artifact(config: &SearchConfig, doc: &mut EvidenceDoc) -> Result<()> {
@@ -9549,6 +9577,51 @@ mod tests {
         };
         assert!(looks_like_whitespace_table_data(&fetched.body));
         assert_eq!(response_content_kind(&hit, &fetched), "data_table_text");
+        let page_text = data_file_text_preview("data_table_text", &fetched.body);
+        assert!(page_text.contains("1490.000 0.125114 0.135440"));
+
+        let digest = snapshot_hash(&fetched.body);
+        let doc = EvidenceDoc {
+            url: url.to_string(),
+            canonical_url: url.to_string(),
+            title: "APC 4.2x4 static propeller data".to_string(),
+            summary: "Immutable original data file retrieved.".to_string(),
+            verification_status: "verified".to_string(),
+            checked_at: 1,
+            http_status: Some(200),
+            snapshot_hash: Some(digest.clone()),
+            source_tier: Some("primary".to_string()),
+            evidence_eligible: true,
+            is_pdf: false,
+            pdf_total_pages: None,
+            page_sections: Vec::new(),
+            excerpts: Vec::new(),
+            page_text,
+            extracted_text_sha256: None,
+            find_results: Vec::new(),
+            raw_html: None,
+            response_body: Some(fetched.body.clone()),
+            response_artifact_path: None,
+            response_archive_manifest: None,
+            response_receipt: Some(ResponseReceipt {
+                requested_url: url.to_string(),
+                final_url: url.to_string(),
+                status: 200,
+                content_type: fetched.content_type.clone(),
+                byte_count: fetched.body.len(),
+                sha256: Some(digest),
+                content_kind: "data_table_text".to_string(),
+                redirected: false,
+                redirect_chain: vec![url.to_string()],
+                lineage: "web_search.evidence_fetch".to_string(),
+                admission_rejection_reason: None,
+            }),
+        };
+        let score = score_evidence_doc_relevance(
+            &doc,
+            "UIUC propeller static test data APC 4.2x4 RPM thrust coefficient torque coefficient measurement",
+        );
+        assert!(score.is_some_and(|value| value >= 8), "score={score:?}");
     }
 
     #[test]
