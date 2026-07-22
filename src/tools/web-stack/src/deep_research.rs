@@ -448,7 +448,11 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                                 && queued_urls.insert(normalized)
                                 && read_queue.len() + enriched.len() < expanded_candidate_pool_limit
                             {
-                                read_queue.push_front(followup);
+                                // Preserve the balanced paper/web/data ordering selected above.
+                                // A repository page can expose hundreds of files; putting each
+                                // file at the front lets one host consume the complete evidence
+                                // budget before any scholarly source is read.
+                                read_queue.push_back(followup);
                                 followed_data_links += 1;
                             }
                         }
@@ -1011,24 +1015,13 @@ fn derive_measurement_data_query(raw: &str) -> String {
     let mut terms = topical_query_terms(raw)
         .into_iter()
         .filter(|term| !term.chars().any(|ch| ch.is_ascii_digit()))
-        .take(16)
+        .take(6)
         .collect::<Vec<_>>();
     if lowered.contains("load") || lowered.contains("last") {
-        terms.extend([
-            "load".to_string(),
-            "force".to_string(),
-            "moment".to_string(),
-            "thrust".to_string(),
-            "torque".to_string(),
-        ]);
+        terms.extend(["force".to_string(), "torque".to_string()]);
     }
     if lowered.contains("data") || lowered.contains("dataset") || lowered.contains("source") {
-        terms.extend([
-            "dataset".to_string(),
-            "measured".to_string(),
-            "benchmark".to_string(),
-            "data".to_string(),
-        ]);
+        terms.extend(["dataset".to_string(), "measured".to_string()]);
     }
     let mut seen = BTreeSet::new();
     let mut unique = Vec::new();
@@ -2090,6 +2083,12 @@ fn topical_query_stopwords() -> BTreeSet<&'static str> {
         "dataset",
         "find",
         "information",
+        "experimental",
+        "files",
+        "load",
+        "measurement",
+        "measurements",
+        "measured",
         "official",
         "original",
         "real",
@@ -2101,6 +2100,7 @@ fn topical_query_stopwords() -> BTreeSet<&'static str> {
         "sources",
         "study",
         "technical",
+        "volume",
     ])
 }
 
