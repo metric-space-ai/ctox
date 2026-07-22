@@ -110,7 +110,9 @@ test('IA is a canonical shift list plus planning board with conflicts in the mai
   assert.match(js, /addEventListener\('ctox-pane-grammar-change'/);
   assert.match(js, /const pg = pane\.__ctoxPaneGrammar/);
   assert.doesNotMatch(js, /window\.dispatchEvent|ctox-business-os-chat-submit/);
-  assert.match(js, /markupUrl\.searchParams\.set\('v', MOD_BUILD\)/);
+  assert.match(js, /const markupVersion = String\(import\.meta\.url\)\.split\('\?v='\)\[1\] \|\| MOD_BUILD/);
+  assert.match(js, /const markupHref = new URL\('\.\/index\.html', import\.meta\.url\)\.pathname \+ \(markupVersion \? `\?v=\$\{markupVersion\}` : ''\)/);
+  assert.match(js, /const cssVersion = String\(import\.meta\.url\)\.split\('\?v='\)\[1\] \|\| MOD_BUILD/);
   assert.match(js, /data-open-employee-id/);
   assert.match(js, /addEventListener\('dragstart'/);
   assert.match(js, /quick-assign-day-btn/);

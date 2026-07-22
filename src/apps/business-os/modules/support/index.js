@@ -236,7 +236,9 @@ export async function mount(ctx) {
   state.localNotes = [];
   state.data = Object.fromEntries(COLLECTIONS.map((name) => [name, []]));
   await ensureStyles();
-  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  const markupVersion = String(import.meta.url).split('?v=')[1] || '';
+  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
+  const html = await fetch(markupHref).then((res) => res.text());
   ctx.host.innerHTML = html;
   ctx.left?.replaceChildren?.();
   ctx.right?.replaceChildren?.();
@@ -272,12 +274,16 @@ export async function mount(ctx) {
 }
 
 async function ensureStyles() {
-  if (document.querySelector('link[data-support-style]')) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = new URL('./index.css', import.meta.url).href;
-  link.dataset.supportStyle = 'true';
-  document.head.append(link);
+  const cssVersion = String(import.meta.url).split('?v=')[1] || '';
+  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
+  let link = document.querySelector('link[data-support-style]');
+  if (!link) {
+    link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.dataset.supportStyle = 'true';
+    document.head.append(link);
+  }
+  if (link.getAttribute('href') !== cssHref) link.href = cssHref;
 }
 
 function applyStaticLabels() {
@@ -622,7 +628,7 @@ function renderTimeline() {
 function renderTimelineItem(row) {
   const label = timelineLabel(row);
   return `
-    <article class="support-timeline-item is-${escapeAttr(row.kind)}">
+    <article class="support-timeline-item is-${escapeAttr(row.kind)}" data-context-record-id="${escapeAttr(row.id)}" data-context-record-type="support_${escapeAttr(row.kind)}" data-context-label="${escapeAttr(label)}">
       <header>
         <strong>${escapeHtml(label)}</strong>
         <span>${escapeHtml(formatTime(row.at))}</span>
@@ -649,9 +655,15 @@ function renderContext() {
   if (!context) return;
   const item = selectedConversation();
   if (!item) {
+    context.removeAttribute('data-context-record-id');
+    context.removeAttribute('data-context-record-type');
+    context.removeAttribute('data-context-label');
     context.innerHTML = renderEmptyState(state.t('contextTitle', 'Kunde und Ticket'), state.t('emptyTimelineBody', ''));
     return;
   }
+  context.setAttribute('data-context-record-id', item.id || '');
+  context.setAttribute('data-context-record-type', 'support_conversation');
+  context.setAttribute('data-context-label', conversationLabel(item));
   const suggestions = suggestionsFor(item.id);
   const account = customerAccountFor(item);
   const contact = customerContactFor(item);
@@ -661,24 +673,27 @@ function renderContext() {
   const commands = businessCommandsFor(item);
   const tasks = queueTasksFor(item, commands);
   const actorId = currentUserId();
+  const relatedCustomer = account || contact;
+  const relatedCustomerType = account ? 'customer_account' : 'customer_contact';
+  const relatedCustomerLabel = account?.name || contact?.name || contact?.display_name || contact?.email || relatedCustomer?.id || '';
 
   // Secondary reference sections: only build the ones that actually have data,
   // then render them as collapsed disclosures below the primary controls.
-  const relatedCustomerHtml = (account || contact) ? `
-    <dl class="ctox-fields ctox-fields--stacked">
+  const relatedCustomerHtml = relatedCustomer ? `
+    <dl class="ctox-fields ctox-fields--stacked" data-context-record-id="${escapeAttr(relatedCustomer.id)}" data-context-record-type="${relatedCustomerType}" data-context-label="${escapeAttr(relatedCustomerLabel)}">
       ${fact(state.t('customer', 'Kunde'), account?.name || account?.id || item.customer_account_id)}
       ${fact('Kontakt', contact?.name || contact?.display_name || contact?.email || item.customer_contact_id)}
       ${fact('E-Mail', contact?.email || account?.domain || '')}
     </dl>` : '';
   const relatedTicketHtml = ticket ? `
-    <dl class="ctox-fields ctox-fields--stacked">
+    <dl class="ctox-fields ctox-fields--stacked" data-context-record-id="${escapeAttr(ticket.id || item.ticket_case_id)}" data-context-record-type="ticket" data-context-label="${escapeAttr(ticket.title || ticket.summary || ticket.id || item.ticket_case_id)}">
       ${fact('ID', ticket.id || item.ticket_case_id)}
       ${fact('Titel', ticket.title || ticket.summary || ticket.id)}
       ${fact(state.t('status', 'Status'), ticket.status || ticket.state || '')}
     </dl>` : '';
   const communicationHtml = (threadLinks.length || messages.length) ? `
     ${threadLinks.map((link) => `
-      <p class="support-linked-row">
+      <p class="support-linked-row" data-context-record-id="${escapeAttr(link.id || `${item.id}:${link.thread_key || 'thread'}`)}" data-context-record-type="support_thread_link" data-context-label="${escapeAttr(link.thread_key || link.channel || link.link_role || 'Support thread')}">
         <strong>${escapeHtml(link.channel || link.link_role || 'thread')}</strong>
         <span>${escapeHtml(link.thread_key || '')}</span>
       </p>
@@ -686,20 +701,20 @@ function renderContext() {
     ${messages.length ? `<p class="support-status">${escapeHtml(localMessagesLoadedLabel(messages.length))}</p>` : ''}` : '';
   const ctoxWorkHtml = (commands.length || tasks.length) ? `
     ${commands.slice(0, 3).map((command) => `
-      <p class="support-linked-row">
+      <p class="support-linked-row" data-context-record-id="${escapeAttr(command.id || command.command_id || command.task_id)}" data-context-record-type="business_command" data-context-label="${escapeAttr(command.command_type || command.type || command.id || 'Command')}">
         <strong>${escapeHtml(command.command_type || command.type || 'command')}</strong>
         <span>${escapeHtml([command.status, command.task_status, command.task_id].filter(Boolean).join(' · '))}</span>
       </p>
     `).join('')}
     ${tasks.slice(0, 3).map((task) => `
-      <p class="support-linked-row">
+      <p class="support-linked-row" data-context-record-id="${escapeAttr(task.id)}" data-context-record-type="ctox_queue_task" data-context-label="${escapeAttr(task.title || task.id || 'Task')}">
         <strong>${escapeHtml(task.title || task.id || 'task')}</strong>
         <span>${escapeHtml([task.status, task.task_status, task.id].filter(Boolean).join(' · '))}</span>
       </p>
     `).join('')}` : '';
   // CTOX suggestions stay a top-level card, but only when there is one to act on.
   const suggestionsHtml = suggestions.length ? suggestions.slice(0, 3).map((suggestion) => `
-    <div class="support-suggestion-row">
+    <div class="support-suggestion-row" data-context-record-id="${escapeAttr(suggestion.id)}" data-context-record-type="support_agent_suggestion" data-context-label="${escapeAttr(suggestion.summary || suggestion.suggestion_kind || suggestion.id)}">
       <p>${escapeHtml(suggestion.summary || suggestion.suggestion_kind || suggestion.id)}</p>
       <small>${escapeHtml([suggestion.suggestion_kind, suggestion.status].filter(Boolean).join(' · '))}</small>
       ${['applied', 'rejected'].includes(String(suggestion.status || '').toLowerCase()) ? '' : `

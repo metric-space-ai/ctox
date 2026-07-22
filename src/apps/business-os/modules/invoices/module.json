@@ -41,7 +41,7 @@
     "third_pane_justification": "The financial inspector provides approval, open-item and customer context alongside the invoice editor; compact mode moves it into the shared drawer."
   },
   "category": "Finance",
-  "version": "v0.1",
+  "version": "0.1.1",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",
   "tags": [

@@ -327,7 +327,9 @@ export async function mount(ctx) {
   state.selectedId = '';
   state.opsMode = 'auto';
   await ensureStyles();
-  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  const markupVersion = String(import.meta.url).split('?v=')[1] || '';
+  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
+  const html = await fetch(markupHref).then((res) => res.text());
   ctx.host.innerHTML = html;
   ctx.left.replaceChildren();
   ctx.right.replaceChildren();
@@ -346,12 +348,16 @@ export async function mount(ctx) {
 }
 
 async function ensureStyles() {
-  if (document.querySelector('link[data-tickets-style]')) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = new URL('./index.css', import.meta.url).href;
-  link.dataset.ticketsStyle = 'true';
-  document.head.append(link);
+  const cssVersion = String(import.meta.url).split('?v=')[1] || '';
+  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
+  let link = document.querySelector('link[data-tickets-style]');
+  if (!link) {
+    link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.dataset.ticketsStyle = 'true';
+    document.head.append(link);
+  }
+  if (link.getAttribute('href') !== cssHref) link.href = cssHref;
 }
 
 function root() {

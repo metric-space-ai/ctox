@@ -16,7 +16,7 @@
     "third_pane_justification": "Editor-type app (IA-Karte): left = books/tags nav + note list, main = rich-text editor; the third pane is the justified reference/metadata surface of the editor layout."
   },
   "category": "Productivity",
-  "version": "v1",
+  "version": "1.0.1",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",
   "tags": [

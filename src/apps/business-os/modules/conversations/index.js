@@ -317,7 +317,9 @@ const FALLBACK_LABELS = {
 
 export async function mount(ctx) {
   await ensureStyles();
-  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  const markupVersion = String(import.meta.url).split('?v=')[1] || STYLE_BUILD;
+  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
+  const html = await fetch(markupHref).then((res) => res.text());
   ctx.host.innerHTML = html;
 
   const root = ctx.host.querySelector('[data-conv-root]');
@@ -1097,9 +1099,9 @@ export async function mount(ctx) {
     btn.type = 'button';
     btn.className = 'ctox-list-item conv-thread-item';
     btn.dataset.bucketKey = bucket.key;
-    btn.dataset.contextRecordId = bucket.key;
-    btn.dataset.contextRecordType = 'conversation';
-    btn.dataset.contextLabel = bucket.displayName || bucket.key;
+    for (const [name, value] of Object.entries(conversationRecordContext(bucket))) {
+      btn.setAttribute(name, value);
+    }
     btn.setAttribute('role', 'option');
     if (view.selectedBucketKey === bucket.key) btn.classList.add('is-active', 'is-selected');
 
@@ -1302,6 +1304,9 @@ export async function mount(ctx) {
     el.dataset.status = msg.status || '';
     el.dataset.seen = String(Number(msg.seen) || 0);
     el.dataset.messageKey = msg.message_key || '';
+    for (const [name, value] of Object.entries(messageRecordContext(msg))) {
+      el.setAttribute(name, value);
+    }
 
     const meta = document.createElement('div');
     meta.className = 'conv-message-meta';
@@ -3245,12 +3250,36 @@ function pad(value) {
 }
 
 async function ensureStyles() {
-  const href = `${new URL('./index.css', import.meta.url).pathname}?v=${STYLE_BUILD}`;
-  if (document.querySelector(`link[href="${href}"]`)) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = href;
-  document.head.append(link);
+  const cssVersion = String(import.meta.url).split('?v=')[1] || STYLE_BUILD;
+  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
+  let link = document.querySelector('link[data-conversations-style]');
+  if (!link) {
+    link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.dataset.conversationsStyle = 'true';
+    document.head.append(link);
+  }
+  if (link.getAttribute('href') !== cssHref) link.href = cssHref;
+}
+
+function conversationRecordContext(bucket = {}) {
+  const id = String(bucket.key || '');
+  return {
+    'data-context-record-id': id,
+    'data-context-record-type': 'conversation',
+    'data-context-label': String(bucket.displayName || id || 'Conversation'),
+  };
+}
+
+function messageRecordContext(message = {}) {
+  const id = String(message.message_key || message.id || message.external_message_id || message.external_created_at || '');
+  const rawLabel = message.subject || message.sender_display || message.sender_address || message.preview || message.body_text || `${message.channel || 'Conversation'} message`;
+  const label = String(rawLabel).replace(/\s+/g, ' ').trim().slice(0, 160);
+  return {
+    'data-context-record-id': id,
+    'data-context-record-type': 'conversation_message',
+    'data-context-label': label || id || 'Conversation message',
+  };
 }
 
 // Auto-reveal model (design-guide "Progressive Disclosure", outbound idiom):
@@ -3337,6 +3366,8 @@ export const __conversationsTestHooks = {
   hasActiveListFilters,
   hasLocalCommunicationData,
   conversationContextVisible,
+  conversationRecordContext,
+  messageRecordContext,
   channelBandCounts,
   buildConversationsExport,
   parseConversationsImport,

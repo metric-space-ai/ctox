@@ -196,8 +196,10 @@ assert.match(source, /function stageVisible\(state\)/);
 assert.match(source, /Boolean\(getSelectedItem\(state\)\)\s*&&\s*!state\.userCollapsed/);
 assert.match(source, /data-toggle-stage/);
 
-// Markup + CSS carry the JS cache-buster (fresh JS over stale cached assets).
-assert.match(source, /index\.html'\s*,\s*import\.meta\.url\)\.pathname\}\?v=\$\{BUILD\}/);
-assert.match(source, /index\.css'\s*,\s*import\.meta\.url\)\.pathname\}\?v=\$\{BUILD\}/);
+// Markup + CSS inherit the JS cache-buster (fresh JS over stale cached assets).
+assert.match(source, /const markupVersion = String\(import\.meta\.url\)\.split\('\?v='\)\[1\] \|\| BUILD/);
+assert.match(source, /const markupHref = new URL\('\.\/index\.html', import\.meta\.url\)\.pathname \+ \(markupVersion \? `\?v=\$\{markupVersion\}` : ''\)/);
+assert.match(source, /const cssVersion = String\(import\.meta\.url\)\.split\('\?v='\)\[1\] \|\| BUILD/);
+assert.match(source, /const cssHref = new URL\('\.\/index\.css', import\.meta\.url\)\.pathname \+ \(cssVersion \? `\?v=\$\{cssVersion\}` : ''\)/);
 
 console.log('cv-print-builder module contract OK');

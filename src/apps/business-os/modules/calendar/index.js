@@ -251,9 +251,11 @@ export async function mount(ctx) {
 
 async function ensureAssetsLoaded() {
   // 1. Module stylesheet
+  const cssVersion = String(import.meta.url).split('?v=')[1] || '';
+  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
   await loadStylesheetOnce({
     selector: 'link[data-module-styles="calendar"]',
-    href: new URL('./index.css', import.meta.url).href,
+    href: cssHref,
     dataset: { moduleStyles: 'calendar' }
   });
 
@@ -284,7 +286,11 @@ async function ensureAssetsLoaded() {
 }
 
 function loadStylesheetOnce({ selector, href, dataset }) {
-  if (document.querySelector(selector)) return Promise.resolve();
+  const existing = document.querySelector(selector);
+  if (existing) {
+    if (existing.getAttribute('href') !== href) existing.href = href;
+    return Promise.resolve();
+  }
   return new Promise((resolve) => {
     const link = document.createElement('link');
     link.rel = 'stylesheet';
@@ -347,7 +353,9 @@ function applyStaticLabels(root, t) {
 }
 
 async function loadModuleMarkup() {
-  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  const markupVersion = String(import.meta.url).split('?v=')[1] || '';
+  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
+  const html = await fetch(markupHref).then((res) => res.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
   return doc.body.innerHTML;
@@ -925,7 +933,7 @@ function renderContextPane() {
   const safeSlug = normalizeSlug(selectedPage.slug) || String(selectedPage.slug || '').replace(/[^a-zA-Z0-9-_]/g, '');
   if (els.bookingContext) {
     els.bookingContext.innerHTML = `
-      <div class="ctox-callout calendar-context-card">
+      <div class="ctox-callout calendar-context-card" data-context-record-id="${escapeHtml(selectedPage.id)}" data-context-record-type="calendar_booking_page" data-context-label="${escapeHtml(selectedPage.title || selectedPage.id)}">
         <span class="ctox-field-label">Ausgewählte Buchungsseite</span>
         <strong>${escapeHtml(selectedPage.title)}</strong>
         <span>${Number(selectedPage.duration_minutes) || 0} Min · /book/${escapeHtml(safeSlug)}</span>
@@ -945,7 +953,7 @@ function renderContextPane() {
         const startStr = new Date(hold.slot_start_ms).toLocaleString();
         const expiresStr = new Date(hold.expires_at_ms).toLocaleTimeString();
         return `
-          <div class="ctox-list-item calendar-audit-item">
+          <div class="ctox-list-item calendar-audit-item" data-context-record-id="${escapeHtml(hold.id)}" data-context-record-type="calendar_booking_hold" data-context-label="${escapeHtml(`${selectedPage.title || 'Booking'} hold · ${startStr}`)}">
             <div class="calendar-audit-head">
               <strong>${escapeHtml(selectedPage.title || 'Buchung hold')}</strong>
               <span class="ctox-badge is-warning">Hold</span>
@@ -970,7 +978,7 @@ function renderContextPane() {
         const startStr = new Date(bk.slot_start_ms).toLocaleString();
         const statusBadge = bk.status === 'confirmed' ? 'is-success' : 'is-danger';
         return `
-          <div class="ctox-list-item calendar-audit-item" data-action="view-booking" data-id="${bk.id}">
+          <div class="ctox-list-item calendar-audit-item" data-action="view-booking" data-id="${escapeHtml(bk.id)}" data-context-record-id="${escapeHtml(bk.id)}" data-context-record-type="calendar_booking" data-context-label="${escapeHtml(bk.attendee_name || `${selectedPage.title || 'Booking'} · ${startStr}`)}">
             <div class="calendar-audit-head">
               <strong>${escapeHtml(bk.attendee_name)}</strong>
               <span class="ctox-badge ${statusBadge}">${bk.status === 'confirmed' ? 'Bestätigt' : 'Storniert'}</span>

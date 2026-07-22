@@ -233,6 +233,16 @@ test('selecting a conversation is an in-place flip, never a list rebuild', () =>
   assert.match(wire[0], /selectConversation\(/);
 });
 
+test('primary and secondary support records expose the full context trio', () => {
+  assert.match(indexJs, /support-conversation-row[^\n]+data-context-record-id=[^\n]+data-context-record-type="support_conversation"[^\n]+data-context-label=/);
+  assert.match(indexJs, /support-timeline-item[^\n]+data-context-record-id=[^\n]+data-context-record-type="support_/);
+  assert.match(indexJs, /const relatedCustomerType = account \? 'customer_account' : 'customer_contact'/);
+  assert.match(indexJs, /data-context-record-type="\$\{relatedCustomerType\}"/);
+  for (const recordType of ['ticket', 'support_thread_link', 'business_command', 'ctox_queue_task', 'support_agent_suggestion']) {
+    assert.match(indexJs, new RegExp(`data-context-record-type="${recordType}"`), `${recordType} context type is present`);
+  }
+});
+
 test('auto-reveal: context visible only with a selection that is not collapsed', () => {
   assert.equal(hooks.computeContextVisible({ hasSelection: true, userCollapsed: false }), true);
   assert.equal(hooks.computeContextVisible({ hasSelection: false, userCollapsed: false }), false);

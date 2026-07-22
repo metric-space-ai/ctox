@@ -194,18 +194,22 @@ export async function mount(ctx) {
 // -------------------------------------------------------------
 
 async function ensureStyles() {
-  const href = `${new URL('./index.css', import.meta.url).pathname}?v=${MOD_BUILD}`;
-  if (document.querySelector(`link[href="${href}"]`)) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = href;
-  document.head.append(link);
+  const cssVersion = String(import.meta.url).split('?v=')[1] || MOD_BUILD;
+  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
+  let link = document.querySelector('link[data-shiftflow-style]');
+  if (!link) {
+    link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.dataset.shiftflowStyle = 'true';
+    document.head.append(link);
+  }
+  if (link.getAttribute('href') !== cssHref) link.href = cssHref;
 }
 
 async function loadModuleMarkup() {
-  const markupUrl = new URL('./index.html', import.meta.url);
-  markupUrl.searchParams.set('v', MOD_BUILD);
-  const html = await fetch(markupUrl).then((res) => res.text());
+  const markupVersion = String(import.meta.url).split('?v=')[1] || MOD_BUILD;
+  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
+  const html = await fetch(markupHref).then((res) => res.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
   return doc.body.innerHTML;

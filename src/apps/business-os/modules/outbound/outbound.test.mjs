@@ -149,6 +149,7 @@ test('campaign column uses shell-owned grammar and stable in-place selection', a
   assert.match(js, /function updateCampaignSelectionInPlace/);
   assert.match(js, /row\.classList\.toggle\('is-selected', selected\)/);
   assert.match(js, /function updateQualificationSelectionInPlace/);
+  assert.match(js, /renderContactQualificationRow[\s\S]*data-context-record-id=[^\n]+data-context-record-type=[^\n]+data-context-label=/);
   assert.match(js, /state\.ctx\?\.storageScope\?\.get\?\.\(OUTBOUND_CENTER_SPLIT_KEY\)/);
   assert.match(js, /state\.ctx\?\.storageScope\?\.set\?\.\(OUTBOUND_CENTER_SPLIT_KEY/);
   assert.match(js, /openBusinessChat = state\.ctx\?\.openBusinessChat/);
