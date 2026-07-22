@@ -814,8 +814,8 @@ export async function mount(ctx) {
 
   function rebuildBuckets() {
     const byKey = new Map();
-    // Imported threads (local-only snapshot) are merged with the live projection
-    // so they appear in the list without being persisted.
+    // Imported threads (in-memory import snapshot) are merged with the live
+    // projection so they appear in the list without being persisted.
     for (const thread of [...view.threads, ...view.importedThreads]) {
       const participants = participantsOf(thread);
       const key = bucketKeyFor(participants);
