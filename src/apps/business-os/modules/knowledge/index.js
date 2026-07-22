@@ -1,5 +1,4 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
-import { CtoxResizer } from '../../shared/resizer.js';
 
 const KNOWLEDGE_RENDER_DEBOUNCE_MS = 80;
 const KNOWLEDGE_SYNC_START_WAIT_MS = 1500;
@@ -75,10 +74,10 @@ const state = {
   sortDir: 'desc',
   flagFilters: new Set(),
   listView: false,
+  searchTerm: '',
   messages: null,
   openGroups: new Set(['research/drone-design/drone-bearing-loads']),
   contextMenu: null,
-  resizeCleanup: null,
   localSubscriptionCleanup: null,
   syncWarmupPromise: null,
   refreshInFlight: false,
@@ -94,12 +93,11 @@ export async function mount(ctx) {
   state.ctx = ctx;
   state.lang = ctx.locale === 'en' ? 'en' : 'de';
   state.messages = await loadModuleMessages(import.meta.url, state.lang, labels);
-  ctx.host.innerHTML = documentTemplate();
+  ctx.host.innerHTML = await loadModuleMarkup();
   ctx.left.replaceChildren();
   ctx.right.replaceChildren();
   bindElements(ctx.host);
   wireEvents();
-  state.resizeCleanup = setupKnowledgeColumnResizing();
   let disposed = false;
   renderKnowledgeList();
   renderRunbooks();
@@ -117,8 +115,6 @@ export async function mount(ctx) {
     window.removeEventListener('message', handleShellMessage);
     window.removeEventListener('click', handleContextOutsideClick, { capture: true });
     window.removeEventListener('keydown', handleContextEscape);
-    state.resizeCleanup?.();
-    state.resizeCleanup = null;
     state.localSubscriptionCleanup?.();
     state.localSubscriptionCleanup = null;
     state.contextMenu?.remove();
@@ -157,139 +153,25 @@ function actionIcon(name) {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${path}"></path></svg>`;
 }
 
-function documentTemplate() {
-  const copy = state.messages || labels[state.lang];
-  return `
-    <main class="knowledge-module" data-knowledge-root data-resize-frame>
-      <section class="ctox-pane knowledge-pane knowledge-left" aria-label="Knowledge">
-        <!-- Row 1: title + management-only icons (top-right). -->
-        <header class="ctox-pane-header ctox-pane-band">
-          <div class="ctox-pane-title-row">
-            <div class="ctox-pane-titles">
-              <span class="ctox-pane-kicker">Bibliothek</span>
-              <h2 class="ctox-pane-title">Knowledge</h2>
-            </div>
-            <div class="ctox-pane-actions">
-              <button class="ctox-pane-icon" type="button" data-action="create-knowledge-book" aria-label="Knowledge Book erstellen" title="Knowledge Book erstellen">${actionIcon('add')}</button>
-              <button class="ctox-pane-icon" type="button" data-action="import-knowledge-book" aria-label="Knowledge Book importieren" title="Knowledge Book importieren">${actionIcon('download')}</button>
-              <button class="ctox-pane-icon" type="button" data-action="export-knowledge-book" aria-label="Knowledge Books exportieren" title="Knowledge Books exportieren">${actionIcon('export')}</button>
-            </div>
-          </div>
-        </header>
-        <!-- Row 2: filter section — search + a single toggle. Everything else
-             (scope, sort, content type) lives in the advanced tray and stays
-             collapsed until the toggle is pressed. -->
-        <div class="knowledge-filterbar">
-          <input class="ctox-pane-search" data-search placeholder="Suchen…" />
-          <div class="knowledge-view-toggle" role="group" aria-label="Darstellung">
-            <button class="ctox-pane-icon" type="button" data-view-mode="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
-            <button class="ctox-pane-icon" type="button" data-view-mode="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
-          </div>
-          <button class="ctox-pane-icon knowledge-filter-toggle" type="button" data-action="toggle-filters" aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--knowledge-surface-muted)"/><circle cx="15" cy="12" r="2.4" fill="var(--knowledge-surface-muted)"/><circle cx="8" cy="17" r="2.4" fill="var(--knowledge-surface-muted)"/></svg></button>
-        </div>
-        <div class="knowledge-filter-advanced" data-filter-advanced hidden>
-          <div class="knowledge-filter-row">
-            <select class="ctox-select knowledge-select" data-scope aria-label="Bereich">
-              <option value="all">Alle Bereiche</option>
-              <option value="user">Nur User</option>
-              <option value="system">Nur System</option>
-            </select>
-            <div class="knowledge-sort">
-              <select class="ctox-select knowledge-select" data-sort aria-label="Sortieren nach">
-                <option value="recent">Bearbeitet</option>
-                <option value="created">Erstellt</option>
-                <option value="name">Name</option>
-                <option value="entries">Einträge</option>
-              </select>
-              <button type="button" class="knowledge-sort-dir" data-action="toggle-sort-dir" data-dir="desc" aria-label="Sortierrichtung umkehren" title="Absteigend"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="6 13 12 19 18 13"/></svg></button>
-            </div>
-            <button type="button" class="knowledge-sort-dir knowledge-filter-reset" data-action="reset-filters" aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
-          </div>
-          <div class="knowledge-filter-chips" role="group" aria-label="Enthält">
-            <button type="button" class="ctox-chip" data-flag="skillbooks" aria-pressed="false">Skillbooks</button>
-            <button type="button" class="ctox-chip" data-flag="runbooks" aria-pressed="false">Runbooks</button>
-            <button type="button" class="ctox-chip" data-flag="tables" aria-pressed="false">Tabellen</button>
-          </div>
-        </div>
-        <div class="knowledge-scroll" data-knowledge-list>
-          <div class="ctox-empty"><strong>${copy.loading}</strong></div>
-        </div>
-      </section>
-      <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--knowledge-left-width" data-resizer-min="300" data-resizer-max="720" aria-label="Spaltenbreite anpassen"></button>
-      <section class="ctox-pane knowledge-pane knowledge-center" aria-label="Knowledge Dokument">
-        <!-- Row 1: title + action icon only (edit), top-right. -->
-        <header class="ctox-pane-header ctox-pane-band knowledge-center-head">
-          <div class="ctox-pane-title-row">
-            <button class="ctox-pane-icon knowledge-mobile-back" type="button" data-action="mobile-back" aria-label="Zurück zur Liste" title="Zurück zur Liste"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
-            <div class="ctox-pane-titles">
-              <span class="ctox-pane-kicker" data-selected-kind>${escapeHtml(copy.selected)}</span>
-              <h2 class="ctox-pane-title" data-selected-title>${escapeHtml(copy.noSelection)}</h2>
-            </div>
-            <div class="ctox-pane-actions"></div>
-          </div>
-        </header>
-        <!-- Row 3: view switcher (its own band below the header, never top-right). -->
-        <div class="knowledge-view-switch">
-          <div class="ctox-pane-tabs" role="tablist" aria-label="Knowledge Ansicht">
-            <button type="button" class="ctox-pane-tab" role="tab" data-tab="skill" aria-selected="true">Skill<span class="view-count" data-count-skill></span></button>
-            <button type="button" class="ctox-pane-tab" role="tab" data-tab="runbooks" aria-selected="false">Runbooks<span class="view-count" data-count-runbooks></span></button>
-            <button type="button" class="ctox-pane-tab" role="tab" data-tab="data" aria-selected="false">Tabellen<span class="view-count" data-count-tables></span></button>
-          </div>
-        </div>
-        <div class="knowledge-tab-panel" data-panel="skill">
-          <!-- Element actions live top-right as icons — never as text buttons in
-               the content flow. Save/cancel replace the pencil while editing. -->
-          <div class="knowledge-content-actions">
-            <span class="knowledge-edit-status" data-skill-status></span>
-            <button class="ctox-pane-icon is-confirm" type="button" data-action="save-markdown" hidden aria-label="An CTOX geben" title="An CTOX geben"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l5 5L19 7"/></svg></button>
-            <button class="ctox-pane-icon" type="button" data-action="cancel-markdown" hidden aria-label="Abbrechen" title="Abbrechen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
-            <button class="ctox-pane-icon" type="button" data-action="edit-markdown" aria-label="Bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
-            <button class="ctox-pane-icon" type="button" data-action="delete-skill" aria-label="Löschen" title="Löschen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M10 11v6M14 11v6"/></svg></button>
-          </div>
-          <article class="markdown-document" data-markdown-view></article>
-          <textarea class="markdown-editor" data-markdown-editor hidden></textarea>
-        </div>
-        <div class="knowledge-tab-panel" data-panel="runbooks" hidden>
-          <div class="knowledge-content-actions">
-            <span class="knowledge-edit-status" data-runbook-status></span>
-            <button class="ctox-pane-icon is-confirm" type="button" data-action="save-runbook" hidden aria-label="An CTOX geben" title="An CTOX geben"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l5 5L19 7"/></svg></button>
-            <button class="ctox-pane-icon" type="button" data-action="cancel-runbook" hidden aria-label="Abbrechen" title="Abbrechen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
-            <button class="ctox-pane-icon" type="button" data-action="execute-runbook" aria-label="Ausführen" title="Ausführen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5.5v13l10-6.5-10-6.5Z"/></svg></button>
-            <button class="ctox-pane-icon" type="button" data-action="edit-runbook" aria-label="Bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
-            <button class="ctox-pane-icon" type="button" data-action="delete-runbook" aria-label="Löschen" title="Löschen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M10 11v6M14 11v6"/></svg></button>
-          </div>
-          <div class="knowledge-secondary-switcher" data-runbook-switcher></div>
-          <article class="runbook-document" data-runbook-view></article>
-          <form class="runbook-editor" data-runbook-form hidden>
-            <input class="ctox-input" data-runbook-title placeholder="Runbook-Titel" />
-            <textarea class="ctox-textarea" data-runbook-prompt placeholder="Runbook-Anweisung"></textarea>
-          </form>
-        </div>
-        <div class="knowledge-tab-panel" data-panel="data" hidden>
-          <div class="table-switcher" data-table-switcher></div>
-          <div class="dataframe-bar">
-            <div><strong data-table-title>DataFrame</strong><span data-table-meta></span></div>
-            <div class="table-pager">
-              <button class="ctox-pane-icon" type="button" data-action="export-table-csv" aria-label="Als CSV exportieren" title="Als CSV exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11M12 14l-4-4M12 14l4-4M5 20h14"/></svg></button>
-              <button class="ctox-pane-icon" type="button" data-action="prev-rows" aria-label="Vorherige Zeilen" title="Vorherige Zeilen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
-              <button class="ctox-pane-icon" type="button" data-action="next-rows" aria-label="Nächste Zeilen" title="Nächste Zeilen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
-            </div>
-          </div>
-          <div class="dataframe-host" data-dataframe-host></div>
-        </div>
-      </section>
-      <footer class="knowledge-footer" data-knowledge-footer>
-        <span data-knowledge-footer-count>—</span>
-      </footer>
-    </main>
-  `;
+async function loadModuleMarkup() {
+  // index.html is the single source of truth for the module markup (same
+  // contract as ctox/coding-agents): the shell imports ONLY index.js
+  // (app.js moduleBasePath → modules/knowledge/index.js?v=<build>), so the
+  // module fetches its own markup here. Markup inherits the JS cache-buster —
+  // a deploy must never leave fresh JS binding against stale cached markup.
+  const version = String(import.meta.url).split('?v=')[1] || '';
+  const markupHref = new URL('./index.html', import.meta.url).pathname + (version ? `?v=${version}` : '');
+  const html = await fetch(markupHref).then((res) => res.text());
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
+  return doc.body.innerHTML;
 }
 
 function bindElements(root) {
   els.root = root.querySelector('[data-knowledge-root]');
+  els.leftPane = root.querySelector('.knowledge-left');
+  els.centerPane = root.querySelector('.knowledge-center');
   els.list = root.querySelector('[data-knowledge-list]');
-  els.search = root.querySelector('[data-search]');
-  els.kindFilter = root.querySelector('[data-kind-filter]');
   els.selectedKind = root.querySelector('[data-selected-kind]');
   els.selectedTitle = root.querySelector('[data-selected-title]');
   els.markdownView = root.querySelector('[data-markdown-view]');
@@ -309,14 +191,13 @@ function bindElements(root) {
 }
 
 function wireEvents() {
-  els.search.addEventListener('input', renderKnowledgeList);
-  els.kindFilter?.addEventListener('change', renderKnowledgeList);
-  state.ctx.host.querySelector('select[data-scope]')?.addEventListener('change', (event) => {
-    setSourceScope(event.target.value || 'all');
-  });
-  for (const button of state.ctx.host.querySelectorAll('[data-tab]')) {
-    button.addEventListener('click', () => setTab(button.dataset.tab || 'book'));
-  }
+  // Pane chrome is SHELL-owned canonical grammar (autoWirePaneGrammar wires
+  // the data-pg-* markup once, debounced ~120ms after mount). The module only
+  // keeps its state in sync through the bubbling grammar event and re-renders
+  // lists — the same contract the ctox module's task column uses. Listeners
+  // hang on the pane elements (persistent), never on the rebuilt list well.
+  els.leftPane?.addEventListener('ctox-pane-grammar-change', onLeftGrammarChange);
+  els.centerPane?.addEventListener('ctox-pane-grammar-change', onCenterGrammarChange);
   state.ctx.host.querySelector('[data-action="prev-rows"]').addEventListener('click', () => pageTable(-1));
   state.ctx.host.querySelector('[data-action="next-rows"]').addEventListener('click', () => pageTable(1));
   state.ctx.host.querySelector('[data-action="export-table-csv"]')?.addEventListener('click', exportActiveTableCsv);
@@ -324,60 +205,38 @@ function wireEvents() {
   state.ctx.host.querySelector('[data-action="import-knowledge-book"]')?.addEventListener('click', () => openImportKnowledgeBookDrawer());
   state.ctx.host.querySelector('[data-action="export-knowledge-book"]')?.addEventListener('click', () => openExportKnowledgeBookDrawer());
   state.ctx.host.querySelector('[data-action="configure-knowledge"]')?.addEventListener('click', () => openKnowledgeConfig());
-  // Filter section: the gear toggles the advanced-filter panel in place.
-  state.ctx.host.querySelector('[data-action="toggle-filters"]')?.addEventListener('click', (event) => {
-    const btn = event.currentTarget;
-    const panel = state.ctx.host.querySelector('[data-filter-advanced]');
-    if (!panel) return;
-    const open = panel.hasAttribute('hidden');
-    if (open) panel.removeAttribute('hidden'); else panel.setAttribute('hidden', '');
-    btn.setAttribute('aria-expanded', String(open));
-  });
-  // Advanced-filter controls: sort field (dropdown) + direction toggle + kind
-  // flags, all re-render the list.
-  state.ctx.host.querySelector('select[data-sort]')?.addEventListener('change', (event) => {
-    state.sortMode = event.target.value || 'recent';
-    renderKnowledgeList();
-  });
+  // Domain-specific leftover: the sort-direction toggle inside the tray has no
+  // grammar equivalent (the grammar owns filter VALUES, not direction) — same
+  // pattern as ctox's data-task-sort-direction.
   state.ctx.host.querySelector('[data-action="toggle-sort-dir"]')?.addEventListener('click', (event) => {
     state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
     const btn = event.currentTarget;
     btn.dataset.dir = state.sortDir;
     btn.title = state.sortDir === 'asc' ? 'Aufsteigend' : 'Absteigend';
-    renderKnowledgeList();
+    renderKnowledgeList({ resetScroll: true });
   });
-  state.ctx.host.querySelectorAll('[data-filter-advanced] [data-flag]').forEach((chip) => {
+  // Kind chips are module-owned (the grammar filters are select/input values,
+  // not aria-pressed chips).
+  state.ctx.host.querySelectorAll('[data-pg-tray] [data-flag]').forEach((chip) => {
     chip.addEventListener('click', () => {
       const flag = chip.dataset.flag;
       if (state.flagFilters.has(flag)) state.flagFilters.delete(flag);
       else state.flagFilters.add(flag);
       chip.setAttribute('aria-pressed', String(state.flagFilters.has(flag)));
-      renderKnowledgeList();
+      renderKnowledgeList({ resetScroll: true });
     });
   });
-  // One-click reset for every filter: scope, sort, direction, flags, search.
-  state.ctx.host.querySelector('[data-action="reset-filters"]')?.addEventListener('click', () => {
-    state.sourceScope = 'all';
-    state.sortMode = 'recent';
+  // The grammar reset restores search + select defaults and emits; the chips
+  // and the sort direction are module state, so the module resets them here
+  // (this listener was attached at mount, BEFORE the shell-wired grammar
+  // handler, so it runs first and the grammar's emit re-renders with the
+  // cleared module state).
+  state.ctx.host.querySelector('[data-pg-reset]')?.addEventListener('click', () => {
     state.sortDir = 'desc';
     state.flagFilters.clear();
-    const scopeSelect = state.ctx.host.querySelector('select[data-scope]');
-    if (scopeSelect) scopeSelect.value = 'all';
-    const sortSelect = state.ctx.host.querySelector('select[data-sort]');
-    if (sortSelect) sortSelect.value = 'recent';
     const dirBtn = state.ctx.host.querySelector('[data-action="toggle-sort-dir"]');
     if (dirBtn) { dirBtn.dataset.dir = 'desc'; dirBtn.title = 'Absteigend'; }
-    state.ctx.host.querySelectorAll('[data-filter-advanced] [data-flag]').forEach((chip) => chip.setAttribute('aria-pressed', 'false'));
-    if (els.search) els.search.value = '';
-    renderKnowledgeList();
-  });
-  // Shard vs. compact list rendering of the element well.
-  state.ctx.host.querySelectorAll('[data-view-mode]').forEach((button) => {
-    button.addEventListener('click', () => {
-      state.listView = button.dataset.viewMode === 'list';
-      state.ctx.host.querySelectorAll('[data-view-mode]').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.viewMode === 'list') === state.listView)));
-      state.ctx.host.querySelector('[data-knowledge-root]')?.classList.toggle('is-list-view', state.listView);
-    });
+    state.ctx.host.querySelectorAll('[data-pg-tray] [data-flag]').forEach((chip) => chip.setAttribute('aria-pressed', 'false'));
   });
   // Mobile master-detail: back to the list.
   state.ctx.host.querySelector('[data-action="mobile-back"]')?.addEventListener('click', () => {
@@ -408,6 +267,24 @@ function wireEvents() {
     event.preventDefault();
     queueRunbookSave();
   });
+}
+
+function onLeftGrammarChange(event) {
+  const detail = event?.detail || {};
+  state.searchTerm = String(detail.search ?? '');
+  state.listView = detail.view === 'list';
+  state.sourceScope = ['system', 'user', 'all'].includes(detail.filters?.scope) ? detail.filters.scope : 'all';
+  state.sortMode = detail.filters?.sort || 'recent';
+  els.root?.classList.toggle('is-list-view', state.listView);
+  // Intentional reset: search/view/filter changes move the content set, so the
+  // list scrolls back to the top (the shell scroll guard also clears its
+  // recorded offsets on this event).
+  renderKnowledgeList({ resetScroll: true });
+}
+
+function onCenterGrammarChange(event) {
+  const detail = event?.detail || {};
+  if (detail.band) setTab(detail.band);
 }
 
 async function loadKnowledgeFromLocal(options = {}) {
@@ -945,153 +822,6 @@ function domainLabelFor(item) {
   return subtitle.length ? subtitle.join(' / ') : groupLabel(item.kind || 'knowledge');
 }
 
-const KNOWLEDGE_LAYOUT_KEY = 'ctox.businessOs.knowledge.columnLayout';
-const KNOWLEDGE_COL_MIN = Object.freeze({ left: 300, center: 420 });
-const KNOWLEDGE_COL_LEFT_MAX = 720;
-
-function setupKnowledgeColumnResizing() {
-  // Column resizing is now owned by the shell-global resizer (app.js
-  // `setupModuleResizers`): the `.ctox-column-resizer[data-resizer-var=
-  // "--knowledge-left-width"]` handle in index.html, inside the
-  // `[data-resize-frame]` root, gets drag/keyboard/persistence for free.
-  // This DIY (createElement + CtoxResizer + ResizeObserver + localStorage)
-  // is retired; we no-op so call sites keep working without dangling refs.
-  return () => {};
-
-  // eslint-disable-next-line no-unreachable
-  const root = els.root;
-  if (!root) return null;
-
-  const handle = document.createElement('div');
-  handle.className = 'knowledge-col-resizer';
-  handle.dataset.resizer = 'left';
-  handle.setAttribute('role', 'separator');
-  handle.setAttribute('aria-orientation', 'vertical');
-  handle.setAttribute('aria-label', 'Spaltenbreite anpassen');
-  handle.dataset.resizer = 'left';
-  root.append(handle);
-
-  const setLeftWidth = (width) => {
-    const next = clampKnowledgeLeftWidth(root, width);
-    root.style.setProperty('--knowledge-left-width', `${next}px`);
-    localStorage.setItem('ctox.knowledge.layout.leftWidth', String(next));
-    return next;
-  };
-  const resizer = new CtoxResizer({
-    resizerEl: handle,
-    containerEl: root,
-    cssVar: '--knowledge-left-width',
-    side: 'left',
-    minWidth: KNOWLEDGE_COL_MIN.left,
-    maxWidth: knowledgeLeftMaxForRoot(root),
-    onResize: setLeftWidth,
-  });
-
-  const leftWidth = localStorage.getItem('ctox.knowledge.layout.leftWidth') || '390';
-  setLeftWidth(Number.parseFloat(leftWidth));
-  const resizeObserver = new ResizeObserver(() => {
-    resizer.maxWidth = knowledgeLeftMaxForRoot(root);
-    handle.setAttribute('aria-valuemax', String(resizer.maxWidth));
-    resizer.setWidth(clampKnowledgeLeftWidth(root, resizer.readCurrentWidth()));
-  });
-  resizeObserver.observe(root);
-
-  return () => {
-    resizeObserver.disconnect();
-    resizer.destroy();
-    handle.remove();
-  };
-}
-
-function knowledgeLeftMaxForRoot(root) {
-  const metrics = getKnowledgeGridMetrics(root);
-  const available = (metrics?.contentWidth || root?.clientWidth || 0) - 12 - KNOWLEDGE_COL_MIN.center;
-  return Math.max(KNOWLEDGE_COL_MIN.left, Math.min(KNOWLEDGE_COL_LEFT_MAX, available));
-}
-
-function clampKnowledgeLeftWidth(root, width) {
-  return clampNumber(Number(width) || KNOWLEDGE_COL_MIN.left, KNOWLEDGE_COL_MIN.left, knowledgeLeftMaxForRoot(root));
-}
-
-function getKnowledgeGridMetrics(root) {
-  if (!root) return null;
-  const cs = getComputedStyle(root);
-  const gap = Number.parseFloat(cs.columnGap || cs.gap || '0') || 0;
-  const padLeft = Number.parseFloat(cs.paddingLeft || '0') || 0;
-  const padRight = Number.parseFloat(cs.paddingRight || '0') || 0;
-  const contentWidth = Math.max(0, root.clientWidth - padLeft - padRight);
-  const trackTotal = Math.max(0, contentWidth - gap);
-  return { gap, padLeft, contentWidth, trackTotal };
-}
-
-function readKnowledgeGridTrackPixels(root) {
-  if (!root) return null;
-  const tracks = String(getComputedStyle(root).gridTemplateColumns || '')
-    .split(/\s+/)
-    .map((part) => Number.parseFloat(part))
-    .filter((number) => Number.isFinite(number) && number > 0);
-  if (tracks.length < 2) return null;
-  return { left: tracks[0], center: tracks[1] };
-}
-
-function clampKnowledgeColumns(widths, trackTotal) {
-  if (!widths || !Number.isFinite(trackTotal) || trackTotal <= 0) return null;
-  if (trackTotal < KNOWLEDGE_COL_MIN.left + KNOWLEDGE_COL_MIN.center) return null;
-  const maxLeft = Math.max(KNOWLEDGE_COL_MIN.left, Math.min(KNOWLEDGE_COL_LEFT_MAX, trackTotal - KNOWLEDGE_COL_MIN.center));
-  const left = Math.round(clampNumber(Number(widths.left) || KNOWLEDGE_COL_MIN.left, KNOWLEDGE_COL_MIN.left, maxLeft));
-  const center = Math.round(trackTotal - left);
-  if (center < KNOWLEDGE_COL_MIN.center) return null;
-  return { left, center };
-}
-
-function columnPixelsToRatios(widths) {
-  if (!widths) return null;
-  const left = Number(widths.left) || 0;
-  const center = Number(widths.center) || 0;
-  const sum = left + center;
-  if (sum <= 0) return null;
-  return {
-    left: Number((left / sum).toFixed(6)),
-    center: Number((center / sum).toFixed(6)),
-  };
-}
-
-function sanitizeKnowledgeColumnLayout(raw) {
-  if (!raw || typeof raw !== 'object') return null;
-  const left = Number(raw.left);
-  const center = Number(raw.center);
-  if (![left, center].every(Number.isFinite)) return null;
-  if (left <= 0 || center <= 0) return null;
-  const sum = left + center;
-  if (sum <= 0) return null;
-  return { left: left / sum, center: center / sum };
-}
-
-function columnRatiosToPixels(ratios, trackTotal) {
-  const safe = sanitizeKnowledgeColumnLayout(ratios);
-  if (!safe) return null;
-  return clampKnowledgeColumns({
-    left: safe.left * trackTotal,
-    center: safe.center * trackTotal,
-  }, trackTotal);
-}
-
-function readKnowledgeColumnLayout() {
-  try {
-    return sanitizeKnowledgeColumnLayout(JSON.parse(window.localStorage.getItem(KNOWLEDGE_LAYOUT_KEY) || 'null'));
-  } catch (_) {
-    return null;
-  }
-}
-
-function writeKnowledgeColumnLayout(ratios) {
-  try {
-    window.localStorage.setItem(KNOWLEDGE_LAYOUT_KEY, JSON.stringify(ratios));
-  } catch (_) {
-    // Ignore unavailable storage.
-  }
-}
-
 function clampNumber(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
@@ -1169,9 +899,13 @@ async function selectSkillbook(group, skillbook) {
   await selectKnowledge(targetId);
 }
 
-function renderKnowledgeList() {
+function renderKnowledgeList({ resetScroll = false } = {}) {
   const copy = state.messages || labels[state.lang];
-  const term = els.search.value.trim().toLowerCase();
+  const term = state.searchTerm;
+  // Data re-renders never move the operator: preserve the scroll offset across
+  // the rebuild (intentional resets — search/view/filter — pass resetScroll
+  // because the content set changed). The shell scroll guard backs this up.
+  const scrollTop = resetScroll ? 0 : (els.list?.scrollTop || 0);
   let visibleGroups = state.groups
     .map((group) => ({
       ...group,
@@ -1207,26 +941,23 @@ function renderKnowledgeList() {
   visibleGroups.sort((a, b) => ascending(a, b) * dir);
   if (!visibleGroups.length) {
     els.list.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(knowledgeEmptyStateMessage(copy, term))}</strong></div>`;
-    return;
+    els.list.scrollTop = scrollTop;
+  } else {
+    els.list.replaceChildren(...visibleGroups.map((group) => renderKnowledgeBundle(group)));
+    els.list.scrollTop = scrollTop;
   }
-  els.list.replaceChildren(...visibleGroups.map((group) => renderKnowledgeBundle(group)));
-  updateFilterIndicator();
-  const footer = state.ctx.host.querySelector('[data-knowledge-footer-count]');
-  if (footer) {
-    const n = visibleGroups.length;
-    const scopeLabel = state.sourceScope === 'all' ? 'Alle' : state.sourceScope === 'system' ? 'System' : 'User';
-    footer.textContent = `${n} ${n === 1 ? 'Eintrag' : 'Einträge'} · ${scopeLabel}`;
+  // One-line pane footer via the shell-wired grammar handle (null-guarded: the
+  // shell wires the panes debounced ~120ms after mount, so early renders fall
+  // back to the direct data-pg-footer target).
+  const n = visibleGroups.length;
+  const scopeLabel = state.sourceScope === 'all' ? 'Alle' : state.sourceScope === 'system' ? 'System' : 'User';
+  const footerText = `${n} ${n === 1 ? 'Eintrag' : 'Einträge'} · ${scopeLabel}`;
+  const pg = els.leftPane?.__ctoxPaneGrammar;
+  if (pg?.setFooter) pg.setFooter(footerText);
+  else {
+    const node = els.leftPane?.querySelector('[data-pg-footer]');
+    if (node) node.textContent = footerText;
   }
-}
-
-// Accent dot on the filter toggle whenever any filter deviates from the
-// defaults — so a collapsed tray can never silently hide active filters.
-function updateFilterIndicator() {
-  const active = state.sourceScope !== 'all'
-    || state.sortMode !== 'recent'
-    || state.sortDir !== 'desc'
-    || (state.flagFilters && state.flagFilters.size > 0);
-  state.ctx.host.querySelector('[data-action="toggle-filters"]')?.classList.toggle('has-active-filters', active);
 }
 
 function knowledgeEmptyStateMessage(copy, term = '') {
@@ -1279,14 +1010,15 @@ function bundleCountsHtml(skillbooks, runbooks, tables) {
 
 function renderKnowledgeBundle(group) {
   const section = document.createElement('section');
-  section.className = 'knowledge-bundle';
+  const selected = group.id === state.selectedGroupId;
+  section.className = `knowledge-bundle${selected ? ' is-selected' : ''}`;
   section.dataset.bundleId = group.id;
   section.dataset.contextModule = 'knowledge';
   section.dataset.contextRecordType = 'knowledge-group';
   section.dataset.contextRecordId = group.id;
   section.dataset.contextLabel = group.title;
   section.dataset.knowledgeColumn = 'sources';
-  section.setAttribute('aria-current', String(group.id === state.selectedGroupId));
+  section.setAttribute('aria-selected', String(selected));
   const tableCount = group.tableIds.length;
   const runbookCount = group.runbookIds.length;
   const skillbookCount = skillbooksForGroup(group).length;
@@ -1325,64 +1057,15 @@ function deleteKnowledgeEntry(item, group) {
   }
 }
 
-function groupEntriesByKind(entries) {
-  const order = ['skill', 'skillbook', 'runbook', 'dataframe'];
-  const grouped = groupBy(entries, (entry) => entry.kind || 'knowledge');
-  return order.reduce((acc, key) => {
-    if (grouped[key]?.length) acc[key] = grouped[key];
-    return acc;
-  }, {});
-}
-
-function itemMeta(item) {
-  if (item.has_table) {
-    const table = tableForItem(item, state.tables);
-    if (Number.isFinite(Number(table?.row_count))) return `${Number(table.row_count).toLocaleString('de-DE')} Zeilen`;
-    return 'Tabelle';
-  }
-  if (item.file_count) return `${item.file_count} Dateien`;
-  return item.subtitle || '';
-}
-
-function renderKnowledgeListLegacy() {
-  const term = els.search.value.trim().toLowerCase();
-  const kind = els.kindFilter?.value || 'all';
-  const visible = state.items.filter((item) => {
-    if (kind !== 'all' && item.kind !== kind) return false;
-    if (!term) return true;
-    return `${item.title} ${item.subtitle || ''} ${item.summary || ''}`.toLowerCase().includes(term);
+// In-place selection: flip is-selected/aria-selected across the existing rows,
+// never a list rebuild — a rebuild resets the scroll position under the
+// operator's pointer (canonical interaction law; ctox applyTaskSelection).
+function applyKnowledgeSelection() {
+  els.list?.querySelectorAll('.knowledge-bundle').forEach((row) => {
+    const on = (row.dataset.bundleId || '') === state.selectedGroupId;
+    row.classList.toggle('is-selected', on);
+    row.setAttribute('aria-selected', String(on));
   });
-  if (!visible.length) {
-    els.list.innerHTML = `<div class="ctox-empty"><strong>${labels[state.lang].noItems}</strong></div>`;
-    return;
-  }
-  const groups = groupBy(visible, (item) => item.kind || 'knowledge');
-  els.list.replaceChildren(...Object.entries(groups).map(([group, items]) => renderKnowledgeGroup(group, items)));
-}
-
-function renderKnowledgeGroup(group, items) {
-  const section = document.createElement('section');
-  section.className = 'knowledge-group';
-  section.innerHTML = `<div class="knowledge-group-title">${escapeHtml(groupLabel(group))}</div>`;
-  for (const item of items) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'knowledge-item';
-    button.dataset.knowledgeId = item.id;
-    button.dataset.contextModule = 'knowledge';
-    button.dataset.contextRecordType = item.kind;
-    button.dataset.contextRecordId = item.id;
-    button.dataset.contextLabel = item.title || item.id;
-    button.setAttribute('aria-current', String(item.id === state.selectedId));
-    button.innerHTML = `
-      <strong>${escapeHtml(item.title || item.id)}</strong>
-      <span>${escapeHtml(item.subtitle || item.summary || '')}</span>
-      <small>${escapeHtml(item.has_table ? 'DataFrame' : item.file_count ? `${item.file_count} Dateien` : '')}</small>
-    `;
-    button.addEventListener('click', () => selectKnowledge(item.id));
-    section.append(button);
-  }
-  return section;
 }
 
 async function selectKnowledge(id) {
@@ -1412,7 +1095,9 @@ async function selectKnowledge(id) {
   const item = state.items.find((entry) => entry.id === id);
   els.selectedKind.textContent = groupLabel(item?.kind || 'knowledge');
   els.selectedTitle.textContent = item?.title || 'Knowledge';
-  renderKnowledgeList();
+  // Selection is an in-place class flip, never a list rebuild — a rebuild
+  // resets the scroll position under the operator's pointer.
+  applyKnowledgeSelection();
   const doc = await loadKnowledgeDocument(id);
   els.markdownEditor.hidden = true;
   els.markdownView.hidden = false;
@@ -1421,22 +1106,6 @@ async function selectKnowledge(id) {
   syncMarkdownEditControls();
   syncKnowledgeTabControls();
   await renderActiveTab();
-}
-
-function setSourceScope(scope) {
-  state.sourceScope = ['system', 'user', 'all'].includes(scope) ? scope : 'user';
-  const scopeSelect = state.ctx.host.querySelector('select[data-scope]');
-  if (scopeSelect) scopeSelect.value = state.sourceScope;
-  const firstVisibleGroup = state.groups.find((group) => group.entries.some((entry) => state.sourceScope === 'all' || sourceScopeFor(entry) === state.sourceScope));
-  if (firstVisibleGroup) {
-    state.selectedGroupId = firstVisibleGroup.id;
-    state.openGroups.add(firstVisibleGroup.id);
-    const firstSkillbook = skillbooksForGroup(firstVisibleGroup).find((entry) => state.sourceScope === 'all' || sourceScopeFor(entry) === state.sourceScope) || firstSkillbookForGroup(firstVisibleGroup);
-    selectSkillbook(firstVisibleGroup, firstSkillbook);
-    return;
-  }
-  renderKnowledgeList();
-  renderEmptyKnowledgeSelection();
 }
 
 function renderRunbooks() {
@@ -1465,7 +1134,9 @@ function renderRunbooks() {
     button.dataset.contextRecordId = runbook.id;
     button.dataset.contextLabel = runbook.title || runbook.id;
     button.dataset.knowledgeColumn = 'runbooks';
-    button.setAttribute('aria-current', String(runbookIdMatches(runbook.id || runbook.runbook_id, state.selectedRunbookId)));
+    const isActiveRunbook = runbookIdMatches(runbook.id || runbook.runbook_id, state.selectedRunbookId);
+    button.classList.toggle('is-selected', isActiveRunbook);
+    button.setAttribute('aria-selected', String(isActiveRunbook));
     button.innerHTML = `<strong>${escapeHtml(runbook.title || runbook.id)}</strong><span>${escapeHtml(`${runbook.status || ''} · ${runbook.problem_domain || ''}`)}</span>`;
     button.addEventListener('click', () => {
       state.selectedRunbookId = normaliseRunbookId(runbook.id || runbook.runbook_id);
@@ -1505,19 +1176,35 @@ function setActionHidden(action, hidden) {
   if (button) button.hidden = hidden;
 }
 
-// Counts on the view-switcher tabs, so you can see what a selection holds
-// before clicking a tab (Skill · Runbooks (n) · Tabellen (n)).
+// Counts on the counted view band + one-line pane footer, so you can see what
+// a selection holds before clicking a tab (Skill · Runbooks (n) · Tabellen
+// (n)). Goes through the shell-wired grammar handle when present (null-
+// guarded: the shell wires panes debounced ~120ms after mount, so early
+// renders fall back to the direct data-pg-* targets).
 function updateViewCounts() {
-  const host = state.ctx?.host;
-  if (!host) return;
+  const pane = els.centerPane;
+  if (!pane) return;
   const context = skillbookContext();
-  const set = (sel, n) => {
-    const el = host.querySelector(sel);
-    if (el) el.textContent = ` (${n})`;
+  const counts = {
+    skill: context.skill ? 1 : 0,
+    runbooks: context.runbooks.length,
+    data: context.tables.length,
   };
-  set('[data-count-skill]', context.skill ? 1 : 0);
-  set('[data-count-runbooks]', context.runbooks.length);
-  set('[data-count-tables]', context.tables.length);
+  const pg = pane.__ctoxPaneGrammar;
+  if (pg?.setCounts) pg.setCounts(counts);
+  else for (const [key, value] of Object.entries(counts)) {
+    const node = pane.querySelector(`[data-pg-count="${key}"]`);
+    if (node) node.textContent = ` (${value})`;
+  }
+  const item = state.items.find((entry) => entry.id === state.selectedId);
+  const footerText = item
+    ? [groupLabel(item.kind || 'knowledge'), domainLabelFor(item)].filter(Boolean).join(' · ')
+    : '';
+  if (pg?.setFooter) pg.setFooter(footerText);
+  else {
+    const node = pane.querySelector('[data-pg-footer]');
+    if (node) node.textContent = footerText;
+  }
 }
 
 async function renderActiveTab() {
@@ -1548,11 +1235,13 @@ async function renderActiveTab() {
 
 function syncKnowledgeTabControls() {
   if (isKnowledgeTabDisabled(state.activeTab, state.selectedId)) state.activeTab = 'skill';
-  for (const button of state.ctx.host.querySelectorAll('[data-tab]')) {
-    const disabled = isKnowledgeTabDisabled(button.dataset.tab, state.selectedId);
+  for (const button of state.ctx.host.querySelectorAll('[data-pg-band]')) {
+    const disabled = isKnowledgeTabDisabled(button.dataset.pgBand, state.selectedId);
+    const selected = button.dataset.pgBand === state.activeTab;
     button.disabled = disabled;
     button.setAttribute('aria-disabled', String(disabled));
-    button.setAttribute('aria-selected', String(button.dataset.tab === state.activeTab));
+    button.setAttribute('aria-selected', String(selected));
+    button.classList.toggle('is-active', selected);
   }
   for (const panel of state.ctx.host.querySelectorAll('[data-panel]')) {
     panel.hidden = panel.dataset.panel !== state.activeTab;
@@ -1603,7 +1292,7 @@ async function renderRunbookWorkspace() {
     button.dataset.contextRecordId = runbook.id || runbook.runbook_id || '';
     button.dataset.contextLabel = runbook.title || runbook.id || runbook.runbook_id || '';
     button.dataset.knowledgeColumn = 'runbooks';
-    button.setAttribute('aria-current', String(runbookIdMatches(runbook.id || runbook.runbook_id, state.selectedRunbookId)));
+    button.setAttribute('aria-selected', String(runbookIdMatches(runbook.id || runbook.runbook_id, state.selectedRunbookId)));
     button.textContent = runbook.title || runbook.id || runbook.runbook_id || 'Runbook';
     button.addEventListener('click', () => {
       state.selectedRunbookId = normaliseRunbookId(runbook.id || runbook.runbook_id);
@@ -1667,14 +1356,15 @@ function renderTableSwitcher() {
     button.dataset.contextRecordId = table.id;
     button.dataset.contextLabel = table.title || table.id;
     button.dataset.knowledgeColumn = 'workspace';
-    button.setAttribute('aria-current', String(table.id === activeTableId()));
+    button.setAttribute('aria-selected', String(table.id === activeTableId()));
     button.textContent = labels[index];
     button.title = table.title || table.id;
     button.addEventListener('click', () => {
       state.selectedTableId = table.id;
       state.selectedId = table.id;
       state.tableOffset = 0;
-      renderKnowledgeList();
+      // In-place selection flip in the left rail — never a list rebuild.
+      applyKnowledgeSelection();
       renderTableSwitcher();
       renderTable();
     });

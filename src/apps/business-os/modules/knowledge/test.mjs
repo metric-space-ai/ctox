@@ -329,6 +329,45 @@ test('presentation follows compact Business OS knowledge contract', async () => 
   assert.match(css, /\.bundle-meta\s*\{/);
 });
 
+test('pane chrome follows the canonical data-pg-* grammar contract', async () => {
+  const js = await readFile(fileURLToPath(new URL('./index.js', import.meta.url)), 'utf8');
+  const html = await readFile(fileURLToPath(new URL('./index.html', import.meta.url)), 'utf8');
+  const css = await readFile(fileURLToPath(new URL('./index.css', import.meta.url)), 'utf8');
+
+  // The shell wires search / view / tray / reset / band / counts / footer from
+  // the markup (autoWirePaneGrammar); the module never re-codes that chrome.
+  for (const attr of ['data-pg-search', 'data-pg-view', 'data-pg-tray-toggle', 'data-pg-tray', 'data-pg-reset', 'data-pg-filter', 'data-pg-band', 'data-pg-count', 'data-pg-footer']) {
+    assert.match(html, new RegExp(attr), `index.html carries ${attr}`);
+  }
+  // The module consumes the grammar through the bubbling change event and the
+  // null-guarded pane handle — not through hand-rolled search/tray wiring.
+  assert.match(js, /ctox-pane-grammar-change/);
+  assert.match(js, /__ctoxPaneGrammar/);
+  assert.doesNotMatch(js, /data-action="toggle-filters"|data-action="reset-filters"|\[data-view-mode\]|\[data-tab\]/);
+  // Import/Export stay collected header actions (top-right icons).
+  assert.match(html, /ctox-pane-actions[\s\S]*data-action="import-knowledge-book"[\s\S]*data-action="export-knowledge-book"/);
+  // Selection is signaled canonically and flipped in place, never via a list
+  // rebuild: aria-selected + is-selected on existing rows.
+  assert.match(js, /applyKnowledgeSelection/);
+  assert.match(js, /aria-selected/);
+  assert.doesNotMatch(js, /aria-current/);
+  assert.doesNotMatch(css, /aria-current/);
+  // The counted band keeps ≥2 real views with zeros rendered by the grammar.
+  assert.match(html, /data-pg-band="skill"/);
+  assert.match(html, /data-pg-band="runbooks"/);
+  assert.match(html, /data-pg-band="data"/);
+  // Per-pane one-line footers; no module-wide app floor.
+  assert.doesNotMatch(html, /knowledge-footer/);
+  assert.doesNotMatch(css, /\.knowledge-footer\b/);
+  // Kit tokens are owned by the kit (shared/base.css), never re-defined here.
+  assert.doesNotMatch(css, /--kit-fill:\s|--kit-hover:\s|--kit-fill-strong:\s|--focus-ring:\s/);
+  // No module-owned localStorage persistence (ctx.storageScope is the rule).
+  assert.doesNotMatch(js, /localStorage/);
+  // Markup is fetched from index.html with the JS cache-buster (single source).
+  assert.match(js, /loadModuleMarkup/);
+  assert.match(js, /\.\/index\.html/);
+});
+
 let passed = 0;
 for (const entry of tests) {
   try {

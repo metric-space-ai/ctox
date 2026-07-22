@@ -12,10 +12,9 @@
   --knowledge-panel-radius: var(--surface-radius);
   --knowledge-control-radius: var(--control-radius);
   --knowledge-shadow: none;
-  /* Self-contained kit tokens: defined here so this app is DECOUPLED from the
-     shell/base.css version. It renders correctly even when installed as a
-     runtime module against an older packaged shell (no --fs-*/--kit-* needed
-     from base.css). Values mirror the kit type + fill scale. */
+  /* Kit-owned tokens (--kit-fill/--kit-fill-strong/--kit-hover/--focus-ring)
+     come from shared/base.css — the module must NOT re-define them. Only the
+     type scale aliases below are module-local conveniences. */
   --fs-micro: 10px;
   --fs-meta: 11px;
   --fs-sm: 12px;
@@ -24,10 +23,6 @@
   --fs-hero: 19px;
   --lh-tight: 1.25;
   --lh-base: 1.45;
-  --kit-fill: color-mix(in srgb, var(--knowledge-text) 6%, transparent);
-  --kit-fill-strong: color-mix(in srgb, var(--knowledge-text) 10%, transparent);
-  --kit-hover: color-mix(in srgb, var(--knowledge-text) 5%, transparent);
-  --focus-ring: 0 0 0 2px color-mix(in srgb, var(--knowledge-accent) 42%, transparent);
   display: grid;
   /* Spalten: [linke Liste] [12px Resizer] [rechtes Detail]. Der shell-globale
    * Resizer (.ctox-column-resizer[data-resizer-var="--knowledge-left-width"])
@@ -127,7 +122,7 @@
   display: grid;
 }
 
-.knowledge-module .knowledge-bundle[aria-current="true"] .bundle-select {
+.knowledge-module .knowledge-bundle.is-selected .bundle-select {
   background: color-mix(in srgb, var(--knowledge-accent) 13%, var(--knowledge-surface));
 }
 
@@ -155,8 +150,8 @@
   text-align: left;
 }
 
-.knowledge-module .knowledge-item[aria-current="true"],
-.knowledge-module .runbook-item[aria-current="true"] {
+.knowledge-module .knowledge-item.is-selected,
+.knowledge-module .runbook-item.is-selected {
   background: color-mix(in srgb, var(--knowledge-accent) 14%, var(--knowledge-surface));
 }
 
@@ -927,11 +922,11 @@
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 .knowledge-module .knowledge-bundle:hover { border-color: var(--knowledge-line); }
-.knowledge-module .knowledge-bundle[aria-current="true"] {
+.knowledge-module .knowledge-bundle.is-selected {
   border-color: var(--knowledge-accent);
 }
 /* the card carries the selection now — drop the inner row highlight */
-.knowledge-module .knowledge-bundle[aria-current="true"] .bundle-select { background: transparent; }
+.knowledge-module .knowledge-bundle.is-selected .bundle-select { background: transparent; }
 
 /* Dense head: ONE muted meta line (kicker · counts) under the title — no pill
    badges, no extra rows. While the shard is expanded the counts disappear:
@@ -992,7 +987,7 @@
 .knowledge-module .table-switcher .ctox-chip:hover,
 .knowledge-module .knowledge-secondary-switcher .ctox-chip:hover { background: var(--kit-hover); }
 .knowledge-module .table-switcher .ctox-chip.is-active,
-.knowledge-module .table-switcher .ctox-chip[aria-current="true"],
+.knowledge-module .table-switcher .ctox-chip[aria-selected="true"],
 .knowledge-module .knowledge-secondary-switcher .ctox-chip.is-active {
   background: var(--kit-fill-strong);
   color: var(--knowledge-text);
@@ -1019,19 +1014,9 @@
   border-color: var(--knowledge-accent);
 }
 
-/* App floor — a status footer spanning the whole module, like the Files app. */
-.knowledge-module { grid-template-rows: minmax(0, 1fr) auto; }
-.knowledge-module .knowledge-footer {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
-  border-top: 1px solid var(--knowledge-line);
-  background: var(--knowledge-surface);
-  color: var(--knowledge-muted);
-  font-size: var(--fs-micro);
-}
+/* Per-pane one-line footers (canonical pane anatomy) — the old module-wide
+   "app floor" was dropped; each pane owns its data-pg-footer line. */
+.knowledge-module .knowledge-pane-footer { flex: 0 0 auto; }
 
 /* ============================================================================
    De-frame pass: ONE frame only (the pane). Everything inside uses surfaces /
@@ -1047,7 +1032,7 @@
   box-shadow: none;
 }
 .knowledge-module .knowledge-bundle:hover { background: var(--kit-hover); }
-.knowledge-module .knowledge-bundle[aria-current="true"] {
+.knowledge-module .knowledge-bundle.is-selected {
   background: color-mix(in srgb, var(--knowledge-accent) 8%, transparent);
 }
 /* Segmented controls: fill track, no border box (one less frame everywhere). */
@@ -1079,7 +1064,7 @@
   padding: 0;
 }
 .knowledge-module .knowledge-item:hover { background: var(--kit-hover); }
-.knowledge-module .knowledge-item[aria-current="true"] {
+.knowledge-module .knowledge-item.is-selected {
   background: color-mix(in srgb, var(--knowledge-accent) 8%, transparent);
 }
 .knowledge-module .item-select {
@@ -1094,7 +1079,7 @@
 }
 .knowledge-module .knowledge-item .ctox-pane-icon { opacity: 0; transition: opacity 0.12s ease; }
 .knowledge-module .knowledge-item:hover .ctox-pane-icon,
-.knowledge-module .knowledge-item[aria-current="true"] .ctox-pane-icon,
+.knowledge-module .knowledge-item.is-selected .ctox-pane-icon,
 .knowledge-module .knowledge-item .ctox-pane-icon:focus-visible { opacity: 0.6; }
 .knowledge-module .knowledge-item .ctox-pane-icon:hover { opacity: 1; }
 
@@ -1125,12 +1110,12 @@
 .knowledge-module .knowledge-bundle:hover {
   background: color-mix(in srgb, var(--knowledge-text) 6%, var(--knowledge-surface));
 }
-.knowledge-module .knowledge-bundle[aria-current="true"] {
+.knowledge-module .knowledge-bundle.is-selected {
   background: color-mix(in srgb, var(--knowledge-accent) 12%, var(--knowledge-surface));
 }
 /* Selection accent bar: a flat 2px fill via pseudo-element (no shadow, no thick
    border) — keeps the Matching-style accent while staying inside kit discipline. */
-.knowledge-module .knowledge-bundle[aria-current="true"]::before {
+.knowledge-module .knowledge-bundle.is-selected::before {
   content: "";
   position: absolute;
   left: 0;
@@ -1141,7 +1126,7 @@
   border-radius: var(--knowledge-control-radius) 0 0 var(--knowledge-control-radius);
 }
 /* nested items sit inside the card — no own fill, just an indent guide */
-.knowledge-module .knowledge-bundle[aria-current="true"] .knowledge-item[aria-current="true"] {
+.knowledge-module .knowledge-bundle.is-selected .knowledge-item.is-selected {
   background: color-mix(in srgb, var(--knowledge-accent) 10%, transparent);
 }
 
@@ -1153,7 +1138,7 @@
 @container business-app-window (max-width: 640px) {
   .knowledge-module {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr) auto;
+    grid-template-rows: minmax(0, 1fr);
     padding: 0;
     gap: 0;
   }
@@ -1168,7 +1153,6 @@
   .knowledge-module .knowledge-bundle { padding: 12px; margin-bottom: 8px; }
   .knowledge-module .bundle-select { padding: 8px 6px; }
   .knowledge-module .knowledge-item { min-height: 44px; }
-  .knowledge-module .ctox-pane-header { padding: 12px 14px 10px; }
 }
 
 /* ============================================================================
@@ -1212,7 +1196,7 @@
   border-bottom: 1px solid color-mix(in srgb, var(--knowledge-line) 55%, transparent);
 }
 .knowledge-module.is-list-view .knowledge-bundle:hover { background: var(--kit-hover); }
-.knowledge-module.is-list-view .knowledge-bundle[aria-current="true"] {
+.knowledge-module.is-list-view .knowledge-bundle.is-selected {
   background: color-mix(in srgb, var(--knowledge-accent) 10%, transparent);
 }
 .knowledge-module.is-list-view .bundle-counts { display: none; }
