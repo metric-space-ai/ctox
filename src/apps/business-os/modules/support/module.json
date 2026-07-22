@@ -44,7 +44,7 @@
     "third_pane_justification": "Support operators need customer identity, linked tickets, SLA state, and CTOX suggestions visible while reading and replying; moving this context into drawers would force repeated context switches during every conversation."
   },
   "category": "Operations",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",
   "tags": [
