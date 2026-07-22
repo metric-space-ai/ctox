@@ -67,8 +67,13 @@ SHA-256-verified snapshot. Require actual full text or original data content,
 Copy `relevance_score` exactly from the current typed `ctox_web_read`
 `evidence_relevance_score` field. Never estimate, rescale, round, or replace
 that machine-computed 0–10 value in the evidence manifest.
-For prose, use the server-written `workspace_evidence` / deep-research
-snapshot receipt and its full extracted-text artifact. Every claim must carry
+The corresponding `workspace_evidence.receipt_path` and `receipt_sha256` must
+come directly from that same typed call and remain present in the immutable
+harness rollout. Never create, copy, reconstruct, rename, or rewrite a receipt
+artifact. `ctox_deep_research` output is discovery inventory, not final
+evidence; every admitted source requires its own direct `ctox_web_read` call.
+For prose, use the server-written `workspace_evidence` snapshot receipt and
+its full extracted-text artifact. Every claim must carry
 a verbatim `evidence_quote` (at least six words and 40 characters) that occurs
 in that extracted text; a title, abstract, snippet, model paraphrase, or a
 quote copied from another URL is not evidence. Claims over original data have

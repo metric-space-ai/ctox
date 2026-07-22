@@ -350,7 +350,7 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
         if item.get("snapshot_id") != snapshot_id:
             raise GuardError("evidence_snapshot_id_mismatch")
         retrieval = require_dict(item.get("retrieval_receipt"), "retrieval_receipt")
-        if retrieval.get("tool") not in {"ctox_web_read", "ctox_deep_research"}:
+        if retrieval.get("tool") != "ctox_web_read":
             raise GuardError("evidence_requires_ctox_web_stack_receipt")
         request_url = require_string(retrieval, "request_url", "retrieval_receipt")
         request_parsed = urlparse(request_url)

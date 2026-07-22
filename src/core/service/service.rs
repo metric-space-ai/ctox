@@ -11567,6 +11567,246 @@ fn systematic_research_validation_receipt_path(job: &QueuedPrompt) -> Option<Pat
         })
 }
 
+fn validate_systematic_research_typed_web_read_receipts(
+    job: &QueuedPrompt,
+    workspace: &Path,
+    manifest: &Value,
+    research_started_at: u64,
+) -> Result<()> {
+    let (expected_run_id, expected_command_id) = systematic_research_binding(job)?;
+    let codex_home =
+        ctox_core::config::find_codex_home().context("resolve harness state directory")?;
+    let state_db = [
+        codex_home.join("state_5.sqlite"),
+        codex_home.join("sqlite/state_5.sqlite"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+    .context("systematic research requires the durable harness state database")?;
+    let conn = Connection::open_with_flags(
+        &state_db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("open harness state database {}", state_db.display()))?;
+    validate_systematic_research_typed_web_read_receipts_from_conn(
+        &conn,
+        &codex_home,
+        workspace,
+        &expected_run_id,
+        &expected_command_id,
+        manifest,
+        research_started_at,
+    )
+}
+
+fn validate_systematic_research_typed_web_read_receipts_from_conn(
+    conn: &Connection,
+    codex_home: &Path,
+    workspace: &Path,
+    expected_run_id: &str,
+    expected_command_id: &str,
+    manifest: &Value,
+    research_started_at: u64,
+) -> Result<()> {
+    let workspace = workspace
+        .canonicalize()
+        .with_context(|| format!("canonicalize research workspace {}", workspace.display()))?;
+    let codex_home = codex_home.canonicalize().with_context(|| {
+        format!(
+            "canonicalize harness state directory {}",
+            codex_home.display()
+        )
+    })?;
+    let evidence = manifest
+        .get("evidence")
+        .and_then(Value::as_array)
+        .context("evidence manifest has no evidence array")?;
+
+    let mut required_receipts = HashSet::<(PathBuf, String)>::new();
+    for item in evidence {
+        let evidence_id = item
+            .get("evidence_id")
+            .and_then(Value::as_str)
+            .unwrap_or("<unknown>");
+        let retrieval = item
+            .get("retrieval_receipt")
+            .and_then(Value::as_object)
+            .with_context(|| format!("evidence {evidence_id} has no retrieval_receipt"))?;
+        anyhow::ensure!(
+            retrieval.get("tool").and_then(Value::as_str) == Some("ctox_web_read"),
+            "evidence {evidence_id} must use a direct typed ctox_web_read receipt"
+        );
+        let artifact = retrieval
+            .get("receipt_artifact")
+            .and_then(Value::as_object)
+            .with_context(|| {
+                format!("evidence {evidence_id} has no retrieval_receipt.receipt_artifact")
+            })?;
+        let relative_path = artifact
+            .get("path")
+            .and_then(Value::as_str)
+            .with_context(|| format!("evidence {evidence_id} has no receipt artifact path"))?;
+        let artifact_hash = artifact
+            .get("sha256")
+            .and_then(Value::as_str)
+            .map(|value| {
+                value
+                    .strip_prefix("sha256:")
+                    .unwrap_or(value)
+                    .to_ascii_lowercase()
+            })
+            .filter(|value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            .with_context(|| {
+                format!("evidence {evidence_id} has an invalid receipt artifact hash")
+            })?;
+        let receipt_path = workspace
+            .join(relative_path)
+            .canonicalize()
+            .with_context(|| {
+                format!("canonicalize evidence {evidence_id} receipt artifact {relative_path}")
+            })?;
+        anyhow::ensure!(
+            receipt_path.starts_with(&workspace),
+            "evidence {evidence_id} receipt artifact escapes the research workspace"
+        );
+        required_receipts.insert((receipt_path, artifact_hash));
+    }
+
+    let mut observed_receipts = HashSet::<(PathBuf, String)>::new();
+    let mut stmt = conn.prepare(
+        "SELECT rollout_path
+         FROM threads
+         WHERE subagent_parent_thread_id IS NULL",
+    )?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    for row in rows {
+        let rollout_path = PathBuf::from(row?);
+        let Ok(rollout_path) = rollout_path.canonicalize() else {
+            continue;
+        };
+        if !rollout_path.starts_with(&codex_home) {
+            continue;
+        }
+        let file = std::fs::File::open(&rollout_path)
+            .with_context(|| format!("open harness rollout {}", rollout_path.display()))?;
+        let mut calls = HashSet::<String>::new();
+        let mut run_bound = false;
+        let mut command_bound = false;
+        let mut workspace_bound = false;
+        for line in BufReader::new(file).lines() {
+            let line = line?;
+            let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            let Some(timestamp) = value
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .and_then(|timestamp| DateTime::parse_from_rfc3339(timestamp).ok())
+                .and_then(|timestamp| u64::try_from(timestamp.timestamp()).ok())
+            else {
+                continue;
+            };
+            if timestamp < research_started_at {
+                continue;
+            }
+            let payload = value.get("payload").unwrap_or(&Value::Null);
+            if payload.get("type").and_then(Value::as_str) == Some("task_started") {
+                run_bound = false;
+                command_bound = false;
+                workspace_bound = false;
+                calls.clear();
+            }
+            if line.contains(expected_run_id) {
+                run_bound = true;
+            }
+            if line.contains(expected_command_id) {
+                command_bound = true;
+            }
+            if value.get("type").and_then(Value::as_str) == Some("turn_context") {
+                workspace_bound = payload
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .and_then(|cwd| Path::new(cwd).canonicalize().ok())
+                    .is_some_and(|cwd| cwd == workspace);
+            }
+            match payload.get("type").and_then(Value::as_str) {
+                Some("function_call")
+                    if payload.get("name").and_then(Value::as_str) == Some("ctox_web_read") =>
+                {
+                    if run_bound && command_bound && workspace_bound {
+                        if let Some(call_id) = payload.get("call_id").and_then(Value::as_str) {
+                            calls.insert(call_id.to_string());
+                        }
+                    }
+                }
+                Some("function_call_output") => {
+                    let Some(call_id) = payload.get("call_id").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    if !calls.contains(call_id) {
+                        continue;
+                    }
+                    let Some(output) = payload.get("output").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let Ok(output) = serde_json::from_str::<Value>(output) else {
+                        continue;
+                    };
+                    if output.get("ok").and_then(Value::as_bool) != Some(true)
+                        || output.get("evidence_eligible").and_then(Value::as_bool) != Some(true)
+                        || output
+                            .pointer("/workspace_evidence/persisted")
+                            .and_then(Value::as_bool)
+                            != Some(true)
+                    {
+                        continue;
+                    }
+                    let Some(receipt_path) = output
+                        .pointer("/workspace_evidence/receipt_path")
+                        .and_then(Value::as_str)
+                        .map(PathBuf::from)
+                        .and_then(|path| path.canonicalize().ok())
+                    else {
+                        continue;
+                    };
+                    if !receipt_path.starts_with(&workspace) {
+                        continue;
+                    }
+                    let Some(receipt_hash) = output
+                        .pointer("/workspace_evidence/receipt_sha256")
+                        .and_then(Value::as_str)
+                        .map(|value| {
+                            value
+                                .strip_prefix("sha256:")
+                                .unwrap_or(value)
+                                .to_ascii_lowercase()
+                        })
+                        .filter(|value| {
+                            value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                        })
+                    else {
+                        continue;
+                    };
+                    observed_receipts.insert((receipt_path, receipt_hash));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut missing = required_receipts
+        .difference(&observed_receipts)
+        .map(|(path, _)| path.display().to_string())
+        .collect::<Vec<_>>();
+    missing.sort();
+    anyhow::ensure!(
+        missing.is_empty(),
+        "evidence receipt artifacts were not emitted by typed ctox_web_read calls in the current durable research run: {}",
+        missing.join(", ")
+    );
+    Ok(())
+}
+
 fn validate_systematic_research_web_receipts(
     root: &Path,
     manifest: &Value,
@@ -11916,6 +12156,12 @@ fn validate_systematic_research_workspace(
         let deep_research_receipt = validate_systematic_research_deep_research_receipt(
             job,
             &workspace,
+            research_started_at,
+        )?;
+        validate_systematic_research_typed_web_read_receipts(
+            job,
+            &workspace,
+            &manifest_value,
             research_started_at,
         )?;
         validate_systematic_research_web_receipts(root, &manifest_value, research_started_at)?;
@@ -25350,6 +25596,138 @@ mod tests {
         assert!(missing_persisted_artifact
             .to_string()
             .contains("exhaustive (not persisted)"));
+    }
+
+    #[test]
+    fn systematic_research_rejects_receipt_not_emitted_by_typed_web_read() {
+        let workspace = temp_root("research-typed-read-workspace");
+        let receipt = workspace.join(".ctox/web-read/call-1/receipt.json");
+        std::fs::create_dir_all(receipt.parent().unwrap()).unwrap();
+        std::fs::write(&receipt, "{}").unwrap();
+        let codex_home = temp_root("research-typed-read-codex-home");
+        let rollout = codex_home.join("sessions/rollout-parent.jsonl");
+        std::fs::create_dir_all(rollout.parent().unwrap()).unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                subagent_parent_thread_id TEXT
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads (id, rollout_path, cwd, subagent_parent_thread_id)
+             VALUES ('parent-thread', ?1, ?2, NULL)",
+            params![rollout.to_string_lossy(), codex_home.to_string_lossy()],
+        )
+        .unwrap();
+        let receipt_hash = "a".repeat(64);
+        let timestamp = now_iso_string();
+        let output = serde_json::json!({
+            "ok": true,
+            "evidence_eligible": true,
+            "workspace_evidence": {
+                "persisted": true,
+                "receipt_path": receipt,
+                "receipt_sha256": receipt_hash,
+            },
+        });
+        let rows = [
+            serde_json::json!({
+                "timestamp": timestamp,
+                "type": "event_msg",
+                "payload": {"type": "task_started", "turn_id": "turn-1"},
+            }),
+            serde_json::json!({
+                "timestamp": timestamp,
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": "Research Run ID: run-1\nResearch Command ID: command-1",
+                    }],
+                },
+            }),
+            serde_json::json!({
+                "timestamp": timestamp,
+                "type": "turn_context",
+                "payload": {"turn_id": "turn-1", "cwd": workspace},
+            }),
+            serde_json::json!({
+                "timestamp": timestamp,
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "ctox_web_read",
+                    "call_id": "call-1",
+                    "arguments": "{}",
+                },
+            }),
+            serde_json::json!({
+                "timestamp": timestamp,
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "call-1",
+                    "output": output.to_string(),
+                },
+            }),
+        ];
+        std::fs::write(
+            &rollout,
+            rows.into_iter()
+                .map(|row| row.to_string())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        let manifest = serde_json::json!({
+            "evidence": [{
+                "evidence_id": "evidence-1",
+                "retrieval_receipt": {
+                    "tool": "ctox_web_read",
+                    "receipt_artifact": {
+                        "path": ".ctox/web-read/call-1/receipt.json",
+                        "sha256": "a".repeat(64),
+                    },
+                },
+            }],
+        });
+        let started_at = current_epoch_secs().saturating_sub(1);
+        validate_systematic_research_typed_web_read_receipts_from_conn(
+            &conn,
+            &codex_home,
+            &workspace,
+            "run-1",
+            "command-1",
+            &manifest,
+            started_at,
+        )
+        .unwrap();
+
+        let synthetic = workspace.join(".ctox/web-read/synthetic/receipt.json");
+        std::fs::create_dir_all(synthetic.parent().unwrap()).unwrap();
+        std::fs::write(&synthetic, "{}").unwrap();
+        let mut synthetic_manifest = manifest;
+        synthetic_manifest["evidence"][0]["retrieval_receipt"]["receipt_artifact"]["path"] =
+            Value::String(".ctox/web-read/synthetic/receipt.json".to_string());
+        let error = validate_systematic_research_typed_web_read_receipts_from_conn(
+            &conn,
+            &codex_home,
+            &workspace,
+            "run-1",
+            "command-1",
+            &synthetic_manifest,
+            started_at,
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("were not emitted by typed ctox_web_read calls"));
     }
 
     #[test]

@@ -26,6 +26,11 @@ An evidence entry is eligible only when all of these are true:
   hash and every repeated field; a worker cannot rewrite a redirect,
   interstitial URL, timestamp, content type, or response identity after the
   read. The evidence `canonical_url` must equal the persisted final URL.
+- Final evidence must come from a direct typed `ctox_web_read` call. The
+  persisted receipt path and SHA-256 must be present in the immutable harness
+  rollout for that call. Deep Research output is discovery inventory only.
+  Never create, copy, reconstruct, rename, or rewrite `receipt.json`; if a
+  direct read did not persist `workspace_evidence`, the source is ineligible.
 - `content_scope=full_text` for prose or `content_kind=data_file` for data.
   The snapshot is non-empty, its SHA-256 is recorded in both the snapshot and
   evidence row, and the hash verifies before every downstream use.
