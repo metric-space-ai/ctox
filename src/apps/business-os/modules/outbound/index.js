@@ -891,18 +891,22 @@ async function applyOutboundLanguage(lang, options = {}) {
 }
 
 async function ensureStyles() {
-  const href = `${new URL('./index.css', import.meta.url).pathname}?v=${BUILD}`;
-  if (document.querySelector(`link[href="${href}"]`)) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = href;
-  document.head.append(link);
+  const cssVersion = String(import.meta.url).split('?v=')[1] || BUILD;
+  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
+  let link = document.querySelector('link[data-outbound-style]');
+  if (!link) {
+    link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.dataset.outboundStyle = 'true';
+    document.head.append(link);
+  }
+  if (link.getAttribute('href') !== cssHref) link.href = cssHref;
 }
 
 async function loadModuleMarkup() {
-  const markupUrl = new URL('./index.html', import.meta.url);
-  markupUrl.searchParams.set('v', BUILD);
-  const html = await fetch(markupUrl).then((res) => res.text());
+  const markupVersion = String(import.meta.url).split('?v=')[1] || BUILD;
+  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
+  const html = await fetch(markupHref).then((res) => res.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   return doc.body.innerHTML;
 }
@@ -4237,7 +4241,7 @@ function renderContactQualificationRow(row, columns) {
     ? `<button class="ctox-button" type="button" data-action="research-contacts" data-id="${escapeHtml(item.id)}">Ansprechpartner</button>`
     : `<button class="ctox-button" type="button" data-action="send-pipeline" data-id="${escapeHtml(company.id)}">Pipeline</button>`;
   return `
-    <tr${rowClass} data-action="${item ? 'select-pipeline' : 'select-company'}" data-id="${escapeHtml(item?.id || company.id)}" aria-current="${company.id === state.selectedCompanyId || item?.id === state.selectedPipelineId}">
+    <tr${rowClass} data-action="${item ? 'select-pipeline' : 'select-company'}" data-id="${escapeHtml(item?.id || company.id)}" data-context-record-id="${escapeHtml(item?.id || company.id)}" data-context-record-type="${item ? 'outbound_pipeline_item' : 'outbound_company'}" data-context-label="${escapeHtml(item?.company_name || company.name || item?.id || company.id)}" aria-current="${company.id === state.selectedCompanyId || item?.id === state.selectedPipelineId}">
       ${columns.map((column) => {
         if (column.action) return `<td>${action}</td>`;
         if (column.primary) {
