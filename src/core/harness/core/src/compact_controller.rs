@@ -857,6 +857,27 @@ fn normalize_text(value: &str) -> String {
         .to_string()
 }
 
+fn structured_json_payload(value: &str) -> &str {
+    let trimmed = value.trim();
+    let Some(opening_end) = trimmed.find('\n') else {
+        return trimmed;
+    };
+    let opening = trimmed[..opening_end].trim();
+    if opening != "```" && !opening.eq_ignore_ascii_case("```json") {
+        return trimmed;
+    }
+
+    let body_with_closing = &trimmed[opening_end + 1..];
+    let Some(closing_start) = body_with_closing.rfind("```") else {
+        return trimmed;
+    };
+    if !body_with_closing[closing_start + 3..].trim().is_empty() {
+        return trimmed;
+    }
+
+    body_with_closing[..closing_start].trim()
+}
+
 fn count_chars(value: &str) -> usize {
     normalize_text(value).chars().count()
 }
@@ -1819,11 +1840,13 @@ async fn run_structured_prompt_once<T: DeserializeOwned>(
                         None,
                     ));
                 }
-                return serde_json::from_str::<T>(&payload).map_err(|err| {
+                return serde_json::from_str::<T>(structured_json_payload(&payload)).map_err(
+                    |err| {
                     CodexErr::InvalidRequest(format!(
                         "failed to parse structured compaction response: {err}; payload={payload}"
                     ))
-                });
+                    },
+                );
             }
             _ => {}
         }
@@ -1897,6 +1920,15 @@ mod tests {
 
         assert!(is_structured_output_format_error(&parse_error));
         assert!(!is_structured_output_format_error(&transport_error));
+    }
+
+    #[test]
+    fn structured_json_payload_accepts_an_outer_markdown_fence() {
+        let fenced = "```json\n{\"summary\":\"kept\"}\n```";
+        let plain = "{\"summary\":\"kept\"}";
+
+        assert_eq!(structured_json_payload(fenced), plain);
+        assert_eq!(structured_json_payload(plain), plain);
     }
 
     #[test]
