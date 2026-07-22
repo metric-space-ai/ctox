@@ -878,8 +878,9 @@ function renderTranscriptList(box, events, emptyText) {
   const roleLabel = { user: 'Auftrag', assistant: 'Agent', agent: 'Agent' };
   for (const event of events) {
     const label = roleLabel[event.role] || 'System';
+    const recordLabel = String(event.text || label).replace(/\s+/g, ' ').slice(0, 160) || label;
     box.insertAdjacentHTML('beforeend', `
-      <div class="coding-agents-proto-row" data-role="${escapeHtml(event.role)}">
+      <div class="coding-agents-proto-row" data-role="${escapeHtml(event.role)}" data-context-record-id="${escapeHtml(event.recordId || event.key)}" data-context-record-type="${escapeHtml(event.recordType || 'coding_agent_event')}" data-context-label="${escapeHtml(recordLabel)}">
         <span class="coding-agents-proto-role">${escapeHtml(label)}</span>
         <span class="coding-agents-proto-text">${escapeHtml(String(event.text || '').replace(/\s+/g, ' ').slice(0, 160))}</span>
         ${event.status ? `<span class="coding-agents-proto-status">${escapeHtml(event.status)}</span>` : ''}
@@ -933,6 +934,8 @@ function buildTranscriptEvents() {
   if (sessionEvents.length) {
     return sessionEvents.map((event, index) => ({
       key: event.seq != null ? `evt:${event.seq}` : `evt:${event.id || index}`,
+      recordId: String(event.id || event.event_id || ''),
+      recordType: 'coding_agent_event',
       role: String(event.role || 'system'),
       text: String(event.text || ''),
       status: String(event.status || ''),
@@ -941,7 +944,7 @@ function buildTranscriptEvents() {
 
   const events = [];
   [...state.recentTurns].sort((a, b) => a.timeMs - b.timeMs).forEach((turn) => {
-    events.push({ key: `turn:${turn.id}:u`, role: 'user', text: turn.prompt || turn.moduleId });
+    events.push({ key: `turn:${turn.id}:u`, recordId: turn.id, recordType: 'business_command', role: 'user', text: turn.prompt || turn.moduleId });
     const statusLabel = turn.status === 'completed'
       ? t('statusCompleted')
       : turn.status === 'failed'
@@ -955,6 +958,8 @@ function buildTranscriptEvents() {
     ].filter(Boolean).join(' · ');
     events.push({
       key: `turn:${turn.id}:s`,
+      recordId: turn.id,
+      recordType: 'business_command',
       role: 'system',
       text: detail,
       failed: turn.status === 'failed' || !turn.ok,
@@ -1127,6 +1132,10 @@ function renderSessionBanner() {
     `;
     return banner;
   }
+  const sessionLabel = session.title || `${t('sessionLabel')} · ${state.activeModuleId}`;
+  banner.setAttribute('data-context-record-id', String(session.id || session.session_id || ''));
+  banner.setAttribute('data-context-record-type', 'coding_agent_session');
+  banner.setAttribute('data-context-label', sessionLabel);
   const metaParts = [`${state.recentTurns.length} ${t('sessionTurns')}`];
   const updated = formatRecordTime(Number(session.updated_at_ms || 0));
   if (updated) metaParts.push(updated);

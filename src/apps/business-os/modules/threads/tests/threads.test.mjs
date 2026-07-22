@@ -80,6 +80,23 @@ assert.match(js, /data-context-record-id/);
 assert.match(js, /data-context-record-type="thread"/);
 assert.match(js, /data-context-label/);
 assert.doesNotMatch(js, /data-record-id|data-record-type|data-title=/);
+// Secondary message, approval, and notification records expose the same trio
+// without replacing their existing action/selection ids.
+const secondarySurfaces = [
+  ['event message', js.match(/<div class="threads-message is-event"[^>]*>/)?.[0] || '', 'thread_message'],
+  ['conversation message', js.match(/<article class="threads-message[^>]*>/)?.[0] || '', 'thread_message'],
+  ['approval card', js.match(/<article class="threads-approval-card"[^>]*>/)?.[0] || '', 'thread_approval'],
+  ['notification item', js.match(/<div class="ctox-callout threads-notification-item"[^>]*>/)?.[0] || '', 'thread_notification'],
+];
+for (const [surface, openingTag, recordType] of secondarySurfaces) {
+  for (const attr of ['data-context-record-id', 'data-context-record-type', 'data-context-label']) {
+    assert.match(openingTag, new RegExp(attr), `${surface} carries ${attr}`);
+  }
+  assert.match(openingTag, new RegExp(`data-context-record-type="${recordType}"`), `${surface} uses ${recordType}`);
+}
+assert.match(secondarySurfaces[0][1], /data-message-id/);
+assert.match(secondarySurfaces[1][1], /data-message-id/);
+assert.match(secondarySurfaces[2][1], /data-approval-id/);
 // Selection is an in-place is-selected/aria-selected flip, never a rebuild.
 assert.match(js, /applyThreadSelection/);
 assert.match(js, /aria-selected/);

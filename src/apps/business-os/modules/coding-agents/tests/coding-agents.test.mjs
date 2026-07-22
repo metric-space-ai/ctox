@@ -80,6 +80,18 @@ test('presentation layer stays compact and shell-native', () => {
   assert.match(js, /renderTranscriptList/);
 });
 
+test('secondary transcript and session records carry the canonical context trio', () => {
+  const js = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  const protoRow = js.match(/<div class="coding-agents-proto-row"[^>]*>/)?.[0] || '';
+  for (const attr of ['data-context-record-id', 'data-context-record-type', 'data-context-label']) {
+    assert.match(protoRow, new RegExp(attr), `transcript row carries ${attr}`);
+  }
+  assert.match(js, /recordType: 'coding_agent_event'/);
+  assert.match(js, /banner\.setAttribute\('data-context-record-id'/);
+  assert.match(js, /banner\.setAttribute\('data-context-record-type', 'coding_agent_session'\)/);
+  assert.match(js, /banner\.setAttribute\('data-context-label'/);
+});
+
 test('task validation requires a meaningful instruction', () => {
   assert.equal(hooks.validateTaskPrompt('').valid, false);
   assert.equal(hooks.validateTaskPrompt('fix').valid, false);
