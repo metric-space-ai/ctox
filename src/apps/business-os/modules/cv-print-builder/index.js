@@ -86,7 +86,9 @@ const COMMON_FIRST_NAMES = new Set([
 export async function mount(ctx) {
   ACTIVE_LOCALE = String(ctx.locale || document.documentElement.lang || 'de').toLowerCase().startsWith('en') ? 'en' : 'de';
   await ensureStyles();
-  const html = await fetch(`${new URL('./index.html', import.meta.url).pathname}?v=${BUILD}`).then((res) => res.text());
+  const markupVersion = String(import.meta.url).split('?v=')[1] || BUILD;
+  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
+  const html = await fetch(markupHref).then((res) => res.text());
   ctx.host.innerHTML = html;
   applyStaticLocale(ctx.host);
   ctx.host.dataset.cvPrintBuilder = 'native';
@@ -184,12 +186,16 @@ function applyStaticLocale(host) {
 }
 
 async function ensureStyles() {
-  const href = `${new URL('./index.css', import.meta.url).pathname}?v=${BUILD}`;
-  if (document.querySelector(`link[href="${href}"]`)) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = href;
-  document.head.append(link);
+  const cssVersion = String(import.meta.url).split('?v=')[1] || BUILD;
+  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
+  let link = document.querySelector('link[data-cv-print-builder-style]');
+  if (!link) {
+    link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.dataset.cvPrintBuilderStyle = 'true';
+    document.head.append(link);
+  }
+  if (link.getAttribute('href') !== cssHref) link.href = cssHref;
 }
 
 function bindStaticEvents(state) {
