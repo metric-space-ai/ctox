@@ -5964,8 +5964,9 @@ pub fn update_queue_task(root: &Path, request: QueueTaskUpdateRequest) -> Result
         metadata.remove("not_before");
         metadata.remove("defer_reason");
     }
-    upsert_communication_message(
-        &mut conn,
+    let tx = conn.transaction()?;
+    upsert_communication_message_tx(
+        &tx,
         UpsertMessage {
             message_key: &current.message_key,
             channel: QUEUE_CHANNEL_NAME,
@@ -5999,19 +6000,33 @@ pub fn update_queue_task(root: &Path, request: QueueTaskUpdateRequest) -> Result
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty());
-        set_routing_status(
-            &mut conn,
-            &current.message_key,
-            route_status,
-            &now,
-            "ctox-queue-update",
-            "update_queue_task",
-            status_note,
-        )?;
+        let command_transitioned = route_status.eq_ignore_ascii_case("pending")
+            && transition_business_command_for_task_in_transaction(
+                &tx,
+                &current.message_key,
+                route_status,
+                None,
+                None,
+                status_note,
+                status_note.unwrap_or("queue task released for retry"),
+            )?;
+        if !command_transitioned {
+            set_routing_status(
+                &tx,
+                &current.message_key,
+                route_status,
+                &now,
+                "ctox-queue-update",
+                "update_queue_task",
+                status_note,
+            )?;
+        }
     }
-    refresh_thread(&mut conn, &thread_key)?;
-    load_queue_task_from_conn(&conn, &current.message_key)?
-        .context("failed to load updated queue task")
+    refresh_thread_tx(&tx, &thread_key)?;
+    let updated = load_queue_task_from_conn(&tx, &current.message_key)?
+        .context("failed to load updated queue task")?;
+    tx.commit()?;
+    Ok(updated)
 }
 
 pub fn set_queue_task_metadata_value(
@@ -19291,6 +19306,89 @@ mod tests {
             )
             .expect("count attempt results");
         assert_eq!(result_count, 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn releasing_failed_queue_task_moves_running_command_to_retry_wait() {
+        let root = business_command_test_root("ctox-business-command-manual-release");
+        let claimed = claim_business_command_with_queue(
+            &root,
+            business_command_claim("command-manual-release", "sha256:manual-release"),
+            QueueTaskCreateRequest {
+                title: "Recover interrupted command".to_string(),
+                prompt: "Continue the interrupted command.".to_string(),
+                thread_key: "business-os/tests/manual-release".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(json!({"idempotency_key": "command-manual-release"})),
+            },
+        )
+        .expect("claim command");
+        let task_id = claimed.task.message_key;
+        lease_queue_task(&root, &task_id, "ctox-test").expect("lease queue task");
+        transition_business_command_for_task(
+            &root,
+            &task_id,
+            "leased",
+            None,
+            None,
+            None,
+            "initial lease",
+        )
+        .expect("lease command");
+        transition_business_command_for_task(
+            &root,
+            &task_id,
+            "running",
+            None,
+            None,
+            None,
+            "initial execution",
+        )
+        .expect("run command");
+
+        update_queue_task(
+            &root,
+            QueueTaskUpdateRequest {
+                message_key: task_id.clone(),
+                route_status: Some("failed".to_string()),
+                status_note: Some("worker interrupted before lifecycle cleanup".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("record interrupted queue route");
+        let released = update_queue_task(
+            &root,
+            QueueTaskUpdateRequest {
+                message_key: task_id.clone(),
+                route_status: Some("pending".to_string()),
+                status_note: Some("operator retry".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("release interrupted command");
+        assert_eq!(released.route_status, "pending");
+        let projection = business_command_projection(&root, "command-manual-release")
+            .expect("load released command projection");
+        assert_eq!(projection["execution_phase"], "retry_wait");
+
+        lease_queue_task(&root, &task_id, "ctox-test").expect("lease retry");
+        transition_business_command_for_task(
+            &root,
+            &task_id,
+            "leased",
+            None,
+            None,
+            None,
+            "retry lease",
+        )
+        .expect("retry_wait must transition to leased");
+        let projection = business_command_projection(&root, "command-manual-release")
+            .expect("load retried command projection");
+        assert_eq!(projection["execution_phase"], "leased");
         let _ = fs::remove_dir_all(root);
     }
 
