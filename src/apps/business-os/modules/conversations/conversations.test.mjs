@@ -219,6 +219,23 @@ test('context pane auto-reveals only with a selection and no user collapse', () 
   assert.equal(hooks.conversationContextVisible('', false), false);
 });
 
+test('conversation rows and message bubbles expose the agent context trio', () => {
+  assert.deepEqual(hooks.conversationRecordContext({ key: 'alice|bob', displayName: 'Alice & Bob' }), {
+    'data-context-record-id': 'alice|bob',
+    'data-context-record-type': 'conversation',
+    'data-context-label': 'Alice & Bob',
+  });
+  assert.deepEqual(hooks.messageRecordContext({
+    message_key: 'msg-42',
+    subject: 'Quarterly review',
+    body_text: 'Fallback body',
+  }), {
+    'data-context-record-id': 'msg-42',
+    'data-context-record-type': 'conversation_message',
+    'data-context-label': 'Quarterly review',
+  });
+});
+
 test('export builds an honest snapshot and import round-trips it into a local overlay', () => {
   const buckets = [{
     key: 'a|b',

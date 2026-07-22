@@ -23,7 +23,7 @@
     "third_pane_justification": "The contact and linked-record inspector must stay visible beside long communication timelines in wide mode; compact mode moves it into the shared drawer."
   },
   "category": "Collaboration",
-  "version": "v1",
+  "version": "1.0.1",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",
   "tags": [
