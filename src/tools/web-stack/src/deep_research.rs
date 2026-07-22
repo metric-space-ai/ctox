@@ -266,7 +266,15 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
     let followup_read_budget = max_sources.min(16);
     let candidate_pool_limit = research_candidate_pool_limit(request.depth, max_sources);
     let expanded_candidate_pool_limit = candidate_pool_limit.saturating_add(followup_read_budget);
-    let selected_sources = select_balanced_sources(sources, candidate_pool_limit);
+    let discovered_sources = sources;
+    let selected_sources = select_balanced_sources(
+        discovered_sources
+            .iter()
+            .filter(|source| should_attempt_source_read(source))
+            .cloned()
+            .collect(),
+        candidate_pool_limit,
+    );
     let mut read_queue = VecDeque::from(selected_sources);
     let mut queued_urls = read_queue
         .iter()
@@ -465,6 +473,29 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
             };
             mark_source_not_read(&mut source, reason);
         }
+        enriched.push(source);
+    }
+
+    let processed_urls = enriched
+        .iter()
+        .filter_map(|source| source.get("url").and_then(Value::as_str))
+        .map(normalize_url_key)
+        .collect::<BTreeSet<_>>();
+    for mut source in discovered_sources {
+        let normalized = source
+            .get("url")
+            .and_then(Value::as_str)
+            .map(normalize_url_key)
+            .unwrap_or_default();
+        if processed_urls.contains(&normalized) {
+            continue;
+        }
+        let reason = if is_non_scoreable_source(&source) {
+            "metadata_or_aggregator"
+        } else {
+            "candidate_pool_limit"
+        };
+        mark_source_not_read(&mut source, reason);
         enriched.push(source);
     }
 
