@@ -146,6 +146,7 @@ const labels = {
     webStackConnecting: 'RxDB ist verbunden, die CTOX Web-Stack-Projektion fehlt noch.',
     webStackUnavailable: 'Web Stack ist gerade nicht erreichbar.',
     webStackSyncRequired: 'Verbindung prüfen',
+    webStackCheckProjection: 'Web-Stack-Projektion neu einlesen',
     webStackProjectionMissing: 'Der Web Stack ist gerade nicht vollständig verfügbar. Die reaktive Verbindung prüft weiter.',
     webStackCredentialSaved: 'Credential gespeichert.',
     webStackAuthQueued: 'Browser-Login angefordert.',
@@ -322,6 +323,7 @@ const labels = {
     webStackConnecting: 'RxDB is connected, but the CTOX Web Stack projection is still missing.',
     webStackUnavailable: 'Web Stack is currently unreachable.',
     webStackSyncRequired: 'Check connection',
+    webStackCheckProjection: 'Reload Web Stack projection',
     webStackProjectionMissing: 'The Web Stack is not fully available right now. The reactive connection keeps checking.',
     webStackCredentialSaved: 'Credential saved.',
     webStackAuthQueued: 'Browser login requested.',
@@ -1315,6 +1317,7 @@ function actionIcon(state, name) {
     chevronUp: 'M6 15l6-6 6 6',
     chevronDown: 'M6 9l6 6 6-6',
     close: 'M6 6l12 12M18 6L6 18',
+    refresh: 'M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4',
     open: 'M14 5h5v5M19 5l-8 8M11 5H5v14h14v-6',
     play: 'M8 5.5v13l10-6.5-10-6.5Z',
     trash: 'M5 7h14M10 7V5h4v2M8 7l1 13h6l1-13M10.5 11v5M13.5 11v5',
@@ -1421,13 +1424,13 @@ function webStackPanel(state) {
   const statusTone = webStack.error ? 'is-warning' : (webStack.notice ? 'is-info' : '');
   return `
     <section class="ctox-web-stack-panel ctox-context-item" data-webstack-panel data-context-label="${escapeAttr(t.webStack)}" data-context-record-id="ctox-web-stack" ${state.webStackPanelOpen ? '' : 'hidden'}>
-      <header class="ctox-web-stack-head">
-        <div class="ctox-web-stack-head-titles">
+      <header class="ctox-pane-title-row ctox-web-stack-head">
+        <div class="ctox-pane-titles ctox-web-stack-head-titles">
           <span class="ctox-pane-kicker">${escapeHtml(t.webStack)}</span>
           <strong class="ctox-badge ${statusTone}">${escapeHtml(headerSummary)}</strong>
         </div>
-        <div class="ctox-web-stack-head-actions">
-          <button type="button" class="ctox-pane-icon" data-webstack-refresh aria-label="${escapeAttr(t.webStackSyncRequired)}" title="${escapeAttr(t.webStackSyncRequired)}">${resetIcon()}</button>
+        <div class="ctox-pane-actions ctox-web-stack-head-actions">
+          <button type="button" class="ctox-pane-icon" data-webstack-check-projection aria-label="${escapeAttr(t.webStackCheckProjection)}" title="${escapeAttr(t.webStackCheckProjection)}">${actionIcon(state, 'refresh')}</button>
           <button type="button" class="ctox-pane-icon" data-webstack-close aria-label="${escapeAttr(t.auxHide)}" title="${escapeAttr(t.auxHide)}">${actionIcon(state, 'close')}</button>
         </div>
       </header>
@@ -1500,7 +1503,7 @@ function wireWebStackPanel(state, root) {
     toggle?.setAttribute('aria-pressed', 'false');
     toggle?.setAttribute('aria-expanded', 'false');
   });
-  root.querySelector('[data-webstack-refresh]')?.addEventListener('click', async () => {
+  root.querySelector('[data-webstack-check-projection]')?.addEventListener('click', async () => {
     state.webStack = { ...(state.webStack || {}), loading: true, notice: '' };
     renderMain(state);
     await refreshWebStackPanel(state);

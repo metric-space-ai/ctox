@@ -264,7 +264,11 @@ test('Web Stack panel is hidden by default and the toggle reveals it', () => {
   assert.match(open, /data-webstack-panel/);
   // Restored on-demand machinery: collected header toggle + credential/auth wiring.
   assert.match(js, /data-webstack-toggle/);
-  assert.match(js, /data-webstack-refresh/);
+  assert.match(open, /<header class="ctox-pane-title-row ctox-web-stack-head">/);
+  assert.match(open, /class="ctox-pane-actions ctox-web-stack-head-actions"[\s\S]*data-webstack-check-projection/);
+  assert.match(open, /data-webstack-check-projection[^>]*aria-label="Reload Web Stack projection"[^>]*title="Reload Web Stack projection"/);
+  assert.match(open, /data-webstack-check-projection[\s\S]*data-icon="refresh"/);
+  assert.doesNotMatch(open, /data-webstack-refresh/);
   assert.match(js, /data-webstack-auth-source/);
   assert.match(js, /function requestWebStackAuthAssist/);
 });
