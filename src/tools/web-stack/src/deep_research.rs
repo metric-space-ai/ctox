@@ -3000,7 +3000,7 @@ fn scholarly_result_to_db_value(result: ScholarlyResult) -> Value {
 
 fn push_database_sources(
     database: &'static str,
-    _query: &str,
+    query: &str,
     items: Vec<Value>,
     seen_urls: &mut BTreeSet<String>,
     sources: &mut Vec<Value>,
@@ -3059,6 +3059,7 @@ fn push_database_sources(
         item["verification_status"] = Value::String("unverified".to_string());
         item["discovery_status"] = Value::String("discovered".to_string());
         item["evidence_eligible"] = Value::Bool(false);
+        item["discovery_score"] = Value::Number(score_source_discovery(&item, query).into());
         sources.push(item);
         pushed += 1;
     }
