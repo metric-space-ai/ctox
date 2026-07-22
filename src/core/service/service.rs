@@ -9419,19 +9419,30 @@ fn record_typed_business_command_review(
             None => ("held", "pending"),
         },
     };
-    let recorded = channels::record_business_command_review(
-        root,
-        task_id,
-        review_status,
-        validation_status,
-        &serde_json::json!({
-            "disposition": completion_review_disposition_label(disposition),
-            "app_validation": app_validation,
-            "turn_id": turn_id,
-            "thread_key": thread_key,
-            "retryable_hold": retryable_hold,
-        }),
-    )?;
+    let evidence = serde_json::json!({
+        "disposition": completion_review_disposition_label(disposition),
+        "app_validation": app_validation,
+        "turn_id": turn_id,
+        "thread_key": thread_key,
+        "retryable_hold": retryable_hold,
+    });
+    let mut retry = 0_u32;
+    let recorded = loop {
+        match channels::record_business_command_review(
+            root,
+            task_id,
+            review_status,
+            validation_status,
+            &evidence,
+        ) {
+            Ok(recorded) => break recorded,
+            Err(error) if command_review_persistence_is_locked(&error) && retry < 3 => {
+                retry += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100 * u64::from(retry)));
+            }
+            Err(error) => return Err(error),
+        }
+    };
     anyhow::ensure!(
         recorded,
         "command/task link disappeared before review persistence"
@@ -9456,6 +9467,16 @@ fn record_typed_business_command_review(
         },
     );
     Ok(())
+}
+
+fn command_review_persistence_is_locked(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        let message = cause.to_string().to_ascii_lowercase();
+        message.contains("database is locked")
+            || message.contains("database table is locked")
+            || message.contains("sqlite_busy")
+            || message.contains("sqlite_locked")
+    })
 }
 
 fn completion_review_disposition_is_retryable_hold(
@@ -11621,6 +11642,7 @@ fn validate_systematic_research_web_receipts(
         .and_then(Value::as_array)
         .context("evidence manifest has no evidence array")?;
 
+    let mut unmatched = Vec::new();
     for item in evidence {
         let evidence_id = item
             .get("evidence_id")
@@ -11774,11 +11796,37 @@ fn validate_systematic_research_web_receipts(
                     && extracted_text_matches(doc, extracted_text_sha256)
             });
         if matching_entry.is_none() {
-            anyhow::bail!(
-                "evidence {evidence_id} is not bound to a matching admitted CTOX Web Stack retrieval for {canonical_url}"
-            );
+            let mut observed_scores = entries
+                .values()
+                .chain(receipt_history.iter())
+                .filter_map(|entry| {
+                    let receipt = entry.pointer("/doc/response_receipt")?;
+                    (receipt.get("requested_url").and_then(Value::as_str)
+                        == Some(manifest_request_url)
+                        && receipt.get("final_url").and_then(Value::as_str)
+                            == Some(manifest_final_url)
+                        && entry.get("checked_at").and_then(Value::as_u64)
+                            == Some(manifest_checked_at))
+                    .then(|| {
+                        entry
+                            .get("evidence_relevance_score")
+                            .and_then(Value::as_i64)
+                    })
+                    .flatten()
+                })
+                .collect::<Vec<_>>();
+            observed_scores.sort_unstable();
+            observed_scores.dedup();
+            unmatched.push(format!(
+                "{evidence_id}(manifest_score={relevance_score}, server_scores={observed_scores:?}, url={canonical_url})"
+            ));
         }
     }
+    anyhow::ensure!(
+        unmatched.is_empty(),
+        "evidence is not bound to a matching admitted CTOX Web Stack retrieval; unmatched entries: {}",
+        unmatched.join("; ")
+    );
     Ok(())
 }
 
