@@ -604,21 +604,26 @@ test('center column carries the canonical grammar and the shelf contract', () =>
   const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
   const css = readFileSync(new URL('./index.css', import.meta.url), 'utf8');
   const js = readFileSync(new URL('./index.js', import.meta.url), 'utf8');
-  // Filter section: search + canonical shelf/list toggle IN the filterbar +
-  // collapsed tray with reset; active-dot rule present.
+  // Filter section: search + canonical cards/list toggle IN the filterbar +
+  // collapsed tray with reset; active-dot rule present. The canonical pair is
+  // cards|list — the retail-box shelf IS this app's cards rendering.
   assert.match(html, /store-filterbar/);
-  assert.match(html, /data-store-filter-advanced[^>]*hidden/);
-  assert.match(html, /data-reset-store-filters/);
-  assert.match(html, /data-view="shelf"/);
-  assert.match(html, /data-view="list"/);
+  assert.match(html, /data-pg-search/);
+  assert.match(html, /data-pg-tray[^>]*hidden/);
+  assert.match(html, /data-pg-reset/);
+  assert.match(html, /data-pg-filter data-pg-name="category" data-pg-default="all"/);
+  assert.match(html, /data-pg-filter data-pg-name="sort" data-pg-default="title"/);
+  assert.match(html, /data-pg-view="cards"/);
+  assert.match(html, /data-pg-view="list"/);
   assert.match(css, /\.store-filter-toggle\.has-active-filters::after/);
   // Counted view band with two real views (zeros included via JS counts).
-  assert.match(html, /data-center-band="catalog"/);
-  assert.match(html, /data-center-band="updates"/);
-  // Recessed well + per-column one-line footers.
+  assert.match(html, /data-pg-band="catalog"/);
+  assert.match(html, /data-pg-band="updates"/);
+  assert.match(html, /data-pg-count="catalog"/);
+  assert.match(html, /data-pg-count="updates"/);
+  // Recessed well + per-pane one-line footers.
   assert.match(css, /\.store-well/);
-  assert.match(html, /data-left-footer/);
-  assert.match(html, /data-center-footer/);
+  assert.equal((html.match(/data-pg-footer/g) || []).length, 2);
   // No standing count badge in the pane actions (counts live in footer/band).
   assert.doesNotMatch(html, /data-apps-count/);
   // Shelf: vendored three-based library loaded lazily with a list fallback;
@@ -630,4 +635,58 @@ test('center column carries the canonical grammar and the shelf contract', () =>
   // Detail panel keeps real store actions (shared builder with the cards).
   assert.match(js, /cardActionsHtml\(item, operation, statusForCard\(item, operation\), \{ includeDetails: false \}\)/);
   assert.match(html, /data-detail-capture/);
+});
+
+test('chrome is shell-grammar plus header icons, never module-owned wiring', () => {
+  const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('./index.css', import.meta.url), 'utf8');
+  const js = readFileSync(new URL('./index.js', import.meta.url), 'utf8');
+  // Standing actions (create + both import paths + GitHub discovery refresh)
+  // are collected .ctox-pane-icon buttons in the catalog pane header — never
+  // page-level text buttons in the content flow.
+  assert.match(html, /class="ctox-pane-icon" data-action="create-scratch"/);
+  assert.match(html, /class="ctox-pane-icon" data-action="install-github"/);
+  assert.match(html, /class="ctox-pane-icon" data-action="install-zip"/);
+  assert.match(html, /class="ctox-pane-icon" data-refresh-marketplace/);
+  assert.doesNotMatch(html, /btn-create-scratch|btn-install-github|btn-install-zip/);
+  assert.doesNotMatch(html, /store-action-btn|store-refresh-btn/);
+  assert.doesNotMatch(css, /\.store-action-btn|\.store-refresh-btn/);
+  // No standing sync-state line: discovery state rides on the refresh icon's
+  // tooltip (marketplaceStateLabel) and folds into the one-line footer.
+  assert.doesNotMatch(html, /data-marketplace-state/);
+  assert.doesNotMatch(css, /\.store-sync-state/);
+  assert.match(js, /els\.refresh\.title = marketplaceStateLabel\(\{/);
+  // Scope shards are pure selectors: title + ONE meta line with the
+  // parenthesized count (zeros included) — no badge-pill chrome in the nav.
+  const nav = html.slice(html.indexOf('data-scope-list'), html.indexOf('</nav>'));
+  assert.ok(nav.length > 0);
+  assert.doesNotMatch(nav, /ctox-badge/);
+  assert.match(nav, /class="cat-meta" data-scope-count>\(0\)/);
+  assert.match(js, /count\.textContent = `\(\$\{counts\[scope\] \|\| 0\}\)`/);
+  // The shell wires the data-pg-* chrome; the module only listens and mirrors.
+  assert.match(js, /addEventListener\('ctox-pane-grammar-change', onCenterGrammarChange\)/);
+  assert.match(js, /__ctoxPaneGrammar/);
+  // No hand-rolled grammar wiring left (the shell owns search/view/tray/band).
+  assert.doesNotMatch(js, /syncStoreFilterIndicator/);
+  assert.doesNotMatch(js, /els\.filterToggle|els\.filterTray|els\.filterReset|els\.bandTabs/);
+  assert.doesNotMatch(html, /data-toggle-store-filters|data-store-filter-advanced|data-reset-store-filters|data-center-band|data-search|data-view-toggle/);
+  // Selection is an in-place class flip on existing cards (never a rebuild);
+  // data re-renders preserve the well's scroll offset (resetScroll only for
+  // intentional grammar/scope changes).
+  assert.match(js, /function applyAppStoreSelection\(\)/);
+  assert.match(js, /aria-selected/);
+  assert.match(js, /render\(\{ resetScroll = false \} = \{\}\)/);
+  // Cards carry the context-record trio for "Chat to CTOX".
+  assert.match(js, /contextRecordId/);
+  assert.match(js, /contextRecordType/);
+  assert.match(js, /contextLabel/);
+  // Markup and stylesheet inherit the JS cache-buster (loadModuleMarkup
+  // contract, same as ctox/coding-agents/knowledge/threads).
+  assert.match(js, /async function loadModuleMarkup\(\)/);
+  assert.match(js, /\?v=\$\{version\}/);
+  assert.match(js, /link\.dataset\.appStoreStyle = 'true'/);
+  // No localStorage; the sessionStorage creator-return handoff is the
+  // established inter-app channel (knowledge uses the same for cross-module
+  // focus handoffs) and stays.
+  assert.doesNotMatch(js, /localStorage/);
 });

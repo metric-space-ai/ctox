@@ -1,10 +1,11 @@
 /* --- Business OS App Store Module Styling ---
    Frame (.ctox-workspace[data-resize-frame]), panes (.ctox-pane), the column
-   resizer, pane headers/search, list rows, buttons, badges, callouts and the
-   empty state all come from the shared kit (shared/base.css + app.css).
-   This file keeps only what is genuinely unique to the App Store:
-   the catalog card grid, the card internals, the install-progress button,
-   the lifecycle status dot, and the sync/loading indicator. */
+   resizer, pane headers/search, pane chrome (data-pg-* grammar is shell-wired),
+   list rows, buttons, badges, callouts and the empty state all come from the
+   shared kit (shared/base.css + app.css). This file keeps only what is
+   genuinely unique to the App Store: the scope shard anatomy, the catalog
+   card grid, the card internals, the install-progress button, the lifecycle
+   status dot, the retail-box shelf, and the sync/loading indicator. */
 
 /* Module-local special: purple "local app" badge accent (light + dark
    literals; everything else derives from the shell tokens). */
@@ -25,9 +26,10 @@
   min-height: 0;
 }
 
-/* Collapsible sidebar extras (install actions + discovery info): hidden by
-   default per the M3 reduction — common view is browse/search. A "…" icon
-   button in the pane header toggles [hidden] on this section. */
+/* Collapsible sidebar extras (source info): hidden by default per the M3
+   reduction — common view is browse/search. A "…" icon button in the pane
+   header toggles [hidden] on this section. The install/create/refresh
+   ACTIONS are header icons in the catalog pane, not text buttons here. */
 .store-sidebar-extras {
   display: flex;
   flex-direction: column;
@@ -39,23 +41,15 @@
   display: none;
 }
 
-.store-create-scratch-wrapper {
-  display: grid;
-  gap: 6px;
-}
-
-.store-action-btn {
-  width: 100%;
-}
-
 /* Kit .ctox-list filling the remaining sidebar height. */
 .store-category-list {
   flex: 1 1 auto;
 }
 
-/* Category row internals: icon tile + label inside the kit .ctox-list-item.
-   Selection state comes from .ctox-list-item.is-selected (JS toggles it next
-   to the legacy .active hook). */
+/* Scope shard internals: icon tile + title with ONE meta line (parenthesized
+   count, zeros included) inside the kit .ctox-list-item — pure selectors, no
+   badge pills. Selection state comes from .ctox-list-item.is-selected (JS
+   toggles it next to the legacy .active hook). */
 .category-btn {
   display: flex;
   align-items: center;
@@ -75,13 +69,27 @@
   font-weight: 800;
 }
 
-.category-btn .cat-label {
+.category-btn .cat-main {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
-/* Sidebar discovery info panel: kit .ctox-callout, module owns the spacing
-   and the sync-state status colors. */
+.category-btn .cat-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.category-btn .cat-meta {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Sidebar discovery info panel: kit .ctox-callout, module owns the spacing. */
 
 .store-info-box h4 {
   margin: 0 0 6px;
@@ -94,28 +102,6 @@
 
 .store-info-box code {
   color: var(--accent);
-}
-
-.store-refresh-btn {
-  width: 100%;
-  margin: 10px 0 8px;
-}
-
-.store-sync-state {
-  color: var(--muted);
-}
-
-.store-sync-state[data-state="loading"],
-.store-sync-state[data-state="stale"] {
-  color: var(--warning);
-}
-
-.store-sync-state[data-state="error"] {
-  color: var(--danger);
-}
-
-.store-sync-state[data-state="ready"] {
-  color: var(--success);
 }
 
 /* Center pane body: status callout above the scrollable catalog. The message
