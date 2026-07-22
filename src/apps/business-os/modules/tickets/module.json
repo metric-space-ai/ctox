@@ -29,7 +29,7 @@
     "min_height": 480
   },
   "category": "Operations",
-  "version": "v1",
+  "version": "1.0.1",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",
   "tags": [
