@@ -13,7 +13,8 @@ An evidence entry is eligible only when all of these are true:
   standards body, or lawful repository.
 - `url_role` is `original_content` or `original_data`. DOI resolvers,
   publisher/DOI landing pages, metadata APIs, aggregators, mirrors, search
-  results, and snippets are discovery-only.
+  results, tertiary encyclopedias, and snippets are discovery-only. Canonical
+  original URLs must be unique; URL aliases do not count as additional sources.
 - `freshness_status=current` is recorded at retrieval time and the snapshot is
   the bytes actually downloaded from that URL. A failed, stale, redirected,
   login, cookie, JavaScript shell, metadata, abstract-only, or snippet read is
@@ -49,8 +50,8 @@ claim_id -> evidence_id -> snapshot_id -> source_id -> canonical_url
 ```
 
 For prose evidence, copy the paths and hashes from the Web Stack workspace
-receipt into the manifest using this shape (paths must be relative to the
-manifest directory):
+receipt into the manifest using this shape. Paths are relative to the task
+workspace root, even though the manifest itself lives below `validation/`:
 
 ```json
 {

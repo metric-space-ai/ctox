@@ -36,6 +36,7 @@ FORBIDDEN_HOSTS = (
     "api.crossref.org",
     "api.semanticscholar.org",
     "api.datacite.org",
+    "wikipedia.org",
 )
 FORBIDDEN_ROLES = {"aggregator", "doi_landing", "landing", "metadata", "snippet"}
 FORBIDDEN_SCOPES = {"abstract", "cookie_wall", "login", "metadata", "shell", "snippet"}
@@ -140,6 +141,23 @@ def validate_url(url: Any, role: Any) -> None:
     query = parsed.query.lower()
     if "cookies_not_supported" in query or "cookie_not_supported" in query:
         raise GuardError("canonical_url_is_cookie_interstitial")
+
+
+def canonical_url_identity(url: str) -> str:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    port = parsed.port
+    authority = host
+    if port is not None and not (
+        (parsed.scheme.lower() == "http" and port == 80)
+        or (parsed.scheme.lower() == "https" and port == 443)
+    ):
+        authority = f"{host}:{port}"
+    path = re.sub(r"/{2,}", "/", parsed.path or "/")
+    if path != "/":
+        path = path.rstrip("/")
+    query = f"?{parsed.query}" if parsed.query else ""
+    return f"{parsed.scheme.lower()}://{authority}{path}{query}"
 
 
 def validate_content(path: Path, scope: str) -> None:
@@ -259,11 +277,17 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
         raise GuardError("at_least_one_verified_source_and_evidence_required")
 
     source_by_id: dict[str, dict[str, Any]] = {}
+    source_by_url: dict[str, str] = {}
     for source in sources:
         source = require_dict(source, "source")
         source_id = require_string(source, "source_id", "source")
         if source_id in source_by_id:
             raise GuardError("source_id_not_unique")
+        canonical_url = require_string(source, "canonical_url", "source")
+        identity = canonical_url_identity(canonical_url)
+        if identity in source_by_url:
+            raise GuardError("source_canonical_url_not_unique")
+        source_by_url[identity] = source_id
         source_by_id[source_id] = source
 
     evidence_by_id: dict[str, dict[str, Any]] = {}
@@ -367,6 +391,12 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
             if len(normalized_text) < 100:
                 raise GuardError("extracted_full_text_missing")
             evidence_text_by_id[evidence_id] = normalized_text
+
+    evidenced_source_ids = {
+        require_string(item, "source_id", "evidence") for item in evidence_by_id.values()
+    }
+    if evidenced_source_ids != set(source_by_id):
+        raise GuardError("manifest_source_without_verified_evidence")
 
     data_files = manifest.get("data_files", [])
     if not isinstance(data_files, list):

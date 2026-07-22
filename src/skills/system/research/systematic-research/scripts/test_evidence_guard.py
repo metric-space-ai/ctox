@@ -175,6 +175,37 @@ class EvidenceGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at_least_one_verified_source"):
             validate_manifest(self.manifest, self.base)
 
+    def test_canonical_source_urls_must_be_unique(self) -> None:
+        self.manifest["sources"].append({
+            "source_id": "src-2",
+            "canonical_url": "https://EXAMPLE.edu/paper/full-text/#duplicate",
+        })
+        with self.assertRaisesRegex(ValueError, "source_canonical_url_not_unique"):
+            validate_manifest(self.manifest, self.base)
+
+    def test_every_manifest_source_requires_verified_evidence(self) -> None:
+        self.manifest["sources"].append({
+            "source_id": "src-2",
+            "canonical_url": "https://example.edu/paper/other-full-text",
+        })
+        with self.assertRaisesRegex(ValueError, "source_without_verified_evidence"):
+            validate_manifest(self.manifest, self.base)
+
+    def test_tertiary_encyclopedia_cannot_be_evidence(self) -> None:
+        url = "https://en.wikipedia.org/wiki/Bearing_(mechanical)"
+        self.manifest["sources"][0]["canonical_url"] = url
+        self.manifest["evidence"][0]["canonical_url"] = url
+        self.manifest["evidence"][0]["snapshot"]["canonical_url"] = url
+        self.manifest["evidence"][0]["retrieval_receipt"]["request_url"] = url
+        self.manifest["evidence"][0]["retrieval_receipt"]["final_url"] = url
+        self.manifest["claims"][0]["canonical_url"] = url
+        self.manifest["claims"][0]["lineage_sha256"] = lineage_hash(
+            self.manifest["claims"][0]
+        )
+        self._sync_receipt_artifact()
+        with self.assertRaisesRegex(ValueError, "metadata_or_aggregator"):
+            validate_manifest(self.manifest, self.base)
+
     def test_rejected_url_classes_fail_closed(self) -> None:
         for url, role, needle in (
             ("https://doi.org/10.1/example", "doi_landing", "doi_landing"),

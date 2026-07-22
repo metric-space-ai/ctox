@@ -376,6 +376,11 @@ Retain rejected candidates with their rejection reason for auditability, but
 exclude them from knowledge construction, calculations, and report evidence
 registers. Never fill a failed or missing read from model memory.
 
+The admitted source set contains one row per unique canonical original URL and
+every manifest source must have a matching eligible Evidence entry. URL aliases,
+duplicate records, Wikipedia or other tertiary encyclopedias remain discovery
+candidates only and never increase the verified source count.
+
 ### Breadth before depth — facet the query, never settle for one pull
 
 A single `ctox web deep-research --query "<topic>"` returns one ranked

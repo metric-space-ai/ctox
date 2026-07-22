@@ -33843,7 +33843,7 @@ fn validate_systematic_research_csv(
             );
         }
         "derived_bearing_loads" => {
-            for field in ["source_row_ref", "derivation_method"] {
+            for field in ["source_row_ref", "derivation_method", "assumption_text"] {
                 require_header(&headers, output, field)?;
             }
             require_any_header(
@@ -33989,7 +33989,7 @@ fn validate_systematic_research_csv(
                 }
             }
             "derived_bearing_loads" => {
-                for field in ["source_row_ref", "derivation_method"] {
+                for field in ["source_row_ref", "derivation_method", "assumption_text"] {
                     anyhow::ensure!(
                         record_value(&record, &headers, field)
                             .is_some_and(|value| !value.is_empty()),
@@ -43183,9 +43183,9 @@ mod tests {
             concat!(
                 "research_run_id,research_command_id,claim_id,evidence_id,source_id,",
                 "snapshot_id,canonical_url,snapshot_hash,quote,source_row_ref,",
-                "derivation_method,value,unit\n",
+                "derivation_method,assumption_text,value,unit\n",
                 "run,cmd,CLM,EVD,SRC,SNAP,https://example.test/source,abc,",
-                "three orthogonal axes,row-7,counted axes,3,directions\n"
+                "three orthogonal axes,row-7,counted axes,none,3,directions\n"
             ),
         )?;
         let eligible = HashMap::from([(
@@ -43217,6 +43217,50 @@ mod tests {
         assert!(error
             .to_string()
             .contains("not identified as a physical load or moment"));
+        Ok(())
+    }
+
+    #[test]
+    fn systematic_research_rejects_derived_load_without_assumptions() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let path = temp.path().join("derived_bearing_loads.csv");
+        fs::write(
+            &path,
+            concat!(
+                "research_run_id,research_command_id,claim_id,evidence_id,source_id,",
+                "snapshot_id,canonical_url,snapshot_hash,quote,source_row_ref,",
+                "derivation_method,assumption_text,radial_load_N\n",
+                "run,cmd,CLM,EVD,SRC,SNAP,https://example.test/source,abc,",
+                "measured thrust was 10 N,row-7,ten percent of thrust,,1.0\n"
+            ),
+        )?;
+        let eligible = HashMap::from([(
+            "SRC".to_string(),
+            ("https://example.test/source".to_string(), "abc".to_string()),
+        )]);
+        let claims = HashMap::from([(
+            "CLM".to_string(),
+            (
+                "EVD".to_string(),
+                "SRC".to_string(),
+                "SNAP".to_string(),
+                "https://example.test/source".to_string(),
+                "abc".to_string(),
+                "measured thrust was 10 N".to_string(),
+            ),
+        )]);
+
+        let error = validate_systematic_research_csv(
+            &path,
+            &research_csv_output("derived_bearing_loads"),
+            "run",
+            "cmd",
+            &eligible,
+            &claims,
+        )
+        .expect_err("derived loads without explicit assumptions must not pass");
+
+        assert!(error.to_string().contains("has no assumption_text"));
         Ok(())
     }
 
