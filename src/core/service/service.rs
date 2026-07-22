@@ -6161,6 +6161,13 @@ fn start_prompt_worker(
                                 evidence_contract.display(),
                                 evidence_guard.display(),
                             ));
+                            if job.prompt.contains(
+                                "evidence receipt artifacts were not emitted by typed ctox_web_read calls",
+                            ) {
+                                prompt.push_str(
+                                    "\n\nTyped evidence-receipt correction:\nThe completion reviewer rejected this attempt because one or more manifest receipts have no immutable typed `ctox_web_read` call in the durable harness rollout. Before any `exec_command`, inspection, manifest edit, or local guard run, invoke the model-visible `ctox_web_read` tool directly for every canonical evidence URL named by the current manifest/review feedback. Do not run `ctox web read` through the shell. Use each successful typed tool output's exact `workspace_evidence.receipt_path`, `receipt_sha256`, snapshot path, relevance score, and retrieval fields; then update the manifest only where those immutable outputs differ. Every evidence item must have its own successful typed call in this durable Research Run and Command before completion.\n",
+                                );
+                            }
                         }
                         outbound_email_first_execution_prompt(&job, prompt)
                     })
@@ -10443,13 +10450,17 @@ fn chat_turn_session_options_for_queue_job(
     job: &QueuedPrompt,
 ) -> turn_loop::ChatTurnSessionOptions {
     if is_systematic_research_job(job) {
+        let required_initial_tool = job
+            .prompt
+            .contains("evidence receipt artifacts were not emitted by typed ctox_web_read calls")
+            .then(|| "ctox_web_read".to_string());
         return turn_loop::ChatTurnSessionOptions {
             disable_mcp_servers: false,
             force_isolated_session: true,
             base_instructions: None,
             plain_prompt: false,
             turn_timeout_secs_override: None,
-            required_initial_tool: None,
+            required_initial_tool,
         };
     }
     if business_os_app_module_target_from_prompt(&job.prompt).is_some() {
@@ -31387,6 +31398,23 @@ Business OS command:
         assert_eq!(options.turn_timeout_secs_override, None);
         assert!(options.required_initial_tool.is_none());
         assert!(!queue_job_reuses_persistent_session(&options));
+    }
+
+    #[test]
+    fn systematic_research_receipt_retry_requires_typed_web_read_first() {
+        let workspace = temp_root("systematic-research-receipt-retry-options");
+        let mut job = systematic_research_test_job(&workspace);
+        job.prompt.push_str(
+            "\nReview feedback: evidence receipt artifacts were not emitted by typed ctox_web_read calls in the current durable research run",
+        );
+
+        let options = chat_turn_session_options_for_queue_job(&job);
+
+        assert_eq!(
+            options.required_initial_tool.as_deref(),
+            Some("ctox_web_read")
+        );
+        assert!(options.force_isolated_session);
     }
 
     #[test]
