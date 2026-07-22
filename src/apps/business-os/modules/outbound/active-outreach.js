@@ -270,7 +270,7 @@ function renderSkillbookEditor(sb) {
   const rules = Array.isArray(sb.non_negotiable_rules) ? sb.non_negotiable_rules.join('\n') : '';
   const workflow = Array.isArray(sb.workflow_backbone) ? sb.workflow_backbone.join('\n') : '';
   return `
-    <article class="outbound-outreach-skillbook-card" data-skillbook-id="${escapeFn(sb.id || sb.skillbook_id)}">
+    <article class="outbound-outreach-skillbook-card" data-skillbook-id="${escapeFn(sb.id || sb.skillbook_id)}" data-context-record-id="${escapeFn(sb.id || sb.skillbook_id)}" data-context-record-type="outbound_skillbook" data-context-label="${escapeFn(sb.title || sb.skillbook_id || sb.id)}">
       <header>
         <strong>${escapeFn(sb.title || sb.skillbook_id || sb.id)}</strong>
         <small>${escapeFn(translate('version', 'Version'))} ${escapeFn(sb.version_number || 1)}</small>
@@ -296,7 +296,7 @@ function renderSkillbookEditor(sb) {
 
 function renderLetterTemplateEditor(tpl) {
   return `
-    <article class="outbound-outreach-template-card" data-template-id="${escapeFn(tpl.id)}">
+    <article class="outbound-outreach-template-card" data-template-id="${escapeFn(tpl.id)}" data-context-record-id="${escapeFn(tpl.id)}" data-context-record-type="outbound_letter_template" data-context-label="${escapeFn(tpl.title || tpl.id)}">
       <header>
         <strong>${escapeFn(tpl.title || tpl.id)}</strong>
         <small>${escapeFn(translate('version', 'Version'))} ${escapeFn(tpl.version_number || 1)}</small>
@@ -369,7 +369,7 @@ function renderLeadQueueRow(lead, campaign, defaultMailbox, defaultChannel) {
     ? `<small class="outbound-outreach-mailbox">${escapeFn(defaultMailbox.replace(/^email:/, ''))}</small>`
     : `<small class="outbound-outreach-mailbox is-missing">${escapeFn(translate('noMailbox', 'kein Postfach'))}</small>`;
   return `
-    <tr data-lead-id="${escapeFn(lead.id)}">
+    <tr data-lead-id="${escapeFn(lead.id)}" data-context-record-id="${escapeFn(lead.id)}" data-context-record-type="outbound_pipeline_item" data-context-label="${escapeFn(lead.lead_name || lead.payload?.lead_name || lead.company_name || lead.id)}">
       <td>${escapeFn(lead.lead_name || lead.payload?.lead_name || lead.id)}</td>
       <td>${escapeFn(lead.company_name || lead.payload?.company_name || '—')}</td>
       <td>
@@ -414,12 +414,14 @@ function renderEngagementListItem(engagement, isSelected) {
   const lastSubject = lastMessage?.subject || lastMessage?.payload?.subject || '';
   const status = engagement.status || '—';
   return `
-    <li>
+    <li data-context-record-id="${escapeFn(engagement.id)}" data-context-record-type="outbound_engagement" data-context-label="${escapeFn(engagement.payload?.contact_name || engagement.payload?.company_name || engagement.id)}">
       <button
         type="button"
-        class="outbound-outreach-list-item${isSelected ? ' is-active' : ''}"
+        role="option"
+        class="ctox-list-item outbound-outreach-list-item${isSelected ? ' is-active is-selected' : ''}"
         data-action="ao-select-engagement"
         data-id="${escapeFn(engagement.id)}"
+        aria-selected="${isSelected}"
         aria-pressed="${isSelected}"
       >
         <strong>${escapeFn(engagement.payload?.contact_name || engagement.payload?.company_name || engagement.id)}</strong>
@@ -610,7 +612,7 @@ function renderApprovalCard(msg) {
     ? renderReplyContextForMessage(msg)
     : '';
   return `
-    <article class="outbound-outreach-approval" data-message-id="${escapeFn(msg.id)}" aria-busy="${busy}">
+    <article class="outbound-outreach-approval" data-message-id="${escapeFn(msg.id)}" data-context-record-id="${escapeFn(msg.id)}" data-context-record-type="outbound_message" data-context-label="${escapeFn(subject || recipient || msg.id)}" aria-busy="${busy}">
       <header>
         <div>
           <strong>${escapeFn(msg.payload?.draft_engine || msg.payload?.message_type || 'draft')}</strong>
@@ -671,7 +673,7 @@ function renderReadyToSendItem(msg) {
     ? translate('retrySend', 'Erneut versuchen')
     : translate('queueSend', 'In Mailserver-Queue einreihen');
   return `
-    <li class="outbound-outreach-ready-item${blocked ? ' outbound-outreach-ready-blocked' : ''}">
+    <li class="outbound-outreach-ready-item${blocked ? ' outbound-outreach-ready-blocked' : ''}" data-context-record-id="${escapeFn(msg.id)}" data-context-record-type="outbound_message" data-context-label="${escapeFn(subject || recipient || msg.id)}">
       <div>
         <strong>${escapeFn(subject)}</strong>
         <small>${escapeFn(recipient)}</small>
@@ -705,7 +707,7 @@ function renderReplyCard(engagement) {
   const replyClass = engagement.payload?.reply_classification || 'unclear';
   const subject = lastMessageForEngagement(engagement.id)?.subject || '';
   return `
-    <li class="outbound-outreach-reply">
+    <li class="outbound-outreach-reply" data-context-record-id="${escapeFn(engagement.id)}" data-context-record-type="outbound_engagement" data-context-label="${escapeFn(engagement.payload?.contact_name || engagement.id)}">
       <header>
         <div>
           <strong>${escapeFn(engagement.payload?.contact_name || engagement.id)}</strong>
@@ -749,7 +751,7 @@ function renderDoneView(campaign) {
       </thead>
       <tbody>
         ${engagements.map((e) => `
-          <tr>
+          <tr data-context-record-id="${escapeFn(e.id)}" data-context-record-type="outbound_engagement" data-context-label="${escapeFn(e.payload?.contact_name || e.id)}">
             <td>${escapeFn(e.payload?.contact_name || e.id)}</td>
             <td>${escapeFn(prettyStatus(e.status || ''))}</td>
             <td>${escapeFn(e.closed_reason || e.payload?.closed_reason || '—')}</td>
@@ -1162,7 +1164,29 @@ function withBusyEngagement(engagementId, fn) {
     });
 }
 
+function selectEngagementInPlace(target) {
+  const engagementId = target?.dataset?.id || '';
+  if (!engagementId) return;
+  stateRef.activeOutreach.selectedEngagementId = engagementId;
+  const host = stateRef.ctx?.host;
+  host?.querySelectorAll?.('[data-action="ao-select-engagement"]').forEach((button) => {
+    const selected = button.dataset.id === engagementId;
+    button.classList.toggle('is-active', selected);
+    button.classList.toggle('is-selected', selected);
+    button.setAttribute('aria-selected', String(selected));
+    button.setAttribute('aria-pressed', String(selected));
+  });
+  const campaign = stateRef.campaigns.find((item) => item.id === stateRef.selectedCampaignId);
+  const engagement = stateRef.engagements.find((item) => item.id === engagementId);
+  const detail = host?.querySelector?.('.outbound-outreach-detail');
+  if (campaign && engagement && detail) detail.innerHTML = renderEngagementDetail(campaign, engagement);
+}
+
 export async function handleActiveOutreachAction(action, target) {
+  if (action === 'ao-select-engagement') {
+    selectEngagementInPlace(target);
+    return;
+  }
   clearError();
   const campaign = stateRef.campaigns.find((c) => c.id === stateRef.selectedCampaignId);
   switch (action) {
@@ -1175,8 +1199,7 @@ export async function handleActiveOutreachAction(action, target) {
       triggerRender();
       return;
     case 'ao-select-engagement':
-      stateRef.activeOutreach.selectedEngagementId = target.dataset.id;
-      triggerRender();
+      selectEngagementInPlace(target);
       return;
     case 'ao-start-engagement':
       return startEngagementFromLead(target.dataset.leadId, campaign, { autoDraft: false });

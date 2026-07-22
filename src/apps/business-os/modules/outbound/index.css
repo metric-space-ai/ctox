@@ -8,8 +8,7 @@
    come from shared/base.css (+ app.css pane-header typography).
 
    This file only holds what the kit does not express:
-   - the campaign record card (metric tiles, mini funnel bars, masked icon
-     actions) in the left pane,
+   - the campaign/sequence selector row and explicit two-pane grid tracks,
    - the CTOX research activity strip and live status pill,
    - the JS-driven table/detail split inside the center pane (the kit resizer
      is declarative and cannot model a conditional inner split),
@@ -22,33 +21,15 @@
    ========================================================================== */
 
 .outbound-module {
-  /* Module specials not covered by shell tokens: the outreach pipeline colors
-     (blue info / purple referral / indigo approval) and the masked shard
-     action icons. Light values here, dark overrides below. */
-  --outbound-info: #2563eb;
-  --outbound-info-ink: #1d4ed8;
-  --outbound-purple: #7c3aed;
-  --outbound-purple-ink: #6d28d9;
-  --outbound-indigo: #4f46e5;
-  --outbound-icon-import: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M11 4h2v8.2l2.9-2.9 1.4 1.4L12 16l-5.3-5.3 1.4-1.4 2.9 2.9V4Zm-5 13h2v1h8v-1h2v3H6v-3Z'/%3E%3C/svg%3E");
-  --outbound-icon-edit: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4 17.2V20h2.8L17.9 8.9 15.1 6.1 4 17.2ZM19.7 7.1c.4-.4.4-1 0-1.4l-1.4-1.4a1 1 0 0 0-1.4 0l-1.1 1.1 2.8 2.8 1.1-1.1Z'/%3E%3C/svg%3E");
-  --outbound-icon-delete: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M8 4h8l1 2h4v2H3V6h4l1-2Zm1 6h2v8H9v-8Zm4 0h2v8h-2v-8Zm-6 0h10l-.7 10H7.7L7 10Z'/%3E%3C/svg%3E");
-  --outbound-icon-runbook: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M5 4.5A2.5 2.5 0 0 1 7.5 2H20v17H7.5A2.5 2.5 0 0 0 5 21.5v-17ZM7.5 4a.5.5 0 0 0-.5.5v13.1c.2 0 .3-.1.5-.1H18V4H7.5ZM9 7h7v2H9V7Zm0 4h6v2H9v-2Z'/%3E%3C/svg%3E");
-  /* Left column default; the declarative kit resizer reads/writes
-     --ctox-left-width on this frame. */
+  --outbound-info: var(--accent);
+  --outbound-info-ink: var(--accent);
+  --outbound-purple: var(--warning);
+  --outbound-purple-ink: var(--warning);
+  --outbound-indigo: var(--accent);
   --ctox-left-width: min(360px, 32vw);
-  /* custom: CRM grid row height — tall cells host inline editors. */
   --row-h: 140px;
-  /* custom: the bottom-sheet drawers anchor absolutely to the module frame. */
   position: relative;
-}
-
-:root[data-theme="dark"] .outbound-module {
-  --outbound-info: #3b82f6;
-  --outbound-info-ink: #93c5fd;
-  --outbound-purple: #a855f7;
-  --outbound-purple-ink: #d8b4fe;
-  --outbound-indigo: #6366f1;
+  grid-template-columns: minmax(280px, var(--ctox-left-width)) 12px minmax(360px, 1fr);
 }
 
 /* Small text utility used across cells, lists and detail panes. */
@@ -70,68 +51,69 @@
   flex-wrap: wrap;
 }
 
-/* custom: tool row of the center pane header wraps on narrow panes. */
+/* Explicit workspace tracks keep the primary workbench off the resizer track. */
+.outbound-left {
+  grid-column: 1;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  container-type: inline-size;
+}
+
+.outbound-module > .ctox-column-resizer {
+  grid-column: 2;
+}
+
+.outbound-center {
+  grid-column: 3;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
 .outbound-center-tools {
   flex-wrap: wrap;
 }
 
-/* Full-pane single views rendered straight into the center pane (empty
-   state, Active Outreach shell) span both pane rows. */
-.outbound-center > .ctox-empty,
-.outbound-center > .outbound-outreach {
-  grid-row: 1 / -1;
-}
-
-/* ----------------------------------------------------------------------------
-   Left pane — campaign navigation
-   -------------------------------------------------------------------------- */
-.outbound-left {
-  container-type: inline-size;
-}
-
-/* custom: keep campaign rows stable while the list scrolls. */
-.outbound-left .outbound-scroll {
-  scrollbar-gutter: stable;
-}
-
-.outbound-section {
+.outbound-campaign-list {
   display: grid;
-  gap: 8px;
-  padding: 8px;
+  align-content: start;
+  gap: 6px;
+  padding: 6px;
 }
 
-/* custom: campaign record card — title button, metric tiles, mini funnel and
-   masked icon actions have no kit component. */
 .outbound-campaign-item {
+  position: relative;
   display: grid;
-  width: 100%;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid transparent;
+  padding: 9px 8px 9px 10px;
+  border: 0;
   border-radius: var(--panel-radius);
+  background: var(--surface);
+}
+
+.outbound-campaign-item::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
   background: transparent;
-  color: inherit;
-  text-align: left;
 }
 
 .outbound-campaign-item:hover {
-  background: color-mix(in srgb, var(--surface-2) 74%, transparent);
+  background: var(--surface-2);
 }
 
-.outbound-campaign-item[aria-current="true"] {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
-  background: color-mix(in srgb, var(--accent-soft) 58%, var(--surface));
+.outbound-campaign-item.is-selected {
+  background: var(--accent-soft);
 }
 
-.outbound-campaign-top {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-items: start;
-  gap: 10px;
+.outbound-campaign-item.is-selected::before {
+  background: var(--accent);
 }
 
 .outbound-campaign-select {
+  display: grid;
+  gap: 3px;
   min-width: 0;
   padding: 0;
   border: 0;
@@ -141,9 +123,7 @@
 }
 
 .outbound-campaign-select strong,
-.outbound-campaign-select span,
-.outbound-campaign-select em {
-  display: block;
+.outbound-campaign-select span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -151,173 +131,37 @@
 }
 
 .outbound-campaign-select strong {
-  color: var(--text);
-  font-size: 14px;
-  font-weight: 840;
-  line-height: 1.18;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .outbound-campaign-select span {
-  margin-top: 2px;
   color: var(--muted);
-  font-size: 11.5px;
-}
-
-.outbound-campaign-select em {
-  display: -webkit-box;
-  margin-top: 3px;
-  color: color-mix(in srgb, var(--muted) 86%, var(--text));
   font-size: 10.5px;
-  font-style: normal;
-  line-height: 1.18;
-  white-space: normal;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-
-.outbound-campaign-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.outbound-campaign-metrics span {
-  min-width: 0;
-  padding: 6px 7px;
-  border: 1px solid color-mix(in srgb, var(--line) 66%, transparent);
-  border-radius: var(--control-radius);
-  background: color-mix(in srgb, var(--surface-2) 52%, transparent);
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 760;
-  line-height: 1.05;
-}
-
-.outbound-campaign-metrics b {
-  display: block;
-  color: var(--text);
-  font-size: 14px;
-  font-weight: 860;
   font-variant-numeric: tabular-nums;
 }
 
-.outbound-mini-funnel {
-  display: grid;
-  gap: 4px;
-}
-
-.outbound-mini-funnel button {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  min-height: 26px;
-  padding: 0 7px;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--line) 58%, transparent);
-  border-radius: var(--control-radius);
-  background: var(--surface-2);
-  color: var(--muted);
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-  font-weight: 780;
-  text-align: left;
-}
-
-.outbound-mini-funnel button i {
-  position: absolute;
-  inset: auto 0 0 0;
-  height: 2px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 72%, transparent);
-}
-
-.outbound-mini-funnel button[aria-pressed="true"] {
-  border-color: color-mix(in srgb, var(--accent) 46%, var(--line));
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
-  color: var(--accent);
-}
-
-/* custom: shard actions — masked-data-URI icon buttons; the kit icon button
-   uses inline SVGs, these share one mask-driven glyph mechanism. */
-.outbound-shard-actions {
+.outbound-campaign-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  gap: 5px;
-  padding-top: 1px;
+  gap: 1px;
 }
 
-.outbound-shard-actions button {
-  display: inline-grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: 1px solid color-mix(in srgb, var(--line) 58%, transparent);
-  border-radius: var(--control-radius);
-  background: color-mix(in srgb, var(--surface-2) 42%, transparent);
-  color: color-mix(in srgb, var(--muted) 86%, var(--text));
-  cursor: pointer;
+.outbound-campaign-actions .ctox-pane-icon {
+  width: 26px;
+  height: 26px;
 }
 
-.outbound-shard-actions button::before {
-  content: "";
-  width: 16px;
-  height: 16px;
-  background: currentColor;
-  -webkit-mask: var(--outbound-action-icon) center / contain no-repeat;
-  mask: var(--outbound-action-icon) center / contain no-repeat;
+.outbound-campaign-list.is-list .outbound-campaign-item {
+  padding-block: 6px;
+  border-radius: 0;
 }
 
-.outbound-shard-actions button b {
-  min-width: 0;
-  overflow: hidden;
-  font: inherit;
-  font-size: 11px;
-  font-weight: 860;
-  line-height: 1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.outbound-campaign-list.is-list .outbound-campaign-item + .outbound-campaign-item {
+  border-top: 1px solid var(--line);
 }
 
-.outbound-shard-actions button[data-icon="import"] {
-  --outbound-action-icon: var(--outbound-icon-import);
-}
-
-.outbound-shard-actions button[data-icon="runbook"] {
-  --outbound-action-icon: var(--outbound-icon-runbook);
-}
-
-.outbound-shard-actions button[data-icon="edit"] {
-  --outbound-action-icon: var(--outbound-icon-edit);
-}
-
-.outbound-shard-actions button[data-icon="delete"] {
-  --outbound-action-icon: var(--outbound-icon-delete);
-}
-
-.outbound-shard-actions button.is-primary-action {
-  display: inline-flex;
-  width: auto;
-  min-width: 86px;
-  gap: 7px;
-  padding: 0 11px;
-  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
-  background: color-mix(in srgb, var(--accent) 15%, var(--surface-2));
-  color: var(--accent);
-}
-
-.outbound-shard-actions button:hover {
-  border-color: var(--line);
-  background: var(--surface-2);
-  color: var(--accent);
-}
-
-/* custom: inline campaign create/edit form inside the record card; fields
-   and buttons are kit classes, only the layout lives here. */
 .outbound-campaign-edit {
   display: grid;
   gap: 8px;
@@ -342,34 +186,24 @@
   gap: 6px;
 }
 
-/* Compact left column (toggled via [data-left-compact] from module JS and by
-   the pane's own container query on very narrow widths). */
-.outbound-module[data-left-compact="true"] .outbound-left .ctox-pane-band {
-  padding: 7px 10px;
+.outbound-workbench-mode-switch,
+.outbound-funnel-tabs {
+  min-width: 0;
+  overflow-x: auto;
 }
 
-.outbound-module[data-left-compact="true"] .outbound-left .outbound-section {
-  padding: 6px;
+.outbound-workbench-mode-switch {
+  margin-top: 8px;
 }
 
-.outbound-module[data-left-compact="true"] .outbound-left .outbound-campaign-item {
-  gap: 7px;
-  padding: 7px;
+.outbound-workbench-mode-switch .ctox-pane-tab,
+.outbound-funnel-tabs .ctox-pane-tab {
+  flex: 1 0 auto;
+  white-space: nowrap;
 }
 
-@container (max-width: 360px) {
-  .outbound-left .ctox-pane-band {
-    padding: 7px 10px;
-  }
-
-  .outbound-left .outbound-section {
-    padding: 6px;
-  }
-
-  .outbound-left .outbound-campaign-item {
-    gap: 7px;
-    padding: 7px;
-  }
+.outbound-outreach-host {
+  overflow: hidden;
 }
 
 /* ----------------------------------------------------------------------------
@@ -768,8 +602,9 @@
   background: color-mix(in srgb, var(--text) 2%, transparent);
 }
 
-.crm-table tbody tr[aria-current="true"] td {
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+.crm-table tbody tr.is-selected td,
+.crm-table tbody tr[aria-selected="true"] td {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
 }
 
 /* Column width hints matching the leadgen layout. */
@@ -1949,30 +1784,6 @@
   font-style: normal;
 }
 
-/* custom: outreach toggle in the left pane header (ctox-button with an
-   active state and a pending-count pill). */
-.outbound-outreach-toggle {
-  min-width: 94px;
-}
-
-.outbound-outreach-toggle.is-active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-foreground);
-}
-
-.outbound-outreach-toggle em {
-  display: inline-block;
-  margin-left: 6px;
-  background: var(--danger);
-  color: var(--accent-foreground);
-  border-radius: 999px;
-  padding: 1px 6px;
-  font-size: 10px;
-  font-style: normal;
-  font-weight: 600;
-}
-
 .outbound-outreach-actions-cell {
   display: flex;
   gap: 6px;
@@ -2359,7 +2170,18 @@
    resizer; the left pane only needs a height cap.
    -------------------------------------------------------------------------- */
 @container business-app-window (max-width: 760px) {
-  .outbound-left {
-    max-height: 42vh;
+  .outbound-module {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(180px, 42vh) minmax(360px, 1fr);
+    overflow: auto;
   }
+
+  .outbound-left,
+  .outbound-center {
+    grid-column: 1;
+    height: auto;
+  }
+
+  .outbound-left { grid-row: 1; }
+  .outbound-center { grid-row: 2; }
 }

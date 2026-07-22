@@ -14,10 +14,9 @@ import {
   renderActiveOutreachShell,
   handleActiveOutreachAction,
   handleActiveOutreachInput,
-  activeOutreachCounts,
-} from './active-outreach.js?v=20260605-rxdb-cancel1';
+} from './active-outreach.js?v=20260721-outbound-ia-karte';
 
-const BUILD = '20260718-outbound-ux-reduction';
+const BUILD = '20260721-outbound-ia-karte';
 let loadedOutboundLang = '';
 let t = (key, fallback, ...args) => {
   let val = fallback ?? key;
@@ -57,11 +56,8 @@ function getContactFieldDesc(id, fallback) {
 const DEFAULT_CAMPAIGN_ID = 'outbound_default_campaign';
 const DEFAULT_CAMPAIGN_NAME = 'Outbound Firmenqualifizierung';
 const OUTBOUND_CAMPAIGN_SETUP_SKILL = 'business-os-outbound-campaign-setup';
-const OUTBOUND_LAYOUT_KEY = 'ctox.businessOs.outbound.columnLayout';
-const OUTBOUND_CENTER_SPLIT_KEY = 'ctox.businessOs.outbound.centerSplit';
-const OUTBOUND_WORKSPACE_MODE_KEY_PREFIX = 'ctox.businessOs.outbound.workspaceMode.';
-const OUTBOUND_COL_MIN = Object.freeze({ left: 280, center: 420 });
-const OUTBOUND_COL_LEFT_MAX = 520;
+const OUTBOUND_CENTER_SPLIT_KEY = 'outbound.centerSplit';
+const OUTBOUND_HIDDEN_COMPANIES_KEY_PREFIX = 'outbound.hiddenCompanies.';
 const OUTBOUND_CENTER_MIN = Object.freeze({ left: 360, right: 360 });
 const OUTBOUND_EXPORT_NS = 'urn:schemas-microsoft-com:office:spreadsheet';
 const OUTBOUND_TABLE_RENDER_LIMIT = 250;
@@ -760,7 +756,6 @@ const state = {
   isScrolling: false,
   scrollTimeout: null,
   pendingRenderAfterScroll: false,
-  leftScrollTop: 0,
   statusFilter: '',
   tagFilter: '',
   lastTbodyHtml: '',
@@ -768,6 +763,12 @@ const state = {
   outreachView: false,
   campaignEditDrafts: new Map(),
   campaignCreateDraft: null,
+  campaignSearch: '',
+  campaignViewMode: 'cards',
+  campaignBand: 'all',
+  campaignStatusFilter: 'all',
+  campaignSort: 'updated-desc',
+  campaignChromeLang: '',
   detailPaneUserHidden: false,
 };
 
@@ -790,17 +791,14 @@ export async function mount(ctx) {
   ctx.host.innerHTML = await loadModuleMarkup();
   ctx.left?.replaceChildren?.();
   ctx.right?.replaceChildren?.();
-  configureActiveOutreach({ state, t, escapeHtml, rerender: () => render(true) });
+  configureActiveOutreach({ state, t, escapeHtml, rerender: () => render() });
   wireEvents(ctx.host);
   wireRealtime();
   let disposed = false;
 
   const scrollListener = (event) => {
-    const scrollContainer = event.target.closest('.outbound-table-scroll-unified, .outbound-left .outbound-scroll');
+    const scrollContainer = event.target.closest('.outbound-table-scroll-unified, .ctox-well, .outbound-outreach');
     if (scrollContainer) {
-      if (scrollContainer.matches('.outbound-left .outbound-scroll')) {
-        state.leftScrollTop = scrollContainer.scrollTop;
-      }
       state.isScrolling = true;
       if (state.scrollTimeout) window.clearTimeout(state.scrollTimeout);
       state.scrollTimeout = window.setTimeout(() => {
@@ -839,8 +837,6 @@ export async function mount(ctx) {
     window.removeEventListener('message', languageMessageHandler);
   });
 
-  const resizeCleanup = setupOutboundColumnResizing();
-  if (resizeCleanup) state.cleanup.push(resizeCleanup);
   render();
   Promise.resolve()
     .then(async () => {
@@ -886,7 +882,7 @@ async function applyOutboundLanguage(lang, options = {}) {
     }
     return val;
   };
-  configureActiveOutreach({ state, t, escapeHtml, rerender: () => render(true) });
+  configureActiveOutreach({ state, t, escapeHtml, rerender: () => render() });
   if (options.render !== false && state.ctx?.host?.isConnected) {
     const editor = state.ctx.host.querySelector('.outbound-campaign-edit');
     if (editor) syncCampaignEditDraftFromEditor(editor);
@@ -904,7 +900,9 @@ async function ensureStyles() {
 }
 
 async function loadModuleMarkup() {
-  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  const markupUrl = new URL('./index.html', import.meta.url);
+  markupUrl.searchParams.set('v', BUILD);
+  const html = await fetch(markupUrl).then((res) => res.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   return doc.body.innerHTML;
 }
@@ -1215,7 +1213,7 @@ function openCampaignRunbook(campaignId) {
   const campaign = state.campaigns.find((item) => item.id === campaignId) || selectedCampaign();
   const runbookId = campaignKnowledgeRefs(campaign).runbookId;
   if (!runbookId) return;
-  sessionStorage.setItem('ctox.businessOs.knowledge.openId', `runbook:${runbookId}`);
+  state.ctx?.storageScope?.set?.('ctox.businessOs.knowledge.openId', `runbook:${runbookId}`);
   location.hash = 'knowledge';
 }
 
@@ -1868,15 +1866,29 @@ function knowledgeRowsSignature(campaignId, companyRows, contactRows, runRows) {
 }
 
 function wireEvents(root) {
+  root.addEventListener('ctox-pane-grammar-change', (event) => {
+    const pane = event.target?.closest?.('.outbound-left');
+    if (!pane || !event.detail) return;
+    state.campaignSearch = event.detail.search || '';
+    state.campaignViewMode = event.detail.view === 'list' ? 'list' : 'cards';
+    state.campaignBand = ['all', 'active', 'planning', 'done'].includes(event.detail.band) ? event.detail.band : 'all';
+    state.campaignStatusFilter = event.detail.filters?.status || 'all';
+    state.campaignSort = event.detail.filters?.sort || 'updated-desc';
+    renderCampaignList(pane);
+  });
+
   root.addEventListener('click', async (event) => {
     const action = event.target.closest('[data-action]')?.dataset.action;
     const view = event.target.closest('[data-view]')?.dataset.view;
     const filter = event.target.closest('[data-filter]')?.dataset.filter;
 
-    if (action === 'toggle-outreach') {
+    if (action === 'toggle-outreach' || action === 'set-workbench-mode') {
       event.preventDefault();
-      state.outreachView = !state.outreachView;
-      render(true);
+      const requestedMode = event.target.closest('[data-workbench-mode]')?.dataset.workbenchMode;
+      const nextOutreachView = requestedMode ? requestedMode === 'outreach' : !state.outreachView;
+      if (state.outreachView === nextOutreachView) return;
+      state.outreachView = nextOutreachView;
+      renderCenter(true);
       return;
     }
     if (action && action.startsWith('ao-')) {
@@ -2056,9 +2068,19 @@ function wireEvents(root) {
       state.selectedCampaignId = id;
       state.selectedCompanyId = currentCompanies()[0]?.id || '';
       state.selectedPipelineId = currentPipeline()[0]?.id || '';
-      render();
+      updateCampaignSelectionInPlace();
+      renderCenter(true);
+      return;
     }
     if (action === 'new-campaign') await createCampaign();
+    if (action === 'import-campaign-records') {
+      root.querySelector('[data-campaign-record-import]')?.click?.();
+      return;
+    }
+    if (action === 'export-campaign-records') {
+      exportCampaignRecords();
+      return;
+    }
     if (action === 'import-source') {
       if (id) state.selectedCampaignId = id;
       await openCompanyImporter();
@@ -2066,7 +2088,7 @@ function wireEvents(root) {
     if (action === 'open-campaign-runbook') openCampaignRunbook(id || state.selectedCampaignId);
     if (action === 'edit-campaign') {
       state.editingCampaignId = id || state.selectedCampaignId;
-      renderLeft();
+      renderCampaignEditorModal({ force: true });
     }
     if (action === 'cancel-campaign-edit') {
       if (id && state.campaignCreateDraft?.id === id) {
@@ -2074,7 +2096,8 @@ function wireEvents(root) {
         if (state.selectedCampaignId === id) selectBestCampaignAfterLoad();
       }
       state.editingCampaignId = '';
-      renderLeft();
+      renderCampaignEditorModal({ force: true });
+      updateCampaignSelectionInPlace();
     }
     if (action === 'save-campaign-edit') await saveCampaignInlineEdit(id || state.selectedCampaignId);
     if (action === 'delete-campaign') await deleteCampaign(id || state.selectedCampaignId);
@@ -2083,12 +2106,17 @@ function wireEvents(root) {
       if (companyId) {
         state.selectedCompanyId = companyId;
         state.activeView = 'companies';
-        render();
+        updateQualificationSelectionInPlace();
+        updateDetailPaneVisibility();
       }
+      return;
     }
     if (action === 'select-company') {
       state.selectedCompanyId = id;
-      render();
+      state.activeView = 'companies';
+      updateQualificationSelectionInPlace();
+      updateDetailPaneVisibility();
+      return;
     }
     if (action === 'research-company') await queueCompanyResearch(id || state.selectedCompanyId);
     if (action === 'validate-company-research') await validateCompanyResearch(id || state.selectedCompanyId);
@@ -2125,7 +2153,9 @@ function wireEvents(root) {
     if (action === 'start-automation') await startAutomationBatch();
     if (action === 'select-pipeline') {
       state.selectedPipelineId = id;
-      render();
+      state.activeView = 'pipeline';
+      updateDetailPaneVisibility();
+      return;
     }
     if (action === 'research-contacts') await queueContactResearch(id || state.selectedPipelineId);
     if (action === 'open-research-settings') openResearchSettingsDrawer();
@@ -2149,7 +2179,7 @@ function wireEvents(root) {
     if (action === 'export-table') exportQualificationTable();
     if (action === 'toggle-details') {
       state.detailPaneUserHidden = !state.detailPaneUserHidden;
-      render();
+      updateDetailPaneVisibility();
       return;
     }
     if (action === 'sort-table') {
@@ -2351,9 +2381,12 @@ function wireEvents(root) {
     if (filter) {
       state.filter = filter;
       const campaignId = event.target.closest('[data-campaign-id]')?.dataset.campaignId;
-      if (campaignId) state.selectedCampaignId = campaignId;
+      if (campaignId && campaignId !== state.selectedCampaignId) {
+        state.selectedCampaignId = campaignId;
+        updateCampaignSelectionInPlace();
+      }
       ensureSelectedCompanyInFilter();
-      render();
+      renderCenter();
     }
   });
 
@@ -2602,6 +2635,12 @@ function wireEvents(root) {
   });
 
   root.addEventListener('change', (event) => {
+    if (event.target.matches('[data-campaign-record-import]')) {
+      const input = event.target;
+      importCampaignRecords(input.files?.[0]).catch((error) => showBusinessAlert(error?.message || String(error)));
+      input.value = '';
+      return;
+    }
     if (event.target.matches('[data-campaign-idea-template]')) {
       applyCampaignIdeaTemplate(event.target);
       return;
@@ -2630,8 +2669,13 @@ function wireEvents(root) {
     }
     if (state.editingCampaignId && event.target.closest('.outbound-campaign-edit')) {
       event.preventDefault();
+      if (state.campaignCreateDraft?.id === state.editingCampaignId) {
+        state.campaignCreateDraft = null;
+        selectBestCampaignAfterLoad();
+      }
       state.editingCampaignId = '';
-      renderLeft();
+      renderCampaignEditorModal({ force: true });
+      updateCampaignSelectionInPlace();
     }
   });
 }
@@ -2658,140 +2702,301 @@ function render(force = false) {
   }
   renderLeft();
   renderCenter(force);
-  renderRight();
+}
+
+function cardsViewIcon() {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg>';
+}
+
+function listViewIcon() {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg>';
+}
+
+function filterIcon() {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg>';
+}
+
+function resetIcon() {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg>';
+}
+
+function campaignBandLabel(key) {
+  return ({
+    all: t('campaignViewAll', 'Alle'),
+    active: t('campaignViewActive', 'Aktiv'),
+    planning: t('campaignViewPlanning', 'Planung'),
+    done: t('campaignViewDone', 'Beendet'),
+  })[key] || t('campaignViewAll', 'Alle');
+}
+
+function campaignStatusBand(campaign) {
+  const status = String(campaign?.status || 'active').trim().toLowerCase();
+  if (['completed', 'complete', 'done', 'closed', 'archived', 'cancelled'].includes(status)) return 'done';
+  if (['draft', 'planning', 'planned', 'setup', 'configured', 'pending', 'paused', 'on_hold', 'blocked'].includes(status)) return 'planning';
+  return 'active';
+}
+
+function campaignBandCounts(campaigns = visibleCampaigns()) {
+  const counts = { all: campaigns.length, active: 0, planning: 0, done: 0 };
+  campaigns.forEach((campaign) => { counts[campaignStatusBand(campaign)] += 1; });
+  return counts;
+}
+
+function campaignStatusOptions(campaigns = visibleCampaigns()) {
+  return [...new Set(campaigns.map((campaign) => String(campaign.status || 'active').trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, state.lang === 'en' ? 'en' : 'de'));
+}
+
+function campaignSequences(campaignId) {
+  return (state.engagementSequences || []).filter((sequence) => sequence.campaign_id === campaignId);
+}
+
+function campaignSequenceSummary(campaign) {
+  const sequences = campaignSequences(campaign.id);
+  if (!sequences.length) return t('noSequence', 'Keine Sequenz');
+  if (sequences.length === 1) return sequences[0].name || t('sequence', 'Sequenz');
+  return t('sequenceCount', '{0} Sequenzen', sequences.length);
+}
+
+function filteredCampaigns() {
+  const search = state.campaignSearch.trim().toLowerCase();
+  const statusFilter = state.campaignStatusFilter || 'all';
+  const band = state.campaignBand || 'all';
+  const rows = visibleCampaigns().filter((campaign) => {
+    if (band !== 'all' && campaignStatusBand(campaign) !== band) return false;
+    if (statusFilter !== 'all' && String(campaign.status || 'active') !== statusFilter) return false;
+    if (!search) return true;
+    const sequenceText = campaignSequences(campaign.id).map((sequence) => sequence.name || '').join(' ');
+    return `${campaign.name || ''} ${campaign.market || ''} ${campaign.status || ''} ${sequenceText}`.toLowerCase().includes(search);
+  });
+  const [field, direction] = String(state.campaignSort || 'updated-desc').split('-');
+  const sign = direction === 'asc' ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    if (field === 'name') return String(a.name || '').localeCompare(String(b.name || ''), state.lang === 'en' ? 'en' : 'de') * sign;
+    if (field === 'status') return String(a.status || '').localeCompare(String(b.status || ''), state.lang === 'en' ? 'en' : 'de') * sign;
+    if (field === 'sequences') return (campaignSequences(a.id).length - campaignSequences(b.id).length) * sign;
+    return (Number(a.updated_at_ms || a.created_at_ms || 0) - Number(b.updated_at_ms || b.created_at_ms || 0)) * sign;
+  });
+}
+
+function campaignColumnMarkup() {
+  const cards = state.campaignViewMode !== 'list';
+  const counts = campaignBandCounts();
+  return `
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(t('outbound', 'Outbound'))}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(t('campaignsAndSequences', 'Campaigns & Sequenzen'))}</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button class="ctox-pane-icon" type="button" data-action="new-campaign" title="${escapeHtml(t('newCampaign', 'Neue Campaign'))}" aria-label="${escapeHtml(t('newCampaign', 'Neue Campaign'))}">${actionIcon('add')}</button>
+          <button class="ctox-pane-icon" type="button" data-action="import-campaign-records" title="${escapeHtml(t('importCampaigns', 'Campaigns importieren'))}" aria-label="${escapeHtml(t('importCampaigns', 'Campaigns importieren'))}">${actionIcon('download')}</button>
+          <button class="ctox-pane-icon" type="button" data-action="export-campaign-records" title="${escapeHtml(t('exportCampaigns', 'Campaigns exportieren'))}" aria-label="${escapeHtml(t('exportCampaigns', 'Campaigns exportieren'))}">${actionIcon('export')}</button>
+          <input type="file" accept="application/json,.json" data-campaign-record-import hidden />
+        </div>
+      </div>
+      <div class="ctox-filterbar">
+        <input class="ctox-pane-search" type="search" data-pg-search value="${escapeHtml(state.campaignSearch)}" placeholder="${escapeHtml(t('campaignSearch', 'Campaign oder Sequenz suchen'))}" aria-label="${escapeHtml(t('campaignSearch', 'Campaign oder Sequenz suchen'))}">
+        <div class="ctox-view-toggle" role="group" aria-label="${escapeHtml(t('view', 'Darstellung'))}">
+          <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="${cards}" aria-label="${escapeHtml(t('cardsView', 'Shard-Ansicht'))}" title="${escapeHtml(t('cardsView', 'Shard-Ansicht'))}">${cardsViewIcon()}</button>
+          <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="${!cards}" aria-label="${escapeHtml(t('listView', 'Listen-Ansicht'))}" title="${escapeHtml(t('listView', 'Listen-Ansicht'))}">${listViewIcon()}</button>
+        </div>
+        <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="${escapeHtml(t('filter', 'Filter'))}" title="${escapeHtml(t('filter', 'Filter'))}">${filterIcon()}</button>
+      </div>
+      <div class="ctox-filter-tray" data-pg-tray hidden>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" data-pg-filter data-pg-name="status" data-pg-default="all" aria-label="${escapeHtml(t('status', 'Status'))}">
+            <option value="all">${escapeHtml(t('allStatus', 'Alle Status'))}</option>
+            ${campaignStatusOptions().map((status) => `<option value="${escapeHtml(status)}"${state.campaignStatusFilter === status ? ' selected' : ''}>${escapeHtml(status)}</option>`).join('')}
+          </select>
+          <select class="ctox-select" data-pg-filter data-pg-name="sort" data-pg-default="updated-desc" aria-label="${escapeHtml(t('sort', 'Sortieren'))}">
+            <option value="updated-desc">${escapeHtml(t('sortUpdatedDesc', 'Aktualisiert ↓'))}</option>
+            <option value="updated-asc">${escapeHtml(t('sortUpdatedAsc', 'Aktualisiert ↑'))}</option>
+            <option value="name-asc">${escapeHtml(t('sortNameAsc', 'Name ↑'))}</option>
+            <option value="name-desc">${escapeHtml(t('sortNameDesc', 'Name ↓'))}</option>
+            <option value="status-asc">${escapeHtml(t('sortStatusAsc', 'Status ↑'))}</option>
+            <option value="status-desc">${escapeHtml(t('sortStatusDesc', 'Status ↓'))}</option>
+            <option value="sequences-desc">${escapeHtml(t('sortSequencesDesc', 'Sequenzen ↓'))}</option>
+            <option value="sequences-asc">${escapeHtml(t('sortSequencesAsc', 'Sequenzen ↑'))}</option>
+          </select>
+          <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="${escapeHtml(t('resetFilters', 'Filter zurücksetzen'))}" title="${escapeHtml(t('resetFilters', 'Filter zurücksetzen'))}">${resetIcon()}</button>
+        </div>
+      </div>
+    </header>
+    <nav class="ctox-view-switch" aria-label="${escapeHtml(t('campaignStatusViews', 'Campaign-Status'))}">
+      <div class="ctox-pane-tabs" role="tablist">
+        ${['all', 'active', 'planning', 'done'].map((key) => `<button type="button" class="ctox-pane-tab${state.campaignBand === key ? ' is-active' : ''}" role="tab" data-pg-band="${key}" aria-selected="${state.campaignBand === key}">${escapeHtml(campaignBandLabel(key))}<span class="view-count" data-pg-count="${key}"> (${counts[key]})</span></button>`).join('')}
+      </div>
+    </nav>
+    <div class="ctox-pane-body ctox-well">
+      <div class="ctox-list outbound-campaign-list${cards ? ' is-cards' : ' is-list'}" role="listbox" data-campaign-list></div>
+    </div>
+    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
+  `;
 }
 
 function renderLeft() {
   const root = state.ctx.host.querySelector('.outbound-left');
   if (!root) return;
-  const previousScrollTop = root.querySelector('.outbound-scroll')?.scrollTop ?? state.leftScrollTop ?? 0;
-  const campaigns = state.campaignCreateDraft
-    ? [state.campaignCreateDraft, ...visibleCampaigns()]
-    : visibleCampaigns();
-  const outreachActive = !!state.outreachView;
-  const outreachCounts = state.selectedCampaignId
-    ? activeOutreachCounts(state.selectedCampaignId)
-    : { leadQueue: 0, engagements: 0, approvalInbox: 0, readyToSend: 0, replies: 0, done: 0 };
-  const outreachPending = outreachCounts.leadQueue + outreachCounts.approvalInbox + outreachCounts.readyToSend + outreachCounts.replies;
-  root.innerHTML = `
-    <header class="ctox-pane-header ctox-pane-band">
-      <div class="ctox-pane-title-row">
-        <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">${escapeHtml(t('outbound', 'Outbound'))}</span>
-          <h2 class="ctox-pane-title">${escapeHtml(t('campaigns', 'Campaigns'))}</h2>
-        </div>
-        <div class="ctox-pane-actions">
-          <button class="ctox-button outbound-outreach-toggle${outreachActive ? ' is-active' : ''}" type="button" data-action="toggle-outreach" title="${escapeHtml(t('outreachToggle', 'Active Outreach'))}" aria-pressed="${outreachActive}">${outreachActive ? '◀ Funnel' : 'Outreach ▶'}${outreachPending ? ` <em>${outreachPending}</em>` : ''}</button>
-          <button class="ctox-pane-icon" type="button" data-action="new-campaign" title="${escapeHtml(t('newCampaign', 'Neue Campaign'))}" aria-label="${escapeHtml(t('newCampaign', 'Neue Campaign'))}">${actionIcon('add')}</button>
-        </div>
-      </div>
-    </header>
-    <div class="ctox-pane-scroll outbound-scroll">
-      <section class="outbound-section" aria-label="${escapeHtml(t('campaigns', 'Campaigns'))}">
-        ${campaigns.map(renderCampaignItem).join('') || `<div class="ctox-empty">${escapeHtml(t('noCampaigns', 'Keine Campaigns vorhanden.'))}</div>`}
-      </section>
-    </div>
-  `;
-  const scroll = root.querySelector('.outbound-scroll');
-  if (scroll) {
-    scroll.scrollTop = previousScrollTop;
+  const needsChrome = !root.querySelector('[data-campaign-list]') || state.campaignChromeLang !== state.lang;
+  if (needsChrome) {
+    root.innerHTML = campaignColumnMarkup();
+    root.removeAttribute('data-pg-wired');
+    root.__ctoxPaneGrammar = null;
+    state.campaignChromeLang = state.lang;
+  }
+  updateCampaignStatusOptions(root);
+  const sortSelect = root.querySelector('[data-pg-filter][data-pg-name="sort"]');
+  if (sortSelect && [...sortSelect.options].some((option) => option.value === state.campaignSort)) sortSelect.value = state.campaignSort;
+  renderCampaignList(root);
+  renderCampaignEditorModal({ force: needsChrome });
+}
+
+function updateCampaignStatusOptions(root) {
+  const select = root.querySelector('[data-pg-filter][data-pg-name="status"]');
+  if (!select) return;
+  const options = campaignStatusOptions();
+  const signature = `${state.lang}:${options.join('|')}`;
+  if (select.dataset.optionsSignature === signature) return;
+  select.dataset.optionsSignature = signature;
+  const selected = options.includes(state.campaignStatusFilter) ? state.campaignStatusFilter : 'all';
+  state.campaignStatusFilter = selected;
+  select.innerHTML = `<option value="all">${escapeHtml(t('allStatus', 'Alle Status'))}</option>${options.map((status) => `<option value="${escapeHtml(status)}">${escapeHtml(status)}</option>`).join('')}`;
+  select.value = selected;
+  root.__ctoxPaneGrammar?.refreshDot?.();
+}
+
+function renderCampaignList(root = state.ctx?.host?.querySelector?.('.outbound-left')) {
+  if (!root) return;
+  const list = root.querySelector('[data-campaign-list]');
+  const well = root.querySelector('.ctox-well');
+  if (!list) return;
+  const previousScrollTop = well?.scrollTop || 0;
+  const campaigns = filteredCampaigns();
+  list.classList.toggle('is-cards', state.campaignViewMode !== 'list');
+  list.classList.toggle('is-list', state.campaignViewMode === 'list');
+  list.innerHTML = campaigns.map(renderCampaignItem).join('') || `<div class="ctox-empty">${escapeHtml(t('noCampaignsForView', 'Keine Campaigns für diese Ansicht.'))}</div>`;
+  if (well && previousScrollTop) well.scrollTop = previousScrollTop;
+  renderCampaignCountsAndFooter(root, campaigns.length);
+}
+
+function renderCampaignCountsAndFooter(root, visibleCount) {
+  const counts = campaignBandCounts();
+  const bandLabel = campaignBandLabel(state.campaignBand);
+  const statusLabel = state.campaignStatusFilter === 'all' ? t('allStatus', 'Alle Status') : state.campaignStatusFilter;
+  const footer = `${visibleCount} ${t('entries', 'Einträge')} · ${bandLabel} · ${statusLabel}`;
+  const pg = root.__ctoxPaneGrammar;
+  if (pg?.setCounts) pg.setCounts(counts);
+  else for (const [key, value] of Object.entries(counts)) {
+    const node = root.querySelector(`[data-pg-count="${key}"]`);
+    if (node) node.textContent = ` (${value})`;
+  }
+  if (pg?.setFooter) pg.setFooter(footer);
+  else {
+    const node = root.querySelector('[data-pg-footer]');
+    if (node) node.textContent = footer;
   }
 }
 
+function updateCampaignSelectionInPlace() {
+  const list = state.ctx?.host?.querySelector?.('[data-campaign-list]');
+  list?.querySelectorAll?.('[data-campaign-id]').forEach((row) => {
+    const selected = row.dataset.campaignId === state.selectedCampaignId;
+    row.classList.toggle('is-selected', selected);
+    row.setAttribute('aria-selected', String(selected));
+  });
+}
+
 function renderCampaignItem(campaign) {
-  if (state.editingCampaignId === campaign.id) return renderCampaignEditItem(campaign);
   const metrics = campaignFunnelMetrics(campaign.id);
-  const subtitle = campaign.payload?.subtitle || `${campaign.market || 'DACH'} · ${campaign.status || 'active'}`;
-  const scope = campaign.payload?.scope || campaign.objective || '';
+  const selected = campaign.id === state.selectedCampaignId;
   const knowledge = campaignKnowledgeRefs(campaign);
+  const status = String(campaign.status || 'active');
+  const meta = `${status} · ${campaignSequenceSummary(campaign)} · ${formatCount(metrics.leadQualified)} ${t('leadsShort', 'Leads')}`;
   return `
-    <article class="outbound-campaign-item" aria-current="${campaign.id === state.selectedCampaignId}">
-      <div class="outbound-campaign-top">
-        <button class="outbound-campaign-select" type="button" data-action="select-campaign" data-id="${escapeHtml(campaign.id)}">
-          <strong>${escapeHtml(campaign.name)}</strong>
-          <span>${escapeHtml(subtitle)}</span>
-          ${scope ? `<em>${escapeHtml(scope)}</em>` : ''}
-        </button>
-      </div>
-      <div class="outbound-campaign-metrics" aria-label="${escapeHtml(t('campaignStatus', 'Campaign Status'))}">
-        <span><b>${formatCount(metrics.input)}</b>${escapeHtml(t('inputCompanies', 'Input'))}</span>
-        <span><b>${formatCount(metrics.companyQualified)}</b>${escapeHtml(t('companyQualifiedShort', 'Qualifiziert'))}</span>
-        <span><b>${formatCount(metrics.contactQualified)}</b>${escapeHtml(t('contactsShort', 'Kontakte'))}</span>
-        <span><b>${formatCount(metrics.leadQualified)}</b>${escapeHtml(t('leadsShort', 'Leads'))}</span>
-      </div>
-      ${renderCampaignMiniFunnel(campaign, metrics)}
-      <div class="outbound-shard-actions" aria-label="Campaign Aktionen">
-        <button class="is-primary-action" type="button" data-icon="import" data-action="import-source" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('importJob', 'Importjob anlegen'))}" aria-label="${escapeHtml(t('importJob', 'Importjob anlegen'))}"><b>${escapeHtml(t('import', 'Import'))}</b></button>
-        <button type="button" data-icon="runbook" data-action="open-campaign-runbook" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('openRunbook', 'Campaign Runbook öffnen'))}" aria-label="${escapeHtml(t('openRunbook', 'Campaign Runbook öffnen'))}" ${knowledge.runbookId ? '' : 'disabled'}></button>
-        <button type="button" data-icon="edit" data-action="edit-campaign" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('editCampaign', 'Campaign bearbeiten'))}" aria-label="${escapeHtml(t('editCampaign', 'Campaign bearbeiten'))}"></button>
-        <button type="button" data-icon="delete" data-action="delete-campaign" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('deleteCampaign', 'Campaign löschen'))}" aria-label="${escapeHtml(t('deleteCampaign', 'Campaign löschen'))}"></button>
+    <article class="ctox-list-item outbound-campaign-item${selected ? ' is-selected' : ''}" role="option" aria-selected="${selected}" data-campaign-id="${escapeHtml(campaign.id)}" data-context-record-id="${escapeHtml(campaign.id)}" data-context-record-type="outbound_campaign" data-context-label="${escapeHtml(campaign.name)}">
+      <button class="outbound-campaign-select" type="button" data-action="select-campaign" data-id="${escapeHtml(campaign.id)}">
+        <strong>${escapeHtml(campaign.name)}</strong>
+        <span>${escapeHtml(meta)}</span>
+      </button>
+      <div class="outbound-campaign-actions" aria-label="${escapeHtml(t('campaignActions', 'Campaign-Aktionen'))}">
+        <button class="ctox-pane-icon" type="button" data-action="import-source" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('importJob', 'Importjob anlegen'))}" aria-label="${escapeHtml(t('importJob', 'Importjob anlegen'))}">${actionIcon('download')}</button>
+        <button class="ctox-pane-icon" type="button" data-action="open-campaign-runbook" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('openRunbook', 'Campaign Runbook öffnen'))}" aria-label="${escapeHtml(t('openRunbook', 'Campaign Runbook öffnen'))}" ${knowledge.runbookId ? '' : 'disabled'}>${actionIcon('book')}</button>
+        <button class="ctox-pane-icon" type="button" data-action="edit-campaign" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('editCampaign', 'Campaign bearbeiten'))}" aria-label="${escapeHtml(t('editCampaign', 'Campaign bearbeiten'))}">${actionIcon('edit')}</button>
+        <button class="ctox-pane-icon" type="button" data-action="delete-campaign" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('deleteCampaign', 'Campaign löschen'))}" aria-label="${escapeHtml(t('deleteCampaign', 'Campaign löschen'))}">${actionIcon('trash')}</button>
       </div>
     </article>
   `;
 }
 
-function renderCampaignMiniFunnel(campaign, metrics) {
-  const stages = [
-    ['all', t('inputCompanies', 'Input'), metrics.input],
-    ['research', t('researchShort', 'Research'), metrics.companyResearchDone],
-    ['qualified', t('companyQualifiedShort', 'Qualifiziert'), metrics.companyQualified],
-    ['contact_qualified', t('contactsShort', 'Kontakte'), metrics.contactQualified],
-    ['lead_qualified', t('leadsShort', 'Leads'), metrics.leadQualified],
-  ];
-  const max = Math.max(1, ...stages.map(([, , value]) => Number(value || 0)));
-  return `
-    <div class="outbound-mini-funnel" aria-label="Campaign Funnel">
-      ${stages.map(([filter, label, value]) => {
-        const active = campaign.id === state.selectedCampaignId && state.filter === filter;
-        const width = Math.max(4, Math.round((Number(value || 0) / max) * 100));
-        return `
-          <button
-            type="button"
-            data-filter="${escapeHtml(filter)}"
-            data-campaign-id="${escapeHtml(campaign.id)}"
-            aria-pressed="${active}"
-            title="${escapeHtml(`${label}: ${formatCount(value)}`)}"
-          >
-            <span>${escapeHtml(label)}</span>
-            <b>${formatCount(value)}</b>
-            <i style="width:${width}%"></i>
-          </button>
-        `;
-      }).join('')}
-    </div>
-  `;
+function exportCampaignRecords() {
+  const campaigns = visibleCampaigns();
+  const campaignIds = new Set(campaigns.map((campaign) => campaign.id));
+  const payload = {
+    format: 'ctox-outbound-campaigns-v1',
+    exported_at_ms: Date.now(),
+    campaigns,
+    sequences: (state.engagementSequences || []).filter((sequence) => campaignIds.has(sequence.campaign_id)),
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `outbound-campaigns-${new Date().toISOString().slice(0, 10)}.json`;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
-function renderInputFunnelStage(campaign, metrics) {
-  const active = campaign.id === state.selectedCampaignId && state.filter === 'all';
-  const progress = metrics.sourceCount ? Math.round((metrics.parsedSourceCount / metrics.sourceCount) * 100) : 0;
-  const status = inputImportStatusLabel(metrics);
-  const runningClass = metrics.runningSourceCount ? ' is-running' : '';
-  return `
-    <button
-      class="outbound-funnel-stage outbound-funnel-input${runningClass}"
-      type="button"
-      data-filter="all"
-      data-campaign-id="${escapeHtml(campaign.id)}"
-      aria-pressed="${active}"
-      title="${escapeHtml(t('filter_input_title', 'Input Unternehmen filtern'))}"
-    >
-      <span><b>Input</b><small>${escapeHtml(t('company', 'Unternehmen'))}</small></span>
-      <i>${formatCount(metrics.input)}</i>
-      <em>${escapeHtml(status)}</em>
-      <span class="outbound-funnel-progress" aria-hidden="true">
-        <span style="width:${Math.max(0, Math.min(100, progress))}%"></span>
-      </span>
-    </button>
-  `;
+function validCampaignImportRecord(record) {
+  return record && typeof record === 'object'
+    && typeof record.id === 'string' && record.id.length > 0
+    && typeof record.name === 'string' && record.name.length > 0
+    && typeof record.status === 'string'
+    && record.payload && typeof record.payload === 'object'
+    && Number.isFinite(Number(record.created_at_ms))
+    && Number.isFinite(Number(record.updated_at_ms));
 }
 
-function inputImportStatusLabel(metrics) {
-  if (!metrics.sourceCount) return t('noImport', 'Noch kein Import');
-  const parts = [`${formatCount(metrics.parsedSourceCount)} / ${formatCount(metrics.sourceCount)} ${t('processed', 'verarbeitet')}`];
-  if (metrics.runningSourceCount) parts.push(`${formatCount(metrics.runningSourceCount)} ${t('running', 'läuft')}`);
-  if (metrics.failedSourceCount) parts.push(`${formatCount(metrics.failedSourceCount)} ${t('failed', 'Fehler')}`);
-  return parts.join(' · ');
+function validSequenceImportRecord(record) {
+  return record && typeof record === 'object'
+    && typeof record.id === 'string' && record.id.length > 0
+    && typeof record.campaign_id === 'string' && record.campaign_id.length > 0
+    && typeof record.name === 'string' && record.name.length > 0
+    && typeof record.strategy_text === 'string'
+    && typeof record.sequence_policy_text === 'string'
+    && record.approval_policy && typeof record.approval_policy === 'object'
+    && record.payload && typeof record.payload === 'object'
+    && Number.isFinite(Number(record.created_at_ms))
+    && Number.isFinite(Number(record.updated_at_ms));
+}
+
+async function importCampaignRecords(file) {
+  if (!file) return;
+  const parsed = JSON.parse(await file.text());
+  const campaigns = (Array.isArray(parsed) ? parsed : parsed?.campaigns || []).filter(validCampaignImportRecord);
+  const sequences = (Array.isArray(parsed?.sequences) ? parsed.sequences : []).filter(validSequenceImportRecord);
+  if (!campaigns.length && !sequences.length) {
+    throw new Error(t('campaignImportEmpty', 'Die JSON-Datei enthält keine gültigen Campaign- oder Sequenz-Datensätze.'));
+  }
+  const campaignCollection = outboundCollection('outbound_campaigns');
+  const sequenceCollection = outboundCollection('outbound_sequences');
+  if (campaigns.length && (!campaignCollection || !canWriteCollection('outbound_campaigns'))) {
+    throw new Error(t('campaignImportDenied', 'Campaigns können mit den aktuellen Rechten nicht importiert werden.'));
+  }
+  if (sequences.length && (!sequenceCollection || !canWriteCollection('outbound_sequences'))) {
+    throw new Error(t('sequenceImportDenied', 'Sequenzen können mit den aktuellen Rechten nicht importiert werden.'));
+  }
+  for (const campaign of campaigns) await upsertDoc(campaignCollection, campaign.id, campaign);
+  for (const sequence of sequences) await upsertDoc(sequenceCollection, sequence.id, sequence);
+  await loadAll({ hydrateKnowledge: false });
+  await loadActiveOutreachData();
+  selectBestCampaignAfterLoad();
+  render();
+  const message = t('campaignImportDone', '{0} Campaigns und {1} Sequenzen importiert.', campaigns.length, sequences.length);
+  if (state.ctx?.notifications?.show) {
+    state.ctx.notifications.show({ type: 'success', title: t('outbound', 'Outbound'), message });
+  } else showBusinessAlert(message);
 }
 
 function renderCampaignEditItem(campaign) {
@@ -2814,9 +3019,8 @@ function renderCampaignEditItem(campaign) {
       || String(briefing || '').trim() !== String(originalBriefing || '').trim()
       || String(templateId || 'custom') !== String(originalTemplateId || 'custom'));
   return `
-    <article
-      class="outbound-campaign-item outbound-campaign-edit"
-      aria-current="${campaign.id === state.selectedCampaignId}"
+    <div
+      class="outbound-campaign-edit"
       data-id="${escapeHtml(campaign.id)}"
       ${isCreateDraft ? 'data-new-campaign="true"' : ''}
       data-original-name="${escapeHtml(originalName)}"
@@ -2857,8 +3061,36 @@ function renderCampaignEditItem(campaign) {
         <button class="ctox-button" type="button" data-action="cancel-campaign-edit" data-id="${escapeHtml(campaign.id)}">${escapeHtml(t('cancel', 'Abbrechen'))}</button>
         <button class="ctox-button is-primary" type="button" data-action="save-campaign-edit" data-id="${escapeHtml(campaign.id)}" data-campaign-edit-save${canSave ? '' : ' disabled'}>${escapeHtml(t('save', 'Speichern'))}</button>
       </div>
-    </article>
+    </div>
   `;
+}
+
+function renderCampaignEditorModal(options = {}) {
+  const modal = state.ctx?.host?.querySelector?.('[data-campaign-editor-modal]');
+  if (!modal) return;
+  const campaign = state.campaigns.find((item) => item.id === state.editingCampaignId)
+    || (state.campaignCreateDraft?.id === state.editingCampaignId ? state.campaignCreateDraft : null);
+  if (!campaign) {
+    modal.hidden = true;
+    modal.replaceChildren();
+    delete modal.dataset.editorId;
+    return;
+  }
+  if (!options.force && modal.dataset.editorId === campaign.id && !modal.hidden) return;
+  const focusState = saveFocusState(modal);
+  modal.dataset.editorId = campaign.id;
+  modal.hidden = false;
+  modal.innerHTML = `
+    <section class="ctox-modal-card ctox-modal-card--wide" role="dialog" aria-modal="true" aria-labelledby="outbound-campaign-editor-title">
+      <header class="ctox-modal-header">
+        <h2 class="ctox-modal-title" id="outbound-campaign-editor-title">${escapeHtml(campaign.payload?.create_draft ? t('createCampaignTitle', 'Campaign anlegen') : t('editCampaign', 'Campaign bearbeiten'))}</h2>
+        <button class="ctox-pane-icon" type="button" data-action="cancel-campaign-edit" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('close', 'Schließen'))}" aria-label="${escapeHtml(t('close', 'Schließen'))}">${actionIcon('close')}</button>
+      </header>
+      <div class="ctox-modal-body">${renderCampaignEditItem(campaign)}</div>
+    </section>
+  `;
+  if (focusState) restoreFocusState(modal, focusState);
+  else modal.querySelector('[data-campaign-edit-field="name"]')?.focus?.();
 }
 
 function updateCampaignEditSaveState(editor) {
@@ -2889,45 +3121,6 @@ function syncCampaignEditDraftFromEditor(editor) {
   });
 }
 
-function renderFunnelStage(campaign, filter, label, sublabel, value, openCount = 0, tone = '') {
-  const active = campaign.id === state.selectedCampaignId && state.filter === filter;
-  return `
-    <button
-      class="outbound-funnel-stage ${tone}"
-      type="button"
-      data-filter="${escapeHtml(filter)}"
-      data-campaign-id="${escapeHtml(campaign.id)}"
-      aria-pressed="${active}"
-      title="${escapeHtml(t('filter_stage_title', '{0} {1} filtern', label, sublabel || ''))}"
-    >
-      <span><b>${escapeHtml(label)}</b>${sublabel ? `<small>${escapeHtml(sublabel)}</small>` : ''}</span>
-      <i>${typeof value === 'number' ? formatCount(value) : escapeHtml(value)}</i>
-      ${openCount ? `<em>${formatCount(openCount)} ${escapeHtml(t('offen', 'offen'))}</em>` : ''}
-    </button>
-  `;
-}
-
-function renderConversion(from, to, campaign, stage) {
-  const openCount = automationOpenRecords(campaign.id, stage).length;
-  const stageDef = getAutomationStageDefinition(stage);
-  const ctaText = stageDef?.cta || t('automationStart', 'Automatisierung starten');
-  const titleText = `${ctaText} · ${formatCount(openCount)} ${t('offen', 'offen')}`;
-  return `
-    <div class="outbound-conversion">
-      <span>${conversionRate(from, to)}</span>
-      <button
-        type="button"
-        data-action="open-automation"
-        data-stage="${escapeHtml(stage)}"
-        data-campaign-id="${escapeHtml(campaign.id)}"
-        title="${escapeHtml(titleText)}"
-        aria-label="${escapeHtml(titleText)}"
-        ${openCount ? '' : 'disabled'}
-      >${openCount ? '<span aria-hidden="true">▶</span>' : ''}<b>${escapeHtml(automationShortLabel(stage, openCount))}</b></button>
-    </div>
-  `;
-}
-
 function currentFilterLabel() {
   return ({
     all: t('filter_all', 'Input Unternehmen'),
@@ -2940,20 +3133,48 @@ function currentFilterLabel() {
   })[state.filter] || t('filter_default', 'Alle');
 }
 
-function automationShortLabel(stage, openCount) {
-  if (!openCount) return t('done', 'fertig');
-  return ({
-    company_research: t('filter_research', 'Research'),
-    pipeline: t('filter_pipeline', 'Pipeline'),
-    contact_research: t('contact_people', 'Kontakte'),
-    lead_qualification: t('lead_status', 'Leads'),
-  })[stage] || 'Start';
-}
-
 function formatCount(value) {
   const number = Number(value || 0);
-  if (number >= 1000000) return number.toLocaleString('de-DE', { notation: 'compact', maximumFractionDigits: 1 });
-  return number.toLocaleString('de-DE');
+  const locale = state.lang === 'en' ? 'en-US' : 'de-DE';
+  if (number >= 1000000) return number.toLocaleString(locale, { notation: 'compact', maximumFractionDigits: 1 });
+  return number.toLocaleString(locale);
+}
+
+function renderWorkbenchModeSwitch() {
+  return `
+    <div class="ctox-pane-tabs outbound-workbench-mode-switch" role="tablist" aria-label="${escapeHtml(t('workbenchMode', 'Workbench-Modus'))}">
+      <button type="button" class="ctox-pane-tab${state.outreachView ? '' : ' is-active'}" role="tab" data-action="set-workbench-mode" data-workbench-mode="campaign" aria-selected="${!state.outreachView}">${escapeHtml(t('campaignWorkbench', 'Campaign'))}</button>
+      <button type="button" class="ctox-pane-tab${state.outreachView ? ' is-active' : ''}" role="tab" data-action="set-workbench-mode" data-workbench-mode="outreach" aria-selected="${state.outreachView}">${escapeHtml(t('sequenceAndSending', 'Sequenz & Versand'))}</button>
+    </div>
+  `;
+}
+
+function renderOutreachCenterShell(campaign) {
+  return `
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(campaign.market || 'DACH')}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(campaign.name)}</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button class="ctox-pane-icon" type="button" data-action="import-source" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('importJob', 'Importjob anlegen'))}" aria-label="${escapeHtml(t('importJob', 'Importjob anlegen'))}">${actionIcon('download')}</button>
+          <button class="ctox-pane-icon" type="button" data-action="ao-audit-export" title="${escapeHtml(t('auditExport', 'Audit-Export'))}" aria-label="${escapeHtml(t('auditExport', 'Audit-Export'))}">${actionIcon('export')}</button>
+        </div>
+      </div>
+      ${renderWorkbenchModeSwitch()}
+    </header>
+    <div class="ctox-pane-body outbound-outreach-host" data-outbound-outreach-host>${renderActiveOutreachShell(campaign)}</div>
+  `;
+}
+
+function renderQualificationCenterContent(campaign) {
+  return `
+    <div class="outbound-research-activity-container">
+      ${renderResearchActivityPanel(campaign)}
+    </div>
+    ${renderQualificationSplit(campaign)}
+  `;
 }
 
 function renderCenter(force = false) {
@@ -2967,7 +3188,17 @@ function renderCenter(force = false) {
     return;
   }
   if (state.outreachView) {
-    root.innerHTML = renderActiveOutreachShell(campaign);
+    const outreachHost = root.querySelector('[data-outbound-outreach-host]');
+    if (!force && outreachHost) {
+      const scrollTop = outreachHost.querySelector('.outbound-outreach')?.scrollTop || 0;
+      const focusState = saveFocusState(outreachHost);
+      outreachHost.innerHTML = renderActiveOutreachShell(campaign);
+      const nextScroll = outreachHost.querySelector('.outbound-outreach');
+      if (nextScroll && scrollTop) nextScroll.scrollTop = scrollTop;
+      restoreFocusState(outreachHost, focusState);
+    } else root.innerHTML = renderOutreachCenterShell(campaign);
+    root.dataset.renderedCampaignId = campaign.id;
+    root.dataset.renderedLang = state.lang;
     return;
   }
 
@@ -2982,12 +3213,19 @@ function renderCenter(force = false) {
   const campaignStatuses = extractUniqueStatuses(currentPipeline());
   const campaignTags = extractUniqueTags(currentPipeline());
   const hiddenCount = loadHiddenCompanies().length;
+  const hasSelectedDetail = Boolean(state.selectedCompanyId && currentCompanies().some((item) => item.id === state.selectedCompanyId || item.duplicate_company_ids?.includes(state.selectedCompanyId)));
 
   const scrollUnified = root.querySelector('.outbound-table-scroll-unified');
   const tbody = root.querySelector('.crm-table tbody');
 
   // SMART INLINE UPDATE DETECT
   if (!force && scrollUnified && tbody) {
+    root.querySelectorAll('.outbound-funnel-tabs [data-filter]').forEach((tab) => {
+      const active = tab.dataset.filter === state.filter;
+      tab.classList.toggle('is-active', active);
+      tab.setAttribute('aria-selected', String(active));
+    });
+
     // 1. Update active research summary
     const summaryContainer = root.querySelector('.outbound-active-research-container');
     if (summaryContainer) {
@@ -3033,11 +3271,33 @@ function renderCenter(force = false) {
     }
     syncTableEmptyOverlay(scrollUnified, visibleRows.length === 0, emptyCompanyMessage);
 
-    setupCenterSplitResizing(root);
+    updateDetailPaneVisibility({ preserveScroll: true });
     return;
   }
 
-  // FALLBACK FULL REDRAW (force === true or initial campaign select)
+  // Structural updates replace only the workbench body when campaign and
+  // language are stable. The pane header remains the same node on data refresh.
+  const sameCampaignChrome = root.dataset.renderedCampaignId === campaign.id
+    && root.dataset.renderedLang === state.lang;
+  if (force && sameCampaignChrome) {
+    const content = root.querySelector('.outbound-center-content');
+    if (content) {
+      const scrollTop = scrollUnified?.scrollTop || 0;
+      const scrollLeft = scrollUnified?.scrollLeft || 0;
+      const focusState = saveFocusState(content);
+      content.innerHTML = renderQualificationCenterContent(campaign);
+      const nextScroll = content.querySelector('.outbound-table-scroll-unified');
+      if (nextScroll) {
+        nextScroll.scrollTop = scrollTop;
+        nextScroll.scrollLeft = scrollLeft;
+      }
+      restoreFocusState(content, focusState);
+      setupCenterSplitResizing(root);
+      return;
+    }
+  }
+
+  // Initial render, campaign change, or language change rebuilds the main chrome.
   const scrollTop = scrollUnified ? scrollUnified.scrollTop : 0;
   const scrollLeft = scrollUnified ? scrollUnified.scrollLeft : 0;
   const focusState = saveFocusState(root);
@@ -3053,6 +3313,14 @@ function renderCenter(force = false) {
           <button
             class="ctox-pane-icon"
             type="button"
+            data-action="import-source"
+            data-id="${escapeHtml(campaign.id)}"
+            title="${escapeHtml(t('importJob', 'Importjob anlegen'))}"
+            aria-label="${escapeHtml(t('importJob', 'Importjob anlegen'))}"
+          >${actionIcon('download')}</button>
+          <button
+            class="ctox-pane-icon"
+            type="button"
             data-action="export-table"
             title="${escapeHtml(t('exportExcel', 'Tabelle als Excel exportieren'))}"
             aria-label="${escapeHtml(t('exportExcel', 'Tabelle als Excel exportieren'))}"
@@ -3063,7 +3331,8 @@ function renderCenter(force = false) {
             data-action="toggle-details"
             title="${escapeHtml(t('toggleDetails', 'Detailbereich ein-/ausblenden'))}"
             aria-label="${escapeHtml(t('toggleDetails', 'Detailbereich ein-/ausblenden'))}"
-            aria-pressed="${state.detailPaneUserHidden ? 'false' : 'true'}"
+            aria-pressed="${hasSelectedDetail && !state.detailPaneUserHidden}"
+            ${hasSelectedDetail ? '' : 'hidden'}
           >${actionIcon('columns')}</button>
           <button
             class="ctox-pane-icon"
@@ -3074,7 +3343,19 @@ function renderCenter(force = false) {
           >${actionIcon('settings')}</button>
         </div>
       </div>
+      ${renderWorkbenchModeSwitch()}
       <div class="ctox-pane-tools outbound-center-tools">
+        <div class="ctox-pane-tabs outbound-funnel-tabs" role="tablist" aria-label="${escapeHtml(t('campaignFunnel', 'Campaign-Funnel'))}">
+          ${[
+            ['all', t('filter_all', 'Input')],
+            ['research', t('filter_research', 'Research')],
+            ['qualified', t('filter_qualified', 'Qualifiziert')],
+            ['contact_qualified', t('filter_contact_qualified', 'Kontakte')],
+            ['lead_qualified', t('filter_lead_qualified', 'Leads')],
+            ['pipeline', t('filter_pipeline', 'Pipeline')],
+            ['rejected', t('filter_rejected', 'Nicht passend')],
+          ].map(([key, label]) => `<button type="button" class="ctox-pane-tab${state.filter === key ? ' is-active' : ''}" role="tab" data-filter="${key}" data-campaign-id="${escapeHtml(campaign.id)}" aria-selected="${state.filter === key}">${escapeHtml(label)}</button>`).join('')}
+        </div>
         <div class="outbound-active-research-container">
           ${renderActiveResearchSummary(campaign)}
         </div>
@@ -3100,12 +3381,7 @@ function renderCenter(force = false) {
         </button>
       </div>
     </header>
-    <div class="outbound-center-content">
-      <div class="outbound-research-activity-container">
-        ${renderResearchActivityPanel(campaign)}
-      </div>
-      ${renderQualificationSplit(campaign)}
-    </div>
+    <div class="outbound-center-content">${renderQualificationCenterContent(campaign)}</div>
   `;
 
   // Restore scroll & focus states
@@ -3115,6 +3391,8 @@ function renderCenter(force = false) {
     newScrollUnified.scrollLeft = scrollLeft;
   }
   restoreFocusState(root, focusState);
+  root.dataset.renderedCampaignId = campaign.id;
+  root.dataset.renderedLang = state.lang;
 
   setupCenterSplitResizing(root);
 }
@@ -3356,7 +3634,8 @@ function renderCRMCompanyRows(row) {
   let html = '';
   const contactStatus = row.item ? pipelineResearchStatus(row.item, 'contact_research') : '';
   const leadStatus = row.item ? pipelineResearchStatus(row.item, 'lead_qualification') : '';
-  const rowClass = tableRowStatusClass(combinedAutomationStatus(contactStatus, leadStatus));
+  const rowSelected = row.company.id === state.selectedCompanyId;
+  const rowClass = tableRowStatusClass(combinedAutomationStatus(contactStatus, leadStatus), rowSelected);
 
   // Helper to match contact against active filters
   const contactMatchesFilters = (c) => {
@@ -3381,7 +3660,7 @@ function renderCRMCompanyRows(row) {
     const contactKey = row.item ? `${row.item.id}_0` : `${row.company.id}_0`;
 
     html += `
-      <tr${rowClass} data-action="select-company-row" data-company-id="${escapeHtml(row.company.id)}" data-contact-key="${escapeHtml(contactKey)}" data-id="${escapeHtml(row.item?.id || row.company.id)}" data-contact-index="0" data-context-record-id="${escapeHtml(row.company.id)}" data-context-record-type="outbound_company" data-context-label="${escapeHtml(row.company.name)}">
+      <tr${rowClass} data-action="select-company-row" data-company-id="${escapeHtml(row.company.id)}" data-contact-key="${escapeHtml(contactKey)}" data-id="${escapeHtml(row.item?.id || row.company.id)}" data-contact-index="0" data-context-record-id="${escapeHtml(row.company.id)}" data-context-record-type="outbound_company" data-context-label="${escapeHtml(row.company.name)}" aria-selected="${rowSelected}">
     `;
 
     const contactCols = activeCols.filter(col => col.type === 'contact_people' || col.type === 'contact_field');
@@ -3462,7 +3741,7 @@ function renderCRMCompanyRows(row) {
     const activeNoteKey = state.activeNoteByContact.get(contactKey) || 'note_general';
 
     html += `
-      <tr${rowClass} data-action="select-company-row" data-company-id="${escapeHtml(row.company.id)}" data-contact-key="${escapeHtml(contactKey)}" data-id="${escapeHtml(row.item?.id || row.company.id)}" data-contact-index="${activeIndex}" data-context-record-id="${escapeHtml(row.company.id)}" data-context-record-type="outbound_company" data-context-label="${escapeHtml(row.company.name)}">
+      <tr${rowClass} data-action="select-company-row" data-company-id="${escapeHtml(row.company.id)}" data-contact-key="${escapeHtml(contactKey)}" data-id="${escapeHtml(row.item?.id || row.company.id)}" data-contact-index="${activeIndex}" data-context-record-id="${escapeHtml(row.company.id)}" data-context-record-type="outbound_company" data-context-label="${escapeHtml(row.company.name)}" aria-selected="${rowSelected}">
     `;
 
     activeCols.forEach(col => {
@@ -3609,6 +3888,56 @@ function renderCRMCompanyRows(row) {
   }
 
   return html;
+}
+
+function updateQualificationSelectionInPlace() {
+  const root = state.ctx?.host?.querySelector?.('.outbound-center');
+  root?.querySelectorAll?.('.crm-table tbody tr[data-company-id]').forEach((row) => {
+    const selected = row.dataset.companyId === state.selectedCompanyId;
+    row.classList.toggle('is-selected', selected);
+    row.setAttribute('aria-selected', String(selected));
+  });
+}
+
+function updateDetailPaneVisibility(options = {}) {
+  const root = state.ctx?.host?.querySelector?.('.outbound-center');
+  const split = root?.querySelector?.('[data-outbound-center-split]');
+  if (!root || !split) return;
+  const hasSelection = state.activeView === 'pipeline'
+    ? Boolean(state.selectedPipelineId && currentPipeline().some((item) => item.id === state.selectedPipelineId))
+    : Boolean(state.selectedCompanyId && currentCompanies().some((item) => item.id === state.selectedCompanyId || item.duplicate_company_ids?.includes(state.selectedCompanyId)));
+  const visible = hasSelection && !state.detailPaneUserHidden;
+  let detail = split.querySelector('.outbound-right');
+  let handle = split.querySelector('[data-outbound-center-resizer]');
+  if (!visible) {
+    handle?.remove();
+    detail?.remove();
+    split.classList.add('is-detail-hidden');
+    state.centerResizeCleanup?.();
+    state.centerResizeCleanup = null;
+  } else {
+    split.classList.remove('is-detail-hidden');
+    if (!handle || !detail) {
+      split.insertAdjacentHTML('beforeend', `
+        <button class="outbound-center-resizer" type="button" data-outbound-center-resizer aria-label="${escapeHtml(t('resizeDetailsPane', 'Tabellen- und Detailbereich anpassen'))}"></button>
+        <aside class="ctox-pane outbound-right" aria-label="${escapeHtml(t('researchDetails', 'Research Details'))}"></aside>
+      `);
+      handle = split.querySelector('[data-outbound-center-resizer]');
+      detail = split.querySelector('.outbound-right');
+    }
+    if (detail) {
+      const detailScrollTop = detail.querySelector('.outbound-detail')?.scrollTop || 0;
+      detail.innerHTML = state.activeView === 'pipeline' ? renderPipelineDetail() : renderCompanyDetail();
+      const nextDetailScroll = detail.querySelector('.outbound-detail');
+      if (options.preserveScroll && nextDetailScroll && detailScrollTop) nextDetailScroll.scrollTop = detailScrollTop;
+    }
+    setupCenterSplitResizing(root);
+  }
+  const toggle = root.querySelector('[data-action="toggle-details"]');
+  if (toggle) {
+    toggle.hidden = !hasSelection;
+    toggle.setAttribute('aria-pressed', String(visible));
+  }
 }
 
 function renderQualificationSplit(campaign) {
@@ -3922,10 +4251,12 @@ function renderContactQualificationRow(row, columns) {
   `;
 }
 
-function tableRowStatusClass(status) {
-  if (isAutomationActive(status)) return ' class="is-updating"';
-  if (isFailedStatus(status) || isCancelledStatus(status)) return ' class="is-failed"';
-  return '';
+function tableRowStatusClass(status, selected = false) {
+  const classes = [];
+  if (isAutomationActive(status)) classes.push('is-updating');
+  if (isFailedStatus(status) || isCancelledStatus(status)) classes.push('is-failed');
+  if (selected) classes.push('is-selected');
+  return classes.length ? ` class="${classes.join(' ')}"` : '';
 }
 
 function combinedAutomationStatus(...statuses) {
@@ -5848,7 +6179,7 @@ function renderPipelineWorkbench() {
 
 function renderPipelineItem(item) {
   return `
-    <div class="ctox-list-item outbound-pipeline-item${item.id === state.selectedPipelineId ? ' is-selected' : ''}" data-action="select-pipeline" data-id="${escapeHtml(item.id)}" aria-current="${item.id === state.selectedPipelineId}">
+    <div class="ctox-list-item outbound-pipeline-item${item.id === state.selectedPipelineId ? ' is-selected' : ''}" data-action="select-pipeline" data-id="${escapeHtml(item.id)}" data-context-record-id="${escapeHtml(item.id)}" data-context-record-type="outbound_pipeline_item" data-context-label="${escapeHtml(item.company_name || item.id)}" aria-selected="${item.id === state.selectedPipelineId}">
       <strong>${escapeHtml(item.company_name)}</strong>
       <div class="outbound-muted">${escapeHtml(item.stage)} · ${escapeHtml(item.contact_research_status)}</div>
       <div class="outbound-row-actions">
@@ -5858,16 +6189,6 @@ function renderPipelineItem(item) {
       </div>
     </div>
   `;
-}
-
-function renderRight() {
-  const root = state.ctx.host.querySelector('.outbound-right');
-  if (!root) return;
-  if (state.activeView === 'pipeline') {
-    root.innerHTML = renderPipelineDetail();
-    return;
-  }
-  root.innerHTML = renderCompanyDetail();
 }
 
 function renderCompanyDetail() {
@@ -6201,34 +6522,41 @@ function dispatchOutboundPromptTask({
   writebackContract = null,
   payload = {},
   clientContext = {},
+  openBusinessChat = state.ctx?.openBusinessChat,
 }) {
   const userText = String(text || '').trim();
-  if (!userText) return;
-  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
-    detail: {
-      text: userText,
-      module: 'outbound',
-      source_title: 'Outbound',
+  if (!userText) return null;
+  const detail = {
+    text: userText,
+    draft: userText,
+    module: 'outbound',
+    source_module: 'outbound',
+    source_title: 'Outbound',
+    action: 'context-chat',
+    reuseActive: false,
+    command_id: commandId,
+    command_type: 'business_os.chat.task',
+    record_id: recordId,
+    title,
+    command_title: title,
+    instruction,
+    mode: 'data',
+    target: 'data',
+    required_skills: requiredSkills,
+    writeback_contract: writebackContract,
+    payload,
+    client_context: {
+      ...clientContext,
       action: 'context-chat',
-      reuseActive: false,
-      command_id: commandId,
-      command_type: 'business_os.chat.task',
-      record_id: recordId,
-      title,
-      instruction,
-      mode: 'data',
-      target: 'data',
-      required_skills: requiredSkills,
-      writeback_contract: writebackContract,
-      payload,
-      client_context: {
-        ...clientContext,
-        action: 'context-chat',
-        source: 'outbound-prompt-task',
-        module: 'outbound',
-      },
+      source: 'outbound-prompt-task',
+      module: 'outbound',
     },
-  }));
+  };
+  if (typeof openBusinessChat !== 'function') {
+    throw new Error('CTOX Business Chat is required for outbound prompt tasks');
+  }
+  openBusinessChat(detail);
+  return detail;
 }
 
 function campaignSetupPrompt(campaign, commandId, template) {
@@ -7338,10 +7666,11 @@ function loadHiddenCompanies() {
   const campaignId = state.selectedCampaignId;
   if (!campaignId) return [];
   try {
-    const data = localStorage.getItem(`outbound_hidden_companies_${campaignId}`);
-    return data ? JSON.parse(data) : [];
-  } catch (e) {
-    console.error('Error loading hidden companies:', e);
+    const data = state.ctx?.storageScope?.get?.(`${OUTBOUND_HIDDEN_COMPANIES_KEY_PREFIX}${campaignId}`);
+    const parsed = data ? JSON.parse(data) : [];
+    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : [];
+  } catch (error) {
+    console.warn('[outbound] hidden company state could not be read', error);
     return [];
   }
 }
@@ -7350,9 +7679,12 @@ function saveHiddenCompanies(list) {
   const campaignId = state.selectedCampaignId;
   if (!campaignId) return;
   try {
-    localStorage.setItem(`outbound_hidden_companies_${campaignId}`, JSON.stringify(list));
-  } catch (e) {
-    console.error('Error saving hidden companies:', e);
+    state.ctx?.storageScope?.set?.(
+      `${OUTBOUND_HIDDEN_COMPANIES_KEY_PREFIX}${campaignId}`,
+      JSON.stringify(Array.isArray(list) ? list : []),
+    );
+  } catch (error) {
+    console.warn('[outbound] hidden company state could not be saved', error);
   }
 }
 
@@ -7648,46 +7980,6 @@ function fingerprint(value) {
   return Math.abs(hash).toString(36);
 }
 
-function setupOutboundColumnResizing() {
-  // Column drag/keyboard resizing + width persistence is now owned by the
-  // shell-global resizer (setupModuleResizers in app.js), wired declaratively from
-  // the `.ctox-column-resizer[data-resizer-var]` handle inside the
-  // `[data-resize-frame]` root. We no longer hand-wire CtoxResizer here (that would
-  // double-bind the handle). We only apply the initial left-compact CSS state once
-  // on mount based on the resolved start width, since that visual toggle is a
-  // module-specific concern the shell resizer does not own.
-  const root = state.ctx?.host?.querySelector?.('[data-outbound-root]');
-  if (!root) return null;
-
-  const handle = root.querySelector('[data-outbound-column-resizer]');
-  if (!handle) return null;
-
-  const applyCompact = (widthPx) => {
-    root.dataset.leftCompact = widthPx <= 360 ? 'true' : 'false';
-  };
-
-  // Resolve the start width the same way as before (persisted -> default),
-  // matching the shell resizer's storage key so the compact state agrees with the
-  // restored layout.
-  let initialWidth = null;
-  try {
-    const raw = window.localStorage.getItem(`ctox.businessOs.moduleColumns.outbound:--ctox-left-width`)
-      ?? window.localStorage.getItem(`ctox.businessOs.moduleColumns.outbound:--outbound-left-width`)
-      ?? window.localStorage.getItem(OUTBOUND_LAYOUT_KEY);
-    const stored = Number(raw);
-    if (Number.isFinite(stored) && stored > 0) initialWidth = stored;
-  } catch {
-    /* storage unavailable */
-  }
-  if (!Number.isFinite(initialWidth)) initialWidth = 360;
-  const clampedInitial = clampNumber(initialWidth, OUTBOUND_COL_MIN.left, OUTBOUND_COL_LEFT_MAX);
-  applyCompact(clampedInitial);
-
-  return () => {
-    delete root.dataset.leftCompact;
-  };
-}
-
 function setupCenterSplitResizing(root) {
   state.centerResizeCleanup?.();
   state.centerResizeCleanup = null;
@@ -7802,7 +8094,7 @@ function setupCenterSplitResizing(root) {
 
 function readCenterSplitRatio() {
   try {
-    const value = Number(window.localStorage.getItem(OUTBOUND_CENTER_SPLIT_KEY));
+    const value = Number(state.ctx?.storageScope?.get?.(OUTBOUND_CENTER_SPLIT_KEY));
     return Number.isFinite(value) && value > 0.25 && value < 0.78 ? value : null;
   } catch {
     return null;
@@ -7811,9 +8103,9 @@ function readCenterSplitRatio() {
 
 function writeCenterSplitRatio(value) {
   try {
-    if (Number.isFinite(value)) window.localStorage.setItem(OUTBOUND_CENTER_SPLIT_KEY, String(value));
+    if (Number.isFinite(value)) state.ctx?.storageScope?.set?.(OUTBOUND_CENTER_SPLIT_KEY, String(value));
   } catch {
-    // Ignore unavailable storage.
+    // Ignore unavailable scoped storage.
   }
 }
 
@@ -7928,6 +8220,8 @@ function saveFocusState(parentEl) {
     selector = `[data-table-filter="${activeEl.getAttribute('data-table-filter')}"]`;
   } else if (activeEl.hasAttribute('data-campaign-edit-field')) {
     selector = `[data-campaign-edit-field="${activeEl.getAttribute('data-campaign-edit-field')}"]`;
+  } else if (activeEl.hasAttribute('data-action') && activeEl.hasAttribute('data-message-id')) {
+    selector = `[data-action="${activeEl.getAttribute('data-action')}"][data-message-id="${activeEl.getAttribute('data-message-id')}"]`;
   } else if (activeEl.classList.contains('inline-editor')) {
     const tr = activeEl.closest('tr');
     if (tr && tr.hasAttribute('data-contact-key')) {
@@ -8502,6 +8796,9 @@ export function buildHiddenCompaniesPanel() {
 
       const row = document.createElement('div');
       row.className = 'hidden-company-row';
+      row.dataset.contextRecordId = companyId;
+      row.dataset.contextRecordType = 'outbound_company';
+      row.dataset.contextLabel = companyName;
 
       const nameDiv = document.createElement('div');
       nameDiv.className = 'hidden-company-name';

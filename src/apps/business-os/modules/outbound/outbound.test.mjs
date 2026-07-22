@@ -118,7 +118,43 @@ test('presentation layer stays compact and shell-native', async () => {
   // declarative column resizer driving --ctox-left-width.
   assert.match(html, /ctox-workspace ctox-workspace--two-pane outbound-module/);
   assert.match(html, /data-resizer-var="--ctox-left-width"/);
+  assert.match(html, /data-campaign-editor-modal hidden/);
   assert.match(css, /\.outbound-mailserver-domain-card/);
+  assert.match(css, /\.outbound-left\s*\{[\s\S]*grid-column:\s*1;[\s\S]*grid-template-rows:\s*auto auto minmax\(0, 1fr\) auto;/);
+  assert.match(css, /\.outbound-center\s*\{[\s\S]*grid-column:\s*3;[\s\S]*grid-template-rows:\s*auto minmax\(0, 1fr\);/);
+  assert.match(css, /grid-template-columns:\s*minmax\(280px,[^;]+\) 12px minmax\(360px, 1fr\)/);
+});
+
+test('campaign column uses shell-owned grammar and stable in-place selection', async () => {
+  const js = await fs.readFile(new URL('./index.js', import.meta.url), 'utf8');
+  const activeJs = await fs.readFile(new URL('./active-outreach.js', import.meta.url), 'utf8');
+  const css = await fs.readFile(new URL('./index.css', import.meta.url), 'utf8');
+
+  assert.match(js, /ctox-pane-grammar-change/);
+  assert.match(js, /data-pg-search/);
+  assert.match(js, /data-pg-view="cards"/);
+  assert.match(js, /data-pg-view="list"/);
+  assert.match(js, /data-pg-tray-toggle/);
+  assert.match(js, /data-pg-reset/);
+  assert.match(js, /data-pg-band=/);
+  assert.match(js, /ctox-pane-body ctox-well/);
+  assert.match(js, /ctox-pane-footer/);
+  assert.match(js, /import-campaign-records/);
+  assert.match(js, /export-campaign-records/);
+  assert.match(js, /type="file" accept="application\/json,\.json"/);
+  assert.match(js, /new Blob\(\[JSON\.stringify\(payload, null, 2\)\], \{ type: 'application\/json' \}\)/);
+  assert.match(js, /root\.__ctoxPaneGrammar/);
+  assert.match(js, /const needsChrome = !root\.querySelector\('\[data-campaign-list\]'\)/);
+  assert.match(js, /const sameCampaignChrome = root\.dataset\.renderedCampaignId === campaign\.id/);
+  assert.match(js, /function updateCampaignSelectionInPlace/);
+  assert.match(js, /row\.classList\.toggle\('is-selected', selected\)/);
+  assert.match(js, /function updateQualificationSelectionInPlace/);
+  assert.match(js, /state\.ctx\?\.storageScope\?\.get\?\.\(OUTBOUND_CENTER_SPLIT_KEY\)/);
+  assert.match(js, /state\.ctx\?\.storageScope\?\.set\?\.\(OUTBOUND_CENTER_SPLIT_KEY/);
+  assert.match(js, /openBusinessChat = state\.ctx\?\.openBusinessChat/);
+  assert.match(activeJs, /function selectEngagementInPlace/);
+  assert.doesNotMatch(`${js}\n${activeJs}`, /localStorage|sessionStorage|window\.dispatchEvent|ctox-business-os-chat-submit/);
+  assert.doesNotMatch(css, /\.ctox-filterbar\s*\{|\.ctox-filter-tray\s*\{|\.ctox-view-switch\s*\{|\.ctox-well\s*\{|\.ctox-pane-footer\s*\{/);
 });
 
 test('campaign scope recovers existing outbound rows for the only visible campaign', () => {
@@ -335,8 +371,9 @@ test('campaign briefing uses stored free text as the central campaign instructio
   assert.equal(hooks.campaignBriefingSummary(campaign), 'Ich möchte 100 Handwerksbetriebe per Mail anschreiben.');
 });
 
-test('campaign briefing save spawns a CTOX chat task for the setup skill', () => {
-  assert.match(bundledSource, /ctox-business-os-chat-submit/);
+test('campaign briefing save opens the current CTOX Business Chat contract for the setup skill', () => {
+  assert.match(bundledSource, /openBusinessChat/);
+  assert.doesNotMatch(bundledSource, /ctox-business-os-chat-submit|window\.dispatchEvent/);
   assert.match(bundledSource, /business-os-outbound-campaign-setup/);
   assert.match(bundledSource, /outbound\.campaign\.briefing\.update/);
   assert.match(bundledSource, /function dispatchOutboundPromptTask/);
@@ -367,40 +404,30 @@ test('campaign briefing save spawns a CTOX chat task for the setup skill', () =>
   assert.match(prompt, /selected_template_title: Handwerk in Norddeutschland per E-Mail/);
 });
 
-test('outbound prompt tasks use the same spawned chat event as context menu actions', () => {
-  const events = [];
-  const previousWindow = globalThis.window;
-  globalThis.window = {
-    dispatchEvent(event) {
-      events.push(event);
-      return true;
-    },
-  };
-  try {
-    hooks.dispatchOutboundPromptTask({
-      text: 'Bitte richte diese Outbound-Kampagne ein.',
-      commandId: 'cmd-context-chat-1',
-      recordId: 'camp-1',
-      title: 'Outbound Campaign einrichten',
-      instruction: 'Nutze den Outbound Skill.',
-      requiredSkills: ['business-os-outbound-campaign-setup'],
-      writebackContract: { command_type: 'outbound.campaign.apply_setup' },
-      payload: { prompt: 'Bitte richte diese Outbound-Kampagne ein.' },
-      clientContext: { outbound_action: 'campaign-setup-briefing' },
-    });
-  } finally {
-    globalThis.window = previousWindow;
-  }
+test('outbound prompt tasks use ctx.openBusinessChat with the context-chat contract', () => {
+  const opened = [];
+  const detail = hooks.dispatchOutboundPromptTask({
+    text: 'Bitte richte diese Outbound-Kampagne ein.',
+    commandId: 'cmd-context-chat-1',
+    recordId: 'camp-1',
+    title: 'Outbound Campaign einrichten',
+    instruction: 'Nutze den Outbound Skill.',
+    requiredSkills: ['business-os-outbound-campaign-setup'],
+    writebackContract: { command_type: 'outbound.campaign.apply_setup' },
+    payload: { prompt: 'Bitte richte diese Outbound-Kampagne ein.' },
+    clientContext: { outbound_action: 'campaign-setup-briefing' },
+    openBusinessChat(value) { opened.push(value); },
+  });
 
-  assert.equal(events.length, 1);
-  assert.equal(events[0].type, 'ctox-business-os-chat-submit');
-  assert.equal(events[0].detail.action, 'context-chat');
-  assert.equal(events[0].detail.reuseActive, false);
-  assert.equal(events[0].detail.command_type, 'business_os.chat.task');
-  assert.deepEqual(events[0].detail.required_skills, ['business-os-outbound-campaign-setup']);
-  assert.equal(events[0].detail.writeback_contract.command_type, 'outbound.campaign.apply_setup');
-  assert.equal(events[0].detail.client_context.action, 'context-chat');
-  assert.equal(events[0].detail.client_context.outbound_action, 'campaign-setup-briefing');
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0], detail);
+  assert.equal(detail.action, 'context-chat');
+  assert.equal(detail.reuseActive, false);
+  assert.equal(detail.command_type, 'business_os.chat.task');
+  assert.deepEqual(detail.required_skills, ['business-os-outbound-campaign-setup']);
+  assert.equal(detail.writeback_contract.command_type, 'outbound.campaign.apply_setup');
+  assert.equal(detail.client_context.action, 'context-chat');
+  assert.equal(detail.client_context.outbound_action, 'campaign-setup-briefing');
 });
 
 test('campaign editor keeps template briefing drafts across rerenders', () => {
