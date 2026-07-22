@@ -410,6 +410,7 @@ function escapeHtml(value) {
 
 export async function mount(ctx) {
   resetState(ctx);
+  ensureModuleStyles();
   await ensureMountedMarkup(ctx);
   if (!ctx?.db) {
     renderError(t('missingDb'));
@@ -1507,11 +1508,28 @@ if (typeof window !== 'undefined') {
   });
 }
 
+function ensureModuleStyles() {
+  if (typeof document === 'undefined' || String(import.meta.url).startsWith('data:') || (!document.head?.appendChild && !document.head?.append)) return;
+  const cssVersion = String(import.meta.url).split('?v=')[1] || '';
+  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
+  let link = document.querySelector?.('link[data-invoices-style]');
+  if (!link) {
+    link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.dataset.invoicesStyle = 'true';
+    if (document.head.appendChild) document.head.appendChild(link);
+    else document.head.append(link);
+  }
+  if (link.getAttribute?.('href') !== cssHref) link.href = cssHref;
+}
+
 async function ensureMountedMarkup(ctx) {
   if (!ctx?.host?.querySelector) return moduleRoot();
   if (ctx.host.querySelector('#invoices-root')) return moduleRoot();
   try {
-    const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => {
+    const markupVersion = String(import.meta.url).split('?v=')[1] || '';
+    const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
+    const html = await fetch(markupHref).then((res) => {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.text();
     });
