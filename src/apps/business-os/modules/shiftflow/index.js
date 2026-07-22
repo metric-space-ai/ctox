@@ -2,7 +2,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { accumulateUeberlassung, checkDailyHours, checkRestPeriods } from './core/arbzg.js';
 
-const MOD_BUILD = '20260718-ux-reduce-v1';
+const MOD_BUILD = '20260722-ia-karte-v1';
 const PLANNING_COLLECTIONS = Object.freeze([
   'planning_employees',
   'planning_projects',
@@ -21,12 +21,18 @@ let activeSubscriptions = [];
 let currentWeekStart = getMondayOfCurrentWeek();
 let currentView = 'scheduler'; // 'scheduler', 'timesheets', or 'billing'
 let currentTimelineFocus = 'employees'; // 'employees' or 'projects'
+let selectedShiftId = null;
 let selectedEmployeeId = null;
+let detailUserCollapsed = false;
 let currentDeptFilter = 'all';
+let shiftListState = { search: '', view: 'cards', band: 'week', filters: { department: 'all', status: 'all' } };
+let latestEmployees = [];
+let latestProjects = [];
+let latestShifts = [];
+let latestTimeRecords = [];
+let latestConflicts = [];
 let lang = 'de';
 let t = (key, fallback) => fallback ?? key;
-let contextMenu = null;
-let contextMenuCleanup = null;
 
 function shiftflowCollection(ctx, name) {
   const facade = ctx?.db;
@@ -74,29 +80,23 @@ export async function mount(ctx) {
   applyStaticLabels(ctx.host, t);
   ctx.host.dataset.shiftflowModule = 'native';
 
-  // Initialize UI variables & elements
+  // Static chrome is mounted once. Reactive refreshes replace only list/board
+  // data nodes so search focus and the shell-owned pane grammar stay intact.
   const els = {
     app: ctx.host.querySelector('.shiftflow-app'),
-    activeEmployeeList: ctx.host.querySelector('#activeEmployeeList'),
-    inactiveEmployeeList: ctx.host.querySelector('#inactiveEmployeeList'),
-    activeEmployeesCount: ctx.host.querySelector('#activeEmployeesCount'),
-    inactiveEmployeesCount: ctx.host.querySelector('#inactiveEmployeesCount'),
-
-    // Project management elements
-    projectList: ctx.host.querySelector('#projectList'),
-    addProjectBtn: ctx.host.querySelector('#addProjectBtn'),
-
-    // View content panes
+    leftPane: ctx.host.querySelector('#shiftflow-left'),
+    shiftList: ctx.host.querySelector('[data-shift-list]'),
+    addShiftBtn: ctx.host.querySelector('#addShiftBtn'),
+    importShiftsBtn: ctx.host.querySelector('#importShiftsBtn'),
+    exportShiftsBtn: ctx.host.querySelector('#exportShiftsBtn'),
+    shiftImportInput: ctx.host.querySelector('#shiftImportInput'),
     schedulerView: ctx.host.querySelector('#schedulerView'),
+    conflictsView: ctx.host.querySelector('#conflictsView'),
     timesheetsView: ctx.host.querySelector('#timesheetsView'),
     billingView: ctx.host.querySelector('#billingView'),
-
-    // Dual timeline toggles
     toggleViewEmployeesBtn: ctx.host.querySelector('#toggleViewEmployeesBtn'),
     toggleViewProjectsBtn: ctx.host.querySelector('#toggleViewProjectsBtn'),
     schedulerCornerCell: ctx.host.querySelector('#schedulerCornerCell'),
-
-    // Table / Grid elements
     schedulerGridHeader: ctx.host.querySelector('#schedulerGridHeader'),
     schedulerGridBody: ctx.host.querySelector('#schedulerGridBody'),
     schedulerWeekRange: ctx.host.querySelector('#schedulerWeekRange'),
@@ -105,26 +105,15 @@ export async function mount(ctx) {
     nextWeekBtn: ctx.host.querySelector('#nextWeekBtn'),
     approveAllTimesheetsBtn: ctx.host.querySelector('#approveAllTimesheetsBtn'),
     timesheetsList: ctx.host.querySelector('#timesheetsList'),
-    departmentFilterSelect: ctx.host.querySelector('#departmentFilterSelect'),
-    employeeSearchInput: ctx.host.querySelector('#employeeSearchInput'),
-    addEmployeeBtn: ctx.host.querySelector('#addEmployeeBtn'),
     btnPublishSchedule: ctx.host.querySelector('#btnPublishSchedule'),
     publishScheduleStatus: ctx.host.querySelector('#publishScheduleStatus'),
-
-    // AI and Inspector
-    aiPlannerChatBody: ctx.host.querySelector('#aiPlannerChatBody'),
     btnAutoGenerateSchedule: ctx.host.querySelector('#btnAutoGenerateSchedule'),
     btnCheckConflicts: ctx.host.querySelector('#btnCheckConflicts'),
-    btnFindReplacements: ctx.host.querySelector('#btnFindReplacements'),
     conflictsList: ctx.host.querySelector('#conflictsList'),
     detailInspectorSection: ctx.host.querySelector('#detailInspectorSection'),
-    aiPlannerSection: ctx.host.querySelector('#aiPlannerSection'),
     closeInspectorBtn: ctx.host.querySelector('#closeInspectorBtn'),
     inspectorContent: ctx.host.querySelector('#inspectorContent'),
     inspectorTitle: ctx.host.querySelector('#inspectorTitle'),
-
-
-    // Billing Workbench elements
     billingStartDate: ctx.host.querySelector('#billingStartDate'),
     billingEndDate: ctx.host.querySelector('#billingEndDate'),
     billingFilterApplyBtn: ctx.host.querySelector('#billingFilterApplyBtn'),
@@ -133,15 +122,13 @@ export async function mount(ctx) {
     billingTotalCost: ctx.host.querySelector('#billingTotalCost'),
     billingTotalMargin: ctx.host.querySelector('#billingTotalMargin'),
     billingAggregationBody: ctx.host.querySelector('#billingAggregationBody'),
-
-    // Center tabs
     viewSchedulerTabBtn: ctx.host.querySelector('#viewSchedulerTabBtn'),
+    viewConflictsTabBtn: ctx.host.querySelector('#viewConflictsTabBtn'),
     viewTimesheetsTabBtn: ctx.host.querySelector('#viewTimesheetsTabBtn'),
     viewBillingTabBtn: ctx.host.querySelector('#viewBillingTabBtn'),
-
-    // Right-pane visibility toggle (UX reduction: hidden by default)
-    toggleActions: ctx.host.querySelector('[data-toggle-actions]')
   };
+
+  applyActionIcons(ctx, els);
 
   // Seed default dates in Billing selector (current month)
   const today = new Date();
@@ -149,6 +136,20 @@ export async function mount(ctx) {
   const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0);
   els.billingStartDate.value = firstDay.toISOString().split('T')[0];
   els.billingEndDate.value = lastDay.toISOString().split('T')[0];
+
+  currentWeekStart = getMondayOfCurrentWeek();
+  currentView = 'scheduler';
+  currentTimelineFocus = 'employees';
+  currentDeptFilter = 'all';
+  selectedShiftId = null;
+  selectedEmployeeId = null;
+  detailUserCollapsed = false;
+  shiftListState = { search: '', view: 'cards', band: 'week', filters: { department: 'all', status: 'all' } };
+  latestEmployees = [];
+  latestProjects = [];
+  latestShifts = [];
+  latestTimeRecords = [];
+  latestConflicts = [];
 
   // Setup reactive RxDB subscriptions
   setupSubscriptions(ctx, els);
@@ -183,9 +184,6 @@ export async function mount(ctx) {
     disposed = true;
     activeSubscriptions.forEach(sub => sub.unsubscribe?.());
     activeSubscriptions = [];
-    contextMenuCleanup?.();
-    contextMenu?.remove();
-    contextMenu = null;
     ctx.host.replaceChildren();
     delete ctx.host.dataset.shiftflowModule;
   };
@@ -205,10 +203,29 @@ async function ensureStyles() {
 }
 
 async function loadModuleMarkup() {
-  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  const markupUrl = new URL('./index.html', import.meta.url);
+  markupUrl.searchParams.set('v', MOD_BUILD);
+  const html = await fetch(markupUrl).then((res) => res.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
   return doc.body.innerHTML;
+}
+
+function applyActionIcons(ctx, els) {
+  if (typeof ctx?.getActionIcon !== 'function') return;
+  const icons = [
+    [els.addShiftBtn, 'add'],
+    [els.importShiftsBtn, 'download'],
+    [els.exportShiftsBtn, 'export'],
+    [els.btnAutoGenerateSchedule, 'play'],
+    [els.prevWeekBtn, 'chevronLeft'],
+    [els.nextWeekBtn, 'chevronRight'],
+    [els.closeInspectorBtn, 'close'],
+  ];
+  for (const [button, name] of icons) {
+    const glyph = button ? ctx.getActionIcon(name) : '';
+    if (glyph) button.innerHTML = glyph;
+  }
 }
 
 function getMondayOfCurrentWeek(date = new Date()) {
@@ -290,6 +307,7 @@ export function getShiftflowPressedState(view = 'scheduler', timelineFocus = 'em
   return {
     tabs: {
       scheduler: view === 'scheduler',
+      conflicts: view === 'conflicts',
       timesheets: view === 'timesheets',
       billing: view === 'billing'
     },
@@ -308,28 +326,34 @@ export function getWeekBoundsMs(weekStart) {
   return { startMs: start.getTime(), endMs: end.getTime() - 1 };
 }
 
-function getEmployeeSearchQuery(els) {
-  return String(els.employeeSearchInput?.value || '').trim();
+function getEmployeeSearchQuery() {
+  return String(shiftListState.search || '').trim();
 }
 
 function setPressedState(button, pressed) {
   if (!button) return;
   button.classList.toggle('active', pressed);
-  button.setAttribute('aria-pressed', String(Boolean(pressed)));
+  button.classList.toggle('is-active', pressed);
+  if (button.getAttribute('role') === 'tab') button.setAttribute('aria-selected', String(Boolean(pressed)));
+  else button.setAttribute('aria-pressed', String(Boolean(pressed)));
 }
 
 function applyCenterViewState(els) {
   const state = getShiftflowPressedState(currentView, currentTimelineFocus);
   setPressedState(els.viewSchedulerTabBtn, state.tabs.scheduler);
+  setPressedState(els.viewConflictsTabBtn, state.tabs.conflicts);
   setPressedState(els.viewTimesheetsTabBtn, state.tabs.timesheets);
   setPressedState(els.viewBillingTabBtn, state.tabs.billing);
 
   els.schedulerView.classList.toggle('hidden', !state.tabs.scheduler);
+  els.conflictsView.classList.toggle('hidden', !state.tabs.conflicts);
   els.timesheetsView.classList.toggle('hidden', !state.tabs.timesheets);
   els.billingView.classList.toggle('hidden', !state.tabs.billing);
 
   if (state.tabs.scheduler) {
     els.centerPaneTitle.textContent = t('schedulePlanning', 'Einsatzplanung');
+  } else if (state.tabs.conflicts) {
+    els.centerPaneTitle.textContent = t('conflictsAndWarnings', 'Konflikte & Warnungen');
   } else if (state.tabs.timesheets) {
     els.centerPaneTitle.textContent = t('tabTimesheets', 'Zeiterfassung');
   } else {
@@ -344,19 +368,15 @@ function applyTimelineState(els) {
 }
 
 function showInspectorSection(els) {
-  // Reveal the collapsible right pane too, otherwise the inspector would open
-  // inside a hidden pane and the user would have to discover the toggle.
-  els.app?.classList.remove('is-actions-hidden');
-  els.toggleActions?.setAttribute('aria-pressed', 'true');
-  els.aiPlannerSection.classList.add('hidden');
-  els.detailInspectorSection.classList.remove('hidden');
-  els.detailInspectorSection.classList.add('is-open');
+  const visible = Boolean(selectedShiftId || selectedEmployeeId) && !detailUserCollapsed;
+  els.detailInspectorSection.hidden = !visible;
+  els.detailInspectorSection.classList.toggle('is-open', visible);
+  els.detailInspectorSection.parentElement?.classList.toggle('has-detail', visible);
 }
 
 function hideInspectorSection(els) {
-  els.detailInspectorSection.classList.add('hidden');
-  els.detailInspectorSection.classList.remove('is-open');
-  els.aiPlannerSection.classList.remove('hidden');
+  detailUserCollapsed = true;
+  showInspectorSection(els);
 }
 
 function setPublishStatus(els, message = '') {
@@ -699,68 +719,191 @@ function setupSubscriptions(ctx, els) {
   const db = shiftflowDb(ctx);
   if (!db || !PLANNING_COLLECTIONS.every((name) => canReadCollection(ctx, name))) return;
 
-  // 1. Reactive Employees Subscription
-  const empSub = db.planning_employees.find().$.subscribe(async (employees) => {
-    const timeRecords = await db.planning_time_records.find().exec();
-    renderEmployeesList(employees, timeRecords, els, ctx);
-
-    const projects = await db.planning_projects.find().exec();
-    const shifts = await db.planning_shifts.find().exec();
-    renderSchedulerGrid(employees, projects, shifts, els, ctx);
-
-    if (selectedEmployeeId) {
-      openEmployeeDetailsInspector(selectedEmployeeId, employees, els, ctx);
+  const refresh = () => refreshPlanningSurfaces(els, ctx);
+  activeSubscriptions.push(db.planning_employees.find().$.subscribe((employees) => {
+    latestEmployees = employees || [];
+    refresh();
+  }));
+  activeSubscriptions.push(db.planning_projects.find().$.subscribe((projects) => {
+    latestProjects = projects || [];
+    refresh();
+  }));
+  activeSubscriptions.push(db.planning_shifts.find().$.subscribe((shifts) => {
+    latestShifts = shifts || [];
+    if (selectedShiftId && !latestShifts.some((shift) => shift.id === selectedShiftId)) {
+      selectedShiftId = null;
+      detailUserCollapsed = false;
     }
-  });
-  activeSubscriptions.push(empSub);
+    refresh();
+  }));
+  activeSubscriptions.push(db.planning_time_records.find().$.subscribe((records) => {
+    latestTimeRecords = records || [];
+    refresh();
+  }));
+}
 
-  // 2. Reactive Projects Subscription
-  const projSub = db.planning_projects.find().$.subscribe(async (projects) => {
-    renderProjectsList(projects, els, ctx);
-
-    const employees = await db.planning_employees.find().exec();
-    const shifts = await db.planning_shifts.find().exec();
-    renderSchedulerGrid(employees, projects, shifts, els, ctx);
-    renderBillingAggregation(employees, projects, await db.planning_time_records.find().exec(), els);
-
-    if (selectedEmployeeId) {
-      openEmployeeDetailsInspector(selectedEmployeeId, employees, els, ctx);
-    }
-  });
-  activeSubscriptions.push(projSub);
-
-  // 3. Reactive Shifts Subscription
-  const shiftSub = db.planning_shifts.find().$.subscribe(async (shifts) => {
-    const employees = await db.planning_employees.find().exec();
-    const projects = await db.planning_projects.find().exec();
-    renderSchedulerGrid(employees, projects, shifts, els, ctx);
-
-    if (selectedEmployeeId) {
-      openEmployeeDetailsInspector(selectedEmployeeId, employees, els, ctx);
-    }
-  });
-  activeSubscriptions.push(shiftSub);
-
-  // 4. Reactive Time Records Subscription
-  const timeSub = db.planning_time_records.find().$.subscribe(async (records) => {
-    const employees = await db.planning_employees.find().exec();
-    const projects = await db.planning_projects.find().exec();
-    const shifts = await db.planning_shifts.find().exec();
-
-    renderTimesheets(employees, projects, shifts, records, els, ctx);
-    renderEmployeesList(employees, records, els, ctx);
-    renderBillingAggregation(employees, projects, records, els);
-
-    if (selectedEmployeeId) {
-      openEmployeeDetailsInspector(selectedEmployeeId, employees, els, ctx);
-    }
-  });
-  activeSubscriptions.push(timeSub);
+function refreshPlanningSurfaces(els, ctx) {
+  renderShiftList(els);
+  renderSchedulerGrid(latestEmployees, latestProjects, latestShifts, els, ctx);
+  renderTimesheets(latestEmployees, latestProjects, latestShifts, latestTimeRecords, els, ctx);
+  renderBillingAggregation(latestEmployees, latestProjects, latestTimeRecords, els, ctx);
+  latestConflicts = collectPlanningConflicts(latestShifts, latestEmployees, currentWeekStart);
+  renderConflicts(latestConflicts, els);
+  renderMainViewCounts(els);
+  renderSelectedShiftDetail(els, ctx);
 }
 
 // -------------------------------------------------------------
 // Renders
 // -------------------------------------------------------------
+
+function shiftListBandCounts(shifts = latestShifts) {
+  const { startMs, endMs } = getWeekBoundsMs(currentWeekStart);
+  return {
+    week: shifts.filter((shift) => shift.start_time >= startMs && shift.start_time <= endMs).length,
+    drafts: shifts.filter((shift) => shift.status === 'draft').length,
+  };
+}
+
+function visibleShiftListRecords() {
+  const { startMs, endMs } = getWeekBoundsMs(currentWeekStart);
+  const query = String(shiftListState.search || '').trim().toLowerCase();
+  const department = shiftListState.filters?.department || 'all';
+  const status = shiftListState.filters?.status || 'all';
+  const employeesById = new Map(latestEmployees.map((employee) => [employee.id, employee]));
+  const projectsById = new Map(latestProjects.map((project) => [project.id, project]));
+
+  return latestShifts
+    .filter((shift) => shiftListState.band === 'drafts'
+      ? shift.status === 'draft'
+      : shift.start_time >= startMs && shift.start_time <= endMs)
+    .filter((shift) => department === 'all' || shift.department === department)
+    .filter((shift) => status === 'all' || shift.status === status)
+    .filter((shift) => {
+      if (!query) return true;
+      const employee = employeesById.get(shift.employee_id);
+      const project = projectsById.get(shift.project_id);
+      return `${shift.title || ''} ${shift.department || ''} ${employee?.name || ''} ${employee?.role || ''} ${project?.name || ''} ${project?.client || ''}`.toLowerCase().includes(query);
+    })
+    .sort((a, b) => Number(a.start_time || 0) - Number(b.start_time || 0));
+}
+
+function renderShiftList(els) {
+  if (!els.shiftList || !els.leftPane) return;
+  const records = visibleShiftListRecords();
+  const previousScrollTop = els.shiftList.parentElement?.scrollTop || 0;
+  els.shiftList.classList.toggle('is-cards', shiftListState.view !== 'list');
+  els.shiftList.classList.toggle('is-list', shiftListState.view === 'list');
+  els.shiftList.innerHTML = records.map((shift) => renderShiftListItem(shift)).join('')
+    || `<div class="ctox-empty">${escapeHtml(t('noShiftsForView', 'Keine Schichten für diese Ansicht.'))}</div>`;
+  if (previousScrollTop && els.shiftList.parentElement) els.shiftList.parentElement.scrollTop = previousScrollTop;
+  renderShiftListCountsAndFooter(els.leftPane, records.length);
+}
+
+function renderShiftListItem(shift) {
+  const employee = latestEmployees.find((item) => item.id === shift.employee_id);
+  const project = latestProjects.find((item) => item.id === shift.project_id);
+  const start = new Date(shift.start_time);
+  const end = new Date(shift.end_time);
+  const locale = lang === 'en' ? 'en-US' : 'de-DE';
+  const date = start.toLocaleDateString(locale, { weekday: 'short', day: '2-digit', month: '2-digit' });
+  const title = shift.title || project?.name || t('shift', 'Dienst');
+  const meta = `${date} · ${formatTime(start)}–${formatTime(end)} · ${employee?.name || t('unassigned', 'Unbesetzt')} · ${project?.name || shift.location || t('noProject', 'Ohne Projekt')}`;
+  const selected = shift.id === selectedShiftId;
+  return `
+    <article class="ctox-list-item shiftflow-shift-item${selected ? ' is-selected' : ''}" role="option" aria-selected="${selected}" data-shift-list-id="${escapeHtml(shift.id)}" data-context-record-id="${escapeHtml(shift.id)}" data-context-record-type="planning_shift" data-context-label="${escapeHtml(title)}">
+      <button type="button" class="shiftflow-shift-select" data-select-shift-id="${escapeHtml(shift.id)}" aria-label="${escapeHtml(`${t('openShift', 'Schicht öffnen')}: ${title}`)}">
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(meta)}</span>
+      </button>
+      <button type="button" class="ctox-pane-icon" data-edit-shift-id="${escapeHtml(shift.id)}" title="${escapeHtml(t('edit', 'Bearbeiten'))}" aria-label="${escapeHtml(`${t('edit', 'Bearbeiten')}: ${title}`)}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4l11-11-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg></button>
+    </article>
+  `;
+}
+
+function renderShiftListCountsAndFooter(pane, visibleCount) {
+  const counts = shiftListBandCounts();
+  const bandLabel = shiftListState.band === 'drafts' ? t('viewDrafts', 'Entwürfe') : t('viewWeek', 'Woche');
+  const footer = `${visibleCount} ${t('entries', 'Einträge')} · ${bandLabel}`;
+  const pg = pane.__ctoxPaneGrammar;
+  if (pg?.setCounts) pg.setCounts(counts);
+  else for (const [key, value] of Object.entries(counts)) {
+    const node = pane.querySelector(`[data-pg-count="${key}"]`);
+    if (node) node.textContent = ` (${value})`;
+  }
+  if (pg?.setFooter) pg.setFooter(footer);
+  else {
+    const node = pane.querySelector('[data-pg-footer]');
+    if (node) node.textContent = footer;
+  }
+}
+
+export function applyShiftListSelection(list, selectedId) {
+  if (!list?.querySelectorAll) return;
+  list.querySelectorAll('[data-shift-list-id]').forEach((row) => {
+    const selected = String(row.dataset.shiftListId || '') === String(selectedId || '');
+    row.classList.toggle('is-selected', selected);
+    row.setAttribute('aria-selected', String(selected));
+  });
+}
+
+function applyBoardShiftSelection(els) {
+  els.schedulerGridBody?.querySelectorAll?.('[data-shift-id]').forEach((card) => {
+    const selected = String(card.dataset.shiftId || '') === String(selectedShiftId || '');
+    card.classList.toggle('is-selected', selected);
+    card.setAttribute('aria-pressed', String(selected));
+  });
+}
+
+function selectShiftInPlace(shiftId, els, ctx) {
+  selectedShiftId = String(shiftId || '') || null;
+  selectedEmployeeId = null;
+  detailUserCollapsed = false;
+  applyShiftListSelection(els.shiftList, selectedShiftId);
+  applyBoardShiftSelection(els);
+  currentView = 'scheduler';
+  applyCenterViewState(els);
+  renderSelectedShiftDetail(els, ctx);
+}
+
+function selectEmployeeInPlace(employeeId, els, ctx) {
+  selectedEmployeeId = String(employeeId || '') || null;
+  selectedShiftId = null;
+  detailUserCollapsed = false;
+  applyShiftListSelection(els.shiftList, null);
+  applyBoardShiftSelection(els);
+  currentView = 'scheduler';
+  applyCenterViewState(els);
+  renderSelectedShiftDetail(els, ctx);
+}
+
+function renderSelectedShiftDetail(els, ctx) {
+  const shift = latestShifts.find((item) => item.id === selectedShiftId);
+  if (shift) {
+    void openShiftDetails(shift.id, latestShifts, latestEmployees, els, ctx);
+    return;
+  }
+  selectedShiftId = null;
+  if (selectedEmployeeId) {
+    void openEmployeeDetailsInspector(selectedEmployeeId, latestEmployees, els, ctx);
+    return;
+  }
+  showInspectorSection(els);
+}
+
+function renderMainViewCounts(els) {
+  const { startMs, endMs } = getWeekBoundsMs(currentWeekStart);
+  const counts = {
+    scheduler: latestShifts.filter((shift) => shift.start_time >= startMs && shift.start_time <= endMs).length,
+    conflicts: latestConflicts.length,
+    timesheets: latestTimeRecords.filter((record) => record.approval_status === 'pending' && record.end_time !== null).length,
+    billing: latestTimeRecords.filter((record) => record.approval_status === 'approved' && record.end_time !== null).length,
+  };
+  for (const [key, value] of Object.entries(counts)) {
+    const node = els.app?.querySelector(`[data-main-count="${key}"]`);
+    if (node) node.textContent = ` (${value})`;
+  }
+}
 
 function renderEmployeesList(employees, timeRecords, els, ctx) {
   const filtered = filterShiftflowEmployeesForPlanner(employees, {
@@ -879,13 +1022,13 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
       const initials = emp.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
 
       const rowHeader = `
-        <div class="row-employee-cell">
+        <button type="button" class="row-employee-cell" data-open-employee-id="${escapeHtml(emp.id)}" draggable="true" aria-label="${escapeHtml(`${t('employeeDetails', 'Mitarbeiter-Details')}: ${emp.name}`)}">
           <div class="ctox-avatar emp-avatar" style="background: ${emp.avatar_color || 'var(--accent)'}">${initials}</div>
           <div class="emp-info">
             <div class="emp-name">${escapeHtml(emp.name)}</div>
             <div class="emp-meta">${escapeHtml(emp.role)}</div>
           </div>
-        </div>
+        </button>
       `;
 
       const dayCells = Array.from({ length: 7 }).map((_, index) => {
@@ -938,7 +1081,7 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
       }).join('');
 
       return `
-        <div class="scheduler-row">
+        <div class="scheduler-row" data-context-record-id="${escapeHtml(emp.id)}" data-context-record-type="planning_employee" data-context-label="${escapeHtml(emp.name)}">
           ${rowHeader}
           ${dayCells}
         </div>
@@ -1021,14 +1164,14 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
       }).join('');
 
       return `
-        <div class="scheduler-row">
+        <div class="scheduler-row" data-context-record-id="${escapeHtml(proj.id)}" data-context-record-type="planning_project" data-context-label="${escapeHtml(proj.name)}">
           ${rowHeader}
           ${dayCells}
         </div>
       `;
     }).join('');
 
-    els.schedulerGridBody.innerHTML = rows || '<div class="ctox-empty">Keine aktiven Projekte gefunden. Lege links ein neues an!</div>';
+    els.schedulerGridBody.innerHTML = rows || `<div class="ctox-empty">${escapeHtml(t('noActiveProjects', 'Keine aktiven Projekte vorhanden.'))}</div>`;
   }
 
   // Bind click & double-click handlers on shift cards
@@ -1036,14 +1179,25 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
     card.addEventListener('click', (e) => {
       e.stopPropagation();
       const shift = shifts.find(s => s.id === card.dataset.shiftId);
-      if (shift) openShiftDetails(shift.id, shifts, employees, els, ctx);
+      if (shift) selectShiftInPlace(shift.id, els, ctx);
     });
 
     card.addEventListener('dblclick', (e) => {
       e.stopPropagation();
       const shift = shifts.find(s => s.id === card.dataset.shiftId);
-      if (shift) openShiftDetails(shift.id, shifts, employees, els, ctx);
+      if (shift) selectShiftInPlace(shift.id, els, ctx);
     });
+  });
+
+  // Employee row headers remain the drag source for the one-step booking path;
+  // clicking one opens the existing quick-assign matrix in the in-board detail.
+  els.schedulerGridBody.querySelectorAll('[data-open-employee-id]').forEach((button) => {
+    button.addEventListener('click', () => selectEmployeeInPlace(button.dataset.openEmployeeId, els, ctx));
+    button.addEventListener('dragstart', (event) => {
+      event.dataTransfer.setData('text/plain', button.dataset.openEmployeeId);
+      button.classList.add('is-dragging');
+    });
+    button.addEventListener('dragend', () => button.classList.remove('is-dragging'));
   });
 
   // Bind click handlers on "add shift" hover buttons
@@ -1134,6 +1288,8 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
       });
     });
   });
+
+  applyBoardShiftSelection(els);
 }
 
 function renderTimesheets(employees, projects, shifts, records, els, ctx) {
@@ -1206,7 +1362,7 @@ function renderTimesheets(employees, projects, shifts, records, els, ctx) {
     const projColor = proj ? proj.color : 'var(--line)';
 
     return `
-      <div class="timesheet-card" data-rec-id="${rec.id}">
+      <div class="timesheet-card" data-rec-id="${rec.id}" data-context-record-id="${escapeHtml(rec.id)}" data-context-record-type="planning_time_record" data-context-label="${escapeHtml(`${emp ? emp.name : t('employee', 'Mitarbeiter')} · ${dateStr}`)}">
         <div class="timesheet-card-main">
           <div class="ctox-avatar emp-avatar" style="background: ${emp ? emp.avatar_color : 'var(--muted)'}">${initials}</div>
           <div class="timesheet-details">
@@ -1250,7 +1406,7 @@ function renderTimesheets(employees, projects, shifts, records, els, ctx) {
   });
 }
 
-function renderBillingAggregation(employees, projects, records, els) {
+function renderBillingAggregation(employees, projects, records, els, ctx) {
   // 1. Gather all approved and completed records
   const approvedRecords = records.filter(rec => rec.approval_status === 'approved' && rec.end_time !== null);
 
@@ -1350,7 +1506,7 @@ function renderBillingAggregation(employees, projects, records, els) {
       const billingDisplay = p.hourly_rate > 0 ? `${p.hourly_rate.toFixed(2)} €/h` : 'Nicht abrechenbar';
 
       return `
-        <tr>
+        <tr data-context-record-id="${escapeHtml(p.id)}" data-context-record-type="planning_project" data-context-label="${escapeHtml(p.name)}">
           <td class="billing-project-cell">
             <span class="project-card-badge" style="background:${p.color || 'var(--muted)'}"></span>
             <strong>${escapeHtml(p.name)}</strong>
@@ -1559,6 +1715,7 @@ async function publishCurrentWeekSchedule(ctx, els) {
 async function openShiftDetails(shiftId, shifts, employees, els, ctx) {
   const shift = shifts.find(s => s.id === shiftId);
   if (!shift) return;
+  selectedShiftId = shift.id;
 
   const emp = employees.find(e => e.id === shift.employee_id);
   const db = shiftflowDb(ctx);
@@ -1635,6 +1792,7 @@ async function openEmployeeDetailsInspector(empId, employees, els, ctx) {
     hideInspectorSection(els);
     return;
   }
+  selectedEmployeeId = empId;
 
   const db = shiftflowDb(ctx);
   if (!db) return;
@@ -2273,151 +2431,153 @@ async function openShiftDrawer(shift, dateStr, empId, projId, els, ctx) {
 // -------------------------------------------------------------
 
 function bindEventListeners(ctx, els) {
-  // Prev / Next Week
-  els.prevWeekBtn.addEventListener('click', () => {
-    currentWeekStart.setDate(currentWeekStart.getDate() - 7);
+  const changeWeek = (days) => {
+    currentWeekStart.setDate(currentWeekStart.getDate() + days);
     updateWeekRangeDisplay(els);
     renderGridHeader(els);
-    triggerScheduleGridRefresh(ctx, els);
-  });
+    latestConflicts = collectPlanningConflicts(latestShifts, latestEmployees, currentWeekStart);
+    refreshPlanningSurfaces(els, ctx);
+  };
+  els.prevWeekBtn.addEventListener('click', () => changeWeek(-7));
+  els.nextWeekBtn.addEventListener('click', () => changeWeek(7));
 
-  els.nextWeekBtn.addEventListener('click', () => {
-    currentWeekStart.setDate(currentWeekStart.getDate() + 7);
-    updateWeekRangeDisplay(els);
-    renderGridHeader(els);
-    triggerScheduleGridRefresh(ctx, els);
-  });
-
-  // Tab switching center pane
-  els.viewSchedulerTabBtn.addEventListener('click', () => {
-    currentView = 'scheduler';
+  const setMainView = (view) => {
+    currentView = view;
     applyCenterViewState(els);
-  });
+    if (view === 'billing') renderBillingAggregation(latestEmployees, latestProjects, latestTimeRecords, els, ctx);
+  };
+  els.viewSchedulerTabBtn.addEventListener('click', () => setMainView('scheduler'));
+  els.viewConflictsTabBtn.addEventListener('click', () => setMainView('conflicts'));
+  els.viewTimesheetsTabBtn.addEventListener('click', () => setMainView('timesheets'));
+  els.viewBillingTabBtn.addEventListener('click', () => setMainView('billing'));
 
-  els.viewTimesheetsTabBtn.addEventListener('click', () => {
-    currentView = 'timesheets';
-    applyCenterViewState(els);
-  });
-
-  els.viewBillingTabBtn.addEventListener('click', () => {
-    currentView = 'billing';
-    applyCenterViewState(els);
-    triggerBillingAggregationUpdate(ctx, els);
-  });
-
-  // Dual Timeline Toggle Button handlers
   els.toggleViewEmployeesBtn.addEventListener('click', () => {
     currentTimelineFocus = 'employees';
     applyTimelineState(els);
     renderGridHeader(els);
-    triggerScheduleGridRefresh(ctx, els);
+    renderSchedulerGrid(latestEmployees, latestProjects, latestShifts, els, ctx);
   });
-
   els.toggleViewProjectsBtn.addEventListener('click', () => {
     currentTimelineFocus = 'projects';
     applyTimelineState(els);
     renderGridHeader(els);
-    triggerScheduleGridRefresh(ctx, els);
+    renderSchedulerGrid(latestEmployees, latestProjects, latestShifts, els, ctx);
   });
 
-  // Projects Drawer Trigger
-  els.addProjectBtn.addEventListener('click', () => {
-    openProjectDrawer(null, els, ctx);
+  els.leftPane.addEventListener('ctox-pane-grammar-change', (event) => {
+    const detail = event.detail || {};
+    shiftListState = {
+      search: String(detail.search || ''),
+      view: detail.view === 'list' ? 'list' : 'cards',
+      band: detail.band === 'drafts' ? 'drafts' : 'week',
+      filters: {
+        department: detail.filters?.department || 'all',
+        status: detail.filters?.status || 'all',
+      },
+    };
+    currentDeptFilter = shiftListState.filters.department;
+    renderShiftList(els);
+    renderSchedulerGrid(latestEmployees, latestProjects, latestShifts, els, ctx);
   });
 
-  // Employee Add Drawer Trigger
-  els.addEmployeeBtn.addEventListener('click', () => {
-    openEmployeeDrawer(null, els, ctx);
+  els.shiftList.addEventListener('click', (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const edit = target?.closest('[data-edit-shift-id]');
+    if (edit) {
+      const shift = latestShifts.find((item) => item.id === edit.dataset.editShiftId);
+      if (shift) void openShiftDrawer(shift, null, null, null, els, ctx);
+      return;
+    }
+    const select = target?.closest('[data-select-shift-id]');
+    if (select) selectShiftInPlace(select.dataset.selectShiftId, els, ctx);
   });
 
-  // Department Filters & Employee Search
-  els.departmentFilterSelect.addEventListener('change', (e) => {
-    currentDeptFilter = e.target.value;
-    triggerSidebarsUpdate(ctx, els);
-    triggerScheduleGridRefresh(ctx, els);
+  els.addShiftBtn.addEventListener('click', () => {
+    const date = new Date(currentWeekStart).toISOString().split('T')[0];
+    void openShiftDrawer(null, date, '', '', els, ctx);
   });
-
-  els.employeeSearchInput.addEventListener('input', () => {
-    triggerSidebarsUpdate(ctx, els);
-    triggerScheduleGridRefresh(ctx, els);
+  els.importShiftsBtn.addEventListener('click', () => els.shiftImportInput.click());
+  els.shiftImportInput.addEventListener('change', async () => {
+    const [file] = els.shiftImportInput.files || [];
+    try {
+      await importShiftRecords(file, ctx);
+    } catch (error) {
+      ctx.notifications?.show?.({ type: 'error', title: t('shiftPlanList', 'Schichten & Pläne'), message: error?.message || String(error) });
+    } finally {
+      els.shiftImportInput.value = '';
+    }
   });
+  els.exportShiftsBtn.addEventListener('click', exportShiftRecords);
 
-  els.employeeSearchInput.addEventListener('search', () => {
-    triggerSidebarsUpdate(ctx, els);
-    triggerScheduleGridRefresh(ctx, els);
-  });
-
-  // Timesheets Workbench Actions
   els.approveAllTimesheetsBtn.addEventListener('click', () => approveAllTimesheets(ctx));
-
-  els.btnPublishSchedule.addEventListener('click', () => {
-    publishCurrentWeekSchedule(ctx, els);
-  });
-
-  // Billing Date bounds selectors
-  els.billingFilterApplyBtn.addEventListener('click', () => {
-    triggerBillingAggregationUpdate(ctx, els);
-  });
-
-  // Invoice Export Payload drafting
-  els.exportInvoiceDraftBtn.addEventListener('click', () => {
-    exportInvoiceDraftPayload();
-  });
-
-  // Detail Inspector Drawer Closes
-  els.closeInspectorBtn.addEventListener('click', () => {
-    hideInspectorSection(els);
-  });
-
-  // AI chat triggers
-  els.btnAutoGenerateSchedule.addEventListener('click', () => {
-    alert(t('aiGenerateAlert', 'Planungs-Assistent: Generiere optimierten Dienstplan für KW {0} basierend auf Mitarbeiter-Sollstunden & Projektbedarf...', getWeekNumber(currentWeekStart)));
-    autoGenerateSchedule(ctx, els);
-  });
-
-  els.btnCheckConflicts.addEventListener('click', () => {
-    runConflictsAnalysis(ctx, els);
-  });
-
-  els.btnFindReplacements.addEventListener('click', () => {
-    alert(t('aiReplacementAlert', 'Planungs-Assistent: Suche qualifizierten Ersatz für gemeldete Abwesenheiten...'));
-  });
-
-  // Right-pane (AI planner + inspector) collapse toggle. Mirrors the threads /
-  // tickets pattern: hidden by default, header icon re-reveals on demand.
-  els.toggleActions?.addEventListener('click', () => {
-    if (!els.app) return;
-    const nowHidden = els.app.classList.toggle('is-actions-hidden');
-    els.toggleActions.setAttribute('aria-pressed', nowHidden ? 'false' : 'true');
-  });
+  els.btnPublishSchedule.addEventListener('click', () => publishCurrentWeekSchedule(ctx, els));
+  els.billingFilterApplyBtn.addEventListener('click', () => renderBillingAggregation(latestEmployees, latestProjects, latestTimeRecords, els, ctx));
+  els.exportInvoiceDraftBtn.addEventListener('click', exportInvoiceDraftPayload);
+  els.closeInspectorBtn.addEventListener('click', () => hideInspectorSection(els));
+  els.btnAutoGenerateSchedule.addEventListener('click', () => autoGenerateSchedule(ctx, els));
+  els.btnCheckConflicts.addEventListener('click', () => runConflictsAnalysis(ctx, els));
 }
 
 function triggerScheduleGridRefresh(ctx, els) {
-  shiftflowCollection(ctx, 'planning_shifts').find().exec().then(shifts => {
-    shiftflowCollection(ctx, 'planning_employees').find().exec().then(employees => {
-      shiftflowCollection(ctx, 'planning_projects').find().exec().then(projects => {
-        renderSchedulerGrid(employees, projects, shifts, els, ctx);
-      });
-    });
+  Promise.all([
+    shiftflowCollection(ctx, 'planning_shifts').find().exec(),
+    shiftflowCollection(ctx, 'planning_employees').find().exec(),
+    shiftflowCollection(ctx, 'planning_projects').find().exec(),
+  ]).then(([shifts, employees, projects]) => {
+    latestShifts = shifts;
+    latestEmployees = employees;
+    latestProjects = projects;
+    refreshPlanningSurfaces(els, ctx);
   });
 }
 
-function triggerSidebarsUpdate(ctx, els) {
-  shiftflowCollection(ctx, 'planning_employees').find().exec().then(employees => {
-    shiftflowCollection(ctx, 'planning_time_records').find().exec().then(records => {
-      renderEmployeesList(employees, records, els, ctx);
-    });
-  });
+function exportShiftRecords() {
+  const shifts = visibleShiftListRecords().map((shift) => typeof shift.toJSON === 'function' ? shift.toJSON() : { ...shift });
+  const payload = { format: 'ctox-shiftflow-shifts-v1', exported_at_ms: Date.now(), shifts };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `shiftflow-shifts-${new Date().toISOString().slice(0, 10)}.json`;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
-function triggerBillingAggregationUpdate(ctx, els) {
-  shiftflowCollection(ctx, 'planning_employees').find().exec().then(employees => {
-    shiftflowCollection(ctx, 'planning_projects').find().exec().then(projects => {
-      shiftflowCollection(ctx, 'planning_time_records').find().exec().then(records => {
-        renderBillingAggregation(employees, projects, records, els);
-      });
-    });
-  });
+function validShiftImportRecord(record) {
+  return record && typeof record === 'object'
+    && typeof record.id === 'string' && record.id.length > 0
+    && Number.isFinite(Number(record.start_time))
+    && Number.isFinite(Number(record.end_time))
+    && Number(record.end_time) > Number(record.start_time)
+    && typeof record.status === 'string'
+    && Number.isFinite(Number(record.created_at_ms))
+    && Number.isFinite(Number(record.updated_at_ms));
+}
+
+async function importShiftRecords(file, ctx) {
+  if (!file) return;
+  const parsed = JSON.parse(await file.text());
+  const records = (Array.isArray(parsed) ? parsed : parsed?.shifts || []).filter(validShiftImportRecord);
+  if (!records.length) throw new Error(t('shiftImportEmpty', 'Die JSON-Datei enthält keine gültigen Schichten.'));
+  const collection = shiftflowCollection(ctx, 'planning_shifts');
+  if (!collection || !canWriteCollection(ctx, 'planning_shifts')) throw new Error(t('shiftImportDenied', 'Schichten können mit den aktuellen Rechten nicht importiert werden.'));
+  for (const record of records) {
+    const normalized = {
+      ...record,
+      kind: record.kind || 'shift',
+      start_time: Number(record.start_time),
+      end_time: Number(record.end_time),
+      created_at_ms: Number(record.created_at_ms),
+      updated_at_ms: Number(record.updated_at_ms),
+    };
+    if (typeof collection.upsert === 'function') await collection.upsert(normalized);
+    else {
+      const existing = await collection.findOne(normalized.id).exec();
+      if (existing) await existing.incrementalPatch(normalized);
+      else await collection.insert(normalized);
+    }
+  }
+  ctx.notifications?.show?.({ type: 'success', title: t('shiftPlanList', 'Schichten & Pläne'), message: t('shiftImportDone', '{0} Schichten importiert.', String(records.length)) });
 }
 
 // -------------------------------------------------------------
@@ -2489,132 +2649,118 @@ async function autoGenerateSchedule(ctx, els) {
     }
   }
 
-  // Display a nice chat success message
-  const msgHtml = `
-    <div class="shiftflow-ai-msg bot">
-      <div class="ctox-avatar ctox-avatar--sm">AI</div>
-      <div class="shiftflow-ai-text">${t('aiGenerateSuccess', 'Ich habe erfolgreich einen optimierten Dienstplanentwurf (Mo-Fr) für alle aktiven Mitarbeiter generiert! Die Schichten wurden im Modus <strong>Entwurf</strong> angelegt, sodass du sie vor dem Veröffentlichen noch anpassen kannst.')}</div>
-    </div>
-  `;
-  els.aiPlannerChatBody.insertAdjacentHTML('beforeend', msgHtml);
-  els.aiPlannerChatBody.scrollTop = els.aiPlannerChatBody.scrollHeight;
+  ctx.notifications?.show?.({
+    type: 'success',
+    title: t('schedulePlanning', 'Einsatzplanung'),
+    message: t('aiGenerateSuccessPlain', 'Dienstplanentwurf für Montag bis Freitag wurde angelegt.'),
+  });
+}
+
+export function collectPlanningConflicts(shifts, employees, weekStart = currentWeekStart) {
+  const monday = new Date(weekStart);
+  const weekStartMs = monday.getTime();
+  const weekEndMs = weekStartMs + 7 * 24 * 3600000 - 1;
+  const weekShifts = shifts.filter((shift) => shift.start_time >= weekStartMs && shift.start_time <= weekEndMs);
+  const conflicts = [];
+
+  // The established Shiftflow rules remain unchanged: >42 weekly hours,
+  // overlapping assignments, 11h rest, 10h extended daily cap, AÜG duration.
+  employees.forEach((employee) => {
+    const employeeShifts = weekShifts.filter((shift) => shift.employee_id === employee.id);
+    const totalHours = employeeShifts.reduce((sum, shift) => sum + (shift.end_time - shift.start_time) / 3600000, 0);
+    if (totalHours > 42) {
+      conflicts.push({
+        type: 'overtime',
+        employeeId: employee.id,
+        message: t('conflictMaxHours', '<strong>{0}</strong> überschreitet die wöchentliche Höchstarbeitszeit ({1} Std. geplant, Soll: {2} Std.)', employee.name, totalHours.toFixed(1), employee.weekly_target_hours || 40),
+      });
+    }
+  });
+
+  for (let i = 0; i < weekShifts.length; i += 1) {
+    for (let j = i + 1; j < weekShifts.length; j += 1) {
+      const first = weekShifts[i];
+      const second = weekShifts[j];
+      if (first.employee_id === second.employee_id && first.start_time < second.end_time && second.start_time < first.end_time) {
+        const employee = employees.find((item) => item.id === first.employee_id);
+        conflicts.push({
+          type: 'overlap',
+          employeeId: first.employee_id,
+          shiftId: second.id,
+          message: t('conflictDoubleBooking', 'Doppelbuchung für <strong>{0}</strong> am {1} erkannt.', employee ? employee.name : t('employee', 'Mitarbeiter'), new Date(first.start_time).toLocaleDateString(lang === 'en' ? 'en-US' : 'de-DE')),
+        });
+      }
+    }
+  }
+
+  const employeesById = new Map(employees.map((employee) => [employee.id, employee]));
+  const employeeName = (id) => employeesById.get(id)?.name || t('employee', 'Mitarbeiter');
+  const toPlain = (shift) => ({ id: shift.id, employee_id: shift.employee_id, project_id: shift.project_id, start_time: shift.start_time, end_time: shift.end_time });
+  const weekShiftObjects = weekShifts.map(toPlain);
+  for (const violation of checkRestPeriods(weekShiftObjects)) {
+    conflicts.push({
+      type: 'rest_period',
+      employeeId: violation.employeeId,
+      shiftId: violation.shiftId,
+      message: t('conflictRestPeriod', '<strong>{0}</strong>: Ruhezeit unter 11 Std. ({1} Std.) zwischen zwei Schichten.', employeeName(violation.employeeId), violation.restHours),
+    });
+  }
+  for (const violation of checkDailyHours(weekShiftObjects, { extended: true })) {
+    conflicts.push({
+      type: 'daily_hours',
+      employeeId: violation.employeeId,
+      message: t('conflictDailyHours', '<strong>{0}</strong>: Tägliche Höchstarbeitszeit überschritten ({1} Std., max {2} Std.).', employeeName(violation.employeeId), violation.hours, violation.capHours),
+    });
+  }
+  for (const assignment of accumulateUeberlassung(shifts.map(toPlain))) {
+    if (assignment.overCap) {
+      conflicts.push({
+        type: 'ueberlassung',
+        employeeId: assignment.employeeId,
+        projectId: assignment.projectId,
+        message: t('conflictUeberlassung', '<strong>{0}</strong>: Höchstüberlassungsdauer überschritten ({1} Tage, max {2}).', employeeName(assignment.employeeId), assignment.days, assignment.capDays),
+      });
+    } else if (assignment.nearCap) {
+      conflicts.push({
+        type: 'ueberlassung',
+        employeeId: assignment.employeeId,
+        projectId: assignment.projectId,
+        message: t('conflictUeberlassungNear', '<strong>{0}</strong>: Höchstüberlassungsdauer fast erreicht ({1} Tage).', employeeName(assignment.employeeId), assignment.days),
+      });
+    }
+  }
+  return conflicts;
+}
+
+function renderConflicts(conflicts, els) {
+  if (!els.conflictsList) return;
+  els.conflictsList.innerHTML = conflicts.length ? conflicts.map((conflict, index) => {
+    const recordId = conflict.shiftId || conflict.employeeId || conflict.projectId || `conflict-${index}`;
+    return `
+      <article class="ctox-callout is-danger shiftflow-conflict-item" data-context-record-id="${escapeHtml(recordId)}" data-context-record-type="planning_conflict" data-context-label="${escapeHtml(`${t('tabConflicts', 'Konflikt')} ${index + 1}`)}">
+        <span data-conflict-symbol aria-hidden="true">!</span>
+        <div>${conflict.message}</div>
+      </article>
+    `;
+  }).join('') : `<div class="ctox-empty">${t('noConflictsDetected', 'Keine aktiven Konflikte erkannt. Der Dienstplan erfüllt alle Vorgaben.')}</div>`;
 }
 
 async function runConflictsAnalysis(ctx, els) {
   const shiftsCollection = shiftflowCollection(ctx, 'planning_shifts');
   const employeesCollection = shiftflowCollection(ctx, 'planning_employees');
   if (!shiftsCollection || !employeesCollection) return;
-
-  const shifts = await shiftsCollection.find().exec();
-  const employees = await employeesCollection.find().exec();
-
-  const monday = new Date(currentWeekStart);
-  const weekStartMs = monday.getTime();
-  const weekEndMs = weekStartMs + 7 * 24 * 3600000 - 1;
-
-  // Filter shifts this week
-  const weekShifts = shifts.filter(s => s.start_time >= weekStartMs && s.start_time <= weekEndMs);
-
-  const conflicts = [];
-
-  // Rule 1: Check maximum working hours (e.g. max 45 hours a week)
-  employees.forEach(emp => {
-    const empShifts = weekShifts.filter(s => s.employee_id === emp.id);
-    let totalHours = 0;
-    empShifts.forEach(s => {
-      totalHours += (s.end_time - s.start_time) / 3600000;
-    });
-
-    if (totalHours > 42) {
-      conflicts.push({
-        type: 'overtime',
-        message: t('conflictMaxHours', '<strong>{0}</strong> überschreitet die wöchentliche Höchstarbeitszeit ({1} Std. geplant, Soll: {2} Std.)', emp.name, totalHours.toFixed(1), emp.weekly_target_hours || 40)
-      });
-    }
+  latestShifts = await shiftsCollection.find().exec();
+  latestEmployees = await employeesCollection.find().exec();
+  latestConflicts = collectPlanningConflicts(latestShifts, latestEmployees, currentWeekStart);
+  renderConflicts(latestConflicts, els);
+  renderMainViewCounts(els);
+  ctx.notifications?.show?.({
+    type: latestConflicts.length ? 'warning' : 'success',
+    title: t('conflictsAndWarnings', 'Konflikte & Warnungen'),
+    message: latestConflicts.length
+      ? t('conflictCountResult', '{0} Konflikte gefunden.', String(latestConflicts.length))
+      : t('noConflictsDetected', 'Keine aktiven Konflikte erkannt. Der Dienstplan erfüllt alle Vorgaben.'),
   });
-
-  // Rule 2: Double-booking check
-  for (let i = 0; i < weekShifts.length; i++) {
-    for (let j = i + 1; j < weekShifts.length; j++) {
-      const s1 = weekShifts[i];
-      const s2 = weekShifts[j];
-
-      if (s1.employee_id === s2.employee_id) {
-        // Check overlap
-        if (s1.start_time < s2.end_time && s2.start_time < s1.end_time) {
-          const emp = employees.find(e => e.id === s1.employee_id);
-          conflicts.push({
-            type: 'overlap',
-            message: t('conflictDoubleBooking', 'Doppelbuchung für <strong>{0}</strong> am {1} erkannt.', emp ? emp.name : t('employee', 'Mitarbeiter'), new Date(s1.start_time).toLocaleDateString(lang === 'en' ? 'en-US' : 'de-DE'))
-          });
-        }
-      }
-    }
-  }
-
-  // Rule 3: real ArbZG rest periods + daily caps, and AÜG Höchstüberlassungsdauer.
-  // Previously the success message claimed "Ruhezeiten geprüft" while only weekly
-  // hours + double-booking were actually checked.
-  const employeesById = new Map(employees.map(e => [e.id, e]));
-  const empName = (id) => employeesById.get(id)?.name || t('employee', 'Mitarbeiter');
-  const toPlain = (s) => ({ id: s.id, employee_id: s.employee_id, project_id: s.project_id, start_time: s.start_time, end_time: s.end_time });
-  const weekShiftObjs = weekShifts.map(toPlain);
-  for (const v of checkRestPeriods(weekShiftObjs)) {
-    conflicts.push({
-      type: 'rest_period',
-      message: t('conflictRestPeriod', '<strong>{0}</strong>: Ruhezeit unter 11 Std. ({1} Std.) zwischen zwei Schichten.', empName(v.employeeId), v.restHours)
-    });
-  }
-  for (const v of checkDailyHours(weekShiftObjs, { extended: true })) {
-    conflicts.push({
-      type: 'daily_hours',
-      message: t('conflictDailyHours', '<strong>{0}</strong>: Tägliche Höchstarbeitszeit überschritten ({1} Std., max {2} Std.).', empName(v.employeeId), v.hours, v.capHours)
-    });
-  }
-  // Überlassungsdauer accumulates across the whole plan, not just this week.
-  for (const u of accumulateUeberlassung(shifts.map(toPlain))) {
-    if (u.overCap) {
-      conflicts.push({ type: 'ueberlassung', message: t('conflictUeberlassung', '<strong>{0}</strong>: Höchstüberlassungsdauer überschritten ({1} Tage, max {2}).', empName(u.employeeId), u.days, u.capDays) });
-    } else if (u.nearCap) {
-      conflicts.push({ type: 'ueberlassung', message: t('conflictUeberlassungNear', '<strong>{0}</strong>: Höchstüberlassungsdauer fast erreicht ({1} Tage).', empName(u.employeeId), u.days) });
-    }
-  }
-
-  // Render Conflicts list
-  if (conflicts.length === 0) {
-    els.conflictsList.innerHTML = `
-      <div class="ctox-empty">
-        ${t('noConflictsDetected', 'Keine aktiven Konflikte erkannt. Der Dienstplan erfüllt alle Vorgaben.')}
-      </div>
-    `;
-
-    const botMsg = `
-      <div class="shiftflow-ai-msg bot">
-        <div class="ctox-avatar ctox-avatar--sm">AI</div>
-        <div class="shiftflow-ai-text">${t('aiCheckSuccess', 'Ich habe die Konfliktanalyse durchgeführt: Keine Regelverletzungen (Ruhezeiten, Höchstarbeitszeiten, Doppelbelegungen) gefunden! Perfekte Dienstplanung.')}</div>
-      </div>
-    `;
-    els.aiPlannerChatBody.insertAdjacentHTML('beforeend', botMsg);
-  } else {
-    els.conflictsList.innerHTML = conflicts.map(c => {
-      const icon = c.type === 'overtime' ? '🕒' : '⚠️';
-      return `
-        <div class="ctox-callout is-danger shiftflow-conflict-item">
-          <span>${icon}</span>
-          <div>${c.message}</div>
-        </div>
-      `;
-    }).join('');
-
-    const botMsg = `
-      <div class="shiftflow-ai-msg bot">
-        <div class="ctox-avatar ctox-avatar--sm">AI</div>
-        <div class="shiftflow-ai-text">${t('aiCheckWarning', 'Vorsicht! Ich habe {0} Dienstplankonflikte bzw. Arbeitszeitüberschreitungen gefunden. Bitte prüfe das Konflikte-Panel unten rechts.', conflicts.length)}</div>
-      </div>
-    `;
-    els.aiPlannerChatBody.insertAdjacentHTML('beforeend', botMsg);
-  }
-  els.aiPlannerChatBody.scrollTop = els.aiPlannerChatBody.scrollHeight;
 }
 
 function exportInvoiceDraftPayload() {
@@ -2707,212 +2853,14 @@ function applyStaticLabels(root, t) {
   root.querySelectorAll('[data-t-placeholder]').forEach(el => el.placeholder = t(el.dataset.tPlaceholder));
 }
 
-function initShiftflowContextMenu(els, ctx) {
-  contextMenu?.remove();
-  const menu = document.createElement('div');
-  menu.className = 'ctox-context-menu shiftflow-context-menu';
-  menu.hidden = true;
-  document.body.append(menu);
-  contextMenu = menu;
-
-  const handleContextMenu = (event) => {
-    if (ctx.module?.id !== 'shiftflow') return;
-    const context = shiftflowCommandContextFromElement(els, event.target);
-    event.preventDefault();
-    event.stopPropagation();
-    renderShiftflowContextMenu(els, ctx, context, event.clientX, event.clientY);
-  };
-  const handleOutsideClick = (event) => {
-    if (contextMenu?.contains(event.target)) return;
-    hideShiftflowContextMenu();
-  };
-  const handleEscape = (event) => {
-    if (event.key === 'Escape') hideShiftflowContextMenu();
-  };
-
-  window.addEventListener('click', handleOutsideClick, { capture: true });
-  window.addEventListener('keydown', handleEscape);
-
-  return () => {
-    window.removeEventListener('click', handleOutsideClick, { capture: true });
-    window.removeEventListener('keydown', handleEscape);
-    hideShiftflowContextMenu();
-    contextMenu?.remove();
-    contextMenu = null;
-  };
-}
-
-function hideShiftflowContextMenu() {
-  if (contextMenu) contextMenu.hidden = true;
-}
-
-function canModifyShiftflowApp(ctx) {
-  if (typeof ctx.canModifyModule === 'function' && ctx.canModifyModule()) return true;
-  const user = ctx.session?.user || {};
-  const role = String(user.role || (user.is_admin ? 'admin' : 'user')).trim().toLowerCase().replace(/^business_os_/, '');
-  return ['admin', 'chef'].includes(role);
-}
-
-function shiftflowCommandContextFromElement(els, target) {
-  const element = target?.nodeType === Node.ELEMENT_NODE ? target : target?.parentElement;
-
-  const shiftCard = element?.closest('.shift-card');
-  const gridCell = element?.closest('.grid-shift-cell');
-  const employeeCard = element?.closest('.employee-card');
-  const projectCard = element?.closest('.project-card');
-
-  let employee_id = '';
-  let employee_name = '';
-  let project_id = '';
-  let project_name = '';
-  let shift_id = '';
-  let shift_title = '';
-  let date = '';
-
-  if (shiftCard) {
-    shift_id = shiftCard.dataset.shiftId || '';
-    const titleEl = shiftCard.querySelector('.shift-title') || shiftCard.querySelector('div[style*="font-weight:700"]');
-    if (titleEl) shift_title = titleEl.textContent;
-  }
-  if (gridCell) {
-    employee_id = gridCell.dataset.empId || '';
-    project_id = gridCell.dataset.projId || '';
-    date = gridCell.dataset.date || '';
-  }
-  if (employeeCard) {
-    employee_id = employeeCard.dataset.empId || '';
-    const nameEl = employeeCard.querySelector('.emp-name');
-    if (nameEl) employee_name = nameEl.textContent;
-  }
-  if (projectCard) {
-    project_id = projectCard.dataset.projId || '';
-    const nameEl = projectCard.querySelector('.project-card-name');
-    if (nameEl) project_name = nameEl.textContent;
-  }
-
-  const searchQuery = els.employeeSearchInput?.value || '';
-
-  return {
-    module: 'shiftflow',
-    column: currentView || 'scheduler',
-    record_type: shift_id ? 'shift' : (employee_id ? 'employee' : (project_id ? 'project' : 'schedule')),
-    record_id: shift_id || employee_id || project_id || '',
-    label: shift_title || employee_name || project_name || date || t('shiftflow', 'Einsatzplanung'),
-    employee_id,
-    employee_name,
-    project_id,
-    project_name,
-    shift_id,
-    shift_title,
-    date,
-    current_view: currentView,
-    timeline_focus: currentTimelineFocus,
-    dept_filter: currentDeptFilter,
-    search_query: searchQuery,
-    selected_text: String(window.getSelection?.()?.toString?.() || '').trim().slice(0, 1000),
-    clicked_text: String(element?.innerText || element?.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 500),
-  };
-}
-
-function renderShiftflowContextMenu(els, ctx, context, x, y) {
-  const canModifyApp = canModifyShiftflowApp(ctx);
-  contextMenu.innerHTML = `
-    <form class="shiftflow-context-chat" data-shiftflow-context-chat-form>
-      <header>
-        <div>
-          <strong>Chat to CTOX</strong>
-          <span>${escapeHtml(context.label || 'Einsatzplanung')}</span>
-        </div>
-        <button type="button" data-shiftflow-context-close aria-label="Schließen">×</button>
-      </header>
-      ${canModifyApp ? `
-        <div class="ctox-context-mode" role="radiogroup" aria-label="CTOX Aufgabe">
-          <label><input type="radio" name="contextMode" value="data" checked /> Mit Daten arbeiten</label>
-          <label><input type="radio" name="contextMode" value="app" /> App modifizieren</label>
-        </div>
-      ` : ''}
-      <textarea data-shiftflow-context-message placeholder="Was soll CTOX im Dienstplan / der Einsatzplanung tun?"></textarea>
-      <footer>
-        <span data-shiftflow-context-status></span>
-        <button type="submit">Senden</button>
-      </footer>
-    </form>
-  `;
-  contextMenu.hidden = false;
-  contextMenu.style.left = '0px';
-  contextMenu.style.top = '0px';
-  const rect = contextMenu.getBoundingClientRect();
-  const clampNumber = (val, min, max) => Math.min(max, Math.max(min, val));
-  const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
-  const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
-  contextMenu.style.left = `${clampNumber(x, 8, maxLeft)}px`;
-  contextMenu.style.top = `${clampNumber(y, 8, maxTop)}px`;
-
-  const form = contextMenu.querySelector('[data-shiftflow-context-chat-form]');
-  const textarea = contextMenu.querySelector('[data-shiftflow-context-message]');
-  contextMenu.querySelector('[data-shiftflow-context-close]')?.addEventListener('click', hideShiftflowContextMenu);
-  form?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const mode = canModifyApp ? (new FormData(form).get('contextMode') || 'data') : 'data';
-    await dispatchShiftflowContextChat(els, ctx, context, textarea?.value || '', mode);
-  });
-  requestAnimationFrame(() => textarea?.focus());
-}
-
-async function dispatchShiftflowContextChat(els, ctx, context, message, mode = 'data') {
-  const trimmed = String(message || '').trim();
-  const status = contextMenu?.querySelector('[data-shiftflow-context-status]');
-  if (!trimmed) {
-    if (status) status.textContent = 'Nachricht fehlt.';
-    return;
-  }
-
-  const safeMode = mode === 'app' && canModifyShiftflowApp(ctx) ? 'app' : 'data';
-  if (!document.querySelector('[data-ctox-chat-root]')) {
-    if (status) status.textContent = 'Chat ist noch nicht bereit.';
-    return;
-  }
-  if (status) status.textContent = 'Oeffne Chat...';
-  const title = `${safeMode === 'app' ? 'Shiftflow App modifizieren' : 'Dienstplan anpassen'} · ${context.label || 'Einsatzplanung'}`;
-  const instruction = safeMode === 'app'
-    ? `Modifiziere die Einsatzplanung-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, Dienstplandaten selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
-    : trimmed;
-
-  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
-    detail: {
-      text: trimmed,
-      module: 'shiftflow',
-      source_title: 'Einsatzplanung',
-      command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
-      record_id: safeMode === 'app' ? 'shiftflow' : (context.record_id || 'shiftflow'),
-      title,
-      instruction,
-      payload: {
-        title,
-        instruction,
-        prompt: trimmed,
-        user_message: trimmed,
-        mode: safeMode,
-        target: safeMode === 'app' ? 'app' : 'data',
-        context,
-        thread_key: 'business-os/shiftflow',
-      },
-      client_context: {
-        action: 'context-chat',
-        mode: safeMode,
-        column: context.column,
-        record_type: context.record_type,
-        shift_id: context.shift_id || '',
-        employee_id: context.employee_id || '',
-        project_id: context.project_id || '',
-      },
-    },
-  }));
-  hideShiftflowContextMenu();
-}
+// Right-click context is shell-owned. Record containers expose the explicit
+// data-context-record-* trio; Shiftflow does not dispatch shell events or own a
+// context menu.
 
 export const __shiftflowTestHooks = {
   filterShiftflowEmployeesForPlanner,
   getShiftflowPressedState,
-  getWeekBoundsMs
+  getWeekBoundsMs,
+  applyShiftListSelection,
+  collectPlanningConflicts,
 };

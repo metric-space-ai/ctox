@@ -1,64 +1,58 @@
-<main class="ctox-workspace shiftflow-app is-actions-hidden" data-shiftflow-root data-resize-frame>
-  <!-- LEFT PANE: Team, Status & Projects -->
-  <aside class="ctox-pane shiftflow-left-pane" id="shiftflow-left">
+<main class="ctox-workspace shiftflow-app" data-shiftflow-root data-resize-frame>
+  <aside class="ctox-pane shiftflow-left-pane" id="shiftflow-left" data-left-content>
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-t="overview">Übersicht</span>
-          <h2 class="ctox-pane-title" data-t="teamAndStatus">Team & Status</h2>
+          <span class="ctox-pane-kicker" data-t="planningKicker">Planung</span>
+          <h2 class="ctox-pane-title" data-t="shiftPlanList">Schichten & Pläne</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button class="ctox-pane-icon" id="addEmployeeBtn" data-t-title="addEmployee" data-t-aria="addEmployee" title="Mitarbeiter hinzufügen" aria-label="Mitarbeiter hinzufügen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
+          <button type="button" class="ctox-pane-icon" id="addShiftBtn" data-t-title="addShift" data-t-aria="addShift" title="Neue Schicht" aria-label="Neue Schicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+          <button type="button" class="ctox-pane-icon" id="importShiftsBtn" data-t-title="importShifts" data-t-aria="importShifts" title="Schichten importieren" aria-label="Schichten importieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg></button>
+          <button type="button" class="ctox-pane-icon" id="exportShiftsBtn" data-t-title="exportShifts" data-t-aria="exportShifts" title="Schichten exportieren" aria-label="Schichten exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21V9M12 9l-4 4M12 9l4 4M5 3h14"/></svg></button>
+          <input type="file" id="shiftImportInput" accept="application/json,.json" hidden />
         </div>
       </div>
-      <div class="ctox-pane-tools">
-        <input type="search" id="employeeSearchInput" class="ctox-pane-search" data-t-placeholder="searchEmployees" data-t-aria="searchEmployeesAria" placeholder="Mitarbeiter in Liste & Plan suchen..." aria-label="Mitarbeiter in Liste und Dienstplan suchen" />
-        <select id="departmentFilterSelect" class="ctox-pane-filter" data-t-aria="filterDepartment" aria-label="Abteilung filtern">
-          <option value="all" data-t="allDepartments">Alle Abteilungen</option>
-          <option value="Service" data-t="deptService">Service</option>
-          <option value="Küche" data-t="deptKitchen">Küche</option>
-          <option value="Bar" data-t="deptBar">Bar</option>
-          <option value="Verwaltung" data-t="deptAdmin">Verwaltung</option>
-        </select>
+      <div class="ctox-filterbar">
+        <input class="ctox-pane-search" type="search" data-pg-search data-t-placeholder="searchShifts" data-t-aria="searchShiftsAria" placeholder="Schicht, Person oder Projekt suchen..." aria-label="Schichten suchen" />
+        <div class="ctox-view-toggle" role="group" aria-label="Darstellung">
+          <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="true" data-t-title="cardsView" data-t-aria="cardsView" title="Shard-Ansicht" aria-label="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="false" data-t-title="listView" data-t-aria="listView" title="Listen-Ansicht" aria-label="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
+        <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" data-t-title="filter" data-t-aria="filter" title="Filter" aria-label="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      </div>
+      <div class="ctox-filter-tray" data-pg-tray hidden>
+        <div class="ctox-filter-row">
+          <select class="ctox-select" data-pg-filter data-pg-name="department" data-pg-default="all" data-t-aria="filterDepartment" aria-label="Abteilung filtern">
+            <option value="all" data-t="allDepartments">Alle Abteilungen</option>
+            <option value="Service" data-t="deptService">Service</option>
+            <option value="Küche" data-t="deptKitchen">Küche</option>
+            <option value="Bar" data-t="deptBar">Bar</option>
+            <option value="Verwaltung" data-t="deptAdmin">Verwaltung</option>
+          </select>
+          <select class="ctox-select" data-pg-filter data-pg-name="status" data-pg-default="all" data-t-aria="filterStatus" aria-label="Status filtern">
+            <option value="all" data-t="allStatuses">Alle Status</option>
+            <option value="draft" data-t="statusDraft">Entwurf</option>
+            <option value="published" data-t="statusPublished">Veröffentlicht</option>
+          </select>
+          <button type="button" class="ctox-sort-dir" data-pg-reset data-t-title="resetFilters" data-t-aria="resetFilters" aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+        </div>
       </div>
     </header>
-
-    <div class="ctox-pane-body">
-      <div class="ctox-pane-scroll shiftflow-sidebar os-scrollbar">
-        <!-- Employees Section -->
-        <section class="shiftflow-sidebar-section">
-          <div class="shiftflow-employee-groups">
-            <div class="shiftflow-employee-group">
-              <div class="shiftflow-section-head"><span class="ctox-field-label" data-t="onDuty">Im Dienst</span> <span class="ctox-badge is-success" id="activeEmployeesCount">0</span></div>
-              <div class="shiftflow-employee-list" id="activeEmployeeList"></div>
-            </div>
-            <div class="shiftflow-employee-group">
-              <div class="shiftflow-section-head"><span class="ctox-field-label" data-t="absent">Abwesend</span> <span class="ctox-badge" id="inactiveEmployeesCount">0</span></div>
-              <div class="shiftflow-employee-list" id="inactiveEmployeeList"></div>
-            </div>
-          </div>
-        </section>
-
-        <hr class="shiftflow-separator" />
-
-        <!-- Projects Section -->
-        <section class="shiftflow-sidebar-section">
-          <div class="shiftflow-section-head">
-            <span class="ctox-field-label" data-t="projectsAndLocations">Projekte & Einsatzorte</span>
-            <button class="ctox-button ctox-button--sm" id="addProjectBtn" data-t="addProjectBtnText" data-t-title="addProject" data-t-aria="addProject" title="Projekt hinzufügen" aria-label="Projekt hinzufügen">+ Projekt</button>
-          </div>
-          <div class="shiftflow-project-list" id="projectList">
-            <!-- Projects will be rendered dynamically -->
-          </div>
-        </section>
+    <nav class="ctox-view-switch" data-shift-list-band aria-label="Schichtansichten">
+      <div class="ctox-pane-tabs" role="tablist">
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="week" aria-selected="true"><span data-t="viewWeek">Woche</span><span class="view-count" data-pg-count="week"> (0)</span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="drafts" aria-selected="false"><span data-t="viewDrafts">Entwürfe</span><span class="view-count" data-pg-count="drafts"> (0)</span></button>
       </div>
+    </nav>
+    <div class="ctox-pane-body ctox-well">
+      <div class="ctox-list shiftflow-shift-list is-cards" role="listbox" data-shift-list></div>
     </div>
+    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
   </aside>
 
-  <!-- LEFT RESIZER (shell-owned, declarative) -->
-  <button class="ctox-column-resizer" type="button" data-t-aria="adjustLeftWidth" aria-label="Linke Spaltenbreite anpassen" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="220" data-resizer-max="480"></button>
+  <button class="ctox-column-resizer" type="button" data-t-aria="adjustLeftWidth" aria-label="Linke Spaltenbreite anpassen" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="240" data-resizer-max="440"></button>
 
-  <!-- CENTER PANE: Main Scheduler, Timesheets & Billing -->
   <section class="ctox-pane shiftflow-center-pane" id="shiftflow-center">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
@@ -67,21 +61,23 @@
           <h2 class="ctox-pane-title" id="centerPaneTitle" data-t="schedulePlanning">Einsatzplanung</h2>
         </div>
         <div class="ctox-pane-actions">
-          <div class="ctox-pane-tabs" role="group" aria-label="Einsatzplanung Ansicht">
-            <button type="button" class="ctox-pane-tab active" id="viewSchedulerTabBtn" data-t="tabScheduler" aria-pressed="true">Dienstplan</button>
-            <button type="button" class="ctox-pane-tab" id="viewTimesheetsTabBtn" data-t="tabTimesheets" aria-pressed="false">Zeiterfassung</button>
-            <button type="button" class="ctox-pane-tab" id="viewBillingTabBtn" data-t="tabBilling" aria-pressed="false">Abrechnung</button>
-          </div>
-          <button class="ctox-pane-icon" id="prevWeekBtn" data-t-title="prevWeek" data-t-aria="prevWeek" title="Vorherige Woche" aria-label="Vorherige Woche"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg></button>
-          <button class="ctox-pane-icon" id="nextWeekBtn" data-t-title="nextWeek" data-t-aria="nextWeek" title="Nächste Woche" aria-label="Nächste Woche"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></button>
-          <button type="button" class="ctox-pane-icon" data-toggle-actions data-t-title="aiAssistantToggle" data-t-aria="aiAssistantToggle" title="CTOX Planungs-Assistent" aria-label="CTOX Planungs-Assistent einblenden" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button>
+          <button type="button" class="ctox-pane-icon" id="btnAutoGenerateSchedule" data-t-title="aiGenerateSchedule" data-t-aria="aiGenerateSchedule" title="Dienstplan automatisch generieren" aria-label="Dienstplan automatisch generieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.4 4.1L17.5 8.5l-4.1 1.4L12 14l-1.4-4.1-4.1-1.4 4.1-1.4L12 3z"/><path d="M18 14l.8 2.2L21 17l-2.2.8L18 20l-.8-2.2L15 17l2.2-.8L18 14z"/></svg></button>
+          <button type="button" class="ctox-pane-icon" id="prevWeekBtn" data-t-title="prevWeek" data-t-aria="prevWeek" title="Vorherige Woche" aria-label="Vorherige Woche"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
+          <button type="button" class="ctox-pane-icon" id="nextWeekBtn" data-t-title="nextWeek" data-t-aria="nextWeek" title="Nächste Woche" aria-label="Nächste Woche"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
         </div>
       </div>
     </header>
 
-    <!-- VIEW 1: SCHEDULER TIMELINE (Calendar Grid) -->
+    <nav class="ctox-view-switch shiftflow-main-view-switch" aria-label="Planungsansichten">
+      <div class="ctox-pane-tabs" role="tablist">
+        <button type="button" class="ctox-pane-tab is-active" id="viewSchedulerTabBtn" data-main-view="scheduler" role="tab" aria-selected="true"><span data-t="tabScheduler">Dienstplan</span><span class="view-count" data-main-count="scheduler"> (0)</span></button>
+        <button type="button" class="ctox-pane-tab" id="viewConflictsTabBtn" data-main-view="conflicts" role="tab" aria-selected="false"><span data-t="tabConflicts">Konflikte</span><span class="view-count" data-main-count="conflicts"> (0)</span></button>
+        <button type="button" class="ctox-pane-tab" id="viewTimesheetsTabBtn" data-main-view="timesheets" role="tab" aria-selected="false"><span data-t="tabTimesheets">Zeiterfassung</span><span class="view-count" data-main-count="timesheets"> (0)</span></button>
+        <button type="button" class="ctox-pane-tab" id="viewBillingTabBtn" data-main-view="billing" role="tab" aria-selected="false"><span data-t="tabBilling">Abrechnung</span><span class="view-count" data-main-count="billing"> (0)</span></button>
+      </div>
+    </nav>
+
     <div class="shiftflow-view-content" id="schedulerView">
-      <!-- Toolbar for Dual-Timeline Switcher + signature publish automation -->
       <header class="ctox-action-strip">
         <span class="ctox-action-strip__group">
           <div class="ctox-pane-tabs" role="group" aria-label="Timeline Fokus">
@@ -94,151 +90,65 @@
           <button type="button" class="ctox-run-control" id="btnPublishSchedule" data-t="publishSchedule">Dienstplan veröffentlichen</button>
         </span>
       </header>
-
-      <div class="shiftflow-scheduler-container os-scrollbar">
-        <!-- Calendar Grid Header (Days) -->
-        <div class="shiftflow-scheduler-grid-header" id="schedulerGridHeader">
-          <div class="shiftflow-grid-corner-cell" id="schedulerCornerCell" data-t="employee">Mitarbeiter</div>
-          <!-- Day cells will be rendered dynamically -->
+      <div class="shiftflow-board-stage">
+        <div class="shiftflow-scheduler-container os-scrollbar">
+          <div class="shiftflow-scheduler-grid-header" id="schedulerGridHeader">
+            <div class="shiftflow-grid-corner-cell" id="schedulerCornerCell" data-t="employee">Mitarbeiter</div>
+          </div>
+          <div class="shiftflow-scheduler-grid-body" id="schedulerGridBody"></div>
         </div>
-        <!-- Calendar Grid Body -->
-        <div class="shiftflow-scheduler-grid-body" id="schedulerGridBody">
-          <!-- Rows will be rendered dynamically -->
-        </div>
+        <aside class="shiftflow-board-detail" id="detailInspectorSection" data-detail-drawer hidden>
+          <header class="ctox-pane-header ctox-pane-band">
+            <div class="ctox-pane-title-row">
+              <div class="ctox-pane-titles">
+                <span class="ctox-pane-kicker" data-t="shiftDetails">Schicht-Details</span>
+                <h3 class="ctox-pane-title" id="inspectorTitle">Details</h3>
+              </div>
+              <div class="ctox-pane-actions">
+                <button type="button" class="ctox-pane-icon" id="closeInspectorBtn" data-t-title="close" data-t-aria="close" title="Schließen" aria-label="Schließen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+              </div>
+            </div>
+          </header>
+          <div class="ctox-pane-scroll shiftflow-detail-body os-scrollbar" id="inspectorContent"></div>
+        </aside>
       </div>
     </div>
 
-    <!-- VIEW 2: TIMESHEETS WORKBENCH -->
-    <div class="shiftflow-view-content hidden" id="timesheetsView">
+    <div class="shiftflow-view-content hidden" id="conflictsView">
       <header class="ctox-action-strip">
-        <span class="ctox-action-strip__group">
-          <button class="ctox-button is-primary" id="approveAllTimesheetsBtn" data-t="approveAll">Alle freigeben</button>
-        </span>
+        <span class="ctox-action-strip__group"><span class="ctox-field-label" data-t="conflictsAndWarnings">Konflikte & Warnungen</span></span>
+        <span class="ctox-action-strip__group"><button type="button" class="ctox-button" id="btnCheckConflicts" data-t="aiCheckConflicts">Konflikte & Ruhezeiten prüfen</button></span>
       </header>
-      <div class="ctox-pane-scroll shiftflow-timesheets-list os-scrollbar" id="timesheetsList">
-        <!-- Timesheets will be loaded here -->
+      <div class="ctox-pane-scroll shiftflow-conflicts-alert-container os-scrollbar">
+        <div class="shiftflow-conflicts-list" id="conflictsList"><div class="ctox-empty" data-t="noConflictsDetected">Keine aktiven Konflikte erkannt. Der Dienstplan erfüllt alle Vorgaben.</div></div>
       </div>
     </div>
 
-    <!-- VIEW 3: BILLING & AGGREGATION WORKBENCH -->
+    <div class="shiftflow-view-content hidden" id="timesheetsView">
+      <header class="ctox-action-strip"><span class="ctox-action-strip__group"><button class="ctox-button is-primary" id="approveAllTimesheetsBtn" data-t="approveAll">Alle freigeben</button></span></header>
+      <div class="ctox-pane-scroll shiftflow-timesheets-list os-scrollbar" id="timesheetsList"></div>
+    </div>
+
     <div class="shiftflow-view-content hidden" id="billingView">
       <header class="ctox-action-strip">
         <span class="ctox-action-strip__group shiftflow-billing-date-selector">
-          <label class="shiftflow-date-field">
-            <span class="ctox-field-label" data-t="dateFrom">Von</span>
-            <input type="date" id="billingStartDate" class="ctox-input" />
-          </label>
-          <label class="shiftflow-date-field">
-            <span class="ctox-field-label" data-t="dateTo">Bis</span>
-            <input type="date" id="billingEndDate" class="ctox-input" />
-          </label>
+          <label class="shiftflow-date-field"><span class="ctox-field-label" data-t="dateFrom">Von</span><input type="date" id="billingStartDate" class="ctox-input" /></label>
+          <label class="shiftflow-date-field"><span class="ctox-field-label" data-t="dateTo">Bis</span><input type="date" id="billingEndDate" class="ctox-input" /></label>
           <button class="ctox-button" id="billingFilterApplyBtn" data-t="filter">Filtern</button>
         </span>
-        <span class="ctox-action-strip__group">
-          <button class="ctox-button shiftflow-icon-text-btn" id="exportInvoiceDraftBtn" data-icon="document" data-t="exportInvoiceDraft">Rechnungsentwurf (JSON)</button>
-        </span>
+        <span class="ctox-action-strip__group"><button class="ctox-button shiftflow-icon-text-btn" id="exportInvoiceDraftBtn" data-icon="document" data-t="exportInvoiceDraft">Rechnungsentwurf (JSON)</button></span>
       </header>
-
-      <!-- Financial Margins Dashboard -->
       <div class="shiftflow-financial-summary">
-        <div class="ctox-card">
-          <header data-t="billingTotalRevenueLabel">Umsatz (Abrechenbar)</header>
-          <div class="ctox-card-body">
-            <span class="shiftflow-fin-value text-revenue" id="billingTotalRevenue">0,00 €</span>
-          </div>
-        </div>
-        <div class="ctox-card">
-          <header data-t="billingTotalCostLabel">Lohnkosten (Intern)</header>
-          <div class="ctox-card-body">
-            <span class="shiftflow-fin-value text-cost" id="billingTotalCost">0,00 €</span>
-          </div>
-        </div>
-        <div class="ctox-card">
-          <header data-t="billingTotalMarginLabel">Bruttomarge (Projekte)</header>
-          <div class="ctox-card-body">
-            <span class="shiftflow-fin-value text-margin" id="billingTotalMargin">0,00 € (0%)</span>
-          </div>
-        </div>
+        <div class="ctox-card"><header data-t="billingTotalRevenueLabel">Umsatz (Abrechenbar)</header><div class="ctox-card-body"><span class="shiftflow-fin-value text-revenue" id="billingTotalRevenue">0,00 €</span></div></div>
+        <div class="ctox-card"><header data-t="billingTotalCostLabel">Lohnkosten (Intern)</header><div class="ctox-card-body"><span class="shiftflow-fin-value text-cost" id="billingTotalCost">0,00 €</span></div></div>
+        <div class="ctox-card"><header data-t="billingTotalMarginLabel">Bruttomarge (Projekte)</header><div class="ctox-card-body"><span class="shiftflow-fin-value text-margin" id="billingTotalMargin">0,00 € (0%)</span></div></div>
       </div>
-
-      <!-- Aggregated Margins Table -->
       <div class="ctox-table-wrap shiftflow-billing-content-wrapper os-scrollbar">
         <table class="ctox-table">
-          <thead>
-            <tr>
-              <th data-t="colProject">Projekt / Einsatzort</th>
-              <th data-t="colCustomer">Kunde</th>
-              <th class="is-num" data-t="colApprovedHours">Freigegebene Std</th>
-              <th class="is-num" data-t="colRateExt">Satz (ext.)</th>
-              <th class="is-num" data-t="colTargetRevenue">Soll-Umsatz</th>
-              <th class="is-num" data-t="colWages">Lohnkosten</th>
-              <th class="is-num" data-t="colMargin">Marge</th>
-              <th class="is-num" data-t="colActions">Aktionen</th>
-            </tr>
-          </thead>
-          <tbody id="billingAggregationBody">
-            <!-- Will be rendered dynamically -->
-          </tbody>
+          <thead><tr><th data-t="colProject">Projekt / Einsatzort</th><th data-t="colCustomer">Kunde</th><th class="is-num" data-t="colApprovedHours">Freigegebene Std</th><th class="is-num" data-t="colRateExt">Satz (ext.)</th><th class="is-num" data-t="colTargetRevenue">Soll-Umsatz</th><th class="is-num" data-t="colWages">Lohnkosten</th><th class="is-num" data-t="colMargin">Marge</th><th class="is-num" data-t="colActions">Aktionen</th></tr></thead>
+          <tbody id="billingAggregationBody"></tbody>
         </table>
       </div>
     </div>
   </section>
-
-  <!-- RIGHT RESIZER (shell-owned, declarative) -->
-  <button class="ctox-column-resizer" type="button" data-t-aria="adjustRightWidth" aria-label="Rechte Spaltenbreite anpassen" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="280" data-resizer-max="520"></button>
-
-  <!-- RIGHT PANE: AI Planner & Detail Inspector -->
-  <aside class="ctox-pane shiftflow-right-pane" id="shiftflow-right">
-    <!-- Tab 1: AI Planner Context -->
-    <div class="shiftflow-right-pane-section" id="aiPlannerSection">
-      <header class="ctox-pane-header ctox-pane-band">
-        <div class="ctox-pane-title-row">
-          <div class="ctox-pane-titles shiftflow-ai-title">
-            <span class="shiftflow-icon-mask" data-icon="spark" aria-hidden="true"></span>
-            <h2 class="ctox-pane-title" data-t="aiAssistantTitle">CTOX Planungs-Assistent</h2>
-          </div>
-        </div>
-      </header>
-      <div class="shiftflow-ai-chat-card">
-        <div class="shiftflow-ai-chat-body os-scrollbar" id="aiPlannerChatBody">
-          <div class="shiftflow-ai-msg bot">
-            <div class="ctox-avatar ctox-avatar--sm">AI</div>
-            <div class="shiftflow-ai-text" data-t="aiAssistantWelcome">Hallo! Ich bin dein CTOX Planungs-Assistent. Ich kann dir dabei helfen, den Dienstplan automatisch zu optimieren, Konflikte zu prüfen oder kurzfristigen Schicht-Ersatz bei Krankheit zu finden. Was kann ich heute für dich tun?</div>
-          </div>
-        </div>
-        <div class="shiftflow-ai-actions-stack">
-          <button class="shiftflow-ai-action-shortcut" id="btnAutoGenerateSchedule" data-icon="spark" data-t="aiGenerateSchedule">Dienstplan automatisch generieren</button>
-          <button class="shiftflow-ai-action-shortcut" id="btnCheckConflicts" data-icon="search" data-t="aiCheckConflicts">Konflikte & Ruhezeiten prüfen</button>
-          <button class="shiftflow-ai-action-shortcut" id="btnFindReplacements" data-icon="replacement" data-t="aiPlanReplacement">Ausfall/Ersatz planen...</button>
-        </div>
-      </div>
-
-      <!-- Conflicts Alert Roster -->
-      <div class="ctox-pane-scroll shiftflow-conflicts-alert-container os-scrollbar">
-        <div class="shiftflow-section-head">
-          <span class="ctox-field-label" data-t="conflictsAndWarnings">Konflikte & Warnungen</span>
-        </div>
-        <div class="shiftflow-conflicts-list" id="conflictsList">
-          <div class="ctox-empty" data-t="noConflictsDetected">Keine aktiven Konflikte erkannt. Der Dienstplan erfüllt alle Vorgaben.</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="shiftflow-right-pane-section shiftflow-detail-pane hidden" id="detailInspectorSection" data-detail-drawer>
-      <header class="ctox-pane-header ctox-pane-band">
-        <div class="ctox-pane-title-row">
-          <div class="ctox-pane-titles">
-            <span class="ctox-pane-kicker" data-t="shiftDetails">Schicht-Details</span>
-            <h2 class="ctox-pane-title" id="inspectorTitle">Details</h2>
-          </div>
-          <div class="ctox-pane-actions">
-            <button type="button" class="ctox-pane-icon" id="closeInspectorBtn" data-t-aria="close" aria-label="Schließen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
-          </div>
-        </div>
-      </header>
-      <div class="ctox-pane-scroll shiftflow-detail-body os-scrollbar" id="inspectorContent">
-        <!-- Detail view will be loaded here -->
-      </div>
-    </div>
-  </aside>
 </main>
