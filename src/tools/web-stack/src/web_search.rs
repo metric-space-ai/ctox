@@ -1268,7 +1268,7 @@ fn score_evidence_doc_relevance(doc: &EvidenceDoc, query: &str) -> Option<i64> {
         // file/schema match below the evidence gate. Numeric identifiers are
         // still required above, and at least the selective dataset terms must
         // occur in the immutable source bytes, title, or canonical URL.
-        terms.len().min(7)
+        terms.len().min(5)
     } else {
         terms.len()
     };
@@ -9584,7 +9584,7 @@ mod tests {
         let doc = EvidenceDoc {
             url: url.to_string(),
             canonical_url: url.to_string(),
-            title: "APC 4.2x4 static propeller data".to_string(),
+            title: "m-selig.ae.illinois.edu".to_string(),
             summary: "Immutable original data file retrieved.".to_string(),
             verification_status: "verified".to_string(),
             checked_at: 1,
