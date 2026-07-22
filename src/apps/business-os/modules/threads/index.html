@@ -10,55 +10,62 @@
           <span class="ctox-pane-kicker" data-label="hubKicker">Business OS</span>
           <h2 class="ctox-pane-title" data-label="threadsTitle">Threads</h2>
         </div>
-        <!-- No manual refresh: the module keeps itself current (bounded poll +
+        <!-- Standing actions: new note (opens the action workbench, focuses
+             the note form) + JSON export of the filtered thread list. No
+             manual refresh: the module keeps itself current (bounded poll +
              command receipts). Reactive data needs no reload button. -->
-        <div class="ctox-pane-actions"></div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon" data-action="create-note" aria-label="Neue Notiz anlegen" title="Neue Notiz anlegen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-action="export-threads" aria-label="Gefilterte Threads als JSON exportieren" title="Gefilterte Threads als JSON exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7"/></svg></button>
+        </div>
       </div>
       <!-- Row 2: filter section — search + view toggle + filter tray toggle.
-           The old permanent 12-chip wall lived here; secondary filters now sit
-           in the collapsed tray, primary views in the switcher band below. -->
+           Canonical data-pg-* grammar: the SHELL wires search / view / tray /
+           reset / band / counts / footer (autoWirePaneGrammar); the module
+           only renders lists and listens to ctox-pane-grammar-change. The old
+           permanent 12-chip wall lived here; secondary filters now sit in the
+           collapsed tray, primary views in the switcher band below. -->
       <div class="threads-filterbar">
-        <input class="ctox-pane-search" type="search" data-thread-search placeholder="Threads suchen" aria-label="Threads suchen">
+        <input class="ctox-pane-search" type="search" data-pg-search placeholder="Threads suchen" aria-label="Threads suchen">
         <div class="threads-view-toggle" role="group" aria-label="Darstellung">
-          <button type="button" class="ctox-pane-icon" data-view-mode="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
-          <button type="button" class="ctox-pane-icon" data-view-mode="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
         </div>
-        <button type="button" class="ctox-pane-icon threads-filter-toggle" data-toggle-filters aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+        <button type="button" class="ctox-pane-icon threads-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
       </div>
-      <div class="threads-filter-advanced" data-filter-advanced hidden>
+      <div class="threads-filter-advanced" data-pg-tray hidden>
         <div class="threads-filter-row">
-          <select class="ctox-select threads-select" data-filter-select aria-label="Ansicht">
-            <option value="inbox">Jetzt handeln</option>
-            <option value="waiting">Wartet auf mich</option>
-            <option value="running">AI arbeitet</option>
+          <!-- Secondary views only: the four primary queues live in the counted
+               band below; the neutral value means "band governs". -->
+          <select class="ctox-select threads-select" data-pg-filter data-pg-name="view" data-pg-default="" aria-label="Sekundäre Ansicht">
+            <option value="">Sekundäransicht aus</option>
             <option value="delegated">Wartet auf andere</option>
             <option value="snoozed">Später</option>
             <option value="team">Team Queue</option>
             <option value="mentions">Erwähnungen</option>
             <option value="approvals">Freigaben</option>
             <option value="failed">Blockiert</option>
-            <option value="archived">Erledigt / Archiv</option>
             <option value="all">Alle</option>
             <option value="system">CTOX-Tasks (System)</option>
           </select>
-          <button type="button" class="threads-filter-reset" data-reset-filters aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+          <button type="button" class="threads-filter-reset" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
         </div>
       </div>
     </header>
-    <!-- Row 3: primary view switcher band — the four everyday queues, counted. -->
+    <!-- Row 3: counted view band — the four everyday queues, ALL counted
+         (zeros rendered, never hidden). -->
     <nav class="threads-view-switch" aria-label="Thread Ansichten">
       <div class="ctox-pane-tabs">
-        <button type="button" class="ctox-pane-tab" role="tab" data-filter="inbox" aria-selected="true">Handeln<span class="view-count" data-count-inbox></span></button>
-        <button type="button" class="ctox-pane-tab" role="tab" data-filter="waiting" aria-selected="false">Wartet<span class="view-count" data-count-waiting></span></button>
-        <button type="button" class="ctox-pane-tab" role="tab" data-filter="running" aria-selected="false">AI<span class="view-count" data-count-running></span></button>
-        <button type="button" class="ctox-pane-tab" role="tab" data-filter="archived" aria-selected="false">Erledigt</button>
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="inbox" aria-selected="true">Handeln<span class="view-count" data-pg-count="inbox"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="waiting" aria-selected="false">Wartet<span class="view-count" data-pg-count="waiting"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="running" aria-selected="false">AI<span class="view-count" data-pg-count="running"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="archived" aria-selected="false">Erledigt<span class="view-count" data-pg-count="archived"></span></button>
       </div>
     </nav>
-    <section class="threads-briefing" data-personal-briefing aria-label="Persönliches Briefing"></section>
     <div class="ctox-pane-body threads-well">
-      <div class="ctox-list threads-list" data-thread-list></div>
+      <div class="ctox-list threads-list" data-thread-list tabindex="-1"></div>
     </div>
-    <footer class="threads-footer"><span data-threads-footer-count></span></footer>
+    <footer class="threads-footer"><span data-pg-footer></span></footer>
   </aside>
 
   <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="240" data-resizer-max="480" aria-label="Linke Spaltenbreite anpassen"></button>
@@ -74,11 +81,11 @@
           <h2 class="ctox-pane-title" data-thread-title>Kein Thread ausgewählt</h2>
         </div>
         <div class="ctox-pane-actions">
-          <!-- View toggle for the timeline (cards vs. compact list) — every
-               main view that lists elements offers both renderings. -->
+          <!-- View toggle for the timeline (cards vs. compact list) — shell-wired
+               pane grammar (data-pg-view) like the left rail. -->
           <div class="threads-view-toggle" role="group" aria-label="Timeline-Darstellung">
-            <button type="button" class="ctox-pane-icon" data-center-view="cards" aria-pressed="true" aria-label="Karten-Ansicht" title="Karten-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
-            <button type="button" class="ctox-pane-icon" data-center-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+            <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="true" aria-label="Karten-Ansicht" title="Karten-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+            <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
           </div>
           <button type="button" class="ctox-pane-icon" data-thread-delegate title="An Teammitglied übergeben" aria-label="An Teammitglied übergeben">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM3.5 19.5a5.5 5.5 0 0 1 11 0"/><path d="M16 8h5M18.5 5.5 21 8l-2.5 2.5"/></svg>

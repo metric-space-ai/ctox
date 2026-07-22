@@ -78,7 +78,7 @@ export async function mount(ctx) {
   state.ctx = ctx;
   const messages = await loadModuleMessages(import.meta.url, ctx.locale).catch(() => ({}));
   state.t = (key, fallback) => messages[key] ?? fallback ?? key;
-  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  ctx.host.innerHTML = await loadModuleMarkup();
   applyTranslations(ctx.host, state.t);
   ensureStylesheet();
   bindElements(ctx.host);
@@ -113,19 +113,37 @@ export async function mount(ctx) {
 }
 
 function ensureStylesheet() {
-  const href = new URL('./index.css', import.meta.url).pathname;
-  if (document.head.querySelector(`link[href="${href}"]`)) return;
+  if (document.head.querySelector('link[data-app-store-style]')) return;
   const link = document.createElement('link');
   link.rel = 'stylesheet';
-  link.href = href;
+  const styleUrl = new URL('./index.css', import.meta.url);
+  // Inherit the module's own cache-buster (index.js is imported with
+  // ?v=<build>): fresh JS must never render against a stale cached sheet.
+  const version = String(import.meta.url).split('?v=')[1] || '20260722-app-store-grammar-v1';
+  styleUrl.searchParams.set('v', version);
+  link.href = styleUrl.href;
+  link.dataset.appStoreStyle = 'true';
   document.head.append(link);
 }
 
+async function loadModuleMarkup() {
+  // Markup inherits the JS cache-buster — like the stylesheet, a deploy must
+  // never leave fresh JS binding against stale cached markup (same contract
+  // as ctox/coding-agents/knowledge/threads).
+  const version = String(import.meta.url).split('?v=')[1] || '20260722-app-store-grammar-v1';
+  const markupHref = new URL('./index.html', import.meta.url).pathname + (version ? `?v=${version}` : '');
+  const html = await fetch(markupHref).then((res) => res.text());
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
+  return doc.body.innerHTML;
+}
+
 function bindElements(root) {
-  els.search = root.querySelector('[data-search]');
+  els.leftPane = root.querySelector('.store-left');
+  els.centerPane = root.querySelector('.store-center');
+  els.well = root.querySelector('.store-well');
   els.scopes = root.querySelector('[data-scope-list]');
   els.title = root.querySelector('[data-visible-category-title]');
-  els.count = root.querySelector('[data-apps-count]');
   els.grid = root.querySelector('[data-apps-grid]');
   els.detail = root.querySelector('[data-detail-drawer]');
   els.detailIcon = root.querySelector('[data-detail-icon]');
@@ -138,24 +156,14 @@ function bindElements(root) {
   els.detailStatus = root.querySelector('[data-detail-status]');
   els.readme = root.querySelector('[data-readme-content]');
   els.closeDrawer = root.querySelector('[data-close-drawer]');
-  els.viewToggle = root.querySelector('[data-view-toggle]');
+  els.viewButtons = [...root.querySelectorAll('[data-pg-view]')];
   els.loading = root.querySelector('[data-loading-spinner]');
   els.loadingText = root.querySelector('[data-loading-text]');
   els.refresh = root.querySelector('[data-refresh-marketplace]');
   els.message = root.querySelector('[data-store-message]');
-  els.marketplaceState = root.querySelector('[data-marketplace-state]');
   els.toggleExtras = root.querySelector('[data-toggle-sidebar-extras]');
   els.sidebarExtras = root.querySelector('[data-sidebar-extras]');
-  els.filterToggle = root.querySelector('[data-toggle-store-filters]');
-  els.filterTray = root.querySelector('[data-store-filter-advanced]');
-  els.categoryFilter = root.querySelector('[data-category-filter]');
-  els.sortSelect = root.querySelector('[data-sort-select]');
-  els.filterReset = root.querySelector('[data-reset-store-filters]');
-  els.bandTabs = [...root.querySelectorAll('[data-center-band]')];
-  els.countCatalog = root.querySelector('[data-count-catalog]');
-  els.countUpdates = root.querySelector('[data-count-updates]');
-  els.leftFooter = root.querySelector('[data-left-footer]');
-  els.centerFooter = root.querySelector('[data-center-footer]');
+  els.categoryFilter = root.querySelector('[data-pg-filter][data-pg-name="category"]');
   els.shelfStage = root.querySelector('[data-shelf-stage]');
   els.shelfCanvas = root.querySelector('[data-shelf-canvas]');
   els.shelfScroll = root.querySelector('[data-shelf-scroll]');
@@ -167,11 +175,6 @@ function bindElements(root) {
 }
 
 function wireEvents() {
-  els.search?.addEventListener('input', () => {
-    state.query = els.search.value.trim().toLowerCase();
-    syncStoreFilterIndicator();
-    render();
-  });
   els.scopes?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-scope]');
     if (!button) return;
@@ -185,6 +188,9 @@ function wireEvents() {
 
     const appId = card.dataset.appId || '';
     state.selectedId = appId;
+    // In-place selection flip — a selection click never rebuilds the grid
+    // (scroll + focus stay put); only the detail drawer re-renders.
+    applyAppStoreSelection();
 
     if (actionBtn) {
       const actionType = actionBtn.dataset.cardAction;
@@ -193,7 +199,7 @@ function wireEvents() {
     }
 
     state.drawerOpen = true;
-    render();
+    renderDetails();
   });
   els.grid?.addEventListener('keydown', (event) => {
     if (!['Enter', ' '].includes(event.key)) return;
@@ -201,18 +207,19 @@ function wireEvents() {
     if (!card) return;
     event.preventDefault();
     state.selectedId = card.dataset.appId || '';
+    applyAppStoreSelection();
     state.drawerOpen = true;
-    render();
+    renderDetails();
   });
 
   els.closeDrawer?.addEventListener('click', () => {
     state.drawerOpen = false;
-    render();
+    renderDetails();
   });
   state.ctx.host.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && state.drawerOpen) {
       state.drawerOpen = false;
-      render();
+      renderDetails();
     }
   });
   els.detail?.addEventListener('click', (event) => {
@@ -221,46 +228,12 @@ function wireEvents() {
     triggerCardAction(state.selectedId, actionBtn.dataset.cardAction);
   });
 
-  // Filter section: collapsed tray with category + sort + reset; active-dot
-  // on the toggle whenever a non-default filter is set.
-  els.filterToggle?.addEventListener('click', () => {
-    if (!els.filterTray) return;
-    const open = els.filterTray.hidden;
-    els.filterTray.hidden = !open;
-    els.filterToggle.setAttribute('aria-expanded', String(open));
-  });
-  els.categoryFilter?.addEventListener('change', () => {
-    state.categoryFilter = els.categoryFilter.value;
-    syncStoreFilterIndicator();
-    render();
-  });
-  els.sortSelect?.addEventListener('change', () => {
-    state.sortKey = els.sortSelect.value;
-    syncStoreFilterIndicator();
-    render();
-  });
-  els.filterReset?.addEventListener('click', () => {
-    state.categoryFilter = 'all';
-    state.sortKey = 'title';
-    state.query = '';
-    if (els.categoryFilter) els.categoryFilter.value = 'all';
-    if (els.sortSelect) els.sortSelect.value = 'title';
-    if (els.search) els.search.value = '';
-    syncStoreFilterIndicator();
-    render();
-  });
-  els.bandTabs.forEach((tab) => tab.addEventListener('click', () => {
-    state.centerBand = tab.dataset.centerBand;
-    els.bandTabs.forEach((other) => other.setAttribute('aria-selected', String(other === tab)));
-    render();
-  }));
-
-  els.viewToggle?.addEventListener('click', (event) => {
-    const btn = event.target.closest('[data-view]');
-    if (!btn) return;
-    state.viewMode = btn.dataset.view || 'grid';
-    render();
-  });
+  // Pane chrome is SHELL-owned canonical grammar (autoWirePaneGrammar wires
+  // the data-pg-* markup once, debounced ~120ms after mount): search input,
+  // shelf/list toggle, collapsed tray with reset + active-dot, counted band.
+  // The module only keeps its state in sync through the bubbling grammar
+  // event and re-renders — the same contract knowledge/threads use.
+  els.centerPane?.addEventListener('ctox-pane-grammar-change', onCenterGrammarChange);
 
   els.refresh?.addEventListener('click', () => refreshMarketplace({ force: true }));
 
@@ -270,17 +243,46 @@ function wireEvents() {
     els.toggleExtras.setAttribute('aria-pressed', isHidden ? 'false' : 'true');
   });
 
-  state.ctx.host.querySelector('#btn-create-scratch')?.addEventListener('click', () => {
+  state.ctx.host.querySelector('[data-action="create-scratch"]')?.addEventListener('click', () => {
     openCreatorFromStore({ mode: 'scratch' });
   });
 
-  state.ctx.host.querySelector('#btn-install-github')?.addEventListener('click', () => {
+  state.ctx.host.querySelector('[data-action="install-github"]')?.addEventListener('click', () => {
     installFromGithub();
   });
 
-  state.ctx.host.querySelector('#btn-install-zip')?.addEventListener('click', () => {
+  state.ctx.host.querySelector('[data-action="install-zip"]')?.addEventListener('click', () => {
     installFromZip();
   });
+}
+
+// Grammar state application (center pane: search, shelf/list view, counted
+// band, category/sort tray filters). Intentional reset: grammar changes move
+// the content set, so the well scrolls back to the top (the shell scroll
+// guard also clears its recorded offsets on this event).
+function onCenterGrammarChange(event) {
+  const detail = event?.detail || {};
+  state.query = String(detail.search ?? '').trim().toLowerCase();
+  // Canonical pair is cards|list; the retail-box shelf IS this app's cards
+  // rendering (see the shelf section below).
+  state.viewMode = detail.view === 'list' ? 'list' : 'shelf';
+  if (detail.band) state.centerBand = detail.band;
+  state.categoryFilter = String(detail.filters?.category ?? 'all') || 'all';
+  state.sortKey = String(detail.filters?.sort ?? 'title') || 'title';
+  render({ resetScroll: true });
+}
+
+// Selection is an in-place flip over the existing cards — never a grid
+// rebuild for a selection click (an innerHTML/replaceChildren rebuild would
+// clamp the well's scrollTop to 0).
+function applyAppStoreSelection() {
+  if (!els.grid) return;
+  for (const card of els.grid.querySelectorAll('[data-app-id]')) {
+    const selected = card.dataset.appId === state.selectedId;
+    card.classList.toggle('active', selected);
+    card.classList.toggle('is-selected', selected);
+    card.setAttribute('aria-selected', selected ? 'true' : 'false');
+  }
 }
 
 async function triggerCardAction(appId, actionType) {
@@ -324,7 +326,7 @@ async function triggerCardAction(appId, actionType) {
     }
   } else if (actionType === 'details') {
     state.drawerOpen = true;
-    render();
+    renderDetails();
   }
 }
 
@@ -659,12 +661,43 @@ function syncCategoryOptions() {
     els.categoryFilter.innerHTML = '<option value="all">Alle Kategorien</option>'
       + categories.map((category) => `<option value="${escapeAttr(category)}">${escapeHtml(category)}</option>`).join('');
   }
-  els.categoryFilter.value = wanted.includes(state.categoryFilter) ? state.categoryFilter : 'all';
+  const clamped = wanted.includes(state.categoryFilter) ? state.categoryFilter : 'all';
+  els.categoryFilter.value = clamped;
+  // Keep module state coherent with the clamped select (a stale category
+  // would otherwise filter the list to zero rows while the select shows
+  // "Alle Kategorien", e.g. after a scope switch).
+  state.categoryFilter = clamped;
 }
 
-function syncStoreFilterIndicator() {
-  const active = Boolean(state.query) || state.categoryFilter !== 'all' || state.sortKey !== 'title';
-  els.filterToggle?.classList.toggle('has-active-filters', active);
+// Counts on the counted view band (zeros included) + both one-line pane
+// footers go through the shell-wired grammar handle when present
+// (null-guarded: the shell wires panes debounced ~120ms after mount, so early
+// renders fall back to the direct data-pg-* targets). The left pane has no
+// grammar wiring — its footer fills directly.
+function syncGrammarSurfaces(items, searched) {
+  const counts = { catalog: searched.length, updates: searched.filter(itemHasUpdate).length };
+  const pg = els.centerPane?.__ctoxPaneGrammar;
+  if (pg?.setCounts) pg.setCounts(counts);
+  else for (const [key, value] of Object.entries(counts)) {
+    const node = els.centerPane?.querySelector(`[data-pg-count="${key}"]`);
+    if (node) node.textContent = ` (${value})`;
+  }
+  // The standing sync-state line is gone; the compact discovery signal folds
+  // into this one footer line (full state text rides on the refresh icon's
+  // tooltip via marketplaceStateLabel).
+  const marketplaceSuffix = state.scope === 'marketplace'
+    && ['ready', 'stale'].includes(state.marketplaceStatus)
+    && state.marketplace.length
+    ? ` · ${state.marketplace.length} GitHub`
+    : '';
+  const footerText = `${appCountLabel(items.length, state.scope, state.marketplaceStatus)}${marketplaceSuffix}`;
+  if (pg?.setFooter) pg.setFooter(footerText);
+  else {
+    const node = els.centerPane?.querySelector('[data-pg-footer]');
+    if (node) node.textContent = footerText;
+  }
+  const leftFooter = els.leftPane?.querySelector('[data-pg-footer]');
+  if (leftFooter) leftFooter.textContent = `${catalogItems().length} Apps insgesamt`;
 }
 
 // Updates band: installed apps whose catalog counterpart advertises a newer
@@ -753,7 +786,7 @@ function chooseCanonicalCatalogItem(existing, candidate) {
   return existing;
 }
 
-function render() {
+function render({ resetScroll = false } = {}) {
   const items = filteredItems();
   const searched = searchedItems();
   updateScopeButtons();
@@ -761,16 +794,16 @@ function render() {
   renderMessage();
   if (els.title) els.title.textContent = scopeTitle(state.scope);
 
-  // Counted view band (zeros included) + tray options + footers.
-  if (els.countCatalog) els.countCatalog.textContent = ` (${searched.length})`;
-  if (els.countUpdates) els.countUpdates.textContent = ` (${searched.filter(itemHasUpdate).length})`;
+  // Counted view band (zeros included) + tray options + per-pane footers.
+  syncGrammarSurfaces(items, searched);
   syncCategoryOptions();
-  if (els.leftFooter) els.leftFooter.textContent = `${catalogItems().length} Apps insgesamt`;
-  if (els.centerFooter) {
-    els.centerFooter.textContent = appCountLabel(items.length, state.scope, state.marketplaceStatus);
-  }
 
   const shelfMode = state.viewMode === 'shelf' && !state.shelfUnavailable;
+  // Data re-renders never move the operator: preserve the well's scroll
+  // offset across the list rebuild (intentional resets — search/view/band/
+  // filter/scope — pass resetScroll because the content set changed). The
+  // shell scroll guard backs this up; the reset lands after its restore.
+  const scrollTop = resetScroll ? 0 : (els.well?.scrollTop || 0);
   if (els.shelfStage) els.shelfStage.hidden = !shelfMode;
   if (els.grid) {
     els.grid.hidden = shelfMode;
@@ -779,15 +812,19 @@ function render() {
       els.grid.replaceChildren(...renderCatalogBody(items));
     }
   }
+  if (els.well && !shelfMode) {
+    if (resetScroll) requestAnimationFrame(() => { els.well.scrollTop = 0; });
+    else els.well.scrollTop = scrollTop;
+  }
   if (shelfMode) syncShelf(items);
 
-  if (els.viewToggle) {
-    for (const btn of els.viewToggle.querySelectorAll('[data-view]')) {
-      const active = btn.dataset.view === (shelfMode ? 'shelf' : 'list');
-      btn.classList.toggle('is-active', active);
-      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
-      if (btn.dataset.view === 'shelf') btn.disabled = state.shelfUnavailable;
-    }
+  // Mirror the shell-wired view toggle for programmatic state (shelf
+  // fallback forces list mode and locks the cards/shelf button).
+  for (const btn of els.viewButtons || []) {
+    const active = btn.dataset.pgView === (shelfMode ? 'cards' : 'list');
+    btn.classList.toggle('is-active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    if (btn.dataset.pgView === 'cards') btn.disabled = state.shelfUnavailable;
   }
 
   if (state.selectedId && !items.some((item) => item.id === state.selectedId)) {
@@ -1801,7 +1838,8 @@ function setOperation(moduleId, operation) {
 function setScope(scope) {
   state.scope = scope;
   state.selectedId = '';
-  render();
+  // Scope switch is an intentional content change — the well starts at top.
+  render({ resetScroll: true });
 }
 
 function updateScopeButtons() {
@@ -1814,8 +1852,10 @@ function updateScopeButtons() {
     button.classList.toggle('active', scope === state.scope);
     button.classList.toggle('is-selected', scope === state.scope);
     button.setAttribute('aria-pressed', scope === state.scope ? 'true' : 'false');
+    // Shard meta line: parenthesized count as plain inline text (zeros
+    // included) — no badge-pill chrome on pure selectors.
     const count = button.querySelector('[data-scope-count]');
-    if (count) count.textContent = String(counts[scope] || 0);
+    if (count) count.textContent = `(${counts[scope] || 0})`;
   }
 }
 
@@ -1836,23 +1876,21 @@ function availableMarketplaceCount() {
 }
 
 function renderMarketplaceState() {
-  if (!els.marketplaceState) return;
   const counts = countsByScope();
-  els.marketplaceState.textContent = marketplaceStateLabel({
-    status: state.marketplaceStatus,
-    message: state.marketplaceMessage,
-    discoveredCount: state.marketplace.length,
-    availableCount: availableMarketplaceCount(),
-    installedCount: counts.installed,
-  });
-  els.marketplaceState.dataset.state = state.marketplaceStatus;
+  // No standing sync-state line: the full discovery state rides on the
+  // refresh header icon's tooltip (marketplaceStateLabel), the compact
+  // signal folds into the center pane footer, and progress surfaces through
+  // the loading overlay while a sync actually runs.
   if (els.refresh) {
     const refreshBusy = state.marketplaceStatus === 'loading' || state.busy;
     els.refresh.disabled = refreshBusy;
-    els.refresh.textContent = state.marketplaceStatus === 'loading' ? 'Synchronisiere GitHub...' : 'GitHub aktualisieren';
-    els.refresh.title = refreshBusy
-      ? 'GitHub Discovery läuft bereits.'
-      : `GitHub Discovery aus ${CTOX_REPO} aktualisieren.`;
+    els.refresh.title = marketplaceStateLabel({
+      status: state.marketplaceStatus,
+      message: state.marketplaceMessage,
+      discoveredCount: state.marketplace.length,
+      availableCount: availableMarketplaceCount(),
+      installedCount: counts.installed,
+    });
   }
   const showLoading = state.marketplaceStatus === 'loading' || state.busy;
   if (els.loading) els.loading.hidden = !showLoading;

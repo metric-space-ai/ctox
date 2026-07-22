@@ -1,81 +1,115 @@
 <main class="knowledge-module" data-knowledge-root data-resize-frame>
+      <!-- The pane chrome below is the canonical data-pg-* grammar — the SHELL
+           wires search / view toggle / tray / reset / active-dot / band /
+           counts / footer (autoWirePaneGrammar); the module only renders
+           lists and listens to ctox-pane-grammar-change. This file is the
+           single source of truth for the module markup: index.js fetches it
+           with the JS cache-buster (loadModuleMarkup), like ctox and
+           coding-agents. -->
       <section class="ctox-pane knowledge-pane knowledge-left" aria-label="Knowledge">
+        <!-- Row 1: title + management-only icons (top-right). -->
         <header class="ctox-pane-header ctox-pane-band">
           <div class="ctox-pane-title-row">
             <div class="ctox-pane-titles">
-              <span class="ctox-pane-kicker" data-i18n="leftEyebrow">Research</span>
-              <h2 class="ctox-pane-title" data-i18n="leftTitle">Knowledge</h2>
+              <span class="ctox-pane-kicker">Bibliothek</span>
+              <h2 class="ctox-pane-title">Knowledge</h2>
             </div>
             <div class="ctox-pane-actions">
-              <button class="ctox-pane-icon" type="button" data-action="create-knowledge-book" aria-label="Knowledge Book erstellen" title="Knowledge Book erstellen">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-              </button>
-              <button class="ctox-pane-icon" type="button" data-action="configure-knowledge" aria-label="Knowledge konfigurieren" title="Knowledge konfigurieren">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
-              </button>
-              <button class="ctox-pane-icon" type="button" data-action="import-knowledge-book" aria-label="Knowledge Book importieren" title="Knowledge Book importieren">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg>
-              </button>
-              <button class="ctox-pane-icon" type="button" data-action="export-knowledge-book" aria-label="Knowledge Books exportieren" title="Knowledge Books exportieren">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7"/></svg>
-              </button>
+              <button class="ctox-pane-icon" type="button" data-action="create-knowledge-book" aria-label="Knowledge Book erstellen" title="Knowledge Book erstellen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+              <button class="ctox-pane-icon" type="button" data-action="import-knowledge-book" aria-label="Knowledge Book importieren" title="Knowledge Book importieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg></button>
+              <button class="ctox-pane-icon" type="button" data-action="export-knowledge-book" aria-label="Knowledge Books exportieren" title="Knowledge Books exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7"/></svg></button>
             </div>
           </div>
-          <div class="ctox-pane-tools">
-            <input class="ctox-pane-search" data-search placeholder="Suchen..." />
-          </div>
         </header>
-        <div class="knowledge-scope-switch">
-          <div class="ctox-pane-tabs" role="tablist" aria-label="Knowledge Quelle">
-            <button type="button" class="ctox-pane-tab" role="tab" data-scope="user" aria-selected="false">User</button>
-            <button type="button" class="ctox-pane-tab" role="tab" data-scope="system" aria-selected="false">System</button>
-            <button type="button" class="ctox-pane-tab" role="tab" data-scope="all" aria-selected="true">Alle</button>
+        <!-- Row 2: filter section — search + view toggle + tray toggle.
+             Everything else (scope, sort, content type) lives in the collapsed
+             tray. data-pg-* attributes are wired by the shell grammar. -->
+        <div class="knowledge-filterbar">
+          <input class="ctox-pane-search" type="search" data-pg-search placeholder="Suchen…" aria-label="Suchen" />
+          <div class="knowledge-view-toggle" role="group" aria-label="Darstellung">
+            <button class="ctox-pane-icon" type="button" data-pg-view="cards" aria-pressed="true" aria-label="Shard-Ansicht" title="Shard-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+            <button class="ctox-pane-icon" type="button" data-pg-view="list" aria-pressed="false" aria-label="Listen-Ansicht" title="Listen-Ansicht"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+          </div>
+          <button class="ctox-pane-icon knowledge-filter-toggle" type="button" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--knowledge-surface-muted)"/><circle cx="15" cy="12" r="2.4" fill="var(--knowledge-surface-muted)"/><circle cx="8" cy="17" r="2.4" fill="var(--knowledge-surface-muted)"/></svg></button>
+        </div>
+        <div class="knowledge-filter-advanced" data-pg-tray hidden>
+          <div class="knowledge-filter-row">
+            <select class="ctox-select knowledge-select" data-pg-filter data-pg-name="scope" data-pg-default="all" aria-label="Bereich">
+              <option value="all">Alle Bereiche</option>
+              <option value="user">Nur User</option>
+              <option value="system">Nur System</option>
+            </select>
+            <div class="knowledge-sort">
+              <select class="ctox-select knowledge-select" data-pg-filter data-pg-name="sort" data-pg-default="recent" aria-label="Sortieren nach">
+                <option value="recent">Bearbeitet</option>
+                <option value="created">Erstellt</option>
+                <option value="name">Name</option>
+                <option value="entries">Einträge</option>
+              </select>
+              <!-- Domain-specific leftover: the grammar owns filter VALUES, not
+                   the sort direction — the direction toggle stays module-wired
+                   (same pattern as ctox's data-task-sort-direction). -->
+              <button type="button" class="knowledge-sort-dir" data-action="toggle-sort-dir" data-dir="desc" aria-label="Sortierrichtung umkehren" title="Absteigend"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="6 13 12 19 18 13"/></svg></button>
+            </div>
+            <button type="button" class="knowledge-sort-dir knowledge-filter-reset" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+          </div>
+          <div class="knowledge-filter-chips" role="group" aria-label="Enthält">
+            <button type="button" class="ctox-chip" data-flag="skillbooks" aria-pressed="false">Skillbooks</button>
+            <button type="button" class="ctox-chip" data-flag="runbooks" aria-pressed="false">Runbooks</button>
+            <button type="button" class="ctox-chip" data-flag="tables" aria-pressed="false">Tabellen</button>
           </div>
         </div>
-        <div class="knowledge-scroll" data-knowledge-list></div>
+        <div class="knowledge-scroll" data-knowledge-list tabindex="-1">
+          <div class="ctox-empty"><strong>Knowledge wird geladen</strong></div>
+        </div>
+        <footer class="ctox-pane-footer knowledge-pane-footer"><span data-pg-footer></span></footer>
       </section>
 
       <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--knowledge-left-width" data-resizer-min="300" data-resizer-max="720" aria-label="Spaltenbreite anpassen"></button>
 
       <section class="ctox-pane knowledge-pane knowledge-center" aria-label="Knowledge Dokument">
+        <!-- Row 1: title (the content element's own actions live top-right of
+             each panel as icons — never as text buttons in the content flow). -->
         <header class="ctox-pane-header ctox-pane-band knowledge-center-head">
           <div class="ctox-pane-title-row">
+            <button class="ctox-pane-icon knowledge-mobile-back" type="button" data-action="mobile-back" aria-label="Zurück zur Liste" title="Zurück zur Liste"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
             <div class="ctox-pane-titles">
               <span class="ctox-pane-kicker" data-selected-kind>Ausgewählt</span>
               <h2 class="ctox-pane-title" data-selected-title>Kein Eintrag ausgewählt</h2>
             </div>
-            <div class="ctox-pane-actions">
-              <div class="ctox-pane-tabs" role="tablist" aria-label="Knowledge Ansicht">
-                <button type="button" class="ctox-pane-tab" role="tab" data-tab="skill" aria-selected="true">Skill</button>
-                <button type="button" class="ctox-pane-tab" role="tab" data-tab="runbooks" aria-selected="false">Runbooks</button>
-                <button type="button" class="ctox-pane-tab" role="tab" data-tab="data" aria-selected="false">Data</button>
-              </div>
-            </div>
+            <div class="ctox-pane-actions"></div>
           </div>
         </header>
+        <!-- Row 3: counted view band (its own band below the header, never
+             top-right). Zeros are rendered, never hidden. -->
+        <div class="knowledge-view-switch">
+          <div class="ctox-pane-tabs" role="tablist" aria-label="Knowledge Ansicht">
+            <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="skill" aria-selected="true">Skill<span class="view-count" data-pg-count="skill"></span></button>
+            <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="runbooks" aria-selected="false">Runbooks<span class="view-count" data-pg-count="runbooks"></span></button>
+            <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="data" aria-selected="false">Tabellen<span class="view-count" data-pg-count="data"></span></button>
+          </div>
+        </div>
         <div class="knowledge-tab-panel" data-panel="skill">
-          <div class="ctox-toolbar knowledge-edit-bar" data-skill-toolbar>
-            <div class="knowledge-edit-actions">
-              <button class="ctox-button" type="button" data-action="edit-markdown">Bearbeiten</button>
-              <button class="ctox-button is-primary" type="button" data-action="save-markdown" hidden>An CTOX geben</button>
-              <button class="ctox-button" type="button" data-action="cancel-markdown" hidden>Abbrechen</button>
-            </div>
+          <div class="knowledge-content-actions">
             <span class="knowledge-edit-status" data-skill-status></span>
+            <button class="ctox-pane-icon is-confirm" type="button" data-action="save-markdown" hidden aria-label="An CTOX geben" title="An CTOX geben"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l5 5L19 7"/></svg></button>
+            <button class="ctox-pane-icon" type="button" data-action="cancel-markdown" hidden aria-label="Abbrechen" title="Abbrechen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+            <button class="ctox-pane-icon" type="button" data-action="edit-markdown" aria-label="Bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
+            <button class="ctox-pane-icon" type="button" data-action="delete-skill" aria-label="Löschen" title="Löschen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M10 11v6M14 11v6"/></svg></button>
           </div>
           <article class="markdown-document" data-markdown-view></article>
           <textarea class="markdown-editor" data-markdown-editor hidden></textarea>
         </div>
         <div class="knowledge-tab-panel" data-panel="runbooks" hidden>
-          <div class="knowledge-secondary-switcher" data-runbook-switcher></div>
-          <div class="ctox-toolbar knowledge-edit-bar" data-runbook-toolbar>
-            <div class="knowledge-edit-actions">
-              <button class="ctox-button" type="button" data-action="edit-runbook">Bearbeiten</button>
-              <button class="ctox-button is-primary" type="button" data-action="save-runbook" hidden>An CTOX geben</button>
-              <button class="ctox-button" type="button" data-action="cancel-runbook" hidden>Abbrechen</button>
-              <button class="ctox-button" type="button" data-action="execute-runbook">Ausführen</button>
-            </div>
+          <div class="knowledge-content-actions">
             <span class="knowledge-edit-status" data-runbook-status></span>
+            <button class="ctox-pane-icon is-confirm" type="button" data-action="save-runbook" hidden aria-label="An CTOX geben" title="An CTOX geben"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l5 5L19 7"/></svg></button>
+            <button class="ctox-pane-icon" type="button" data-action="cancel-runbook" hidden aria-label="Abbrechen" title="Abbrechen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+            <button class="ctox-pane-icon" type="button" data-action="execute-runbook" aria-label="Ausführen" title="Ausführen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5.5v13l10-6.5-10-6.5Z"/></svg></button>
+            <button class="ctox-pane-icon" type="button" data-action="edit-runbook" aria-label="Bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
+            <button class="ctox-pane-icon" type="button" data-action="delete-runbook" aria-label="Löschen" title="Löschen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M10 11v6M14 11v6"/></svg></button>
           </div>
+          <div class="knowledge-secondary-switcher" data-runbook-switcher></div>
           <article class="runbook-document" data-runbook-view></article>
           <form class="runbook-editor" data-runbook-form hidden>
             <input class="ctox-input" data-runbook-title placeholder="Runbook-Titel" />
@@ -85,22 +119,15 @@
         <div class="knowledge-tab-panel" data-panel="data" hidden>
           <div class="table-switcher" data-table-switcher></div>
           <div class="dataframe-bar">
-            <div>
-              <strong data-table-title>DataFrame</strong>
-              <span data-table-meta></span>
-            </div>
+            <div><strong data-table-title>DataFrame</strong><span data-table-meta></span></div>
             <div class="table-pager">
-              <button class="ctox-button" type="button" data-action="export-table-csv">CSV</button>
-              <button class="ctox-button" type="button" data-action="prev-rows">Zurück</button>
-              <button class="ctox-button" type="button" data-action="next-rows">Weiter</button>
+              <button class="ctox-pane-icon" type="button" data-action="export-table-csv" aria-label="Als CSV exportieren" title="Als CSV exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11M12 14l-4-4M12 14l4-4M5 20h14"/></svg></button>
+              <button class="ctox-pane-icon" type="button" data-action="prev-rows" aria-label="Vorherige Zeilen" title="Vorherige Zeilen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
+              <button class="ctox-pane-icon" type="button" data-action="next-rows" aria-label="Nächste Zeilen" title="Nächste Zeilen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
             </div>
           </div>
-          <div class="dataframe-host" data-dataframe-host>
-            <div class="ctox-empty">
-              <strong>Keine Tabelle ausgewählt</strong>
-              <span>Wähle links eine Knowledge-Tabelle.</span>
-            </div>
-          </div>
+          <div class="dataframe-host" data-dataframe-host></div>
         </div>
+        <footer class="ctox-pane-footer knowledge-pane-footer"><span data-pg-footer></span></footer>
       </section>
 </main>

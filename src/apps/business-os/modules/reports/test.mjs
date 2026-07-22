@@ -194,6 +194,68 @@ test('presentation layer stays compact and shell-native', async () => {
   assert.doesNotMatch(html, /reports-sr-only/);
 });
 
+test('rail chrome is shell grammar: search, view toggle, tray, counted band, footer', async () => {
+  const css = await readFile(new URL('./index.css', import.meta.url), 'utf8');
+  const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
+  const js = await readFile(new URL('./index.js', import.meta.url), 'utf8');
+  const manifest = JSON.parse(await readFile(new URL('./module.json', import.meta.url), 'utf8'));
+
+  // Canonical data-pg-* grammar markup on the rail pane.
+  assert.match(html, /data-pg-search/);
+  assert.match(html, /data-pg-view="cards"/);
+  assert.match(html, /data-pg-view="list"/);
+  assert.match(html, /data-pg-tray-toggle/);
+  assert.match(html, /data-pg-tray hidden/);
+  assert.match(html, /data-pg-filter data-pg-name="status" data-pg-default="all"/);
+  assert.match(html, /data-pg-reset/);
+  assert.match(html, /data-pg-band="all"/);
+  assert.match(html, /data-pg-band="bug"/);
+  assert.match(html, /data-pg-band="feature"/);
+  assert.match(html, /data-pg-count="all"/);
+  assert.match(html, /data-pg-count="bug"/);
+  assert.match(html, /data-pg-count="feature"/);
+  // Exactly two footers: rail (grammar-fed) + detail (module-fed).
+  assert.equal(html.match(/data-pg-footer/g).length, 2);
+  // Active-filter dot CSS survives on the tray toggle class.
+  assert.match(css, /\.reports-filter-toggle\.has-active-filters::after/);
+
+  // Old hand-rolled filter markup is gone.
+  assert.doesNotMatch(html, /data-report-search|data-report-view|data-toggle-report-filters|data-report-filter-advanced|data-reset-report-filters|data-report-status|data-report-kind=|data-count-kind-|data-reports-footer|data-report-detail-footer/);
+  assert.doesNotMatch(js, /syncReportFilterIndicator/);
+
+  // The module listens to the bubbling grammar event and feeds counts/footer
+  // through the pane grammar handle (with direct-markup fallbacks).
+  assert.match(js, /ctox-pane-grammar-change/);
+  assert.match(js, /__ctoxPaneGrammar/);
+
+  // Dead refresh button fully removed: markup, wiring, spinner CSS.
+  assert.doesNotMatch(html, /data-refresh-reports/);
+  assert.doesNotMatch(js, /data-refresh-reports/);
+  assert.doesNotMatch(css, /reports-refresh-button/);
+
+  // Standing rail action: JSON export of the filtered list.
+  assert.match(html, /class="ctox-pane-icon" data-action="export-json"/);
+  assert.match(js, /function exportVisibleReports\(\)/);
+  assert.match(js, /URL\.createObjectURL/);
+
+  // In-place selection flip: aria-selected on rows, no list rebuild on click.
+  assert.match(js, /function applyReportsSelection\(\)/);
+  assert.match(js, /aria-selected/);
+  assert.match(js, /renderList\(\{ resetScroll = false \} = \{\}\)/);
+
+  // Cache-buster contract: markup + stylesheet inherit the JS ?v= buster.
+  assert.match(js, /async function loadModuleMarkup\(\)/);
+  assert.match(js, /\?v=\$\{version\}/);
+  assert.match(js, /link\.dataset\.reportsStyle = 'true'/);
+
+  // Manifest: semantic version + documented third pane.
+  assert.match(manifest.layout.third_pane_justification, /Aktion/);
+  assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
+
+  // No web-storage state — filters live in module state, data in RxDB.
+  assert.doesNotMatch(js, /localStorage|sessionStorage/);
+});
+
 let passed = 0;
 for (const entry of tests) {
   try {

@@ -60,8 +60,7 @@ export async function mount(ctx) {
   state.t = (key, fallback) => messages[key] ?? fallback ?? key;
 
   await ensureStyles();
-  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
-  ctx.host.innerHTML = html;
+  ctx.host.innerHTML = await loadModuleMarkup();
   ctx.left.replaceChildren();
   ctx.right.replaceChildren();
 
@@ -130,20 +129,32 @@ async function ensureStyles() {
   const styleUrl = new URL('./index.css', import.meta.url);
   // Inherit the module's own cache-buster (index.js is imported with
   // ?v=<build>): fresh JS must never render against a stale cached sheet.
-  const version = String(import.meta.url).split('?v=')[1] || '20260720-threads-grammar-v2';
+  const version = String(import.meta.url).split('?v=')[1] || '20260722-threads-grammar-v3';
   styleUrl.searchParams.set('v', version);
   link.href = styleUrl.href;
   link.dataset.threadsStyle = 'true';
   document.head.append(link);
 }
 
+async function loadModuleMarkup() {
+  // Markup inherits the JS cache-buster — like the stylesheet, a deploy must
+  // never leave fresh JS binding against stale cached markup (same contract
+  // as ctox/coding-agents/knowledge).
+  const version = String(import.meta.url).split('?v=')[1] || '20260722-threads-grammar-v3';
+  const markupHref = new URL('./index.html', import.meta.url).pathname + (version ? `?v=${version}` : '');
+  const html = await fetch(markupHref).then((res) => res.text());
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
+  return doc.body.innerHTML;
+}
+
 function bindElements(root) {
   els.root = root.querySelector('[data-threads-root]');
+  els.leftPane = root.querySelector('.threads-left');
+  els.centerPane = root.querySelector('.threads-center');
   els.refresh = root.querySelector('[data-refresh]');
-  els.search = root.querySelector('[data-thread-search]');
-  els.filters = [...root.querySelectorAll('[data-filter]')];
+  els.search = root.querySelector('[data-pg-search]');
   els.list = root.querySelector('[data-thread-list]');
-  els.briefing = root.querySelector('[data-personal-briefing]');
   els.title = root.querySelector('[data-thread-title]');
   els.source = root.querySelector('[data-thread-source]');
   els.status = root.querySelector('[data-thread-status]');
@@ -195,7 +206,7 @@ function applyLabels() {
   // Approval / delegation labels (the static index.html copy ships German;
   // translate the approval-flow strings through the module message catalog).
   const setFilterText = (filter, key, fb) => {
-    const btn = els.filters?.find((b) => b.dataset.filter === filter);
+    const btn = els.root?.querySelector(`[data-pg-band="${filter}"]`);
     if (btn) btn.textContent = state.t(key, fb);
   };
   setFilterText('approvals', 'filterApprovals', 'Freigaben');
@@ -219,49 +230,30 @@ function applyLabels() {
 
 function wireUi() {
   els.refresh?.addEventListener('click', () => refresh({ restartSync: true }));
-  els.search?.addEventListener('input', (event) => {
-    state.search = event.target.value || '';
-    syncSelection();
-    render();
-  });
-  els.filters.forEach((button) => {
-    button.addEventListener('click', () => {
-      setThreadFilter(button.dataset.filter || 'inbox');
+  // Pane chrome is SHELL-owned canonical grammar (autoWirePaneGrammar wires
+  // the data-pg-* markup once, debounced ~120ms after mount). The module only
+  // keeps its state in sync through the bubbling grammar event and re-renders
+  // — the same contract the ctox module's task column uses.
+  els.leftPane?.addEventListener('ctox-pane-grammar-change', onLeftGrammarChange);
+  els.centerPane?.addEventListener('ctox-pane-grammar-change', onCenterGrammarChange);
+  // A band tab click means "primary queue": clear any secondary tray view so
+  // the two dimensions never fight (this listener was attached at mount,
+  // BEFORE the shell-wired grammar handler, so it runs first).
+  els.leftPane?.querySelectorAll('[data-pg-band]').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      const select = els.leftPane?.querySelector('[data-pg-filter][data-pg-name="view"]');
+      if (select && select.value !== '') select.value = '';
     });
   });
-  // Filter tray: toggle, secondary-view dropdown, reset.
-  els.root?.querySelector('[data-toggle-filters]')?.addEventListener('click', (event) => {
-    const btn = event.currentTarget;
-    const panel = els.root.querySelector('[data-filter-advanced]');
-    if (!panel) return;
-    const open = panel.hasAttribute('hidden');
-    if (open) panel.removeAttribute('hidden'); else panel.setAttribute('hidden', '');
-    btn.setAttribute('aria-expanded', String(open));
+  // Header actions: create-note opens the action workbench with the note form
+  // focused; export serializes the currently filtered thread list as JSON.
+  els.root?.querySelector('[data-action="create-note"]')?.addEventListener('click', () => {
+    els.root?.classList.remove('is-actions-hidden');
+    els.toggleActions?.setAttribute('aria-pressed', 'true');
+    els.noteBody?.focus();
+    els.noteBody?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   });
-  els.root?.querySelector('select[data-filter-select]')?.addEventListener('change', (event) => {
-    setThreadFilter(event.target.value || 'inbox');
-  });
-  els.root?.querySelector('[data-reset-filters]')?.addEventListener('click', () => {
-    if (els.search) els.search.value = '';
-    state.search = '';
-    setThreadFilter('inbox');
-  });
-  // Shard cards vs. compact list rendering of the thread well.
-  els.root?.querySelectorAll('[data-view-mode]').forEach((button) => {
-    button.addEventListener('click', () => {
-      state.listView = button.dataset.viewMode === 'list';
-      els.root.querySelectorAll('[data-view-mode]').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.viewMode === 'list') === state.listView)));
-      els.root.classList.toggle('is-list-view', state.listView);
-    });
-  });
-  // Same toggle for the main view: timeline as cards or compact rows.
-  els.root?.querySelectorAll('[data-center-view]').forEach((button) => {
-    button.addEventListener('click', () => {
-      state.centerListView = button.dataset.centerView === 'list';
-      els.root.querySelectorAll('[data-center-view]').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.centerView === 'list') === state.centerListView)));
-      els.root.classList.toggle('is-center-list-view', state.centerListView);
-    });
-  });
+  els.root?.querySelector('[data-action="export-threads"]')?.addEventListener('click', exportVisibleThreads);
   els.list?.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target : null;
     const row = target?.closest?.('[data-thread-id]');
@@ -269,7 +261,11 @@ function wireUi() {
     state.selectedId = row.getAttribute('data-thread-id') || '';
     state.mobileView = 'detail';
     persistNavigationState();
-    render();
+    // Selection is an in-place class flip, never a list rebuild — a rebuild
+    // resets the scroll position under the operator's pointer.
+    applyThreadSelection();
+    renderMobileState();
+    renderDetail(visibleThreads());
   });
   els.context?.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target : null;
@@ -512,18 +508,88 @@ function mergeRecords(...groups) {
   return [...byId.values()].sort((a, b) => Number(b?.updated_at_ms || 0) - Number(a?.updated_at_ms || 0));
 }
 
-function render() {
-  els.root?.classList.toggle('is-mobile-detail', state.mobileView === 'detail' && Boolean(state.selectedId));
+function render(options = {}) {
+  renderMobileState();
   const threads = visibleThreads();
-  renderBriefing();
   renderNotificationPreferences();
-  updateFilterControls(threads.length);
-  renderList(threads);
+  syncGrammarSurfaces(threads.length);
+  renderList(threads, options);
   renderDetail(threads);
+}
+
+function renderMobileState() {
+  els.root?.classList.toggle('is-mobile-detail', state.mobileView === 'detail' && Boolean(state.selectedId));
+}
+
+function onLeftGrammarChange(event) {
+  const detail = event?.detail || {};
+  state.search = String(detail.search ?? '');
+  state.listView = detail.view === 'list';
+  els.root?.classList.toggle('is-list-view', state.listView);
+  // One view dimension, two controls: a secondary tray view wins while set;
+  // the neutral tray value hands the view back to the counted band (the
+  // module's own band-click listener cleared the tray select first). When
+  // nothing is selected anywhere (grammar reset from a secondary view), fall
+  // back to the inbox.
+  const secondary = String(detail.filters?.view || '');
+  if (secondary) {
+    state.filter = secondary;
+  } else {
+    const band = els.leftPane?.querySelector('[data-pg-band][aria-selected="true"]')?.dataset.pgBand;
+    state.filter = band || 'inbox';
+  }
+  syncSelection();
+  // Intentional reset: search/view/filter changes move the content set, so the
+  // list scrolls back to the top (the shell scroll guard also clears its
+  // recorded offsets on this event).
+  render({ resetScroll: true });
+}
+
+function onCenterGrammarChange(event) {
+  const detail = event?.detail || {};
+  state.centerListView = detail.view === 'list';
+  els.root?.classList.toggle('is-center-list-view', state.centerListView);
+}
+
+// Export serializes the currently visible (filtered + searched) thread list
+// as a JSON download — the module has no import path, so there is no import
+// action (adding one would invent a write flow the domain does not have).
+function exportVisibleThreads() {
+  const threads = visibleThreads();
+  const exportedAt = new Date().toISOString();
+  const payload = {
+    format: 'ctox-threads-export',
+    version: 1,
+    exportedAt,
+    module: 'threads',
+    view: state.filter || 'inbox',
+    count: threads.length,
+    threads: threads.map((thread) => ({
+      threadId: String(thread.id || ''),
+      title: String(thread.title || ''),
+      kind: String(thread.kind || ''),
+      status: String(thread.status || ''),
+      sourceModule: String(thread.source_module || ''),
+      sourceRecordId: String(thread.source_record_id || ''),
+      assignedUserId: String(thread.assigned_user_id || ''),
+      updatedAtMs: Number(thread.updated_at_ms || 0),
+    })),
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `ctox-threads-${exportedAt.slice(0, 19).replace(/[:T]/g, '-')}.json`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // The primary tab a filter maps to; secondary filters live in the tray only.
 const PRIMARY_FILTERS = ['inbox', 'waiting', 'running', 'archived'];
+const SECONDARY_FILTERS = ['delegated', 'snoozed', 'team', 'mentions', 'approvals', 'failed', 'all', 'system'];
+const THREAD_FILTERS = [...PRIMARY_FILTERS, ...SECONDARY_FILTERS];
 const FILTER_LABELS = {
   inbox: 'Jetzt handeln', waiting: 'Wartet auf mich', running: 'AI arbeitet',
   delegated: 'Wartet auf andere', snoozed: 'Später', team: 'Team Queue',
@@ -531,34 +597,45 @@ const FILTER_LABELS = {
   archived: 'Erledigt / Archiv', all: 'Alle', system: 'CTOX-Tasks (System)',
 };
 
-function setThreadFilter(filter) {
-  state.filter = filter || 'inbox';
-  syncSelection();
-  render();
-}
-
-function updateFilterControls(visibleCount) {
-  const root = els.root;
-  if (!root) return;
+// Counts on the counted view band (ALL four queues, zeros included) + the
+// one-line pane footer go through the shell-wired grammar handle when present
+// (null-guarded: the shell wires panes debounced ~120ms after mount, so early
+// renders fall back to the direct data-pg-* targets). Band/tab selection is
+// mirrored here for programmatic filter changes (restore, deep links) so the
+// grammar's state read stays consistent.
+function syncGrammarSurfaces(visibleCount) {
+  const pane = els.leftPane;
+  if (!pane) return;
   const me = currentUserId();
   const isAdmin = currentUserRole() === 'chef' || currentUserRole() === 'admin';
   // Counts per primary queue, computed with the same predicate the tab uses.
-  for (const filter of ['inbox', 'waiting', 'running']) {
-    const el = root.querySelector(`[data-count-${filter}]`);
-    if (el) el.textContent = ` (${state.data.threads.filter((thread) => threadMatchesFilter(thread, filter, me, isAdmin)).length})`;
+  const counts = {};
+  for (const filter of PRIMARY_FILTERS) {
+    counts[filter] = state.data.threads.filter((thread) => threadMatchesFilter(thread, filter, me, isAdmin)).length;
   }
-  for (const button of els.filters) {
-    button.setAttribute('aria-selected', String(button.dataset.filter === state.filter));
+  const pg = pane.__ctoxPaneGrammar;
+  if (pg?.setCounts) pg.setCounts(counts);
+  else for (const [key, value] of Object.entries(counts)) {
+    const node = pane.querySelector(`[data-pg-count="${key}"]`);
+    if (node) node.textContent = ` (${value})`;
   }
-  const select = root.querySelector('select[data-filter-select]');
-  if (select && select.value !== state.filter) select.value = state.filter;
-  // Accent dot on the filter toggle whenever a tray-only filter is active —
-  // the band alone would otherwise show no selection at all.
-  root.querySelector('[data-toggle-filters]')?.classList.toggle('has-active-filters', !PRIMARY_FILTERS.includes(state.filter));
-  const footer = root.querySelector('[data-threads-footer-count]');
-  if (footer) {
-    const who = state.ctx?.session?.user?.display_name || currentUserId() || '';
-    footer.textContent = `${visibleCount} ${visibleCount === 1 ? 'Thread' : 'Threads'} · ${FILTER_LABELS[state.filter] || state.filter}${who ? ` · als ${who}` : ''}`;
+  const secondaryActive = !PRIMARY_FILTERS.includes(state.filter);
+  for (const tab of pane.querySelectorAll('[data-pg-band]')) {
+    const on = !secondaryActive && tab.dataset.pgBand === state.filter;
+    tab.setAttribute('aria-selected', String(on));
+    tab.classList.toggle('is-active', on);
+  }
+  const select = pane.querySelector('[data-pg-filter][data-pg-name="view"]');
+  if (select) select.value = secondaryActive ? state.filter : '';
+  // The grammar's active-dot reads search + tray select; refresh after the
+  // programmatic sync above (dot = search active or secondary view set).
+  pg?.refreshDot?.();
+  const who = state.ctx?.session?.user?.display_name || currentUserId() || '';
+  const footerText = `${visibleCount} ${visibleCount === 1 ? 'Thread' : 'Threads'} · ${FILTER_LABELS[state.filter] || state.filter}${who ? ` · als ${who}` : ''}`;
+  if (pg?.setFooter) pg.setFooter(footerText);
+  else {
+    const node = pane.querySelector('[data-pg-footer]');
+    if (node) node.textContent = footerText;
   }
 }
 
@@ -572,26 +649,6 @@ function renderNotificationPreferences() {
   if (els.notificationApprovals) els.notificationApprovals.checked = !types.size || types.has('approval');
   if (els.notificationMentions) els.notificationMentions.checked = !types.size || types.has('mention');
   if (els.notificationEscalations) els.notificationEscalations.checked = !types.size || types.has('escalation');
-}
-
-function renderBriefing() {
-  if (!els.briefing) return;
-  const me = currentUserId();
-  const role = currentUserRole();
-  const isAdmin = role === 'chef' || role === 'admin';
-  const relevant = state.data.threads.filter((thread) => isAdmin || !me || threadRelevantToUser(thread, me));
-  const decisions = relevant.filter((thread) => approvalsForThread(thread.id)
-    .some((approval) => approval.status === 'pending' && (isAdmin || approval.reviewer_user_id === me))).length;
-  const blocked = relevant.filter((thread) => thread.status === 'blocked' || threadHasFailedCtox(thread.id)).length;
-  const aiResults = relevant.filter((thread) => messagesForThread(thread.id)
-    .some((message) => message.actor_type === 'ai' && message.execution_status === 'completed')).length;
-  const items = [[decisions, 'Entscheidungen'], [blocked, 'Blockaden'], [aiResults, 'AI-Ergebnisse']];
-  els.briefing.innerHTML = items.map(([value, label]) => `
-    <div class="threads-briefing-item">
-      <span class="threads-briefing-value">${value}</span>
-      <span class="threads-briefing-label">${escapeHtml(label)}</span>
-    </div>
-  `).join('');
 }
 
 // One predicate for filtering AND for the counts on the switcher band — the
@@ -729,10 +786,15 @@ function threadSenderInitial(preview) {
   return name.slice(0, 1).toUpperCase();
 }
 
-function renderList(threads) {
+function renderList(threads, { resetScroll = false } = {}) {
   if (!els.list) return;
+  // Data re-renders never move the operator: preserve the scroll offset across
+  // the rebuild (intentional resets — search/view/filter — pass resetScroll
+  // because the content set changed). The shell scroll guard backs this up.
+  const scrollTop = resetScroll ? 0 : els.list.scrollTop;
   if (!threads.length) {
     els.list.innerHTML = `<div class="ctox-empty">${escapeHtml(state.t('noThreads', 'Keine relevanten Threads vorhanden.'))}</div>`;
+    els.list.scrollTop = scrollTop;
     return;
   }
   const me = currentUserId();
@@ -741,12 +803,14 @@ function renderList(threads) {
     const unread = unreadNotificationsForThread(thread.id, me).length;
     const why = whyMeLine(thread, pending);
     const preview = foreignPreview(thread);
+    const selected = thread.id === state.selectedId;
     return `
-      <button type="button" class="ctox-list-item threads-list-item ${thread.id === state.selectedId ? 'is-selected' : ''} ${unread ? 'is-unread' : ''}"
+      <button type="button" class="ctox-list-item threads-list-item ${selected ? 'is-selected' : ''} ${unread ? 'is-unread' : ''}"
         data-thread-id="${escapeAttr(thread.id)}"
-        data-record-id="${escapeAttr(thread.source_record_id || thread.id)}"
-        data-record-type="thread"
-        data-title="${escapeAttr(thread.title || '')}">
+        data-context-record-id="${escapeAttr(thread.source_record_id || thread.id)}"
+        data-context-record-type="thread"
+        data-context-label="${escapeAttr(thread.title || '')}"
+        aria-selected="${selected}">
         <span class="threads-item-anchor" aria-hidden="true">
           <span class="threads-item-dot"></span>
           <span class="threads-item-avatar">${escapeHtml(threadSenderInitial(preview))}</span>
@@ -762,6 +826,18 @@ function renderList(threads) {
       </button>
     `;
   }).join('');
+  els.list.scrollTop = scrollTop;
+}
+
+// In-place selection: flip is-selected/aria-selected across the existing rows,
+// never a list rebuild — a rebuild resets the scroll position under the
+// operator's pointer (canonical interaction law; ctox applyTaskSelection).
+function applyThreadSelection() {
+  els.list?.querySelectorAll('[data-thread-id]').forEach((row) => {
+    const on = (row.getAttribute('data-thread-id') || '') === state.selectedId;
+    row.classList.toggle('is-selected', on);
+    row.setAttribute('aria-selected', String(on));
+  });
 }
 
 function renderDetail(threads) {
@@ -1469,37 +1545,58 @@ function attentionScore(thread) {
   return attentionReasons(thread).reduce((score, reason) => score + (weights[reason] || 10), 0);
 }
 
+// Module-owned UI persistence goes through ctx.storageScope (workspace- and
+// actor-scoped by the shell); sessionStorage is only the legacy fallback for
+// shells without the storageScope facade.
+function storageGet(key) {
+  try {
+    const scoped = state.ctx?.storageScope?.get?.(key);
+    if (scoped != null) return scoped;
+  } catch {}
+  try { return sessionStorage.getItem(key); } catch { return null; }
+}
+
+function storageSet(key, value) {
+  try {
+    if (state.ctx?.storageScope?.set) { state.ctx.storageScope.set(key, value); return; }
+  } catch {}
+  try { sessionStorage.setItem(key, value); } catch {}
+}
+
+function storageRemove(key) {
+  try { state.ctx?.storageScope?.remove?.(key); } catch {}
+  try { sessionStorage.removeItem(key); } catch {}
+}
+
 function draftKey() {
   return `ctox:threads:draft:${currentUserId() || 'anonymous'}:${state.selectedId || 'new'}`;
 }
 
 function persistDraft() {
-  try { sessionStorage.setItem(draftKey(), String(els.messageBody?.value || '')); } catch {}
+  storageSet(draftKey(), String(els.messageBody?.value || ''));
 }
 
 function restoreDraft() {
   try {
-    const saved = sessionStorage.getItem(draftKey());
+    const saved = storageGet(draftKey());
     if (saved && els.messageBody) els.messageBody.value = saved;
-    const nav = JSON.parse(sessionStorage.getItem(`ctox:threads:navigation:${currentUserId() || 'anonymous'}`) || '{}');
+    const nav = JSON.parse(storageGet(`ctox:threads:navigation:${currentUserId() || 'anonymous'}`) || '{}');
     if (!state.requestedThreadId) state.requestedThreadId = String(nav.selectedId || '');
-    if (nav.filter && els.filters.some((button) => button.dataset.filter === nav.filter)) state.filter = nav.filter;
+    if (nav.filter && THREAD_FILTERS.includes(nav.filter)) state.filter = nav.filter;
     state.mobileView = nav.mobileView === 'detail' ? 'detail' : 'list';
   } catch {}
 }
 
 function clearDraft() {
-  try { sessionStorage.removeItem(draftKey()); } catch {}
+  storageRemove(draftKey());
 }
 
 function persistNavigationState() {
-  try {
-    sessionStorage.setItem(`ctox:threads:navigation:${currentUserId() || 'anonymous'}`, JSON.stringify({
-      selectedId: state.selectedId,
-      filter: state.filter,
-      mobileView: state.mobileView,
-    }));
-  } catch {}
+  storageSet(`ctox:threads:navigation:${currentUserId() || 'anonymous'}`, JSON.stringify({
+    selectedId: state.selectedId,
+    filter: state.filter,
+    mobileView: state.mobileView,
+  }));
 }
 
 function updateConnectivity() {
@@ -1529,10 +1626,8 @@ function notifyActionRequired(notifications) {
     .slice(0, 3)
     .forEach((item) => {
       const dedupeKey = `ctox:threads:notified:${currentUserId()}:${item.id}`;
-      try {
-        if (sessionStorage.getItem(dedupeKey)) return;
-        sessionStorage.setItem(dedupeKey, '1');
-      } catch {}
+      if (storageGet(dedupeKey)) return;
+      storageSet(dedupeKey, '1');
       const notice = new Notification(item.title || 'CTOX braucht deine Aufmerksamkeit', {
         body: 'In Threads ist eine Aktion für dich offen.',
         tag: `ctox-thread-${item.thread_id || item.id}`,

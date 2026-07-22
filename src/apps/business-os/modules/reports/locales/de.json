@@ -1,6 +1,7 @@
 {
   "workspaceLoading": "Workspace wird geladen.",
   "refresh": "Aktualisieren",
+  "exportJson": "Gefilterte Liste als JSON exportieren",
   "searchPlaceholder": "Suchen...",
   "searchLabel": "Bugs und Features suchen",
   "kindFilterLabel": "Typ filtern",

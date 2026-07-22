@@ -18,7 +18,7 @@
     "third_pane_justification": "The agent's self-published progress artifact must stay visible while chatting — hiding it would blind the user to the running task."
   },
   "category": "Development",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",
   "tags": [

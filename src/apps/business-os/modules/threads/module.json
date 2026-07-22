@@ -19,13 +19,14 @@
     "left": "personal inbox, approvals, and source filters",
     "center": "durable thread timeline tied to app records",
     "right": "new notes, CTOX approval requests, and lifecycle context",
+    "third_pane_justification": "Die Aktions-Werkbank (Übergabe, AI-Auftrag, Notiz, CTOX-Freigabe, Benachrichtigungsregeln, Kontext) gehört zum selektierten Thread und muss in breiten Fenstern neben Liste und Timeline sichtbar bleiben; in kompakten Fenstern klappt sie hinter den Aktionen-Toggle.",
     "default_width": 1120,
     "default_height": 760,
     "min_width": 640,
     "min_height": 480
   },
   "category": "System",
-  "version": "v0.1",
+  "version": "0.2.0",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",
   "tags": [

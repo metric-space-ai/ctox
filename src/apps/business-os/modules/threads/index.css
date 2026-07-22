@@ -9,7 +9,7 @@
    .ctox-field-label), key/value facts (.ctox-fields), inline status panels
    (.ctox-callout), buttons (.ctox-button) and empty states (.ctox-empty) all
    come from the kit. This file keeps only what is genuinely
-   threads-specific: the briefing stat strip, the chat-style timeline with
+   threads-specific: the chat-style timeline with
    approval cards, the composer, the right-pane form stacking and the mobile
    list/detail switcher. */
 
@@ -18,21 +18,19 @@
    every window — a blanket padding-bottom leaves a dead band in windowed mode.
    The mobile sheet (container <=600px) keeps its own safe-area padding. */
 .threads-module {
-  /* Self-contained kit tokens (mirrors the Knowledge reference app) so the
-     module renders correctly even against an older packaged base.css. */
+  /* Module-local type scale aliases. Kit tokens (--kit-fill/--kit-fill-strong/
+     --kit-hover/--focus-ring) come from shared/base.css — the module must NOT
+     re-define them. */
   --fs-micro: 10px;
   --fs-meta: 11px;
   --fs-base: 13px;
-  --kit-fill: color-mix(in srgb, var(--text) 6%, transparent);
-  --kit-fill-strong: color-mix(in srgb, var(--text) 10%, transparent);
-  --kit-hover: color-mix(in srgb, var(--text) 5%, transparent);
 }
 
 /* Pane row templates: the kit ships auto/1fr; each threads pane declares its
-   own rows (left: header/filters/briefing/list, center: header/timeline/
+   own rows (left: header/band/list/footer, center: header/timeline/
    composer/mobile bar, right: one scrolling card stack). */
 .threads-left {
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
 /* Explicit tracks (the Knowledge idiom): the kit hides column resizers on
@@ -158,38 +156,8 @@
 .threads-status-line { display: inline-flex; gap: 4px; margin-top: 2px; }
 .threads-notification-actions { display: inline-flex; gap: 2px; }
 
-/* custom: 3-up briefing stat strip (Entscheidungen / Blockaden /
-   AI-Ergebnisse) — a hairline-divided counter band the kit does not express */
-.threads-briefing {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1px;
-  border-bottom: 1px solid var(--hairline, var(--line));
-  background: var(--hairline, var(--line));
-}
-
-.threads-briefing-item {
-  min-width: 0;
-  padding: 7px 9px;
-  background: var(--surface);
-}
-
-.threads-briefing-value {
-  display: block;
-  color: var(--text-strong, var(--text));
-  font-size: 13px;
-  font-weight: 780;
-  line-height: 1.1;
-  font-variant-numeric: tabular-nums;
-}
-
-.threads-briefing-label {
-  display: block;
-  margin-top: 2px;
-  color: var(--muted);
-  font-size: 10px;
-  line-height: 1.25;
-}
+/* The standing briefing stat strip was removed (no standing status rows):
+   the counted view band + tray filters carry the same numbers. */
 
 /* Thread list: rows are kit .ctox-list-item (hover/selected accent bar from
    the kit); only the title/attention/meta/preview content stack is local. */

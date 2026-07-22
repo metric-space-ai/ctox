@@ -62,8 +62,7 @@ export async function mount(ctx) {
   };
   state.lang = ctx.locale === 'en' ? 'en' : 'de';
 
-  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
-  ctx.host.innerHTML = html;
+  ctx.host.innerHTML = await loadModuleMarkup();
 
   applyStaticLabels(ctx.host, state.t);
 
@@ -98,34 +97,51 @@ async function ensureStyles() {
   if (document.querySelector('link[data-reports-style]')) return;
   const link = document.createElement('link');
   link.rel = 'stylesheet';
-  link.href = new URL('./index.css', import.meta.url).href;
+  const styleUrl = new URL('./index.css', import.meta.url);
+  // Inherit the module's own cache-buster (index.js is imported with
+  // ?v=<build>): fresh JS must never render against a stale cached sheet.
+  const version = String(import.meta.url).split('?v=')[1] || '20260722-reports-grammar-v1';
+  styleUrl.searchParams.set('v', version);
+  link.href = styleUrl.href;
   link.dataset.reportsStyle = 'true';
   document.head.append(link);
+}
+
+async function loadModuleMarkup() {
+  // Markup inherits the JS cache-buster — like the stylesheet, a deploy must
+  // never leave fresh JS binding against stale cached markup (same contract
+  // as ctox/coding-agents/knowledge/threads/app-store).
+  const version = String(import.meta.url).split('?v=')[1] || '20260722-reports-grammar-v1';
+  const markupHref = new URL('./index.html', import.meta.url).pathname + (version ? `?v=${version}` : '');
+  const html = await fetch(markupHref).then((res) => res.text());
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
+  return doc.body.innerHTML;
 }
 
 function applyStaticLabels(host, t) {
   const root = host.querySelector('[data-reports-root]');
   if (!root) return;
 
-  // Refresh button keeps the static SVG markup in index.html — only the
-  // tooltip / aria-label are translated.
-  const refreshBtn = root.querySelector('[data-refresh-reports]');
-  if (refreshBtn) {
-    const label = t('refresh', 'Aktualisieren');
-    refreshBtn.title = label;
-    refreshBtn.setAttribute('aria-label', label);
+  // Header export action keeps the static SVG markup in index.html — only
+  // the tooltip / aria-label are translated.
+  const exportBtn = root.querySelector('[data-action="export-json"]');
+  if (exportBtn) {
+    const label = t('exportJson', 'Gefilterte Liste als JSON exportieren');
+    exportBtn.title = label;
+    exportBtn.setAttribute('aria-label', label);
   }
 
   // Search input placeholder
-  const searchInput = root.querySelector('[data-report-search]');
+  const searchInput = root.querySelector('[data-pg-search]');
   if (searchInput) {
     searchInput.placeholder = t('searchPlaceholder', 'Suchen...');
     searchInput.setAttribute('aria-label', t('searchLabel', 'Bugs und Features suchen'));
   }
 
-  // Status select options (kind is now chips in markup; status stays as the
-  // single primary filter, with values translatable so en/de stay readable).
-  const statusSelect = root.querySelector('[data-report-status]');
+  // Status select options (kind is the counted band in markup; status stays
+  // the single tray filter, with values translatable so en/de stay readable).
+  const statusSelect = root.querySelector('[data-pg-filter][data-pg-name="status"]');
   if (statusSelect) {
     statusSelect.setAttribute('aria-label', t('statusFilterLabel', 'Status filtern'));
     statusSelect.innerHTML = `
@@ -167,58 +183,15 @@ function updateToggleActionsAria(root) {
 function wireUi() {
   const root = state.ctx.host.querySelector('[data-reports-root]');
   if (!root) return;
-  root.querySelector('[data-refresh-reports]')?.addEventListener('click', () => refreshReports({ restartSync: true, manual: true }));
-  root.querySelector('[data-report-search]')?.addEventListener('input', (event) => {
-    state.search = event.target.value || '';
-    syncReportFilterIndicator(root);
-    syncSelectionToVisibleItems();
-    render();
-  });
-  const filterToggle = root.querySelector('[data-toggle-report-filters]');
-  const filterTray = root.querySelector('[data-report-filter-advanced]');
-  filterToggle?.addEventListener('click', () => {
-    if (!filterTray) return;
-    const open = filterTray.hidden;
-    filterTray.hidden = !open;
-    filterToggle.setAttribute('aria-expanded', String(open));
-  });
-  root.querySelector('[data-reset-report-filters]')?.addEventListener('click', () => {
-    state.status = 'all';
-    state.search = '';
-    const search = root.querySelector('[data-report-search]');
-    const status = root.querySelector('[data-report-status]');
-    if (search) search.value = '';
-    if (status) status.value = 'all';
-    syncReportFilterIndicator(root);
-    syncSelectionToVisibleItems();
-    render();
-  });
-  root.querySelectorAll('[data-report-view]').forEach((button) => button.addEventListener('click', () => {
-    state.viewMode = button.dataset.reportView;
-    root.querySelectorAll('[data-report-view]').forEach((other) => other.setAttribute('aria-pressed', String(other === button)));
-    render();
-  }));
-  root.querySelector('[data-report-status]')?.addEventListener('change', (event) => {
-    state.status = event.target.value || 'all';
-    syncReportFilterIndicator(root);
-    syncSelectionToVisibleItems();
-    render();
-  });
-  // Kind chips live in static markup; toggle the .is-active state instead of
-  // rewriting the strip on every render so the focus ring survives.
-  root.querySelectorAll('[data-report-kind-chips] [data-report-kind]').forEach((chip) => {
-    chip.addEventListener('click', () => {
-      const next = chip.getAttribute('data-report-kind') || 'all';
-      if (next === state.kind) return;
-      state.kind = next;
-      root.querySelectorAll('[data-report-kind-chips] [data-report-kind]').forEach((node) => {
-        node.classList.toggle('is-active', node === chip);
-        node.setAttribute('aria-selected', String(node === chip));
-      });
-      syncSelectionToVisibleItems();
-      render();
-    });
-  });
+  // Header action: JSON export of the currently filtered list.
+  root.querySelector('[data-action="export-json"]')?.addEventListener('click', () => exportVisibleReports());
+  // Pane chrome is SHELL-owned canonical grammar (autoWirePaneGrammar wires
+  // the data-pg-* markup once, debounced ~120ms after mount): search input,
+  // shard/list toggle, collapsed tray with reset + active-dot, counted kind
+  // band. The module only keeps its state in sync through the bubbling
+  // grammar event and re-renders — the same contract knowledge/threads/
+  // app-store use.
+  root.querySelector('.reports-rail')?.addEventListener('ctox-pane-grammar-change', onRailGrammarChange);
   // Right actions column is collapsible — same toggle pattern threads/tickets
   // use. The toggle stays in the detail header so the actions pane never has
   // to render its own chrome.
@@ -269,8 +242,77 @@ function wireUi() {
       return;
     }
     state.selectedId = reportId;
-    render();
+    // In-place selection flip — a selection click never rebuilds the list
+    // (scroll + focus stay put); only detail and actions re-render.
+    applyReportsSelection();
+    renderDetail();
+    renderActions();
   });
+}
+
+// Grammar state application (rail pane: search, cards/list view, counted kind
+// band, status tray filter). Intentional reset: grammar changes move the
+// content set, so the well scrolls back to the top (the shell scroll guard
+// also clears its recorded offsets on this event).
+function onRailGrammarChange(event) {
+  const detail = event?.detail || {};
+  state.search = String(detail.search ?? '');
+  state.viewMode = detail.view === 'list' ? 'list' : 'cards';
+  if (detail.band) state.kind = detail.band;
+  state.status = String(detail.filters?.status ?? 'all') || 'all';
+  syncSelectionToVisibleItems();
+  render({ resetScroll: true });
+}
+
+// Selection is an in-place flip over the existing rows — never a list
+// rebuild for a selection click (an innerHTML rebuild would clamp the
+// well's scrollTop to 0).
+function applyReportsSelection() {
+  const list = state.ctx?.host?.querySelector('[data-reports-list]');
+  if (!list) return;
+  for (const row of list.querySelectorAll('[data-report-id]')) {
+    const selected = row.getAttribute('data-report-id') === state.selectedId;
+    row.classList.toggle('is-selected', selected);
+    row.setAttribute('aria-selected', selected ? 'true' : 'false');
+  }
+}
+
+// Export serializes the currently visible (filtered + searched) report list
+// as a JSON download — reports arrive through the CTOX intake flows, so
+// there is no import action (adding one would invent a write flow the domain
+// does not have). Same contract as the threads list export.
+function exportVisibleReports() {
+  const items = filteredReports();
+  const exportedAt = new Date().toISOString();
+  const payload = {
+    format: 'ctox-reports-export',
+    version: 1,
+    exportedAt,
+    module: 'reports',
+    filter: { search: state.search || '', kind: state.kind || 'all', status: state.status || 'all' },
+    count: items.length,
+    reports: items.map((report) => ({
+      reportId: String(report.id || ''),
+      title: String(report.title || ''),
+      kind: String(report.kind || ''),
+      status: String(report.status || ''),
+      severity: String(report.severity || ''),
+      moduleId: String(report.moduleId || ''),
+      commandId: String(report.commandId || ''),
+      taskId: String(report.taskId || ''),
+      createdAt: String(report.createdAt || ''),
+      updatedAt: String(report.updatedAt || ''),
+    })),
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `ctox-reports-${exportedAt.slice(0, 19).replace(/[:T]/g, '-')}.json`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function wireRealtime() {
@@ -304,7 +346,6 @@ async function refreshReports(options = {}) {
     lastAttemptAt: Date.now(),
     lastManual: Boolean(options.manual),
   };
-  renderDiagnostics();
 
   const syncErrors = options.restartSync ? await restartReportSync() : [];
   const results = await Promise.all(REPORT_COLLECTIONS.map((name) => loadCollectionResult(name)));
@@ -334,7 +375,6 @@ async function refreshReports(options = {}) {
   state.renderKey = nextRenderKey;
   syncSelectionToVisibleItems();
   if (hadSameData && previousSelectedId === state.selectedId) {
-    renderDiagnostics();
     return;
   }
   render();
@@ -385,22 +425,10 @@ function buildRenderKey(collections) {
   ].join('\n');
 }
 
-function render() {
-  renderList();
+function render({ resetScroll = false } = {}) {
+  renderList({ resetScroll });
   renderDetail();
   renderActions();
-  renderDiagnostics();
-}
-
-function renderDiagnostics() {
-  const root = state.ctx?.host?.querySelector?.('[data-reports-root]');
-  if (!root) return;
-  const refreshBtn = root.querySelector('[data-refresh-reports]');
-  if (refreshBtn) {
-    refreshBtn.disabled = Boolean(state.diagnostics.loading);
-    refreshBtn.setAttribute('aria-busy', state.diagnostics.loading ? 'true' : 'false');
-    refreshBtn.title = refreshDiagnosticTitle(state.diagnostics);
-  }
 }
 
 function renderListEmptyState(allItems) {
@@ -442,11 +470,6 @@ function rememberDetailScroll() {
   const scroller = state.ctx.host.querySelector('[data-reports-detail-scroll]');
   if (!scroller) return;
   state.detailScrollByReport[state.renderedDetailId] = scroller.scrollTop;
-}
-
-function syncReportFilterIndicator(root) {
-  const active = Boolean(state.search) || state.status !== 'all';
-  root?.querySelector('[data-toggle-report-filters]')?.classList.toggle('has-active-filters', active);
 }
 
 // ---------------------------------------------------------------------------
@@ -619,36 +642,54 @@ function openDelegateDialog(report) {
   });
 }
 
-function renderList() {
+function syncGrammarSurfaces(allItems, searched) {
+  const counts = {
+    all: searched.length,
+    bug: searched.filter((item) => item.kind === 'bug').length,
+    feature: searched.filter((item) => item.kind !== 'bug').length,
+  };
+  const root = state.ctx.host.querySelector('[data-reports-root]');
+  const grammar = root?.querySelector('.reports-rail')?.__ctoxPaneGrammar;
+  if (grammar) {
+    grammar.setCounts?.(counts);
+    grammar.setFooter?.(`${allItems.length} Meldungen`);
+    return;
+  }
+  for (const kind of ['all', 'bug', 'feature']) {
+    const node = root?.querySelector(`[data-pg-count="${kind}"]`);
+    if (node) node.textContent = ` (${counts[kind]})`;
+  }
+  const footer = root?.querySelector('.reports-rail [data-pg-footer]');
+  if (footer) footer.textContent = `${allItems.length} Meldungen`;
+}
+
+function renderList({ resetScroll = false } = {}) {
   const list = state.ctx.host.querySelector('[data-reports-list]');
   if (!list) return;
   const items = filteredReports();
   const allItems = normalizedReports();
-  const root = state.ctx.host.querySelector('[data-reports-root]');
   // Counted view band (zeros included) + one-line footer.
   const searched = filterReportItems(normalizedReports(), { search: state.search, kind: 'all', status: state.status });
-  const setCount = (kind, value) => { const node = root?.querySelector(`[data-count-kind-${kind}]`); if (node) node.textContent = ` (${value})`; };
-  setCount('all', searched.length);
-  setCount('bug', searched.filter((item) => item.kind === 'bug').length);
-  setCount('feature', searched.filter((item) => item.kind !== 'bug').length);
-  const footer = root?.querySelector('[data-reports-footer]');
-  if (footer) footer.textContent = `${allItems.length} Meldungen`;
+  syncGrammarSurfaces(allItems, searched);
+  const well = state.ctx.host.querySelector('.reports-well');
+  const savedScrollTop = well ? well.scrollTop : 0;
   list.classList.toggle('is-list-view', state.viewMode === 'list');
   if (!items.length) {
     list.innerHTML = renderListEmptyState(allItems);
+    if (resetScroll && well) requestAnimationFrame(() => { well.scrollTop = 0; });
+    else if (well) well.scrollTop = savedScrollTop;
     return;
   }
   if (state.viewMode === 'list') {
     list.innerHTML = items.map((report) => `
-      <button type="button" class="ctox-list-item report-row-compact ${report.id === state.selectedId ? 'is-selected' : ''}" data-report-id="${escapeAttr(report.id)}" data-context-record-id="${escapeAttr(report.id)}" data-context-record-type="business_report" data-context-label="${escapeAttr(report.title || report.id)}">
+      <button type="button" class="ctox-list-item report-row-compact ${report.id === state.selectedId ? 'is-selected' : ''}" data-report-id="${escapeAttr(report.id)}" data-context-record-id="${escapeAttr(report.id)}" data-context-record-type="business_report" data-context-label="${escapeAttr(report.title || report.id)}" aria-selected="${report.id === state.selectedId ? 'true' : 'false'}">
         <span class="reports-compact-title">${escapeHtml(report.title)}</span>
         <span class="ctox-badge${statusBadgeClass(report.status)}">${escapeHtml(displayStatus(report.status))}</span>
       </button>
     `).join('');
-    return;
-  }
-  list.innerHTML = items.map((report) => `
-    <button type="button" class="ctox-list-item report-row ${report.id === state.selectedId ? 'is-selected' : ''}" data-report-id="${escapeAttr(report.id)}" data-context-record-id="${escapeAttr(report.id)}" data-context-record-type="business_report" data-context-label="${escapeAttr(report.title || report.id)}">
+  } else {
+    list.innerHTML = items.map((report) => `
+    <button type="button" class="ctox-list-item report-row ${report.id === state.selectedId ? 'is-selected' : ''}" data-report-id="${escapeAttr(report.id)}" data-context-record-id="${escapeAttr(report.id)}" data-context-record-type="business_report" data-context-label="${escapeAttr(report.title || report.id)}" aria-selected="${report.id === state.selectedId ? 'true' : 'false'}">
       <span class="reports-badges">
         <span class="ctox-badge ${report.kind === 'bug' ? 'is-danger' : 'is-feature'}">${escapeHtml(report.kindLabel)}</span>
         <span class="ctox-badge${statusBadgeClass(report.status)}">${escapeHtml(displayStatus(report.status))}</span>
@@ -658,12 +699,15 @@ function renderList() {
       <small>${escapeHtml(report.moduleId)} · ${escapeHtml(formatDate(report.updatedAt || report.createdAt))}</small>
     </button>
   `).join('');
+  }
+  if (resetScroll && well) requestAnimationFrame(() => { well.scrollTop = 0; });
+  else if (well) well.scrollTop = savedScrollTop;
   // Click handling is wired once via event delegation in wireUi(); re-binding
   // per-button on every renderList() is no longer needed.
 }
 
 function renderDetailFooter(report) {
-  const node = state.ctx.host.querySelector('[data-report-detail-footer]');
+  const node = state.ctx.host.querySelector('.reports-detail [data-pg-footer]');
   if (!node) return;
   if (!report) { node.textContent = ''; return; }
   const { approval, command } = delegationInfoFor(report);
@@ -991,24 +1035,6 @@ function buildDiagnosticsState({ results, syncErrors, syncDiagnostics, reportCou
   };
 }
 
-function diagnosticsMessages(diagnostics, t = defaultTranslate) {
-  if (diagnostics.loading) return [t('refreshRunning', 'Bugs & Features werden aktualisiert...')];
-  const messages = [];
-  for (const name of REPORT_DATA_COLLECTIONS) {
-    const info = diagnostics.collections?.[name];
-    if (!info) continue;
-    if (info.missing) messages.push(t('reportsUnavailableDetail', 'Die Liste wird automatisch gefüllt, sobald Einträge geladen sind.'));
-    if (info.error) messages.push(t('reportsUnavailableDetail', 'Die Liste wird automatisch gefüllt, sobald Einträge geladen sind.'));
-    if (isUnavailableReportSyncStatus(info.syncStatus) || info.syncError) {
-      messages.push(t('reportsUnavailableDetail', 'Die Liste wird automatisch gefüllt, sobald Einträge geladen sind.'));
-    }
-  }
-  for (const error of diagnostics.syncErrors || []) {
-    if (error) messages.push(t('reportsUnavailableDetail', 'Die Liste wird automatisch gefüllt, sobald Einträge geladen sind.'));
-  }
-  return [...new Set(messages)];
-}
-
 function hasBlockingReportDiagnostic() {
   const dataCollections = REPORT_DATA_COLLECTIONS.map((name) => state.diagnostics.collections?.[name]).filter(Boolean);
   if (!dataCollections.length) return true;
@@ -1028,16 +1054,6 @@ export function isPendingReportSyncStatus(value) {
 
 function isUnhealthySyncStatus(value) {
   return ['failed', 'error', 'stopped'].includes(String(value || '').toLowerCase());
-}
-
-function refreshDiagnosticTitle(diagnostics) {
-  if (diagnostics.loading) return state.t('refreshRunning', 'Bugs & Features werden aktualisiert...');
-  const messages = diagnosticsMessages(diagnostics, state.t);
-  if (messages.length) return messages.join(' ');
-  if (diagnostics.lastSuccessAt) {
-    return state.t('refreshTitleOk', 'Zuletzt aktualisiert: {0}', formatDate(diagnostics.lastSuccessAt));
-  }
-  return state.t('refresh', 'Aktualisieren');
 }
 
 function releasesForModule(moduleId) {
