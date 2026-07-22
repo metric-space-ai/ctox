@@ -203,6 +203,8 @@ async function loadModuleMarkup() {
 
 function bindElements(root) {
   els.root = root.querySelector('[data-coding-agents-root]');
+  els.leftPane = root.querySelector('.coding-agents-left');
+  els.centerPane = root.querySelector('.coding-agents-center');
   els.appList = root.querySelector('#ca-app-list');
   els.refreshApps = root.querySelector('#ca-refresh-apps');
   els.activeAppKicker = root.querySelector('#ca-active-app-kicker');
@@ -219,22 +221,10 @@ function bindElements(root) {
   els.resultBody = root.querySelector('#ca-result-body');
   els.recentList = root.querySelector('#ca-recent-list');
   els.turnsList = root.querySelector('#ca-turns-list');
-  els.appSearch = root.querySelector('[data-app-search]');
-  els.appFilterToggle = root.querySelector('[data-toggle-app-filters]');
-  els.appFilterTray = root.querySelector('[data-app-filter-advanced]');
-  els.appSort = root.querySelector('[data-app-sort]');
-  els.appSortDir = root.querySelector('[data-app-sort-dir]');
-  els.appFilterReset = root.querySelector('[data-reset-app-filters]');
-  els.chatSearch = root.querySelector('[data-chat-search]');
-  els.chatFilterToggle = root.querySelector('[data-toggle-chat-filters]');
-  els.chatFilterTray = root.querySelector('[data-chat-filter-advanced]');
-  els.chatRoleFilter = root.querySelector('[data-chat-role-filter]');
-  els.chatFilterReset = root.querySelector('[data-reset-chat-filters]');
-  els.appViewButtons = [...root.querySelectorAll('[data-app-view]')];
-  els.chatViewButtons = [...root.querySelectorAll('[data-chat-view]')];
-  els.centerTabs = [...root.querySelectorAll('[data-center-tab]')];
-  els.countEvents = root.querySelector('[data-count-events]');
-  els.countTurns = root.querySelector('[data-count-turns]');
+  // Domain-specific sort-direction toggle inside the left tray; the rest of
+  // the pane chrome (search / view / tray / reset / band / counts / footer)
+  // is shell-wired from the data-pg-* markup (autoWirePaneGrammar).
+  els.appSortDir = els.leftPane?.querySelector('[data-app-sort-dir]');
   els.centerFooter = root.querySelector('#ca-center-footer');
   els.artifactFooter = root.querySelector('#ca-artifact-footer');
   if (els.root) els.root.className = ROOT_CLASSES;
@@ -259,6 +249,10 @@ function applyStaticTexts() {
   if (els.refreshApps) {
     els.refreshApps.title = refreshLabel;
     els.refreshApps.setAttribute('aria-label', refreshLabel);
+    // Canonical shell action icon (shared/icons.js) with an inline fallback
+    // so the header action never renders empty before the shell icon set is up.
+    els.refreshApps.innerHTML = state.ctx?.getActionIcon?.('refresh')
+      || '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4"></path></svg>';
   }
   if (els.taskInput) els.taskInput.placeholder = t('taskPlaceholder');
 }
@@ -287,81 +281,39 @@ function wireEvents() {
     });
   }
 
-  // Left column: search + collapsed tray (sort select, direction, reset).
-  els.appSearch?.addEventListener('input', () => {
-    state.appSearch = els.appSearch.value.trim().toLowerCase();
-    syncFilterIndicators();
-    renderAppList();
-  });
-  els.appFilterToggle?.addEventListener('click', () => toggleTray(els.appFilterToggle, els.appFilterTray));
-  els.appSort?.addEventListener('change', () => { state.appSort = els.appSort.value; syncFilterIndicators(); renderAppList(); });
+  // Pane chrome is SHELL-owned canonical grammar (autoWirePaneGrammar wires
+  // the data-pg-* markup once, debounced after mount). The module only keeps
+  // its state in sync through the bubbling grammar event and re-renders lists
+  // — the same contract the ctox module's task column uses.
+  els.leftPane?.addEventListener('ctox-pane-grammar-change', onAppGrammarChange);
+  els.centerPane?.addEventListener('ctox-pane-grammar-change', onChatGrammarChange);
+
+  // Domain-specific leftover: the sort-direction toggle inside the left tray
+  // has no grammar equivalent (the grammar owns values, not direction).
   els.appSortDir?.addEventListener('click', () => {
     state.appSortDir = state.appSortDir === 'asc' ? 'desc' : 'asc';
     els.appSortDir.dataset.dir = state.appSortDir;
     els.appSortDir.title = state.appSortDir === 'asc' ? 'Aufsteigend' : 'Absteigend';
     els.appSortDir.style.transform = state.appSortDir === 'asc' ? '' : 'scaleY(-1)';
-    syncFilterIndicators();
     renderAppList();
   });
-  els.appFilterReset?.addEventListener('click', () => {
-    state.appSearch = ''; state.appSort = 'title'; state.appSortDir = 'asc';
-    if (els.appSearch) els.appSearch.value = '';
-    if (els.appSort) els.appSort.value = 'title';
-    if (els.appSortDir) { els.appSortDir.dataset.dir = 'asc'; els.appSortDir.style.transform = ''; }
-    syncFilterIndicators();
-    renderAppList();
-  });
-
-  // Main view: transcript search + role tray + cards/list toggle + view band.
-  els.chatSearch?.addEventListener('input', () => {
-    state.chatSearch = els.chatSearch.value.trim().toLowerCase();
-    syncFilterIndicators();
-    renderRecentTurns();
-  });
-  els.chatFilterToggle?.addEventListener('click', () => toggleTray(els.chatFilterToggle, els.chatFilterTray));
-  els.chatRoleFilter?.addEventListener('change', () => {
-    state.chatRoleFilter = els.chatRoleFilter.value;
-    syncFilterIndicators();
-    renderRecentTurns();
-  });
-  els.chatFilterReset?.addEventListener('click', () => {
-    state.chatSearch = ''; state.chatRoleFilter = 'all';
-    if (els.chatSearch) els.chatSearch.value = '';
-    if (els.chatRoleFilter) els.chatRoleFilter.value = 'all';
-    syncFilterIndicators();
-    renderRecentTurns();
-  });
-  els.appViewButtons.forEach((button) => button.addEventListener('click', () => {
-    state.appViewMode = button.dataset.appView;
-    els.appViewButtons.forEach((other) => other.setAttribute('aria-pressed', String(other === button)));
-    renderAppList();
-  }));
-  els.chatViewButtons.forEach((button) => button.addEventListener('click', () => {
-    state.chatViewMode = button.dataset.chatView;
-    els.chatViewButtons.forEach((other) => other.setAttribute('aria-pressed', String(other === button)));
-    renderRecentTurns();
-  }));
-  els.centerTabs.forEach((tab) => tab.addEventListener('click', () => {
-    state.centerTab = tab.dataset.centerTab;
-    els.centerTabs.forEach((other) => other.setAttribute('aria-selected', String(other === tab)));
-    renderRecentTurns();
-  }));
 }
 
-function toggleTray(toggle, tray) {
-  if (!toggle || !tray) return;
-  const open = tray.hidden;
-  tray.hidden = !open;
-  toggle.setAttribute('aria-expanded', String(open));
+function onAppGrammarChange(event) {
+  const detail = event?.detail || {};
+  state.appSearch = String(detail.search ?? '');
+  state.appViewMode = detail.view === 'list' ? 'list' : 'cards';
+  state.appSort = detail.filters?.sort || 'title';
+  renderAppList();
 }
 
-// Active-filter dot on the tray toggles: visible whenever a non-default
-// filter is set, so a collapsed tray never hides active filtering.
-function syncFilterIndicators() {
-  const appActive = Boolean(state.appSearch) || state.appSort !== 'title' || state.appSortDir !== 'asc';
-  els.appFilterToggle?.classList.toggle('has-active-filters', appActive);
-  const chatActive = Boolean(state.chatSearch) || state.chatRoleFilter !== 'all';
-  els.chatFilterToggle?.classList.toggle('has-active-filters', chatActive);
+function onChatGrammarChange(event) {
+  const detail = event?.detail || {};
+  state.chatSearch = String(detail.search ?? '');
+  state.chatViewMode = detail.view === 'list' ? 'list' : 'cards';
+  state.chatRoleFilter = detail.filters?.role || 'all';
+  state.centerTab = detail.band === 'turns' ? 'turns' : 'chat';
+  renderRecentTurns();
 }
 
 /* App/Module picker */
@@ -455,7 +407,14 @@ function renderAppList() {
     // the compact one-line rendering (canonical shard/list toggle).
     item.className = `ctox-list-item coding-agents-app-item ${state.activeModuleId === mod.id ? 'is-selected' : ''}`;
     item.dataset.moduleId = mod.id;
+    // Canonical context-record trio: the shell's right-click context resolves
+    // records from these attributes (fallbacks cover any data-*-id, but the
+    // canonical trio is the designed contract).
+    item.setAttribute('data-context-record-id', mod.id);
+    item.setAttribute('data-context-record-type', 'business_module');
+    item.setAttribute('data-context-label', mod.title);
     item.setAttribute('aria-label', mod.title);
+    item.setAttribute('aria-selected', String(state.activeModuleId === mod.id));
     const initial = (mod.title.trim().charAt(0) || '?').toUpperCase();
     item.innerHTML = `
       <span class="coding-agents-app-icon"><img src="${escapeHtml(moduleIconUrl(mod.id))}" alt="" loading="lazy"><span class="coding-agents-app-monogram" hidden>${escapeHtml(initial)}</span></span>
@@ -517,7 +476,9 @@ function selectApp(moduleId) {
   // Selection is an in-place class flip, never a list rebuild — a rebuild
   // resets the scroll position under the operator's pointer.
   els.appList?.querySelectorAll('.coding-agents-app-item').forEach((el) => {
-    el.classList.toggle('is-selected', el.dataset.moduleId === moduleId);
+    const on = el.dataset.moduleId === moduleId;
+    el.classList.toggle('is-selected', on);
+    el.setAttribute('aria-selected', String(on));
   });
   updateWorkbenchHeader();
   updateFormState();
@@ -846,8 +807,17 @@ function renderRecentTurns() {
   const filtered = events.length !== allEvents.length;
   const emptyText = filtered ? 'Keine Treffer im Verlauf.' : t('recentEmpty');
 
-  if (els.countEvents) els.countEvents.textContent = ` (${events.length})`;
-  if (els.countTurns) els.countTurns.textContent = ` (${state.recentTurns.length})`;
+  // Counts + footers go through the shell-wired grammar handles when present
+  // (null-guarded: the shell wires the panes debounced ~120ms after mount, so
+  // early renders fall back to the direct data-pg-* targets).
+  const centerPg = els.centerPane?.__ctoxPaneGrammar;
+  if (centerPg?.setCounts) centerPg.setCounts({ chat: events.length, turns: state.recentTurns.length });
+  else {
+    const countChat = els.centerPane?.querySelector('[data-pg-count="chat"]');
+    const countTurns = els.centerPane?.querySelector('[data-pg-count="turns"]');
+    if (countChat) countChat.textContent = ` (${events.length})`;
+    if (countTurns) countTurns.textContent = ` (${state.recentTurns.length})`;
+  }
 
   const showTurns = state.centerTab === 'turns';
   if (els.turnsList) els.turnsList.hidden = !showTurns;
@@ -860,19 +830,28 @@ function renderRecentTurns() {
     renderTranscriptList(box, events, emptyText);
   }
 
-  const footer = els.root?.querySelector('#ca-footer');
-  if (footer) footer.textContent = appFooterText();
-  if (els.centerFooter) {
-    els.centerFooter.textContent = state.activeModuleId
-      ? `${state.recentTurns.length} Delegationen · ${state.activeModuleId}${running ? ' · Agent arbeitet' : ''}`
-      : '';
+  const leftFooterText = appFooterText();
+  const leftPg = els.leftPane?.__ctoxPaneGrammar;
+  if (leftPg?.setFooter) leftPg.setFooter(leftFooterText);
+  else {
+    const footer = els.root?.querySelector('#ca-footer');
+    if (footer) footer.textContent = leftFooterText;
   }
+  const centerFooterText = state.activeModuleId
+    ? `${state.recentTurns.length} Delegationen · ${state.activeModuleId}${running ? ' · Agent arbeitet' : ''}`
+    : '';
+  if (centerPg?.setFooter) centerPg.setFooter(centerFooterText);
+  else if (els.centerFooter) els.centerFooter.textContent = centerFooterText;
   renderArtifact();
 }
 
 // Compact list rendering (the counterpart to the bubble cards): one protocol
 // row per event — role, one-line preview, status.
 function renderTranscriptList(box, events, emptyText) {
+  // Data re-renders never move the operator: preserve the scroll offset
+  // across the rebuild (intentional resets — search/view/filter — scroll to
+  // the top because the content set changed, guarded by the caller).
+  const scrollTop = box.scrollTop;
   box.innerHTML = '';
   if (!events.length) {
     box.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(emptyText)}</strong></div>`;
@@ -889,27 +868,32 @@ function renderTranscriptList(box, events, emptyText) {
       </div>
     `);
   }
+  box.scrollTop = scrollTop;
 }
 
 // The "Delegationen" band view: the turn log for the active app as kit rows.
 function renderTurnsList() {
   const box = els.turnsList;
   if (!box) return;
+  // Same interaction law as the transcript: data refreshes keep the offset.
+  const scrollTop = box.scrollTop;
   box.innerHTML = '';
   if (!state.recentTurns.length) {
     box.innerHTML = `<div class="ctox-empty"><strong>Noch keine Delegationen.</strong></div>`;
     return;
   }
   for (const turn of state.recentTurns) {
+    const label = String(turn.prompt || '').replace(/\s+/g, ' ').slice(0, 120) || '—';
     box.insertAdjacentHTML('beforeend', `
-      <div class="ctox-list-item coding-agents-turn-row">
+      <div class="ctox-list-item coding-agents-turn-row" data-context-record-id="${escapeHtml(turn.id)}" data-context-record-type="business_command" data-context-label="${escapeHtml(label)}">
         <span class="coding-agents-app-row">
-          <span class="coding-agents-app-title">${escapeHtml(String(turn.prompt || '').replace(/\s+/g, ' ').slice(0, 120) || '—')}</span>
+          <span class="coding-agents-app-title">${escapeHtml(label)}</span>
           <span class="coding-agents-app-id">${escapeHtml(turn.status || '')}${turn.timeMs ? ` · ${escapeHtml(relativeTime(turn.timeMs))}` : ''}</span>
         </span>
       </div>
     `);
   }
+  box.scrollTop = scrollTop;
 }
 
 function relativeTime(timeMs) {
