@@ -23,7 +23,7 @@
     "third_pane_justification": "The bookings and holds auditing context belongs to a selected booking page and must stay beside the calendar grid in wide mode; it is hidden by default, auto-reveals on selection, and stacks below the grid in compact mode."
   },
   "category": "Productivity",
-  "version": "v1",
+  "version": "1.0.1",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",
   "tags": [

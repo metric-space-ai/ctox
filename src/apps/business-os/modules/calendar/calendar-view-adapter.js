@@ -52,6 +52,12 @@ export function createCalendarView({
     firstDay: 1, // Monday
     events: formattedEvents,
     resources: resources,
+    eventDidMount: (info) => {
+      if (!info?.el?.setAttribute) return;
+      for (const [name, value] of Object.entries(calendarEventContext(info))) {
+        info.el.setAttribute(name, value);
+      }
+    },
     editable: true,
     selectable: true,
     slotMinTime: '00:00:00',
@@ -237,6 +243,16 @@ function mapSingleEvent(ev, color) {
 
 function getOriginalEventId(eventCalendarId) {
   return String(eventCalendarId || '').replace(/_occ_\d+$/, '');
+}
+
+export function calendarEventContext(info = {}) {
+  const id = getOriginalEventId(getCalendarEventId(info));
+  const label = String(info?.event?.title || id || 'Calendar event');
+  return {
+    'data-context-record-id': id,
+    'data-context-record-type': 'calendar_event',
+    'data-context-label': label,
+  };
 }
 
 function getCalendarEventId(info) {

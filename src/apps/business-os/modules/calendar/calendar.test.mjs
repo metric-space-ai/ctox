@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
+import { calendarEventContext } from './calendar-view-adapter.js';
 
 globalThis.window = globalThis.window || {};
 
@@ -241,6 +242,19 @@ test('context pane auto-reveals only with a selection and no user collapse', () 
   assert.equal(hooks.calendarContextVisible(true, true), false);
   assert.equal(hooks.calendarContextVisible(false, false), false);
   assert.equal(hooks.calendarContextVisible('', false), false);
+});
+
+test('event, hold, and booking records expose the agent context trio', async () => {
+  assert.deepEqual(calendarEventContext({ event: { id: 'evt_1_occ_3', title: 'Customer call' } }), {
+    'data-context-record-id': 'evt_1',
+    'data-context-record-type': 'calendar_event',
+    'data-context-label': 'Customer call',
+  });
+
+  const js = await readFile(new URL('./index.js', import.meta.url), 'utf8');
+  assert.match(js, /data-context-record-type="calendar_booking_hold"/);
+  assert.match(js, /data-context-record-type="calendar_booking"/);
+  assert.match(js, /calendar-context-card" data-context-record-id=/);
 });
 
 test('selecting a booking page is an in-place class flip, never a list rebuild', async () => {
