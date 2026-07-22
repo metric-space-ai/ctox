@@ -53,6 +53,7 @@ const labels = {
     leftKicker: 'pi Coding Agent',
     leftTitle: 'Apps',
     refresh: 'Aktualisieren',
+    exportVisible: 'Sichtbare Session-Daten exportieren',
     workbenchKicker: 'pi Coding Agent',
     workbenchEmptyTitle: 'Workbench',
     formTitle: 'Neuer Coding-Turn',
@@ -87,6 +88,7 @@ const labels = {
     leftKicker: 'pi Coding Agent',
     leftTitle: 'Apps',
     refresh: 'Refresh',
+    exportVisible: 'Export visible session data',
     workbenchKicker: 'pi Coding Agent',
     workbenchEmptyTitle: 'Workbench',
     formTitle: 'New coding turn',
@@ -210,6 +212,7 @@ function bindElements(root) {
   els.activeAppKicker = root.querySelector('#ca-active-app-kicker');
   els.activeAppTitle = root.querySelector('#ca-active-app-title');
   els.modelBadge = root.querySelector('#ca-model-badge');
+  els.exportSession = root.querySelector('#ca-export-session');
   els.openEditor = root.querySelector('#ca-open-editor');
   els.turnForm = root.querySelector('#ca-turn-form');
   els.taskInput = root.querySelector('#ca-task-input');
@@ -254,12 +257,22 @@ function applyStaticTexts() {
     els.refreshApps.innerHTML = state.ctx?.getActionIcon?.('refresh')
       || '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4"></path></svg>';
   }
+  if (els.exportSession) {
+    const exportLabel = t('exportVisible');
+    els.exportSession.title = exportLabel;
+    els.exportSession.setAttribute('aria-label', exportLabel);
+    els.exportSession.innerHTML = state.ctx?.getActionIcon?.('export')
+      || '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7"></path></svg>';
+  }
   if (els.taskInput) els.taskInput.placeholder = t('taskPlaceholder');
 }
 
 function wireEvents() {
   if (els.refreshApps) {
     els.refreshApps.addEventListener('click', () => loadApps());
+  }
+  if (els.exportSession) {
+    els.exportSession.addEventListener('click', exportVisibleSessionData);
   }
   if (els.modelSelect) {
     els.modelSelect.addEventListener('change', () => {
@@ -495,6 +508,7 @@ function updateWorkbenchHeader() {
   const mod = selectedModule();
   if (els.activeAppKicker) els.activeAppKicker.textContent = mod ? mod.id : t('workbenchKicker');
   if (els.activeAppTitle) els.activeAppTitle.textContent = mod ? mod.title : t('workbenchEmptyTitle');
+  if (els.exportSession) els.exportSession.disabled = !mod;
   if (els.openEditor) els.openEditor.disabled = !mod;
 }
 
@@ -780,6 +794,16 @@ function turnFromCommand(doc) {
   };
 }
 
+function visibleTranscriptEvents() {
+  return buildTranscriptEvents().filter((event) => {
+    if (state.chatRoleFilter !== 'all') {
+      const role = event.role === 'agent' ? 'assistant' : event.role;
+      if (state.chatRoleFilter === 'system' ? (role === 'user' || role === 'assistant') : role !== state.chatRoleFilter) return false;
+    }
+    return !state.chatSearch || String(event.text || '').toLowerCase().includes(state.chatSearch);
+  });
+}
+
 function renderRecentTurns() {
   const box = els.recentList;
   if (!box) return;
@@ -796,13 +820,7 @@ function renderRecentTurns() {
   // otherwise the turn log as user-bubble + status-line pairs. Search + role
   // tray filter the transcript; the band counts BOTH views (zeros included).
   const allEvents = buildTranscriptEvents();
-  const events = allEvents.filter((event) => {
-    if (state.chatRoleFilter !== 'all') {
-      const role = event.role === 'agent' ? 'assistant' : event.role;
-      if (state.chatRoleFilter === 'system' ? (role === 'user' || role === 'assistant') : role !== state.chatRoleFilter) return false;
-    }
-    return !state.chatSearch || String(event.text || '').toLowerCase().includes(state.chatSearch);
-  });
+  const events = visibleTranscriptEvents();
   const running = state.activeSession?.status === 'running';
   const filtered = events.length !== allEvents.length;
   const emptyText = filtered ? 'Keine Treffer im Verlauf.' : t('recentEmpty');
@@ -943,6 +961,91 @@ function buildTranscriptEvents() {
     });
   });
   return events;
+}
+
+// Export exactly the records in the currently selected center view. Transcript
+// filters apply to the chat view; the delegation view displays the bounded
+// recent-turn list unchanged, so its export does the same.
+function exportVisibleSessionData() {
+  const mod = selectedModule();
+  if (!mod) return;
+  const exportedAt = new Date().toISOString();
+  const payload = buildCodingAgentsExport({
+    module: mod,
+    session: state.activeSession,
+    view: state.centerTab,
+    filters: {
+      search: state.chatSearch || '',
+      role: state.chatRoleFilter || 'all',
+      viewMode: state.chatViewMode || 'cards',
+    },
+    events: visibleTranscriptEvents(),
+    turns: state.recentTurns,
+    exportedAt,
+  });
+  const safeModuleId = mod.id.replace(/[^a-z0-9_-]+/gi, '-');
+  downloadJsonFile(
+    `ctox-coding-agents-${safeModuleId}-${payload.view}-${exportedAt.slice(0, 19).replace(/[:T]/g, '-')}.json`,
+    payload,
+  );
+}
+
+function buildCodingAgentsExport({ module, session, view, filters, events, turns, exportedAt }) {
+  const activeView = view === 'turns' ? 'turns' : 'chat';
+  const records = activeView === 'turns'
+    ? (Array.isArray(turns) ? turns : []).map((turn) => ({
+      id: String(turn?.id || ''),
+      moduleId: String(turn?.moduleId || ''),
+      prompt: String(turn?.prompt || ''),
+      status: String(turn?.status || ''),
+      ok: turn?.ok !== false,
+      error: String(turn?.error || ''),
+      appliedCount: Number(turn?.appliedCount || 0),
+      timeMs: Number(turn?.timeMs || 0),
+    }))
+    : (Array.isArray(events) ? events : []).map((event) => ({
+      key: String(event?.key || ''),
+      role: String(event?.role || 'system'),
+      text: String(event?.text || ''),
+      status: String(event?.status || ''),
+      failed: Boolean(event?.failed),
+    }));
+  return {
+    format: 'ctox-coding-agents-export',
+    version: 1,
+    exportedAt: String(exportedAt || new Date().toISOString()),
+    module: 'coding-agents',
+    project: {
+      id: String(module?.id || ''),
+      title: String(module?.title || module?.id || ''),
+    },
+    session: session ? {
+      sessionId: String(session.session_id || session.id || ''),
+      workspaceRoot: String(session.workspace_root || ''),
+      status: String(session.status || ''),
+      updatedAtMs: Number(session.updated_at_ms || 0),
+    } : null,
+    view: activeView,
+    filters: {
+      search: String(filters?.search || ''),
+      role: String(filters?.role || 'all'),
+      viewMode: filters?.viewMode === 'list' ? 'list' : 'cards',
+    },
+    count: records.length,
+    records,
+  };
+}
+
+function downloadJsonFile(filename, payload) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // Fallback renderer used only when the vendored chat-ui failed to load. Keeps
@@ -1101,6 +1204,7 @@ export const __codingAgentsTestHooks = {
   normalizeCatalogModules,
   validateTaskPrompt,
   buildTurnPayload,
+  buildCodingAgentsExport,
   turnFromCommand,
   turnErrorFromProjection,
   escapeHtml,
