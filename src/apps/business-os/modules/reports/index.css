@@ -54,28 +54,6 @@
   border-color: color-mix(in srgb, var(--reports-feature) 30%, transparent);
 }
 
-/* Refresh icon spins while a reload is in flight. */
-.reports-module .reports-refresh-button[aria-busy="true"] svg {
-  animation: reports-refresh-spin 0.9s linear infinite;
-}
-
-@keyframes reports-refresh-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* custom: kind chip strip — kit .ctox-chip pills in a flat horizontal row
-   that replaces the old `<select data-report-kind>` (one less always-visible
-   control next to the search). */
-.reports-module .reports-kind-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 8px 14px 10px;
-  border-bottom: 1px solid var(--hairline, var(--line));
-}
-
 /* custom: record-row content — badge row, title and meta line stacked inside
    the standard .ctox-list-item button. */
 .reports-module .report-row {

@@ -1,6 +1,7 @@
 {
   "workspaceLoading": "Loading workspace...",
   "refresh": "Refresh",
+  "exportJson": "Export filtered list as JSON",
   "searchPlaceholder": "Search...",
   "searchLabel": "Search bugs and features",
   "kindFilterLabel": "Filter type",
