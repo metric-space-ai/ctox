@@ -206,14 +206,21 @@ export async function mount(ctx) {
 }
 
 function ensureStyles() {
-  const href = `${new URL('./index.css', import.meta.url).pathname}?v=${BUILD}`;
-  if (document.querySelector(`link[href="${href}"]`)) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet'; link.href = href;
-  document.head.append(link);
+  const cssVersion = String(import.meta.url).split('?v=')[1] || BUILD;
+  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
+  let link = document.querySelector('link[data-iot-style]');
+  if (!link) {
+    link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.dataset.iotStyle = 'true';
+    document.head.append(link);
+  }
+  if (link.getAttribute('href') !== cssHref) link.href = cssHref;
 }
 async function loadMarkup() {
-  const html = await fetch(new URL(`./index.html?v=${BUILD}`, import.meta.url)).then((r) => r.text());
+  const markupVersion = String(import.meta.url).split('?v=')[1] || BUILD;
+  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
+  const html = await fetch(markupHref).then((r) => r.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((n) => n.remove());
   return doc.body.innerHTML;
