@@ -11200,9 +11200,24 @@ fn systematic_research_binding_from_prompt(prompt: &str) -> Result<(&str, &str)>
         })
     }
 
+    fn json_prompt_value<'a>(prompt: &'a str, key: &str) -> Option<&'a str> {
+        let prefix = format!("\"{key}\":");
+        prompt.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix(&prefix)
+                .map(str::trim)
+                .map(|value| value.trim_end_matches(',').trim())
+                .and_then(|value| value.strip_prefix('"'))
+                .and_then(|value| value.strip_suffix('"'))
+                .filter(|value| !value.is_empty() && *value != "latest")
+        })
+    }
+
     let run_id = prompt_value(prompt, "Research Run ID:")
+        .or_else(|| json_prompt_value(prompt, "research_run_id"))
         .context("systematic research task is missing an explicit Research Run ID")?;
     let command_id = prompt_value(prompt, "Research Command ID:")
+        .or_else(|| json_prompt_value(prompt, "research_command_id"))
         .context("systematic research task is missing an explicit Research Command ID")?;
     Ok((run_id, command_id))
 }
@@ -37413,6 +37428,19 @@ Use shell tools to create or update these files."
         assert!(prompt.contains("Research Command ID: skf-command-001"));
         assert!(prompt.contains("4. Build Knowledge and reports only after review."));
         assert!(!prompt.contains("CURRENT TASK\nSKF verified legacy source re-research"));
+    }
+
+    #[test]
+    fn systematic_research_binding_accepts_typed_business_command_payload() {
+        let prompt = r#"Payload JSON:
+{
+  "research_run_id": "research_run_52db54e4",
+  "research_command_id": "cmd_49f6fb44"
+}"#;
+
+        let binding = systematic_research_binding_from_prompt(prompt).unwrap();
+
+        assert_eq!(binding, ("research_run_52db54e4", "cmd_49f6fb44"));
     }
 
     #[test]
