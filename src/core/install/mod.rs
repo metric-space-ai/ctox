@@ -37,6 +37,7 @@ const LAUNCHD_SIGNALING_LABEL: &str = "com.metric-space.ctox.signaling";
 const DEFAULT_GITHUB_API_BASE: &str = "https://api.github.com";
 const DEFAULT_GITHUB_TOKEN_ENV: &str = "CTOX_UPDATE_GITHUB_TOKEN";
 const DEFAULT_RELEASE_REPO: &str = "metric-space-ai/ctox";
+const UPDATE_BACKUP_RETENTION_COUNT: usize = 3;
 const CHATGPT_AUTH_SECRET_SCOPE: &str = "ctox-auth";
 const CHATGPT_AUTH_SECRET_NAME: &str = "chatgpt_subscription_auth_json";
 const UPGRADE_RUNTIME_ENV_INVARIANT_KEYS: &[&str] = &[
@@ -2005,6 +2006,7 @@ fn apply_update(
         last_error: None,
     };
     persist_update_state(&layout.update_state_path(), &completed)?;
+    prune_old_update_backups(&layout.state_root, UPDATE_BACKUP_RETENTION_COUNT);
     progress_done(format!("applied release {release}"), update_started);
     Ok(ApplyResult {
         updated: true,
@@ -3499,6 +3501,31 @@ fn backup_state_root(state_root: &Path) -> Result<PathBuf> {
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)
         .with_context(|| format!("failed to write {}", manifest_path.display()))?;
     Ok(backup_root)
+}
+
+fn prune_old_update_backups(state_root: &Path, retain: usize) {
+    let backup_dir = state_root.join("backups");
+    let Ok(entries) = fs::read_dir(&backup_dir) else {
+        return;
+    };
+    let mut updates = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_name()?.to_str()?;
+            (path.is_dir() && name.starts_with("update-")).then_some(path)
+        })
+        .collect::<Vec<_>>();
+    updates.sort_by(|left, right| right.file_name().cmp(&left.file_name()));
+    for path in updates.into_iter().skip(retain) {
+        match fs::remove_dir_all(&path) {
+            Ok(()) => progress_step(format!("pruned old update backup {}", path.display())),
+            Err(err) => progress_step(format!(
+                "warning: failed to prune old update backup {}: {err}",
+                path.display()
+            )),
+        }
+    }
 }
 
 /// `true` only for SQLITE_NOTADB — the file exists but is not SQLite. That is
@@ -5048,6 +5075,27 @@ mod tests {
         );
         assert!(!backup.join("ctox.sqlite3-wal").exists());
         assert!(!backup.join("ctox.sqlite3-shm").exists());
+    }
+
+    #[test]
+    fn update_backup_retention_keeps_latest_and_manual_backups() {
+        let temp = tempdir().unwrap();
+        let state_root = temp.path().join("state");
+        let backup_root = state_root.join("backups");
+        ensure_dir(&backup_root).unwrap();
+        for stamp in ["01", "02", "03", "04", "05"] {
+            ensure_dir(&backup_root.join(format!("update-{stamp}"))).unwrap();
+        }
+        ensure_dir(&backup_root.join("manual-pre-upgrade")).unwrap();
+
+        prune_old_update_backups(&state_root, 3);
+
+        assert!(!backup_root.join("update-01").exists());
+        assert!(!backup_root.join("update-02").exists());
+        assert!(backup_root.join("update-03").exists());
+        assert!(backup_root.join("update-04").exists());
+        assert!(backup_root.join("update-05").exists());
+        assert!(backup_root.join("manual-pre-upgrade").exists());
     }
 
     #[test]
