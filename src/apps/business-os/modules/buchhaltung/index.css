@@ -500,11 +500,6 @@
   pointer-events: auto;
 }
 
-body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
-  bottom: calc(var(--shell-taskbar-safe-area, 58px) + env(safe-area-inset-bottom, 0px));
-  max-height: min(430px, calc(100% - var(--shell-taskbar-safe-area, 58px) - 32px));
-}
-
 .fibu-drawer-handle {
   padding: 10px 14px;
   display: flex;
