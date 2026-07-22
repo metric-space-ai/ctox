@@ -263,12 +263,18 @@ export async function mount(ctx) {
   state.ctx = ctx;
   state.lang = ctx.locale === 'en' ? 'en' : 'de';
   
-  // Inject stylesheet dynamically
-  const styleLink = document.createElement('link');
-  styleLink.rel = 'stylesheet';
-  styleLink.href = new URL('./index.css', import.meta.url).href;
-  styleLink.id = state.ctx.module?.id === 'notizen' ? 'notizen-module-styles' : 'notes-module-styles';
-  document.head.appendChild(styleLink);
+  // Inject stylesheet dynamically; inherit the JS cache-buster.
+  const cssVersion = String(import.meta.url).split('?v=')[1] || '';
+  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
+  const styleId = state.ctx.module?.id === 'notizen' ? 'notizen-module-styles' : 'notes-module-styles';
+  let styleLink = document.getElementById(styleId);
+  if (!styleLink) {
+    styleLink = document.createElement('link');
+    styleLink.rel = 'stylesheet';
+    styleLink.id = styleId;
+    document.head.appendChild(styleLink);
+  }
+  if (styleLink.getAttribute('href') !== cssHref) styleLink.href = cssHref;
   
   // Load dynamic locales
   const messages = await loadModuleMessages(import.meta.url, ctx.locale, labels);
@@ -422,7 +428,9 @@ function applyStaticLabels(root, t) {
 }
 
 async function loadModuleMarkup() {
-  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  const markupVersion = String(import.meta.url).split('?v=')[1] || '';
+  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
+  const html = await fetch(markupHref).then((res) => res.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
   return doc.body.innerHTML;
