@@ -18,9 +18,22 @@ Spreadsheets, or Files before claiming completion.
 
 ## CTOX Runtime Contract
 
-- Task spawning is allowed only for real bounded work steps that add mission
-  progress, external waiting, recovery, or explicit decomposition. Do not
-  spawn work merely because review feedback exists.
+- Treat `web_stack_plan.required_depth` from a typed Business OS research
+  command as an immutable execution requirement. Resolve it before the first
+  `ctox_deep_research` call and pass that exact value as the tool's `depth`.
+  In particular, `required_depth: exhaustive` requires at least one successful,
+  persisted typed `ctox_deep_research` call with `depth: exhaustive` in the
+  current durable research run. A `standard` call is useful only as an
+  orientation round and never satisfies an exhaustive command.
+- Never downgrade required research depth because of token pressure, provider
+  rate limits, an existing standard-depth workspace, or a retry. Preserve the
+  task as pending when the required call cannot complete. Before synthesis,
+  validation, or writeback, inspect the successful typed tool receipt and
+  verify that its reported `depth` is at least the command's required depth.
+- CTOX-managed harness sessions do not expose free child agents or
+  `spawn_agent`. Keep discovery, extraction, synthesis, correction, and
+  completion ownership in the same parent work item. Use the typed Web Stack
+  tools for research work; do not plan around unavailable subagent controls.
 - The Review Gate is a quality checkpoint, not a control loop. After review
   feedback, continue the same main work item whenever possible and
   incorporate the feedback there.
@@ -251,10 +264,13 @@ unbound fallback for evidence.
    multi-provider orientation round is useful:
 
    ```
-   ctox web deep-research --query "<topic>" --depth standard --max-sources 24 --workspace "$PWD/research/deep-research-$(date +%s)"
+   ctox web deep-research --query "<topic>" --depth <required-depth> --max-sources 24 --workspace "$PWD/research/deep-research-$(date +%s)"
    ```
 
-   This call internally combines scholarly + agency + standards +
+   For an untyped ad-hoc task, use `standard` as the default value for
+   `<required-depth>`. For a typed Business OS command, copy
+   `web_stack_plan.required_depth` exactly; do not infer or choose a cheaper
+   depth. This call internally combines scholarly + agency + standards +
    dataset + industry buckets into one ranked envelope. Use `--depth
    exhaustive --max-sources 40` when the catalog needs to be
    near-complete. The output JSON carries one entry per source with
