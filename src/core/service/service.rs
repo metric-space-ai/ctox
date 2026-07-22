@@ -14309,7 +14309,7 @@ fn queue_manual_retry_floor(root: &Path, message_key: &str) -> Result<Option<Str
           AND from_state = 'Failed'
           AND to_state = 'Pending'
           AND core_event = 'Release'
-          AND actor = 'ctox-queue-update'
+          AND actor IN ('ctox-queue-update', 'business-command-terminal-owner')
           AND accepted = 1
         "#,
         params![message_key],
@@ -34575,6 +34575,115 @@ Business OS command:
                 .expect("manual retry budget check should not fail")
                 .is_none(),
             "manual retry must reach the worker instead of immediately re-terminalizing"
+        );
+    }
+
+    #[test]
+    fn business_command_operator_release_starts_new_queue_review_budget() {
+        let root = temp_root("ctox-business-command-review-budget-release");
+        let claimed = channels::claim_business_command_with_queue(
+            &root,
+            channels::BusinessCommandClaimRequest {
+                command_id: "command-review-budget-release".to_string(),
+                idempotency_key: "command-review-budget-release".to_string(),
+                payload_hash: "sha256:review-budget-release".to_string(),
+                module: "research".to_string(),
+                command_type: "research.systematic.run".to_string(),
+                record_id: "research-review-budget-release".to_string(),
+                intent: json!({"payload": {"instruction": "verify evidence"}}),
+                created_at_ms: 1_700_000_000_000,
+            },
+            channels::QueueTaskCreateRequest {
+                title: "Verify evidence".to_string(),
+                prompt: "Verify every source through the web stack.".to_string(),
+                thread_key: "business-os/research/review-budget-release".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("systematic-research".to_string()),
+                parent_message_key: None,
+                extra_metadata: Some(json!({
+                    "idempotency_key": "command-review-budget-release"
+                })),
+            },
+        )
+        .expect("claim typed research command");
+        let task = claimed.task;
+        let job = QueuedPrompt {
+            prompt: task.prompt.clone(),
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: task.suggested_skill.clone(),
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("lease typed command task");
+        channels::transition_business_command_for_task(
+            &root,
+            &task.message_key,
+            "leased",
+            None,
+            None,
+            None,
+            "worker leased",
+        )
+        .expect("lease command");
+        channels::transition_business_command_for_task(
+            &root,
+            &task.message_key,
+            "running",
+            None,
+            None,
+            None,
+            "worker started",
+        )
+        .expect("start command");
+        enforce_systematic_research_validation_feedback_transition(
+            &root,
+            &task.message_key,
+            "evidence mismatch",
+            1,
+        )
+        .expect("record review checkpoint");
+        assert_eq!(
+            queue_review_budget_attempt_count(&root, &job, &task.message_key)
+                .expect("read pre-release budget"),
+            1
+        );
+
+        channels::update_queue_task(
+            &root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task.message_key.clone(),
+                route_status: Some("failed".to_string()),
+                status_note: Some("finite review budget exhausted".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("fail command task");
+        channels::update_queue_task(
+            &root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task.message_key.clone(),
+                route_status: Some("pending".to_string()),
+                status_note: Some("operator-authorized bounded retry".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("release command task");
+
+        assert_eq!(
+            queue_review_budget_attempt_count(&root, &job, &task.message_key)
+                .expect("read post-release budget"),
+            0,
+            "a typed Business OS command release must reset the finite review cycle"
         );
     }
 
