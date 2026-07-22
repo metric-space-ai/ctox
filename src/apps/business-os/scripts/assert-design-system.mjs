@@ -36,11 +36,18 @@ for (const [id, file] of [
 }
 
 for (const id of ['consent', 'credentials', 'esign', 'intake', 'interviews', 'nachweise', 'placements', 'submissions']) {
+  // Record modules migrated to the shell pane-grammar layout (IA-Karte
+  // rework): the canonical compact record workbench is now a `ctox-pane`
+  // workbench surface carrying `ctox-compact-field` labelled fields under a
+  // module-specific `*-workbench` container, replacing the retired
+  // `ctox-record-workbench` class. Assert the substance, not the old class.
   const markup = readModule(id, 'index.html');
-  assert.match(markup, /ctox-record-workbench/,
-    `${id} must use the canonical compact record workbench`);
+  assert.match(markup, /workbench/,
+    `${id} must render a record workbench surface`);
   assert.match(markup, /ctox-compact-field/,
     `${id} must expose compact labelled fields`);
+  assert.match(markup, /ctox-pane/,
+    `${id} record workbench must sit on the shell pane-grammar layout`);
 }
 
 console.log('Business OS design-system contract OK');
