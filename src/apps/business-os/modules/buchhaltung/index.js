@@ -3619,7 +3619,7 @@ window.renderTravelList = function() {
     const dateRange = `${metadata.startDate || ''} bis ${metadata.endDate || ''}`;
 
     html += `
-      <tr data-travel-click-id="${t.id}">
+      <tr data-travel-click-id="${escapeHtml(t.id)}" data-context-record-id="${escapeHtml(t.id)}" data-context-record-type="accounting_journal_entry" data-context-label="${escapeHtml(t.narration || `Travel expense ${t.id}`)}">
         <td><strong>✈️ ${escapeHtml(t.narration)}</strong></td>
         <td><span class="fibu-mono">${dateRange}</span></td>
         <td class="fibu-text-warning is-num" style="font-weight: 600;">${formatCents(totalAllowance)}</td>
@@ -3901,7 +3901,7 @@ window.renderMileageList = function() {
     const typeLabel = metadata.purpose === 'business' ? 'Geschäftlich' : (metadata.purpose === 'private' ? 'Privat' : 'Arbeitsweg');
 
     html += `
-      <tr data-mileage-click-id="${t.id}">
+      <tr data-mileage-click-id="${escapeHtml(t.id)}" data-context-record-id="${escapeHtml(t.id)}" data-context-record-type="accounting_journal_entry" data-context-label="${escapeHtml(t.narration || metadata.destination || `Mileage entry ${t.id}`)}">
         <td><span class="fibu-mono">${t.posting_date}</span></td>
         <td><strong>🚗 ${escapeHtml(metadata.destination || '')}</strong> <div style="font-size:11px; opacity:0.75;">Zweck: ${escapeHtml(t.narration || '')}</div></td>
         <td>${escapeHtml(metadata.contactPerson || '—')}</td>

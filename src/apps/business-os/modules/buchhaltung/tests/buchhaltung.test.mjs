@@ -84,8 +84,10 @@ test('L-class pane tracks are explicit and the center keeps a hard minimum', () 
   assert.ok(manifest.layout.third_pane_justification.length > 20);
 });
 
-test('booking rows carry explicit Context v2 identity', () => {
+test('primary and secondary accounting rows carry the full context trio', () => {
   assert.match(js, /data-context-record-id=/);
   assert.match(js, /data-context-record-type=/);
   assert.match(js, /data-context-label=/);
+  assert.match(js, /data-travel-click-id=[^\n]+data-context-record-type="accounting_journal_entry"[^\n]+data-context-label=/);
+  assert.match(js, /data-mileage-click-id=[^\n]+data-context-record-type="accounting_journal_entry"[^\n]+data-context-label=/);
 });
