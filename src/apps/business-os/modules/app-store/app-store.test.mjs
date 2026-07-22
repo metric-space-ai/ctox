@@ -89,6 +89,43 @@ test('scope matching keeps card badges and category counters aligned', () => {
   assert.equal(hooks.itemMatchesScope({ kind: 'local', status: 'local' }, 'local'), true);
 });
 
+test('JSON export serializes the visible catalog or installed list', () => {
+  const payload = hooks.buildAppStoreExport({
+    items: [{
+      id: 'inventory',
+      title: 'Inventory',
+      description: 'Stock control',
+      category: 'Operations',
+      kind: 'installed',
+      status: 'installed',
+      installed_version: '1.0.0',
+      available_version: '1.1.0',
+      developer: 'CTOX',
+      license: 'AGPL-3.0-only',
+      source: 'catalog',
+      repo: 'metric-space-ai/ctox',
+      source_path: 'modules/inventory',
+      install_scope: 'installed',
+      launch_kind: 'desktop-app',
+    }],
+    exportedAt: '2026-07-22T12:00:00.000Z',
+    scope: 'installed',
+    query: 'stock',
+    categoryFilter: 'Operations',
+    sortKey: 'category',
+    centerBand: 'updates',
+  });
+  assert.equal(payload.format, 'ctox-app-store-export');
+  assert.equal(payload.scope, 'installed');
+  assert.equal(payload.view, 'updates');
+  assert.equal(payload.filters.search, 'stock');
+  assert.equal(payload.count, 1);
+  assert.equal(payload.apps[0].id, 'inventory');
+  assert.equal(payload.apps[0].installed, true);
+  assert.equal(payload.apps[0].updateAvailable, true);
+  assert.equal(payload.apps[0].sourcePath, 'modules/inventory');
+});
+
 test('canonical catalog item prefers installed local records over duplicate GitHub records', () => {
   const marketplace = { id: 'buchhaltung', kind: 'marketplace', status: 'available', title: 'Buchhaltung' };
   const local = { id: 'buchhaltung', kind: 'local', status: 'local', title: 'Buchhaltung' };
@@ -641,13 +678,16 @@ test('chrome is shell-grammar plus header icons, never module-owned wiring', () 
   const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
   const css = readFileSync(new URL('./index.css', import.meta.url), 'utf8');
   const js = readFileSync(new URL('./index.js', import.meta.url), 'utf8');
-  // Standing actions (create + both import paths + GitHub discovery refresh)
+  // Standing actions (create + both import paths + export + GitHub discovery)
   // are collected .ctox-pane-icon buttons in the catalog pane header — never
   // page-level text buttons in the content flow.
   assert.match(html, /class="ctox-pane-icon" data-action="create-scratch"/);
   assert.match(html, /class="ctox-pane-icon" data-action="install-github"/);
   assert.match(html, /class="ctox-pane-icon" data-action="install-zip"/);
+  assert.match(html, /class="ctox-pane-icon" data-export-catalog[^>]*aria-label="[^"]+"[^>]*title="[^"]+"/);
   assert.match(html, /class="ctox-pane-icon" data-refresh-marketplace/);
+  assert.match(js, /getActionIcon\?\.\('export'\)/);
+  assert.match(js, /new Blob\(\[JSON\.stringify\(payload, null, 2\)\]/);
   assert.doesNotMatch(html, /btn-create-scratch|btn-install-github|btn-install-zip/);
   assert.doesNotMatch(html, /store-action-btn|store-refresh-btn/);
   assert.doesNotMatch(css, /\.store-action-btn|\.store-refresh-btn/);

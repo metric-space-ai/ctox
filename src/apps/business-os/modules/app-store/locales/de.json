@@ -9,6 +9,7 @@
   "createScratchTitle": "Zum App Creator wechseln, Rückweg: App Store",
   "installGithubTitle": "App aus einem eigenen GitHub-Repository installieren (externe Quelle)",
   "installZipTitle": "App aus einer hochgeladenen .zip-Datei installieren (externe Quelle)",
+  "exportCatalog": "Sichtbare Katalogliste exportieren",
   "scopeMarketplace": "Marketplace",
   "scopeTemplates": "Templates",
   "scopeInstalled": "Installiert",

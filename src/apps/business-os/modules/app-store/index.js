@@ -82,6 +82,7 @@ export async function mount(ctx) {
   applyTranslations(ctx.host, state.t);
   ensureStylesheet();
   bindElements(ctx.host);
+  applyHeaderActionIcons();
   wireEvents();
   await Promise.all([
     ctx.sync?.startCollection?.('business_module_catalog'),
@@ -160,6 +161,7 @@ function bindElements(root) {
   els.loading = root.querySelector('[data-loading-spinner]');
   els.loadingText = root.querySelector('[data-loading-text]');
   els.refresh = root.querySelector('[data-refresh-marketplace]');
+  els.exportCatalog = root.querySelector('[data-export-catalog]');
   els.message = root.querySelector('[data-store-message]');
   els.toggleExtras = root.querySelector('[data-toggle-sidebar-extras]');
   els.sidebarExtras = root.querySelector('[data-sidebar-extras]');
@@ -172,6 +174,12 @@ function bindElements(root) {
   els.detailActions = root.querySelector('[data-detail-actions]');
   els.detailCapture = root.querySelector('[data-detail-capture]');
   els.detailCaptureImg = root.querySelector('[data-detail-capture-img]');
+}
+
+function applyHeaderActionIcons() {
+  if (!els.exportCatalog) return;
+  els.exportCatalog.innerHTML = state.ctx?.getActionIcon?.('export')
+    || '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7"></path></svg>';
 }
 
 function wireEvents() {
@@ -236,6 +244,7 @@ function wireEvents() {
   els.centerPane?.addEventListener('ctox-pane-grammar-change', onCenterGrammarChange);
 
   els.refresh?.addEventListener('click', () => refreshMarketplace({ force: true }));
+  els.exportCatalog?.addEventListener('click', exportVisibleCatalog);
 
   els.toggleExtras?.addEventListener('click', () => {
     if (!els.sidebarExtras) return;
@@ -728,6 +737,74 @@ function filteredItems() {
   if (state.centerBand === 'updates') items = items.filter(itemHasUpdate);
   const key = state.sortKey === 'category' ? 'category' : 'title';
   return [...items].sort((left, right) => String(left[key] || '').localeCompare(String(right[key] || ''), undefined, { sensitivity: 'base' }));
+}
+
+// The header export follows the exact list contract used by both the shelf and
+// compact list renderers: active scope, search, category, band and sort are all
+// reflected, so "Installed" exports only the installed rows currently visible.
+function exportVisibleCatalog() {
+  const exportedAt = new Date().toISOString();
+  const payload = buildAppStoreExport({
+    items: filteredItems(),
+    exportedAt,
+    scope: state.scope,
+    query: state.query,
+    categoryFilter: state.categoryFilter,
+    sortKey: state.sortKey,
+    centerBand: state.centerBand,
+  });
+  downloadJsonFile(
+    `ctox-app-store-${payload.scope}-${payload.view}-${exportedAt.slice(0, 19).replace(/[:T]/g, '-')}.json`,
+    payload,
+  );
+}
+
+function buildAppStoreExport({ items, exportedAt, scope, query, categoryFilter, sortKey, centerBand }) {
+  const apps = (Array.isArray(items) ? items : []).map((item) => ({
+    id: String(item?.id || item?.module_id || ''),
+    title: String(item?.title || item?.name || item?.id || ''),
+    description: String(item?.description || ''),
+    category: String(item?.category || ''),
+    kind: String(item?.kind || ''),
+    status: String(item?.status || ''),
+    version: String(item?.version || item?.installed_version || item?.available_version || ''),
+    developer: String(item?.developer || ''),
+    license: String(item?.license || ''),
+    source: String(item?.source || ''),
+    repo: String(item?.repo || ''),
+    sourcePath: String(item?.source_path || ''),
+    installScope: String(item?.install_scope || ''),
+    launchKind: String(item?.launch_kind || ''),
+    installed: isInstalledCatalogItem(item),
+    updateAvailable: itemHasUpdate(item),
+  }));
+  return {
+    format: 'ctox-app-store-export',
+    version: 1,
+    exportedAt: String(exportedAt || new Date().toISOString()),
+    module: 'app-store',
+    scope: String(scope || 'all'),
+    view: centerBand === 'updates' ? 'updates' : 'catalog',
+    filters: {
+      search: String(query || ''),
+      category: String(categoryFilter || 'all'),
+      sort: sortKey === 'category' ? 'category' : 'title',
+    },
+    count: apps.length,
+    apps,
+  };
+}
+
+function downloadJsonFile(filename, payload) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function scopedCatalogItems(scope) {
@@ -2473,6 +2550,7 @@ export const __appStoreTestHooks = {
   appCountLabel,
   appLifecycleBadge,
   appReleaseProjection,
+  buildAppStoreExport,
   chooseCanonicalCatalogItem,
   compareVersions,
   creatorHashFromStore,
