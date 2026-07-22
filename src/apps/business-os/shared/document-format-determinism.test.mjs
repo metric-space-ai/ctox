@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
-import JSZip from '../../../../archive/reorg-review/templates/business-basic/apps/web/vendor/jszip.mjs';
+import JSZip from '../vendor/jszip/jszip.mjs';
 import { mergeDocxFields } from '../vendor/document-format.mjs';
 
 const fixture = new URL('../../../../tests/fixtures/office/document/edit-save.docx', import.meta.url);
