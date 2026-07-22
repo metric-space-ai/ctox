@@ -13500,7 +13500,9 @@ fn workspace_file_is_fresh_enough(path: &Path, cutoff: Option<SystemTime>) -> bo
 }
 
 fn declared_workspace_file_artifacts_for_job(job: &QueuedPrompt) -> Vec<String> {
-    if business_os_app_module_target_from_prompt(&job.prompt).is_some() {
+    if business_os_app_module_target_from_prompt(&job.prompt).is_some()
+        || is_systematic_research_job(job)
+    {
         return Vec::new();
     }
     let prompt = job.prompt.as_str();
