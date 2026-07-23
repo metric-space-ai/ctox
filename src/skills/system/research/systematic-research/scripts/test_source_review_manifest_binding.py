@@ -99,6 +99,7 @@ class SourceReviewManifestBindingTests(unittest.TestCase):
                 "extracted_text": {
                     "path": "original.txt",
                     "sha256": digest,
+                    "byte_count": self.snapshot.stat().st_size,
                     "source_snapshot_sha256": digest,
                 },
                 "retrieval_receipt": {

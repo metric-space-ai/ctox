@@ -1472,6 +1472,36 @@ def existing_candidate_rows(path: Path | None, discovery_dir: Path | None) -> li
     return deduped
 
 
+def existing_audit_rows(discovery_dir: Path | None) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Load prior screening/rejection audit rows from an earlier run.
+
+    ``write_outputs`` rewrites ``screened_sources.csv`` and
+    ``rejected_sources.csv`` on every run; without this carry-over a
+    continuation run would truncate the candidate audit inventory to the
+    current round. Accumulate instead, deduplicated by canonical source key.
+    """
+
+    screened: list[dict[str, str]] = []
+    rejected: list[dict[str, str]] = []
+    if not discovery_dir:
+        return screened, rejected
+    seen_screened: set[str] = set()
+    for row in load_csv_rows(discovery_dir / "screened_sources.csv"):
+        key = source_key(row)
+        if key in seen_screened:
+            continue
+        seen_screened.add(key)
+        screened.append(row)
+    seen_rejected: set[str] = set()
+    for row in load_csv_rows(discovery_dir / "rejected_sources.csv"):
+        key = source_key(row)
+        if key in seen_rejected:
+            continue
+        seen_rejected.add(key)
+        rejected.append(row)
+    return screened, rejected
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--topic", required=True)
@@ -1553,8 +1583,11 @@ def main() -> int:
     seen: set[str] = {source_key(row) for row in existing_candidates}
     candidates: list[dict[str, str]] = list(existing_candidates)
     initial_candidate_count = len(candidates)
-    screened_sources: list[dict[str, str]] = []
-    rejected_sources: list[dict[str, str]] = []
+    screened_sources, rejected_sources = existing_audit_rows(
+        Path(args.existing_discovery_dir) if args.existing_discovery_dir else None
+    )
+    screened_seen: set[str] = {source_key(row) for row in screened_sources}
+    rejected_seen: set[str] = {source_key(row) for row in rejected_sources}
     protocol_rows: list[dict[str, Any]] = []
     research_ids: list[str] = []
     queue = list(query_plan)
@@ -1603,10 +1636,14 @@ def main() -> int:
                 "screening_status": "unreviewed",
                 "screening_reason": "agent_review_required",
             }
-            screened_sources.append(screened_row)
+            screened_key = source_key(screened_row)
+            if screened_key not in screened_seen:
+                screened_seen.add(screened_key)
+                screened_sources.append(screened_row)
             if row["title"] or row["url"] or row["doi"] or row["openalex_id"]:
                 candidates.append({**row, "review_status": "agent_review_required"})
-            else:
+            elif screened_key not in rejected_seen:
+                rejected_seen.add(screened_key)
                 rejected_sources.append(screened_row)
 
         research_id = ""

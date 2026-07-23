@@ -410,6 +410,29 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
                 "extracted_text_source_snapshot_sha256",
             ) != actual_hash:
                 raise GuardError("extracted_text_snapshot_binding_mismatch")
+            # F-005: byte counts and hashes bind to the extracted-text
+            # artifact itself, never to the source snapshot (e.g. PDF) bytes.
+            byte_count = extracted_text.get("byte_count")
+            if (
+                not isinstance(byte_count, int)
+                or isinstance(byte_count, bool)
+                or byte_count <= 0
+            ):
+                raise GuardError("extracted_text_byte_count_missing")
+            if byte_count != text_path.stat().st_size:
+                raise GuardError("extracted_text_byte_count_mismatch")
+            # The server-written v3 receipt is authoritative for which
+            # artifact is the extracted text; the manifest must match it.
+            if persisted_receipt.get("extracted_text_path") != extracted_text.get("path"):
+                raise GuardError("retrieval_receipt_artifact_extracted_text_path_mismatch")
+            if normalized_sha256(
+                persisted_receipt.get("extracted_text_sha256"),
+                "receipt_extracted_text_sha256",
+            ) != normalized_sha256(
+                extracted_text.get("sha256"),
+                "extracted_text_sha256",
+            ):
+                raise GuardError("retrieval_receipt_artifact_extracted_text_sha256_mismatch")
             text = text_path.read_text(encoding="utf-8", errors="strict")
             normalized_text = normalize_evidence_text(text)
             if len(normalized_text) < 100:

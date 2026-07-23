@@ -55736,61 +55736,162 @@ mod tests {
         fs::create_dir_all(snapshot_path.parent().context("snapshot parent")?)?;
         fs::write(&snapshot_path, b"verified source bytes")?;
         let snapshot_hash = format!("sha256:{}", hex_sha256(b"verified source bytes"));
-        insert_rxdb_test_record(
-            &rxdb_conn,
-            "ctox_business_os__knowledge_tables__v0",
-            "knowledge_source_catalog",
-            serde_json::json!({
-                "id": "knowledge_source_catalog",
-                "domain": "drone_bearing_design",
-                "table_key": "source_catalog",
-                "rows": [{
-                    "source_id": "source-1",
-                    "research_run_id": "research_run_1",
-                    "research_command_id": "cmd_research_completed",
-                    "evidence_id": "evidence-1",
-                    "snapshot_id": "snapshot-1",
-                    "snapshot_path": "runtime/research/snapshots/source-1.html",
-                    "snapshot_hash": snapshot_hash,
-                    "canonical_url": "https://publisher.example/source-1",
-                    "url_role": "original_content",
-                    "content_scope": "full_text",
-                    "retrieved_at": "2026-07-17T00:00:00Z",
-                    "source_type": "publisher",
-                    "source_tier": "primary",
-                    "verification_status": "verified",
-                    "transport_verified": true,
-                    "content_extracted": true,
-                    "actual_full_text_or_data": true,
-                    "evidence_relevance_score": 9,
-                    "http_status": 200,
-                    "evidence_eligible": true
-                }, {
-                    "source_id": "stale-source",
-                    "research_run_id": "research_run_stale",
-                    "research_command_id": "cmd_research_stale",
-                    "evidence_id": "stale-evidence",
-                    "snapshot_id": "snapshot-1",
-                    "snapshot_path": "runtime/research/snapshots/source-1.html",
-                    "snapshot_hash": snapshot_hash,
-                    "canonical_url": "https://publisher.example/stale",
-                    "url_role": "original_content",
-                    "content_scope": "full_text",
-                    "retrieved_at": "2026-07-17T00:00:00Z",
-                    "source_type": "publisher",
-                    "source_tier": "primary",
-                    "verification_status": "verified",
-                    "transport_verified": true,
-                    "content_extracted": true,
-                    "actual_full_text_or_data": true,
-                    "evidence_relevance_score": 9,
-                    "http_status": 200,
-                    "evidence_eligible": true
-                }],
-                "updated_at_ms": 2
-            }),
+        // Seed with a valid RxDB revision envelope ("<height>-<token>") so the
+        // knowledge_tables projection sync can read and tombstone this stale
+        // document instead of failing on an unparseable revision.
+        rxdb_conn.execute(
+            "INSERT INTO ctox_business_os__knowledge_tables__v0
+             (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, ?3, ?4)",
+            params![
+                "knowledge_source_catalog",
+                "1-test",
+                1.0_f64,
+                serde_json::to_string(&serde_json::json!({
+                    "id": "knowledge_source_catalog",
+                    "domain": "drone_bearing_design",
+                    "table_key": "source_catalog",
+                    "rows": [{
+                        "source_id": "source-1",
+                        "research_run_id": "research_run_1",
+                        "research_command_id": "cmd_research_completed",
+                        "evidence_id": "evidence-1",
+                        "snapshot_id": "snapshot-1",
+                        "snapshot_path": "runtime/research/snapshots/source-1.html",
+                        "snapshot_hash": snapshot_hash,
+                        "canonical_url": "https://publisher.example/source-1",
+                        "url_role": "original_content",
+                        "content_scope": "full_text",
+                        "retrieved_at": "2026-07-17T00:00:00Z",
+                        "source_type": "publisher",
+                        "source_tier": "primary",
+                        "verification_status": "verified",
+                        "transport_verified": true,
+                        "content_extracted": true,
+                        "actual_full_text_or_data": true,
+                        "evidence_relevance_score": 9,
+                        "http_status": 200,
+                        "evidence_eligible": true
+                    }, {
+                        "source_id": "stale-source",
+                        "research_run_id": "research_run_stale",
+                        "research_command_id": "cmd_research_stale",
+                        "evidence_id": "stale-evidence",
+                        "snapshot_id": "snapshot-1",
+                        "snapshot_path": "runtime/research/snapshots/source-1.html",
+                        "snapshot_hash": snapshot_hash,
+                        "canonical_url": "https://publisher.example/stale",
+                        "url_role": "original_content",
+                        "content_scope": "full_text",
+                        "retrieved_at": "2026-07-17T00:00:00Z",
+                        "source_type": "publisher",
+                        "source_tier": "primary",
+                        "verification_status": "verified",
+                        "transport_verified": true,
+                        "content_extracted": true,
+                        "actual_full_text_or_data": true,
+                        "evidence_relevance_score": 9,
+                        "http_status": 200,
+                        "evidence_eligible": true
+                    }],
+                    "updated_at_ms": 2,
+                    "_rev": "1-test",
+                    "_meta": { "lwt": 1.0 },
+                    "_attachments": {},
+                    "_deleted": false
+                }))?
+            ],
         )?;
         drop(rxdb_conn);
+
+        // The native writeback gate requires the completed research workspace
+        // to carry the guard-validated evidence manifest, a passing validation
+        // receipt bound to the exact manifest bytes, and the dashboard CSV
+        // outputs matching the native import contract. The simulated completed
+        // workspace must provide the same artifacts a real harness run leaves
+        // behind after evidence_guard passes.
+        let workspace = business_os_command_workspace_root(root, "cmd_research_completed")?;
+        let manifest = serde_json::json!({
+            "schema_version": "ctox.research.evidence.v2",
+            "run_id": "research_run_1",
+            "research_run_id": "research_run_1",
+            "research_command_id": "cmd_research_completed",
+            "research_attempt_id": "research_attempt_1",
+            "as_of": "2026-07-23T00:00:00Z",
+            "sources": [{
+                "source_id": "source-1",
+                "canonical_url": "https://publisher.example/source-1"
+            }],
+            "evidence": [{
+                "evidence_id": "evidence-1",
+                "source_id": "source-1",
+                "snapshot_id": "snapshot-1",
+                "canonical_url": "https://publisher.example/source-1",
+                "snapshot_sha256": snapshot_hash,
+                "url_role": "original_content",
+                "content_scope": "full_text",
+                "http_status": 200,
+                "relevance_score": 9,
+                "evidence_status": "eligible"
+            }],
+            "claims": [{
+                "claim_id": "claim-1",
+                "claim_text": "The source reports verified bearing load data.",
+                "evidence_id": "evidence-1",
+                "source_id": "source-1",
+                "snapshot_id": "snapshot-1",
+                "canonical_url": "https://publisher.example/source-1",
+                "evidence_quote": "verified source bytes"
+            }]
+        });
+        let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+        let manifest_dir = workspace.join("validation");
+        fs::create_dir_all(&manifest_dir)?;
+        fs::write(manifest_dir.join("evidence-manifest.json"), &manifest_bytes)?;
+        let receipt_dir = workspace.join(".ctox");
+        fs::create_dir_all(&receipt_dir)?;
+        fs::write(
+            receipt_dir.join("systematic-research-validation.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": "ctox.systematic-research.validation.v1",
+                "status": "pass",
+                "research_run_id": "research_run_1",
+                "research_command_id": "cmd_research_completed",
+                "manifests": [{"manifest_sha256": hex_sha256(&manifest_bytes)}]
+            }))?,
+        )?;
+        let dashboard_dir = workspace.join("dashboard").join("knowledge");
+        fs::create_dir_all(&dashboard_dir)?;
+        let lineage = "research_run_1,cmd_research_completed";
+        fs::write(
+            dashboard_dir.join("source_candidates.csv"),
+            format!(
+                "research_run_id,research_command_id,candidate_key,url,verification_state,rejection_reason\n{lineage},cand-1,https://publisher.example/source-1,admitted,\n"
+            ),
+        )?;
+        fs::write(
+            dashboard_dir.join("evidence_points.csv"),
+            format!(
+                "research_run_id,research_command_id,claim_id,evidence_id,source_id,snapshot_id,canonical_url,snapshot_hash,quote\n{lineage},claim-1,evidence-1,source-1,snapshot-1,https://publisher.example/source-1,{snapshot_hash},verified source bytes\n"
+            ),
+        )?;
+        fs::write(
+            dashboard_dir.join("evaluation_matrix.csv"),
+            format!("research_run_id,research_command_id,criterion,score\n{lineage},relevance,9\n"),
+        )?;
+        fs::write(
+            dashboard_dir.join("semantic_graph_nodes.csv"),
+            format!("research_run_id,research_command_id,node_id,label\n{lineage},node-1,Bearing load\n"),
+        )?;
+        fs::write(
+            dashboard_dir.join("semantic_graph_edges.csv"),
+            format!("research_run_id,research_command_id,edge_id,relation\n{lineage},edge-1,measured_by\n"),
+        )?;
+        fs::write(
+            dashboard_dir.join("source_catalog.csv"),
+            format!(
+                "research_run_id,research_command_id,source_id,canonical_url,snapshot_hash\n{lineage},source-1,https://publisher.example/source-1,{snapshot_hash}\n"
+            ),
+        )?;
 
         channels::transition_business_command_for_task(
             root,

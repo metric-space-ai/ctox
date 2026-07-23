@@ -37,6 +37,10 @@ An evidence entry is eligible only when all of these are true:
   evidence row, and the hash verifies before every downstream use.
 - Prose evidence carries a server-extracted full-text artifact whose SHA-256
   is verified and whose receipt is bound to the original snapshot SHA-256.
+  Its `byte_count` must equal the extracted-text artifact's own byte size —
+  for PDF sources the extracted-text byte count is never the PDF source byte
+  count — and the manifest `extracted_text` path/SHA-256 must match the
+  server-written receipt's `extracted_text_path`/`extracted_text_sha256`.
   Every claim includes a verbatim `evidence_quote` of at least six words and
   40 characters; the guard requires that normalized quote to occur in that
   extracted text. Data-file claims have the same quote requirement and must
@@ -80,6 +84,7 @@ workspace root, even though the manifest itself lives below `validation/`:
     "extracted_text": {
       "path": "snapshots/source-0001.extracted.txt",
       "sha256": "<extracted-text-sha256>",
+      "byte_count": 23456,
       "source_snapshot_sha256": "<original-response-sha256>"
     }
   }],

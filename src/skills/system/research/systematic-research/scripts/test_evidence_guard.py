@@ -69,6 +69,7 @@ class EvidenceGuardTests(unittest.TestCase):
                 "extracted_text": {
                     "path": "original.txt",
                     "sha256": digest,
+                    "byte_count": self.content.stat().st_size,
                     "source_snapshot_sha256": digest,
                 },
                 "retrieval_receipt": {
@@ -276,6 +277,7 @@ class EvidenceGuardTests(unittest.TestCase):
         self.manifest["evidence"][0]["retrieval_receipt"]["body_sha256"] = digest
         self.manifest["evidence"][0]["retrieval_receipt"]["byte_count"] = self.content.stat().st_size
         self.manifest["evidence"][0]["extracted_text"]["sha256"] = digest
+        self.manifest["evidence"][0]["extracted_text"]["byte_count"] = self.content.stat().st_size
         self.manifest["evidence"][0]["extracted_text"]["source_snapshot_sha256"] = digest
         self.manifest["claims"][0]["evidence_quote"] = (
             "Sign in is discussed as a study limitation. "
@@ -284,6 +286,91 @@ class EvidenceGuardTests(unittest.TestCase):
         self.manifest["claims"][0]["lineage_sha256"] = lineage_hash(self.manifest["claims"][0])
         self._sync_receipt_artifact()
         validate_manifest(self.manifest, self.base)
+
+    def _build_pdf_manifest(self) -> tuple[dict, Path, Path]:
+        """Manifest whose source snapshot is PDF bytes and whose extracted
+        text is a separate artifact — the F-005 provenance scenario."""
+        pdf_path = self.base / "paper.pdf"
+        pdf_bytes = b"%PDF-1.4\n" + b"original pdf binary bytes " * 100
+        pdf_path.write_bytes(pdf_bytes)
+        text_path = self.base / "paper.extracted.txt"
+        text_path.write_text(
+            "Extracted full text from the PDF with methods, results, tables, and units. " * 20,
+            encoding="utf-8",
+        )
+        pdf_digest = hashlib.sha256(pdf_bytes).hexdigest()
+        text_digest = hashlib.sha256(text_path.read_bytes()).hexdigest()
+        url = "https://example.edu/paper.pdf"
+        manifest = copy.deepcopy(self.manifest)
+        manifest["sources"][0]["canonical_url"] = url
+        item = manifest["evidence"][0]
+        item.update({
+            "canonical_url": url,
+            "content_kind": "pdf",
+            "content_scope": "full_text",
+            "snapshot_sha256": pdf_digest,
+        })
+        item["snapshot"].update({"path": "paper.pdf", "sha256": pdf_digest, "canonical_url": url})
+        item["retrieval_receipt"].update({
+            "request_url": url,
+            "final_url": url,
+            "body_sha256": pdf_digest,
+            "byte_count": pdf_path.stat().st_size,
+            "content_kind": "pdf",
+        })
+        item["extracted_text"] = {
+            "path": "paper.extracted.txt",
+            "sha256": text_digest,
+            "byte_count": text_path.stat().st_size,
+            "source_snapshot_sha256": pdf_digest,
+        }
+        claim = manifest["claims"][0]
+        claim.update({
+            "canonical_url": url,
+            "evidence_quote": "Extracted full text from the PDF with methods, results, tables, and units.",
+        })
+        claim["lineage_sha256"] = lineage_hash(claim)
+        self._sync_receipt_artifact(manifest)
+        return manifest, pdf_path, text_path
+
+    def test_pdf_extracted_text_binding_passes_with_correct_artifact(self) -> None:
+        manifest, _, _ = self._build_pdf_manifest()
+        validate_manifest(manifest, self.base)
+
+    def test_pdf_source_byte_count_is_not_the_extracted_text_byte_count(self) -> None:
+        manifest, pdf_path, _ = self._build_pdf_manifest()
+        manifest["evidence"][0]["extracted_text"]["byte_count"] = pdf_path.stat().st_size
+        with self.assertRaisesRegex(ValueError, "extracted_text_byte_count_mismatch"):
+            validate_manifest(manifest, self.base)
+
+    def test_extracted_text_byte_count_is_required(self) -> None:
+        manifest, _, _ = self._build_pdf_manifest()
+        manifest["evidence"][0]["extracted_text"].pop("byte_count")
+        with self.assertRaisesRegex(ValueError, "extracted_text_byte_count_missing"):
+            validate_manifest(manifest, self.base)
+
+    def test_extracted_text_must_match_server_receipt_path(self) -> None:
+        manifest, _, text_path = self._build_pdf_manifest()
+        other = self.base / "other.txt"
+        other.write_bytes(text_path.read_bytes())
+        item = manifest["evidence"][0]
+        item["extracted_text"]["path"] = "other.txt"
+        with self.assertRaisesRegex(ValueError, "extracted_text_path_mismatch"):
+            validate_manifest(manifest, self.base)
+
+    def test_extracted_text_must_match_server_receipt_sha256(self) -> None:
+        manifest, _, _ = self._build_pdf_manifest()
+        other = self.base / "other.txt"
+        other.write_text("Different extracted text that is not the server artifact. " * 10, encoding="utf-8")
+        item = manifest["evidence"][0]
+        item["extracted_text"] = {
+            "path": "other.txt",
+            "sha256": hashlib.sha256(other.read_bytes()).hexdigest(),
+            "byte_count": other.stat().st_size,
+            "source_snapshot_sha256": item["snapshot_sha256"],
+        }
+        with self.assertRaisesRegex(ValueError, "extracted_text"):
+            validate_manifest(manifest, self.base)
 
     def test_deterministic_data_check_requires_all_proofs(self) -> None:
         data_path = self.base / "data.csv"

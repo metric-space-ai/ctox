@@ -399,6 +399,35 @@ Retain rejected candidates with their rejection reason for auditability, but
 exclude them from knowledge construction, calculations, and report evidence
 registers. Never fill a failed or missing read from model memory.
 
+### Native writeback tables — deterministic builder only
+
+For a Business OS research command, the `dashboard/knowledge/*.csv` writeback
+tables must be produced by `scripts/dashboard_knowledge_build.py`, never
+hand-authored. The builder mirrors the native importer contract
+(`validate_systematic_research_csv` in `src/core/business_os/store.rs`):
+
+- `measured_load_points.csv` rows are direct measurements only
+  (`measurement_kind` = `measured`/`direct`/`experimental`, `is_derived=false`),
+  with positive `rpm`, a newton axial-force column (`thrust_N`), numeric
+  `prop_diameter_in`/`prop_pitch_in` split from propeller notation such as
+  `9x5`, explicit units, source uncertainty columns when present, and exact
+  `source_row_ref` lineage. Direct ENOLA measurements use
+  `measurement_kind=experimental`.
+- Any CT/CP→force/torque conversion is derived and goes to
+  `derived_bearing_loads.csv` with formula, constants, assumptions, units, and
+  source-row lineage. UIUC CT/CP rows are direct dimensionless coefficients;
+  never mix measured axial thrust with an inferred radial bearing load.
+- `source_candidates.csv` accumulates every candidate from every discovery
+  round with canonical dedup (DOI / stable id / canonical URL / content hash)
+  and an explicit per-candidate rejection reason; rejected candidates are
+  never promoted into `source_catalog.csv`.
+- Source row-count reconciliation is fail-closed: every parsed source row is
+  emitted or dropped with an explicit recorded reason in
+  `writeback_reconciliation.json`; partial silent imports abort the build.
+- Malformed ENOLA headers (e.g. a missing delimiter between `THRUST[N]` and
+  `u_THRUST[N]`) are repaired only by the builder's deterministic, audited
+  parser rule. Never invent measurements or units.
+
 The admitted source set contains one row per unique canonical original URL and
 every manifest source must have a matching eligible Evidence entry. URL aliases,
 duplicate records, Wikipedia or other tertiary encyclopedias remain discovery
