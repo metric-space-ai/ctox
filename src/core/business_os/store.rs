@@ -38485,6 +38485,25 @@ fn effective_queue_projection_route_status(task: &channels::QueueTaskView) -> St
     {
         return "failed".to_string();
     }
+    // F-002 status coherence: a `leased` route without a durable owner or
+    // lease timestamp is an orphaned/incomplete lease — no live worker can
+    // own it. Surface it as failed/stalled, never as healthy progress.
+    if task.route_status == "leased"
+        && (task
+            .lease_owner
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+            || task
+                .leased_at
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none())
+    {
+        return "failed".to_string();
+    }
     task.route_status.clone()
 }
 

@@ -3171,7 +3171,7 @@ pub fn hold_leased_messages(
                     UPDATE communication_routing_state
                     SET hold_reason='waiting_external', wait_entity_type=?2,
                         wait_entity_id=?3, retry_not_before=NULL,
-                        lease_expires_at=NULL, last_error=?4, updated_at=?5
+                        lease_expires_at=NULL, lease_worker_id=NULL, last_error=?4, updated_at=?5
                     WHERE message_key=?1
                     "#,
                     params![
@@ -3248,7 +3248,7 @@ pub fn hold_leased_messages(
                     SET failure_class=?2, failure_attempt_count=?3,
                         retry_not_before=?4, hold_reason=?5,
                         wait_entity_type=NULL, wait_entity_id=NULL,
-                        lease_expires_at=NULL, last_error=?6, updated_at=?7
+                        lease_expires_at=NULL, lease_worker_id=NULL, last_error=?6, updated_at=?7
                     WHERE message_key=?1
                     "#,
                     params![
@@ -4408,6 +4408,36 @@ fn transition_business_command_for_task_in_transaction(
             terminal_status == prior_terminal || terminal_status == "none",
             "terminal command transition conflict for task `{task_id}`"
         );
+        // lease-1 (F-002): a terminal command whose queue route is still
+        // `leased`/`running` is an orphaned lease — the worker that owned it
+        // disappeared and previously NO path cleared the row: this function
+        // returned here without touching routing, so every lease sweep and
+        // boot recovery reported the row released while it stayed `leased`
+        // forever (acked_at NULL, zero workers, UI showing healthy progress).
+        // Settle the route to match the durable terminal command so queue
+        // state, command state, and UI projections agree. Idempotent: the
+        // settled row is terminal and is no longer selected by lease sweeps,
+        // and the already-terminal command is never re-queued or duplicated.
+        let current_route = current_queue_route_status(tx, task_id)?;
+        if matches!(current_route.as_str(), "leased" | "running") {
+            let settled_route = match prior_terminal.as_str() {
+                "completed" => "handled",
+                "cancelled" => "cancelled",
+                _ => "failed",
+            };
+            let settle_reason = format!(
+                "orphaned queue lease settled to match terminal command ({prior_terminal}): {reason}"
+            );
+            set_routing_status(
+                tx,
+                task_id,
+                settled_route,
+                &now_iso_string(),
+                "business-command-terminal-owner",
+                &settle_reason,
+                Some(settle_reason.as_str()),
+            )?;
+        }
         return Ok(true);
     }
     crate::business_os::command_lifecycle::validate_execution_phase_transition(
@@ -6114,9 +6144,9 @@ pub fn lease_queue_task(
         // Record the core-transition proof only after the CAS actually flips
         // the row, so a losing racer never writes a phantom proof.
         let updated = tx.execute(
-            r#"INSERT INTO communication_routing_state (message_key, route_status, lease_owner, leased_at, first_pending_at, lease_expires_at, acked_at, last_error, updated_at)
-               VALUES (?1, 'leased', ?2, ?3, ?3, ?4, NULL, NULL, ?3)
-               ON CONFLICT(message_key) DO UPDATE SET route_status='leased', lease_owner=excluded.lease_owner, leased_at=excluded.leased_at, first_pending_at=COALESCE(communication_routing_state.first_pending_at, excluded.first_pending_at), lease_expires_at=excluded.lease_expires_at, retry_not_before=NULL, hold_reason=NULL, acked_at=NULL, updated_at=excluded.updated_at
+            r#"INSERT INTO communication_routing_state (message_key, route_status, lease_owner, leased_at, first_pending_at, lease_expires_at, lease_worker_id, acked_at, last_error, updated_at)
+               VALUES (?1, 'leased', ?2, ?3, ?3, ?4, NULL, NULL, NULL, ?3)
+               ON CONFLICT(message_key) DO UPDATE SET route_status='leased', lease_owner=excluded.lease_owner, leased_at=excluded.leased_at, first_pending_at=COALESCE(communication_routing_state.first_pending_at, excluded.first_pending_at), lease_expires_at=excluded.lease_expires_at, lease_worker_id=NULL, retry_not_before=NULL, hold_reason=NULL, acked_at=NULL, updated_at=excluded.updated_at
                WHERE communication_routing_state.route_status = 'pending'"#,
             params![message_key, normalized_owner, now, lease_expires_at],
         )?;
@@ -6216,46 +6246,68 @@ pub fn release_stale_queue_task_leases(
 
     let now = now_iso_string();
     let mut released = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
     for message_key in candidates {
         if active_message_keys.contains(&message_key) {
             continue;
         }
-        if transition_business_command_for_task(
-            root,
-            &message_key,
-            "pending",
-            None,
-            None,
-            Some("stale or ownerless queue lease recovered"),
-            "stale or ownerless queue lease recovered",
-        )? {
-            released.push(message_key);
-            continue;
-        }
-        enforce_queue_route_status_transition(
-            &conn,
-            &message_key,
-            "leased",
-            "pending",
-            "ctox-communication-lease-repair",
-            "release_stale_queue_task_leases",
-        )?;
-        conn.execute(
-            r#"
+        // lease-2 (F-002): one bad candidate must not abort the whole sweep —
+        // otherwise every orphaned lease queued behind a deterministically
+        // failing row survives its worker forever. Each failing candidate is
+        // retried on the next sweep pass; released rows stay released
+        // (idempotent), so a re-run never duplicates the linked command.
+        let outcome = (|| -> Result<()> {
+            if transition_business_command_for_task(
+                root,
+                &message_key,
+                "pending",
+                None,
+                None,
+                Some("stale or ownerless queue lease recovered"),
+                "stale or ownerless queue lease recovered",
+            )? {
+                return Ok(());
+            }
+            enforce_queue_route_status_transition(
+                &conn,
+                &message_key,
+                "leased",
+                "pending",
+                "ctox-communication-lease-repair",
+                "release_stale_queue_task_leases",
+            )?;
+            conn.execute(
+                r#"
             UPDATE communication_routing_state
             SET route_status='pending',
                 lease_owner=NULL,
                 leased_at=NULL,
                 lease_expires_at=NULL,
+                lease_worker_id=NULL,
                 acked_at=NULL,
                 last_error=NULL,
                 updated_at=?2
             WHERE message_key = ?1
               AND route_status = 'leased'
             "#,
-            params![message_key, now],
-        )?;
-        released.push(message_key);
+                params![message_key, now],
+            )?;
+            Ok(())
+        })();
+        match outcome {
+            Ok(()) => released.push(message_key),
+            Err(err) => failed.push(format!("{message_key}: {err}")),
+        }
+    }
+    if !failed.is_empty() {
+        // Surface the partial failure as sweep evidence without stranding the
+        // candidates that did release durably.
+        return Err(anyhow::anyhow!(
+            "stale queue lease sweep released {} candidate(s); {} failed: {}",
+            released.len(),
+            failed.len(),
+            failed.join("; ")
+        ));
     }
     Ok(released)
 }
@@ -6283,6 +6335,69 @@ pub fn renew_message_leases(
         )?;
     }
     Ok(renewed)
+}
+
+/// lease-3 (F-002): durable worker identity for queue-task leases. The worker
+/// that actually starts a leased slice persists its instance-unique id on the
+/// lease row so a recovery sweep (or operator) can tell a lease held by a
+/// live worker apart from one left behind by a worker that disappeared. This
+/// write is deliberately constrained to rows still leased by the expected
+/// owner, so a stale worker can never stamp a lease that was already
+/// reclaimed and re-leased by someone else.
+pub fn record_queue_lease_worker(
+    root: &Path,
+    message_keys: &[String],
+    lease_owner: &str,
+    worker_id: &str,
+) -> Result<usize> {
+    let normalized_worker = worker_id.trim();
+    if message_keys.is_empty() || normalized_worker.is_empty() {
+        return Ok(0);
+    }
+    let conn = open_channel_db(&resolve_db_path(root, None))?;
+    let now = now_iso_string();
+    let mut updated = 0usize;
+    for message_key in message_keys {
+        updated += conn.execute(
+            r#"
+            UPDATE communication_routing_state
+            SET lease_worker_id=?3, updated_at=?4
+            WHERE message_key=?1 AND route_status='leased' AND lease_owner=?2
+            "#,
+            params![message_key, lease_owner, normalized_worker, now],
+        )?;
+    }
+    Ok(updated)
+}
+
+/// lease-3 (F-002): read-only lease health probe for recovery sweeps and
+/// status projections. A leased route is stalled when its lease is incomplete
+/// (missing owner or timestamps) or its expiry has passed without a worker
+/// heartbeat renewal — i.e. no live worker can still own it. Mirrors the
+/// candidate condition in `release_stale_queue_task_leases`.
+pub fn queue_task_lease_stalled(root: &Path, message_key: &str) -> Result<bool> {
+    let conn = open_channel_db(&resolve_db_path(root, None))?;
+    let stalled = conn.query_row(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM communication_routing_state
+            WHERE message_key = ?1
+              AND route_status = 'leased'
+              AND (
+                    lease_owner IS NULL
+                 OR trim(lease_owner) = ''
+                 OR leased_at IS NULL
+                 OR trim(leased_at) = ''
+                 OR lease_expires_at IS NULL
+                 OR trim(lease_expires_at) = ''
+                 OR datetime(lease_expires_at) <= datetime('now')
+              )
+        )
+        "#,
+        params![message_key],
+        |row| row.get::<_, bool>(0),
+    )?;
+    Ok(stalled)
 }
 
 pub fn ingest_cron_message(
@@ -10836,6 +10951,7 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             leased_at TEXT,
             first_pending_at TEXT,
             lease_expires_at TEXT,
+            lease_worker_id TEXT,
             failure_class TEXT,
             failure_attempt_count INTEGER NOT NULL DEFAULT 0,
             retry_not_before TEXT,
@@ -11190,6 +11306,7 @@ fn ensure_routing_state_hardening_columns(conn: &Connection) -> Result<()> {
     for (column, definition) in [
         ("first_pending_at", "TEXT"),
         ("lease_expires_at", "TEXT"),
+        ("lease_worker_id", "TEXT"),
         ("failure_class", "TEXT"),
         ("failure_attempt_count", "INTEGER NOT NULL DEFAULT 0"),
         ("retry_not_before", "TEXT"),
@@ -11604,6 +11721,7 @@ fn take_messages(
                 r.lease_owner,
                 r.leased_at,
                 r.acked_at,
+                r.last_error,
                 r.updated_at,
                 MIN(COALESCE(r.first_pending_at, m.external_created_at)) OVER (
                     PARTITION BY m.thread_key
@@ -11654,6 +11772,7 @@ fn take_messages(
             lease_owner,
             leased_at,
             acked_at,
+            last_error,
             updated_at
         FROM eligible
         WHERE thread_rank = 1
@@ -11695,6 +11814,7 @@ fn take_messages(
                 r.lease_owner,
                 r.leased_at,
                 r.acked_at,
+                r.last_error,
                 r.updated_at,
                 MIN(COALESCE(r.first_pending_at, m.external_created_at)) OVER (
                     PARTITION BY m.thread_key
@@ -11744,6 +11864,7 @@ fn take_messages(
             lease_owner,
             leased_at,
             acked_at,
+            last_error,
             updated_at
         FROM eligible
         WHERE thread_rank = 1
@@ -11787,9 +11908,9 @@ fn take_messages(
     let mut taken = Vec::new();
     for mut item in rows {
         let updated = tx.execute(
-            r#"INSERT INTO communication_routing_state (message_key, route_status, lease_owner, leased_at, first_pending_at, lease_expires_at, acked_at, last_error, updated_at)
-               VALUES (?1, 'leased', ?2, ?3, ?3, ?4, NULL, NULL, ?3)
-               ON CONFLICT(message_key) DO UPDATE SET route_status='leased', lease_owner=excluded.lease_owner, leased_at=excluded.leased_at, first_pending_at=COALESCE(communication_routing_state.first_pending_at, excluded.first_pending_at), lease_expires_at=excluded.lease_expires_at, retry_not_before=NULL, hold_reason=NULL, acked_at=NULL, updated_at=excluded.updated_at
+            r#"INSERT INTO communication_routing_state (message_key, route_status, lease_owner, leased_at, first_pending_at, lease_expires_at, lease_worker_id, acked_at, last_error, updated_at)
+               VALUES (?1, 'leased', ?2, ?3, ?3, ?4, NULL, NULL, NULL, ?3)
+               ON CONFLICT(message_key) DO UPDATE SET route_status='leased', lease_owner=excluded.lease_owner, leased_at=excluded.leased_at, first_pending_at=COALESCE(communication_routing_state.first_pending_at, excluded.first_pending_at), lease_expires_at=excluded.lease_expires_at, lease_worker_id=NULL, retry_not_before=NULL, hold_reason=NULL, acked_at=NULL, updated_at=excluded.updated_at
                WHERE communication_routing_state.route_status = 'pending'"#,
             params![item.message_key, lease_owner, leased_at, lease_expires_at],
         )?;
@@ -11917,6 +12038,7 @@ fn ack_messages_in_transaction(
                 route_status=excluded.route_status,
                 lease_owner=NULL,
                 leased_at=NULL,
+                lease_worker_id=NULL,
                 acked_at=excluded.acked_at,
                 last_error=excluded.last_error,
                 updated_at=excluded.updated_at
@@ -12774,6 +12896,7 @@ fn set_routing_status(
             route_status=excluded.route_status,
             lease_owner=NULL,
             leased_at=NULL,
+            lease_worker_id=NULL,
             lease_expires_at=CASE WHEN excluded.route_status='pending' THEN NULL ELSE communication_routing_state.lease_expires_at END,
             retry_not_before=CASE WHEN excluded.route_status='pending' THEN NULL ELSE communication_routing_state.retry_not_before END,
             hold_reason=CASE WHEN excluded.route_status='pending' THEN NULL ELSE communication_routing_state.hold_reason END,
@@ -15067,6 +15190,208 @@ mod tests {
         assert_eq!(reloaded.route_status, "pending");
         assert!(reloaded.lease_owner.is_none());
         assert!(reloaded.leased_at.is_none());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn terminal_command_orphaned_queue_lease_settles_to_terminal_route() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-queue-orphaned-terminal-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("failed to create temp test root");
+
+        let created = create_queue_task(
+            &root,
+            QueueTaskCreateRequest {
+                title: "orphaned terminal lease".to_string(),
+                prompt: "Settle this orphaned queue lease.".to_string(),
+                thread_key: "queue/orphaned-terminal".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        lease_queue_task(&root, &created.message_key, "ctox-service")
+            .expect("failed to lease queue task");
+        let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open channel db");
+        // F-002 regression fixture: the linked Business OS command reached a
+        // durable terminal state while its queue route stayed `leased` — the
+        // exact orphaned-lease shape production showed (acked_at NULL, no
+        // active worker, no heartbeat).
+        conn.execute(
+            "INSERT INTO business_command_aggregates (
+                command_id, idempotency_key, payload_hash, module, command_type,
+                execution_mode, execution_phase, terminal_status, intent_json,
+                created_at_ms, updated_at_ms
+             ) VALUES (?1, ?2, 'hash', 'ctox', 'ctox.research.run', 'queue', 'terminal', 'failed', '{}', 1, 1)",
+            params!["cmd-orphaned-1", "idem-orphaned-1"],
+        )
+        .expect("seed terminal command aggregate");
+        conn.execute(
+            "INSERT INTO business_command_task_links (command_id, task_id, created_at_ms) VALUES (?1, ?2, 1)",
+            params!["cmd-orphaned-1", created.message_key],
+        )
+        .expect("link terminal command to queue task");
+        conn.execute(
+            "UPDATE communication_routing_state SET lease_expires_at='2000-01-01T00:00:00Z' WHERE message_key=?1",
+            params![created.message_key],
+        )
+        .expect("expire queue lease");
+        drop(conn);
+
+        let released = release_stale_queue_task_leases(&root, "ctox-service", &HashSet::new())
+            .expect("failed to settle orphaned queue lease");
+        assert_eq!(released, vec![created.message_key.clone()]);
+        let reloaded = load_queue_task(&root, &created.message_key)
+            .expect("failed to load queue task")
+            .expect("missing queue task");
+        // The orphaned lease must settle to the terminal route matching the
+        // durable command — never back to pending (which would duplicate the
+        // terminal command) and never left `leased` as phantom progress.
+        assert_eq!(reloaded.route_status, "failed");
+        assert!(reloaded.lease_owner.is_none());
+        assert!(reloaded.leased_at.is_none());
+        // Idempotent: the settled terminal row is no longer a stale-lease
+        // candidate, so a second sweep pass is a no-op.
+        let second = release_stale_queue_task_leases(&root, "ctox-service", &HashSet::new())
+            .expect("second sweep pass failed");
+        assert!(second.is_empty());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn queue_lease_worker_identity_persists_and_clears_on_recovery() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-queue-lease-worker-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("failed to create temp test root");
+
+        let created = create_queue_task(
+            &root,
+            QueueTaskCreateRequest {
+                title: "worker identity lease".to_string(),
+                prompt: "Track worker identity on this lease.".to_string(),
+                thread_key: "queue/lease-worker".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        lease_queue_task(&root, &created.message_key, "ctox-service")
+            .expect("failed to lease queue task");
+        let attached = record_queue_lease_worker(
+            &root,
+            std::slice::from_ref(&created.message_key),
+            "ctox-service",
+            "boot-test:worker:1",
+        )
+        .expect("failed to persist lease worker identity");
+        assert_eq!(attached, 1);
+        let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open channel db");
+        let worker_id: Option<String> = conn
+            .query_row(
+                "SELECT lease_worker_id FROM communication_routing_state WHERE message_key=?1",
+                params![created.message_key],
+                |row| row.get(0),
+            )
+            .expect("read lease worker id");
+        assert_eq!(worker_id.as_deref(), Some("boot-test:worker:1"));
+        conn.execute(
+            "UPDATE communication_routing_state SET lease_expires_at='2000-01-01T00:00:00Z' WHERE message_key=?1",
+            params![created.message_key],
+        )
+        .expect("expire queue lease");
+        drop(conn);
+
+        // The worker vanished without ack; the recovery sweep releases the
+        // orphaned lease and clears the durable worker identity with it.
+        let released = release_stale_queue_task_leases(&root, "ctox-service", &HashSet::new())
+            .expect("failed to release orphaned queue lease");
+        assert_eq!(released, vec![created.message_key.clone()]);
+        let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open channel db");
+        let cleared: Option<String> = conn
+            .query_row(
+                "SELECT lease_worker_id FROM communication_routing_state WHERE message_key=?1",
+                params![created.message_key],
+                |row| row.get(0),
+            )
+            .expect("read lease worker id after sweep");
+        assert!(cleared.is_none());
+        drop(conn);
+        // A stale worker must not restamp a lease that was already reclaimed:
+        // the attach is constrained to rows still leased by the same owner.
+        let restamped = record_queue_lease_worker(
+            &root,
+            std::slice::from_ref(&created.message_key),
+            "ctox-service",
+            "boot-test:worker:1",
+        )
+        .expect("stale worker attach failed");
+        assert_eq!(restamped, 0);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn queue_task_lease_stalled_probe_tracks_heartbeat_expiry() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-queue-lease-stalled-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("failed to create temp test root");
+
+        let created = create_queue_task(
+            &root,
+            QueueTaskCreateRequest {
+                title: "stalled probe".to_string(),
+                prompt: "Probe lease health transitions.".to_string(),
+                thread_key: "queue/lease-stalled".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        // A pending task has no lease at all: not stalled.
+        assert!(!queue_task_lease_stalled(&root, &created.message_key)
+            .expect("stalled probe failed for pending task"));
+        lease_queue_task(&root, &created.message_key, "ctox-service")
+            .expect("failed to lease queue task");
+        // A fresh lease with a future expiry has a live heartbeat window.
+        assert!(!queue_task_lease_stalled(&root, &created.message_key)
+            .expect("stalled probe failed for fresh lease"));
+        let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open channel db");
+        conn.execute(
+            "UPDATE communication_routing_state SET lease_expires_at='2000-01-01T00:00:00Z' WHERE message_key=?1",
+            params![created.message_key],
+        )
+        .expect("expire queue lease");
+        drop(conn);
+        // Heartbeat stopped and the expiry passed: the lease is stalled and
+        // must surface as such, never as healthy progress.
+        assert!(queue_task_lease_stalled(&root, &created.message_key)
+            .expect("stalled probe failed for expired lease"));
 
         let _ = fs::remove_dir_all(&root);
     }

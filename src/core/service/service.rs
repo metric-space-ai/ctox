@@ -2020,6 +2020,7 @@ fn release_stale_service_communication_leases(root: &Path) -> Result<usize> {
                 lease_owner=NULL,
                 leased_at=NULL,
                 lease_expires_at=NULL,
+                lease_worker_id=NULL,
                 acked_at=NULL,
                 last_error='released stale service lease during service boot',
                 updated_at=?1
@@ -5381,6 +5382,20 @@ fn process_is_running(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
+/// lease-3 (F-002): instance-unique durable worker identity stamped onto
+/// queue-task lease rows. Combines the per-boot service id with a per-slice
+/// attempt id so a recovered lease row names the exact worker that owned it.
+fn queue_lease_worker_id(job: &QueuedPrompt) -> String {
+    let boot_id = SERVICE_PERFORMANCE_BOOT_ID
+        .get_or_init(|| uuid::Uuid::new_v4().to_string())
+        .clone();
+    format!(
+        "{boot_id}:{}:worker:{}",
+        job.source_label,
+        uuid::Uuid::new_v4()
+    )
+}
+
 struct PromptWorkerActivity {
     root: std::path::PathBuf,
     state: Arc<Mutex<SharedState>>,
@@ -5453,6 +5468,28 @@ impl PromptWorkerActivity {
                     thread::park_timeout(Duration::from_secs(60));
                 })
             });
+        // lease-3 (F-002): persist the durable worker identity on the lease
+        // row so recovery sweeps and audit surfaces can tell which worker
+        // instance owned the lease when heartbeats stop. Lossy on purpose: a
+        // failed attach must never strand an otherwise valid lease.
+        if !job.leased_message_keys.is_empty() {
+            let worker_id = queue_lease_worker_id(job);
+            if let Err(err) = channels::record_queue_lease_worker(
+                root,
+                &job.leased_message_keys,
+                CHANNEL_ROUTER_LEASE_OWNER,
+                &worker_id,
+            ) {
+                push_event(
+                    state,
+                    format!(
+                        "Failed to persist queue lease worker identity for {}: {}",
+                        job.source_label,
+                        clip_text(&err.to_string(), 180)
+                    ),
+                );
+            }
+        }
         Self {
             root: root.to_path_buf(),
             state: state.clone(),
@@ -15845,9 +15882,97 @@ fn start_mission_maintenance_loop(root: std::path::PathBuf, state: Arc<Mutex<Sha
                     Err(err) => push_event(&state, format!("Approval nag sweep failed: {err}")),
                 }
             }
+            // lease-2 (F-002): orphaned queue-lease recovery sweep. Runs on
+            // the maintenance cadence, independent of the channel-router idle
+            // gates, so a leased task whose worker disappeared (no heartbeat
+            // renewal, lease expired) is mechanically released or settled on
+            // a bounded cadence instead of surviving its worker forever.
+            run_orphaned_queue_lease_sweep(&root, &state);
             thread::sleep(Duration::from_secs(MISSION_MAINTENANCE_POLL_SECS));
         }
     });
+}
+
+const ORPHANED_QUEUE_LEASE_SWEEP_SECS: u64 = 60;
+static ORPHANED_QUEUE_LEASE_SWEEP_GATE: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+
+/// lease-2 (F-002): release or settle queue-task leases whose heartbeat
+/// stopped (lease expired or lease fields incomplete) and that no live
+/// in-process owner holds. Idempotent: only `leased` rows move, released
+/// rows stay released, settled terminal rows leave the sweep candidate set,
+/// and linked Business OS commands resume through `retry_wait` with the same
+/// command id — the sweep never creates or duplicates a command.
+fn run_orphaned_queue_lease_sweep(root: &Path, state: &Arc<Mutex<SharedState>>) {
+    {
+        let gate = ORPHANED_QUEUE_LEASE_SWEEP_GATE.get_or_init(|| Mutex::new(None));
+        let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if guard.as_ref().is_some_and(|last: &Instant| {
+            last.elapsed() < Duration::from_secs(ORPHANED_QUEUE_LEASE_SWEEP_SECS)
+        }) {
+            return;
+        }
+        *guard = Some(Instant::now());
+    }
+    let active_keys = {
+        let shared = lock_shared_state(state);
+        let mut keys = HashSet::new();
+        for prompt in &shared.pending_prompts {
+            keys.extend(prompt.leased_message_keys.iter().cloned());
+            keys.extend(prompt.leased_ticket_event_keys.iter().cloned());
+        }
+        if shared.busy {
+            keys.extend(shared.leased_message_keys_inflight.iter().cloned());
+        }
+        keys
+    };
+    match channels::release_stale_queue_task_leases(root, CHANNEL_ROUTER_LEASE_OWNER, &active_keys)
+    {
+        Ok(released) if !released.is_empty() => {
+            // Status coherence: refresh the native Business OS queue/command
+            // projections for every swept key so a recovered lease stops
+            // rendering as healthy progress immediately after the sweep.
+            for message_key in &released {
+                let _ = crate::business_os::store::refresh_business_command_queue_task_projection(
+                    root,
+                    message_key,
+                );
+            }
+            let released_count = released.len();
+            let idempotence_key = format!(
+                "orphaned-queue-lease-sweep:{}",
+                normalize_token(&released.join(","))
+            );
+            governance::record_event_or_count(
+                root,
+                governance::GovernanceEventRequest {
+                    mechanism_id: "orphaned_queue_lease_sweep",
+                    conversation_id: None,
+                    severity: "warning",
+                    reason:
+                        "queue task lease expired without worker heartbeat (orphaned lease)",
+                    action_taken:
+                        "released or settled orphaned queue task leases; linked commands resume via retry_wait with the same command id",
+                    details: serde_json::json!({
+                        "released_message_keys": released.clone(),
+                        "sweep_interval_secs": ORPHANED_QUEUE_LEASE_SWEEP_SECS,
+                    }),
+                    idempotence_key: Some(&idempotence_key),
+                },
+            );
+            push_event(
+                state,
+                format!("Recovered {released_count} orphaned queue task lease(s)"),
+            );
+        }
+        Ok(_) => {}
+        Err(err) => push_event(
+            state,
+            format!(
+                "Orphaned queue lease sweep failed: {}",
+                clip_text(&err.to_string(), 180)
+            ),
+        ),
+    }
 }
 
 fn start_harness_audit_watcher(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>) {
@@ -18047,6 +18172,14 @@ fn reconcile_ticket_runtime_state(root: &Path, state: &Arc<Mutex<SharedState>>) 
     let released_queue_leases =
         channels::release_stale_queue_task_leases(root, CHANNEL_ROUTER_LEASE_OWNER, &active_keys)?;
     if !released_queue_leases.is_empty() {
+        // Status coherence: swept leases must stop rendering as healthy
+        // progress in the native Business OS projections immediately.
+        for message_key in &released_queue_leases {
+            let _ = crate::business_os::store::refresh_business_command_queue_task_projection(
+                root,
+                message_key,
+            );
+        }
         let released_count = released_queue_leases.len();
         let idempotence_key = format!(
             "ticket-reconcile:released-queue:{}",
