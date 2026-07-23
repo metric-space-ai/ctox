@@ -517,6 +517,7 @@ pub fn handle_unlock_command(root: &Path, args: &[String]) -> Result<()> {
                 }
             }
         }
+        "report" => crate::unlock_report::handle_report_command(root, &args[1..]),
         _ => {
             eprintln!("unknown subcommand: {sub}\n");
             print_usage();
@@ -553,6 +554,10 @@ fn print_usage() {
     println!("  signals <list|resolve|record>");
     println!("                                 Detection signals logged by the runners");
     println!("                                 (see `signals help`)");
+    println!("  report [--target <id>] [--adapters-dir <path>] [--out <path>] [--strict]");
+    println!("                                 Production unlock acceptance gate: one");
+    println!("                                 machine-readable report over every registered");
+    println!("                                 adapter (see `report --help`)");
 }
 
 fn print_signals_usage() {

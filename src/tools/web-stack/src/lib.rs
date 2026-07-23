@@ -21,6 +21,8 @@ pub mod surface;
 #[cfg(feature = "full")]
 pub mod unlock;
 #[cfg(feature = "full")]
+pub mod unlock_report;
+#[cfg(feature = "full")]
 pub mod web_search;
 
 pub use browser::browser_doctor_report;
@@ -74,6 +76,10 @@ pub use surface::handle_web_command;
 pub use surface::WebScrapeRequest;
 #[cfg(feature = "full")]
 pub use unlock::handle_unlock_command;
+#[cfg(feature = "full")]
+pub use unlock_report::generate_acceptance_report;
+#[cfg(feature = "full")]
+pub use unlock_report::handle_report_command;
 #[cfg(feature = "full")]
 pub use web_search::augment_responses_request;
 #[cfg(feature = "full")]
