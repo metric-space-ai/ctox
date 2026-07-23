@@ -39,7 +39,7 @@ class SourceReviewManifestBindingTests(unittest.TestCase):
         retrieval = self._artifact(
             f"{evidence_id}-retrieval.json",
             json.dumps({
-                "schema_version": "ctox.web-read.workspace-evidence.v2",
+                "schema_version": "ctox.web-read.workspace-evidence.v3",
                 "requested_url": url,
                 "final_url": url,
                 "status": 200,
@@ -51,6 +51,9 @@ class SourceReviewManifestBindingTests(unittest.TestCase):
                 "snapshot_path": "original.txt",
                 "extracted_text_path": "original.txt",
                 "extracted_text_sha256": digest,
+                "evidence_relevance_score": 9,
+                "evidence_eligible": True,
+                "evidence_rejection_reason": None,
                 "lineage": "web_search.evidence_fetch",
             }),
         )

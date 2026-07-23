@@ -28,7 +28,7 @@ class EvidenceGuardTests(unittest.TestCase):
         )
         digest = hashlib.sha256(self.content.read_bytes()).hexdigest()
         persisted_receipt = {
-            "schema_version": "ctox.web-read.workspace-evidence.v2",
+            "schema_version": "ctox.web-read.workspace-evidence.v3",
             "requested_url": "https://example.edu/paper/full-text",
             "final_url": "https://example.edu/paper/full-text",
             "status": 200,
@@ -40,6 +40,9 @@ class EvidenceGuardTests(unittest.TestCase):
             "snapshot_path": "original.txt",
             "extracted_text_path": "original.txt",
             "extracted_text_sha256": digest,
+            "evidence_relevance_score": 9,
+            "evidence_eligible": True,
+            "evidence_rejection_reason": None,
             "lineage": "web_search.evidence_fetch",
         }
         retrieval_receipt = self._artifact(
@@ -109,7 +112,7 @@ class EvidenceGuardTests(unittest.TestCase):
         retrieval = item["retrieval_receipt"]
         artifact = retrieval["receipt_artifact"]
         persisted = {
-            "schema_version": "ctox.web-read.workspace-evidence.v2",
+            "schema_version": "ctox.web-read.workspace-evidence.v3",
             "requested_url": retrieval["request_url"],
             "final_url": retrieval["final_url"],
             "status": retrieval["http_status"],
@@ -121,6 +124,9 @@ class EvidenceGuardTests(unittest.TestCase):
             "snapshot_path": item["snapshot"]["path"],
             "extracted_text_path": item.get("extracted_text", {}).get("path"),
             "extracted_text_sha256": item.get("extracted_text", {}).get("sha256"),
+            "evidence_relevance_score": item.get("relevance_score"),
+            "evidence_eligible": item.get("evidence_status") == "eligible",
+            "evidence_rejection_reason": None,
             "lineage": "web_search.evidence_fetch",
         }
         path = self.base / artifact["path"]
@@ -132,6 +138,13 @@ class EvidenceGuardTests(unittest.TestCase):
 
     def test_valid_manifest_passes(self) -> None:
         validate_manifest(self.manifest, self.base)
+
+    def test_manifest_cannot_inflate_receipt_relevance_score(self) -> None:
+        self.manifest["evidence"][0]["relevance_score"] = 10
+        with self.assertRaisesRegex(
+            ValueError, "retrieval_receipt_artifact_evidence_relevance_score_mismatch"
+        ):
+            validate_manifest(self.manifest, self.base)
 
     def test_prefixed_sha256_values_pass_after_strict_normalization(self) -> None:
         item = self.manifest["evidence"][0]

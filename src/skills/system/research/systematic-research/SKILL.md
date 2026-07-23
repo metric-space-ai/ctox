@@ -70,7 +70,9 @@ that machine-computed 0–10 value in the evidence manifest.
 The corresponding `workspace_evidence.receipt_path` and `receipt_sha256` must
 come directly from that same typed call and remain present in the immutable
 harness rollout. Never create, copy, reconstruct, rename, or rewrite a receipt
-artifact. `ctox_deep_research` output is discovery inventory, not final
+artifact. The receipt itself must be
+`ctox.web-read.workspace-evidence.v3` and bind the exact score plus eligibility
+decision. `ctox_deep_research` output is discovery inventory, not final
 evidence; every admitted source requires its own direct `ctox_web_read` call.
 For prose, use the server-written `workspace_evidence` snapshot receipt and
 its full extracted-text artifact. Every claim must carry

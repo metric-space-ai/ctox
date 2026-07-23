@@ -11674,7 +11674,7 @@ fn validate_systematic_research_typed_web_read_receipts_from_conn(
         .and_then(Value::as_array)
         .context("evidence manifest has no evidence array")?;
 
-    let mut required_receipts = HashSet::<(PathBuf, String)>::new();
+    let mut required_receipts = HashSet::<(PathBuf, String, i64)>::new();
     for item in evidence {
         let evidence_id = item
             .get("evidence_id")
@@ -11711,6 +11711,13 @@ fn validate_systematic_research_typed_web_read_receipts_from_conn(
             .with_context(|| {
                 format!("evidence {evidence_id} has an invalid receipt artifact hash")
             })?;
+        let relevance_score = item
+            .get("relevance_score")
+            .and_then(Value::as_i64)
+            .filter(|score| (8..=10).contains(score))
+            .with_context(|| {
+                format!("evidence {evidence_id} has no eligible typed relevance score")
+            })?;
         let receipt_path = workspace
             .join(relative_path)
             .canonicalize()
@@ -11721,10 +11728,10 @@ fn validate_systematic_research_typed_web_read_receipts_from_conn(
             receipt_path.starts_with(&workspace),
             "evidence {evidence_id} receipt artifact escapes the research workspace"
         );
-        required_receipts.insert((receipt_path, artifact_hash));
+        required_receipts.insert((receipt_path, artifact_hash, relevance_score));
     }
 
-    let mut observed_receipts = HashSet::<(PathBuf, String)>::new();
+    let mut observed_receipts = HashSet::<(PathBuf, String, i64)>::new();
     let mut stmt = conn.prepare(
         "SELECT rollout_path
          FROM threads
@@ -11839,7 +11846,14 @@ fn validate_systematic_research_typed_web_read_receipts_from_conn(
                     else {
                         continue;
                     };
-                    observed_receipts.insert((receipt_path, receipt_hash));
+                    let Some(relevance_score) = output
+                        .get("evidence_relevance_score")
+                        .and_then(Value::as_i64)
+                        .filter(|score| (8..=10).contains(score))
+                    else {
+                        continue;
+                    };
+                    observed_receipts.insert((receipt_path, receipt_hash, relevance_score));
                 }
                 _ => {}
             }
@@ -11848,7 +11862,7 @@ fn validate_systematic_research_typed_web_read_receipts_from_conn(
 
     let mut missing = required_receipts
         .difference(&observed_receipts)
-        .map(|(path, _)| path.display().to_string())
+        .map(|(path, _, score)| format!("{} (manifest score {score})", path.display()))
         .collect::<Vec<_>>();
     missing.sort();
     anyhow::ensure!(
@@ -25680,6 +25694,7 @@ mod tests {
         let output = serde_json::json!({
             "ok": true,
             "evidence_eligible": true,
+            "evidence_relevance_score": 9,
             "workspace_evidence": {
                 "persisted": true,
                 "receipt_path": receipt,
@@ -25740,6 +25755,7 @@ mod tests {
         let manifest = serde_json::json!({
             "evidence": [{
                 "evidence_id": "evidence-1",
+                "relevance_score": 9,
                 "retrieval_receipt": {
                     "tool": "ctox_web_read",
                     "receipt_artifact": {
@@ -25760,6 +25776,20 @@ mod tests {
             started_at,
         )
         .unwrap();
+
+        let mut inflated_manifest = manifest.clone();
+        inflated_manifest["evidence"][0]["relevance_score"] = Value::from(10);
+        let error = validate_systematic_research_typed_web_read_receipts_from_conn(
+            &conn,
+            &codex_home,
+            &workspace,
+            "run-1",
+            "command-1",
+            &inflated_manifest,
+            started_at,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("manifest score 10"));
 
         let synthetic = workspace.join(".ctox/web-read/synthetic/receipt.json");
         std::fs::create_dir_all(synthetic.parent().unwrap()).unwrap();

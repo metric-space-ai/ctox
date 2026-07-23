@@ -380,7 +380,7 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
         persisted_receipt = require_dict(
             persisted_receipt, "retrieval_receipt_artifact"
         )
-        if persisted_receipt.get("schema_version") != "ctox.web-read.workspace-evidence.v2":
+        if persisted_receipt.get("schema_version") != "ctox.web-read.workspace-evidence.v3":
             raise GuardError("retrieval_receipt_artifact_schema_mismatch")
         immutable_fields = {
             "requested_url": request_url,
@@ -390,6 +390,8 @@ def validate_manifest(manifest: dict[str, Any], base_dir: Path) -> None:
             "byte_count": item.get("retrieval_receipt", {}).get("byte_count"),
             "snapshot_sha256": item.get("retrieval_receipt", {}).get("body_sha256"),
             "content_kind": item.get("retrieval_receipt", {}).get("content_kind"),
+            "evidence_relevance_score": item.get("relevance_score"),
+            "evidence_eligible": True,
         }
         for field, expected in immutable_fields.items():
             actual = persisted_receipt.get(field)

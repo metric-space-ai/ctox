@@ -937,10 +937,24 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
         relevance_query.as_deref().unwrap_or_default(),
     );
     session.persist_page_cache()?;
+    let (
+        _transport_evidence_eligible,
+        evidence_relevance_score,
+        evidence_eligible,
+        evidence_rejection_reason,
+    ) = direct_read_evidence_assessment(request, &doc);
     let workspace_evidence = request
         .workspace
         .as_deref()
-        .map(|workspace| persist_direct_read_workspace(workspace, &doc))
+        .map(|workspace| {
+            persist_direct_read_workspace(
+                workspace,
+                &doc,
+                evidence_relevance_score,
+                evidence_eligible,
+                evidence_rejection_reason.as_deref(),
+            )
+        })
         .transpose()?;
 
     Ok(render_direct_web_read_payload(
@@ -959,28 +973,12 @@ fn render_direct_web_read_payload(
     doc: EvidenceDoc,
     workspace_evidence: Option<Value>,
 ) -> Value {
-    let transport_evidence_eligible = evidence_doc_is_admitted_for_read(&doc);
-    let evidence_relevance_score = request
-        .query
-        .as_deref()
-        .and_then(normalize_text)
-        .or_else(|| {
-            request
-                .find
-                .first()
-                .and_then(|pattern| normalize_text(pattern))
-        })
-        .and_then(|query| score_evidence_doc_relevance(&doc, &query));
-    let evidence_eligible =
-        transport_evidence_eligible && evidence_relevance_score.is_some_and(|score| score >= 8);
-    let evidence_rejection_reason = doc
-        .response_receipt
-        .as_ref()
-        .and_then(|receipt| receipt.admission_rejection_reason.clone())
-        .or_else(|| {
-            (transport_evidence_eligible && !evidence_eligible)
-                .then(|| "query_relevance_not_established".to_string())
-        });
+    let (
+        transport_evidence_eligible,
+        evidence_relevance_score,
+        evidence_eligible,
+        evidence_rejection_reason,
+    ) = direct_read_evidence_assessment(request, &doc);
     let mut find_results = request
         .find
         .iter()
@@ -1100,7 +1098,47 @@ fn render_direct_web_read_payload(
     })
 }
 
-fn persist_direct_read_workspace(workspace: &Path, doc: &EvidenceDoc) -> Result<Value> {
+fn direct_read_evidence_assessment(
+    request: &DirectWebReadRequest,
+    doc: &EvidenceDoc,
+) -> (bool, Option<i64>, bool, Option<String>) {
+    let transport_evidence_eligible = evidence_doc_is_admitted_for_read(doc);
+    let evidence_relevance_score = request
+        .query
+        .as_deref()
+        .and_then(normalize_text)
+        .or_else(|| {
+            request
+                .find
+                .first()
+                .and_then(|pattern| normalize_text(pattern))
+        })
+        .and_then(|query| score_evidence_doc_relevance(doc, &query));
+    let evidence_eligible =
+        transport_evidence_eligible && evidence_relevance_score.is_some_and(|score| score >= 8);
+    let rejection_reason = doc
+        .response_receipt
+        .as_ref()
+        .and_then(|receipt| receipt.admission_rejection_reason.clone())
+        .or_else(|| {
+            (transport_evidence_eligible && !evidence_eligible)
+                .then(|| "query_relevance_not_established".to_string())
+        });
+    (
+        transport_evidence_eligible,
+        evidence_relevance_score,
+        evidence_eligible,
+        rejection_reason,
+    )
+}
+
+fn persist_direct_read_workspace(
+    workspace: &Path,
+    doc: &EvidenceDoc,
+    evidence_relevance_score: Option<i64>,
+    evidence_eligible: bool,
+    evidence_rejection_reason: Option<&str>,
+) -> Result<Value> {
     if !evidence_doc_is_admitted_for_read(doc) {
         return Ok(json!({
             "persisted": false,
@@ -1147,7 +1185,7 @@ fn persist_direct_read_workspace(workspace: &Path, doc: &EvidenceDoc) -> Result<
         .map(|text| snapshot_hash(&text));
     let receipt_path = workspace.join("receipt.json");
     let persisted_receipt = json!({
-        "schema_version": "ctox.web-read.workspace-evidence.v2",
+        "schema_version": "ctox.web-read.workspace-evidence.v3",
         "requested_url": receipt.requested_url.clone(),
         "final_url": receipt.final_url.clone(),
         "status": receipt.status,
@@ -1159,6 +1197,9 @@ fn persist_direct_read_workspace(workspace: &Path, doc: &EvidenceDoc) -> Result<
         "snapshot_path": snapshot_path.clone(),
         "extracted_text_path": extracted_text_path.clone(),
         "extracted_text_sha256": extracted_text_sha256.clone(),
+        "evidence_relevance_score": evidence_relevance_score,
+        "evidence_eligible": evidence_eligible,
+        "evidence_rejection_reason": evidence_rejection_reason,
         "lineage": receipt.lineage.clone(),
     });
     fs::write(
@@ -9260,8 +9301,13 @@ mod tests {
         .expect("valid workspace receipt");
         assert_eq!(
             persisted_receipt["schema_version"],
-            "ctox.web-read.workspace-evidence.v2"
+            "ctox.web-read.workspace-evidence.v3"
         );
+        assert_eq!(
+            persisted_receipt["evidence_relevance_score"],
+            payload["evidence_relevance_score"]
+        );
+        assert_eq!(persisted_receipt["evidence_eligible"], true);
         assert!(persisted_receipt["checked_at_epoch"]
             .as_u64()
             .is_some_and(|value| value > 0));

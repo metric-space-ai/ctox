@@ -20,10 +20,11 @@ An evidence entry is eligible only when all of these are true:
   login, cookie, JavaScript shell, metadata, abstract-only, or snippet read is
   rejected, never repaired from model memory.
 - Every admitted Web Stack read has a
-  `ctox.web-read.workspace-evidence.v2` receipt artifact. The manifest must
+  `ctox.web-read.workspace-evidence.v3` receipt artifact. The manifest must
   repeat its requested URL, final URL, status, `checked_at_epoch`, byte count,
   content kind, and response hash exactly. The guard verifies the artifact
-  hash and every repeated field; a worker cannot rewrite a redirect,
+  hash and every repeated field, including the machine-computed relevance
+  score and eligibility decision; a worker cannot rewrite a redirect,
   interstitial URL, timestamp, content type, or response identity after the
   read. The evidence `canonical_url` must equal the persisted final URL.
 - Final evidence must come from a direct typed `ctox_web_read` call. The
