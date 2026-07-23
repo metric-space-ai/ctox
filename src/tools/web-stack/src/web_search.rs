@@ -1288,6 +1288,14 @@ fn score_evidence_doc_relevance(doc: &EvidenceDoc, query: &str) -> Option<i64> {
                 "{} {} {} {}",
                 doc.title, doc.url, doc.canonical_url, doc.page_text
             )
+        } else if content_kind == "data_zip" {
+            format!(
+                "{} {} {} {}",
+                doc.title,
+                doc.url,
+                doc.canonical_url,
+                verified_archive_member_paths(doc).unwrap_or_default()
+            )
         } else {
             format!("{} {} {}", doc.title, doc.url, doc.canonical_url)
         }
@@ -1352,6 +1360,42 @@ fn score_evidence_doc_relevance(doc: &EvidenceDoc, query: &str) -> Option<i64> {
         matched_terms.min(denominator),
         denominator,
     ))
+}
+
+fn verified_archive_member_paths(doc: &EvidenceDoc) -> Option<String> {
+    let archive_hash = doc.snapshot_hash.as_deref()?;
+    let receipt = doc.response_archive_manifest.as_ref()?;
+    if receipt.get("schema_version").and_then(Value::as_str)
+        != Some("ctox.web.zip-manifest-receipt.v2")
+        || receipt.get("archive_sha256").and_then(Value::as_str) != Some(archive_hash)
+    {
+        return None;
+    }
+
+    let manifest_path = receipt.get("manifest_path").and_then(Value::as_str)?;
+    let expected_manifest_hash = receipt.get("manifest_sha256").and_then(Value::as_str)?;
+    let manifest_bytes = fs::read(manifest_path).ok()?;
+    if snapshot_hash(&manifest_bytes) != expected_manifest_hash {
+        return None;
+    }
+    let manifest: Value = serde_json::from_slice(&manifest_bytes).ok()?;
+    if manifest.get("schema_version").and_then(Value::as_str) != Some("ctox.web.zip-manifest.v2")
+        || manifest.get("archive_sha256").and_then(Value::as_str) != Some(archive_hash)
+    {
+        return None;
+    }
+    let members = manifest.get("members").and_then(Value::as_array)?;
+    if receipt.get("member_count").and_then(Value::as_u64) != Some(members.len() as u64) {
+        return None;
+    }
+
+    Some(
+        members
+            .iter()
+            .filter_map(|member| member.get("path").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
 }
 
 fn body_has_query_identifier(body_tokens: &BTreeSet<&str>, identifier: &str) -> bool {
@@ -9776,6 +9820,93 @@ mod tests {
             "Download Propeller_Database.zip from Zenodo record 20111572 and verify archive member SHA-256",
         );
         assert!(score.is_some_and(|value| value >= 8), "score={score:?}");
+    }
+
+    #[test]
+    fn evidence_relevance_uses_only_verified_archive_member_paths() {
+        let root = unique_test_root("archive_member_relevance");
+        let archive_hash =
+            "sha256:c9e92c5e5be0aeadab0d42e2ded5d85822f3e8b8e00029d434a68822e108ca98";
+        let manifest = json!({
+            "schema_version": "ctox.web.zip-manifest.v2",
+            "archive_sha256": archive_hash,
+            "member_count": 2,
+            "data_member_count": 1,
+            "members": [
+                {"path": "BBDD/APC/APC15x8/", "is_dir": true},
+                {"path": "BBDD/APC/APC15x8/results/APC15x8_exp.csv", "is_dir": false},
+            ],
+        });
+        let manifest_bytes = serde_json::to_vec_pretty(&manifest).unwrap();
+        let manifest_path = root.join("archive.zip.manifest.json");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(&manifest_path, &manifest_bytes).unwrap();
+        let body = b"PK\x03\x04archive".to_vec();
+        let url = "https://zenodo.org/api/records/20111572/files/Propeller_Database.zip/content";
+        let doc = EvidenceDoc {
+            url: url.to_string(),
+            canonical_url: url.to_string(),
+            title: "Propeller_Database.zip".to_string(),
+            summary: String::new(),
+            verification_status: "verified".to_string(),
+            checked_at: 1,
+            http_status: Some(200),
+            snapshot_hash: Some(archive_hash.to_string()),
+            source_tier: Some("primary".to_string()),
+            evidence_eligible: true,
+            is_pdf: false,
+            pdf_total_pages: None,
+            page_sections: Vec::new(),
+            excerpts: Vec::new(),
+            page_text: String::new(),
+            extracted_text_sha256: None,
+            find_results: Vec::new(),
+            raw_html: None,
+            response_body: Some(body.clone()),
+            response_artifact_path: None,
+            response_archive_manifest: Some(json!({
+                "schema_version": "ctox.web.zip-manifest-receipt.v2",
+                "archive_sha256": archive_hash,
+                "manifest_path": manifest_path,
+                "manifest_sha256": snapshot_hash(&manifest_bytes),
+                "member_count": 2,
+                "data_member_count": 1,
+            })),
+            response_receipt: Some(ResponseReceipt {
+                requested_url: url.to_string(),
+                final_url: url.to_string(),
+                status: 200,
+                content_type: Some("application/zip".to_string()),
+                byte_count: body.len(),
+                sha256: Some(archive_hash.to_string()),
+                content_kind: "data_zip".to_string(),
+                redirected: false,
+                redirect_chain: vec![url.to_string()],
+                lineage: "test".to_string(),
+                admission_rejection_reason: None,
+            }),
+        };
+
+        let score = score_evidence_doc_relevance(
+            &doc,
+            "Propeller Database APC15x8 results APC15x8 exp csv",
+        );
+        assert!(score.is_some_and(|value| value >= 8), "score={score:?}");
+        assert_eq!(
+            score_evidence_doc_relevance(&doc, "Propeller Database APC12x8 results csv"),
+            None
+        );
+
+        let mut tampered = doc;
+        tampered.response_archive_manifest.as_mut().unwrap()["manifest_sha256"] =
+            Value::String("sha256:invalid".to_string());
+        assert_eq!(
+            score_evidence_doc_relevance(
+                &tampered,
+                "Propeller Database APC15x8 results APC15x8 exp csv",
+            ),
+            None
+        );
     }
 
     #[test]
