@@ -1316,11 +1316,20 @@ fn score_evidence_doc_relevance(doc: &EvidenceDoc, query: &str) -> Option<i64> {
         .collect::<BTreeSet<_>>();
     let required_identifiers = terms
         .iter()
-        .filter(|term| term.chars().any(|ch| ch.is_ascii_digit()))
+        .enumerate()
+        .filter(|(index, term)| {
+            term.chars().any(|ch| ch.is_ascii_digit())
+                && !(*term == "256"
+                    && index
+                        .checked_sub(1)
+                        .and_then(|previous| terms.get(previous))
+                        .is_some_and(|previous| previous == "sha"))
+        })
+        .map(|(_, term)| term)
         .collect::<Vec<_>>();
     if required_identifiers
         .iter()
-        .any(|identifier| !body_tokens.contains(identifier.as_str()))
+        .any(|identifier| !body_has_query_identifier(&body_tokens, identifier))
     {
         return None;
     }
@@ -1343,6 +1352,22 @@ fn score_evidence_doc_relevance(doc: &EvidenceDoc, query: &str) -> Option<i64> {
         matched_terms.min(denominator),
         denominator,
     ))
+}
+
+fn body_has_query_identifier(body_tokens: &BTreeSet<&str>, identifier: &str) -> bool {
+    body_tokens.contains(identifier)
+        || (identifier
+            .chars()
+            .all(|character| character.is_ascii_digit())
+            && body_tokens.iter().any(|token| {
+                token
+                    .strip_prefix(identifier)
+                    .or_else(|| token.strip_suffix(identifier))
+                    .is_some_and(|remainder| {
+                        !remainder.is_empty()
+                            && remainder.chars().all(|character| character.is_alphabetic())
+                    })
+            }))
 }
 
 fn normalized_relevance_score(matched_terms: usize, total_terms: usize) -> i64 {
@@ -9697,12 +9722,60 @@ mod tests {
 
         let operational_score = score_evidence_doc_relevance(
             &doc,
-            "APC 4.2x4 electric propeller static thrust torque measurement RPM CT0 CP0 data rows wind tunnel",
+            "Extract per-RPM rows from the UIUC Vol 2 static test of the APC 4.2x4 propeller at OD=0615. List RPM, CT0 and CP0 triples verbatim from the data file.",
         );
         assert!(
             operational_score.is_some_and(|value| value >= 8),
             "operational_score={operational_score:?}"
         );
+    }
+
+    #[test]
+    fn evidence_relevance_ignores_sha_256_as_a_source_identifier() {
+        let body = b"PK\x03\x04archive".to_vec();
+        let url = "https://zenodo.org/api/records/20111572/files/Propeller_Database.zip/content";
+        let doc = EvidenceDoc {
+            url: url.to_string(),
+            canonical_url: url.to_string(),
+            title: "Propeller_Database.zip".to_string(),
+            summary: String::new(),
+            verification_status: "verified".to_string(),
+            checked_at: 1,
+            http_status: Some(200),
+            snapshot_hash: Some(snapshot_hash(&body)),
+            source_tier: Some("primary".to_string()),
+            evidence_eligible: true,
+            is_pdf: false,
+            pdf_total_pages: None,
+            page_sections: Vec::new(),
+            excerpts: Vec::new(),
+            page_text: String::new(),
+            extracted_text_sha256: None,
+            find_results: Vec::new(),
+            raw_html: None,
+            response_body: Some(body.clone()),
+            response_artifact_path: None,
+            response_archive_manifest: None,
+            response_receipt: Some(ResponseReceipt {
+                requested_url: url.to_string(),
+                final_url: url.to_string(),
+                status: 200,
+                content_type: Some("application/zip".to_string()),
+                byte_count: body.len(),
+                sha256: Some(snapshot_hash(&body)),
+                content_kind: "data_zip".to_string(),
+                redirected: false,
+                redirect_chain: vec![url.to_string()],
+                lineage: "web_search.evidence_fetch".to_string(),
+                admission_rejection_reason: None,
+            }),
+        };
+
+        let score = score_evidence_doc_relevance(
+            &doc,
+            "Download Propeller_Database.zip from Zenodo record 20111572 and verify archive member SHA-256",
+        );
+        assert!(score.is_some_and(|value| value >= 8), "score={score:?}");
     }
 
     #[test]
