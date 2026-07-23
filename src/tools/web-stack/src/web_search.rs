@@ -1275,12 +1275,38 @@ fn score_evidence_doc_relevance(doc: &EvidenceDoc, query: &str) -> Option<i64> {
         return None;
     }
     let evidence_text = if evidence_doc_is_data_file(doc) {
-        format!("{} {} {}", doc.title, doc.url, doc.canonical_url)
+        let content_kind = doc
+            .response_receipt
+            .as_ref()
+            .map(|receipt| receipt.content_kind.as_str())
+            .unwrap_or_default();
+        if matches!(
+            content_kind,
+            "data_table_text" | "data_delimited" | "data_json"
+        ) {
+            format!(
+                "{} {} {} {}",
+                doc.title, doc.url, doc.canonical_url, doc.page_text
+            )
+        } else {
+            format!("{} {} {}", doc.title, doc.url, doc.canonical_url)
+        }
     } else {
         doc.page_text.clone()
     };
     let body = evidence_text.to_ascii_lowercase();
-    let terms = query_terms(query);
+    let terms = query_terms(query)
+        .into_iter()
+        .map(|term| match term.as_str() {
+            // Static propeller datasets commonly label the zero-advance
+            // coefficients CT0/CP0/CQ0 as CT/CP/CQ. The trailing zero is a
+            // condition marker, not a source identifier like ISO 281 or P6.
+            "ct0" => "ct".to_string(),
+            "cp0" => "cp".to_string(),
+            "cq0" => "cq".to_string(),
+            _ => term,
+        })
+        .collect::<Vec<_>>();
     if terms.is_empty() {
         return None;
     }
@@ -9668,6 +9694,15 @@ mod tests {
             "UIUC propeller static test data APC 4.2x4 RPM thrust coefficient torque coefficient measurement",
         );
         assert!(score.is_some_and(|value| value >= 8), "score={score:?}");
+
+        let operational_score = score_evidence_doc_relevance(
+            &doc,
+            "APC 4.2x4 electric propeller static thrust torque measurement RPM CT0 CP0 data rows wind tunnel",
+        );
+        assert!(
+            operational_score.is_some_and(|value| value >= 8),
+            "operational_score={operational_score:?}"
+        );
     }
 
     #[test]
