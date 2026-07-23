@@ -18,18 +18,20 @@ Spreadsheets, or Files before claiming completion.
 
 ## CTOX Runtime Contract
 
-- Treat `web_stack_plan.required_depth` from a typed Business OS research
-  command as an immutable execution requirement. Resolve it before the first
-  `ctox_deep_research` call and pass that exact value as the tool's `depth`.
-  In particular, `required_depth: exhaustive` requires at least one successful,
-  persisted typed `ctox_deep_research` call with `depth: exhaustive` in the
-  current durable research run. A `standard` call is useful only as an
-  orientation round and never satisfies an exhaustive command.
-- Never downgrade required research depth because of token pressure, provider
-  rate limits, an existing standard-depth workspace, or a retry. Preserve the
-  task as pending when the required call cannot complete. Before synthesis,
-  validation, or writeback, inspect the successful typed tool receipt and
-  verify that its reported `depth` is at least the command's required depth.
+- `web_stack_plan.required_depth` from a typed Business OS research command
+  is the requested sweep depth, not a tool-ordering or completion gate.
+  Discovery is agentic: no tool has a mandatory fixed position and
+  `ctox_deep_research` is one optional broad discovery round, never the
+  required first move. The durable completion contract requires at least one
+  successful typed discovery call (`ctox_web_search`, `ctox_scholarly_search`,
+  or `ctox_deep_research`) bound to the current run/command/workspace in the
+  harness rollout — never a specific first tool.
+- When you run a `ctox_deep_research` sweep, pass the command's requested
+  depth as the tool's `depth` and never downgrade it because of token
+  pressure, provider rate limits, an existing standard-depth workspace, or a
+  retry. Preserve the task as pending when a planned sweep cannot complete.
+  Before synthesis, validation, or writeback, inspect the successful typed
+  tool receipt and record the depth it actually ran at.
 - CTOX-managed harness sessions do not expose free child agents or
   `spawn_agent`. Keep discovery, extraction, synthesis, correction, and
   completion ownership in the same parent work item. Use the typed Web Stack
@@ -238,6 +240,13 @@ tool from the current evidence gap, exactly as in an agentic benchmark run:
 - use browser/scrape tools when a source requires interaction or structured
   extraction
 
+`ctox_web_search` runs a multi-engine cascade — Google first, then Brave,
+DuckDuckGo, and Bing — with per-engine cooldowns. Every engine that answered
+is recorded in the read receipt `provider` field, and `source_failures`
+records engines that were skipped or cooling down. Silent collapse to a
+single engine is a platform defect: stop fail-closed and report it instead of
+treating one engine's envelope as the whole web.
+
 Plan, execute, inspect, persist and then reformulate. Repeat with different
 facets and the complete canonical exclusion list until the source space
 saturates. A single static envelope is not Systematic Research.
@@ -245,8 +254,9 @@ saturates. A single static envelope is not Systematic Research.
 For scientific work, the first scholarly response is a seed ledger, not a
 reason to start another broad sweep immediately. Select the relevant DOI/OA
 records, call `ctox_web_read` on at least the three strongest canonical
-original/full-text URLs, and record accepted or rejected read receipts before
-calling `ctox_deep_research`. If a provider reports CAPTCHA or HTTP 429, do not
+original/full-text URLs, and record accepted or rejected read receipts;
+interleave further `ctox_deep_research` or search rounds with these reads as
+the evidence gap dictates — no fixed order. If a provider reports CAPTCHA or HTTP 429, do not
 repeat the same provider/query in the next facet. Continue from admitted seeds,
 their references, repository links, and an orthogonal provider after its
 cooldown.
@@ -454,13 +464,18 @@ a controlled facet sweep, not a single call:
    appending to *is* your exclusion list. Pass every canonical URL already
    present through `exclude_urls` on each later `ctox_deep_research` call,
    in addition to reformulating the facet. Existing sources must not consume
-   discovery or read budget.
+   discovery or read budget. `scripts/source_review_discovery.py` carries the
+   canonical exclude list into every round automatically.
 
-3. **Stop on saturation, not on first results.** Discovery is done when
-   consecutive new facets return only sources already in the catalog — not
-   when the catalog merely has entries. If two or three orthogonal facets
-   in a row surface no new Tier-1 source, the space is saturated and you
-   can move to schema/blueprint inference. Until then, keep faceting.
+3. **Stop on saturation, not on first results.** Discovery is done when at
+   least two consecutive orthogonal facet or citation rounds add no new
+   eligible evidence source — not when the catalog merely has entries. A
+   round whose provider failed (CAPTCHA, HTTP 429, timeout) is inconclusive:
+   it neither resets nor advances the saturation counter. The runner script
+   `scripts/source_review_discovery.py` enforces this deterministically
+   (`--saturation-rounds`, minimum 2) over canonical dedup identity, and a
+   source counts as newly discovered exactly once. Until the counter passes,
+   keep faceting.
 
 This breadth pass is what separates a catalog that captured only the
 obvious references from one that is actually near-complete. A catalog built
