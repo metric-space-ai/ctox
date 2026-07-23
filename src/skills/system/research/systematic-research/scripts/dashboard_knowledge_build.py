@@ -36,6 +36,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -68,7 +69,9 @@ MEASURED_LOAD_POINTS_HEADERS = [
     "torque_unit",
     "CT",
     "CP",
+    "archive_manifest_hash",
     "archive_member_path",
+    "archive_member_hash",
     "parsing_rule",
 ]
 
@@ -92,7 +95,9 @@ DERIVED_BEARING_LOADS_HEADERS = [
     "formula",
     "constants",
     "units",
+    "archive_manifest_hash",
     "archive_member_path",
+    "archive_member_hash",
 ]
 
 SOURCE_CANDIDATES_HEADERS = [
@@ -387,7 +392,9 @@ def build_measured_load_points(
     canonical_url: str,
     snapshot_hash: str,
     propeller_size: str,
+    archive_manifest_hash: str,
     member_path: str,
+    member_hash: str,
     parsed: dict[str, Any],
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
     """Build native-contract measured rows from a parsed ENOLA member.
@@ -449,7 +456,9 @@ def build_measured_load_points(
                 "torque_unit": "Nm" if "torque_Nm" in mapping else "",
                 "CT": format_number(ct) if ct is not None else "",
                 "CP": format_number(cp) if cp is not None else "",
+                "archive_manifest_hash": archive_manifest_hash,
                 "archive_member_path": member_path,
+                "archive_member_hash": member_hash,
                 "parsing_rule": parsing_rule,
             }
         )
@@ -475,7 +484,7 @@ def derive_thrust_from_ct(ct: float, rpm: float, diameter_in: float, rho: float)
 def derive_torque_from_cp(cp: float, rpm: float, diameter_in: float, rho: float) -> float:
     revs_per_sec = rpm / 60.0
     diameter_m = diameter_in * 0.0254
-    return cp * rho * revs_per_sec**2 * diameter_m**5
+    return cp * rho * revs_per_sec**2 * diameter_m**5 / (2.0 * math.pi)
 
 
 def build_derived_bearing_loads(
@@ -484,7 +493,9 @@ def build_derived_bearing_loads(
     research_command_id: str,
     claim: dict[str, str],
     propeller_size: str,
+    archive_manifest_hash: str,
     member_path: str,
+    member_hash: str,
     parsed: dict[str, Any],
     rho_kg_per_m3: float = 1.225,
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
@@ -543,10 +554,12 @@ def build_derived_bearing_loads(
                 "thrust_N": format_number(thrust) if thrust is not None else "",
                 "torque_Nm": format_number(torque) if torque is not None else "",
                 "bearing_radial_load_N": "",
-                "formula": "T = CT * rho * (rpm/60)^2 * D^4; Q = CP * rho * (rpm/60)^2 * D^5",
+                "formula": "T = CT * rho * (rpm/60)^2 * D^4; Q = CP * rho * (rpm/60)^2 * D^5 / (2*pi)",
                 "constants": f"rho={rho_kg_per_m3} kg/m^3; D={diameter_in} in = {diameter_in * 0.0254} m",
                 "units": "thrust_N=N; torque_Nm=Nm",
+                "archive_manifest_hash": archive_manifest_hash,
                 "archive_member_path": member_path,
+                "archive_member_hash": member_hash,
             }
         )
     reconciliation = {
@@ -567,22 +580,119 @@ def load_csv_rows(path: Path) -> list[dict[str, str]]:
         return [dict(row) for row in csv.DictReader(handle)]
 
 
+def load_jsonl_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, str]] = []
+    with path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise BuildError(f"candidate_jsonl_invalid:{path}:line-{line_number}") from exc
+            if not isinstance(value, dict):
+                raise BuildError(f"candidate_jsonl_row_not_object:{path}:line-{line_number}")
+            rows.append({str(key): value for key, value in value.items()})
+    return rows
+
+
 def iter_discovery_rows(discovery_dirs: Iterable[Path]) -> list[dict[str, str]]:
     """Collect every candidate-audit row from every discovery round."""
 
     rows: list[dict[str, str]] = []
     for index, directory in enumerate(discovery_dirs, start=1):
-        for name, state in (
-            ("candidate_sources.csv", "candidate"),
-            ("screened_sources.csv", "screened"),
-            ("rejected_sources.csv", "rejected"),
+        for stem, state in (
+            ("candidate_sources", "candidate"),
+            ("screened_sources", "screened"),
+            ("rejected_sources", "rejected"),
         ):
-            for row in load_csv_rows(directory / name):
-                row = dict(row)
-                row.setdefault("verification_state", state)
-                row["_discovery_round"] = str(index)
-                rows.append(row)
+            for loader, suffix in ((load_csv_rows, ".csv"), (load_jsonl_rows, ".jsonl")):
+                for row in loader(directory / f"{stem}{suffix}"):
+                    row = dict(row)
+                    row.setdefault("verification_state", state)
+                    row["_discovery_round"] = str(index)
+                    rows.append(row)
     return rows
+
+
+def normalized_sha256(value: Any, field: str) -> str:
+    text = str(value or "").strip().lower()
+    if text.startswith("sha256:"):
+        text = text[7:]
+    if not re.fullmatch(r"[0-9a-f]{64}", text):
+        raise BuildError(f"{field}_invalid")
+    return text
+
+
+def load_enola_member_binding(path: Path) -> dict[str, str]:
+    try:
+        binding = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BuildError(f"enola_member_binding_invalid:{path}") from exc
+    if not isinstance(binding, dict):
+        raise BuildError(f"enola_member_binding_not_object:{path}")
+
+    required = (
+        "csv_path",
+        "propeller_size",
+        "source_id",
+        "canonical_url",
+        "archive_sha256",
+        "manifest_path",
+        "manifest_sha256",
+        "member_path",
+        "member_sha256",
+    )
+    for field in required:
+        if not str(binding.get(field) or "").strip():
+            raise BuildError(f"enola_member_binding_missing:{field}")
+
+    csv_path = Path(str(binding["csv_path"]))
+    manifest_path = Path(str(binding["manifest_path"]))
+    archive_hash = normalized_sha256(binding["archive_sha256"], "archive_sha256")
+    manifest_hash = normalized_sha256(binding["manifest_sha256"], "manifest_sha256")
+    member_hash = normalized_sha256(binding["member_sha256"], "member_sha256")
+    if sha256_file(manifest_path) != manifest_hash:
+        raise BuildError("enola_manifest_sha256_mismatch")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BuildError("enola_manifest_invalid") from exc
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != "ctox.web.zip-manifest.v2":
+        raise BuildError("enola_manifest_schema_invalid")
+    if normalized_sha256(manifest.get("archive_sha256"), "archive_sha256") != archive_hash:
+        raise BuildError("enola_manifest_archive_sha256_mismatch")
+    member_path = str(binding["member_path"]).strip()
+    members = manifest.get("members")
+    if not isinstance(members, list):
+        raise BuildError("enola_manifest_members_invalid")
+    member = next(
+        (
+            item
+            for item in members
+            if isinstance(item, dict) and str(item.get("path") or "") == member_path
+        ),
+        None,
+    )
+    if member is None:
+        raise BuildError(f"enola_manifest_member_missing:{member_path}")
+    if normalized_sha256(member.get("sha256"), "member_sha256") != member_hash:
+        raise BuildError("enola_manifest_member_sha256_mismatch")
+    if sha256_file(csv_path) != member_hash:
+        raise BuildError("enola_extracted_member_sha256_mismatch")
+
+    return {
+        "csv_path": str(csv_path),
+        "propeller_size": str(binding["propeller_size"]).strip(),
+        "source_id": str(binding["source_id"]).strip(),
+        "canonical_url": str(binding["canonical_url"]).strip(),
+        "archive_sha256": archive_hash,
+        "manifest_sha256": manifest_hash,
+        "member_path": member_path,
+        "member_sha256": member_hash,
+    }
 
 
 def build_source_candidates(
@@ -748,6 +858,10 @@ def assert_native_measured_contract(rows: list[dict[str, str]]) -> None:
         torque = str(row.get("torque_Nm") or "").strip()
         if torque and finite_number(torque) is None:
             raise BuildError(f"native_contract:row {index}:torque_Nm")
+        for field in ("archive_manifest_hash", "archive_member_hash"):
+            normalized_sha256(row.get(field), f"native_contract:row {index}:{field}")
+        if not str(row.get("archive_member_path") or "").strip():
+            raise BuildError(f"native_contract:row {index}:archive_member_path")
         for field in ("research_run_id", "research_command_id", "source_id", "canonical_url", "snapshot_hash"):
             if not str(row.get(field) or "").strip():
                 raise BuildError(f"native_contract:row {index}:{field}")
@@ -783,15 +897,30 @@ def main(argv: list[str] | None = None) -> int:
         "--enola-member",
         action="append",
         default=[],
-        metavar="CSV_PATH:PROPELLER_SIZE:SOURCE_ID:CANONICAL_URL:SNAPSHOT_HASH",
-        help="Hash-bound ENOLA member CSV extracted from the immutable archive snapshot.",
+        metavar="LEGACY_SPEC",
+        help="Unsupported legacy syntax retained only for a fail-closed migration error.",
+    )
+    parser.add_argument(
+        "--enola-member-binding",
+        type=Path,
+        action="append",
+        default=[],
+        metavar="BINDING_JSON",
+        help="Verified ENOLA extraction binding with archive, manifest, member, and extracted-file hashes.",
     )
     parser.add_argument(
         "--derived-claim",
         action="append",
         default=[],
-        metavar="CSV_PATH:PROPELLER_SIZE:CLAIM_ID",
-        help="Build derived CT/CP load rows bound to a validated manifest claim.",
+        metavar="LEGACY_SPEC",
+        help="Unsupported legacy syntax retained only for a fail-closed migration error.",
+    )
+    parser.add_argument(
+        "--derived-claim-binding",
+        action="append",
+        default=[],
+        metavar="BINDING_JSON:CLAIM_ID",
+        help="Build derived CT/CP rows from a verified ENOLA binding and validated manifest claim.",
     )
     args = parser.parse_args(argv)
 
@@ -829,26 +958,31 @@ def main(argv: list[str] | None = None) -> int:
         )
         write_csv(out_dir / "source_catalog.csv", SOURCE_CATALOG_HEADERS, catalog)
 
+    if args.enola_member:
+        raise BuildError(
+            "legacy_enola_member_binding_unsupported:"
+            "use --enola-member-binding with archive/member hashes"
+        )
+
     measured_rows: list[dict[str, str]] = []
-    for spec in args.enola_member:
-        parts = spec.split(":", 3)
-        if len(parts) != 4:
-            raise BuildError(f"enola_member_spec_invalid:{spec!r}")
-        csv_path, propeller_size, source_id = parts[0], parts[1], parts[2]
-        canonical_url, sep, snapshot_hash = parts[3].rpartition(":")
-        if not sep or not canonical_url or not snapshot_hash:
-            raise BuildError(f"enola_member_spec_invalid:{spec!r}")
-        path = Path(csv_path)
-        parsed = parse_enola_member_csv(path.read_text(encoding="utf-8"), path.name)
+    for binding_path in args.enola_member_binding:
+        binding = load_enola_member_binding(binding_path)
+        path = Path(binding["csv_path"])
+        parsed = parse_enola_member_csv(
+            path.read_text(encoding="utf-8"),
+            binding["member_path"],
+        )
         audits.append(parsed["audit"])
         rows, reconciliation = build_measured_load_points(
             research_run_id=args.research_run_id,
             research_command_id=args.research_command_id,
-            source_id=source_id,
-            canonical_url=canonical_url,
-            snapshot_hash=snapshot_hash,
-            propeller_size=propeller_size,
-            member_path=path.name,
+            source_id=binding["source_id"],
+            canonical_url=binding["canonical_url"],
+            snapshot_hash=binding["archive_sha256"],
+            propeller_size=binding["propeller_size"],
+            archive_manifest_hash=binding["manifest_sha256"],
+            member_path=binding["member_path"],
+            member_hash=binding["member_sha256"],
             parsed=parsed,
         )
         assert_native_measured_contract(rows)
@@ -857,20 +991,35 @@ def main(argv: list[str] | None = None) -> int:
     if measured_rows:
         write_csv(out_dir / "measured_load_points.csv", MEASURED_LOAD_POINTS_HEADERS, measured_rows)
 
+    if args.derived_claim:
+        raise BuildError(
+            "legacy_derived_claim_binding_unsupported:"
+            "use --derived-claim-binding with archive/member hashes"
+        )
+
     derived_rows: list[dict[str, str]] = []
-    for spec in args.derived_claim:
-        parts = spec.split(":")
-        if len(parts) != 3:
-            raise BuildError(f"derived_claim_spec_invalid:{spec!r}")
-        csv_path, propeller_size, claim_id = parts
+    for spec in args.derived_claim_binding:
+        binding_path_text, sep, claim_id = spec.rpartition(":")
+        if not sep or not binding_path_text or not claim_id:
+            raise BuildError(f"derived_claim_binding_spec_invalid:{spec!r}")
+        binding = load_enola_member_binding(Path(binding_path_text))
         claim = claims_by_id.get(claim_id)
         if claim is None:
             raise BuildError(f"derived_claim_not_in_manifest:{claim_id}")
         quote = str(claim.get("evidence_quote") or "")
         if not quote:
             raise BuildError(f"derived_claim_missing_quote:{claim_id}")
-        path = Path(csv_path)
-        parsed = parse_enola_member_csv(path.read_text(encoding="utf-8"), path.name)
+        claim_snapshot_hash = normalized_sha256(
+            claim.get("snapshot_hash") or claim.get("snapshot_sha256"),
+            "derived_claim_snapshot_hash",
+        )
+        if claim_snapshot_hash != binding["archive_sha256"]:
+            raise BuildError(f"derived_claim_archive_binding_mismatch:{claim_id}")
+        path = Path(binding["csv_path"])
+        parsed = parse_enola_member_csv(
+            path.read_text(encoding="utf-8"),
+            binding["member_path"],
+        )
         audits.append(parsed["audit"])
         rows, reconciliation = build_derived_bearing_loads(
             research_run_id=args.research_run_id,
@@ -884,8 +1033,10 @@ def main(argv: list[str] | None = None) -> int:
                 "snapshot_hash": str(claim.get("snapshot_hash") or claim.get("snapshot_sha256") or ""),
                 "quote": quote,
             },
-            propeller_size=propeller_size,
-            member_path=path.name,
+            propeller_size=binding["propeller_size"],
+            archive_manifest_hash=binding["manifest_sha256"],
+            member_path=binding["member_path"],
+            member_hash=binding["member_sha256"],
             parsed=parsed,
         )
         derived_rows.extend(rows)

@@ -33826,6 +33826,9 @@ fn validate_systematic_research_csv(
                 "prop_diameter_in",
                 "prop_pitch_in",
                 "torque_Nm",
+                "archive_manifest_hash",
+                "archive_member_path",
+                "archive_member_hash",
             ] {
                 require_header(&headers, output, field)?;
             }
@@ -33843,7 +33846,14 @@ fn validate_systematic_research_csv(
             );
         }
         "derived_bearing_loads" => {
-            for field in ["source_row_ref", "derivation_method", "assumption_text"] {
+            for field in [
+                "source_row_ref",
+                "derivation_method",
+                "assumption_text",
+                "archive_manifest_hash",
+                "archive_member_path",
+                "archive_member_hash",
+            ] {
                 require_header(&headers, output, field)?;
             }
             require_any_header(
@@ -33987,13 +33997,46 @@ fn validate_systematic_research_csv(
                         output.file_name
                     );
                 }
+                for field in ["archive_manifest_hash", "archive_member_hash"] {
+                    anyhow::ensure!(
+                        record_value(&record, &headers, field).is_some_and(|value| {
+                            let value = normalized_hash(value);
+                            value.len() == 64
+                                && value.chars().all(|character| character.is_ascii_hexdigit())
+                        }),
+                        "{} row {rows} has no valid {field}",
+                        output.file_name
+                    );
+                }
+                anyhow::ensure!(
+                    record_value(&record, &headers, "archive_member_path")
+                        .is_some_and(|value| !value.is_empty()),
+                    "{} row {rows} has no archive_member_path",
+                    output.file_name
+                );
             }
             "derived_bearing_loads" => {
-                for field in ["source_row_ref", "derivation_method", "assumption_text"] {
+                for field in [
+                    "source_row_ref",
+                    "derivation_method",
+                    "assumption_text",
+                    "archive_member_path",
+                ] {
                     anyhow::ensure!(
                         record_value(&record, &headers, field)
                             .is_some_and(|value| !value.is_empty()),
                         "{} row {rows} has no {field}",
+                        output.file_name
+                    );
+                }
+                for field in ["archive_manifest_hash", "archive_member_hash"] {
+                    anyhow::ensure!(
+                        record_value(&record, &headers, field).is_some_and(|value| {
+                            let value = normalized_hash(value);
+                            value.len() == 64
+                                && value.chars().all(|character| character.is_ascii_hexdigit())
+                        }),
+                        "{} row {rows} has no valid {field}",
                         output.file_name
                     );
                 }
@@ -43170,9 +43213,13 @@ mod tests {
             concat!(
                 "research_run_id,research_command_id,source_id,canonical_url,snapshot_hash,",
                 "source_row_ref,measurement_kind,is_derived,rpm,propeller_size,",
-                "prop_diameter_in,prop_pitch_in,thrust_N,torque_Nm\n",
+                "prop_diameter_in,prop_pitch_in,thrust_N,torque_Nm,archive_manifest_hash,",
+                "archive_member_path,archive_member_hash\n",
                 "run,cmd,SRC,https://example.test/source,abc,row-42,measured,false,",
-                "11234.383560,9x5,9.000000,5.000000,12.978495,0.141293\n"
+                "11234.383560,9x5,9.000000,5.000000,12.978495,0.141293,",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,",
+                "BBDD/APC/APC9x5/results/APC9x5.csv,",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
             ),
         )?;
         let eligible = HashMap::from([(
@@ -43194,6 +43241,42 @@ mod tests {
     }
 
     #[test]
+    fn systematic_research_rejects_measured_load_without_archive_binding() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let path = temp.path().join("measured_load_points.csv");
+        fs::write(
+            &path,
+            concat!(
+                "research_run_id,research_command_id,source_id,canonical_url,snapshot_hash,",
+                "source_row_ref,measurement_kind,is_derived,rpm,propeller_size,",
+                "prop_diameter_in,prop_pitch_in,thrust_N,torque_Nm,archive_manifest_hash,",
+                "archive_member_path,archive_member_hash\n",
+                "run,cmd,SRC,https://example.test/source,abc,row-42,measured,false,",
+                "11234.383560,9x5,9.000000,5.000000,12.978495,0.141293,,,\n"
+            ),
+        )?;
+        let eligible = HashMap::from([(
+            "SRC".to_string(),
+            ("https://example.test/source".to_string(), "abc".to_string()),
+        )]);
+
+        let error = validate_systematic_research_csv(
+            &path,
+            &research_csv_output("measured_load_points"),
+            "run",
+            "cmd",
+            &eligible,
+            &HashMap::new(),
+        )
+        .expect_err("unbound archive rows must fail closed");
+
+        assert!(error
+            .to_string()
+            .contains("has no valid archive_manifest_hash"));
+        Ok(())
+    }
+
+    #[test]
     fn systematic_research_rejects_axis_count_as_derived_bearing_load() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let path = temp.path().join("derived_bearing_loads.csv");
@@ -43202,9 +43285,13 @@ mod tests {
             concat!(
                 "research_run_id,research_command_id,claim_id,evidence_id,source_id,",
                 "snapshot_id,canonical_url,snapshot_hash,quote,source_row_ref,",
-                "derivation_method,assumption_text,value,unit\n",
+                "derivation_method,assumption_text,value,unit,archive_manifest_hash,",
+                "archive_member_path,archive_member_hash\n",
                 "run,cmd,CLM,EVD,SRC,SNAP,https://example.test/source,abc,",
-                "three orthogonal axes,row-7,counted axes,none,3,directions\n"
+                "three orthogonal axes,row-7,counted axes,none,3,directions,",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,",
+                "BBDD/APC/APC9x5/results/APC9x5.csv,",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
             ),
         )?;
         let eligible = HashMap::from([(
@@ -43248,9 +43335,13 @@ mod tests {
             concat!(
                 "research_run_id,research_command_id,claim_id,evidence_id,source_id,",
                 "snapshot_id,canonical_url,snapshot_hash,quote,source_row_ref,",
-                "derivation_method,assumption_text,radial_load_N\n",
+                "derivation_method,assumption_text,radial_load_N,archive_manifest_hash,",
+                "archive_member_path,archive_member_hash\n",
                 "run,cmd,CLM,EVD,SRC,SNAP,https://example.test/source,abc,",
-                "measured thrust was 10 N,row-7,ten percent of thrust,,1.0\n"
+                "measured thrust was 10 N,row-7,ten percent of thrust,,1.0,",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,",
+                "BBDD/APC/APC9x5/results/APC9x5.csv,",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
             ),
         )?;
         let eligible = HashMap::from([(

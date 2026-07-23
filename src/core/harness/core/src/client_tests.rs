@@ -293,6 +293,7 @@ fn minimax_fallback_request_omits_unsupported_reasoning_include() {
         base_instructions: BaseInstructions::default(),
         personality: None,
         output_schema: None,
+        required_initial_tool: None,
     };
 
     let request = session

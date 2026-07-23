@@ -16,7 +16,9 @@ Covers the F-003/F-004 repair and Workstream D contract items:
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
+import math
 import sys
 import tempfile
 import unittest
@@ -48,7 +50,9 @@ def measured_kwargs(parsed: dict) -> dict:
         "canonical_url": "https://zenodo.org/api/records/20111572/files/Propeller_Database.zip/content",
         "snapshot_hash": "c9e92c5e",
         "propeller_size": "APC15x8",
+        "archive_manifest_hash": "a" * 64,
         "member_path": "BBDD/APC/APC15x8/results/APC15x8_exp.csv",
+        "member_hash": "b" * 64,
         "parsed": parsed,
     }
 
@@ -181,7 +185,9 @@ class DerivedBearingLoadsTests(unittest.TestCase):
             research_command_id="cmd-1",
             claim=self.claim(),
             propeller_size="APC15x8",
+            archive_manifest_hash="a" * 64,
             member_path="BBDD/APC/APC15x8/results/APC15x8_exp.csv",
+            member_hash="b" * 64,
             parsed=parsed,
         )
         self.assertEqual(len(rows), 3)  # CT present even where thrust is NaN
@@ -194,6 +200,15 @@ class DerivedBearingLoadsTests(unittest.TestCase):
         self.assertTrue(row["source_row_ref"].endswith("#row-2"))
         expected = 0.0123 * 1.225 * (2700 / 60.0) ** 2 * (15 * 0.0254) ** 4
         self.assertAlmostEqual(float(row["thrust_N"]), expected, places=6)
+        expected_torque = (
+            0.0824
+            * 1.225
+            * (2700 / 60.0) ** 2
+            * (15 * 0.0254) ** 5
+            / (2.0 * math.pi)
+        )
+        self.assertAlmostEqual(float(row["torque_Nm"]), expected_torque, places=6)
+        self.assertIn("/ (2*pi)", row["formula"])
         self.assertEqual(row["bearing_radial_load_N"], "")
 
     def test_derived_rows_never_mix_measured_axial_with_inferred_radial(self) -> None:
@@ -204,7 +219,9 @@ class DerivedBearingLoadsTests(unittest.TestCase):
             research_command_id="cmd-1",
             claim=self.claim(),
             propeller_size="APC15x8",
+            archive_manifest_hash="a" * 64,
             member_path="BBDD/APC/APC15x8/results/APC15x8_exp.csv",
+            member_hash="b" * 64,
             parsed=parsed,
         )
         for row in measured_rows:
@@ -312,13 +329,98 @@ class CandidateInventoryTests(unittest.TestCase):
         self.assertEqual([row["source_id"] for row in catalog], ["src-1"])
         self.assertNotIn("aggregator.example", json.dumps(catalog))
 
+    def test_jsonl_inventories_are_loaded_and_deduplicated_with_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "candidate_sources.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "title": "Paper",
+                                "url": "https://example.edu/paper",
+                                "doi": "10.1234/paper",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "title": "Dataset",
+                                "url": "https://example.edu/data",
+                                "content_hash": "c" * 64,
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (directory / "rejected_sources.jsonl").write_text(
+                json.dumps(
+                    {
+                        "title": "Paper duplicate",
+                        "url": "https://elsewhere.example/paper",
+                        "doi": "https://doi.org/10.1234/paper",
+                        "screening_reason": "metadata_only",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (directory / "candidate_sources.csv").write_text(
+                "title,url,doi\nPaper alias,https://example.edu/alias,10.1234/paper\n",
+                encoding="utf-8",
+            )
+            rows = builder.build_source_candidates(
+                research_run_id="run-1",
+                research_command_id="cmd-1",
+                discovery_dirs=[directory],
+                admitted_urls=set(),
+            )
+            self.assertEqual(len(rows), 2)
+            paper = next(row for row in rows if row["candidate_key"] == "doi:10.1234/paper")
+            self.assertEqual(paper["verification_state"], "rejected")
+            self.assertEqual(paper["rejection_reason"], "metadata_only")
+
+    def test_invalid_jsonl_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "candidate_sources.jsonl").write_text("{not-json}\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "candidate_jsonl_invalid"):
+                builder.iter_discovery_rows([directory])
+
 
 class BuilderCliTests(unittest.TestCase):
+    def _binding(self, root: Path, member: Path) -> Path:
+        member_path = "BBDD/APC/APC15x8/results/APC15x8_exp.csv"
+        member_hash = hashlib.sha256(member.read_bytes()).hexdigest()
+        manifest = {
+            "schema_version": "ctox.web.zip-manifest.v2",
+            "archive_sha256": "c" * 64,
+            "members": [{"path": member_path, "sha256": f"sha256:{member_hash}"}],
+        }
+        manifest_path = root / "archive.zip.manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        binding = {
+            "csv_path": str(member),
+            "propeller_size": "APC15x8",
+            "source_id": "SRC-ENOLA",
+            "canonical_url": "https://zenodo.org/api/records/20111572/files/Propeller_Database.zip/content",
+            "archive_sha256": "c" * 64,
+            "manifest_path": str(manifest_path),
+            "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+            "member_path": member_path,
+            "member_sha256": member_hash,
+        }
+        binding_path = root / "binding.json"
+        binding_path.write_text(json.dumps(binding), encoding="utf-8")
+        return binding_path
+
     def test_cli_writes_native_contract_tables_and_reconciliation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             member = root / "APC15x8_exp.csv"
             member.write_text(ENOLA_HEADER_MALFORMED + "\n" + ENOLA_ROWS, encoding="utf-8")
+            binding = self._binding(root, member)
             discovery = root / "discovery"
             discovery.mkdir()
             (discovery / "candidate_sources.csv").write_text(
@@ -332,8 +434,7 @@ class BuilderCliTests(unittest.TestCase):
                 "--research-command-id", "cmd-1",
                 "--out-dir", str(out_dir),
                 "--discovery-dir", str(discovery),
-                "--enola-member",
-                f"{member}:APC15x8:SRC-ENOLA:https://zenodo.org/api/records/20111572/files/Propeller_Database.zip/content:c9e92c5e",
+                "--enola-member-binding", str(binding),
             ])
             self.assertEqual(result, 0)
             with (out_dir / "measured_load_points.csv").open(newline="", encoding="utf-8") as handle:
@@ -349,6 +450,32 @@ class BuilderCliTests(unittest.TestCase):
             self.assertEqual(report["measured_rows"], 2)
             self.assertEqual(report["reconciliations"][0]["source_rows"], 3)
             self.assertTrue(report["parser_audits"][0]["header_repaired"])
+
+    def test_enola_binding_rejects_tampered_member_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            member = root / "APC15x8_exp.csv"
+            member.write_text(ENOLA_HEADER + "\n" + ENOLA_ROWS, encoding="utf-8")
+            binding = self._binding(root, member)
+            member.write_text(ENOLA_HEADER + "\n2700,99,0,0,0,0,0\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "extracted_member_sha256_mismatch"):
+                builder.load_enola_member_binding(binding)
+
+    def test_legacy_enola_binding_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "legacy_enola_member_binding_unsupported"):
+                builder.main(
+                    [
+                        "--research-run-id",
+                        "run-1",
+                        "--research-command-id",
+                        "cmd-1",
+                        "--out-dir",
+                        tmp,
+                        "--enola-member",
+                        "legacy",
+                    ]
+                )
 
 
 if __name__ == "__main__":

@@ -425,8 +425,19 @@ hand-authored. The builder mirrors the native importer contract
   `measurement_kind=experimental`.
 - Any CT/CP→force/torque conversion is derived and goes to
   `derived_bearing_loads.csv` with formula, constants, assumptions, units, and
-  source-row lineage. UIUC CT/CP rows are direct dimensionless coefficients;
-  never mix measured axial thrust with an inferred radial bearing load.
+  source-row lineage. Use `Q = CP * rho * n^2 * D^5 / (2*pi)` for torque;
+  omitting `2*pi` is a dimensional/physical contract failure. UIUC CT/CP rows
+  are direct dimensionless coefficients; never mix measured axial thrust with
+  an inferred radial bearing load.
+- ENOLA rows are accepted only through repeatable
+  `--enola-member-binding <binding.json>` arguments. Each binding names the
+  extracted CSV, canonical archive URL, archive SHA-256, manifest path and
+  SHA-256, complete ZIP member path, member SHA-256, source ID, and propeller
+  size. The builder verifies the manifest and extracted member bytes before
+  emitting rows. The legacy `--enola-member` and `--derived-claim` forms are
+  intentionally rejected because they cannot prove archive/member lineage;
+  derived rows use
+  `--derived-claim-binding <binding.json>:<claim_id>`.
 - `source_candidates.csv` accumulates every candidate from every discovery
   round with canonical dedup (DOI / stable id / canonical URL / content hash)
   and an explicit per-candidate rejection reason; rejected candidates are

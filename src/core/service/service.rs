@@ -1888,8 +1888,21 @@ fn release_stale_service_communication_leases_on_boot(
         CHANNEL_ROUTER_LEASE_OWNER,
         &HashSet::new(),
     ) {
-        Ok(released) if !released.is_empty() => {
-            let released_count = released.len();
+        Ok(sweep) if !sweep.released.is_empty() || !sweep.failures.is_empty() => {
+            let released_count = sweep.released.len();
+            if !sweep.failures.is_empty() {
+                push_event(
+                    state,
+                    format!(
+                        "Boot queue lease recovery left {} candidate(s) for retry: {}",
+                        sweep.failures.len(),
+                        clip_text(&sweep.failures.join("; "), 240)
+                    ),
+                );
+            }
+            if released_count == 0 {
+                return;
+            }
             push_event(
                 state,
                 format!("Recovered {released_count} stale queue task lease(s) at boot"),
@@ -1905,7 +1918,8 @@ fn release_stale_service_communication_leases_on_boot(
                         "returned stale queue task leases to pending and moved linked commands to retry wait",
                     details: serde_json::json!({
                         "released_count": released_count,
-                        "released_message_keys": released,
+                        "released_message_keys": sweep.released,
+                        "failed_candidates": sweep.failures,
                     }),
                     idempotence_key: None,
                 },
@@ -15987,20 +16001,33 @@ fn run_orphaned_queue_lease_sweep(root: &Path, state: &Arc<Mutex<SharedState>>) 
     };
     match channels::release_stale_queue_task_leases(root, CHANNEL_ROUTER_LEASE_OWNER, &active_keys)
     {
-        Ok(released) if !released.is_empty() => {
+        Ok(sweep) if !sweep.released.is_empty() || !sweep.failures.is_empty() => {
             // Status coherence: refresh the native Business OS queue/command
             // projections for every swept key so a recovered lease stops
             // rendering as healthy progress immediately after the sweep.
-            for message_key in &released {
+            for message_key in &sweep.released {
                 let _ = crate::business_os::store::refresh_business_command_queue_task_projection(
                     root,
                     message_key,
                 );
             }
-            let released_count = released.len();
+            if !sweep.failures.is_empty() {
+                push_event(
+                    state,
+                    format!(
+                        "Orphaned queue lease sweep left {} candidate(s) for retry: {}",
+                        sweep.failures.len(),
+                        clip_text(&sweep.failures.join("; "), 240)
+                    ),
+                );
+            }
+            let released_count = sweep.released.len();
+            if released_count == 0 {
+                return;
+            }
             let idempotence_key = format!(
                 "orphaned-queue-lease-sweep:{}",
-                normalize_token(&released.join(","))
+                normalize_token(&sweep.released.join(","))
             );
             governance::record_event_or_count(
                 root,
@@ -16013,7 +16040,8 @@ fn run_orphaned_queue_lease_sweep(root: &Path, state: &Arc<Mutex<SharedState>>) 
                     action_taken:
                         "released or settled orphaned queue task leases; linked commands resume via retry_wait with the same command id",
                     details: serde_json::json!({
-                        "released_message_keys": released.clone(),
+                        "released_message_keys": sweep.released.clone(),
+                        "failed_candidates": sweep.failures,
                         "sweep_interval_secs": ORPHANED_QUEUE_LEASE_SWEEP_SECS,
                     }),
                     idempotence_key: Some(&idempotence_key),
@@ -18229,8 +18257,19 @@ fn reconcile_ticket_runtime_state(root: &Path, state: &Arc<Mutex<SharedState>>) 
             ),
         ),
     }
-    let released_queue_leases =
+    let queue_lease_sweep =
         channels::release_stale_queue_task_leases(root, CHANNEL_ROUTER_LEASE_OWNER, &active_keys)?;
+    let released_queue_leases = queue_lease_sweep.released;
+    if !queue_lease_sweep.failures.is_empty() {
+        push_event(
+            state,
+            format!(
+                "Router queue lease recovery left {} candidate(s) for retry: {}",
+                queue_lease_sweep.failures.len(),
+                clip_text(&queue_lease_sweep.failures.join("; "), 240)
+            ),
+        );
+    }
     if !released_queue_leases.is_empty() {
         // Status coherence: swept leases must stop rendering as healthy
         // progress in the native Business OS projections immediately.
