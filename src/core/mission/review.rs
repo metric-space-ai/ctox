@@ -9,6 +9,7 @@ use crate::inference::runtime_env;
 
 const REVIEW_TIMEOUT_SECS: u64 = 900;
 const REVIEW_MAX_LEGS: usize = 3;
+const REVIEW_VERDICT_RECOVERY_TIMEOUT_SECS: u64 = 180;
 const SEMANTIC_ANSWER_REVIEW_TIMEOUT_SECS: u64 = 120;
 
 const SEMANTIC_ANSWER_REVIEW_SYSTEM_PROMPT: &str = r#"You are CTOX Semantic Answer Review.
@@ -741,7 +742,29 @@ fn run_external_review_leg_with_wall_timeout(
             err
         )
     })?;
-    let report = session.run_turn(prompt, Some(timeout), None, Some(false), 0);
+    let report = match session.run_turn(prompt, Some(timeout), None, Some(false), 0) {
+        Ok(report) => Ok(report),
+        Err(err) if review_turn_completed_without_assistant_message(&err) => {
+            let recovery_prompt = build_review_verdict_recovery_prompt(request);
+            session
+                .run_turn(
+                    &recovery_prompt,
+                    Some(Duration::from_secs(REVIEW_VERDICT_RECOVERY_TIMEOUT_SECS)),
+                    None,
+                    Some(false),
+                    0,
+                )
+                .map_err(|recovery_err| {
+                    anyhow::anyhow!(
+                        "completion review leg {} completed its inspection without a verdict and the bounded verdict recovery failed after {}s: {}",
+                        leg + 1,
+                        REVIEW_VERDICT_RECOVERY_TIMEOUT_SECS,
+                        recovery_err
+                    )
+                })
+        }
+        Err(err) => Err(err),
+    };
     session.shutdown();
     report.map_err(|err| {
         anyhow::anyhow!(
@@ -752,6 +775,19 @@ fn run_external_review_leg_with_wall_timeout(
             err
         )
     })
+}
+
+fn review_turn_completed_without_assistant_message(err: &anyhow::Error) -> bool {
+    err.to_string()
+        .to_ascii_lowercase()
+        .contains("turn completed without assistant message")
+}
+
+fn build_review_verdict_recovery_prompt(request: &CompletionReviewRequest) -> String {
+    format!(
+        "The read-only inspection turn for `{}` has completed, but it did not emit the required final report. Do not call any more tools and do not perform any worker action. Use only the evidence you already inspected in this same review thread. Return the review verdict now in the exact structured format from the review assignment. Never infer PASS from the worker summary. PASS still requires the direct or trusted-external evidence you personally established. If the existing evidence does not settle every required gate, return PARTIAL with the exact missing check and a concrete HANDOFF. Emit one response only.",
+        clip_text(&request.preview, 120)
+    )
 }
 
 fn assess_review_requirement(
@@ -2384,6 +2420,7 @@ mod tests {
     fn review_harness_contract_is_finite_isolated_and_simple_compaction_only() {
         assert_eq!(REVIEW_TIMEOUT_SECS, 900);
         assert_eq!(REVIEW_MAX_LEGS, 3);
+        assert_eq!(REVIEW_VERDICT_RECOVERY_TIMEOUT_SECS, 180);
         assert!(REVIEW_SYSTEM_PROMPT.contains("Operate in strict read-only verification mode."));
         assert!(REVIEW_SYSTEM_PROMPT.contains("normal review compaction is disabled"));
         assert!(REVIEW_SYSTEM_PROMPT.contains("emit a review handoff instead of compacting"));
@@ -2429,6 +2466,14 @@ mod tests {
         assert!(format_retry.contains("Created receipt.json with a verified checksum."));
         assert!(format_retry.contains("receipt.json exists in the authoritative workspace"));
         assert!(format_retry.contains("SUMMARY: malformed response"));
+
+        let recovery = build_review_verdict_recovery_prompt(&request);
+        assert!(recovery.contains("Do not call any more tools"));
+        assert!(recovery.contains("Never infer PASS from the worker summary"));
+        assert!(recovery.contains("return PARTIAL"));
+        assert!(review_turn_completed_without_assistant_message(
+            &anyhow::anyhow!("turn completed without assistant message")
+        ));
     }
 
     #[test]
