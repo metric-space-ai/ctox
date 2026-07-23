@@ -162,6 +162,36 @@ def dedupe_query_plan(plan: list[QuerySpec]) -> list[QuerySpec]:
     return out
 
 
+def orthogonal_query_rounds(plan: list[QuerySpec]) -> list[list[QuerySpec]]:
+    """Distribute a query plan into rounds with one query per search facet.
+
+    A saturation round is a complete cross-facet sweep, not one query. Queries
+    sharing a focus are therefore rotated into subsequent rounds while every
+    round covers as many independent focuses as remain.
+    """
+    focus_order: list[str] = []
+    by_focus: dict[str, list[QuerySpec]] = {}
+    for item in dedupe_query_plan(plan):
+        focus_key = item.focus.strip().lower() or "general"
+        if focus_key not in by_focus:
+            focus_order.append(focus_key)
+            by_focus[focus_key] = []
+        by_focus[focus_key].append(item)
+    rounds: list[list[QuerySpec]] = []
+    offset = 0
+    while True:
+        current = [
+            by_focus[focus][offset]
+            for focus in focus_order
+            if offset < len(by_focus[focus])
+        ]
+        if not current:
+            break
+        rounds.append(current)
+        offset += 1
+    return rounds
+
+
 def seed_query_plan(query: str) -> list[QuerySpec]:
     """Create short, obvious first-pass queries before broad expansion.
 
@@ -888,6 +918,7 @@ def run_deep_research(
     timeout_sec: int,
     backend: str,
     web_query_delay_sec: float = 3.0,
+    exclude_urls: list[str] | None = None,
 ) -> dict[str, Any]:
     if backend == "open-metadata":
         return run_open_metadata_search(query, max_sources, out_path, timeout_sec)
@@ -931,6 +962,10 @@ def run_deep_research(
         "--max-sources",
         str(max_sources),
     ]
+    # Carry the canonical exclude list into every round: known candidates must
+    # not count as new discovery or consume search/read budget again.
+    for excluded_url in (exclude_urls or [])[:EXCLUDE_URL_LIMIT]:
+        cmd.extend(["--exclude-url", excluded_url])
     try:
         proc = subprocess.run(
             cmd,
@@ -965,13 +1000,135 @@ def source_records(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
-def source_key(record: dict[str, Any]) -> str:
-    for key in ("doi", "DOI", "url", "canonical_url", "link", "id"):
+TRACKING_QUERY_PARAMS = {
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+    "gclid",
+    "fbclid",
+    "mc_cid",
+    "mc_eid",
+    "ref",
+    "source",
+    "spm",
+}
+
+CONTENT_HASH_KEYS = ("snapshot_hash", "content_hash", "body_hash", "content_sha256", "sha256")
+
+EXCLUDE_URL_LIMIT = 200
+
+
+def normalize_doi_key(raw: str) -> str:
+    value = (raw or "").strip().lower()
+    for prefix in ("https://doi.org/", "http://doi.org/", "https://dx.doi.org/", "http://dx.doi.org/", "doi:"):
+        if value.startswith(prefix):
+            value = value[len(prefix):]
+    return value.strip().rstrip(".")
+
+
+def normalize_hash_key(raw: str) -> str:
+    value = (raw or "").strip().lower()
+    if value.startswith("sha256:"):
+        value = value[len("sha256:"):]
+    return value if re.fullmatch(r"[0-9a-f]{64}", value) else ""
+
+
+def canonicalize_url(raw: str) -> str:
+    """Canonical URL identity for cross-round dedup and exclude lists.
+
+    Lowercases scheme/host, strips a leading ``www.``, drops default ports,
+    fragments, tracking query parameters, and trailing slashes so the same
+    source discovered through decorated links counts as discovered once.
+    """
+    value = (raw or "").strip()
+    if not value:
+        return ""
+    try:
+        parsed = urllib.parse.urlsplit(value if "://" in value else f"https://{value}")
+    except ValueError:
+        return value.lower()
+    scheme = (parsed.scheme or "https").lower()
+    host = (parsed.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    netloc = host
+    if port and not (scheme == "https" and port == 443) and not (scheme == "http" and port == 80):
+        netloc = f"{host}:{port}"
+    path = re.sub(r"/{2,}", "/", parsed.path or "/")
+    if path != "/" and path.endswith("/"):
+        path = path[:-1]
+    kept = [
+        (key, val)
+        for key, val in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+        if key.lower() not in TRACKING_QUERY_PARAMS
+    ]
+    query = urllib.parse.urlencode(sorted(kept))
+    return urllib.parse.urlunsplit((scheme, netloc, path, query, ""))
+
+
+def source_identity_keys(record: dict[str, Any]) -> set[str]:
+    """Return every stable identity alias available for a source."""
+    keys: set[str] = set()
+    for key in CONTENT_HASH_KEYS:
+        value = normalize_hash_key(str(record.get(key) or ""))
+        if value:
+            keys.add(f"sha256:{value}")
+    doi = normalize_doi_key(str(record.get("doi") or record.get("DOI") or ""))
+    if doi:
+        keys.add(f"doi:{doi}")
+    openalex_id = normalize_openalex_work_id(str(record.get("openalex_id") or ""))
+    if openalex_id:
+        keys.add(f"openalex:{openalex_id}")
+    for key in ("canonical_url", "url", "link", "source_url"):
         value = record.get(key)
         if isinstance(value, str) and value.strip():
-            return f"{key.lower()}:{value.strip().lower()}"
+            doi_from_url = normalize_doi_key(value) if "doi.org/" in value.lower() else ""
+            if doi_from_url:
+                keys.add(f"doi:{doi_from_url}")
+            canonical_url = canonicalize_url(value)
+            if canonical_url:
+                keys.add(f"url:{canonical_url}")
+    for key in ("source_id", "stable_id", "provider_id", "id"):
+        stable_id = str(record.get(key) or "").strip()
+        if stable_id:
+            keys.add(f"id:{stable_id.lower()}")
     title = str(record.get("title") or "").strip().lower()
-    return "title:" + re.sub(r"\s+", " ", title)
+    if not keys and title:
+        keys.add("title:" + re.sub(r"\s+", " ", title))
+    return keys
+
+
+def source_key(record: dict[str, Any]) -> str:
+    """Return a deterministic primary identity for audit rows."""
+    keys = source_identity_keys(record)
+    for prefix in ("doi:", "openalex:", "url:", "id:", "sha256:", "title:"):
+        matching = sorted(key for key in keys if key.startswith(prefix))
+        if matching:
+            return matching[0]
+    return ""
+
+
+def candidate_exclude_urls(candidates: list[dict[str, str]], limit: int = EXCLUDE_URL_LIMIT) -> list[str]:
+    """Canonical exclude list carried into every discovery round.
+
+    Built from the full candidate corpus (existing plus newly discovered) so
+    known candidates never count as new discovery or consume search/read
+    budget again.
+    """
+    urls: list[str] = []
+    for row in candidates:
+        url = canonicalize_url(extract_url(row))
+        if url and url not in urls:
+            urls.append(url)
+        if len(urls) >= limit:
+            break
+    return urls
 
 
 def extract_url(record: dict[str, Any]) -> str:
@@ -1283,6 +1440,7 @@ def write_outputs(
         writer = csv.DictWriter(
             handle,
             fieldnames=[
+                "round",
                 "focus",
                 "query",
                 "reviewed_results",
@@ -1304,6 +1462,8 @@ def write_outputs(
                 "url",
                 "doi",
                 "openalex_id",
+                "source_id",
+                "content_sha256",
                 "snippet",
                 "review_status",
             ],
@@ -1320,6 +1480,8 @@ def write_outputs(
                 "url",
                 "doi",
                 "openalex_id",
+                "source_id",
+                "content_sha256",
                 "snippet",
                 "screening_status",
                 "screening_reason",
@@ -1337,6 +1499,8 @@ def write_outputs(
                 "url",
                 "doi",
                 "openalex_id",
+                "source_id",
+                "content_sha256",
                 "snippet",
                 "screening_status",
                 "screening_reason",
@@ -1464,10 +1628,10 @@ def existing_candidate_rows(path: Path | None, discovery_dir: Path | None) -> li
     deduped: list[dict[str, str]] = []
     seen: set[str] = set()
     for row in rows:
-        key = source_key(row)
-        if key in seen:
+        keys = source_identity_keys(row)
+        if not keys or keys & seen:
             continue
-        seen.add(key)
+        seen.update(keys)
         deduped.append(row)
     return deduped
 
@@ -1529,6 +1693,16 @@ def main() -> int:
     )
     parser.add_argument("--snowball-rounds", type=int, default=1)
     parser.add_argument("--snowball-limit", type=int, default=12)
+    parser.add_argument(
+        "--saturation-rounds",
+        type=int,
+        default=2,
+        help=(
+            "Discovery stops only after this many consecutive orthogonal rounds "
+            "add no new candidates (canonical exclude list and dedup applied). "
+            "The systematic-research saturation policy requires at least 2."
+        ),
+    )
     parser.add_argument("--existing-candidates-csv")
     parser.add_argument("--existing-discovery-dir")
     parser.add_argument(
@@ -1580,7 +1754,9 @@ def main() -> int:
         print(out_dir / "query_plan.csv")
         return 0
 
-    seen: set[str] = {source_key(row) for row in existing_candidates}
+    seen: set[str] = set()
+    for row in existing_candidates:
+        seen.update(source_identity_keys(row))
     candidates: list[dict[str, str]] = list(existing_candidates)
     initial_candidate_count = len(candidates)
     screened_sources, rejected_sources = existing_audit_rows(
@@ -1590,88 +1766,135 @@ def main() -> int:
     rejected_seen: set[str] = {source_key(row) for row in rejected_sources}
     protocol_rows: list[dict[str, Any]] = []
     research_ids: list[str] = []
-    queue = list(query_plan)
-    rounds_remaining = max(0, args.snowball_rounds)
+    rounds = orthogonal_query_rounds(query_plan)
+    saturation_rounds = max(2, args.saturation_rounds)
+    rounds_without_new = 0
+    completed_rounds = 0
     reviewed_total = 0
     idx = 0
-    while queue:
-        idx += 1
-        spec = queue.pop(0)
-        if idx > 1 and args.discovery_backend in {"web-search", "hybrid"}:
-            time.sleep(max(0.0, args.web_query_delay_sec))
-        raw_path = out_dir / "raw" / f"{idx:03d}_{slugify(spec.focus)}.json"
-        summary_path = out_dir / "summaries" / f"{idx:03d}_{slugify(spec.focus)}.md"
-        raw_path.parent.mkdir(parents=True, exist_ok=True)
-        summary_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = run_deep_research(
-            spec,
-            args.max_sources_per_query,
-            raw_path,
-            args.query_timeout_sec,
-            args.discovery_backend,
-            args.web_query_delay_sec,
-        )
-        records = source_records(payload)
-        reviewed_total += len(records)
-        write_summary(summary_path, spec, records)
+    additional_candidates = 0
+    stop_requested = False
+    for round_number, query_round in enumerate(rounds, start=1):
+        round_new_count = 0
+        round_conclusive_queries = 0
+        for spec in query_round:
+            idx += 1
+            if idx > 1 and args.discovery_backend in {"web-search", "hybrid"}:
+                time.sleep(max(0.0, args.web_query_delay_sec))
+            raw_path = out_dir / "raw" / f"{idx:03d}_{slugify(spec.focus)}.json"
+            summary_path = out_dir / "summaries" / f"{idx:03d}_{slugify(spec.focus)}.md"
+            raw_path.parent.mkdir(parents=True, exist_ok=True)
+            summary_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = run_deep_research(
+                spec,
+                args.max_sources_per_query,
+                raw_path,
+                args.query_timeout_sec,
+                args.discovery_backend,
+                args.web_query_delay_sec,
+                candidate_exclude_urls(candidates),
+            )
+            records = source_records(payload)
+            reviewed_total += len(records)
+            write_summary(summary_path, spec, records)
+            round_failed = bool(payload.get("error")) or (not records and bool(payload.get("errors")))
+            if not round_failed:
+                round_conclusive_queries += 1
 
-        new_count = 0
-        for record in records:
-            key = source_key(record)
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            new_count += 1
-            row = {
-                "focus": spec.focus,
-                "query": spec.query,
-                "title": str(record.get("title") or record.get("name") or "").strip(),
-                "url": extract_url(record),
-                "doi": extract_doi(record),
-                "openalex_id": str(record.get("openalex_id") or "").strip(),
-                "snippet": str(record.get("snippet") or record.get("summary") or "").strip()[:500],
-            }
-            screened_row = {
-                **row,
-                "screening_status": "unreviewed",
-                "screening_reason": "agent_review_required",
-            }
-            screened_key = source_key(screened_row)
-            if screened_key not in screened_seen:
-                screened_seen.add(screened_key)
-                screened_sources.append(screened_row)
-            if row["title"] or row["url"] or row["doi"] or row["openalex_id"]:
-                candidates.append({**row, "review_status": "agent_review_required"})
-            elif screened_key not in rejected_seen:
-                rejected_seen.add(screened_key)
-                rejected_sources.append(screened_row)
+            new_count = 0
+            for record in records:
+                identity_keys = source_identity_keys(record)
+                if not identity_keys or identity_keys & seen:
+                    continue
+                seen.update(identity_keys)
+                new_count += 1
+                row = {
+                    "focus": spec.focus,
+                    "query": spec.query,
+                    "title": str(record.get("title") or record.get("name") or "").strip(),
+                    "url": extract_url(record),
+                    "doi": extract_doi(record),
+                    "openalex_id": str(record.get("openalex_id") or "").strip(),
+                    "source_id": str(
+                        record.get("source_id")
+                        or record.get("stable_id")
+                        or record.get("provider_id")
+                        or record.get("id")
+                        or ""
+                    ).strip(),
+                    "content_sha256": next(
+                        (
+                            normalize_hash_key(str(record.get(key) or ""))
+                            for key in CONTENT_HASH_KEYS
+                            if normalize_hash_key(str(record.get(key) or ""))
+                        ),
+                        "",
+                    ),
+                    "snippet": str(record.get("snippet") or record.get("summary") or "").strip()[:500],
+                }
+                screened_row = {
+                    **row,
+                    "screening_status": "unreviewed",
+                    "screening_reason": "agent_review_required",
+                }
+                screened_key = source_key(screened_row)
+                if screened_key not in screened_seen:
+                    screened_seen.add(screened_key)
+                    screened_sources.append(screened_row)
+                if row["title"] or row["url"] or row["doi"] or row["openalex_id"]:
+                    candidates.append({**row, "review_status": "agent_review_required"})
+                elif screened_key not in rejected_seen:
+                    rejected_seen.add(screened_key)
+                    rejected_sources.append(screened_row)
 
-        research_id = ""
-        if args.run_id:
-            resolver = {
-                "open-metadata": "openalex+crossref",
-                "web-search": "duckduckgo-html",
-                "hybrid": "hybrid:openalex+crossref+duckduckgo-html",
-                "ctox-deep-research": "ctox web deep-research",
-            }[args.discovery_backend]
-            research_id = register_research_log(args.run_id, spec, len(records), summary_path, raw_path, resolver)
-            research_ids.append(research_id)
-        protocol_rows.append(
-            {
-                "focus": spec.focus,
-                "query": spec.query,
-                "reviewed_results": len(records),
-                "unique_new_sources": new_count,
-                "excluded_or_duplicate": max(0, len(records) - new_count),
-                "research_id": research_id,
-                "raw_payload": str(raw_path),
-            }
-        )
+            round_new_count += new_count
+            research_id = ""
+            if args.run_id:
+                resolver = {
+                    "open-metadata": "openalex+crossref",
+                    "web-search": "google+brave+duckduckgo+bing",
+                    "hybrid": "hybrid:scholarly+google+brave+duckduckgo+bing",
+                    "ctox-deep-research": "ctox web deep-research",
+                }[args.discovery_backend]
+                research_id = register_research_log(
+                    args.run_id, spec, len(records), summary_path, raw_path, resolver
+                )
+                research_ids.append(research_id)
+            protocol_rows.append(
+                {
+                    "round": round_number,
+                    "focus": spec.focus,
+                    "query": spec.query,
+                    "reviewed_results": len(records),
+                    "unique_new_sources": new_count,
+                    "excluded_or_duplicate": max(0, len(records) - new_count),
+                    "research_id": research_id,
+                    "raw_payload": str(raw_path),
+                }
+            )
 
-        additional_candidates = len(candidates) - initial_candidate_count
+            additional_candidates = len(candidates) - initial_candidate_count
+            if args.target_additional_candidates > 0 and additional_candidates >= args.target_additional_candidates:
+                stop_requested = True
+                break
+            if reviewed_total >= args.target_reviewed:
+                stop_requested = True
+                break
+
+        if stop_requested:
+            break
+        completed_rounds += 1
+        if round_new_count > 0:
+            rounds_without_new = 0
+        elif round_conclusive_queries == len(query_round):
+            rounds_without_new += 1
         if args.target_additional_candidates > 0 and additional_candidates >= args.target_additional_candidates:
             break
         if reviewed_total >= args.target_reviewed:
+            break
+        if rounds_without_new >= saturation_rounds:
+            # Saturation requires complete multi-facet rounds. Individual empty
+            # queries never advance this counter.
             break
 
     write_outputs(out_dir, protocol_rows, candidates, screened_sources, rejected_sources, query_plan, research_ids)
@@ -1685,6 +1908,10 @@ def main() -> int:
         "additional_unique_sources": len(candidates) - initial_candidate_count,
         "screened_unique_sources": len(screened_sources),
         "rejected_sources": len(rejected_sources),
+        "saturation_rounds_required": saturation_rounds,
+        "completed_query_rounds": completed_rounds,
+        "consecutive_rounds_without_new": rounds_without_new,
+        "saturated": rounds_without_new >= saturation_rounds,
         "research_logs": len([r for r in research_ids if r]),
         "research_ids_file": str(out_dir / "research_ids.txt"),
         "search_protocol_csv": str(out_dir / "search_protocol.csv"),

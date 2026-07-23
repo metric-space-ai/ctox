@@ -2377,6 +2377,127 @@ mod tests {
     }
 
     #[test]
+    fn crossref_fixture_yields_doi_record_oa_pdf_and_references() {
+        // Stable-fixture Crossref work: DOI record, CC-licensed PDF link,
+        // and a reference list with duplicate/mixed-case DOIs.
+        let item = json!({
+            "title": ["Propeller load measurement rig"],
+            "DOI": "10.1234/prop.rig",
+            "URL": "https://doi.org/10.1234/prop.rig",
+            "container-title": ["Journal of Test Engineering"],
+            "type": "journal-article",
+            "published-print": {"date-parts": [[2021]]},
+            "license": [
+                {"URL": "https://creativecommons.org/licenses/by/4.0/"},
+            ],
+            "link": [
+                {"content-type": "text/html", "URL": "https://publisher.example/article"},
+                {"content-type": "application/pdf", "URL": "https://publisher.example/article.pdf"},
+            ],
+            "reference": [
+                {"DOI": "10.5555/Ref.A"},
+                {"DOI": "10.5555/ref.a"},
+                {"DOI": "10.5555/ref.b"},
+                {"key": "no-doi-reference"},
+            ],
+        });
+        let result = crossref_item_to_result(&item, 1).expect("crossref item converts");
+        assert_eq!(result.provider, "crossref");
+        assert_eq!(result.doi.as_deref(), Some("10.1234/prop.rig"));
+        assert_eq!(result.source_id, "10.1234/prop.rig");
+        assert_eq!(result.year, Some(2021));
+        assert_eq!(
+            result.publisher.as_deref(),
+            Some("Journal of Test Engineering")
+        );
+        assert_eq!(
+            result.open_access_pdf.as_deref(),
+            Some("https://publisher.example/article.pdf")
+        );
+        assert_eq!(
+            result.open_access_license.as_deref(),
+            Some("https://creativecommons.org/licenses/by/4.0/")
+        );
+        assert_eq!(
+            result.reference_ids,
+            vec!["10.5555/ref.a".to_string(), "10.5555/ref.b".to_string()],
+            "references are normalized, deduplicated, and usable for follow-references rounds"
+        );
+    }
+
+    #[test]
+    fn openalex_fixture_yields_doi_oa_location_and_referenced_works() {
+        let item = json!({
+            "id": "https://openalex.org/W4242424242",
+            "display_name": "UAV propeller vibration dataset",
+            "doi": "https://doi.org/10.5281/zenodo.20111572",
+            "publication_year": 2023,
+            "language": "en",
+            "primary_location": {
+                "source": {"display_name": "Zenodo"},
+                "pdf_url": Value::Null,
+            },
+            "best_oa_location": {
+                "pdf_url": "https://zenodo.org/api/records/20111572/files/Propeller_Database.zip/content",
+                "license": "cc-by-4.0",
+            },
+            "referenced_works": [
+                "https://openalex.org/W111",
+                "https://openalex.org/W222",
+            ],
+        });
+        let result = openalex_item_to_result(
+            &item,
+            "https://doi.org/10.5281/zenodo.20111572".to_string(),
+            "UAV propeller vibration dataset".to_string(),
+            Some("https://doi.org/10.5281/zenodo.20111572".to_string()),
+            1,
+        );
+        assert_eq!(result.provider, "openalex");
+        assert_eq!(result.source_id, "https://openalex.org/W4242424242");
+        assert_eq!(result.publisher.as_deref(), Some("Zenodo"));
+        assert_eq!(result.year, Some(2023));
+        assert_eq!(
+            result.open_access_pdf.as_deref(),
+            Some("https://zenodo.org/api/records/20111572/files/Propeller_Database.zip/content"),
+            "OA location resolution ends at retrievable original content"
+        );
+        assert_eq!(result.open_access_license.as_deref(), Some("cc-by-4.0"));
+        assert_eq!(
+            result.reference_ids,
+            vec![
+                "https://openalex.org/W111".to_string(),
+                "https://openalex.org/W222".to_string()
+            ],
+            "referenced works remain available for citation-following rounds"
+        );
+    }
+
+    #[test]
+    fn semantic_scholar_fixture_prefers_doi_references_with_paper_id_fallback() {
+        let item = json!({
+            "references": [
+                {"externalIds": {"DOI": "10.7777/Cited.One"}, "paperId": "S2P1"},
+                {"paperId": "S2P2"},
+                {"externalIds": {}, "paperId": ""},
+            ],
+        });
+        assert_eq!(
+            semantic_scholar_reference_ids(&item),
+            vec!["10.7777/cited.one".to_string(), "S2P2".to_string()],
+            "DOI references normalize; DOI-less references fall back to the paper id"
+        );
+    }
+
+    #[test]
+    fn openalex_work_by_id_rejects_invalid_ids_before_any_fetch() {
+        let root = unique_test_root("openalex-invalid-id");
+        let error = openalex_work_by_id(&root, "not-a-work-id").unwrap_err();
+        assert!(error.to_string().contains("invalid OpenAlex work id"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     #[ignore = "live network: hits real annas-archive.org"]
     fn live_annas_archive_returns_results() {
         let root = std::env::temp_dir().join("ctox-scholarly-live");

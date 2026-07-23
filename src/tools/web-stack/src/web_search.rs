@@ -10134,6 +10134,47 @@ mod tests {
     }
 
     #[test]
+    fn auto_provider_cascade_keeps_google_first_multi_engine_order() {
+        // Regression pin for the benchmark-era multi-engine policy: Auto must
+        // try Google first, then Brave, DuckDuckGo, and Bing. A silent
+        // collapse to a single engine (or a demoted Google adapter) fails
+        // this guard.
+        let root = unique_test_root("provider-cascade");
+        let candidates = search_provider_candidates(&root, ProviderKind::Auto);
+        assert_eq!(
+            candidates,
+            vec![
+                ProviderKind::Google,
+                ProviderKind::Brave,
+                ProviderKind::DuckDuckGo,
+                ProviderKind::Bing,
+            ]
+        );
+        assert_eq!(
+            search_provider_candidates(&root, ProviderKind::Brave),
+            vec![ProviderKind::Brave],
+            "an explicitly pinned provider must not expand into the cascade"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn auto_provider_budget_defaults_to_full_cascade() {
+        let root = unique_test_root("provider-budget");
+        assert_eq!(
+            auto_provider_budget(&root, ProviderKind::Auto),
+            4,
+            "Auto must be able to try every cascade engine before giving up"
+        );
+        assert_eq!(
+            auto_provider_budget(&root, ProviderKind::Brave),
+            usize::MAX,
+            "a pinned provider is not budget-limited"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn model_facing_context_fences_untrusted_page_content() {
         let doc = EvidenceDoc {
             url: "https://evil.example/page".to_string(),
