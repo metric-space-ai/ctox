@@ -511,6 +511,14 @@ impl PersistentSession {
         )
     }
 
+    /// Start a fresh worker session that cannot resume the process-wide
+    /// persistent harness thread.
+    pub(crate) fn start_isolated(root: &Path, settings: &BTreeMap<String, String>) -> Result<Self> {
+        Self::start_with_instructions_and_tool_mode(
+            root, settings, None, false, false, false, false, false,
+        )
+    }
+
     /// Start a worker session without configured MCP/plugin tool servers.
     ///
     /// The shell and apply_patch tools remain available; this only prevents

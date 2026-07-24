@@ -10569,7 +10569,16 @@ fn chat_turn_session_options_for_queue_job(
             required_initial_tool: None,
         };
     }
-    turn_loop::ChatTurnSessionOptions::default()
+    turn_loop::ChatTurnSessionOptions {
+        // An explicit external thread key is already durable conversation
+        // identity. Reusing the process-wide harness thread here leaks tool
+        // history and active context across unrelated CLI/API conversations.
+        force_isolated_session: job
+            .thread_key
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
+        ..turn_loop::ChatTurnSessionOptions::default()
+    }
 }
 
 fn queue_job_reuses_persistent_session(options: &turn_loop::ChatTurnSessionOptions) -> bool {
@@ -31846,12 +31855,17 @@ Business OS command:
         job.prompt = "Write a short implementation note.".to_string();
         let options = chat_turn_session_options_for_queue_job(&job);
         assert!(!options.disable_mcp_servers);
-        assert!(!options.force_isolated_session);
+        assert!(options.force_isolated_session);
         assert!(!options.plain_prompt);
         assert!(options.base_instructions.is_none());
         assert!(options.required_initial_tool.is_none());
-        assert!(queue_job_reuses_persistent_session(&options));
+        assert!(!queue_job_reuses_persistent_session(&options));
         assert_eq!(options.turn_timeout_secs_override, None);
+
+        job.thread_key = None;
+        let options = chat_turn_session_options_for_queue_job(&job);
+        assert!(!options.force_isolated_session);
+        assert!(queue_job_reuses_persistent_session(&options));
     }
 
     #[test]

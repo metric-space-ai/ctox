@@ -756,6 +756,9 @@ where
                     options.base_instructions.as_deref(),
                 )?,
             )
+        } else if options.force_isolated_session {
+            emit("session-isolated");
+            Some(PersistentSession::start_isolated(root, &operator_settings)?)
         } else {
             Some(PersistentSession::start(root, &operator_settings)?)
         }
