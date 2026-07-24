@@ -3780,12 +3780,14 @@ fn handle_system_skills_command(root: &Path, args: &[String]) -> anyhow::Result<
             let name = args
                 .get(1)
                 .context("usage: ctox skills system show <name> [--body]")?;
-            skill_store::bootstrap_embedded_system_skills(root)?;
-            let skills = skill_store::list_system_skill_bundles(root)?;
-            let skill = skills
-                .into_iter()
-                .find(|skill| skill.skill_name == *name || skill.skill_id == *name)
-                .with_context(|| format!("system skill not found: {name}"))?;
+            let skill = match skill_store::load_system_skill_bundle_by_key(root, name)? {
+                Some(skill) => skill,
+                None => {
+                    skill_store::bootstrap_embedded_system_skills(root)?;
+                    skill_store::load_system_skill_bundle_by_key(root, name)?
+                        .with_context(|| format!("system skill not found: {name}"))?
+                }
+            };
             let include_body = args.iter().any(|arg| arg == "--body");
             let body = if include_body {
                 skill_store::load_skill_body_by_name(root, &skill.skill_name)?

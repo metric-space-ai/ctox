@@ -145,6 +145,37 @@ pub fn list_system_skill_bundles(root: &Path) -> Result<Vec<SkillBundleView>> {
         .collect())
 }
 
+pub fn load_system_skill_bundle_by_key(
+    root: &Path,
+    skill_name_or_id: &str,
+) -> Result<Option<SkillBundleView>> {
+    let conn = open_db(root)?;
+    conn.query_row(
+        &format!(
+            "SELECT skill_id, skill_name, class, state, description, source_path, cluster, updated_at
+             FROM {SKILL_BUNDLES_TABLE}
+             WHERE (skill_name = ?1 OR skill_id = ?1)
+               AND class = 'ctox_core'
+               AND source_path LIKE 'embedded:skills/system/%'
+             LIMIT 1"
+        ),
+        params![skill_name_or_id],
+        |row| {
+            Ok(SkillBundleView {
+                skill_id: row.get(0)?,
+                skill_name: row.get(1)?,
+                class: row.get(2)?,
+                state: row.get(3)?,
+                description: row.get(4)?,
+                source_path: row.get(5)?,
+                cluster: row.get(6)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(anyhow::Error::from)
+}
+
 pub fn list_user_skill_bundles(root: &Path) -> Result<Vec<SkillBundleView>> {
     bootstrap_from_roots(root)?;
     let bundles = list_skill_bundles(root)?;
@@ -1624,6 +1655,27 @@ mod tests {
         assert!(load_skill_deliverable_contract(&root, "no-such-skill-xyz")
             .expect("load")
             .is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn system_skill_lookup_reads_the_existing_catalog_without_rebootstrap() {
+        let root =
+            std::env::temp_dir().join(format!("ctox-system-skill-lookup-{}", now_epoch_string()));
+        std::fs::create_dir_all(&root).expect("create root");
+        bootstrap_embedded_system_skills(&root).expect("bootstrap");
+
+        let skill = load_system_skill_bundle_by_key(&root, "systematic-research")
+            .expect("lookup")
+            .expect("systematic research skill");
+        assert_eq!(skill.skill_name, "systematic-research");
+        assert_eq!(skill.class, "ctox_core");
+
+        let by_id = load_system_skill_bundle_by_key(&root, &skill.skill_id)
+            .expect("lookup by id")
+            .expect("systematic research skill by id");
+        assert_eq!(by_id.skill_name, skill.skill_name);
+
         let _ = std::fs::remove_dir_all(&root);
     }
 }
