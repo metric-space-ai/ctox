@@ -12906,6 +12906,515 @@ mod tests {
         assert_eq!(server.join().expect("fixture server"), 1);
     }
 
+    #[test]
+    fn local_fixture_admits_pdf_with_hash_bound_artifact() {
+        let body = mock_pdf_bytes_with_pages(&[
+            "Propeller test rig report with measured thrust, torque, and shaft speed \
+             tables for the rolling bearing load investigation.",
+        ]);
+        let (url, server) =
+            spawn_http_fixture(vec![FixtureReply::ok("application/pdf", body.clone())], 1);
+        let mut config = test_config(ProviderKind::Brave);
+        config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+        let hit = fixture_hit(&format!("{url}/rig-report.pdf"));
+        let (doc, _) = build_evidence_doc(&config, "propeller test rig thrust torque", &hit)
+            .expect("pdf evidence");
+
+        assert!(doc.is_pdf);
+        assert!(doc.evidence_eligible);
+        assert_eq!(doc.verification_status, "verified");
+        let receipt = doc.response_receipt.as_ref().expect("pdf receipt");
+        assert_eq!(receipt.status, 200);
+        assert_eq!(receipt.content_kind, "pdf");
+        assert_eq!(receipt.byte_count, body.len());
+        let expected_hash = snapshot_hash(&body);
+        assert_eq!(receipt.sha256.as_deref(), Some(expected_hash.as_str()));
+        assert_eq!(doc.snapshot_hash.as_deref(), Some(expected_hash.as_str()));
+        assert_eq!(doc.response_body.as_deref(), Some(body.as_slice()));
+        let artifact = doc.response_artifact_path.as_deref().expect("pdf artifact");
+        assert!(artifact.ends_with(".pdf"), "artifact={artifact}");
+        assert_eq!(fs::read(artifact).expect("pdf artifact bytes"), body);
+        assert!(evidence_doc_has_immutable_response(&doc));
+        assert_eq!(server.join().expect("fixture server"), 1);
+    }
+
+    #[test]
+    fn local_fixture_admits_html_with_hash_bound_artifact() {
+        let body = br#"<html><head><title>Thrust stand calibration report</title></head><body><main><article><h1>Thrust stand calibration report</h1><p>The calibration campaign measured axial thrust, reaction torque, and shaft speed for the instrumented propeller test stand across the full operating envelope.</p></article></main></body></html>"#.to_vec();
+        let (url, server) =
+            spawn_http_fixture(vec![FixtureReply::ok("text/html", body.clone())], 1);
+        let mut config = test_config(ProviderKind::Brave);
+        config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+        let hit = fixture_hit(&format!("{url}/calibration-report"));
+        let (doc, _) =
+            build_evidence_doc(&config, "thrust stand calibration", &hit).expect("html evidence");
+
+        assert!(doc.evidence_eligible);
+        assert_eq!(doc.verification_status, "verified");
+        assert!(doc.page_text.contains("calibration campaign"));
+        let receipt = doc.response_receipt.as_ref().expect("html receipt");
+        assert_eq!(receipt.status, 200);
+        assert_eq!(receipt.content_kind, "html");
+        assert_eq!(receipt.byte_count, body.len());
+        let expected_hash = snapshot_hash(&body);
+        assert_eq!(receipt.sha256.as_deref(), Some(expected_hash.as_str()));
+        assert_eq!(doc.snapshot_hash.as_deref(), Some(expected_hash.as_str()));
+        assert_eq!(doc.response_body.as_deref(), Some(body.as_slice()));
+        let artifact = doc
+            .response_artifact_path
+            .as_deref()
+            .expect("html artifact");
+        assert!(artifact.ends_with(".html"), "artifact={artifact}");
+        assert_eq!(fs::read(artifact).expect("html artifact bytes"), body);
+        assert!(evidence_doc_has_immutable_response(&doc));
+        assert_eq!(server.join().expect("fixture server"), 1);
+    }
+
+    #[test]
+    fn local_fixture_admits_json_data_with_hash_bound_artifact() {
+        let body = br#"[{"rpm":1000,"thrust_N":1.2,"torque_Nm":0.03},{"rpm":2000,"thrust_N":4.1,"torque_Nm":0.11}]"#.to_vec();
+        let (url, server) =
+            spawn_http_fixture(vec![FixtureReply::ok("application/json", body.clone())], 1);
+        let mut config = test_config(ProviderKind::Brave);
+        config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+        let hit = fixture_hit(&format!("{url}/measurements.json"));
+        let (doc, _) =
+            build_evidence_doc(&config, "rpm thrust torque", &hit).expect("json data evidence");
+
+        assert!(doc.evidence_eligible);
+        assert_eq!(doc.verification_status, "verified");
+        assert_eq!(doc.summary, "Immutable original data file retrieved.");
+        assert!(evidence_doc_is_data_file(&doc));
+        let receipt = doc.response_receipt.as_ref().expect("json receipt");
+        assert_eq!(receipt.status, 200);
+        assert_eq!(receipt.content_kind, "data_json");
+        assert_eq!(receipt.byte_count, body.len());
+        let expected_hash = snapshot_hash(&body);
+        assert_eq!(receipt.sha256.as_deref(), Some(expected_hash.as_str()));
+        assert_eq!(doc.snapshot_hash.as_deref(), Some(expected_hash.as_str()));
+        // Data-file bytes move out of the doc into the hash-addressed artifact.
+        assert!(doc.response_body.is_none());
+        let artifact = doc
+            .response_artifact_path
+            .as_deref()
+            .expect("json artifact");
+        assert!(artifact.ends_with(".json"), "artifact={artifact}");
+        assert_eq!(fs::read(artifact).expect("json artifact bytes"), body);
+        assert!(evidence_doc_has_immutable_response(&doc));
+        assert_eq!(server.join().expect("fixture server"), 1);
+    }
+
+    #[test]
+    fn local_fixture_admits_csv_data_with_hash_bound_artifact() {
+        let body = b"rpm,thrust_N,torque_Nm\n1000,1.2,0.03\n2000,4.1,0.11\n".to_vec();
+        let (url, server) = spawn_http_fixture(vec![FixtureReply::ok("text/csv", body.clone())], 1);
+        let mut config = test_config(ProviderKind::Brave);
+        config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+        let hit = fixture_hit(&format!("{url}/thrust-stand.csv"));
+        let (doc, _) =
+            build_evidence_doc(&config, "rpm thrust torque", &hit).expect("csv data evidence");
+
+        assert!(doc.evidence_eligible);
+        assert_eq!(doc.verification_status, "verified");
+        assert!(evidence_doc_is_data_file(&doc));
+        let receipt = doc.response_receipt.as_ref().expect("csv receipt");
+        assert_eq!(receipt.status, 200);
+        assert_eq!(receipt.content_kind, "data_delimited");
+        assert_eq!(receipt.byte_count, body.len());
+        let expected_hash = snapshot_hash(&body);
+        assert_eq!(receipt.sha256.as_deref(), Some(expected_hash.as_str()));
+        assert_eq!(doc.snapshot_hash.as_deref(), Some(expected_hash.as_str()));
+        assert!(doc.response_body.is_none());
+        let artifact = doc.response_artifact_path.as_deref().expect("csv artifact");
+        assert!(artifact.ends_with(".csv"), "artifact={artifact}");
+        assert_eq!(fs::read(artifact).expect("csv artifact bytes"), body);
+        assert!(evidence_doc_has_immutable_response(&doc));
+        assert_eq!(server.join().expect("fixture server"), 1);
+    }
+
+    #[test]
+    fn ctox_web_read_tool_binds_fixture_data_receipt_to_the_artifact() {
+        let root = unique_test_root("ctox_web_read_fixture_data");
+        set_runtime_config(&root, "CTOX_WEB_EGRESS_ALLOW", "127.0.0.1");
+        let body = b"rpm,thrust_N,torque_Nm\n1000,1.2,0.03\n2000,4.1,0.11\n".to_vec();
+        let (url, server) = spawn_http_fixture(vec![FixtureReply::ok("text/csv", body.clone())], 1);
+        let payload = run_ctox_web_read_tool(
+            &root,
+            &DirectWebReadRequest {
+                url: format!("{url}/thrust-stand.csv"),
+                query: Some("rpm thrust torque".to_string()),
+                find: Vec::new(),
+                workspace: None,
+                include_full_text: false,
+                timeout_cap_ms: None,
+                max_artifact_bytes: None,
+                country: None,
+            },
+        )
+        .expect("typed read");
+
+        assert_eq!(payload["ok"], json!(true));
+        assert_eq!(payload["http_status"], json!(200));
+        assert_eq!(payload["response_content_kind"], "data_delimited");
+        assert_eq!(payload["transport_evidence_eligible"], json!(true));
+        assert_eq!(payload["evidence_eligible"], json!(true));
+        assert!(payload["evidence_relevance_score"]
+            .as_i64()
+            .is_some_and(|score| score >= 8));
+        let expected_hash = snapshot_hash(&body);
+        assert_eq!(payload["snapshot_hash"], json!(expected_hash));
+        assert_eq!(payload["byte_count"], json!(body.len()));
+        assert_eq!(payload["response_metadata"]["sha256"], json!(expected_hash));
+        assert_eq!(
+            payload["response_metadata"]["byte_count"],
+            json!(body.len())
+        );
+        let artifact = payload["response_artifact_path"]
+            .as_str()
+            .expect("typed read artifact");
+        assert!(artifact.ends_with(".csv"), "artifact={artifact}");
+        assert_eq!(fs::read(artifact).expect("artifact bytes"), body);
+        assert_eq!(server.join().expect("fixture server"), 1);
+    }
+
+    #[test]
+    fn local_fixture_rejects_204_empty_success_without_evidence() {
+        let (url, server) =
+            spawn_http_fixture(vec![FixtureReply::status(204, "text/plain", Vec::new())], 1);
+        let mut config = test_config(ProviderKind::Brave);
+        config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+        let (doc, _) = build_evidence_doc(&config, "empty success", &fixture_hit(&url))
+            .expect("204 read still produces an audited doc");
+
+        // 204 is inside the 2xx range but carries no content: it must fail
+        // closed without a snapshot, an artifact, or a successful empty result.
+        assert_eq!(doc.http_status, Some(204));
+        assert!(!doc.evidence_eligible);
+        assert_eq!(doc.verification_status, "unverified");
+        assert!(doc.snapshot_hash.is_none());
+        assert!(doc.response_body.is_none());
+        assert!(doc.response_artifact_path.is_none());
+        let receipt = doc.response_receipt.expect("204 receipt");
+        assert_eq!(receipt.status, 204);
+        assert_eq!(receipt.byte_count, 0);
+        assert!(receipt.sha256.is_none());
+        assert_eq!(server.join().expect("fixture server"), 1);
+    }
+
+    #[test]
+    fn local_fixture_fails_closed_on_hard_404_and_410() {
+        for status in [404_u16, 410] {
+            let (url, server) = spawn_http_fixture(
+                vec![FixtureReply::status(status, "text/html", b"gone".to_vec())],
+                1,
+            );
+            let mut config = test_config(ProviderKind::Brave);
+            config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+            let root = config.root.clone();
+            let mut session = WebSearchSession::new(&root, &config).expect("search session");
+            let doc = session
+                .fetch_evidence_doc("missing source", &fixture_hit(&url))
+                .expect("hard failure still produces an audited doc");
+
+            assert!(
+                !doc.evidence_eligible,
+                "status {status} must not be eligible"
+            );
+            assert_eq!(doc.verification_status, "failed");
+            assert_eq!(doc.http_status, Some(status));
+            assert!(doc.page_text.is_empty());
+            assert!(doc.snapshot_hash.is_none());
+            assert!(doc.response_body.is_none());
+            assert!(doc.response_artifact_path.is_none());
+            let receipt = doc.response_receipt.expect("failure receipt");
+            assert_eq!(receipt.status, status);
+            assert_eq!(
+                receipt.admission_rejection_reason.as_deref(),
+                Some("http_fetch_failed")
+            );
+            assert_eq!(receipt.byte_count, 0);
+            assert!(receipt.sha256.is_none());
+            assert_eq!(server.join().expect("fixture server"), 1);
+        }
+    }
+
+    #[test]
+    fn local_fixture_rejects_bot_challenge_walls() {
+        for (path, body) in [
+            (
+                "/verify",
+                br#"<html><head><title>Just a moment</title></head><body><div class="cf-turnstile"></div><p>Confirm you are a human to continue.</p></body></html>"#.to_vec(),
+            ),
+            (
+                "/challenge",
+                br#"<html><head><title>Security check</title></head><body><main><p>Thrust stand calibration notes with measured torque and speed tables for the fixture article body content.</p></main></body></html>"#.to_vec(),
+            ),
+        ] {
+            let (url, server) =
+                spawn_http_fixture(vec![FixtureReply::ok("text/html", body)], 1);
+            let mut config = test_config(ProviderKind::Brave);
+            config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+            let hit = fixture_hit(&format!("{url}{path}"));
+            let (doc, _) = build_evidence_doc(&config, "source facts", &hit)
+                .expect("challenge page evidence");
+            assert!(!doc.evidence_eligible, "{path} must fail closed");
+            assert_eq!(
+                doc.response_receipt
+                    .as_ref()
+                    .and_then(|receipt| receipt.admission_rejection_reason.as_deref()),
+                Some("bot_or_captcha_wall"),
+                "{path} must be classified through the challenge taxonomy"
+            );
+            assert_eq!(server.join().expect("fixture server"), 1);
+        }
+    }
+
+    #[test]
+    fn local_fixture_rejects_redirects_to_non_content_pages() {
+        let body = br#"<html><head><title>Record</title></head><body><main><p>Sorry, this record was not found. It may have been removed from the catalog.</p></main></body></html>"#.to_vec();
+        let (url, server) = spawn_http_fixture(
+            vec![
+                FixtureReply::redirect("/gone"),
+                FixtureReply::ok("text/html", body),
+            ],
+            2,
+        );
+        let mut config = test_config(ProviderKind::Brave);
+        config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+        let (doc, _) = build_evidence_doc(&config, "catalog record", &fixture_hit(&url))
+            .expect("redirected evidence");
+        assert!(!doc.evidence_eligible);
+        let receipt = doc.response_receipt.expect("redirect receipt");
+        assert!(receipt.redirected);
+        assert_eq!(receipt.final_url, format!("{url}/gone"));
+        assert_eq!(
+            receipt.admission_rejection_reason.as_deref(),
+            Some("redirected_to_non_content_page")
+        );
+        assert_eq!(server.join().expect("fixture server"), 2);
+    }
+
+    #[test]
+    fn local_fixture_binds_multi_hop_redirects_to_the_terminal_body() {
+        let body = b"The terminal multi hop response contains the stable source content for audit."
+            .to_vec();
+        let (url, server) = spawn_http_fixture(
+            vec![
+                FixtureReply::redirect("/step-2"),
+                FixtureReply::redirect("/final"),
+                FixtureReply::ok("text/plain", body.clone()),
+            ],
+            3,
+        );
+        let mut config = test_config(ProviderKind::Brave);
+        config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+        let (doc, _) = build_evidence_doc(&config, "multi hop source", &fixture_hit(&url))
+            .expect("multi hop evidence");
+        assert!(doc.evidence_eligible);
+        let receipt = doc.response_receipt.as_ref().expect("multi hop receipt");
+        assert!(receipt.redirected);
+        assert_eq!(receipt.status, 200);
+        assert_eq!(receipt.final_url, format!("{url}/final"));
+        assert_eq!(
+            receipt.redirect_chain,
+            vec![url.clone(), format!("{url}/final")]
+        );
+        // Snapshot, receipt, and artifact must bind to the terminal body, not
+        // to any intermediate hop.
+        let expected_hash = snapshot_hash(&body);
+        assert_eq!(receipt.sha256.as_deref(), Some(expected_hash.as_str()));
+        assert_eq!(doc.snapshot_hash.as_deref(), Some(expected_hash.as_str()));
+        assert!(evidence_doc_has_immutable_response(&doc));
+        assert_eq!(server.join().expect("fixture server"), 3);
+    }
+
+    #[test]
+    fn zip_manifest_binds_member_paths_and_member_hashes() {
+        let root = unique_test_root("zip_manifest_binding");
+        fs::create_dir_all(&root).expect("manifest root");
+        let csv = b"rpm,thrust_N,torque_Nm\n1000,1.2,0.03\n".to_vec();
+        let table = b"rpm thrust_N\n1000 1.2\n2000 4.1\n".to_vec();
+        let archive_bytes = {
+            let cursor = Cursor::new(Vec::new());
+            let mut writer = zip::ZipWriter::new(cursor);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            writer.add_directory("data/", options).expect("dir member");
+            writer
+                .start_file("data/run-01.csv", options)
+                .expect("csv member");
+            writer.write_all(&csv).expect("csv bytes");
+            writer
+                .start_file("data/run-02.txt", options)
+                .expect("txt member");
+            writer.write_all(&table).expect("txt bytes");
+            writer.finish().expect("finish zip").into_inner()
+        };
+        let archive_path = root.join("archive.zip");
+        fs::write(&archive_path, &archive_bytes).expect("archive bytes");
+        let archive_hash = snapshot_hash(&archive_bytes);
+
+        let receipt =
+            persist_zip_archive_manifest(&archive_path, &archive_hash).expect("manifest receipt");
+        assert_eq!(
+            receipt["schema_version"],
+            "ctox.web.zip-manifest-receipt.v2"
+        );
+        assert_eq!(receipt["archive_sha256"], json!(archive_hash));
+        assert_eq!(receipt["member_count"], json!(3));
+        assert_eq!(receipt["data_member_count"], json!(2));
+
+        let manifest_path = receipt["manifest_path"]
+            .as_str()
+            .expect("manifest path")
+            .to_string();
+        let manifest_bytes = fs::read(&manifest_path).expect("manifest bytes");
+        // The receipt hash binds to the exact persisted manifest bytes.
+        assert_eq!(
+            receipt["manifest_sha256"],
+            json!(snapshot_hash(&manifest_bytes))
+        );
+        let manifest: Value = serde_json::from_slice(&manifest_bytes).expect("manifest json");
+        assert_eq!(manifest["schema_version"], "ctox.web.zip-manifest.v2");
+        assert_eq!(manifest["archive_sha256"], json!(archive_hash));
+        assert_eq!(manifest["member_count"], receipt["member_count"]);
+
+        let members = manifest["members"].as_array().expect("members");
+        let paths: Vec<&str> = members
+            .iter()
+            .filter_map(|member| member["path"].as_str())
+            .collect();
+        assert_eq!(paths, ["data/", "data/run-01.csv", "data/run-02.txt"]);
+        assert!(!paths.contains(&"data/nonexistent.csv"));
+
+        // Member SHA-256 binds to the member bytes inside the immutable archive,
+        // cross-checked against an independent hasher.
+        let member_hash = |name: &str| {
+            members
+                .iter()
+                .find(|member| member["path"] == name)
+                .and_then(|member| member["sha256"].as_str().map(str::to_string))
+        };
+        let independent = |bytes: &[u8]| {
+            let mut hasher = Sha256::new();
+            hasher.update(bytes);
+            format!("sha256:{:x}", hasher.finalize())
+        };
+        assert_eq!(
+            member_hash("data/run-01.csv").as_deref(),
+            Some(independent(&csv).as_str())
+        );
+        assert_eq!(
+            member_hash("data/run-02.txt").as_deref(),
+            Some(independent(&table).as_str())
+        );
+        assert!(
+            member_hash("data/").is_none(),
+            "directory members carry no content hash"
+        );
+        assert!(member_hash("data/nonexistent.csv").is_none());
+
+        // Verified member paths are available only while the manifest file
+        // matches the hash recorded in the receipt.
+        let doc = EvidenceDoc {
+            url: "https://example.org/archive.zip".to_string(),
+            canonical_url: "https://example.org/archive.zip".to_string(),
+            title: "archive.zip".to_string(),
+            summary: String::new(),
+            verification_status: "verified".to_string(),
+            checked_at: 1,
+            http_status: Some(200),
+            snapshot_hash: Some(archive_hash.clone()),
+            source_tier: Some("primary".to_string()),
+            evidence_eligible: true,
+            is_pdf: false,
+            pdf_total_pages: None,
+            page_sections: Vec::new(),
+            excerpts: Vec::new(),
+            page_text: String::new(),
+            extracted_text_sha256: None,
+            find_results: Vec::new(),
+            raw_html: None,
+            response_body: Some(archive_bytes.clone()),
+            response_artifact_path: Some(archive_path.to_string_lossy().into_owned()),
+            response_archive_manifest: Some(receipt.clone()),
+            response_receipt: None,
+        };
+        let member_paths = verified_archive_member_paths(&doc).expect("verified member paths");
+        assert!(member_paths.contains("data/run-01.csv"));
+        assert!(member_paths.contains("data/run-02.txt"));
+        assert!(!member_paths.contains("data/nonexistent.csv"));
+
+        // A tampered manifest file no longer verifies against the receipt hash.
+        let mut tampered: Value = serde_json::from_slice(&manifest_bytes).expect("manifest json");
+        tampered["members"][1]["sha256"] =
+            json!("sha256:0000000000000000000000000000000000000000000000000000000000000000");
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&tampered).unwrap(),
+        )
+        .expect("tampered manifest bytes");
+        assert!(verified_archive_member_paths(&doc).is_none());
+
+        // A stale manifest from a different archive is never reused: a new
+        // archive hash forces regeneration bound to the new bytes.
+        let other_bytes = {
+            let cursor = Cursor::new(Vec::new());
+            let mut writer = zip::ZipWriter::new(cursor);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            writer
+                .start_file("other/run-99.csv", options)
+                .expect("other member");
+            writer
+                .write_all(b"rpm,thrust_N\n3000,9.9\n")
+                .expect("other bytes");
+            writer.finish().expect("finish other zip").into_inner()
+        };
+        fs::write(&archive_path, &other_bytes).expect("replace archive");
+        let other_hash = snapshot_hash(&other_bytes);
+        let other_receipt = persist_zip_archive_manifest(&archive_path, &other_hash)
+            .expect("regenerated manifest receipt");
+        assert_eq!(other_receipt["archive_sha256"], json!(other_hash));
+        let other_manifest: Value =
+            serde_json::from_slice(&fs::read(&manifest_path).expect("regenerated manifest"))
+                .expect("regenerated manifest json");
+        assert_eq!(other_manifest["archive_sha256"], json!(other_hash));
+        let other_paths: Vec<&str> = other_manifest["members"]
+            .as_array()
+            .expect("other members")
+            .iter()
+            .filter_map(|member| member["path"].as_str())
+            .collect();
+        assert_eq!(other_paths, ["other/run-99.csv"]);
+    }
+
+    #[test]
+    fn zip_manifest_rejects_unsafe_member_paths() {
+        let root = unique_test_root("zip_manifest_unsafe");
+        fs::create_dir_all(&root).expect("unsafe manifest root");
+        let archive_bytes = {
+            let cursor = Cursor::new(Vec::new());
+            let mut writer = zip::ZipWriter::new(cursor);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            writer
+                .start_file("../escape.txt", options)
+                .expect("zip-slip member");
+            writer.write_all(b"escape payload").expect("zip-slip bytes");
+            writer.finish().expect("finish unsafe zip").into_inner()
+        };
+        let archive_path = root.join("unsafe.zip");
+        fs::write(&archive_path, &archive_bytes).expect("unsafe archive bytes");
+        let archive_hash = snapshot_hash(&archive_bytes);
+        let error = persist_zip_archive_manifest(&archive_path, &archive_hash)
+            .expect_err("zip-slip member must be rejected");
+        assert!(
+            format!("{error:#}").contains("unsafe member path"),
+            "unexpected error: {error:#}"
+        );
+    }
+
     #[derive(Clone)]
     struct FixtureReply {
         status: u16,
