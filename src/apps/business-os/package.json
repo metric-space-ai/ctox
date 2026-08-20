@@ -24,6 +24,8 @@
     "qa:creator-browser": "node scripts/assert-creator-browser.mjs",
     "audit:app-quality": "node scripts/audit-app-quality.mjs",
     "qa:design-gates": "node scripts/run-design-quality-gates.mjs",
+    "shell:artifact": "node scripts/build-shell-artifact.mjs",
+    "test:shell-artifact": "node --test scripts/build-shell-artifact.test.mjs",
     "test:shared": "node --test shared/*.test.mjs",
     "test:app-store": "node modules/app-store/app-store.test.mjs",
     "test:app-stories": "node scripts/run-app-story-tests.mjs",

@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: MIT OR AGPL-3.0-only
+name: Business OS Shell Release
+
+on:
+  push:
+    tags:
+      - "business-os-shell-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Strict SemVer shell version (without tag prefix)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish-shell:
+    name: Build and publish Business OS shell
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: "24"
+
+      - name: Validate release identity
+        id: identity
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          import { validateSemVer } from './src/apps/business-os/scripts/build-shell-artifact.mjs';
+
+          const prefix = 'business-os-shell-v';
+          const isTagRun = process.env.EVENT_NAME === 'push';
+          const version = isTagRun
+            ? String(process.env.REF_NAME || '').slice(prefix.length)
+            : String(process.env.INPUT_VERSION || '');
+          validateSemVer(version);
+          if (isTagRun && process.env.REF_NAME !== `${prefix}${version}`) {
+            throw new Error(`Tag must equal ${prefix}<version>; received ${process.env.REF_NAME}`);
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          NODE
+
+      - name: Run focused shell artifact tests
+        run: npm run test:shell-artifact --prefix src/apps/business-os
+
+      - name: Build shell artifact
+        env:
+          SHELL_VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          npm run shell:artifact --prefix src/apps/business-os -- \
+            --source-root "$GITHUB_WORKSPACE/src/apps/business-os" \
+            --output-dir "$GITHUB_WORKSPACE/artifacts/business-os-shell" \
+            --version "$SHELL_VERSION" \
+            --source-commit "${{ github.sha }}"
+
+      - name: Verify detached SHA-256
+        working-directory: artifacts/business-os-shell
+        env:
+          SHELL_VERSION: ${{ steps.identity.outputs.version }}
+        run: sha256sum -c "ctox-business-os-shell-${SHELL_VERSION}.tar.gz.sha256"
+
+      - name: Upload shell release files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ctox-business-os-shell-${{ steps.identity.outputs.version }}
+          if-no-files-found: error
+          path: |
+            artifacts/business-os-shell/ctox-business-os-shell-${{ steps.identity.outputs.version }}.tar.gz
+            artifacts/business-os-shell/ctox-business-os-shell-${{ steps.identity.outputs.version }}.manifest.json
+            artifacts/business-os-shell/ctox-business-os-shell-${{ steps.identity.outputs.version }}.tar.gz.sha256
+
+      - name: Publish GitHub release assets
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: CTOX Business OS Shell ${{ steps.identity.outputs.version }}
+          prerelease: ${{ contains(steps.identity.outputs.version, '-') }}
+          generate_release_notes: true
+          files: |
+            artifacts/business-os-shell/ctox-business-os-shell-${{ steps.identity.outputs.version }}.tar.gz
+            artifacts/business-os-shell/ctox-business-os-shell-${{ steps.identity.outputs.version }}.manifest.json
+            artifacts/business-os-shell/ctox-business-os-shell-${{ steps.identity.outputs.version }}.tar.gz.sha256
