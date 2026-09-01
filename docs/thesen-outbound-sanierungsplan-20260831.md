@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 00:55 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 01:25 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -74,6 +74,29 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   ohne Fehler; die 13 gezielten Tests (5×R1, 4×R2, 4×R3) laufen gerade (Test-Build des Bins).
 - Sitzungs-Login im In-App-Browser für die A1-Reproduktion steht noch aus (Owner).
 
+### 02.09. 01:1x — Compile + Tests grün, Review liefert 2 kritische / 2 hohe Befunde
+
+- Vollklon `ctox-rustfix` Branch `thesen-rust-batch` @ 69814adee: `cargo check -p ctox` fehlerfrei
+  (ein Slice-Pattern-Fehler in R1 selbst behoben), **13/13 gezielte Tests grün** (5×R1, 4×R2, 4×R3);
+  breitere Regression (command_plane, web_stack, person_research, browser_runtime, scrape) läuft.
+- **Kimi-Review (run …bb436fd9, 02.09. 00:0x, nur lesen) — Befunde von mir am Code nachgeprüft:**
+  - K1 kritisch: Relais + `register-script`/`execute` = worker-autorisierter Code läuft unsandboxed im
+    Daemon. Vorbestehendes Architekturmodell (Repair-Worker schreibt Adapter-Skripte, Daemon führt
+    sie aus); durch R1 erstmals wieder erreichbar. → OWNER-Karte (Runner-Sandbox), nicht in R4.
+  - K2 kritisch: `--script-file/--input-file/--module-file/--runtime-root/--db` ungeprüft → Daemon-
+    seitiges Arbitrary-Read/-Write. Verifiziert (cli.rs:141–173, execute.rs:84, main.rs:4408). → R4.
+  - H1 hoch: IPC-Accept-Loop synchron (service.rs:1556), Timeout aus Client-argv ungeklemmt
+    (service.rs:4406–4412). Verifiziert. → R4.
+  - H2 hoch: Owner-Identität client-behauptet über die ganze Kette (Intake stempelt nur Lücken;
+    `--owner-user-id`/`CTOX_OWNER_USER_ID` ungeprüft). Teils vorbestehend, durch R2 geschlossen
+    durchgereicht. → R4.
+  - Mittel: M1 unbounded stdin/IPC-Zeile, M2 Ledger-Skip auch interaktiv, M3 `known_person_records`
+    client-fabrizierbar, M4 Kontakt-IDs kollidieren, M5 Namensvettern-Merge, M6 TTL-Lücken
+    (Screenshot ≠ Aktivität, kein Timer, Dokument-Timestamp klemmbar). → M1/M4/M5/M6.3 in R4;
+    M2/M3/M6.1–2 Backlog.
+  - Niedrig: N1 argv in Logs (→ R4), N2 Capture nur `write_json`, N3 Socket ohne Peer-Auth,
+    N4 Rollen-Positivliste zu eng („Account Manager", „Verkauf") → Backlog/Web-Stack.
+
 ## Working
 
 | Karte | Worker / Log | Fertig heißt |
@@ -84,7 +107,9 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 
 | Review R1–R3 (Kimi · Cyber, nur lesen): Privilegiengrenze des IPC-Relais (Pfadargumente), Impersonation über client-gelieferte `actor.id`, Owner-Env an Kindprozess, TTL-Race, R3-Datenhoheit | Kimi Cyber 1, run local-2026-09-01T230523Z-bb436fd9-0db0-49fe-b6a7-f6f4be2469cd; Review-Stand: Launchpad-Branch `integrated` 5366f5a = ctox-rustfix 69814adee | Befunde nach Schweregrad; kritische/hohe vor B1 fixen |
 
-Sol-Kontingent: 0/3 belegt (R1–R3 terminal). Nächster Sol-Einsatz: A1 nach Reproduktion.
+| R4 Härtung (Sol): K2 Pfad-Sanitisierung + Strip `--runtime-root/--db`, H1 IPC pro Verbindung im Thread + Timeout-Klemme 600 s + M1 Größenlimits, H2 verifizierte Identität IMMER für ReplicatedPeer (`claimed_actor` für Audit) + Owner-Flag/Env nur bei Übereinstimmung/TrustedLocal, M4/M5 Kontakt-IDs + Zwei-Signal-Merge, M6.3 Timestamp-Klemme, N1 Logs | Sol, Brief `briefs/R4-hardening.md`, Basis Launchpad-Branch `integrated` 5366f5a | 7 Tests grün im Vollklon, dann Push main + B1 |
+
+Sol-Kontingent: 1/3 belegt (R4).
 
 ## To-Do (Trigger-Kette)
 
@@ -107,6 +132,11 @@ Sol-Kontingent: 0/3 belegt (R1–R3 terminal). Nächster Sol-Einsatz: A1 nach Re
 
 ## Backlog + Owner
 
+- OWNER: **K1 — Trust-Grenze des Adapter-Runners.** Repair-Worker (LLM) schreiben Adapter-Skripte, der
+  Daemon führt sie ohne Sandbox aus (execute.rs `execute_registered_script`, absichtlich mit
+  `ctox secret get`-Zugriff). R1 macht diesen Pfad wieder nutzbar. Optionen: (a) Runner unter dem
+  Worker-Sandbox-Profil starten, (b) Interpreter-Allowlist + Workspace-Zwang (R4 liefert nur den
+  Workspace-Zwang), (c) Modell akzeptieren und dokumentieren. Bis zur Entscheidung: B1 nur mit R4.
 - OWNER: Codex-Thread `01a052a8…` beenden oder ausdrücklich an einen anderen Tenant binden;
   parallele Deploys auf thesen sind die Ursache Nr. 4.
 - OWNER: Leadfeeder/RocketReach/LinkedIn-Zugangsdaten — ohne gültige Logins bleiben die
