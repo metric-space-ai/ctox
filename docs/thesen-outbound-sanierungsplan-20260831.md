@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 01.09.2026, 21:50 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 00:55 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -52,6 +52,28 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   main.rs; Snapshot < 64 MiB). Briefs unter `briefs/`.
 - **Workjet-Health (checkedAt 2026-09-01T21:34:47Z):** alle 12 Worker `ready`.
 
+
+### 02.09. 00:xx — R1–R3 geliefert und integriert (Compile/Tests laufen)
+
+- Sol-Läufe R1/R2/R3 alle `completed` (R3 erst nach Brief-Fassung 2; erster R3-Lauf korrekt
+  `blocked`: Struct-Literale von `PersonResearchRequest` außerhalb der Whitelist).
+- Patches per `workjet result import` geholt (refs/workjet/<run>), auf origin/main 3731d4ba0 im
+  Vollklon `ctox-rustfix` angewendet — alle drei sauber (Branch `thesen-rust-batch`, Commits
+  516f4ca17 R1, 11dc21213 R2, e73703f76 R3).
+- **Web-Stack-Pin-Falle (Memory bestätigt):** der Daemon baut `ctox-web-stack` aus dem
+  workjet-Git-Pin (48f0d7cb), `src/tools/web-stack` ist workspace-excluded. Die Web-Stack-Anteile
+  von R2 (scrape_bridge Owner-Parameter) und R3 (person_research, person_ranking, lib, surface)
+  wurden deshalb per Blob-3-Way auf workjet main portiert: Klon
+  `~/.local/state/workjet-launchpads/workjet-webstack-thesen`, Branch `thesen-person-contract`,
+  Commit d54bbdcce (gepusht). Zusätzlich fehlte dort `aggregate_candidate_eligible` (nur im
+  ctox-Spiegel vorhanden) — nachgetragen. Web-Stack: `cargo check --features full` grün,
+  24/24 person_research+person_ranking-Tests grün, Lib-Suite 469 grün / 1 rot
+  (`real_registry_has_fifteen_adapters_with_valid_shared_config` — **vorbestehend auf workjet
+  main a091f858c**, Adapterzahl ≠ 15 seit dem LinkedIn-Target; nicht durch diese Änderung).
+- ctox-Pin auf d54bbdcce gesetzt (Cargo.toml + Cargo.lock im Vollklon), `cargo check -p ctox`
+  ohne Fehler; die 13 gezielten Tests (5×R1, 4×R2, 4×R3) laufen gerade (Test-Build des Bins).
+- Sitzungs-Login im In-App-Browser für die A1-Reproduktion steht noch aus (Owner).
+
 ## Working
 
 | Karte | Worker / Log | Fertig heißt |
@@ -60,7 +82,7 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 | R2 Auth-Identität + Sitzungs-TTL: Chat-Steuerkommandos tragen den Nutzer als actor; Recherche→scrape execute→Reauth-Handoff reichen `--owner-user-id` durch; Owner-Fallback über Thread/Chat statt `source_module`; Idle-TTL für `web_stack_auth`-Sitzungen | Sol | Auth-Sitzung aus einem Recherche-Lauf gehört `michael.welsch@…`; nach TTL frei; kein `_ctox_harness`/`_scrape_executor` mehr |
 | R3 Personen-Vertrag: `person_priorities`, `known_person_records`, `research_instructions` nativ; öffentliche person_*-Treffer je Profil-URL zu `person_records` gruppiert; Sellify-Personen führend; Rollen-Validierung; Priorisierung | Sol | Beiersdorf-Fixture: 8 person_records, „Leipzig" keine Funktion, Hahn/Gund erhalten |
 
-Sol-Kontingent: 3/3 belegt, solange R1–R3 laufen — keinen weiteren Sol starten.
+Sol-Kontingent: 0/3 belegt (R1–R3 terminal). Nächster Sol-Einsatz: A1 nach Reproduktion.
 
 ## To-Do (Trigger-Kette)
 
