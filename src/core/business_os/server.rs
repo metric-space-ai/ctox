@@ -3476,10 +3476,10 @@ fn business_os_shell_generation_mismatch(
     if !business_os_shell_generation_token(&requested) {
         return Ok(None);
     }
-    let app_js = fs::read_to_string(app_root.join("app.js"))
+    let index_html = fs::read_to_string(app_root.join("index.html"))
         .context("failed to read the active Business OS shell generation")?;
-    let active = business_os_shell_build_from_app_js(&app_js)
-        .context("active Business OS app.js does not declare APP_BUILD")?;
+    let active = business_os_shell_generation_from_index_html(&index_html)
+        .context("active Business OS index.html does not declare a shell generation")?;
     let suffix = requested.strip_prefix(&active);
     let matches = suffix.is_some_and(|suffix| suffix.is_empty() || suffix.starts_with('_'));
     Ok((!matches).then_some((requested, active)))
@@ -3505,15 +3505,15 @@ fn business_os_shell_generation_guarded_asset(rel: &str) -> bool {
     .any(|prefix| rel.starts_with(prefix))
 }
 
-fn business_os_shell_build_from_app_js(source: &str) -> Option<String> {
-    ["const APP_BUILD = '", "const APP_BUILD = \""]
-        .into_iter()
-        .find_map(|marker| {
-            let tail = source.split_once(marker)?.1;
-            let quote = marker.chars().last()?;
-            let build = tail.split_once(quote)?.0.trim();
-            (!build.is_empty()).then(|| build.to_owned())
-        })
+fn business_os_shell_generation_from_index_html(source: &str) -> Option<String> {
+    source.split("?v=").skip(1).find_map(|tail| {
+        let generation = tail
+            .split(['"', '\'', '&', '<', '>', ' ', '\n', '\r'])
+            .next()
+            .unwrap_or_default()
+            .trim();
+        business_os_shell_generation_token(generation).then(|| generation.to_owned())
+    })
 }
 
 fn respond_shell_generation_mismatch(
@@ -4655,8 +4655,8 @@ mod tests {
     fn shell_generation_guard_rejects_old_assets_without_mixing_releases() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
         fs::write(
-            root.path().join("app.js"),
-            "const APP_BUILD = '20260831-shell-v2-atomic-v304';\n",
+            root.path().join("index.html"),
+            "<script type='module' src='./app.js?v=20260831-shell-v2-atomic-v304'></script>\n",
         )?;
 
         assert_eq!(

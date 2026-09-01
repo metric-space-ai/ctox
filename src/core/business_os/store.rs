@@ -21700,7 +21700,7 @@ fn business_os_app_import_prompt_block(manifest: &Value) -> anyhow::Result<Strin
         .and_then(Value::as_str)
         .context("app import manifest has no resolved revision")?;
     Ok(format!(
-        "\nImported application source (immutable evidence):\n- source_directory: {source_directory}\n- source_kind: {}\n- resolved_revision: {revision}\n- manifest_sha256: {}\n- file_count: {}\n- total_bytes: {}\n\nPorting contract:\n- Treat source_directory as read-only evidence. Write only the requested runtime-installed module target.\n- Reimplement the complete user workflows as a functional Shell-V2 app; do not translate framework syntax mechanically.\n- The delivered app must have no QML, Quickshell, mpv, Python, shell, or original native runtime dependency.\n- Use shell-provided database handles for app-owned RxDB collections; do not import upstream rxdb or create an HTTP data bridge.\n- Browser media playback must use HTMLAudioElement with HTTPS streams. Filter or clearly mark HTTP-only streams; do not add an SSRF/media proxy.\n- Add deterministic fixtures for external APIs and audio, then run static validation and the real browser smoke before claiming completion.\n",
+        "\nImported application source (immutable evidence):\n- source_directory: {source_directory}\n- source_kind: {}\n- resolved_revision: {revision}\n- manifest_sha256: {}\n- file_count: {}\n- total_bytes: {}\n\nPorting contract:\n- Treat source_directory as read-only evidence. Write only the requested runtime-installed module target.\n- Reimplement the complete user workflows as a functional Shell-V2 app; do not translate framework syntax mechanically.\n- The delivered app must have no QML, Quickshell, mpv, Python, shell, or original native runtime dependency.\n- Use shell-provided database handles for app-owned RxDB collections; do not import upstream rxdb or create an HTTP data bridge.\n- Browser media playback must use HTMLAudioElement with HTTPS streams. Filter or clearly mark HTTP-only streams; do not add an SSRF/media proxy.\n- Add deterministic fixtures for external APIs and audio, then run static validation and the real browser smoke before claiming completion.\n\nBounded implementation contract:\n- After the required plan update, inspect only the skill entrypoint, the source entrypoints, and one closest reference app before authoring. One bounded reference-catalog query is enough.\n- Within the first 12 tool calls, create app_directory and every validator-required file as a minimal functional skeleton. Improve it in place after the first validation run.\n- Continue from any existing target artifacts on later slices. Do not restart source or reference discovery, and never leave app_directory absent at the end of a slice.\n",
         manifest.get("kind").and_then(Value::as_str).unwrap_or("unknown"),
         manifest.get("manifest_sha256").and_then(Value::as_str).unwrap_or(""),
         manifest.get("file_count").and_then(Value::as_u64).unwrap_or(0),
@@ -28888,6 +28888,8 @@ pub(super) mod tests {
         assert!(prompt.contains("QML, Quickshell, mpv, Python, shell"));
         assert!(prompt.contains("HTMLAudioElement with HTTPS streams"));
         assert!(prompt.contains("shell-provided database handles"));
+        assert!(prompt.contains("Within the first 12 tool calls"));
+        assert!(prompt.contains("Do not restart source or reference discovery"));
     }
 
     #[test]
