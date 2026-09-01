@@ -73,12 +73,12 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 <header>
   <div class="eyebrow">Progress Board v2 · Orchestrator Fable · Projekt CTOX Sync / Workjet</div>
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
-  <div class="headline"><strong>Kritischer Pfad:</strong> Sechs PRs warten auf Merge in Reihenfolge: Workjet #3 (Baseline: Advisory, Format, Lint) → #4 (getestete Projekt-/Session-Fixes) → #5 (F1 Lazy-Pooling) → #2 (Collective, rebasen); CTOX #43 (E2E-Gate). Danach Electron-Kaltstart-Beweis für T2, dann F2 (Computer-Auswahl) und F3 (Session-Gating) als Produktionsbriefe. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
+  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat jetzt Baseline-Fixes (#3) und die getesteten Projekt-/Session-Fixes (#4). Offen in Reihenfolge: #6 (F1 Lazy-Pooling) → #2 (Collective, rebased) → F2 (läuft auf Sol) → F3 (Session-Gating, Brief folgt); CTOX #43 (E2E-Gate). Danach der Electron-Kaltstart-Beweis. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-02 02:00 CEST</b></span>
+    <span>Stand <b>2026-09-02 02:20 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 0/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 1/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -86,7 +86,18 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- DONE -->
 <div class="col">
-  <h2>Done <small>21 Karten</small></h2>
+  <h2>Done <small>22 Karten</small></h2>
+
+  <div class="card">
+    <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">workjet main</span></div>
+    <h3>PR #3 und #4 gemergt, PR #2 rebased, F1 als #6 neu eröffnet</h3>
+    <ul>
+      <li>#3 → <code>d69a69926</code>: Check und Release Smoke grün; Test rot nur durch den Sidebar-Layout-Baseline-Test (Job-Log geprüft: genau eine Assertion). Admin-Merge mit Begründung.</li>
+      <li>#4 → <code>c12b2b969</code> (drei getestete Desktop-Commits). Beim Löschen des Basis-Branches hat GitHub PR #5 geschlossen statt umzuhängen; F1 läuft jetzt als <a href="https://github.com/metric-space-ai/workjet/pull/6">#6</a> gegen main.</li>
+      <li>#2 (Collective) auf das neue main rebased, konfliktfrei; Build- und Vitest-Gate laufen, danach Merge.</li>
+      <li class="korrektur">Korrektur: Vitest läuft unter Node 26, sobald die Paket-<code>node_modules</code> verlinkt sind (F1: 67 Tests, PR #2: 45 + 5 Tests grün). Der frühere „Hänger“ war ein fehlendes Paket-<code>node_modules</code>, keine Node-Inkompatibilität.</li>
+    </ul>
+  </div>
 
   <div class="card">
     <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">F1 workjet</span></div>
@@ -262,9 +273,16 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- WORKING -->
 <div class="col">
-  <h2>Working <small>2 Karten</small></h2>
+  <h2>Working <small>3 Karten</small></h2>
 
 
+
+  <div class="card">
+    <div class="pills"><span class="pill acc">F2 produktion</span><span class="pill neutral">sol</span></div>
+    <h3>Persistierter Standard-Rechner + Auswahl in Settings</h3>
+    <p>Gestartet 01:35 im Klon <code>~/.local/state/workjet-launchpads/workjet-f2</code> (Branch <code>codex/workjet-selected-computer</code> auf F1 42e5eb454, node_modules verlinkt). Brief <code>workjet-f2-launch/briefs/f2-selected-computer.md</code>: Feld <code>selectedComputerId</code> in <code>WorkjetConfigurationValue</code>, Legacy-Import-Mapping, Radio-Control in Settings → Computers, Auto-Default bei genau einem lokalen Rechner, Composer-Auflösung Worker &gt; Environment &gt; Auswahl, Sidebar-Gate nur noch bei unauflösbarem Rechner. Run <code>local-…T213455Z-7cacec83</code>.</p>
+    <p>Fertig = fünf Testgruppen grün, Pack/Build grün, ein Commit; Fable prüft nach und öffnet PR gegen main (nach #6).</p>
+  </div>
 
   <div class="card">
     <div class="pills"><span class="pill neutral">extern</span></div>
