@@ -73,9 +73,9 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 <header>
   <div class="eyebrow">Progress Board v2 · Orchestrator Fable · Projekt CTOX Sync / Workjet</div>
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
-  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat jetzt Baseline-Fixes (#3) und die getesteten Projekt-/Session-Fixes (#4). Offen in Reihenfolge: #6 (F1 Lazy-Pooling) → #2 (Collective, rebased) → F2 (läuft auf Sol) → F3 (Session-Gating, Brief folgt); CTOX #43 (E2E-Gate). Danach der Electron-Kaltstart-Beweis. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
+  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main enthält jetzt Baseline-Fixes (#3), die getesteten Projekt-/Session-Fixes (#4) und F1 Lazy-Pooling (#6). Offen: #2 (Collective, CI läuft) → F2 (Sol) → F3 (Brief nach F2); CTOX #43 (E2E-Gate, CI läuft). Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-02 02:40 CEST</b></span>
+    <span>Stand <b>2026-09-02 02:52 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
     <span>Provider-Konkurrenz <b>Sol 2/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
@@ -93,7 +93,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <h3>PR #3 und #4 gemergt, PR #2 rebased, F1 als #6 neu eröffnet</h3>
     <ul>
       <li>#3 → <code>d69a69926</code>: Check und Release Smoke grün; Test rot nur durch den Sidebar-Layout-Baseline-Test (Job-Log geprüft: genau eine Assertion). Admin-Merge mit Begründung.</li>
-      <li>#4 → <code>c12b2b969</code> (drei getestete Desktop-Commits). Beim Löschen des Basis-Branches hat GitHub PR #5 geschlossen statt umzuhängen; F1 läuft jetzt als <a href="https://github.com/metric-space-ai/workjet/pull/6">#6</a> gegen main.</li>
+      <li>#4 → <code>c12b2b969</code> (drei getestete Desktop-Commits). Beim Löschen des Basis-Branches hat GitHub PR #5 geschlossen statt umzuhängen; F1 als <a href="https://github.com/metric-space-ai/workjet/pull/6">#6</a> neu eröffnet und gemergt → <code>e8bbc8937</code> (02:50; Check/Release Smoke grün, Test nur Baseline).</li>
       <li>#2 (Collective) auf das neue main rebased, konfliktfrei, Commits <code>1b9a6cc7f</code> + <code>2781db8f1</code>. Gate von Fable: Pack Server/Desktop, Build Web je 0; Vitest Contracts 82, Server-Collective 5, Web 13, Desktop 30 passed. CI läuft.</li>
       <li class="korrektur">Korrektur: Vitest läuft unter Node 26, sobald die Paket-<code>node_modules</code> verlinkt sind (F1: 67 Tests, PR #2: 45 + 5 Tests grün). Der frühere „Hänger“ war ein fehlendes Paket-<code>node_modules</code>, keine Node-Inkompatibilität.</li>
     </ul>
