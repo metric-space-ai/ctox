@@ -73,9 +73,9 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 <header>
   <div class="eyebrow">Progress Board v2 · Orchestrator Fable · Projekt CTOX Sync / Workjet</div>
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
-  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4 und F1 (#6). Offen: F2 als #7 (CI läuft) → F3 (Sol) → #2 Collective (typsauber, CI läuft); CTOX #43 ist gemergt; RFC Session-Transfer als CTOX #44 offen. Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
+  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4, F1 (#6) und F2 (#7). Offen: F3 (Sol) → #2 Collective (typsauber, CI läuft); CTOX #43 ist gemergt; RFC Session-Transfer als CTOX #44 offen. Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-02 04:40 CEST</b></span>
+    <span>Stand <b>2026-09-02 04:56 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
     <span>Provider-Konkurrenz <b>Sol 2/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
@@ -112,7 +112,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">F2 workjet</span></div>
     <h3>Standard-Rechner persistiert und aufgelöst: PR #7</h3>
     <p>Sol (01:35–01:51): <code>selectedComputerId</code> in <code>WorkjetConfigurationValue</code> (Default null, Schema bleibt 4), Legacy-Import-Mapping, Radio-Auswahl in Settings → Computers (max. einer, Löschen setzt null, genau ein lokaler Rechner wird automatisch gewählt), Composer-Auflösung Worker → Umgebung → Auswahl über den bestehenden <code>onDraftEnvironmentChange</code>-Pfad, Sidebar-Hinweise nur bei unauflösbarem Rechner. 10 Dateien, +498/−123.</p>
-    <ul><li>Von Fable nachgefahren auf dem Rebase gegen main e8bbc8937 (Commit <code>3ff6424bf</code>): <code>tsgo</code> 0 Fehler in Contracts/Server/Web/Desktop; Vitest 82 + 67 + 8 passed; Pack/Build grün; fmt und diff-check sauber.</li><li>PR <a href="https://github.com/metric-space-ai/workjet/pull/7">metric-space-ai/workjet#7</a>.</li></ul>
+    <ul><li>Von Fable nachgefahren auf dem Rebase gegen main e8bbc8937 (Commit <code>3ff6424bf</code>): <code>tsgo</code> 0 Fehler in Contracts/Server/Web/Desktop; Vitest 82 + 67 + 8 passed; Pack/Build grün; fmt und diff-check sauber.</li><li>PR <a href="https://github.com/metric-space-ai/workjet/pull/7">metric-space-ai/workjet#7</a> gemergt → <code>1fae1cf84</code> (04:55; Check/Release Smoke grün, Test nur Baseline).</li></ul>
   </div>
 
   <div class="card">
