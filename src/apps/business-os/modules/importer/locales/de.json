@@ -64,6 +64,8 @@
   "folderFailed": "Der Ordner-Import konnte nicht gestartet werden: {error}",
   "snapshotting": "Quell-Snapshot wird gesichert …",
   "queueing": "Langlebiger App-Job wird gesendet …",
+  "syncPending": "Job lokal gesichert; warte auf CTOX-Synchronisierung …",
+  "syncPendingNotice": "Der langlebige Job ist lokal gesichert. CTOX verbindet sich neu und setzt ihn automatisch fort.",
   "tooManyFiles": "Zu viele Dateien ({count}) — bitte über den Deploy-Skill portieren.",
   "idInvalid": "Modul-ID: Kleinbuchstaben, Ziffern und Bindestriche."
 }

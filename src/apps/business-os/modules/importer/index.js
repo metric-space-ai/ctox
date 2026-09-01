@@ -9,6 +9,10 @@ const MAX_FILES = 400;
 const MAX_FILE_BYTES = 512 * 1024;
 const CHUNK_SIZE = 16 * 1024;
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'canceled', 'blocked']);
+const RECOVERABLE_DISPATCH_PATTERNS = [
+  /webrtc native peer did not open for business_commands/i,
+  /reconnect repair is scheduled/i,
+];
 
 const FALLBACK_LABELS = {
   title: 'App Importer',
@@ -59,6 +63,11 @@ export function isImportableFile(path) {
 
 export function validModuleId(id) {
   return /^[a-z0-9][a-z0-9-]{1,63}$/.test(id);
+}
+
+export function isRecoverableDispatchError(error) {
+  const message = String(error?.message || error || '');
+  return RECOVERABLE_DISPATCH_PATTERNS.some((pattern) => pattern.test(message));
 }
 
 export function moduleIdFromSource(value) {
@@ -409,9 +418,20 @@ export async function mount(ctx) {
     setStage('progress');
     setPhase(0);
     state.subscription = ctx.commandBus.subscribe(command.command_id, renderProjection);
-    await state.subscription.ready;
-    const accepted = await ctx.commandBus.dispatch(command, { until: 'accepted', timeoutMs: 60_000 });
-    renderProjection(accepted);
+    try {
+      await state.subscription.ready;
+      const accepted = await ctx.commandBus.dispatch(command, { until: 'accepted', timeoutMs: 60_000 });
+      renderProjection(accepted);
+    } catch (error) {
+      if (!isRecoverableDispatchError(error)) throw error;
+      setStage('progress');
+      setPhase(1);
+      refs.progressNote.textContent = t('syncPending', 'Job secured locally; waiting for CTOX sync…');
+      notify(t(
+        'syncPendingNotice',
+        'The durable job is secured locally. CTOX is reconnecting and will continue it automatically.',
+      ));
+    }
     const current = await ctx.commandBus.getStatus(command.command_id).catch(() => null);
     if (current) renderProjection(current);
   }

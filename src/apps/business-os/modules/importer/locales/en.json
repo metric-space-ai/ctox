@@ -64,6 +64,8 @@
   "folderFailed": "The folder import could not be started: {error}",
   "snapshotting": "Securing the source snapshot…",
   "queueing": "Sending the durable app job…",
+  "syncPending": "Job secured locally; waiting for CTOX sync…",
+  "syncPendingNotice": "The durable job is secured locally. CTOX is reconnecting and will continue it automatically.",
   "tooManyFiles": "Too many files ({count}) — please port via the deploy skill.",
   "idInvalid": "Module id: lowercase letters, digits and dashes."
 }

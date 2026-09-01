@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import {
   buildAppImportCommand,
   isImportableFile,
+  isRecoverableDispatchError,
   isTextFile,
   moduleIdFromSource,
   parseGitHubUrl,
@@ -50,6 +51,14 @@ test('module ids follow the launcher slug contract', () => {
   assert.equal(validModuleId('-bad'), false);
   assert.equal(validModuleId('Bad'), false);
   assert.equal(validModuleId('x'), false);
+});
+
+test('native-peer acknowledgement timeouts keep the durable job observable', () => {
+  assert.equal(isRecoverableDispatchError(
+    new Error('WebRTC native peer did not open for business_commands within 25000ms; reconnect repair is scheduled.'),
+  ), true);
+  assert.equal(isRecoverableDispatchError(new Error('permission denied')), false);
+  assert.equal(isRecoverableDispatchError(new Error('command_bus_unavailable')), false);
 });
 
 test('GitHub import creates one durable harness command with the porting skill', () => {
@@ -110,6 +119,7 @@ test('presentation is a one-click source, porting, live flow', async () => {
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
 
   assert.match(js, /commandBus\.dispatch\(command, \{ until: 'accepted'/);
+  assert.match(js, /Job secured locally; waiting for CTOX sync/);
   assert.match(js, /showDirectoryPicker\(\{ mode: 'read' \}\)/);
   assert.doesNotMatch(js, /transcodeApp|scaffoldModule|createWritable|mode: 'readwrite'/);
   assert.match(js, /result\.live === true/);
