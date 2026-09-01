@@ -108,7 +108,8 @@ Sol-Kontingent: 3/3 belegt, solange R1–R3 laufen — keinen weiteren Sol start
 
 ## Evidenzkarte
 
-- Board: diese Datei (committed) + Artifact-URL (wird beim ersten Publish eingetragen).
+- Board: diese Datei (committed) + stabile Artifact-URL: https://claude.ai/code/artifact/76c22911-7059-44b9-98b2-408f5e7d0b0b (Rendering: Scratchpad thesen-outbound-board.html, bei Updates neu publizieren).
+- Sol-Läufe R1/R2/R3: local-2026-09-01T214228Z-e2266936-869e-49a3-9f68-a7fbb0501ac0 / local-2026-09-01T214231Z-b3bd36e5-8f7d-4b13-9944-96a861dea3ca / local-2026-09-01T214233Z-2fc882cf-5fc1-49b8-91b8-721f3ec774f0 (runs.jsonl im Launchpad).
 - App-Repo: `~/Documents/thesen-apps` (privat, lokal). Tenant-Deploy-Skripte:
   `~/Documents/ctox-dev/output/deploy-olg-*.ts`, Tenant-ID `7f02e63d-aada-430a-928b-87e454b354d3`.
 - Rust: Launchpad `thesen-rust-batch` (Briefs `briefs/R1-*.md`, `R2-*.md`, `R3-*.md`), Vollklon
