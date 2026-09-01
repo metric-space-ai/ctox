@@ -1,4 +1,125 @@
-# THESEN Outbound Lead Generation — Sanierungsplan (Stand 31.08.2026, 01:10 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 01.09.2026, 21:50 UTC)
+
+**Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
+UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
+das Produkt unbenutzbar: (1) der Harness-Worker darf die CTOX-CLI nicht ausführen, deshalb
+heilt kein Adapter; (2) Auth-Sitzungen aus Recherche-Läufen gehören `ctox_harness` bzw.
+`scrape_executor` statt dem Nutzer und fressen das Sitzungsbudget; (3) öffentliche
+Personen-Treffer kollabieren nativ auf EINEN Kontakt, Prioritäten/Sellify-Personen werden
+ignoriert; (4) drei Agenten deployten gegeneinander (5 Neustarts 31.08. 18:37–01:42).
+Kritischer Pfad: Rust-Batch R1+R2+R3 (parallel bei Sol, EIN Build) → App-Fixes A1 →
+gemeinsame Live-Abnahme. Besitzer des Tenants ab jetzt: diese Sitzung (Fable), sonst niemand.
+
+Board-Regeln: nur selbst verifizierte Fakten; Worker-Berichte sind Behauptungen bis zur
+Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-status*-20260901.ts`.
+
+## Ist-Zustand thesen.ctox.dev (gemessen 01.09. 20:00–21:30 UTC)
+
+| Ebene | Stand | Beleg |
+|---|---|---|
+| Rust-Release | `branch-main-20260831T174442Z` (main-Basis 5d413b66e, 31.08. 17:44 UTC), Dienst aktiv seit 01.09. 01:42 | update_state.json phase=completed |
+| main seit Release | 32 Commits, Rust in 14 Dateien (Service, App-Authoring), Shell-Tags bis 0.1.35 | `git log --since=2026-08-31T17:44Z origin/main` |
+| Shell-Slot | 0.1.25 (aktiviert 01.09. 01:42); main ist 10 Releases weiter | slots/, journal |
+| App-Modul | outbound-lead-generation 1.0.64 (index.js 31.08. 21:18 UTC), Quelle jetzt in Git: `~/Documents/thesen-apps` (Commit a04fe1a) | local-modules/…/module.json |
+| Recherche-Läufe | 7 `web_stack.person_research` completed (36 h), 0 failed; Leads: 19 needs_review, 10 new, 2 completed, 1 failed | business_commands, RxDB |
+| Journal 6 h | 0 Token-Ablehnungen, 0 Response-404, **8× database is locked** (sellify_lookup-Intake) | journalctl |
+| Adapter-Reparatur | 31.08.: 23 failed / 12 handled; 01.09.: 2 failed / 1 handled. Fehlerbild in allen failed: `ctox` scheitert im Worker-Sandbox (NoNewPrivs=1, CapEff=0, ~/.codex read-only): „failed to start CTOX CLI turn ledger / attempt to write a readonly database" | `ctox queue show queue:system::bea55fb691b616726df40262` |
+| Auth-Sitzungen | 01.09. 16:45–16:47 rocketreach/xing/dnbhoovers unter `ctox_harness` → Budget 3/3 → leadfeeder für Harness geblockt; 53 Chromium-Prozesse in 5 Profilen | journal `gate=user_budget` |
+| Adapter-Status in der App | 14 Adapter zeigen `last_error` 404 — 36 h alt, KEINE neuen 404; Status wird nie zurückgesetzt, weil Reparatur nicht laufen kann | adapters__v2 |
+| Prompts | Policy-Records: 3320/3380 Zeichen, Nachrecherche leer = Fallback; letzte 5 Läufe trugen den vollen 3320-Zeichen-Prompt | research_policies__v0, payload |
+| Feldvertrag | App sendet 32 Felder; native `FieldKey` hat 33 Varianten, deckt alle 32 (schon im Release) | sources/mod.rs |
+| Personen-Vertrag | App sendet `person_priorities`(8), `known_person_records`(2), `research_instructions`; nativ: 0 Treffer für diese Felder in src/core+src/tools. Beiersdorf: XING lieferte 8 Profile, Lead hat 1 Kontakt („Jana Laufer", Funktion „Leipzig" vom Profil Heilmann) | person_research_command.rs, Lead-Evidenz |
+| Worker-Sandbox | `managed_worker_sandbox_policy`: WorkspaceWrite, State-Root read-only; HARNESS.md:518 bestätigt `runtime/`, `.codex` read-only. Relais-Muster existiert für `ctox knowledge` (ServiceIpcRequest::KnowledgeData, Ledger-Skip main.rs:365) | direct_session.rs:169, service.rs:3556 |
+
+## KORREKTUREN (an früheren Behauptungen, sichtbar gehalten)
+
+- **Codex 01.09. 17:28:** „Nachrecherche-Prompt ist `Adapter-Abgleich läuft.`" — FALSCH. Das ist das
+  Status-Label der Adapter-Reconciliation (index.js:1403), kein Prompt.
+- **Codex-Plan:** „Native Seite kennt nur 22 Felder" — FALSCH (33 Varianten, alle 32 gedeckt).
+- **Codex-E2E:** „Viele Quellen melden 404" — Anzeige-Altlast (36 h), keine aktuellen Fehler.
+- **Fable 31.08. 19:2x:** „Abnahme grün" nach dem Build galt nur Journal/Unlock/Queue, nicht den
+  UI-Flows (Import, Tabellenansicht, Kampagnensuche) — die Codex am 01.09. rot gemessen hat.
+- **Fable 31.08.:** 14 Deploys mit Neustarts während Owner-Tests; jeder Neustart tötete Login-,
+  Browser- und Sync-Sitzungen. Ab jetzt: Deploys nur gebündelt und angekündigt.
+
+## Done (01.09.)
+
+- **Diagnose beider Threads + Live-Messung** (12 Messskripte, s. o.).
+- **App-Quelle versioniert:** `~/Documents/thesen-apps/outbound-lead-generation` = Tenant-Stand
+  1.0.64 (index.js sha256 2b522835…), Commit a04fe1a. Bisher lag sie nur als Tarball vor.
+- **Launchpad Rust-Batch:** `~/.local/state/workjet-launchpads/thesen-rust-batch` (Teilbaum von
+  origin/main 565a8ff6c: business_os, service, capabilities, web-stack, knowledge, channels,
+  main.rs; Snapshot < 64 MiB). Briefs unter `briefs/`.
+- **Workjet-Health (checkedAt 2026-09-01T21:34:47Z):** alle 12 Worker `ready`.
+
+## Working
+
+| Karte | Worker / Log | Fertig heißt |
+|---|---|---|
+| R1 CLI-Relais: `scrape register-script/register-source-module/execute` + `continuity-update` laufen aus dem Worker über den Daemon-IPC (Muster `knowledge`), Ledger-Skip, Fallback ohne Daemon | Sol (Start nach Board-Commit) | Patch importiert, `cargo check` + Tests grün im Vollklon, Repair-Task auf thesen endet `handled` mit registrierter Revision |
+| R2 Auth-Identität + Sitzungs-TTL: Chat-Steuerkommandos tragen den Nutzer als actor; Recherche→scrape execute→Reauth-Handoff reichen `--owner-user-id` durch; Owner-Fallback über Thread/Chat statt `source_module`; Idle-TTL für `web_stack_auth`-Sitzungen | Sol | Auth-Sitzung aus einem Recherche-Lauf gehört `michael.welsch@…`; nach TTL frei; kein `_ctox_harness`/`_scrape_executor` mehr |
+| R3 Personen-Vertrag: `person_priorities`, `known_person_records`, `research_instructions` nativ; öffentliche person_*-Treffer je Profil-URL zu `person_records` gruppiert; Sellify-Personen führend; Rollen-Validierung; Priorisierung | Sol | Beiersdorf-Fixture: 8 person_records, „Leipzig" keine Funktion, Hahn/Gund erhalten |
+
+Sol-Kontingent: 3/3 belegt, solange R1–R3 laufen — keinen weiteren Sol starten.
+
+## To-Do (Trigger-Kette)
+
+1. **Integration R1–R3** — startet, wenn ein Sol-Lauf terminal ist: `workjet result import`, Patch in
+   Vollklon `~/.local/state/workjet-launchpads/ctox-rustfix` (auf origin/main resetten), `cargo check`,
+   gezielte Tests, `rustfmt <datei>` nur für eigene Dateien, Push auf origin/main.
+2. **Build B1 auf thesen** — startet, wenn alle drei Patches auf origin/main sind: `setsid nohup ctox
+   upgrade --dev`, ~30–40 min, EIN Lauf. Vorher Owner-Tests ankündigen (Neustart killt Sitzungen).
+3. **A1 App-Fixes (JS, Repo thesen-apps)** — startet nach eigener Browser-Reproduktion der fünf
+   Codex-Befunde (IDB closing beim Import, Tabellenansicht schließt App, Kampagnensuche hängt,
+   Importtyp-Wechsel behält Vorschau, „Erledigt" ohne Prüfung) + `client_context.actor` im
+   Recherche-Command. Worker: Sol oder Completion Worker (Grok) mit Render-Smoke als Gate.
+4. **Tenant-Konfiguration** — nach B1: `CTOX_BROWSER_MAX_SESSIONS_PER_USER` im Runtime-Store
+   prüfen/anheben, verwaiste Harness-Sitzungen beenden, Adapter-`last_error` durch echten
+   Reparaturlauf zurücksetzen lassen.
+5. **Live-Abnahme gemeinsam** — nach B1 + A1: Leadfeeder-Login mit Nutzer-Sitzung, Nachrecherche
+   mit ≥2 Personen, Import E2E, Tabellenansicht, Kampagnensuche. Erst dann „funktioniert".
+6. **Shell-Drift** — thesen 0.1.25 → aktuelles main-Shell-Release, aber NUR aus main und NUR im
+   Bündel mit B1 (ein Neustart).
+
+## Backlog + Owner
+
+- OWNER: Codex-Thread `01a052a8…` beenden oder ausdrücklich an einen anderen Tenant binden;
+  parallele Deploys auf thesen sind die Ursache Nr. 4.
+- OWNER: Leadfeeder/RocketReach/LinkedIn-Zugangsdaten — ohne gültige Logins bleiben die
+  Personenquellen leer, egal wie gut der Unlock-Pfad wird.
+- `database is locked` (8×/6 h, sellify_lookup-Intake) trotz busy_timeout — Messreihe nach B1,
+  dann Intake-Serialisierung als eigener Punkt.
+- `ctox continuity-update` scheitert aus JEDEM Worker (gleiche Sandbox-Ursache) — Teil von R1,
+  Wirkung auf andere Kampagnen nach B1 messen.
+- Import als dauerhafter Business-Command statt Browser-Schreibschleife (Codex-Plan §1) —
+  nach A1-Reproduktion entscheiden.
+
+## Umgebungsfallen (neu, zusätzlich zu Archiv unten)
+
+- Worker-Sandbox = WorkspaceWrite; State-Root, `~/.codex`, `runtime/` read-only. JEDER
+  `ctox`-Aufruf mit DB-Zugriff (auch Lesen, WAL braucht -shm) aus dem Worker scheitert.
+  Verträge, die Worker-CLI verlangen, sind damit tot, bis R1 landet.
+- Drei Besitzer-Identitäten für Browser-Sitzungen: Nutzer, `ctox_harness`, `scrape_executor`
+  (Sitzungs-ID `browser_session_web_stack_auth_<quelle>_<owner>`); Budget 3 je Owner.
+- `git archive origin/main -- $VAR` in zsh: Variable wird nicht wortgetrennt → leerer Export.
+- Codex-Threads liegen unter `~/.codex/sessions/<Y>/<M>/<D>/rollout-*.jsonl` (hier 163 MB);
+  Claude-Sitzungen über `list_events`.
+- zsh: `$BASE:src/...` wird als History-Modifier gelesen → `${BASE}:` schreiben.
+
+## Evidenzkarte
+
+- Board: diese Datei (committed) + Artifact-URL (wird beim ersten Publish eingetragen).
+- App-Repo: `~/Documents/thesen-apps` (privat, lokal). Tenant-Deploy-Skripte:
+  `~/Documents/ctox-dev/output/deploy-olg-*.ts`, Tenant-ID `7f02e63d-aada-430a-928b-87e454b354d3`.
+- Rust: Launchpad `thesen-rust-batch` (Briefs `briefs/R1-*.md`, `R2-*.md`, `R3-*.md`), Vollklon
+  `ctox-rustfix` für Compile/Tests, origin/main für Push.
+- Codex-Thread: `~/.codex/sessions/2026/08/30/rollout-2026-08-30T14-32-31-01a052a8-36e2-7591-aa5d-c321f3773310.jsonl`;
+  Codex-E2E-Bericht: `~/.codex/worktrees/122c/ctox/docs/thesen-outbound-e2e-ui-ux-report-20260831.md`.
+- Eigener Vorgänger-Thread: Claude-Sitzung `local_f5b3ad21-59a9-4d7b-af96-84017ae50ed6` („outbound app").
+
+---
+
+# Archiv — Sanierungsplan Stand 31.08.2026 (historisch, unverändert)
 
 **Headline / kritischer Pfad:** Ein einziger Shell-Defekt (P0: `business_commands`-Kanal
 stirbt beim Service-Neustart und erholt sich im lebenden Tab nie) erzeugt fast alle
