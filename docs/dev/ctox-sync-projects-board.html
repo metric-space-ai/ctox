@@ -73,12 +73,12 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 <header>
   <div class="eyebrow">Progress Board v2 · Orchestrator Fable · Projekt CTOX Sync / Workjet</div>
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
-  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4 und F1 (#6). Offen: F2 als #7 (CI läuft) → F3 (Sol) → #2 Collective (Sol behebt Typfehler); CTOX #43 (CI läuft); RFC Session-Transfer (Sol). Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
+  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4 und F1 (#6). Offen: F2 als #7 (CI läuft) → F3 (Sol) → #2 Collective (typsauber, CI läuft); CTOX #43 ist gemergt; RFC Session-Transfer (Sol). Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-02 03:58 CEST</b></span>
+    <span>Stand <b>2026-09-02 04:12 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 3/3 — nicht starten · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 2/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -86,7 +86,20 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- DONE -->
 <div class="col">
-  <h2>Done <small>23 Karten</small></h2>
+  <h2>Done <small>25 Karten</small></h2>
+
+  <div class="card">
+    <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">ctox main</span></div>
+    <h3>E2E-Gate gemergt: PR #43 → <code>a6b21e587</code></h3>
+    <p>Alle drei Desktop-E2E, iot-soak, guard und 5/5 CLI-Checks grün bis auf Linux x86_64 (Explorer-Freeze-Guard, Baseline; Log geprüft: 59/59 JS-Tests grün, Fehler ausschließlich <code>modules/explorer/index.js</code>). Damit gilt für den Projekt-Pfad: Core-Änderung ohne lokales Gate ist nicht mehr möglich.</p>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">WP-3b workjet</span></div>
+    <h3>Collective-PR #2 typsauber: Services zur Aufrufzeit aus dem Fiber-Kontext</h3>
+    <p>Sol (01:53–01:57): <code>ManagerTool.ts</code> und <code>WorkBlockTool.ts</code> lesen ihre Services (inkl. <code>OrchestrationEngineService</code>, <code>ProjectionSnapshotQuery</code>) im Handler aus dem Fiber-Kontext, der Server-Layer verlangt sie nicht mehr beim Aufbau; <code>LegacyWorkjetMapping.ts</code> ergänzt <code>managerThreadReference: ""</code>. 3 Dateien, +19/−6, Commit <code>a449a3f6a</code>. Deadlock-Fix bleibt erhalten.</p>
+    <ul><li>Von Fable nachgefahren: <code>tsgo</code> apps/server 0 Fehler; Vitest 7 Dateien / 74 Tests grün; Server-Pack Exit 0. Gepusht, CI läuft (v5).</li></ul>
+  </div>
 
   <div class="card">
     <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">F2 workjet</span></div>
@@ -280,7 +293,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- WORKING -->
 <div class="col">
-  <h2>Working <small>5 Karten</small></h2>
+  <h2>Working <small>4 Karten</small></h2>
 
 
 
@@ -296,13 +309,6 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <h3>Sessions aus Sync-Projekten mit Working Copy auf dem gewählten Rechner</h3>
     <p>Gestartet 01:55 im Klon <code>~/.local/state/workjet-launchpads/workjet-f3</code> (Branch <code>codex/workjet-session-gating</code> auf F2 3ff6424bf). Brief <code>workjet-f3-launch/briefs/f3-session-gating.md</code>: Hook <code>useAvailableProjects</code> (lokal ∪ Sync mit aktiver Working Copy auf dem aufgelösten Rechner), Gates in Sidebar/CommandPalette/LegacySidebar, Session-Start aus Workjet-Projekt über Rechner-Umgebung + Working-Copy-Pfad. Run <code>local-…T215538Z-64484b3b</code>.</p>
     <p>Fertig = tsgo 0, Vitest inkl. <code>WorkjetProjectFlow.test.ts</code> grün, Build grün, ein Commit; Fable prüft nach, PR gegen main nach #7.</p>
-  </div>
-
-  <div class="card">
-    <div class="pills"><span class="pill acc">WP-3b produktion</span><span class="pill neutral">sol</span></div>
-    <h3>Collective-PR #2: fünf Server-Typfehler</h3>
-    <p>Gestartet 01:53 direkt im Worktree <code>/Volumes/tmp/workjet-e4312d8</code>. Handler-Effekte in <code>ManagerTool.ts</code> (und vermutlich <code>WorkBlockTool.ts</code>) yielden Services ohne Deklaration (TS377004), <code>McpHttpServer.test.ts:190</code> verlangt jetzt <code>OrchestrationEngineService | ProjectionSnapshotQuery</code>, <code>LegacyWorkjetMapping.ts:1008</code> ohne <code>managerThreadReference</code>. Deadlock-Fix (Services zur Aufrufzeit) muss erhalten bleiben. Run <code>local-…T215254Z-0f97107c</code>.</p>
-    <p class="korrektur">Lehre: <code>vp pack</code> und Vitest fangen Typfehler nicht; <code>tsgo --noEmit</code> je Paket gehört in jeden Workjet-Gate (seit F2 drin).</p>
   </div>
 
   <div class="card">
