@@ -75,10 +75,10 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
   <div class="headline"><strong>Kritischer Pfad:</strong> Der Projekt-Add-Pfad Desktop → Core → RxDB ist seit 21:54 auf Welsch repariert und belegt; der nächste Blocker ist die Shell-V2-Verdrahtung (Kaltstart-Aktivierung, Computer-Auswahl, Session-Gating), die ohne ein von Michael freigegebenes Shell-Fenster nicht angefasst werden darf.</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-01 22:40 CEST</b></span>
+    <span>Stand <b>2026-09-01 22:55 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 0/3 · Grok 0/3 · Kimi 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 0/3 · xAI 2/3 · Kimi 2/3 · Z.ai 2/3</b></span>
   </div>
 </header>
 
@@ -174,12 +174,30 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- WORKING -->
 <div class="col">
-  <h2>Working <small>2 Karten</small></h2>
+  <h2>Working <small>3 Karten</small></h2>
 
   <div class="card">
-    <div class="pills"><span class="pill acc">fable</span></div>
-    <h3>Board + Auftragszerlegung</h3>
-    <p>Dieses Board; Aufträge WP-1…WP-4 unten sind briefreif. Fertig = erstes Grok-Paket gestartet, Karte nach Working.</p>
+    <div class="pills"><span class="pill acc">WP-1 discovery</span><span class="pill neutral">A/B/C</span></div>
+    <h3>Entwurf lokales E2E-Gate, Dreier-Panel</h3>
+    <p>Gestartet 22:30 aus Launchpad <code>~/.local/state/workjet-launchpads/ctox-sync-transfer</code> (Kontext = Kopien von <code>origin/main</code> 899a9405b). Brief <code>briefs/wp1-e2e-gate.md</code>, sha256 <code>c8eb901b…</code>, byte-identisch für alle drei.</p>
+    <ul>
+      <li>A Grok 4.6: <code>local-…T203045Z-be0fdb1e</code></li>
+      <li>B Kimi K3: <code>local-…T203046Z-17690761</code></li>
+      <li>C GLM 5.3: <code>local-…T203048Z-4ef3d3a9</code></li>
+    </ul>
+    <p>Fertig = drei <code>proposals/wp1-e2e-gate.md</code> importiert, verglichen, Produktionsbrief für Sol geschrieben. Runs-Liste: <code>runs.tsv</code> im Launchpad.</p>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill acc">WP-4 discovery</span><span class="pill neutral">A/B/C</span></div>
+    <h3>Transfer-Protokoll-Entwurf, Dreier-Panel</h3>
+    <p>Gestartet 22:30, gleiches Launchpad. Brief <code>briefs/wp4-transfer-protocol.md</code>, sha256 <code>33c93b8f…</code>.</p>
+    <ul>
+      <li>A Grok 4.6: <code>local-…T203049Z-3cba6969</code></li>
+      <li>B Kimi K3: <code>local-…T203051Z-138b8306</code></li>
+      <li>C GLM 5.3: <code>local-…T203052Z-c679400e</code></li>
+    </ul>
+    <p>Fertig = drei Entwürfe verglichen, Owner-Fragen O6/O7 mit konkreten Optionen unterlegt. Provider jetzt: <b>xAI 2/3 · Kimi 2/3 · Z.ai 2/3</b>, Sol 0/3.</p>
   </div>
 
   <div class="card">
