@@ -1,0 +1,390 @@
+<title>CTOX Sync Projekte Board</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --ground:#EEF2F5;--surface:#FFFFFF;--surface2:#F6F8FA;--ink:#14202B;--muted:#56697A;--line:#D3DBE2;
+  --accent:#0B7A83;--accent-ink:#FFFFFF;--ok:#1E7B4E;--warn:#A66A0F;--crit:#B3261E;
+  --ok-bg:#E3F3EA;--warn-bg:#FBF0DA;--crit-bg:#FBE4E2;--accent-bg:#DDF0F1;--owner-bg:#ECE8F7;--owner:#5B3FA6;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --ground:#0E141A;--surface:#16202A;--surface2:#1C2732;--ink:#E4EAF0;--muted:#93A3B2;--line:#27343F;
+  --accent:#46B9C2;--accent-ink:#0B1418;--ok:#4FBF83;--warn:#E0A33A;--crit:#EF6A62;
+  --ok-bg:#15311F;--warn-bg:#3A2B0E;--crit-bg:#3E1917;--accent-bg:#0F2F33;--owner-bg:#241C3A;--owner:#B7A3EE;
+}}
+:root[data-theme="dark"]{
+  --ground:#0E141A;--surface:#16202A;--surface2:#1C2732;--ink:#E4EAF0;--muted:#93A3B2;--line:#27343F;
+  --accent:#46B9C2;--accent-ink:#0B1418;--ok:#4FBF83;--warn:#E0A33A;--crit:#EF6A62;
+  --ok-bg:#15311F;--warn-bg:#3A2B0E;--crit-bg:#3E1917;--accent-bg:#0F2F33;--owner-bg:#241C3A;--owner:#B7A3EE;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;font-size:14px;line-height:1.5}
+h1,h2,h3{font-family:"IBM Plex Sans Condensed","IBM Plex Sans",system-ui,sans-serif;text-wrap:balance;margin:0;letter-spacing:-.01em}
+code,.mono{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.86em}
+code{background:var(--surface2);border:1px solid var(--line);border-radius:3px;padding:0 .3em;word-break:break-all}
+a{color:var(--accent)}
+.wrap{max-width:1480px;margin:0 auto;padding:24px 20px 64px}
+header{display:grid;gap:10px;margin-bottom:22px}
+.eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);font-weight:600}
+h1{font-size:30px;font-weight:700}
+.headline{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);padding:12px 16px;font-size:15px;max-width:70ch}
+.headline strong{font-weight:600}
+.stamp{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:12px;color:var(--muted)}
+.stamp b{color:var(--ink);font-weight:500}
+.board{display:grid;grid-template-columns:repeat(4,minmax(300px,1fr));gap:14px;overflow-x:auto;padding-bottom:8px}
+.col{background:var(--surface2);border:1px solid var(--line);border-radius:6px;padding:10px;min-width:300px;display:flex;flex-direction:column;gap:10px}
+.col h2{font-size:15px;font-weight:600;display:flex;justify-content:space-between;align-items:baseline;padding:2px 4px}
+.col h2 small{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted);font-weight:400}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:10px 12px;display:grid;gap:6px;font-size:13px}
+.card h3{font-size:14px;font-weight:600;line-height:1.3}
+.card p{margin:0}
+.card ul{margin:0;padding-left:16px}
+.card li{margin:2px 0}
+.pills{display:flex;flex-wrap:wrap;gap:4px}
+.pill{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;padding:1px 7px;border-radius:999px;border:1px solid transparent;font-weight:500}
+.ok{background:var(--ok-bg);color:var(--ok)} .warn{background:var(--warn-bg);color:var(--warn)} .crit{background:var(--crit-bg);color:var(--crit)}
+.acc{background:var(--accent-bg);color:var(--accent)} .owner{background:var(--owner-bg);color:var(--owner)}
+.neutral{background:var(--surface2);color:var(--muted);border-color:var(--line)}
+.trigger{border-top:1px dashed var(--line);padding-top:6px;color:var(--muted);font-size:12.5px}
+.trigger b{color:var(--ink);font-weight:500}
+.korrektur{border-left:3px solid var(--warn);padding-left:8px;font-size:12.5px}
+section.perm{margin-top:34px;display:grid;gap:12px}
+section.perm h2{font-size:20px;font-weight:600}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:14px 16px;display:grid;gap:8px}
+.panel h3{font-size:14px;font-weight:600;color:var(--accent)}
+.panel ul,.panel ol{margin:0;padding-left:18px;display:grid;gap:5px}
+.panel p{margin:0}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+td.num{font-variant-numeric:tabular-nums;text-align:right}
+.tablewrap{overflow-x:auto}
+.wp{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:12px}
+.wp .panel h3{display:flex;justify-content:space-between;gap:10px;color:var(--ink)}
+.wp .panel h3 span{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted);font-weight:400;white-space:nowrap}
+.gate{background:var(--surface2);border:1px solid var(--line);border-radius:4px;padding:8px 10px;font-size:12.5px}
+.gate b{font-weight:600}
+@media (prefers-reduced-motion:no-preference){.card{transition:border-color .15s}}
+.card:hover{border-color:var(--accent)}
+@media (max-width:760px){h1{font-size:24px}.board{grid-template-columns:repeat(4,minmax(280px,1fr))}}
+</style>
+
+<div class="wrap">
+<header>
+  <div class="eyebrow">Progress Board v2 · Orchestrator Fable · Projekt CTOX Sync / Workjet</div>
+  <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
+  <div class="headline"><strong>Kritischer Pfad:</strong> Der Projekt-Add-Pfad Desktop → Core → RxDB ist seit 21:54 auf Welsch repariert und belegt; der nächste Blocker ist die Shell-V2-Verdrahtung (Kaltstart-Aktivierung, Computer-Auswahl, Session-Gating), die ohne ein von Michael freigegebenes Shell-Fenster nicht angefasst werden darf.</div>
+  <div class="stamp">
+    <span>Stand <b>2026-09-01 22:40 CEST</b></span>
+    <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
+    <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
+    <span>Provider-Konkurrenz <b>Sol 0/3 · Grok 0/3 · Kimi 0/3</b></span>
+  </div>
+</header>
+
+<div class="board">
+
+<!-- DONE -->
+<div class="col">
+  <h2>Done <small>11 Karten</small></h2>
+
+  <div class="card">
+    <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">core</span></div>
+    <h3>Fix 1 · Command-Bus-Feld <code>inbound_channel</code> akzeptieren</h3>
+    <p>Handler für <code>ctox.workjet.project.*</code> lehnte jeden Befehl wegen <code>deny_unknown_fields</code> ab.</p>
+    <ul><li>Commit <code>0d2b63830</code>, PR #39 → Merge <code>788fbd27b</code>, 15:45 UTC</li><li>Von Fable geprüft: Ancestor von <code>origin/main</code></li></ul>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">core</span></div>
+    <h3>Fix 2 · Working-Copy sofort in RxDB projizieren</h3>
+    <p>Projektor schlief nach Leerlauf bis 30 min, UI wartete 30 s. Handler weckt Projektion nach Record-Mutation.</p>
+    <ul><li>PR #40 → Merge <code>3ad9ed537</code>, 18:05 UTC</li><li>Von Fable geprüft: auf <code>origin/main</code></li></ul>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">core + ctox.dev</span></div>
+    <h3>Fix 3 · Owner-Identität E-Mail → UUID mit signiertem Alias</h3>
+    <p>Alte Records gehörten der E-Mail, neue Tokens filtern nach UUID. Capability trägt jetzt signierten E-Mail-Claim; Store migriert vor Dispatch.</p>
+    <ul>
+      <li>CTOX PR #41 → Merge <code>5ca837d92</code>, 6 Dateien, +261/−8 (Fable: auf <code>origin/main</code>)</li>
+      <li>ctox-dev PR #30 → Merge <code>d70afcd34</code> = aktueller <code>main</code> (Fable: via gh)</li>
+      <li>Vercel Production <code>dpl_72anNGu9o3AS2iyT1ybhZPpBtrrE</code> Ready 21:38</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill warn">behauptet · journal-belegt</span><span class="pill acc">welsch</span></div>
+    <h3>Stable Update <code>main-5ca837d926e0</code> auf Welsch aktiv</h3>
+    <ul>
+      <li>Action <code>update_apply_core_5ca837d92</code>, Unit <code>ctox-update-main-5ca837d92</code></li>
+      <li>Start 21:41:15, Ende 21:54:31 CEST, Phase <code>completed</code>, <code>last_error null</code>, Dienst PID 901411</li>
+      <li>Quelle Thread 01a052f5 mit Journal-Zitat. Fable: HTTP 200 auf welsch.ctox.dev um 22:33, Release nicht selbst gelesen (SSH nicht öffentlich)</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill warn">behauptet · CDP-belegt</span><span class="pill acc">desktop e2e</span></div>
+    <h3>greppy + miltonticket-app hinzugefügt, nach Kaltstart persistent</h3>
+    <ul>
+      <li>Dev-App <code>~/.codex/worktrees/workjet-shell-v2-e2e</code> @ <code>72731f58</code>, Profil <code>/tmp/workjet-profile-e2e.DBuZgk</code></li>
+      <li>Projekt-IDs <code>71462c13…</code> (greppy), <code>a93f348f…</code> (milton); Rechner <code>50988886…</code>; Owner-UUID <code>196a89ba…</code></li>
+      <li>Vorbedingung: Business-OS-Tab einmal öffnen, sonst „instance no longer connected“ (→ To-Do T2)</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill warn">behauptet</span><span class="pill acc">fleet</span></div>
+    <h3>Shell-Generationen tenant-eigen, TURN-Rotation</h3>
+    <ul><li>CTOX PR #38 <code>596ede641</code>, ctox-dev PR #22 <code>f360dc350</code></li><li>ctox-dev PR #24–#27 (Hydration, Provider-Control, TURN-Priorität, TURN-Key-Rotation)</li><li>Quelle Thread 01a054b3</li></ul>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill warn">behauptet · lokal gegated</span><span class="pill acc">workjet</span></div>
+    <h3>Workjet Collective: Source-Stand mit Electron-Gate</h3>
+    <p><code>workjet://</code>-Links, Universalprompt für 5 Harnesses, Skill <code>workjet-collective</code>, MCP-Toolkits Collective/Manager/WorkBlock, Startansicht, Deadlock-Fix.</p>
+    <ul><li>Uncommittet in <code>~/Documents/workjet</code>, Basis <code>e4312d89</code> (Fable: bestätigt, 11 Collective-Dateien dirty)</li><li>Gate-Run <code>runtime/workjet-ui-testing/e4312d…/2026-09-01T05-33-19-671Z-3c3554/</code> passed 5/5</li></ul>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill ok">verifiziert</span></div>
+    <h3>Handover von drei Codex-Threads eingeholt</h3>
+    <ul><li>Per <code>codex queue --thread … --message</code> um 22:09, Dateien 22:15–22:16 unter <code>~/.codex/handover/</code></li><li>01a052f5 (Projekte), 01a054b3 (Deployment), 01a05900 (Workjet Desktop)</li></ul>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill ok">verifiziert</span></div>
+    <h3>Grok Build headless einsatzbereit</h3>
+    <ul><li><code>grok -p … --permission-mode dontAsk --max-turns 1</code> → „OK Grok 4.6“ in 39 s</li><li>Workjet-Probe 22:11:51: 12/12 Worker <code>ready</code>, davon 3× grok-4.6 (gpu3, lokal ×2)</li></ul>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill crit">negativ</span></div>
+    <h3>Web-Stack-Thread 01a03cd6 per CLI nicht weckbar</h3>
+    <p><code>codex exec resume</code> → „no rollout found“; Historie nur noch in SQLite. Queue-Nachricht bleibt in Codex Desktop anhängig.</p>
+    <p class="korrektur">Ersatz: Grok-Rezept aus 1.160 Kommandos des Threads extrahiert (siehe Umgebungsfallen).</p>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill crit">vorfall</span></div>
+    <h3>Fehlversand per Computer-Use (21:39)</h3>
+    <p>Thread 01a052f5 sendete durch falsche Modifier-Syntax <code>lhttps://ctox.dev/dashboard</code> in den WhatsApp-Chat mit Milena Ducic. Nicht gelöscht. → Owner O9.</p>
+  </div>
+</div>
+
+<!-- WORKING -->
+<div class="col">
+  <h2>Working <small>2 Karten</small></h2>
+
+  <div class="card">
+    <div class="pills"><span class="pill acc">fable</span></div>
+    <h3>Board + Auftragszerlegung</h3>
+    <p>Dieses Board; Aufträge WP-1…WP-4 unten sind briefreif. Fertig = erstes Grok-Paket gestartet, Karte nach Working.</p>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill neutral">extern</span></div>
+    <h3>CI auf <code>origin/main</code> @ <code>899a9405b</code></h3>
+    <p>Läuft (22:19 gestartet). Bekannt rot auf Baseline: Explorer-Freeze-Guard, IoT-Overlay-Test. Fertig = Ergebnis notiert, Baseline-Rot bestätigt oder widerlegt.</p>
+  </div>
+</div>
+
+<!-- TO-DO -->
+<div class="col">
+  <h2>To-Do <small>10 Karten</small></h2>
+
+  <div class="card">
+    <div class="pills"><span class="pill acc">T1</span><span class="pill neutral">grok-tauglich</span></div>
+    <h3>Lokales E2E-Gate Desktop → Command-Bus → Core → RxDB</h3>
+    <p>Test gegen lokalen Daemon: <code>project.upsert</code> + <code>working_copy.upsert</code> absetzen, Projektion in beiden Collections binnen 5 s prüfen. Muss bei Revert von Fix 1 und 2 rot werden.</p>
+    <div class="trigger"><b>Trigger:</b> sofort. Kein Shell-Code. → WP-1</div>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill acc">T2</span><span class="pill crit">shell</span></div>
+    <h3>Kaltstart aktiviert CTOX-Instanz automatisch</h3>
+    <p>Fehler „The selected CTOX instance is no longer connected“ bis Business-OS-Tab geöffnet wird (<code>desktop:ctox-activate</code>).</p>
+    <div class="trigger"><b>Trigger:</b> Owner O1 gibt Shell-Fenster frei.</div>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill acc">T3</span><span class="pill crit">shell</span></div>
+    <h3>Computer-Auswahl + Session-Gating auf <code>workjetProjects</code></h3>
+    <p>„New session unavailable until a computer is selected“; Shell prüft altes <code>projects.length</code>. Settings → Computers hat keine „aktiv wählen“-Aktion.</p>
+    <div class="trigger"><b>Trigger:</b> O1 + O3 entschieden.</div>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill acc">T4</span></div>
+    <h3>Echte Session auf lokalem Rechner, Status über Welsch</h3>
+    <div class="trigger"><b>Trigger:</b> T3 gelandet.</div>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill acc">T5</span><span class="pill neutral">sol</span></div>
+    <h3>Workjet Collective: Hunk-Attribution, Node 24.13.1, Commit auf main</h3>
+    <p>241 Dirty-Einträge trennen; Vitest hängt unter Node 26; Root-pnpm ETIMEDOUT.</p>
+    <div class="trigger"><b>Trigger:</b> Owner bestätigt Attribution oder stellt sauberen Checkout. Textueller Split als Patch nach /Volumes/tmp, kein Commit durch Worker.</div>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill acc">T6</span></div>
+    <h3>Zwei-Rechner-E2E Mac ↔ gpu3/gpu1</h3>
+    <p>Discovery, Nachricht, Delegation, Manager-Wakeup, Work-Block-Replikation über CTOX Sync.</p>
+    <div class="trigger"><b>Trigger:</b> T5 + Manager-Thread auf einer CTOX-Instanz (O7).</div>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill acc">T7</span></div>
+    <h3>Session-/Worktree-Transfer-Protokoll</h3>
+    <p>Genau eine <code>active</code> Working Copy je Session, Lease, Git-Pfad (Branch + Patch) als Normalfall, Kopie als Notfall, Policy-Freigabe des Zielrechners.</p>
+    <div class="trigger"><b>Trigger:</b> O6 entschieden. → WP-4 (Entwurf) kann vorher laufen.</div>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill acc">T8</span><span class="pill neutral">grok-tauglich</span></div>
+    <h3>CI-Baseline reparieren: Explorer-Freeze-Guard, IoT-Overlay-Test</h3>
+    <p><code>modules/explorer/index.js</code> contextmenu-Handler; <code>modules/iot/iot.test.mjs:148</code> mountTarget. Beide auf <code>main</code> rot, unabhängig von Fix 3.</p>
+    <div class="trigger"><b>Trigger:</b> O1 (Shell-Dateien). → WP-2</div>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill acc">T9</span></div>
+    <h3>TURN/STUN isolieren</h3>
+    <p>DNS -105 für stun/turn.cloudflare.com, CreatePermission 403/600, trotz erfolgreichem Sync.</p>
+    <div class="trigger"><b>Trigger:</b> nach T2.</div>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill acc">T10</span></div>
+    <h3>Dublette greppy <code>817cfd5f…</code> serverseitig deduplizieren</h3>
+    <div class="trigger"><b>Trigger:</b> O4.</div>
+  </div>
+</div>
+
+<!-- BACKLOG + OWNER -->
+<div class="col">
+  <h2>Backlog + Owner <small>12 Karten</small></h2>
+
+  <div class="card"><div class="pills"><span class="pill owner">OWNER O1</span></div><h3>Welches Shell-Fenster darf angefasst werden?</h3><p>Hauptcheckout hat 125 fremde Änderungen (App-Store, Module) aus paralleler Sitzung. T2, T3, T8 warten darauf.</p></div>
+  <div class="card"><div class="pills"><span class="pill owner">OWNER O2</span></div><h3>Instanz beim Kaltstart automatisch aktivieren?</h3><p>Für „Projekt sofort hinzufügen“ ist Auto-Aktivierung die naheliegende Semantik.</p></div>
+  <div class="card"><div class="pills"><span class="pill owner">OWNER O3</span></div><h3>Default-Computer: Fallback auf „This machine“?</h3></div>
+  <div class="card"><div class="pills"><span class="pill owner">OWNER O4</span></div><h3>Altes pfadloses greppy löschen oder archivieren?</h3></div>
+  <div class="card"><div class="pills"><span class="pill owner">OWNER O5</span></div><h3><code>/Applications/Workjet.app</code> (Shell V1) ersetzen?</h3></div>
+  <div class="card"><div class="pills"><span class="pill owner">OWNER O6</span></div><h3>Transfer-Semantik</h3><p>Nur Steuerungsrecht, oder Worktree inkl. uncommitted Dateien? Git vs. Kopie? Konfliktstrategie bei zwei bearbeiteten Working Copies?</p></div>
+  <div class="card"><div class="pills"><span class="pill owner">OWNER O7</span></div><h3>Hub-Autorität: eine CTOX-Instanz je Collective oder Föderation?</h3></div>
+  <div class="card"><div class="pills"><span class="pill owner">OWNER O8</span></div><h3>Manager-Rechte, Secret-Handles, Work-Block-Retention</h3></div>
+  <div class="card"><div class="pills"><span class="pill owner">OWNER O9</span></div><h3>WhatsApp-Fehlversand an Milena Ducic löschen?</h3></div>
+  <div class="card"><div class="pills"><span class="pill owner">OWNER O10</span></div><h3>Build-Cache + 11 prunable Worktrees aufräumen?</h3><p><code>/Volumes/tmp/ctox-codex-owner-identity-target</code>; /Volumes/tmp bei 100 %.</p></div>
+  <div class="card"><div class="pills"><span class="pill owner">OWNER O11</span></div><h3>Alten TURN-Primary wann abschalten?</h3></div>
+  <div class="card"><div class="pills"><span class="pill owner">OWNER O12</span></div><h3>Core-Rollout je SHA manuell oder generisches Release-Manifest?</h3></div>
+</div>
+</div>
+
+<section class="perm">
+  <h2>Das Konzept in vier Schichten</h2>
+  <div class="grid2">
+    <div class="panel"><h3>1 · Projekt = virtuell</h3><p><code>workjet_projects</code>: Name, Besitzer, kein Pfad. Repliziert per RxDB/WebRTC an jede angemeldete App. <b>Steht.</b></p></div>
+    <div class="panel"><h3>2 · Working Copy = physisch</h3><p><code>workjet_working_copies</code>: <code>project_id</code>, <code>computer_id</code>, Pfad, <code>active</code>. Core behandelt Pfade als opake Gast-Kennungen. <b>Steht, seit 21:54 live.</b></p></div>
+    <div class="panel"><h3>3 · Session bindet an Working Copy</h3><p>Jede App (Desktop, Fold) ist Steuerpult. Worker läuft dort, wo die Working Copy liegt. <b>Blockiert:</b> Shell gated an altem Projektbegriff, kein aktiver Computer.</p></div>
+    <div class="panel"><h3>4 · Übertragung</h3><p>Session pausieren, Arbeitsbaum per Git oder Kopie übertragen, mit neuer <code>working_copy_id</code> fortsetzen, Worker am Ziel neu starten, Kontext aus CTOX nachladen. Workjet-Tools in allen Harnesses sind die Bedienoberfläche. <b>Nicht modelliert.</b></p></div>
+  </div>
+</section>
+
+<section class="perm">
+  <h2>Auftragspakete (briefreif)</h2>
+  <div class="wp">
+    <div class="panel">
+      <h3>WP-1 · Lokales E2E-Gate für den Projekt-Pfad <span>Discovery-Panel → Sol oder Grok</span></h3>
+      <p>Test, der einen lokalen CTOX-Daemon startet, über den Command-Bus <code>ctox.workjet.project.upsert</code> und <code>working_copy.upsert</code> absetzt (inkl. <code>inbound_channel</code>) und beide RxDB-Collections binnen 5 s prüft. Vorbild: die zwei „daemonabhängigen“ Tests der JS-Suite.</p>
+      <div class="gate"><b>Gate:</b> Test grün auf <code>origin/main</code>; mit <code>git revert</code> von <code>3ad9ed537</code> reproduzierbar rot; <code>cargo fmt --check</code> nur eigene Dateien; kein Shell-Code.</div>
+      <p>Whitelist: <code>tests/</code>, <code>src/apps/business-os/rxdb/tests/</code>. Unklar ist die Daemon-Startmechanik → erst 3er-Discovery.</p>
+    </div>
+    <div class="panel">
+      <h3>WP-2 · CI-Baseline reparieren <span>Grok · nach O1</span></h3>
+      <p>Explorer-contextmenu über <code>ctx.host</code> statt modul-lokal; IoT-Overlay mountTarget-Assertion.</p>
+      <div class="gate"><b>Gate:</b> <code>npm --prefix src/apps/business-os test</code> grün; Freeze-Guard grün; Diff nur die zwei Dateien plus Test.</div>
+    </div>
+    <div class="panel">
+      <h3>WP-3 · Workjet-Collective-Split <span>Sol · nach Attribution</span></h3>
+      <p>Textueller Split der 241 Dirty-Dateien in <code>collective.patch</code> und <code>foreign.patch</code> nach <code>/Volumes/tmp</code>. Kein git add/commit im Auftrag.</p>
+      <div class="gate"><b>Gate:</b> Union beider Patches sha256-identisch zum Dirty-Baum; <code>collective.patch</code> allein baut Server/Desktop/Web mit <code>vp pack</code> unter Node 24.13.1.</div>
+    </div>
+    <div class="panel">
+      <h3>WP-4 · Transfer-Protokoll-Entwurf <span>Prototype A/B/C parallel</span></h3>
+      <p>Drei unabhängige Entwürfe für Lease, aktive Working Copy, Git-Pfad vs. Kopie, Policy-Check, Recovery. Reines Dokument, kein Code.</p>
+      <div class="gate"><b>Gate:</b> Entwurf benennt Source-of-Truth je Datum, Konfliktfall und Abbruchpfad; referenziert reale Symbole in <code>store_workjet_projects.rs</code> und <code>threads.rs</code>.</div>
+    </div>
+  </div>
+</section>
+
+<section class="perm">
+  <h2>Umgebungsfallen</h2>
+  <div class="grid2">
+    <div class="panel"><h3>Checkouts</h3><ul>
+      <li><code>~/Documents/ctox</code>: 125 fremde Einträge, <code>main</code> ahead 3 / behind 17. Nie pauschal resetten.</li>
+      <li><code>~/Documents/ctox-dev</code>: 2597 Einträge auf <code>fix/fleet-guest-config-timeout</code>; 30 Worktrees, 11 prunable. Rollouts nur aus <code>~/.codex/worktrees/ctox-dev-owner-identity</code>.</li>
+      <li><code>~/Documents/workjet</code>: 241 Einträge, behind 10. Hunk-Attribution vor jedem Commit.</li>
+      <li>Saubere Worktrees: <code>~/.codex/worktrees/0df1/ctox</code>, <code>…/ctox-dev-owner-identity</code>, <code>…/workjet-shell-v2-e2e</code> (nur lesend).</li>
+    </ul></div>
+    <div class="panel"><h3>Build und Platte</h3><ul>
+      <li>/ hatte 0 → 16 GiB frei; <code>/Volumes/tmp</code> 461 GiB bei 100 %, 1,2 GiB frei. Große Builds dort riskant.</li>
+      <li>Cargo-Target ausgelagert: <code>/Volumes/tmp/ctox-codex-owner-identity-target</code>; Tests mit <code>CARGO_INCREMENTAL=0</code> und ohne Debug-Symbole.</li>
+      <li><code>cargo fmt</code> hat fremde Dateien umsortiert → nur <code>rustfmt &lt;datei&gt;</code>.</li>
+      <li>Workjet braucht Node <code>24.13.1</code>; aktiv ist 26.6 → Vitest hängt. Workspace-Binaries <code>apps/*/node_modules/.bin/vp</code> statt Root-pnpm (ETIMEDOUT).</li>
+    </ul></div>
+    <div class="panel"><h3>Deploy und Instanz</h3><ul>
+      <li><code>guard:remote-update</code> braucht <code>CTOX_CORE_REPO=&lt;ctox-checkout&gt;</code> (erwartet sonst <code>ctox.nosync</code>).</li>
+      <li>Source-Update dauert länger als der HTTP-Timeout; läuft detached per <code>systemd-run --user</code>. Fertig nur bei Lock weg, keine cargo/rustc-Prozesse, <code>phase=completed</code>, <code>last_error=null</code>, Symlink auf Release. Kein Blind-Retry bei „source path already exists“.</li>
+      <li>Alte Capability-Tokens tragen den E-Mail-Alias nicht: nach Core-Rollout Workjet neu verbinden.</li>
+      <li>Renderer, der vor einem Core-Neustart offen war, hat eine tote WebRTC-Bridge → Reconnect, sonst Timeout auch bei <code>project.list</code>.</li>
+      <li>SSH auf welsch.ctox.dev:22 ist nicht öffentlich; Weg ist die ctox.dev-Action.</li>
+    </ul></div>
+    <div class="panel"><h3>Apps und Threads</h3><ul>
+      <li><code>/Applications/Workjet.app</code> ist Shell V1. Dev-App: <code>…/workjet-shell-v2-e2e/apps/desktop/.electron-runtime/Workjet.app</code>, läuft noch in Exec-Session 89725 → nicht beenden.</li>
+      <li>Codex-Threads: <code>codex queue --thread ID --message TEXT</code> wird beim nächsten Turn verarbeitet. Threads ohne Rollout-Datei (nur SQLite) sind per CLI nicht resumierbar.</li>
+      <li>Greppy 0.3.4: <code>read-file</code> sporadisch leer bei Exit 0. Bugs nur in Thread <code>01a02118-0d61-7e10-a9d4-be496fa34879</code>.</li>
+      <li>Computer-Use-Modifier: <code>modifiers:["CMD"]</code> ist falsch (Super-Key-Form nötig); hat den Fehlversand verursacht.</li>
+    </ul></div>
+    <div class="panel"><h3>Grok Build als Worker (aus Thread 01a03cd6)</h3><ul>
+      <li>Aufruf: <code>grok -c --model grok-4.6-build --reasoning-effort high --permission-mode bypassPermissions "…"</code> im Projektordner; headless-Start mit <code>-p --session-id … --output-format streaming-json</code>.</li>
+      <li>Auftrag = ganzer Guide als <code>.md</code> im Repo; Erfolg = echter Commit-SHA, „Prosa ist Fehlschlag“; keine Web-Recherche, keine Platzhalter; verifizierte Fakten im Prompt.</li>
+      <li>Erste Aktion: <code>git branch --show-current</code>, Abbruch bei falschem Branch.</li>
+      <li>Babysitting stündlich: Prozessliste, Logpfad, Commits; nur bei Stillstand mit <code>-c</code> und präziser Steuerung weiter. Kein Sekunden-Polling.</li>
+      <li>Grok endet still, auch wenn ein Gate rot ist; Quota-Ausfälle; Stalls bei offener Recherche. Gates immer selbst nachfahren.</li>
+    </ul></div>
+  </div>
+</section>
+
+<section class="perm">
+  <h2>Fehlermuster</h2>
+  <div class="tablewrap"><table>
+    <tr><th>#</th><th>Muster</th><th>Anzahl</th><th>Gegenmittel</th></tr>
+    <tr><td>1</td><td>Fix ohne lokales E2E gebaut, Schicht dahinter erst nach 20-min-Release-Build auf Welsch sichtbar</td><td class="num">3</td><td>WP-1 vor weiteren Core-Fixes</td></tr>
+    <tr><td>2</td><td>Platte während Rust-Build voll (11:41, 17:51, 19:13)</td><td class="num">3</td><td>Target auf /Volumes/tmp, Incremental aus, freien Platz vor Start messen</td></tr>
+    <tr><td>3</td><td>Gegen veralteten Zustand getestet (toter Renderer, alter Token)</td><td class="num">2</td><td>Nach Core-Neustart: Reconnect + Token neu ausstellen, dann erst messen</td></tr>
+    <tr><td>4</td><td>Admin-Merge über rote Baseline-Guards (PR #41)</td><td class="num">1</td><td>WP-2 zuerst; Rot dokumentiert auf Karte, nicht verschwiegen</td></tr>
+    <tr><td>5</td><td>Arbeit in fremd-dirty Checkouts, Attribution unklar</td><td class="num">3</td><td>Isolierte Worktrees; textueller Split als Patch</td></tr>
+    <tr><td>6</td><td><code>cargo fmt</code> formatiert fremde Dateien mit</td><td class="num">1</td><td><code>rustfmt</code> je Datei</td></tr>
+    <tr><td>7</td><td>Polling-Spam statt Stundencheck (Web-Stack-Thread)</td><td class="num">1</td><td>Monitore mit Terminalbedingung, Stundenkadenz</td></tr>
+    <tr><td>8</td><td>Computer-Use mit falscher Tastensyntax → externer Fehlversand</td><td class="num">1</td><td>Keine Tastenkombinationen in fremden Apps ohne Trockenlauf</td></tr>
+  </table></div>
+</section>
+
+<section class="perm">
+  <h2>Evidenzkarte</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Artefakt</th><th>Ort</th></tr>
+    <tr><td>Handover-Dateien der drei Threads</td><td class="mono">~/.codex/handover/01a052f5-….md · 01a054b3-….md · 01a05900-….md</td></tr>
+    <tr><td>Rollout-Protokolle</td><td class="mono">~/.codex/sessions/2026/08/30/rollout-…-01a052f5….jsonl (187 MB) · …/08/31/…-01a054b3….jsonl · …-01a05900….jsonl</td></tr>
+    <tr><td>Web-Stack-Thread (nur SQLite)</td><td class="mono">~/.codex/thread_history_1.sqlite, thread_id 01a03cd6-ce8a-78b0-a26c-d1576abb513a</td></tr>
+    <tr><td>CTOX PRs</td><td>metric-space-ai/ctox #38 #39 #40 #41 · Shell-Release <code>business-os-shell-v0.1.35</code> Tag <code>da7fd4d6</code></td></tr>
+    <tr><td>ctox.dev PRs</td><td>mkh-welsch/ctox-dev #22 #24 #25 #26 #27 #28 #29 #30 · Vercel <code>dpl_72anNGu9o3AS2iyT1ybhZPpBtrrE</code></td></tr>
+    <tr><td>Welsch</td><td class="mono">Tenant 322084e5-8239-48d7-b3c5-c5178fbe5822 · Release main-5ca837d926e0 · Backup /home/ctox/.local/state/ctox/backups/update-20260901T194113Z</td></tr>
+    <tr><td>CI-Runs rot (Baseline)</td><td class="mono">ctox run 33549942043 job 99996627112 · run 33549942163 job 99996626547</td></tr>
+    <tr><td>Desktop-E2E</td><td class="mono">Registry-Key workjet:project-registry:v1:managed%3A322084e5-… · Screenshot /var/folders/hf/…/CUAService/Workjet Screenshot 2026-09-01 at 10.04.42 PM.jpeg</td></tr>
+    <tr><td>Workjet-UI-Gate</td><td class="mono">~/Documents/workjet/runtime/workjet-ui-testing/e4312d899983862b3cad4aea45b9d19d27dedc8f/2026-09-01T05-33-19-671Z-3c3554/</td></tr>
+    <tr><td>Grok-Smoke, Workjet-Probe, Extrakte</td><td class="mono">Scratchpad 6f580cc6-…: health.json · webstack.txt · users.txt · assistant.txt</td></tr>
+  </table></div>
+</section>
+</div>
