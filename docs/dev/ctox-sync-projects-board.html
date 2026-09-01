@@ -73,9 +73,9 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 <header>
   <div class="eyebrow">Progress Board v2 · Orchestrator Fable · Projekt CTOX Sync / Workjet</div>
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
-  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4, F1 (#6), F2 (#7), Collective (#2), F3 (#8) und F2b (#9). T4-Beweis Lauf 3 läuft gegen genau diesen Stand; CTOX #43 ist gemergt; RFC Session-Transfer ist als CTOX #44 gemergt (<code>docs/rfcs/workjet-session-transfer.md</code>). Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
+  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4, F1 (#6), F2 (#7), Collective (#2), F3 (#8) und F2b (#9). T4-Beweis Lauf 3: Working Copy bestätigt, „This machine“-Auswahl fehlt → F2c (Sol), dann Lauf 4; CTOX #43 ist gemergt; RFC Session-Transfer ist als CTOX #44 gemergt (<code>docs/rfcs/workjet-session-transfer.md</code>). Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-02 07:57 CEST</b></span>
+    <span>Stand <b>2026-09-02 08:05 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
     <span>Provider-Konkurrenz <b>Sol 2/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
@@ -86,7 +86,14 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- DONE -->
 <div class="col">
-  <h2>Done <small>29 Karten</small></h2>
+  <h2>Done <small>30 Karten</small></h2>
+
+  <div class="card">
+    <div class="pills"><span class="pill warn">teilweise bestanden, belegt</span><span class="pill acc">T4 lauf 3</span></div>
+    <h3>Kaltstart-Beweis gegen F2b: Working Copy jetzt da, „This machine“ bleibt unselektiert</h3>
+    <p>Sol (07:38–07:54) gegen 087ecc260 (= main nach #9). <b>Bestanden:</b> Code-Modus, Welsch, „Project added“ ohne Business-OS-Tab; Registry hat jetzt die Working Copy (Projekt <code>4fd67324…</code>, Pfad <code>/tmp/workjet-t4-project</code>, <code>computerId 50988886…</code>, active); nach zweitem Kaltstart persistent. <b>Weiter rot:</b> Radio „Use as current computer“ für „This machine“ bleibt <code>aria-checked=false</code>, „New thread“/„New session“ deaktiviert. Die F2b-Hydration hat auf diesem Profil nicht gegriffen, obwohl die Working-Copy-Auflösung denselben lokalen Rechner findet. Codex-App auf :9222 unverändert.</p>
+    <ul><li>Evidence: <code>workjet-t4-launch/evidence-run3-partial/</code> (59 Dateien). Nächster Schritt F2c mit dem echten Profil als Reproduktionsbasis.</li></ul>
+  </div>
 
   <div class="card">
     <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">F2b workjet</span></div>
@@ -333,14 +340,15 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <div class="pills"><span class="pill acc">PKG-1 produktion</span><span class="pill neutral">sol</span></div>
     <h3>RFC Paket 1: Session-Register, Computerintegration, record-scoped Policy</h3>
     <p>Gestartet 04:05 im Klon <code>~/.local/state/workjet-launchpads/ctox-pkg1</code> (Branch <code>codex/workjet-sessions-core</code> = main a6b21e587 + RFC 7238b4cc8, RFC im Baum als Vertrag). Brief <code>ctox-pkg1-launch/briefs/pkg1-sessions-core.md</code>: Collections <code>workjet_sessions</code>/<code>workjet_session_transfers</code> nach RFC §10, <code>workjet_computers</code> voll verdrahtet, <code>owned_by_actor</code>-DataWrite, Owner-Migration, Schema-Contract auf beiden Seiten per Generator, Browser-RxDB-Rebuild mit Cache-Bustern. Keine Lifecycle-Verben (Paket 2). Run <code>local-…T220445Z-443dea28</code>. Warmes Target, /Volumes/tmp 31 GiB frei.</p>
-    <p class="korrektur">Lauf 1 (04:05–07:35) endete mit <b>Turn-Timeout nach 5400 s</b>, ohne Commit: 18 Dateien geändert, +2670/−34, darunter <code>store_workjet_sessions.rs</code> (828 Zeilen, 4 Tests), beide Contract-Seiten, gebaute Browser-RxDB, <code>shared/db.js</code>/<code>sync.js</code>. Von Fable als WIP gesichert: Commit <code>fef51c0b4</code> („unverified“). JS-Suite auf dem WIP von Fable geprüft: <code>run-all.mjs</code> 111 passed / 0 failed / 2 skipped (Wire-Daemon nicht gebaut), deklarative Migrationen OK (39 Module). Cargo-Tests laufen; danach Fortsetzungs-Brief mit Pflicht-Commits je grüner Scheibe.</p>
+    <p class="korrektur">Lauf 1 (04:05–07:35) endete mit <b>Turn-Timeout nach 5400 s</b>, ohne Commit: 18 Dateien geändert, +2670/−34, darunter <code>store_workjet_sessions.rs</code> (828 Zeilen, 4 Tests), beide Contract-Seiten, gebaute Browser-RxDB, <code>shared/db.js</code>/<code>sync.js</code>. Von Fable als WIP gesichert: Commit <code>fef51c0b4</code> („unverified“). Von Fable auf dem WIP geprüft: JS-Suite 111 passed / 2 skipped, deklarative Migrationen OK; Cargo: <code>workjet_session</code> 6, <code>record_owned_data_write</code> 3, <code>workjet_computer</code> 7 (2 neue), beide Hash-Registry-Tests, Workjet-Suite 27 passed; rustfmt je Datei sauber, diff-check leer. Einziger roter Test <code>business_command_inventory_matches_exact_control_types</code> ist Baseline auf GitHub main (sechs <code>kundenpipeline.*</code>-Dispatcher-Arme ohne Eintrag in <code>EXACT_CONTROL_TYPES</code>, fremde Sitzung). Branch auf main 9b7ba0f6e rebased (<code>d4ad1a765</code>), Gates laufen dort erneut; danach PR. Der Turn-Timeout kostete keinen Code, aber die Abnahme musste ich komplett selbst fahren.</p>
     <p>Fertig = Gates A–G grün (workjet_session, record_owned_data_write, workjet_computer, Hash-Registry beidseitig, JS-Suite, 14 Alt-Tests); PR gegen main. Kollisionsrisiko: <code>modules/ctox/*</code> und <code>registry.json</code> sind im Hauptcheckout von der App-Store-Sitzung angefasst → Merge mit Sorgfalt.</p>
   </div>
 
   <div class="card">
-    <div class="pills"><span class="pill acc">T4 beweis, lauf 3</span><span class="pill neutral">sol</span></div>
-    <h3>Electron-Kaltstart-Beweis gegen den F2b-Baum</h3>
-    <p>Gestartet 07:38 im Klon <code>workjet-f3</code> @ 087ecc260 (main + F2b), gleicher Brief wie Lauf 2 plus F2b-Identitätsmarker; Evidence der Vorläufe unter <code>evidence-run1-blocked/</code> und <code>evidence-run2-failed/</code>. Erwartung: „Project added“ mit Working Copy auf dem lokalen Rechner, „This machine“ <code>aria-checked=true</code>, „New thread“ aktiv, nach zweitem Kaltstart persistent. Run <code>local-…T233819Z-92916827</code>.</p>
+    <div class="pills"><span class="pill acc">F2c produktion</span><span class="pill neutral">sol</span></div>
+    <h3>Ursache der fehlenden „This machine“-Auswahl im echten Profil + Fix</h3>
+    <p>Gestartet 07:56 im Klon <code>workjet-f3</code>, Branch <code>codex/workjet-this-machine-hydration</code> auf main ae78701c0. Brief <code>workjet-f2c-launch/briefs/f2c-this-machine-hydration.md</code>: Konfiguration aus der Profilkopie <code>/tmp/workjet-profile-t4</code> extrahieren (drei Rechner, echte environmentIds, lokale Server-Environment), Kandidaten a–d prüfen (localEnvironmentId null/anders, Update nicht persistiert, Synchronizer nicht montiert, Radio liest anderes Feld), Unit-Test mit der echten Konfiguration, gleiche Wahrheitsquelle wie das „This machine“-Label. Run <code>local-…T235601Z-5a9541f6</code>.</p>
+    <p>Fertig = Ursache mit Datei:Zeile, Test grün, tsgo 0, Build/Pack grün, ein Commit; danach T4-Lauf 4.</p>
   </div>
 
   <div class="card">
