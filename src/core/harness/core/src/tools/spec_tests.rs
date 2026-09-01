@@ -181,8 +181,8 @@ fn lean_tool_surface_exposes_only_authoring_tools() {
         "expected a shell authoring tool; had: {names:?}"
     );
     assert!(names.iter().any(|name| name == "apply_patch"));
+    assert!(names.iter().any(|name| name == "update_plan"));
     for absent in [
-        "update_plan",
         "view_image",
         "request_user_input",
         "tool_search",
@@ -200,7 +200,7 @@ fn lean_tool_surface_exposes_only_authoring_tools() {
         );
     }
     assert!(
-        names.len() <= 3,
+        names.len() <= 4,
         "lean authoring surface should stay small; had: {names:?}"
     );
 }

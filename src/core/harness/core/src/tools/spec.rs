@@ -3947,6 +3947,15 @@ pub(crate) fn build_specs_with_discoverable_tools(
 
     if config.lean_tool_surface {
         add_apply_patch_tool(&mut builder);
+        if !config.read_only_surface {
+            push_tool_spec(
+                &mut builder,
+                PLAN_TOOL.clone(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            builder.register_handler("update_plan", plan_handler);
+        }
         return builder;
     }
 

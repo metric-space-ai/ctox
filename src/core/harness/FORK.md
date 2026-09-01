@@ -22,6 +22,11 @@ contract: before the first accepted plan call, no unrelated tool is available.
 The existing `PlanUpdate` event remains the structured source for plan labels
 and statuses; no plan is reconstructed from assistant prose.
 
+Lean no-MCP authoring sessions retain `update_plan` alongside the shell and
+patch tools. The service requires that plan as the first model-visible action,
+so removing it from the lean surface would fail the turn before app authoring
+can begin. Read-only lean surfaces remain plan-free.
+
 The direct-session adapter additionally maps stable runtime boundaries into
 CTOX worker events. A `PlanUpdate` is both `worker.plan_updated` and one tool
 activity. Tool begin events use their call/item identifiers, and reasoning
