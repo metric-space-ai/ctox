@@ -73,9 +73,9 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 <header>
   <div class="eyebrow">Progress Board v2 · Orchestrator Fable · Projekt CTOX Sync / Workjet</div>
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
-  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4, F1 (#6), F2 (#7), Collective (#2) und F3 (#8). T4-Beweis: F1 bestanden, Rechner-/Working-Copy-Kette rot → F2b läuft auf Sol, dann T4-Lauf 3; CTOX #43 ist gemergt; RFC Session-Transfer ist als CTOX #44 gemergt (<code>docs/rfcs/workjet-session-transfer.md</code>). Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
+  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4, F1 (#6), F2 (#7), Collective (#2) und F3 (#8). T4-Beweis Lauf 2: F1 bestanden, Rechner-/Working-Copy-Kette rot → F2b als #9 offen, T4-Lauf 3 läuft; CTOX #43 ist gemergt; RFC Session-Transfer ist als CTOX #44 gemergt (<code>docs/rfcs/workjet-session-transfer.md</code>). Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-02 07:40 CEST</b></span>
+    <span>Stand <b>2026-09-02 07:45 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
     <span>Provider-Konkurrenz <b>Sol 2/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
@@ -86,7 +86,14 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- DONE -->
 <div class="col">
-  <h2>Done <small>28 Karten</small></h2>
+  <h2>Done <small>29 Karten</small></h2>
+
+  <div class="card">
+    <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">F2b workjet</span></div>
+    <h3>Lokaler Rechner als Default, Working Copy beim Hinzufügen: PR #9</h3>
+    <p>Sol (07:10–07:36): <code>applyAutomaticCurrentComputer</code> wählt bei leerer Auswahl den Rechner der lokalen Server-Environment unabhängig von der Anzahl (Ein-Rechner-Fallback bleibt); Hydration einmalig/idempotent über <code>useSettings.ts</code> und den global montierten <code>WorkjetProjectRegistrySynchronizer</code>, gemeinsame Logik in <code>state/workjetSettings.ts</code>; Add-Project hängt die Working Copy an den aufgelösten lokalen Rechner (F2-Auflösung falls lokal, sonst erster Rechner der lokalen Environment, sonst Info-Toast). 9 Dateien, +274/−37, Commit <code>087ecc260</code>.</p>
+    <ul><li>Von Fable nachgefahren: <code>tsgo</code> Web 0, Desktop 0; Vitest 8 Dateien / 51 Tests; Web-Build und Desktop-Pack Exit 0; fmt/diff-check sauber. PR <a href="https://github.com/metric-space-ai/workjet/pull/9">metric-space-ai/workjet#9</a>.</li></ul>
+  </div>
 
   <div class="card">
     <div class="pills"><span class="pill crit">negativ, belegt</span><span class="pill acc">T4 beweis</span></div>
@@ -326,15 +333,14 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <div class="pills"><span class="pill acc">PKG-1 produktion</span><span class="pill neutral">sol</span></div>
     <h3>RFC Paket 1: Session-Register, Computerintegration, record-scoped Policy</h3>
     <p>Gestartet 04:05 im Klon <code>~/.local/state/workjet-launchpads/ctox-pkg1</code> (Branch <code>codex/workjet-sessions-core</code> = main a6b21e587 + RFC 7238b4cc8, RFC im Baum als Vertrag). Brief <code>ctox-pkg1-launch/briefs/pkg1-sessions-core.md</code>: Collections <code>workjet_sessions</code>/<code>workjet_session_transfers</code> nach RFC §10, <code>workjet_computers</code> voll verdrahtet, <code>owned_by_actor</code>-DataWrite, Owner-Migration, Schema-Contract auf beiden Seiten per Generator, Browser-RxDB-Rebuild mit Cache-Bustern. Keine Lifecycle-Verben (Paket 2). Run <code>local-…T220445Z-443dea28</code>. Warmes Target, /Volumes/tmp 31 GiB frei.</p>
-    <p class="korrektur">Lauf 1 (04:05–07:35) endete mit <b>Turn-Timeout nach 5400 s</b>, ohne Commit: 18 Dateien geändert, +2670/−34, darunter <code>store_workjet_sessions.rs</code> (828 Zeilen, 4 Tests), beide Contract-Seiten, gebaute Browser-RxDB, <code>shared/db.js</code>/<code>sync.js</code>. Von Fable als WIP gesichert: Commit <code>fef51c0b4</code> („unverified“). Cargo-Tests und JS-Suite laufen jetzt bei mir, danach Fortsetzungs-Brief mit Pflicht-Commits je grüner Scheibe.</p>
+    <p class="korrektur">Lauf 1 (04:05–07:35) endete mit <b>Turn-Timeout nach 5400 s</b>, ohne Commit: 18 Dateien geändert, +2670/−34, darunter <code>store_workjet_sessions.rs</code> (828 Zeilen, 4 Tests), beide Contract-Seiten, gebaute Browser-RxDB, <code>shared/db.js</code>/<code>sync.js</code>. Von Fable als WIP gesichert: Commit <code>fef51c0b4</code> („unverified“). JS-Suite auf dem WIP von Fable geprüft: <code>run-all.mjs</code> 111 passed / 0 failed / 2 skipped (Wire-Daemon nicht gebaut), deklarative Migrationen OK (39 Module). Cargo-Tests laufen; danach Fortsetzungs-Brief mit Pflicht-Commits je grüner Scheibe.</p>
     <p>Fertig = Gates A–G grün (workjet_session, record_owned_data_write, workjet_computer, Hash-Registry beidseitig, JS-Suite, 14 Alt-Tests); PR gegen main. Kollisionsrisiko: <code>modules/ctox/*</code> und <code>registry.json</code> sind im Hauptcheckout von der App-Store-Sitzung angefasst → Merge mit Sorgfalt.</p>
   </div>
 
   <div class="card">
-    <div class="pills"><span class="pill acc">F2b produktion</span><span class="pill neutral">sol</span></div>
-    <h3>Lokaler Rechner automatisch aktuell; lokale Ordner bekommen eine Working Copy</h3>
-    <p>Gestartet 07:10 im Klon <code>workjet-f3</code>, Branch <code>codex/workjet-local-computer-default</code> auf main f07a46baf. Brief <code>workjet-f2b-launch/briefs/f2b-local-computer.md</code>: Auto-Default auf den Rechner der lokalen Server-Environment unabhängig von der Anzahl, auch beim Hydrieren; Add-Project hängt die Working Copy an den aufgelösten lokalen Rechner (Fallback lokale Environment), sonst Hinweis. Run <code>local-…T230954Z-db98fcbb</code>.</p>
-    <p>Fertig = tsgo 0, Vitest inkl. WorkjetProjectFlow grün, Build/Pack grün, ein Commit; danach T4-Lauf 3.</p>
+    <div class="pills"><span class="pill acc">T4 beweis, lauf 3</span><span class="pill neutral">sol</span></div>
+    <h3>Electron-Kaltstart-Beweis gegen den F2b-Baum</h3>
+    <p>Gestartet 07:38 im Klon <code>workjet-f3</code> @ 087ecc260 (main + F2b), gleicher Brief wie Lauf 2 plus F2b-Identitätsmarker; Evidence der Vorläufe unter <code>evidence-run1-blocked/</code> und <code>evidence-run2-failed/</code>. Erwartung: „Project added“ mit Working Copy auf dem lokalen Rechner, „This machine“ <code>aria-checked=true</code>, „New thread“ aktiv, nach zweitem Kaltstart persistent. Run <code>local-…T233819Z-92916827</code>.</p>
   </div>
 
   <div class="card">
