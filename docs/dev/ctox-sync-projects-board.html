@@ -73,12 +73,12 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 <header>
   <div class="eyebrow">Progress Board v2 · Orchestrator Fable · Projekt CTOX Sync / Workjet</div>
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
-  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4 und F1 (#6). Offen: F2 als #7 (CI läuft) → F3 (Sol) → #2 Collective (typsauber, CI läuft); CTOX #43 ist gemergt; RFC Session-Transfer (Sol). Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
+  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4 und F1 (#6). Offen: F2 als #7 (CI läuft) → F3 (Sol) → #2 Collective (typsauber, CI läuft); CTOX #43 ist gemergt; RFC Session-Transfer als CTOX #44 offen. Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-02 04:12 CEST</b></span>
+    <span>Stand <b>2026-09-02 04:25 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 2/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 1/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -86,7 +86,14 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- DONE -->
 <div class="col">
-  <h2>Done <small>25 Karten</small></h2>
+  <h2>Done <small>26 Karten</small></h2>
+
+  <div class="card">
+    <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">WP-4b rfc</span></div>
+    <h3>RFC „Workjet Session Transfer“: PR #44</h3>
+    <p>Sol (01:37–02:01): <code>docs/rfcs/workjet-session-transfer.md</code>, 812 Zeilen, 29 Abschnitte. Entscheidungen: eigenes Register <code>workjet_sessions</code> + Journal <code>workjet_session_transfers</code>; monotone <code>fence_epoch</code> als Schreibzaun (Uhrzeit nur für Fristen); sieben Lifecycle-Befehle <code>start / pause_ack / pack_complete / apply_complete / confirm_working_copy / resume_ack / abort</code>; record-scoped <code>DataWrite</code> über <code>owned_by_actor</code> plus device-gebundene Rechner-Bindung; Transport über bestehende <code>desktop_files</code>/<code>desktop_file_chunks</code>. Fünf Produktionspakete (3–5/5) mit Worker-Gates in §23.</p>
+    <ul><li>Sol validierte 60 Datei:Zeile-Vorkommen (51 eindeutig) automatisiert, 32 gelesen. Von Fable: Rebase auf main a6b21e587 (Commit <code>7238b4cc8</code>), PR <a href="https://github.com/metric-space-ai/ctox/pull/44">metric-space-ai/ctox#44</a>. Keine offenen Owner-Fragen laut RFC; O6/O7 damit entschieden.</li></ul>
+  </div>
 
   <div class="card">
     <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">ctox main</span></div>
@@ -293,16 +300,9 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- WORKING -->
 <div class="col">
-  <h2>Working <small>4 Karten</small></h2>
+  <h2>Working <small>3 Karten</small></h2>
 
 
-
-  <div class="card">
-    <div class="pills"><span class="pill acc">WP-4b produktion</span><span class="pill neutral">sol</span></div>
-    <h3>RFC „Workjet Session Transfer“ aus drei Entwürfen</h3>
-    <p>Gestartet 01:37 im CTOX-Klon <code>~/.local/state/workjet-launchpads/ctox-transfer-rfc</code> (Branch <code>codex/workjet-session-transfer-rfc</code> auf 3731d4ba0). Brief <code>ctox-transfer-rfc-launch/briefs/transfer-rfc.md</code>: fünf Entscheidungen erzwungen (Session-Register, Lease vs. Epoch, Befehlssatz, record-scoped Policy, Transport-Collection), Datei:Zeile im Klon verifizieren, 4–6 Produktionspakete mit Gates. Ziel <code>docs/rfcs/workjet-session-transfer.md</code>. Run <code>local-…T213731Z-7a6cfb97</code>.</p>
-    <p>Fertig = RFC committet, 15 Referenzen von Sol geprüft, Fable liest gegen, PR gegen CTOX main.</p>
-  </div>
 
   <div class="card">
     <div class="pills"><span class="pill acc">F3 produktion</span><span class="pill neutral">sol</span></div>
@@ -400,7 +400,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
   <div class="card"><div class="pills"><span class="pill owner">OWNER O3</span></div><h3>Default-Computer: Fallback auf „This machine“?</h3></div>
   <div class="card"><div class="pills"><span class="pill owner">OWNER O4</span></div><h3>Altes pfadloses greppy löschen oder archivieren?</h3></div>
   <div class="card"><div class="pills"><span class="pill owner">OWNER O5</span></div><h3><code>/Applications/Workjet.app</code> (Shell V1) ersetzen?</h3></div>
-  <div class="card"><div class="pills"><span class="pill owner">OWNER O6</span></div><h3>Transfer-Semantik</h3><p>Panel-Vorschlag (einstimmig): Transfer = Steuerungsrecht <b>plus</b> Arbeitsbaum; Git-Pfad (Branch + Patch + untracked-Bundle) als Normalfall, Kopie-Pfad nur ohne Git; genau eine aktive Working Copy je Session, Quelle nach Commit <code>detached</code>; Konflikt = Nicht-Ziel, kein Merge zweier Bäume. Offen bleibt: Session-Register <code>workjet_sessions</code> (Grok, GLM) oder Felder an <code>coding_agent_sessions</code> (Kimi)?</p></div>
+  <div class="card"><div class="pills"><span class="pill owner">OWNER O6</span></div><h3>Transfer-Semantik</h3><p class="korrektur">Entschieden in RFC (CTOX #44): Session-Register + Journal, Fence-Epoch, Git-Pfad vor Kopie, Quelle nach Commit detached, kein Merge.</p><p>Panel-Vorschlag (einstimmig): Transfer = Steuerungsrecht <b>plus</b> Arbeitsbaum; Git-Pfad (Branch + Patch + untracked-Bundle) als Normalfall, Kopie-Pfad nur ohne Git; genau eine aktive Working Copy je Session, Quelle nach Commit <code>detached</code>; Konflikt = Nicht-Ziel, kein Merge zweier Bäume. Offen bleibt: Session-Register <code>workjet_sessions</code> (Grok, GLM) oder Felder an <code>coding_agent_sessions</code> (Kimi)?</p></div>
   <div class="card"><div class="pills"><span class="pill owner">OWNER O7</span></div><h3>Hub-Autorität: eine CTOX-Instanz je Collective oder Föderation?</h3><p>Panel nimmt eine autoritative Instanz je Session an (Transfer-Saga lebt dort). Föderation wäre eine eigene Stufe.</p></div>
   <div class="card"><div class="pills"><span class="pill owner">OWNER O8</span></div><h3>Manager-Rechte, Secret-Handles, Work-Block-Retention</h3></div>
   <div class="card"><div class="pills"><span class="pill owner">OWNER O9</span></div><h3>WhatsApp-Fehlversand an Milena Ducic löschen?</h3></div>
