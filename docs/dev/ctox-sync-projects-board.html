@@ -73,9 +73,9 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 <header>
   <div class="eyebrow">Progress Board v2 · Orchestrator Fable · Projekt CTOX Sync / Workjet</div>
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
-  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4, F1 (#6), F2 (#7), Collective (#2) und F3 (#8). Offen: T4 Electron-Beweis (Sol); CTOX #43 ist gemergt; RFC Session-Transfer ist als CTOX #44 gemergt (<code>docs/rfcs/workjet-session-transfer.md</code>). Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
+  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4, F1 (#6), F2 (#7), Collective (#2) und F3 (#8). T4-Beweis: F1 bestanden, Rechner-/Working-Copy-Kette rot → F2b läuft auf Sol, dann T4-Lauf 3; CTOX #43 ist gemergt; RFC Session-Transfer ist als CTOX #44 gemergt (<code>docs/rfcs/workjet-session-transfer.md</code>). Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-02 06:52 CEST</b></span>
+    <span>Stand <b>2026-09-02 07:15 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
     <span>Provider-Konkurrenz <b>Sol 2/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
@@ -86,7 +86,18 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- DONE -->
 <div class="col">
-  <h2>Done <small>27 Karten</small></h2>
+  <h2>Done <small>28 Karten</small></h2>
+
+  <div class="card">
+    <div class="pills"><span class="pill crit">negativ, belegt</span><span class="pill acc">T4 beweis</span></div>
+    <h3>Electron-Kaltstart-Beweis: F1 bestanden, Rechner-/Working-Copy-Kette rot</h3>
+    <p>Sol, Lauf 2 (06:49–07:07) gegen main f07a46baf, frischer Build (Server-Pack, Web, Desktop), Electron 41.10.3, Profilkopie <code>/tmp/workjet-profile-t4</code>, CDP :9223, rein CDP-getrieben. <b>Bestanden:</b> Kaltstart im Code-Modus, Instanz Welsch, „Add project“ mit <code>/tmp/workjet-t4-project</code> → „Project added“ ohne Business-OS-Tab; Projekt nach zweitem Kaltstart weiter gelistet. <b>Gescheitert:</b> Registry-Eintrag mit <code>workingCopies: []</code>; „This machine“ vorhanden, aber <code>aria-checked=false</code>; „New thread“/„New session“ deaktiviert („Choose a computer before starting a session“). Codex-App auf :9222 vorher/nachher unverändert (5 Prozesse).</p>
+    <ul>
+      <li>Ursache 1 (Fable, Code gelesen): <code>applyAutomaticCurrentComputer</code> greift nur bei genau einem Rechner und nur beim Speichern; das Profil hat drei.</li>
+      <li>Ursache 2: <code>CommandPalette.tsx:1444</code> hängt die Working Copy nur an, wenn ein Rechner zur aktuellen Draft-Umgebung passt; im Kaltstart ohne Draft wird keine gesendet, obwohl ein lokaler Ordner per Konstruktion auf diesem Rechner liegt.</li>
+      <li>Lauf 1 (06:12) war durch meinen Brief blockiert (Server-Pack fehlte). Evidence: <code>workjet-t4-launch/evidence/</code> (Lauf 2) und <code>evidence-run1-blocked/</code>.</li>
+    </ul>
+  </div>
 
   <div class="card">
     <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">F3 workjet</span></div>
@@ -319,11 +330,10 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
   </div>
 
   <div class="card">
-    <div class="pills"><span class="pill acc">T4 beweis</span><span class="pill neutral">sol</span></div>
-    <h3>Electron-Kaltstart-Beweis F1+F2+F3 gegen den F3-Baum</h3>
-    <p>Gestartet 06:12 im Klon <code>workjet-f3</code> @ 169e0f34f (= main nach #8). Brief <code>workjet-t4-launch/briefs/t4-cold-start-proof.md</code>: Web-Build + Desktop-Pack, Electron-Runtime aus dem Parity-Worktree, Profilkopie <code>/tmp/workjet-profile-t4</code> (Welsch-Pairing), Start mit CDP-Port 9223, rein CDP-getrieben: Add project im Code-Modus ohne Business-OS-Tab, Registry-Auszug, „New thread“-Zustand, „This machine“-Markierung, zweiter Kaltstart für Persistenz. Schutzregeln: laufende Codex-App auf 9222 und Originalprofil unangetastet, keine Zugangsdaten.</p>
-    <p class="korrektur">Lauf 1 (06:12–06:48, <code>local-…T223803Z-881a4a54</code>) blockiert: kein Renderer-Target binnen 90 s, Backend brach mit <code>missing server entry at …/apps/server/dist/bin.mjs</code> ab. Ursache: mein Brief hatte den Server-Pack vergessen. Schutzregeln eingehalten (Codex-App vorher/nachher 5 Prozesse, Port 9222 erreichbar). Evidence unter <code>workjet-t4-launch/evidence-run1-blocked/</code>.</p>
-    <p>Lauf 2 gestartet 06:49 mit Server-Pack-Pflicht: <code>local-…T224858Z-9b85d25a</code>. Fertig = Evidence unter <code>workjet-t4-launch/evidence/</code>, Abnahme A–E; ein negatives Ergebnis ist ein gültiges Ergebnis.</p>
+    <div class="pills"><span class="pill acc">F2b produktion</span><span class="pill neutral">sol</span></div>
+    <h3>Lokaler Rechner automatisch aktuell; lokale Ordner bekommen eine Working Copy</h3>
+    <p>Gestartet 07:10 im Klon <code>workjet-f3</code>, Branch <code>codex/workjet-local-computer-default</code> auf main f07a46baf. Brief <code>workjet-f2b-launch/briefs/f2b-local-computer.md</code>: Auto-Default auf den Rechner der lokalen Server-Environment unabhängig von der Anzahl, auch beim Hydrieren; Add-Project hängt die Working Copy an den aufgelösten lokalen Rechner (Fallback lokale Environment), sonst Hinweis. Run <code>local-…T230954Z-db98fcbb</code>.</p>
+    <p>Fertig = tsgo 0, Vitest inkl. WorkjetProjectFlow grün, Build/Pack grün, ein Commit; danach T4-Lauf 3.</p>
   </div>
 
   <div class="card">
