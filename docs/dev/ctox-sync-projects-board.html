@@ -73,12 +73,12 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 <header>
   <div class="eyebrow">Progress Board v2 · Orchestrator Fable · Projekt CTOX Sync / Workjet</div>
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
-  <div class="headline"><strong>Kritischer Pfad:</strong> Projekt-Add ist auf Welsch repariert und belegt. Jetzt läuft die Shell-Verdrahtung (Kaltstart-Aktivierung, Computer-Auswahl, Session-Gating) als Discovery-Panel auf dem Collective-Stand; Kollisionen werden per isolierten Klonen und PRs vermieden, nicht per Rückfrage (Freigabe 01.09. 23:50: „alles selbst entscheiden“). Parallel: E2E-Gate auf Sol, drei PRs in CI.</div>
+  <div class="headline"><strong>Kritischer Pfad:</strong> Sechs PRs warten auf Merge in Reihenfolge: Workjet #3 (Baseline: Advisory, Format, Lint) → #4 (getestete Projekt-/Session-Fixes) → #5 (F1 Lazy-Pooling) → #2 (Collective, rebasen); CTOX #43 (E2E-Gate). Danach Electron-Kaltstart-Beweis für T2, dann F2 (Computer-Auswahl) und F3 (Session-Gating) als Produktionsbriefe. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-02 01:45 CEST</b></span>
+    <span>Stand <b>2026-09-02 02:00 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 1/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 0/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -86,7 +86,17 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- DONE -->
 <div class="col">
-  <h2>Done <small>20 Karten</small></h2>
+  <h2>Done <small>21 Karten</small></h2>
+
+  <div class="card">
+    <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">F1 workjet</span></div>
+    <h3>Lazy-Pooling der CTOX-Instanz: PR #5</h3>
+    <p>Sol (01:14–01:28): <code>CtoxGuestManager.ensurePooled</code> (Pool ohne Attach, 1×1-Bounds, <code>SynchronizedRef</code>-serialisiert, idempotent; späteres <code>activate</code> übernimmt die View), IPC <code>desktop:ctox-ensure-pooled</code>, Preload-Bridge, ein Retry in <code>requestWorkjetProjectControl</code>. 9 Dateien, +271/−13, Commit <code>42e5eb454</code> (nach Format-Amend). Synchronizer und CtoxModeShell brauchten keine Änderung.</p>
+    <ul>
+      <li class="korrektur">Sol konnte nichts bauen: ich hatte im Klon die <code>node_modules</code>-Links vergessen. Nachgeholt und selbst gefahren: Pack Server/Desktop und Build Web je Exit 0; Vitest lief unter Node 26 hier durch: CtoxGuestManager 37, ipc/ctox 28, workjetProjectControl 2 passed; <code>vp fmt --check</code> sauber.</li>
+      <li>PR <a href="https://github.com/metric-space-ai/workjet/pull/5">metric-space-ai/workjet#5</a>, Basis PR #4. Offen: Electron-Kaltstart-Beweis (T2-Akzeptanz) nach Merge.</li>
+    </ul>
+  </div>
 
   <div class="card">
     <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">WP-1 ctox</span></div>
@@ -252,16 +262,9 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- WORKING -->
 <div class="col">
-  <h2>Working <small>3 Karten</small></h2>
+  <h2>Working <small>2 Karten</small></h2>
 
 
-
-  <div class="card">
-    <div class="pills"><span class="pill acc">F1 produktion</span><span class="pill neutral">sol</span></div>
-    <h3>Lazy-Aktivierung der CTOX-Instanz im Projekt-Control-Pfad</h3>
-    <p>Gestartet 01:14 im Klon <code>~/.local/state/workjet-launchpads/workjet-f1</code> (Branch <code>codex/workjet-lazy-activate</code> = PR #4 @ 72731f58 + <code>origin/main</code>). Brief <code>workjet-f1-launch/briefs/f1-lazy-activate.md</code>: neue idempotente Main-Operation <code>ensurePooled</code> (Pool ohne Attach, Dummy-Bounds 1×1), IPC <code>desktop:ctox-ensure-pooled</code>, ein Retry in <code>requestWorkjetProjectControl</code>, Synchronizer verlässt <code>blocked</code>, Guest-Host übernimmt gepoolten Gast. Run <code>local-…T211413Z-e25bafbf</code>.</p>
-    <p>Fertig = drei neue Unit-Tests, Pack/Build grün, ein Commit; Vitest läuft in CI (Node 24). Danach Electron-Kaltstart-Test durch Fable.</p>
-  </div>
 
   <div class="card">
     <div class="pills"><span class="pill neutral">extern</span></div>
