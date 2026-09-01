@@ -75,10 +75,10 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
   <div class="headline"><strong>Kritischer Pfad:</strong> Der Projekt-Add-Pfad Desktop → Core → RxDB ist seit 21:54 auf Welsch repariert und belegt; der nächste Blocker ist die Shell-V2-Verdrahtung (Kaltstart-Aktivierung, Computer-Auswahl, Session-Gating), die ohne ein von Michael freigegebenes Shell-Fenster nicht angefasst werden darf.</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-01 23:22 CEST</b></span>
+    <span>Stand <b>2026-09-02 00:05 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 2/3 · xAI 1/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 1/3 · xAI 1/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -86,7 +86,18 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- DONE -->
 <div class="col">
-  <h2>Done <small>13 Karten</small></h2>
+  <h2>Done <small>14 Karten</small></h2>
+
+  <div class="card">
+    <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">WP-3 workjet</span></div>
+    <h3>Collective-Split abgenommen, PR #2 offen</h3>
+    <p>Sol (22:34–22:42) zerlegte 190 geänderte + 54 untracked Dateien hunkgenau: 86 Hunks Collective, 576 Fremd, 4 gemischte Dateien, 6 unsichere Hunks konservativ Fremd. Von Fable geprüft: <code>verify_split.py</code> OK; beide Patches wenden sich sauber auf e4312d8 an; Collective + Fremd + untracked reproduzieren den Dirty-Baum byte-identisch (244/244 Dateien).</p>
+    <ul>
+      <li>Build-Gate nur mit Collective: <code>vp pack</code> Server, <code>vp pack</code> Desktop, <code>vp build</code> Web je Exit 0, auf e4312d8 und erneut nach Rebase auf <code>origin/main</code> 48f0d7cbe.</li>
+      <li>Commit <code>297bdec64</code> (39 Dateien, +1731/−38) auf Branch <code>codex/workjet-collective</code>, Worktree <code>/Volumes/tmp/workjet-e4312d8</code>, PR <a href="https://github.com/metric-space-ai/workjet/pull/2">metric-space-ai/workjet#2</a>. Rebase-Konflikt: <code>data-workjet-action</code> im Add-Project-Button, Upstream-Wert <code>project.add.hero</code> behalten.</li>
+      <li>Nicht gelaufen: Vitest (Node 24.13.1 fehlt, aktiv 26.6). Split-Artefakte: Launchpad <code>workjet-collective-split/out/</code>, Commit 3d6ee67.</li>
+    </ul>
+  </div>
 
   <div class="card">
     <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">WP-4 discovery</span></div>
@@ -197,7 +208,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- WORKING -->
 <div class="col">
-  <h2>Working <small>3 Karten</small></h2>
+  <h2>Working <small>4 Karten</small></h2>
 
   <div class="card">
     <div class="pills"><span class="pill acc">WP-1 produktion</span><span class="pill neutral">sol</span></div>
@@ -207,11 +218,12 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
   </div>
 
 
+
   <div class="card">
-    <div class="pills"><span class="pill acc">WP-3 produktion</span><span class="pill neutral">sol</span></div>
-    <h3>Workjet-Collective-Split (textuell)</h3>
-    <p>Gestartet 22:34. Launchpad <code>~/.local/state/workjet-launchpads/workjet-collective-split</code>: <code>input/dirty.patch</code> (190 Dateien, 985 KB, Basis <code>e4312d89</code>), 54 untracked Dateien, 35er-Collective-Liste. Run <code>local-…T203427Z-f81915b8</code>.</p>
-    <p>Fertig = <code>out/collective.patch</code> + <code>out/foreign.patch</code>, Multimengen-Gleichheit per <code>verify_split.py</code>, dann von Fable per <code>git apply --check</code> gegen sauberen e4312d89-Worktree geprüft. Provider: <b>Sol 1/3 · xAI 2/3 · Kimi 2/3 · Z.ai 2/3</b>.</p>
+    <div class="pills"><span class="pill acc">WP-2a produktion</span><span class="pill neutral">grok</span></div>
+    <h3>IoT-Overlay in den Shell-Host montieren (CI-Baseline)</h3>
+    <p>Gestartet 22:54 auf dem Completion Worker (grok-4.6) im Klon <code>~/.local/state/workjet-launchpads/ctox-wp2-baseline</code> (Branch <code>wp2-ci-baseline</code> auf 565a8ff6c). Zwei Zeilen in <code>modules/iot/index.js</code>: <code>mountTarget = state.ctx?.host</code>, kein <code>document.body</code>-Fallback. Run <code>local-…T205450Z-32dd87d3</code>.</p>
+    <p>Fertig = <code>node --test modules/iot/iot.test.mjs</code> 11/11, Freeze-Guard zeigt nur noch den Explorer-Baseline-Fehler, ein Commit im Klon.</p>
   </div>
 
   <div class="card">
@@ -254,9 +266,9 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
   <div class="card">
     <div class="pills"><span class="pill acc">T5</span><span class="pill neutral">sol</span></div>
-    <h3>Workjet Collective: Hunk-Attribution, Node 24.13.1, Commit auf main</h3>
-    <p>241 Dirty-Einträge trennen; Vitest hängt unter Node 26; Root-pnpm ETIMEDOUT.</p>
-    <div class="trigger"><b>Trigger:</b> Owner bestätigt Attribution oder stellt sauberen Checkout. Textueller Split als Patch nach /Volumes/tmp, kein Commit durch Worker.</div>
+    <h3>Workjet Collective: PR #2 mergen, Vitest unter Node 24.13.1</h3>
+    <p>Split und Build-Gate sind erledigt (Done). Offen: CI auf PR #2 abwarten, Vitest-Suiten unter Node 24 nachziehen, mergen. Danach Fremd-Anteil (167 Dateien) an die Owner der Device-Control-/Mobile-Arbeit zurückgeben.</p>
+    <div class="trigger"><b>Trigger:</b> PR-#2-Checks grün. Fable merged selbst (Freigabe „alles selbst entscheiden“, 01.09. 23:50).</div>
   </div>
 
   <div class="card">
@@ -275,9 +287,9 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
   <div class="card">
     <div class="pills"><span class="pill acc">T8</span><span class="pill neutral">grok-tauglich</span></div>
-    <h3>CI-Baseline reparieren: Explorer-Freeze-Guard, IoT-Overlay-Test</h3>
-    <p><code>modules/explorer/index.js</code> contextmenu-Handler; <code>modules/iot/iot.test.mjs:148</code> mountTarget. Beide auf <code>main</code> rot, unabhängig von Fix 3.</p>
-    <div class="trigger"><b>Trigger:</b> O1 (Shell-Dateien). → WP-2</div>
+    <h3>CI-Baseline: Explorer-Freeze-Guard</h3>
+    <p>IoT-Teil läuft als WP-2a. Der Explorer-Teil (<code>modules/explorer/index.js:491</code> modul-lokaler <code>contextmenu</code>-Listener) braucht ein Shell-Delegationsmuster, das es noch nicht gibt: heute gibt es nur den globalen Record-Kontext (<code>data-context-*</code>) und den Legacy-Listener. Explorer wurde laut <code>docs/dev/appstore-v2-board.md</code> von der parallelen App-Store-Sitzung als Core-Modul portiert.</p>
+    <div class="trigger"><b>Trigger:</b> Abstimmung mit der App-Store-v2-Sitzung, wer das Delegationsmuster baut. Nicht parallel anfassen.</div>
   </div>
 
   <div class="card">
@@ -358,6 +370,8 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
       <li><code>~/Documents/ctox-dev</code>: 2597 Einträge auf <code>fix/fleet-guest-config-timeout</code>; 30 Worktrees, 11 prunable. Rollouts nur aus <code>~/.codex/worktrees/ctox-dev-owner-identity</code>.</li>
       <li><code>~/Documents/workjet</code>: 241 Einträge, behind 10. Hunk-Attribution vor jedem Commit.</li>
       <li>Saubere Worktrees: <code>~/.codex/worktrees/0df1/ctox</code>, <code>…/ctox-dev-owner-identity</code>, <code>…/workjet-shell-v2-e2e</code> (nur lesend).</li>
+      <li>Patch-Split anwenden: <code>git apply collective.patch</code>, dann <code>git apply foreign.patch</code> ohne <code>--3way</code>. Mit <code>--3way</code> verweigert Git den zweiten Patch komplett, sobald eine gemischte Datei ihre Index-Zeile nicht mehr trifft.</li>
+      <li>Workjet in einem Worktree bauen: <code>node_modules</code> je Paket als Verzeichnis mit Einzel-Symlinks anlegen; die Workspace-Links <code>@t3tools/*</code> müssen relativ in den Worktree zeigen, sonst löst der Bundler Contracts aus dem Dirty-Checkout auf (falscher <code>MISSING_EXPORT</code>).</li>
     </ul></div>
     <div class="panel"><h3>Build und Platte</h3><ul>
       <li>/ hatte 0 → 16 GiB frei; <code>/Volumes/tmp</code> 461 GiB bei 100 %, 1,2 GiB frei. Große Builds dort riskant.</li>
