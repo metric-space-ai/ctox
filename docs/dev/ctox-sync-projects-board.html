@@ -73,9 +73,9 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 <header>
   <div class="eyebrow">Progress Board v2 · Orchestrator Fable · Projekt CTOX Sync / Workjet</div>
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
-  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4, F1 (#6) und F2 (#7). Offen: F3 als #8 (CI läuft) → #2 Collective (typsauber, CI läuft); CTOX #43 ist gemergt; RFC Session-Transfer als CTOX #44 offen. Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
+  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4, F1 (#6), F2 (#7) und Collective (#2). Offen: F3 als #8 (CI läuft, nach #2 auf Konflikte prüfen); CTOX #43 ist gemergt; RFC Session-Transfer als CTOX #44 offen. Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-02 05:20 CEST</b></span>
+    <span>Stand <b>2026-09-02 05:42 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
     <span>Provider-Konkurrenz <b>Sol 1/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
@@ -128,7 +128,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <ul>
       <li>#3 → <code>d69a69926</code>: Check und Release Smoke grün; Test rot nur durch den Sidebar-Layout-Baseline-Test (Job-Log geprüft: genau eine Assertion). Admin-Merge mit Begründung.</li>
       <li>#4 → <code>c12b2b969</code> (drei getestete Desktop-Commits). Beim Löschen des Basis-Branches hat GitHub PR #5 geschlossen statt umzuhängen; F1 als <a href="https://github.com/metric-space-ai/workjet/pull/6">#6</a> neu eröffnet und gemergt → <code>e8bbc8937</code> (02:50; Check/Release Smoke grün, Test nur Baseline).</li>
-      <li>#2 (Collective) auf das neue main rebased, konfliktfrei, Commits <code>1b9a6cc7f</code> + <code>2781db8f1</code>. Gate von Fable: Pack Server/Desktop, Build Web je 0; Vitest Contracts 82, Server-Collective 5, Web 13, Desktop 30 passed. CI läuft.</li>
+      <li>#2 (Collective) auf main rebased, plus vier Nachbesserungen (Secret-Fixture, Settings-Erwartung, Format, Effect-Diagnostik, Server-Typen) → gemergt <code>a091f858c</code> (05:40; Check/Release Smoke grün, Test 2962/2963, einziger roter Test ist die Baseline). Damit sind Workjet-Links, Collective-Skill, Manager-/WorkBlock-Tools und der Universalprompt für alle Harnesses auf main.</li>
       <li class="korrektur">Korrektur: Vitest läuft unter Node 26, sobald die Paket-<code>node_modules</code> verlinkt sind (F1: 67 Tests, PR #2: 45 + 5 Tests grün). Der frühere „Hänger“ war ein fehlendes Paket-<code>node_modules</code>, keine Node-Inkompatibilität.</li>
     </ul>
   </div>
@@ -359,9 +359,9 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
   <div class="card">
     <div class="pills"><span class="pill acc">T5</span><span class="pill neutral">sol</span></div>
-    <h3>Workjet Collective: PR #2 mergen, Vitest unter Node 24.13.1</h3>
-    <p>Split und Build-Gate sind erledigt (Done). Offen: CI auf PR #2 abwarten, Vitest-Suiten unter Node 24 nachziehen, mergen. Danach Fremd-Anteil (167 Dateien) an die Owner der Device-Control-/Mobile-Arbeit zurückgeben.</p>
-    <div class="trigger"><b>Trigger:</b> PR-#2-Checks grün. Fable merged selbst (Freigabe „alles selbst entscheiden“, 01.09. 23:50).</div>
+    <h3>Fremd-Anteil des Workjet-Dirty-Baums zurückgeben</h3>
+    <p class="korrektur">Collective ist gemergt (#2). Verbleibt: die 167 Fremd-Dateien (Device-Control, Mobile-Pairing, Marketing, Web-Stack-Adapter) liegen weiter uncommittet in <code>~/Documents/workjet</code>; Patch <code>workjet-collective-split/out/foreign.patch</code> + <code>foreign-untracked.txt</code>. Enthält auch die <code>AppSidebarLayout</code>-Änderung, die den Baseline-Test grün machen würde.</p>
+    <div class="trigger"><b>Trigger:</b> Owner benennt Zuständige (Codex-Thread 01a05900 oder Device-Control-Arbeit); bis dahin unangetastet.</div>
   </div>
 
   <div class="card">
