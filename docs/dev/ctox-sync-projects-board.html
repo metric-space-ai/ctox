@@ -73,12 +73,12 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 <header>
   <div class="eyebrow">Progress Board v2 · Orchestrator Fable · Projekt CTOX Sync / Workjet</div>
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
-  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4, F1 (#6) und F2 (#7). Offen: F3 (Sol) → #2 Collective (typsauber, CI läuft); CTOX #43 ist gemergt; RFC Session-Transfer als CTOX #44 offen. Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
+  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4, F1 (#6) und F2 (#7). Offen: F3 als #8 (CI läuft) → #2 Collective (typsauber, CI läuft); CTOX #43 ist gemergt; RFC Session-Transfer als CTOX #44 offen. Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-02 04:56 CEST</b></span>
+    <span>Stand <b>2026-09-02 05:20 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 2/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 1/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -86,7 +86,14 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- DONE -->
 <div class="col">
-  <h2>Done <small>26 Karten</small></h2>
+  <h2>Done <small>27 Karten</small></h2>
+
+  <div class="card">
+    <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">F3 workjet</span></div>
+    <h3>Sessions aus Sync-Projekten: PR #8</h3>
+    <p>Sol (01:55–02:13): <code>useAvailableProjects()</code> als einzige Verfügbarkeitsquelle (lokal immer; Sync nur mit aktiver Working Copy auf dem aufgelösten Rechner, Zuordnung <code>workingCopy.computerId === WorkjetComputer.id</code>, Duplikate zusammengeführt); Rechner-Auflösung aus dem Composer nach <code>workjetProjectRegistry.tsx</code> gezogen; Gates in Sidebar, Command Palette, Legacy Sidebar; Session-Draft aus Sync-Projekt nutzt Rechner-Umgebung und Working-Copy-Pfad; neuer Empty-State „Project available, but no working copy on this computer“. 14 Dateien, +600/−140.</p>
+    <ul><li>Von Fable nachgefahren auf dem Rebase gegen main 1fae1cf84 (Commit <code>991d11fa9</code>): <code>tsgo</code> Web 0, Desktop 0; Vitest 8 Dateien / 144 Tests; Web-Build und Desktop-Pack Exit 0; fmt/diff-check sauber.</li><li>PR <a href="https://github.com/metric-space-ai/workjet/pull/8">metric-space-ai/workjet#8</a>. Damit sind T2 (F1), T3 (F2+F3) im Code gelöst; offen ist der Electron-Beweis (T4).</li></ul>
+  </div>
 
   <div class="card">
     <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">WP-4b rfc</span></div>
@@ -300,16 +307,9 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- WORKING -->
 <div class="col">
-  <h2>Working <small>4 Karten</small></h2>
+  <h2>Working <small>3 Karten</small></h2>
 
 
-
-  <div class="card">
-    <div class="pills"><span class="pill acc">F3 produktion</span><span class="pill neutral">sol</span></div>
-    <h3>Sessions aus Sync-Projekten mit Working Copy auf dem gewählten Rechner</h3>
-    <p>Gestartet 01:55 im Klon <code>~/.local/state/workjet-launchpads/workjet-f3</code> (Branch <code>codex/workjet-session-gating</code> auf F2 3ff6424bf). Brief <code>workjet-f3-launch/briefs/f3-session-gating.md</code>: Hook <code>useAvailableProjects</code> (lokal ∪ Sync mit aktiver Working Copy auf dem aufgelösten Rechner), Gates in Sidebar/CommandPalette/LegacySidebar, Session-Start aus Workjet-Projekt über Rechner-Umgebung + Working-Copy-Pfad. Run <code>local-…T215538Z-64484b3b</code>.</p>
-    <p>Fertig = tsgo 0, Vitest inkl. <code>WorkjetProjectFlow.test.ts</code> grün, Build grün, ein Commit; Fable prüft nach, PR gegen main nach #7.</p>
-  </div>
 
   <div class="card">
     <div class="pills"><span class="pill acc">PKG-1 produktion</span><span class="pill neutral">sol</span></div>
@@ -339,21 +339,22 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
   <div class="card">
     <div class="pills"><span class="pill acc">T2</span><span class="pill crit">shell</span></div>
     <h3>Kaltstart aktiviert CTOX-Instanz automatisch</h3>
-    <p>Fehler „The selected CTOX instance is no longer connected“ bis Business-OS-Tab geöffnet wird (<code>desktop:ctox-activate</code>).</p>
-    <div class="trigger"><b>Trigger:</b> Owner O1 gibt Shell-Fenster frei.</div>
+    <p class="korrektur">Im Code gelöst durch F1 (Workjet #6, main). Verbleibt hier nur bis zum Electron-Kaltstart-Beweis (T4).</p>
+    <div class="trigger"><b>Trigger:</b> T4-Beweis.</div>
   </div>
 
   <div class="card">
     <div class="pills"><span class="pill acc">T3</span><span class="pill crit">shell</span></div>
     <h3>Computer-Auswahl + Session-Gating auf <code>workjetProjects</code></h3>
-    <p>„New session unavailable until a computer is selected“; Shell prüft altes <code>projects.length</code>. Settings → Computers hat keine „aktiv wählen“-Aktion.</p>
-    <div class="trigger"><b>Trigger:</b> O1 + O3 entschieden.</div>
+    <p class="korrektur">Im Code gelöst durch F2 (Workjet #7, main) und F3 (Workjet #8, CI). O3 entschieden: Auto-Default „This machine“ bei genau einem lokalen Rechner, sonst explizite Radio-Auswahl.</p>
+    <div class="trigger"><b>Trigger:</b> #8 gemergt, dann T4-Beweis.</div>
   </div>
 
   <div class="card">
     <div class="pills"><span class="pill acc">T4</span></div>
-    <h3>Echte Session auf lokalem Rechner, Status über Welsch</h3>
-    <div class="trigger"><b>Trigger:</b> T3 gelandet.</div>
+    <h3>Electron-Beweis: Kaltstart im Code-Modus, Projekt hinzufügen, Session starten, Status über Welsch</h3>
+    <p>Gegen einen Build von main (nach #8) mit dem Welsch-gepairten Profil <code>/tmp/workjet-profile-e2e.DBuZgk</code> (Kopie) und CDP; die Dev-App des Codex-Threads läuft noch auf :9222 als Referenz.</p>
+    <div class="trigger"><b>Trigger:</b> Workjet #8 gemergt. Brief an Sol (CDP-getrieben, Muster des Codex-Threads).</div>
   </div>
 
   <div class="card">
