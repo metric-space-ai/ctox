@@ -75,10 +75,10 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
   <div class="headline"><strong>Kritischer Pfad:</strong> Der Projekt-Add-Pfad Desktop → Core → RxDB ist seit 21:54 auf Welsch repariert und belegt; der nächste Blocker ist die Shell-V2-Verdrahtung (Kaltstart-Aktivierung, Computer-Auswahl, Session-Gating), die ohne ein von Michael freigegebenes Shell-Fenster nicht angefasst werden darf.</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-01 23:00 CEST</b></span>
+    <span>Stand <b>2026-09-01 23:15 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 1/3 · xAI 2/3 · Kimi 2/3 · Z.ai 2/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 2/3 · xAI 1/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -86,7 +86,17 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- DONE -->
 <div class="col">
-  <h2>Done <small>11 Karten</small></h2>
+  <h2>Done <small>12 Karten</small></h2>
+
+  <div class="card">
+    <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">WP-1 discovery</span></div>
+    <h3>Dreier-Panel zum E2E-Gate: Konsens erreicht</h3>
+    <p>Grok, Kimi und GLM (22:30–22:37, je 4–7 min) konvergieren: Rust-Test über <code>accept_rxdb_business_command</code> mit Post-Bus-Dokument, Orakel <code>load_rxdb_collection_record</code> auf beiden Workjet-Collections, kein Polling, Replay-Idempotenz, zwei Mutationen als Nachweis. JS-Smoke über <code>v15_wire_daemon</code> einstimmig verworfen (Beispiel-Daemon hat keine Command-Plane).</p>
+    <ul>
+      <li>Von Fable verifiziert: Bus-Injektion in <code>shared/command-bus.js:619–658</code> (top-level, <code>payload</code>, <code>client_context</code>); Crate ist <code>[[bin]] ctox</code>, also <code>cargo test --bin ctox</code>; Fix-Commit 0d2b63830 fügt genau die drei <code>_inbound_channel</code>-Felder hinzu.</li>
+      <li>Entwürfe: <code>proposals/wp1-A-grok.md</code>, <code>wp1-B-kimi.md</code>, <code>wp1-C-glm.md</code> im Launchpad <code>ctox-sync-transfer</code> (Commit 9637602). Runs als integriert markiert.</li>
+    </ul>
+  </div>
 
   <div class="card">
     <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">core</span></div>
@@ -177,27 +187,17 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
   <h2>Working <small>4 Karten</small></h2>
 
   <div class="card">
-    <div class="pills"><span class="pill acc">WP-1 discovery</span><span class="pill neutral">A/B/C</span></div>
-    <h3>Entwurf lokales E2E-Gate, Dreier-Panel</h3>
-    <p>Gestartet 22:30 aus Launchpad <code>~/.local/state/workjet-launchpads/ctox-sync-transfer</code> (Kontext = Kopien von <code>origin/main</code> 899a9405b). Brief <code>briefs/wp1-e2e-gate.md</code>, sha256 <code>c8eb901b…</code>, byte-identisch für alle drei.</p>
-    <ul>
-      <li>A Grok 4.6: <code>local-…T203045Z-be0fdb1e</code></li>
-      <li>B Kimi K3: <code>local-…T203046Z-17690761</code></li>
-      <li>C GLM 5.3: <code>local-…T203048Z-4ef3d3a9</code></li>
-    </ul>
-    <p>Fertig = drei <code>proposals/wp1-e2e-gate.md</code> importiert, verglichen, Produktionsbrief für Sol geschrieben. Runs-Liste: <code>runs.tsv</code> im Launchpad.</p>
+    <div class="pills"><span class="pill acc">WP-1 produktion</span><span class="pill neutral">sol</span></div>
+    <h3>E2E-Gate-Test in der Command-Plane</h3>
+    <p>Gestartet 22:40. Sol arbeitet im sauberen Klon <code>~/.local/state/workjet-launchpads/ctox-wp1-e2e</code> (Branch <code>wp1-e2e-gate</code> auf <code>origin/main</code> 899a9405b) mit warmem Cargo-Target <code>/Volumes/tmp/ctox-codex-owner-identity-target</code>. Brief <code>~/.local/state/workjet-launchpads/ctox-wp1-e2e-launch/briefs/wp1-e2e-gate-production.md</code>. Run <code>local-…T204028Z-b10fdd0a</code>.</p>
+    <p>Fertig = Test <code>workjet_command_documents_project_into_native_rxdb_before_return</code> grün, Mutation A (Felder <code>_inbound_channel</code> entfernt) und B (<code>persist_idempotently</code> statt Projektion) nachweislich rot, ein Commit im Klon, kein Push. Fable fährt A–F selbst nach.</p>
   </div>
 
   <div class="card">
-    <div class="pills"><span class="pill acc">WP-4 discovery</span><span class="pill neutral">A/B/C</span></div>
+    <div class="pills"><span class="pill acc">WP-4 discovery</span><span class="pill neutral">2/3 zurück</span></div>
     <h3>Transfer-Protokoll-Entwurf, Dreier-Panel</h3>
-    <p>Gestartet 22:30, gleiches Launchpad. Brief <code>briefs/wp4-transfer-protocol.md</code>, sha256 <code>33c93b8f…</code>.</p>
-    <ul>
-      <li>A Grok 4.6: <code>local-…T203049Z-3cba6969</code></li>
-      <li>B Kimi K3: <code>local-…T203051Z-138b8306</code></li>
-      <li>C GLM 5.3: <code>local-…T203052Z-c679400e</code></li>
-    </ul>
-    <p>Fertig = drei Entwürfe verglichen, Owner-Fragen O6/O7 mit konkreten Optionen unterlegt.</p>
+    <p>Brief <code>briefs/wp4-transfer-protocol.md</code>, sha256 <code>33c93b8f…</code>. B (Kimi) und C (GLM) importiert und als integriert markiert: <code>proposals/wp4-B-kimi.md</code>, <code>proposals/wp4-C-glm.md</code> im Launchpad <code>ctox-sync-transfer</code>. Beide schlagen eine native Collection <code>workjet_session_transfers</code> mit Zustandsautomat plus Lease vor; GLM zusätzlich ein Session-Register <code>workjet_sessions</code> und eine kausale Epoch statt Uhr.</p>
+    <p>Offen: A Grok 4.6 <code>local-…T203049Z-3cba6969</code>. Fertig = Vergleich aller drei, O6/O7 mit Optionen unterlegt.</p>
   </div>
 
   <div class="card">
