@@ -75,7 +75,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
   <div class="headline"><strong>Kritischer Pfad:</strong> Projekt-Add ist auf Welsch repariert und belegt. Jetzt läuft die Shell-Verdrahtung (Kaltstart-Aktivierung, Computer-Auswahl, Session-Gating) als Discovery-Panel auf dem Collective-Stand; Kollisionen werden per isolierten Klonen und PRs vermieden, nicht per Rückfrage (Freigabe 01.09. 23:50: „alles selbst entscheiden“). Parallel: E2E-Gate auf Sol, drei PRs in CI.</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-02 00:35 CEST</b></span>
+    <span>Stand <b>2026-09-02 01:00 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
     <span>Provider-Konkurrenz <b>Sol 1/3 · xAI 1/3 · Kimi 1/3 · Z.ai 1/3</b></span>
@@ -86,7 +86,14 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- DONE -->
 <div class="col">
-  <h2>Done <small>16 Karten</small></h2>
+  <h2>Done <small>17 Karten</small></h2>
+
+  <div class="card">
+    <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">workjet</span></div>
+    <h3>Getestete Projekt-/Session-Fixes geborgen: PR #4</h3>
+    <p>Die Dev-App, mit der der Projekt-Thread greppy und miltonticket-app hinzugefügt hat, lief auf Branch <code>codex/desktop-mobile-parity-release-owner-20260830</code> @ <code>72731f58</code>: drei Commits (31.08., +618/−192 in CommandPalette, Sidebar, Projekt-Registry/-Creation), nur lokal, nie gepusht. Von Fable geprüft: nicht in <code>origin/main</code>, <code>git merge-tree</code> gegen main konfliktfrei (main hat seither nur Web-Stack-Commits). Gepusht, PR <a href="https://github.com/metric-space-ai/workjet/pull/4">metric-space-ai/workjet#4</a>.</p>
+    <p class="korrektur">Folge für T2/T3: die im Handover zitierten F2-Texte („Choose a computer before starting a session“) existieren nur auf diesem Branch, nicht auf main. Reihenfolge: PR #4 vor PR #2 mergen, PR #2 dann rebasen (beide berühren Sidebar.tsx und _chat.index.tsx).</p>
+  </div>
 
   <div class="card">
     <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">WP-2a ctox</span></div>
@@ -239,7 +246,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <div class="pills"><span class="pill acc">T2/T3 discovery</span><span class="pill neutral">A/B/C</span></div>
     <h3>Shell-Verdrahtung: Kaltstart-Aktivierung, Computer-Auswahl, Session-Gating</h3>
     <p>Gestartet 23:03, read-only auf dem Workjet-Klon <code>~/.local/state/workjet-launchpads/workjet-t2t3</code> @ 297bdec64 (Collective-Stand). Brief <code>workjet-t2t3-launch/briefs/t2t3-shell-wiring.md</code>. Runs: A <code>…T210319Z-e38802a6</code>, B <code>…T210320Z-72360098</code>, C <code>…T210322Z-820605e3</code>.</p>
-    <p>Fertig = drei Entwürfe zu F1 (instance no longer connected), F2 (kein gewählter Computer), F3 (<code>projects.length</code>-Gating) verglichen, Produktionsbrief für Sol.</p>
+    <p>B (Kimi, 23:08) liegt vor: F1-Ursache belegt. <code>desktop:ctox-activate</code> wird nur im Effekt des sichtbaren Business-OS-Guest-Hosts ausgelöst (<code>CtoxModeShell.tsx:2426</code>, an <code>bounds</code> aus einem ResizeObserver gekettet); im Code-Modus wird kein Host gemountet, der Gast-Pool bleibt leer, <code>requestProjectControl</code> antwortet <code>not_active</code> (<code>CtoxGuestManager.ts:1409</code>). Empfehlung: idempotentes <code>ensure-active</code>-IPC plus ein Retry im Projekt-Control-Pfad (F1: 3/5, ~120 Zeilen). F2: es gibt kein „selected computer“-Setting, nur eine Ableitung im Composer (2/5). F3: vier Konsumenten plus Draft-Routing (4/5). Offen: A Grok, C GLM.</p>
   </div>
 
   <div class="card">
