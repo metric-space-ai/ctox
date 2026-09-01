@@ -82,6 +82,8 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 | R2 Auth-Identität + Sitzungs-TTL: Chat-Steuerkommandos tragen den Nutzer als actor; Recherche→scrape execute→Reauth-Handoff reichen `--owner-user-id` durch; Owner-Fallback über Thread/Chat statt `source_module`; Idle-TTL für `web_stack_auth`-Sitzungen | Sol | Auth-Sitzung aus einem Recherche-Lauf gehört `michael.welsch@…`; nach TTL frei; kein `_ctox_harness`/`_scrape_executor` mehr |
 | R3 Personen-Vertrag: `person_priorities`, `known_person_records`, `research_instructions` nativ; öffentliche person_*-Treffer je Profil-URL zu `person_records` gruppiert; Sellify-Personen führend; Rollen-Validierung; Priorisierung | Sol | Beiersdorf-Fixture: 8 person_records, „Leipzig" keine Funktion, Hahn/Gund erhalten |
 
+| Review R1–R3 (Kimi · Cyber, nur lesen): Privilegiengrenze des IPC-Relais (Pfadargumente), Impersonation über client-gelieferte `actor.id`, Owner-Env an Kindprozess, TTL-Race, R3-Datenhoheit | Kimi Cyber 1, run local-2026-09-01T230523Z-bb436fd9-0db0-49fe-b6a7-f6f4be2469cd; Review-Stand: Launchpad-Branch `integrated` 5366f5a = ctox-rustfix 69814adee | Befunde nach Schweregrad; kritische/hohe vor B1 fixen |
+
 Sol-Kontingent: 0/3 belegt (R1–R3 terminal). Nächster Sol-Einsatz: A1 nach Reproduktion.
 
 ## To-Do (Trigger-Kette)
@@ -115,6 +117,10 @@ Sol-Kontingent: 0/3 belegt (R1–R3 terminal). Nächster Sol-Einsatz: A1 nach Re
   Wirkung auf andere Kampagnen nach B1 messen.
 - Import als dauerhafter Business-Command statt Browser-Schreibschleife (Codex-Plan §1) —
   nach A1-Reproduktion entscheiden.
+
+- Härtung Identität (aus Selbstreview R2): Intake stempelt nur, wenn der Client KEINE Identität liefert; ein
+  Browser-Client kann weiterhin `client_context.actor.id` frei setzen (vorbestehend). Ziel: verifizierte
+  Sitzungsidentität VOR Client-Angaben, Ausnahmen nur für Server-/Harness-Ursprünge. Entscheidung nach Kimi-Review.
 
 ## Umgebungsfallen (neu, zusätzlich zu Archiv unten)
 
