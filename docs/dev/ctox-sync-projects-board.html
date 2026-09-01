@@ -75,7 +75,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
   <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4, F1 (#6), F2 (#7), Collective (#2) und F3 (#8). T4-Beweis: F1 bestanden, Rechner-/Working-Copy-Kette rot → F2b läuft auf Sol, dann T4-Lauf 3; CTOX #43 ist gemergt; RFC Session-Transfer ist als CTOX #44 gemergt (<code>docs/rfcs/workjet-session-transfer.md</code>). Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-02 07:15 CEST</b></span>
+    <span>Stand <b>2026-09-02 07:40 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
     <span>Provider-Konkurrenz <b>Sol 2/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
@@ -326,7 +326,8 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <div class="pills"><span class="pill acc">PKG-1 produktion</span><span class="pill neutral">sol</span></div>
     <h3>RFC Paket 1: Session-Register, Computerintegration, record-scoped Policy</h3>
     <p>Gestartet 04:05 im Klon <code>~/.local/state/workjet-launchpads/ctox-pkg1</code> (Branch <code>codex/workjet-sessions-core</code> = main a6b21e587 + RFC 7238b4cc8, RFC im Baum als Vertrag). Brief <code>ctox-pkg1-launch/briefs/pkg1-sessions-core.md</code>: Collections <code>workjet_sessions</code>/<code>workjet_session_transfers</code> nach RFC §10, <code>workjet_computers</code> voll verdrahtet, <code>owned_by_actor</code>-DataWrite, Owner-Migration, Schema-Contract auf beiden Seiten per Generator, Browser-RxDB-Rebuild mit Cache-Bustern. Keine Lifecycle-Verben (Paket 2). Run <code>local-…T220445Z-443dea28</code>. Warmes Target, /Volumes/tmp 31 GiB frei.</p>
-    <p>Fertig = Gates A–G grün (workjet_session, record_owned_data_write, workjet_computer, Hash-Registry beidseitig, JS-Suite, 14 Alt-Tests); Fable fährt nach; PR gegen main nach #44. Kollisionsrisiko: <code>modules/ctox/*</code> und <code>registry.json</code> sind im Hauptcheckout von der App-Store-Sitzung angefasst → Merge mit Sorgfalt.</p>
+    <p class="korrektur">Lauf 1 (04:05–07:35) endete mit <b>Turn-Timeout nach 5400 s</b>, ohne Commit: 18 Dateien geändert, +2670/−34, darunter <code>store_workjet_sessions.rs</code> (828 Zeilen, 4 Tests), beide Contract-Seiten, gebaute Browser-RxDB, <code>shared/db.js</code>/<code>sync.js</code>. Von Fable als WIP gesichert: Commit <code>fef51c0b4</code> („unverified“). Cargo-Tests und JS-Suite laufen jetzt bei mir, danach Fortsetzungs-Brief mit Pflicht-Commits je grüner Scheibe.</p>
+    <p>Fertig = Gates A–G grün (workjet_session, record_owned_data_write, workjet_computer, Hash-Registry beidseitig, JS-Suite, 14 Alt-Tests); PR gegen main. Kollisionsrisiko: <code>modules/ctox/*</code> und <code>registry.json</code> sind im Hauptcheckout von der App-Store-Sitzung angefasst → Merge mit Sorgfalt.</p>
   </div>
 
   <div class="card">
@@ -525,6 +526,8 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <tr><td>6</td><td><code>cargo fmt</code> formatiert fremde Dateien mit</td><td class="num">1</td><td><code>rustfmt</code> je Datei</td></tr>
     <tr><td>7</td><td>Polling-Spam statt Stundencheck (Web-Stack-Thread)</td><td class="num">1</td><td>Monitore mit Terminalbedingung, Stundenkadenz</td></tr>
     <tr><td>8</td><td>Computer-Use mit falscher Tastensyntax → externer Fehlversand</td><td class="num">1</td><td>Keine Tastenkombinationen in fremden Apps ohne Trockenlauf</td></tr>
+    <tr><td>9</td><td>Worker-Turn-Timeout (5400 s) beendet Rust-Paket ohne Commit; Brief erlaubte, verlangte aber keine Zwischen-Commits</td><td class="num">1</td><td>Briefs ≤ 2 h schneiden; Commit je grüner Scheibe verpflichtend; WIP sofort selbst committen</td></tr>
+    <tr><td>10</td><td>Brief ohne Vorbedingung (Server-Pack) → blockierter Beweislauf</td><td class="num">1</td><td>Startsequenz aus dem Referenzlauf vollständig abschreiben (Server, Web, Desktop)</td></tr>
   </table></div>
 </section>
 
