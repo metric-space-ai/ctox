@@ -73,9 +73,9 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 <header>
   <div class="eyebrow">Progress Board v2 · Orchestrator Fable · Projekt CTOX Sync / Workjet</div>
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
-  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4, F1 (#6), F2 (#7) und Collective (#2). Offen: F3 als #8 (CI läuft, nach #2 auf Konflikte prüfen); CTOX #43 ist gemergt; RFC Session-Transfer als CTOX #44 offen. Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
+  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4, F1 (#6), F2 (#7) und Collective (#2). Offen: F3 als #8 (CI läuft, nach #2 auf Konflikte prüfen); CTOX #43 ist gemergt; RFC Session-Transfer ist als CTOX #44 gemergt (<code>docs/rfcs/workjet-session-transfer.md</code>). Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-02 05:42 CEST</b></span>
+    <span>Stand <b>2026-09-02 06:00 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
     <span>Provider-Konkurrenz <b>Sol 1/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
@@ -99,7 +99,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">WP-4b rfc</span></div>
     <h3>RFC „Workjet Session Transfer“: PR #44</h3>
     <p>Sol (01:37–02:01): <code>docs/rfcs/workjet-session-transfer.md</code>, 812 Zeilen, 29 Abschnitte. Entscheidungen: eigenes Register <code>workjet_sessions</code> + Journal <code>workjet_session_transfers</code>; monotone <code>fence_epoch</code> als Schreibzaun (Uhrzeit nur für Fristen); sieben Lifecycle-Befehle <code>start / pause_ack / pack_complete / apply_complete / confirm_working_copy / resume_ack / abort</code>; record-scoped <code>DataWrite</code> über <code>owned_by_actor</code> plus device-gebundene Rechner-Bindung; Transport über bestehende <code>desktop_files</code>/<code>desktop_file_chunks</code>. Fünf Produktionspakete (3–5/5) mit Worker-Gates in §23.</p>
-    <ul><li>Sol validierte 60 Datei:Zeile-Vorkommen (51 eindeutig) automatisiert, 32 gelesen. Von Fable: Rebase auf main a6b21e587 (Commit <code>7238b4cc8</code>), PR <a href="https://github.com/metric-space-ai/ctox/pull/44">metric-space-ai/ctox#44</a>. Keine offenen Owner-Fragen laut RFC; O6/O7 damit entschieden.</li></ul>
+    <ul><li>Sol validierte 60 Datei:Zeile-Vorkommen (51 eindeutig) automatisiert, 32 gelesen. Von Fable: Rebase auf main a6b21e587 (Commit <code>7238b4cc8</code>), PR <a href="https://github.com/metric-space-ai/ctox/pull/44">metric-space-ai/ctox#44</a> gemergt → <code>ce2632595</code> (05:58; nur Explorer-Baseline rot). Keine offenen Owner-Fragen laut RFC; O6/O7 damit entschieden.</li></ul>
   </div>
 
   <div class="card">
