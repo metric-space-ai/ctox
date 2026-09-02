@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 09:35 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 09:45 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -397,6 +397,17 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   und über `native_authorization.actor.id` des referenzierten Kommandos (daemon-signiert); (c) Spiegel
   `business_commands.client_context` erhält die verifizierte Identität; (d) Fallback nie mehr stumm
   `ctox_harness`, sondern Auth-Assist mit `owner=unresolved` + Fehler an den Aufrufer.
+
+### 02.09. 07:0x — Probe „after-hotfix2": `-r` reicht unter Landlock NICHT (negatives Ergebnis) → R5d
+
+- `sandbox-probe-after-hotfix2.txt`: CMD 2/11 weiterhin „line 11: business-os.env: Permission denied".
+  Ursache: bash `[[ -r ]]` prüft DAC-Bits (Datei gehört ctox, 0600 → lesbar), Landlock verweigert erst das
+  `open()` → `source` scheitert unter `set -e`. Alles andere unverändert grün (Binary EXIT 0, DNS, Secrets
+  verweigert).
+- **R5d** (Template): `source … 2>/dev/null || true` für beide Env-Dateien; auf origin/main nach Compile.
+  Tenant-Hotfix v2 mit demselben Muster gesetzt (Backup `ctox.bak2-20260902`), Probe „after-hotfix3" läuft.
+- Umgebungsfalle: Prüfungen auf Lesbarkeit müssen den Zugriff VERSUCHEN; Permission-Bits sind unter LSM-
+  Sandboxes bedeutungslos.
 
 ## Working
 
