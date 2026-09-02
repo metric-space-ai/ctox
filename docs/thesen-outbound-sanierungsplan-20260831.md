@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 16:15 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 16:50 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -567,6 +567,30 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   Build läuft; ~27 min). Wächter: `claude-wait-upgrade-thesen.ts`. Nach Aktivierung: Nutzer meldet sich neu an.
 - Workjet-Läufe markiert: R7a `…055758Z-07c9bb8a`, R7b `…055759Z-e176f415`, R8 v3 `…071046Z-059e8552` →
   integrated; R8 v1/v2 → abandoned.
+
+### 02.09. 16:33–16:45 UTC — B4 AKTIV; drei Befunde, davon einer blockierend → B5 (Gate 9 läuft)
+
+- **B4 aktiv 16:33 UTC**: `current_release = branch-main-20260902T160618Z`, HTTP 200, Binary trägt R1-Relais
+  (15 Marker) und Live-Op-Marker. Vorher-Messung (`claude-lead-fields.ts`): KUKA 4 gefüllte Felder / 0 Kontakte
+  / 0 Feldzustände; Beiersdorf 8 / 1 / 0.
+- **Befund B4-1 (Wrapper):** `ctox upgrade` schreibt `~/.local/bin/ctox` mit dem Template des ALTEN Binaries
+  (B3) — die R5d-Zeile fehlte wieder, obwohl das neue Binary sie enthält (`strings ctox-real` Zeile 14228).
+  R5d greift erst beim nächsten Upgrade. Hotfix v2 erneut angewendet (16:38), Wrapper geprüft. Regel: nach
+  jedem Upgrade Zeile 11 prüfen, bis ein Upgrade von einem R5d-Binary aus lief.
+- **Befund B4-2 (Recovery-Flut):** Der Daemon legte beim Start 11 Lückenschluss-Tasks für alle historischen
+  abgeschlossenen Phase-A-Befehle an (inkl. Testleads „CTOX Abnahme Chemie", „E2E04 Gueltig Eins"); Befehle
+  ohne Owner-Identität. Backlog: Recovery nur für Befehle mit verifiziertem Owner und nicht für Testleads.
+- **Befund B4-3 (BLOCKIEREND, eigener Fehler):** Mein `business_command_task_links`-Eintrag für den
+  Lückenschluss-Task bindet ihn an einen bereits TERMINALEN Befehl. `command_saga.rs` (lease-1/F-002) wertet
+  einen geleasten Task eines terminalen Befehls als verwaisten Lease und **setzt ihn ohne Ausführung auf
+  `handled`** (mit Terminal-Grant → Zeuge umgangen); `queue cancel` scheitert mit „terminal command transition
+  conflict". Genau das zeigte thesen: 11 Tasks leased, 0 Worker, nicht abbrechbar. Abhilfe live: Link-Zeilen
+  per SQL entfernt, 11 Tasks per CLI abgebrochen (pending 1). **Fix B5 = 9cda2385f:** kein Link mehr;
+  Owner-Auflösung folgt `business_os_command_id` aus den Task-Metadaten (`web_stack_auth_owner_from_task_metadata`),
+  der MCP-Session-Token tat das bereits. KORREKTUR zur Karte 14:40 (Task-Link).
+- **Gate 9** gestartet 16:44 UTC auf 9cda2385f. Danach Push → B5 → Nachrecherche. Nachweis auf B4 wäre
+  wertlos gewesen (Task würde ohne Lauf „erledigt").
+- Worker-Probe „after-b4" (Task `queue:system::55f500a3…`) läuft; Ergebnis folgt.
 
 ## Working
 
