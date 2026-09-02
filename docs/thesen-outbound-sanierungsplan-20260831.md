@@ -158,7 +158,15 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   allowed over the relay" (abgelehnt); relayter `scrape execute handelsregister-de` → `ok:true, succeeded,
   2 records` (Daemon führt aus, Ausgabe kommt zurück). Socket `ctox_service.sock` vorhanden.
 - Modul 1.0.64 und Shell-Slot 0.1.25 unverändert (Upgrade tauscht nur das Binary). 0 Chromium-Prozesse.
-- Journal seit Neustart: nur ein RxDB-DB6-Hinweis (Vorgeschichte wird geprüft), keine neuen Fehlerklassen.
+- Journal seit Neustart: einziger Fehler ist RxDB DB6 beim Registrieren der OPTIONALEN Collection
+  `workjet_computers` (neu auf main durch 445c4d669 „workjet sessions", nicht aus dieser Kampagne; die
+  Collection wird übersprungen). WebRTC-Replikation: „multiplexed WebRTC replication up for 201
+  collections", Peer-Status ok, p2p-first.
+- Kontrollierter Heal-Lauf bundesanzeiger-de → `portal_drift`, Reparaturaufgabe
+  `queue:system::36c31fa9e0ca33519745a3f4` angelegt (03:02:47 UTC); Wächter prüft, ob sie erstmals ohne
+  CLI-Sperre endet.
+- Hinweis Repo-Zustand: das lokale main-Checkout ist gegenüber origin/main abgewichen (58/31 Commits, fremde
+  Arbeit im Baum). Board-Commits liegen lokal UND werden über den Klon ctox-rustfix nach origin/main gepusht.
 - Offen für die fachliche Abnahme: (a) Reparaturaufgabe endet `handled` (kontrollierter Heal-Lauf
   angestoßen), (b) Auth-Sitzung aus einem Recherche-Lauf gehört dem Nutzer (braucht Owner-Recherche),
   (c) mehrere Personen im Lead (braucht Owner-Nachrecherche).
