@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 10:30 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 10:45 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -451,6 +451,38 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   durchgängig. Stand auf thesen: Release B3 + Wrapper-Hotfix v2 (Template-Fix R5d folgt mit B4).
 - Offen bleibt der fachliche Nachweis, dass eine Reparaturaufgabe ein Skript registriert (Relais
   `register-script`) — nächste Gelegenheit: der erste Adapter mit echtem Portal-Drift nach B4.
+
+### 02.09. 08:10 UTC — R7-Gate rot → zwei Befunde behoben; R8 v3 integriert; Identitätskette für Lückenschluss geschlossen
+
+- **R7b-Gate (Log `/Volumes/tmp/thesen-ctox-r7b-gate.log`): 3 grün, 2 rot.** Ursachen (selbst verifiziert, Testbinary
+  `/Volumes/tmp/ctox-check-target/debug/deps/ctox-d2d4e11076007a83`):
+  1. `person_research_gap_witness_accepts_complete_status_and_writeback`: der Core-Guard
+     (`src/core/core_state/guard.rs::load_artifact_terminal_state`) prüft jedes gelieferte Artefakt gegen dauerhaften
+     Zustand; für den neuen Schlüssel `business-command:outbound.lead.research_writeback:<record>:<task>` kannte er
+     nur `communication_messages` → `WP-Outcome-Missing`. **Fix:** Resolver für `business-command:`-Schlüssel, liest
+     `business_commands` (Nachbar-DB `business-os.sqlite3`, read-only, gleiche Regel wie
+     `person_research_gap_closure_writeback_exists`).
+  2. `…fails_terminally_after_third_rejection`: Proof-IDs sind deterministisch aus dem Request; identische
+     Ablehnungen kollabieren zu einer Zeile (Zähler blieb 1). Produktion variiert den Audit-Key je Runde
+     (`vrun_…` mit `created_at`), der Test nicht. **Fix:** Test-Treiber mit explizitem Audit-Key je Runde.
+- **R8 v3 (Run `local-2026-09-02T071046Z-059e8552…`, Patch `/Volumes/tmp/thesen-R8v3.patch`, 6 Dateien) auf
+  `thesen-r7` angewendet.** Kern: nativer Capture-Pfad übergibt `--task-id <command_id>` + `--owner-user-id`
+  (vorher Firmenname als Task-ID); `ctox_harness`-Fallbacks entfernt; Auth-Assist aus dem Harness nur noch mit
+  gebundenem Command-Session-Token; Recovery persistiert `owner_user_id` in `business_commands.client_context_json`.
+  Zwei Korrekturen von mir: let-chain in `resolve_ctox_binary` wiederhergestellt (Fork-Struktur), Owner-Prüfung vor
+  Phase A statt danach (kein Adapter-Budget verbrennen, wenn der Befehl ohnehin abgelehnt wird).
+- **Befund beim Review (nicht von Sol abgedeckt): der Lückenschluss-Task hatte keine Identität.** R7a legt den Task
+  per `create_queue_task` an — ohne `business_command_task_links`-Zeile und ohne `business_os_command_id`.
+  Folge: `source-capture --task-id <gap-task>` findet keinen Owner; der Harness bekommt keinen Session-Token
+  (nur `business_os.chat.task` bekam einen). **Fix (direkt):** `channels::link_business_command_task` (neu,
+  idempotent) + Metadatum `business_os_command_id` beim Anlegen; `configure_business_os_mcp_session_for_queue_job`
+  stellt für Lückenschluss-Tasks einen Token mit `allowed_actions=[outbound-lead-generation/
+  outbound.lead.research_writeback]` aus.
+- **Gate 2 läuft:** `/Volumes/tmp/thesen-r7-gate2.sh` → Log `/Volumes/tmp/thesen-ctox-r7-gate.log`
+  (Zielfilter `person_research_gap outcome_witness core_state`, danach volle `ctox`-Bin-Suite). Fertig =
+  Zeile `=== full exit <code> …`. Danach: Commit auf `thesen-r7`, R5d cherry-pick, Push, B4.
+- Umgebungsfalle (neu): **macOS hat kein `setsid`** — `setsid nohup … &` scheitert stumm; Gate 1 lief dadurch
+  20 Minuten lang gar nicht. Hintergrundstart auf dem Mac: `(nohup script > log 2>&1 &)`.
 
 ## Working
 
