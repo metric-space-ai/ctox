@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 10:20 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 10:30 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -439,6 +439,18 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   Nachrecherche auf KUKA/Beiersdorf: Lead bleibt „läuft/gap_closure", genau ein Task „Lückenschluss: …",
   Worker schreibt `gap_closure/field_status.json`, Rückschreibbefehl akzeptiert, Endstatus mit 32
   Feldzuständen; Auth-Sitzungen gehören michael.welsch@…; (3) Feldzahl vorher/nachher je Lead.
+
+### 02.09. 07:12 UTC — URSACHE 1 BEWIESEN BEHOBEN: Worker führt `ctox` aus, Relais erzeugt echten Lauf
+
+- Probe „after-hotfix3" (Datei `sandbox-probe-after-hotfix3.txt`, geschrieben vom Worker in der Landlock-Sandbox):
+  CMD 2 `/usr/local/bin/ctox status` → JSON, EXIT 0 (Wrapper + Binary); CMD 3 `ctox-real status` → JSON;
+  CMD 4 DNS ok; CMD 9 curl 302; CMD 10 Secrets `Permission denied` (geschützt);
+  **CMD 11 `ctox scrape execute --target-key handelsregister-de …` aus dem Worker → `ok:true, status:succeeded,
+  run_id scrape_run-d3000576405f541e, records_found 2`**; Lauf-Tabelle: 07:12:48 manual succeeded 2.
+  Damit ist die Kette Worker-Sandbox → Wrapper → Binary → Daemon-Relais → nativer Scrape-Lauf erstmals
+  durchgängig. Stand auf thesen: Release B3 + Wrapper-Hotfix v2 (Template-Fix R5d folgt mit B4).
+- Offen bleibt der fachliche Nachweis, dass eine Reparaturaufgabe ein Skript registriert (Relais
+  `register-script`) — nächste Gelegenheit: der erste Adapter mit echtem Portal-Drift nach B4.
 
 ## Working
 
