@@ -78,7 +78,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <span>Stand <b>2026-09-02 09:45 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 2/3 (2b-2, F3d) · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 2/3 (2b-2, T4b-5) · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -392,7 +392,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <div class="pills"><span class="pill acc">F3d fix</span><span class="pill neutral">sol</span></div>
     <h3>Registrierter lokaler Rechner („This machine“) bringt seine Server-Environment in den Business-OS-Code-Scope</h3>
     <p>Gestartet 05:57 im Klon <code>workjet-f3c</code>, Branch <code>codex/workjet-local-computer-scope</code> auf Workjet main 9f4ca6bcf. Brief <code>workjet-f3c-launch/briefs/f3d-local-computer-in-code-scope.md</code>: Tests zuerst; Primary-Environment gehört zum Scope, wenn ein Computer mit <code>presentationKind: "local"</code> und <code>environmentId === primaryEnvironmentId</code> in <code>settings.workjet.computers</code> steht (Mitgliedschaftsbeweis = F2b/F2c-Registrierung); Relay-Regel unverändert, SSH/Bearer weiter ausgeschlossen; Whitelist nur <code>businessOsCodeScope.tsx</code> + Test. Run <code>local-…T035724Z-16a22d6d</code>.</p>
-    <p>Fertig = tsgo 0, Tests grün (inkl. entities/F3c-Dateien), build/fmt/lint, ein Commit; dann PR, Merge, T4b-Lauf 5 (Klon f3c, echtes Server-Pack, CDP :9224).</p>
+    <p><b>Stand 06:06:</b> Run <code>completed</code>, Commit <code>415f45d18</code> (2 Dateien, +116/−21): neue reine Funktion <code>resolveBusinessOsCodeScopeEnvironmentIds</code> (Relay-Menge + Primary, wenn ein Computer <code>local</code> mit <code>environmentId === primary</code> registriert ist), Synchronizer liest <code>primaryEnvironmentIdAtom</code> + <code>settings.workjet.computers</code>, Rationale-Kommentar aktualisiert; Tests rot→grün (4 neue), Receipt: 6 Dateien 131 Tests, build, fmt, lint. Diff von mir gelesen (rein additiv, Relay-Regel unverändert). Mein Gate läuft (Log <code>scratchpad/f3d-verify.log</code>).</p><p><b>T4b-Lauf 5</b> sofort gegen diesen Klon gestartet 06:07 (Brief <code>t4b-session-proof-run5.md</code>, Profil t4b5, CDP :9224, Evidence <code>evidence-run5/</code>; Run <code>local-2026-09-02T040623Z-9f7621e2-bf4d-4…</code>). Fertig = Gate grün → PR/Merge; Lauf 5 liefert Harness-Antwort + Persistenz oder den nächsten Blocker.</p>
   </div>
 
   <div class="card">
