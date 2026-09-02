@@ -167,7 +167,15 @@ function parseArgs(argv) {
 
 function withModuleHash(baseUrl, moduleId) {
   const url = new URL(baseUrl);
+  url.searchParams.set('rxdbSmoke', '1');
   url.hash = moduleId;
+  return url.href;
+}
+
+function withoutModuleHash(baseUrl) {
+  const url = new URL(baseUrl);
+  url.searchParams.set('rxdbSmoke', '1');
+  url.hash = '';
   return url.href;
 }
 
@@ -279,34 +287,35 @@ async function pollUntil(fn, timeoutMs, intervalMs = 500) {
 }
 
 async function openModule(page, moduleId, url, timeoutMs) {
-  const targetUrl = withModuleHash(url, moduleId);
   const rootSelector = `[data-module-root="${moduleId}"]`;
-  await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+  await page.goto(withoutModuleHash(url), { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+  await page.waitForFunction((id) => {
+    const app = window.CTOX_BUSINESS_OS_APP;
+    return typeof app?.openModule === 'function'
+      && Boolean(app.modules?.find?.((module) => module.id === id));
+  }, moduleId, { timeout: timeoutMs, polling: 250 });
   await page.evaluate(async (id) => {
     const app = window.CTOX_BUSINESS_OS_APP;
-    location.hash = id;
-    if (typeof app?.openModule === 'function') {
-      await app.openModule(id, { force: true });
-    }
+    const target = new URL(location.href);
+    target.hash = id;
+    history.replaceState(history.state, '', target.href);
+    await app.openModule(id, { force: true });
   }, moduleId);
-  await page.waitForFunction(({ id, selector }) => {
+  await page.waitForFunction((selector) => {
     const root = document.querySelector(selector);
-    if (root) {
-      const box = root.getBoundingClientRect();
-      const style = window.getComputedStyle(root);
-      if (box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.display !== 'none') {
-        return true;
-      }
-    }
-    const app = window.CTOX_BUSINESS_OS_APP;
-    return Boolean(app?.modules?.find?.((module) => module.id === id));
-  }, { id: moduleId, selector: rootSelector }, { timeout: timeoutMs });
-  await page.evaluate(async (id) => {
-    const app = window.CTOX_BUSINESS_OS_APP;
-    if (typeof app?.openModule === 'function') {
-      await app.openModule(id, { force: true });
-    }
-  }, moduleId);
+    return root?.dataset.moduleReady === 'true';
+  }, rootSelector, { timeout: timeoutMs, polling: 100 });
+  const mount = await page.evaluate(({ id, selector }) => {
+    const root = document.querySelector(selector);
+    return {
+      failed: root?.dataset.moduleLoadFailed === 'true',
+      failure: window.CTOX_BUSINESS_OS_APP?.qaModuleMountFailures?.[id] || null,
+      recovery_text: root?.querySelector('.shell-app-recovery')?.textContent?.trim() || '',
+    };
+  }, { id: moduleId, selector: rootSelector });
+  if (mount.failed) {
+    throw new Error(`module mount failed: ${mount.failure?.message || mount.recovery_text || moduleId}`);
+  }
   await page.waitForSelector(rootSelector, { state: 'visible', timeout: timeoutMs });
   return rootSelector;
 }
