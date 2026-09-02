@@ -371,7 +371,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <div class="pills"><span class="pill acc">F3b produktion</span><span class="pill neutral">sol</span></div>
     <h3>Drafts aus Sync-Projekten bleiben offen; Thread landet unter dem Projekt</h3>
     <p>Gestartet 09:40 im Klon <code>workjet-f3</code>, Branch <code>codex/workjet-synced-project-draft</code> auf main 664ced80c. Brief <code>workjet-f3b-launch/briefs/f3b-synced-project-draft.md</code>: fehlschlagenden Test zuerst, <code>draftInActiveInstance</code> über Projekt-/Working-Copy-Zuordnung statt Environment-String, Thread-Gruppierung in der Sidebar für Sync-Projekte, WorkjetProjectFlow-Assertions minimal. Run <code>local-…T013950Z-6d1eeec2</code>.</p>
-    <p>Fertig = tsgo 0, Tests grün, Build/Pack grün, ein Commit; danach T4b-Lauf 2.</p>
+    <p><b>Stand 04:45:</b> Commit <code>afedff53f</code> im Klon (9 Dateien, +356/−18): neuer reiner Helfer <code>routes/-_chat.draft.$draftId.logic.ts</code> liefert <code>active | pending | foreign</code> (pending solange die Projekt-Registry lädt, active wenn das Sync-Projekt eine aktive Working Copy auf einem Rechner der Draft-Environment hat, <code>workjetProjectMatchesDraftSession</code> in <code>availableProjects.ts</code>), Sidebar gruppiert Sync-Projekt-Threads. <b>Von mir verifiziert:</b> tsgo web 0 / desktop 0, <code>vp test --project unit</code> 4 Dateien 117 grün, <code>vp build</code> grün, fmt clean, lint 0. PR <a href="https://github.com/metric-space-ai/workjet/pull/12">Workjet #12</a> offen, CI läuft. Worker-Run selbst noch nicht terminal.</p><p>Fertig = CI grün (Baseline-Rot Sidebar-Layout erlaubt), gemergt; danach T4b-Lauf 2.</p>
   </div>
 
   <div class="card">
