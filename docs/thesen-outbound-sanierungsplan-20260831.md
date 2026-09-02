@@ -753,6 +753,24 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   Rückschreiben — Beobachtung offen, Ursache noch nicht gemessen (Backlog B9).
 - Gate 12 auf 8ade4d738 gestartet 21:36 UTC.
 
+### 02.09. 21:42–21:50 UTC — Beiersdorf 8 → 17 Felder; Lücke „21 statt 32" geschlossen; B8 gepusht
+
+- **Lauf Beiersdorf** (`leadgen-lead-research-7cd3942e…`): 3 Turns (21:19–21:32, 21:33–21:36, 21:36–21:42), jeder
+  Turn endete `ok`, Rückschreiben im dritten: 3 Fehlversuche (21:40:50 / 21:41:11 / 21:41:49), angenommen 21:42:12.
+  Ergebnis `lead_1awj3nw`: **17 gefüllte Felder (vorher 8), 21 Feldzustände (14 verified, 6 no_match,
+  1 action_required — erstes `action_required` im Feldbetrieb: firma_telefon), 9 Kontakte.** Werte plausibel
+  (Paul-Beiersdorf-Str. 2, 04356 Leipzig; frühere Firmierung „Beiersdorf Manufacturing Waldheim GmbH";
+  Geschäftsführung mit Wechselhistorie; Tochter der Beiersdorf AG).
+- **Befund B9 (eigene Lücke, behoben):** Im Chat-Pfad nahm der Handler die Feldliste aus dem, was der Worker
+  meldete → 21 statt 32 Feldzustände wurden akzeptiert. **Fix 151652af3:** `research_command_requested_fields`
+  liest `payload.fields` des Recherche-Befehls (die 32 aus der App); wer weniger meldet, wird abgewiesen.
+  Skill-Regel entsprechend verschärft.
+- Gate 13 auf 151652af3: 113 grün / 1 rot (vorbestehend). **Push 21:49 UTC** (65b356562 → 151652af3),
+  **B8-Build** gestartet 21:50 UTC.
+- Offene Datenqualität (Backlog B10): Im Beiersdorf-Lead stecken Altkontakte aus früheren Adapterläufen mit
+  XING-Profil-URLs als `person_key`, dreimal „Frederic Heilmann" und einer fremden Firmen-E-Mail
+  (heiko.fischer@daw.de). Der Skill verbietet URLs als person_key jetzt; Altbestand muss separat bereinigt werden.
+
 ## Working
 
 | Karte | Worker / Log | Fertig heißt |
