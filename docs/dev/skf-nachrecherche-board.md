@@ -1,6 +1,6 @@
 # SKF Nachrecherche — Kampagnen-Board (drone_bearing_design_verified)
 
-**Headline:** ABGESCHLOSSEN — Nachrecherche gelandet, App-Fixes F3/F4 gelandet (Knowledge = Claims, Scoring nur Aufgabenkriterien, Commit 2f3aa9628, auf skf.ctox.dev hotpatched v1.0.15), Export-Graph auf Themen/Quellen-Aggregation umgebaut. Offen: F1 (CTOX-Polars-Panic), F2 (5.000-Zeilen-Cap), vorbestehender App-Smoke-Fehler.
+**Headline:** Nachrecherche + App-Fixes gelandet und ausgeliefert (v1.0.15 auf skf.ctox.dev, per HTTP belegt). BLOCKIERT ist nur die Sichtprüfung in der laufenden App: die Browser-Replikation dieser Sitzung kommt nicht hoch (Sync 0/3), deshalb trägt die Shell-Projektion noch 1.0.14 und die App bleibt bei „Knowledge wird geladen“.
 
 Owner-Auftrag 02.09.2026: „da müssen noch Stunden an nachträglicher Quellenauswertung rein“ — 138 verifizierte Quellen sind nur zu 17 inhaltlich ausgewertet (31 Claims), 121 Quellen hängen im Graph frei, Knowledge zeigt rohe Textfetzen, Messdaten nur aus SRC-0123.
 
@@ -34,6 +34,8 @@ Zielbild: jede der 138 Quellen inhaltlich ausgewertet (Relevanzurteil, 3–10 pr
 
 ## To-Do
 
+- **[F6] Sichtprüfung Web Research auf skf.ctox.dev nachholen.** Serverseite gesund: Peer `replicationUp=true`, `dataChannelOpen=true`, Wartungsmodus `phase=completed` (geprüft 23:38). Browser dieser Sitzung: Sync bleibt „0/3", `CTOX_BUSINESS_OS_STATUS.snapshot()` leer, Modulliste 1.0.14 obwohl HTTP 1.0.15 liefert (per `fetch` mit eigenem Buster belegt, Build `20260902-research-claims-knowledge-v89`, `research-claim-list` im ausgelieferten Code). Geladener Buster laut `performance.getEntriesByType('resource')`: `…C2cfcde4a3f0a66a13a72…C1.0.14` — Manifest-Hash der NEUEN module.json, Versionssuffix alt. TRIGGER: Browser mit funktionierender Replikation (Nutzer-Chrome oder `ctox web browser-automation` auf der Instanz).
+
 - **[F5] App-Smoke `ctox business-os app smoke research` ist auf skf.ctox.dev vorbestehend rot** — `locator.scrollIntoViewIfNeeded: strict mode violation: resolved to 2 elements` plus zwei 404-Ressourcen; identisch vor und nach dem Hotpatch gemessen (Baseline mit v1.0.14 zurückgespielt). Keine `page_errors`. Ursache suchen: doppeltes Element im Shell-Markup. TRIGGER: eigener PR.
 
 - **[F1] CTOX-Defekt melden/fixen:** `ctox knowledge data` head/count/export/import panicken im Release (Polars `LazyFrame.collect()` ohne `new-streaming`); eager Reader wie in `read_rows_capped` verwenden (`src/core/knowledge/ops.rs`). TRIGGER: eigener PR.
@@ -53,6 +55,10 @@ Zielbild: jede der 138 Quellen inhaltlich ausgewertet (Relevanzurteil, 3–10 pr
 ---
 
 ## Environment traps
+
+- **Abnahme auf Kundeninstanzen läuft über SSH + CTOX-CLI, nicht über MCP** (bestätigt von der Sitzung „Outbound app Funktionsproblem", 02.09.): `ninja-ctox-dev-business-os` gibt 401, ein Token für Kundeninstanzen existiert nicht. Browser auf der Instanz: `ctox web browser-capture --url`, `ctox web browser-automation [--session-id] --script-file`, Login-Quellen über `ctox business-os web-stack auth-assist-request/--status/source-capture`; Live-Op-Probe `strings current/bin/ctox-real | grep liveScreenshot`. Der web-stack-Runner kommt aus dem workjet-Pin (src/tools/web-stack ist workspace-excluded).
+- **Nach `ctox upgrade` steht die Instanz im Wartungsmodus** (`~/.local/state/ctox/ctox-maintenance.sqlite3`, Phase `waiting_collections`); Befehle werden mit `CTOX_MAINTENANCE_READ_ONLY` abgelehnt und Projektionen wirken eingefroren, bis die Shell Bereitschaft quittiert (ein Reload der Oberfläche genügt). Prüfen mit `sqlite3 … "select state_json from ctox_maintenance_state"` BEVOR man an APP_BUILD dreht. Auf skf am 02.09. `phase=completed` — dort nicht die Ursache.
+- **Geladenen Cache-Buster prüfen** mit `performance.getEntriesByType('resource')`: der Buster der Modul-Assets endet auf der Modulversion aus der RxDB-Projektion. Trägt er die alte Version, ist nicht der Deploy kaputt, sondern die Projektion im Browser alt.
 
 - **Modul-Deploy auf skf.ctox.dev geht NUR ins Release-Verzeichnis** `~/.local/lib/ctox/current/src/apps/business-os/modules/<id>/`; die Kopie unter `~/.local/state/ctox/business-os/modules/<id>/` wird nicht ausgeliefert (Katalog-`manifest_sha256` zeigt auf das Release). Nach dem Kopieren `ctox business-os app refresh-catalog`, dann `curl http://127.0.0.1:8765/modules/<id>/module.json` als Beweis. Ein `ctox upgrade` überschreibt den Hotpatch — der Commit auf `main` ist die Wahrheit.
 - **`ctox business-os app validate --source` scheitert auf der Instanz an fehlendem esbuild** (Modultests); mit `--skip-tests` grün, Tests lokal fahren.
