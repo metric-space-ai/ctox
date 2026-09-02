@@ -1,6 +1,6 @@
 # SKF Nachrecherche — Kampagnen-Board (drone_bearing_design_verified)
 
-**Headline:** P1 läuft — erster Slice (03) nach 6 min integriert, Slices 01/02/04 aktiv (Sol 3/3); Tempo ≈ 2–3 min je Quelle → 138 Quellen in ~2–3 h bei 3 parallel; danach P2 Konsolidierung (Sol) und P4 Import.
+**Headline:** P1 zur Hälfte — 20/40 Slices integriert (67 Quellen, 527 Claims, alle Validatoren grün, 0 needs_review), 21–23 laufen; ETA P1 ≈ 21:20; danach P2 (Themenfeld-Briefs an Sol) und P4 Import.
 
 Owner-Auftrag 02.09.2026: „da müssen noch Stunden an nachträglicher Quellenauswertung rein“ — 138 verifizierte Quellen sind nur zu 17 inhaltlich ausgewertet (31 Claims), 121 Quellen hängen im Graph frei, Knowledge zeigt rohe Textfetzen, Messdaten nur aus SRC-0123.
 
@@ -18,7 +18,8 @@ Zielbild: jede der 138 Quellen inhaltlich ausgewertet (Relevanzurteil, 3–10 pr
 ## Working
 
 - **[P1] Slice-03 INTEGRIERT 19:46 (SRC-0006, SRC-0097; 2/2 gültig; result import + runs mark ok).** Generator `nachrecherche/build-tables.py` läuft gegen die bisherigen 10 Ausgaben: 74 neue Claims, 45 Quellen mit Kanten, 5.218 Evidenzzeilen, 926 P3-Zeilen (`nachrecherche/v5/`).
-- **[P1] Sol-Slices 01, 02, 04 laufen** (Run-IDs in `nachrecherche/runs.json`; Ereignisse `nachrecherche/logs/<slice>.events.log`; Pump `nachrecherche/pump.py` alle 120 s, Log `logs/pump.log`). Pump validiert fertige Slices (`validate.py`, Zitat-Substring-Prüfung gegen texts/) und markiert nur grüne Slices `integrated`; rote → `needs_review` für Fable. Sol 3/3 — nicht zusätzlich starten.
+- **[P1] 20:40 — 20/40 Slices integriert, 67 Quellen, 527 Claims (19 core, 46 context, 2 off_topic)** (`nachrecherche/runs.json`). Worker schlagen neues Themenfeld „NEU: Elektrische Lagerströme und Elektroerosion“ vor (wird KB-101 im Generator).
+- **[P1] Sol-Slices 21–23 laufen** (Run-IDs in `nachrecherche/runs.json`; Ereignisse `nachrecherche/logs/<slice>.events.log`; Pump `nachrecherche/pump.py` alle 120 s, Log `logs/pump.log`). Pump validiert fertige Slices (`validate.py`, Zitat-Substring-Prüfung gegen texts/) und markiert nur grüne Slices `integrated`; rote → `needs_review` für Fable. Sol 3/3 — nicht zusätzlich starten.
 - **[P0d] Snapshots → lokal → Text.** rsync der 138 Dateien nach `/Volumes/tmp/skf-research-board/snapshots/` (Log `rsync.log`), danach automatisch `extract-texts.py` → `texts/SRC-XXXX.txt` mit `[[PAGE n]]`-Markern (Log `nachrecherche/logs/extract.log`, Statistik `texts/_stats.json`). ERLEDIGT 19:36: 138 Textdateien, 18,5 Mio Zeichen, keine Fehlextraktion; Riesen: SRC-0119 5,0 M (SKF-Katalog), SRC-0121 1,3 M, SRC-0067 0,58 M; ZIP-Listen auf 90 k gekürzt. 40 Slices (`nachrecherche/slices.json`, Briefs `nachrecherche/briefs/`), sechs Briefs mit Gezielt-lesen-Hinweis.
 
 ## To-Do
