@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 05:50 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 06:20 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -237,6 +237,22 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 - Nachher-Messung gestartet: Probe-Task „sandbox probe (after-b2)" (11 Befehle inkl. Secrets-Verweigerung und
   Relais-Aufruf `scrape execute` aus dem Worker) + ein Heal-Lauf bundesanzeiger-de für eine frische
   Reparaturaufgabe.
+
+### 02.09. 05:xx — Nachher-Messung nach B2: noch NICHT ausreichend (negatives Ergebnis) → R5b
+
+- Probe-Task „after-b2" (`queue:system::59fc1c58287c7e661911f8e8`) endete `handled`, aber die Worker-Antwort ist
+  in keiner Queue-/DB-Struktur persistiert (nur Review-Feedback); das Kontext-Log speichert Tool-Aufrufe ohne
+  Ausgabe, und der Exit-Code ist wegen `; echo EXIT=$?` immer 0 → als Beleg unbrauchbar. Belastbare Messung:
+  der Worker-Aufruf `ctox scrape execute handelsregister-de` (04:55:57 und 04:58:03 UTC) erzeugte **keinen**
+  Scrape-Lauf → die CLI ist aus dem Worker weiterhin nicht gestartet.
+- Ursache: Harness-Log „managed worker readable roots: 4 (releases/…, current, /usr/local/bin)" + Resolver-Dir.
+  `~/.local/bin` fehlt, weil der Daemon-PATH (systemd user unit) `~/.local/bin` nicht enthält; Landlock löst
+  `/usr/local/bin/ctox` → `/home/ctox/.local/bin/ctox` auf, und dieses Verzeichnis ist nicht lesbar → EACCES.
+- **R5b** (selbst, klein): Elternverzeichnis des symlink-aufgelösten Wrappers (für jeden PATH-Treffer und
+  `/usr/local/bin/ctox`) zu den Leseroots. Branch `thesen-r5b`, Gate läuft; danach Push + Build B3 (dritter
+  Neustart).
+- Lehre (Umgebungsfalle): Probe-Tasks müssen ihre Ausgabe als DATEI ins Workspace schreiben, sonst ist nichts
+  nachprüfbar; und Exit-Codes nie hinter `; echo` verstecken.
 
 ## Working
 
