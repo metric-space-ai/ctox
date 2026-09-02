@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 08:55 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 09:10 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -356,6 +356,26 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   Sellify-Intakes (31.08./01.09.) → bleibt als Intake-Karte (M-Backlog), nicht als App-Defekt.
 - Live-Test „Neue Recherche" auf dem KUKA-Lead gestartet (R2/R3-Messung: Identität am Kommando, Besitzer der
   Auth-Sitzungen, Personen im Lead).
+
+### 02.09. 06:4x — Live-Nachrecherche KUKA (Owner-Sitzung): Sellify-Weiche ok, Recherche läuft, Identität FEHLT weiterhin
+
+- „Neue Recherche" auf KUKA → Weiche greift: „bereits in Sellify (contact_id 14644), nur Nachrecherche" (korrekt).
+  „Nachrecherche" → Sellify-Lookup + `web_stack.person_research` per Command-Bus in 2,6 s `push_confirmed`,
+  Crew-Chat öffnet, Zeile „Läuft"; nach ~90 s `completed`: **4 von 32 Feldern**, Quellen dnbhoovers/leadfeeder/
+  sellify, **0 Personen**, 1 Quelle braucht Browser-Autorisierung → Lead `needs_review`.
+- **R2/R4 fachlich NICHT wirksam:** das persistierte Kommando hat KEIN `actor`/`owner_user_id` im client_context,
+  obwohl `native_authorization.actor.id = michael.welsch@…` (die Queue-Autorisierung kannte den Nutzer). Folge:
+  Journal „auth assist owner unresolved source_module=ctox_harness task=KUKA Deutschland GmbH" und die
+  RocketReach-Auth-Sitzung wieder unter `ctox_harness`, geblockt durch Budget 3/3 (drei alte Harness-Sitzungen).
+- Journal: 5× „accepting business command … failed: a valid capability token is required" (06:43:18–23) für
+  ReplicatedPeer-Zustellungen desselben Docs — der Kontext des Kommandos trägt kein `capability_token`; die
+  Annahme kam über den Chat-/TrustedLocal-Pfad (Stempelung greift nur für ReplicatedPeer). Genau die Stelle,
+  die R2 als „Builder nicht gefunden" ausgelassen hat. → **R8**: Chat-abgeleitete Steuerkommandos erben die
+  verifizierte Chat-/Queue-Identität (dieselbe Quelle wie `native_authorization.actor`); Auth-Assist aus dem
+  Recherche-Lauf muss den Besitzer aus dem Kommando lesen (R2-Kette), sonst Fallback nie `ctox_harness`, sondern
+  Fehler mit Klartext.
+- UI-Nebenbefund: der Hinweis-Dialog („nur Nachrecherche möglich") blieb nach OK-Klick per Skript stehen (zwei
+  gestapelte Dialoge) — Karte A1.
 
 ## Working
 
