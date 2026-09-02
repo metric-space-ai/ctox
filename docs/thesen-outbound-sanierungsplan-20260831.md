@@ -727,6 +727,32 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   landeten (Feldstatus je Person vs. Personenliste). Skill-Ergänzung ist drin, Wirkung mit B8 messen.
 - Beiersdorf-Lauf gestartet 21:19 UTC (Queue-Task „Nachrecherche: Beiersdorf Manufacturing Leipzig GmbH").
 
+### 02.09. 21:40 UTC — Unblocking-Fortsetzung: existierte bereits, Identität ergänzt; Skill um Randfälle erweitert
+
+- Befund (Code): `rxdb_peer_browser.rs` behandelt `web_stack.auth_assist.complete` (Knopf „Anmeldung bestätigt")
+  bereits vollständig: `settle_auth_assist_queue_task` bricht die wartende Auth-Assist-Aufgabe ab,
+  `resume_auth_assist_requesting_task` setzt den Recherche-Task fort — `pending` bei blocked/failed, sonst neue
+  Aufgabe **„Fortsetzen: <Titel>"** im selben Thread, gleicher Workspace, gleicher Skill, parent = Originaltask.
+  Damit ist das vom Owner beschriebene Modell vorhanden; es war nur nie erprobt.
+- **Ergänzt (8ade4d738):** Die Fortsetzungsaufgabe trägt jetzt `business_os_command_id`, `business_os_module`
+  und `business_os_record_id` aus dem Originaltask. Ohne sie hätte der fortgesetzte Lauf keinen Owner für weitere
+  Browsersitzungen und keinen Bezug für den Rückschreibbefehl.
+- **Skill erweitert** (jetzt 221 Zeilen): §8 „Unblocking across turns" (Turn nicht offenhalten, `action_required`
+  mit `session_id` zurückschreiben, in der Fortsetzung nur offene Felder, danach wieder VOLLSTÄNDIGE 32
+  Feldzustände, weil der Handler die Karte ersetzt) und §9 Randfall-Tabelle mit 17 realen Fällen (Rate-Limit,
+  Blockade, fehlender Login, portal_drift, temporary_unreachable, kein Adapter, Quellenwiderspruch, veraltete
+  Sellify-Person, Namensdubletten, Profil-URL als person_key, Tochter/Umfirmierung, inaktives Register, AT/CH,
+  abgelehntes Rückschreiben, Budget-Ende, `no_match` ohne Beleg).
+- **Qualitätsbeleg KUKA** (Chatantwort des Agenten, gekürzt): „17 Felder verifiziert, je ≥ 2 unabhängige Quellen —
+  HRB 14914 Amtsgericht Augsburg, aktiv seit 02.02.1982, früherer Name KUKA Roboter GmbH; Zugspitzstraße 140,
+  86165 Augsburg; Geschäftsführung mit Bestelldaten; 15 aktive Prokuristen, Dirk Busch zum 10.07.2026
+  ausgeschieden. no_match mit Begründung: WZ-Code/Umsatz/Mitarbeiter verlangen Login (Bundesanzeiger, D&B,
+  Leadfeeder), LinkedIn blockt (HTTP 999). Detail in research_summary.md im Workspace."
+  Das ist erstmals Produktqualität statt Adapter-Rohdaten.
+- Beiersdorf läuft seit 21:19 in Turn 3 (21:19–21:32, 21:33–21:36, ab 21:36); jeder Turn endet `ok`, ohne
+  Rückschreiben — Beobachtung offen, Ursache noch nicht gemessen (Backlog B9).
+- Gate 12 auf 8ade4d738 gestartet 21:36 UTC.
+
 ## Working
 
 | Karte | Worker / Log | Fertig heißt |
