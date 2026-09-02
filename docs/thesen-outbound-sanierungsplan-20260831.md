@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 14:45 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 15:55 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -543,6 +543,18 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   Merge origin/main c3e99712f, konfliktfrei + R5d b0945e8c8). `ctox-rustfix` steht jetzt auf diesem Stand.
 - **Gate 7** gestartet 14:40 UTC auf 12b08eae1 (sauberer Baum). Grün = Ziel-Tests ≤ 1 rot (nur der
   vorbestehende MCP-Test) → Push nach origin/main → B4.
+
+### 02.09. 15:49 UTC — Gate 7 GRÜN (113/1, nur der vorbestehende MCP-Test) → main erneut bewegt → Gate 8
+
+- Gate 7 (Neustart 15:02 nach Sitzungs-Restart, der den Lauf um 14:40 mitgerissen hatte) auf 12b08eae1:
+  **113 grün, 1 rot** = `outbound_lead_generation_exposes_native_scoped_person_research` (vorbestehend auf
+  origin/main, unverändert). Damit erfüllt.
+- Push-Versuch 15:48: `origin/main` war inzwischen 57dc87f39 (3 Commits: Importer-Standalone-Fix, Workjet
+  Session-Transfer-Events #50, Web-Research-Messdaten #56; Rust nur `store.rs`/`store_workjet_sessions.rs`).
+  Kein Fast-Forward → Merge konfliktfrei = **e46d3a1d5** (neuer Push-Kandidat, `ctox-rustfix` steht darauf).
+- **Gate 8** gestartet 15:49 UTC auf e46d3a1d5 (gleiches Skript/Log). Regel: gepusht wird nur der exakt
+  gemessene Stand; bewegt sich main erneut nur in JS-Dateien, wird nach Merge ohne weiteres Gate gepusht.
+- Zeitplan (lokal): Gate 8 ~16:35 UTC → Push → B4 ~17:05 UTC aktiv → Nachrecherche ~17:10 UTC (19:10 Uhr).
 
 ## Working
 
