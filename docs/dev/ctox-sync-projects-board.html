@@ -622,6 +622,9 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <tr><td>8</td><td>Computer-Use mit falscher Tastensyntax → externer Fehlversand</td><td class="num">1</td><td>Keine Tastenkombinationen in fremden Apps ohne Trockenlauf</td></tr>
     <tr><td>9</td><td>Worker-Turn-Timeout (5400 s) beendet Rust-Paket ohne Commit; Brief erlaubte, verlangte aber keine Zwischen-Commits</td><td class="num">1</td><td>Briefs ≤ 2 h schneiden; Commit je grüner Scheibe verpflichtend; WIP sofort selbst committen</td></tr>
     <tr><td>10</td><td>Brief ohne Vorbedingung (Server-Pack) → blockierter Beweislauf</td><td class="num">1</td><td>Startsequenz aus dem Referenzlauf vollständig abschreiben (Server, Web, Desktop)</td></tr>
+    <tr><td>11</td><td>Gate im Klon gemessen, während ein Worker dort editierte → Compile-Fehler aus fremdem WIP (2b-1-Rebase-Gate)</td><td class="num">1</td><td>Vor jeder Messung: läuft ein Worker in diesem Klon? Dann warten oder in einem zweiten Klon messen</td></tr>
+    <tr><td>12</td><td>Zwei Worker in denselben Klon geschickt (3a Rust + 3b-1a JS); der zweite hätte per <code>git checkout -b</code> den Branch des ersten gewechselt</td><td class="num">1</td><td>Je Worker ein Klon (<code>git clone --shared</code> ist billig); Launch-Skript prüft, dass der Zielklon keinen laufenden Run hat</td></tr>
+    <tr><td>13</td><td>Symlink-geliehene Build-Artefakte liefern fremden Code (Server-dist → Renderer aus anderem Klon, T4b-Lauf 3)</td><td class="num">1</td><td>Artefakte im selben Klon bauen; Asset-Hash des geladenen Renderers belegen (Falle E11)</td></tr>
   </table></div>
 </section>
 
@@ -637,6 +640,9 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <tr><td>Welsch</td><td class="mono">Tenant 322084e5-8239-48d7-b3c5-c5178fbe5822 · Release main-5ca837d926e0 · Backup /home/ctox/.local/state/ctox/backups/update-20260901T194113Z</td></tr>
     <tr><td>CI-Runs rot (Baseline)</td><td class="mono">ctox run 33549942043 job 99996627112 · run 33549942163 job 99996626547</td></tr>
     <tr><td>Desktop-E2E</td><td class="mono">Registry-Key workjet:project-registry:v1:managed%3A322084e5-… · Screenshot /var/folders/hf/…/CUAService/Workjet Screenshot 2026-09-01 at 10.04.42 PM.jpeg</td></tr>
+    <tr><td>T4b-Beweisläufe</td><td class="mono">~/.local/state/workjet-launchpads/workjet-t4b-launch/evidence-run2/ (failed) · evidence-run3/ (ungültig) · evidence-run4/ (failed, Ursache) · evidence-run5/ (PASSED: report.md, run1-thread-details.json, run2-thread-details.json)</td></tr>
+    <tr><td>PKG-3 Discovery-Berichte</td><td class="mono">~/.local/state/workjet-launchpads/ctox-pkg3-launch/reports/A-grok.md · B-kimi.md · C-glm.md · briefs/pkg3a-fence-in-pi-turn.md · briefs/pkg3b1a-session-control-shell.md</td></tr>
+    <tr><td>Klone (je Worker einer)</td><td class="mono">ctox-pkg2 (2a) · ctox-pkg2b (2b) · ctox-pkg3 (3a) · ctox-pkg3b (3b-1a) · workjet-f3 (F3b, T4b-2/3) · workjet-f3c (F3c/F3d, T4b-4/5; echtes Server-Pack)</td></tr>
     <tr><td>Workjet-UI-Gate</td><td class="mono">~/Documents/workjet/runtime/workjet-ui-testing/e4312d899983862b3cad4aea45b9d19d27dedc8f/2026-09-01T05-33-19-671Z-3c3554/</td></tr>
     <tr><td>Grok-Smoke, Workjet-Probe, Extrakte</td><td class="mono">Scratchpad 6f580cc6-…: health.json · webstack.txt · users.txt · assistant.txt</td></tr>
   </table></div>
