@@ -73,9 +73,9 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 <header>
   <div class="eyebrow">Progress Board v2 · Orchestrator Fable · Projekt CTOX Sync / Workjet</div>
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
-  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4, F1 (#6), F2 (#7), Collective (#2), F3 (#8), F2b (#9) und F2c (#10). T4-Beweis Lauf 4 läuft gegen genau diesen Stand; RFC Paket 1 ist als CTOX #45 gemergt, Paket 2a (Lifecycle-Verben start/abort/status) startet; CTOX #43 ist gemergt; RFC Session-Transfer ist als CTOX #44 gemergt (<code>docs/rfcs/workjet-session-transfer.md</code>). Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
+  <div class="headline"><strong>Kritischer Pfad:</strong> Stufe 1–3 des Zielbilds sind im Code und per Electron-Kaltstart belegt: virtuelles Projekt in CTOX Sync, Working Copy auf diesem Rechner, Rechner automatisch gewählt, Session startbar (Workjet main 664ced80c). Jetzt läuft Stufe 4, die Übergabe: RFC (CTOX #44) → Paket 1 gemergt (#45) → Paket 2a auf Sol (start/abort/status) → 2b → Coding-Fence → Git-Pfad → Zwei-Rechner-Test. Parallel als nächster Beweis: eine echte Session aus der App starten (T4b). Baseline-rot bleiben Sidebar-Layout-Test (Workjet) und Explorer-Guard/Inventory-Test (CTOX), beide Fremd-Anteile.</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-02 09:14 CEST</b></span>
+    <span>Stand <b>2026-09-02 09:25 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
     <span>Provider-Konkurrenz <b>Sol 2/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
@@ -86,7 +86,14 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- DONE -->
 <div class="col">
-  <h2>Done <small>32 Karten</small></h2>
+  <h2>Done <small>33 Karten</small></h2>
+
+  <div class="card">
+    <div class="pills"><span class="pill ok">bestanden, belegt</span><span class="pill acc">T4 lauf 4</span></div>
+    <h3>Electron-Kaltstart-Beweis bestanden: Projekt hinzufügen, Rechner gewählt, Session startbar, persistent</h3>
+    <p>Sol (08:50–09:06) gegen fef2f59f3 (= Workjet main 664ced80c), frischer Build, Electron 41.10.3, Profilkopie, CDP :9223, rein CDP-getrieben. Lauf 1: Code-Modus, Welsch, „Add project“ mit <code>/tmp/workjet-t4-project</code> → „Project added“ ohne Business-OS-Tab; Working Copy <code>workjet_wc_74560e35…</code> auf <code>computerId 50988886…</code>, active; „New thread“ und „New session“ <code>disabled=false</code>; Settings → Computers: MacBook Pro „This machine · Current computer“ <code>aria-checked=true</code>. Lauf 2 (zweiter Kaltstart): alles persistent. Codex-App auf :9222 unverändert.</p>
+    <ul><li>Von Fable in den Evidence-JSONs nachgelesen (Buttons, Radio-Zustände, Registry). Evidence: <code>workjet-t4-launch/evidence-run4-passed/</code> (64 Dateien). Damit sind T2, T3 und T4 abgeschlossen; vier Beweisläufe insgesamt (blockiert, negativ, teilweise, bestanden).</li></ul>
+  </div>
 
   <div class="card">
     <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">F2c workjet</span></div>
@@ -349,15 +356,9 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- WORKING -->
 <div class="col">
-  <h2>Working <small>4 Karten</small></h2>
+  <h2>Working <small>3 Karten</small></h2>
 
 
-
-  <div class="card">
-    <div class="pills"><span class="pill acc">T4 beweis, lauf 4</span><span class="pill neutral">sol</span></div>
-    <h3>Electron-Kaltstart-Beweis gegen den F2c-Baum</h3>
-    <p>Gestartet 08:50 im Klon <code>workjet-f3</code> @ fef2f59f3 (= main nach #10), gleicher Brief mit F2c-Markern; Vorläufe unter <code>evidence-run1-blocked/</code>, <code>evidence-run2-failed/</code>, <code>evidence-run3-partial/</code>. Erwartung: alle drei Kriterien grün (Project added mit Working Copy, „This machine“ <code>aria-checked=true</code>, „New thread“ aktiv, persistent). Run <code>local-…T005028Z-8624c4c0</code>.</p>
-  </div>
 
   <div class="card">
     <div class="pills"><span class="pill acc">PKG-2a produktion</span><span class="pill neutral">sol</span></div>
@@ -375,34 +376,13 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- TO-DO -->
 <div class="col">
-  <h2>To-Do <small>12 Karten</small></h2>
+  <h2>To-Do <small>9 Karten</small></h2>
 
   <div class="card">
     <div class="pills"><span class="pill acc">T1</span><span class="pill neutral">grok-tauglich</span></div>
     <h3>Lokales E2E-Gate Desktop → Command-Bus → Core → RxDB</h3>
     <p>Test gegen lokalen Daemon: <code>project.upsert</code> + <code>working_copy.upsert</code> absetzen, Projektion in beiden Collections binnen 5 s prüfen. Muss bei Revert von Fix 1 und 2 rot werden.</p>
     <div class="trigger"><b>Trigger:</b> sofort. Kein Shell-Code. → WP-1</div>
-  </div>
-
-  <div class="card">
-    <div class="pills"><span class="pill acc">T2</span><span class="pill crit">shell</span></div>
-    <h3>Kaltstart aktiviert CTOX-Instanz automatisch</h3>
-    <p class="korrektur">Im Code gelöst durch F1 (Workjet #6, main). Verbleibt hier nur bis zum Electron-Kaltstart-Beweis (T4).</p>
-    <div class="trigger"><b>Trigger:</b> T4-Beweis.</div>
-  </div>
-
-  <div class="card">
-    <div class="pills"><span class="pill acc">T3</span><span class="pill crit">shell</span></div>
-    <h3>Computer-Auswahl + Session-Gating auf <code>workjetProjects</code></h3>
-    <p class="korrektur">Im Code gelöst durch F2 (Workjet #7, main) und F3 (Workjet #8, CI). O3 entschieden: Auto-Default „This machine“ bei genau einem lokalen Rechner, sonst explizite Radio-Auswahl.</p>
-    <div class="trigger"><b>Trigger:</b> #8 gemergt, dann T4-Beweis.</div>
-  </div>
-
-  <div class="card">
-    <div class="pills"><span class="pill acc">T4</span></div>
-    <h3>Electron-Beweis: Kaltstart im Code-Modus, Projekt hinzufügen, Session starten, Status über Welsch</h3>
-    <p>Gegen einen Build von main (nach #8) mit dem Welsch-gepairten Profil <code>/tmp/workjet-profile-e2e.DBuZgk</code> (Kopie) und CDP; die Dev-App des Codex-Threads läuft noch auf :9222 als Referenz.</p>
-    <div class="trigger"><b>Trigger:</b> Workjet #8 gemergt. Brief an Sol (CDP-getrieben, Muster des Codex-Threads).</div>
   </div>
 
   <div class="card">
