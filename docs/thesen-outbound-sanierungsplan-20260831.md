@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 08:45 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 08:55 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -343,6 +343,19 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 - Reparaturaufgabe `6ace265f…` (alter Wrapper) endete `handled` ohne neue Revision — die Schleife bricht nicht
   mehr, der Worker kam nur mangels CLI nicht zur Registrierung; Negativkontrolle. Frische Reparaturaufgabe nach
   Hotfix eingereiht.
+
+### 02.09. 06:4x — A1-Reproduktion Teil 2 (Owner erneut angemeldet, nach B3, Schreibpfad)
+
+- **Import (IDB closing): NICHT reproduziert.** Freitext „KUKA Deutschland GmbH" → Vorschau 1 Lead → „Gültige
+  Leads importieren" → nach 10 s: Dialog zu, 4. Zeile „KUKA Deutschland GmbH" in ABNAHME-E2E04, keine
+  Fehler/Alerts, keine `IDBDatabase`-Konsolenfehler. Codex' Befund trat in einer lang laufenden Sitzung nach
+  DB-Neuöffnung auf → bleibt als Robustheits-Karte (Import als dauerhafter Business-Command), nicht als
+  reproduzierter Defekt.
+- **Sellify-Kampagnensuche hängt: NICHT reproduziert.** „Welle" → nach ~20 s „40 Kampagnen gefunden" mit
+  Mitgliederzahlen (Screenshot). Codex' Befund lag im Zeitfenster der `database is locked`-Vorfälle des
+  Sellify-Intakes (31.08./01.09.) → bleibt als Intake-Karte (M-Backlog), nicht als App-Defekt.
+- Live-Test „Neue Recherche" auf dem KUKA-Lead gestartet (R2/R3-Messung: Identität am Kommando, Besitzer der
+  Auth-Sitzungen, Personen im Lead).
 
 ## Working
 
