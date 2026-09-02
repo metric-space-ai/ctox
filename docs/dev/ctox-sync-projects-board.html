@@ -78,7 +78,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <span>Stand <b>2026-09-02 09:45 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 2/3 (2b-2, T4b-5) · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 1/3 (T4b-5) · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -399,7 +399,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <div class="pills"><span class="pill acc">PKG-2b-2 produktion</span><span class="pill neutral">sol</span></div>
     <h3>RFC Paket 2, Scheibe 3: apply_complete (3× Mismatch → failed), confirm_working_copy (atomarer Switch §12.6, neue Epoch), resume_ack, Recovery-Pass</h3>
     <p>Gestartet 05:23 im Klon <code>ctox-pkg2b</code> (rebased HEAD 70f4377b4 auf main 0615f22a4), Branch <code>codex/workjet-session-transfer-2b</code>. Brief <code>ctox-pkg2b-launch/briefs/pkg2b2-apply-confirm-resume-recovery.md</code>: Pflicht-Commit nach jedem der vier Schritte, Recovery als aufrufbare Funktion ohne Scheduler-Verdrahtung (Paket 3), §17-Codes apply_hash_mismatch / working_copy_id_mismatch / resume_timeout / transfer_expired / pause_timeout. Run <code>local-…T032307Z-d96d2b22</code>.</p>
-    <p><b>Stand 05:55 (Klon):</b> drei Pflicht-Commits gelandet — <code>3bfaab938</code> apply completion, <code>edc4b2eb1</code> confirm working copy, <code>e0c68625d</code> resume acknowledgement; Schritt 5 (Recovery-Pass + Inventar) läuft, Baum sauber.</p><p>Fertig = Transfer-Tests grün (17 + neue), <code>workjet_</code> grün, Inventar grün, Commits je Schritt; dann <code>rebase --onto</code> CTOX main 388dad97e (2b-1 gesquasht) und Folge-PR.</p>
+    <p><b>Stand 06:20:</b> Run <code>completed</code> in der Zeit, vier Pflicht-Commits (apply completion, confirm working copy, resume acknowledgement, recovery pass; +1751/−79). Receipt: Transfer-Tests 17 → 29, <code>workjet_</code> 56, Inventar 1, Scheduler-Verdrahtung nach Paket 3 verschoben, Schema-Contract/Coding-Pfad unverändert. Diff-Oberfläche von mir geprüft: <code>run_workjet_session_transfer_recovery(root, now_ms) -> Vec&lt;RecoveryOutcome&gt;</code> (re-exportiert in mod.rs), 11 neue Tests (apply git/copy/3. Mismatch/falscher Rechner+Epoch, confirm alle Switch-Wirkungen/ID+Actor-Mismatch/Replay ohne zweite Epoch/Zustand, resume complete+replay/Quelle+alte Epoch, recovery beide Seiten + idempotent), §17-Codes apply_hash_mismatch, working_copy_id_mismatch, resume_timeout, transfer_expired, pause_timeout, manual_intervention. Rebased auf CTOX main 39b3de7b4 (4 Commits, sauber), <b>mein Gate läuft</b> (Log <code>scratchpad/pkg2b2-gate.log</code>; jetzt ohne Worker im Klon).</p><p>Fertig = Gate grün → Push, PR, CI, Merge. Damit ist RFC Paket 2 komplett; Paket 3 (Fence im Coding-Pfad + Scheduler-Verdrahtung des Recovery-Pass) folgt als T7.</p>
   </div>
 
   <div class="card">
