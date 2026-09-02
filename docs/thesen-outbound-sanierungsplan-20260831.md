@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 08:15 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 08:35 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -313,6 +313,28 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 - **R7a** (Kern: Träger, Status-Split, Prompt, Writeback-Befehl + Validierung, Guard/Recovery) und **R7b**
   (Service: Witness-Artefakte, 3600-s-Budget, Rework-Grenze 3) an Sol, Whitelists disjunkt, gemeinsamer
   Metadata-Schlüssel `person_research_gap_closure`. App-Anzeige (x/32, Feldstatus) folgt als A2 im App-Repo.
+
+### 02.09. 06:2x — Nachher-Messung B3 (Datei-Beleg `sandbox-probe-after-b3.txt` aus dem Worker)
+
+| CMD | Ergebnis im Worker (Landlock-Sandbox) |
+|---|---|
+| 3 `ctox-real status` | **EXIT 0**, JSON-Status → Binary ist aus dem Worker ausführbar (R5 wirkt) |
+| 4 `getent hosts` | **EXIT 0**, `2001:aa8:…` → DNS funktioniert (R5 wirkt) |
+| 5/6 resolv.conf, /run/systemd/resolve | lesbar |
+| 7 `current/bin` | lesbar |
+| 8 Socket | sichtbar |
+| 9 curl bundesanzeiger | HTTP 302 → Netz + DNS ok |
+| 10 `ctox-secrets.key` | **Permission denied** → Secrets bleiben geschützt (Symlink-Argument bestätigt) |
+| 2/11 `/usr/local/bin/ctox …` | **EXIT 1**: Wrapper Zeile 11 `source ~/.config/ctox/business-os.env: Permission denied` |
+
+- Neuer, letzter Blocker: der vom Installer generierte Wrapper prüft die Env-Dateien mit `-f` und sourced sie
+  unter `set -e`; `~/.config/ctox` ist im Worker unlesbar → jeder `ctox`-Aufruf über den Wrapper stirbt, obwohl
+  das Binary läuft. **R5c** (d6f8dff75, auf origin/main): Template testet `-r` und überspringt unlesbare
+  Env-Dateien (der Daemon bekommt sie ohnehin über systemd `EnvironmentFile`). Auf thesen zusätzlich als
+  Hotfix direkt im Wrapper gesetzt (Backup `~/.local/bin/ctox.bak-20260902`; der nächste Upgrade regeneriert
+  den Wrapper aus dem gefixten Template). Erneuter Probe-Task „after-b3-hotfix" läuft.
+- Reparaturaufgabe nach B3 (`queue:system::6ace265f…`) lief noch gegen den alten Wrapper → Ergebnis nur als
+  Negativ-Kontrolle verwertbar; Duplikat `9499cee1…` storniert.
 
 ## Working
 
