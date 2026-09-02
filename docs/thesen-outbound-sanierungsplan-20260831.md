@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 07:40 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 07:55 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -274,6 +274,23 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   Komma in Name/Ort-Angaben killt den Import (UX-Defekt, neu).
 - Noch offen (brauchen Schreibpfad, nach B3): echter Import (IDB-closing), Sellify-Kampagnensuche, Nachrecherche
   (Identität + Personen + Auth-Sitzung), „Erledigt – Recherche fortsetzen".
+
+### 02.09. 05:4x — Ursache 5 gefunden: nach Phase A gibt es KEINEN Agenten-Schritt (Owner-Frage „warum hört der Agent auf?")
+
+- Messung Beiersdorf-Nachrecherche (01.09. 16:47 UTC): Business-Commands im Fenster = nur `sellify.lookup`,
+  `research_source.auth_assist`, `web_stack.person_research` (completed). Kein `business_os.chat.task`, kein
+  Queue-Task mit „Nachrecherche/Beiersdorf", keine Harness-Sitzung (context-log: 0 agent_messages mit
+  „Beiersdorf"; Sitzungsarten nur mission=Repair-Worker und review). Lead → `needs_review` mit 8/32.
+- Code: `web_stack.person_research` ∈ EXACT_CONTROL_TYPES → `person_research_command::start` (nativ,
+  command_plane.rs:1223); `outbound_lead_generation_research_outcome_patch` setzt `completed`, wenn alle
+  recherchierten Felder verifiziert sind, sonst `needs_review` — es gibt keinen Träger für Phase B/C
+  (Websuche, Seiten öffnen, Belege, strukturiertes Nachtragen), obwohl der Owner-Prompt sie verlangt.
+  Der „Agent" hört nicht auf, er beginnt nie. Die 17.08.-Threads „Nachrecherche: … Blockiert" stammen aus
+  der früheren Chat-Variante, die seit dem Umbau auf den Steuerbefehl nicht mehr läuft.
+- → **D7 Discovery-Panel** (Grok/Kimi/GLM, identischer Brief `briefs/D7-lueckenschluss-discovery.md`):
+  verbindlicher Lückenschluss-Vertrag je Feld (`verified | no_match(mit Versuchen) | unsupported |
+  action_required`), Träger = Queue-Task nach Phase A (Vorbild Repair-Task), Rückschreibkanal, Review-Gate,
+  App-Anzeige. Danach konsolidierter Produktionsbrief R7 an Sol.
 
 ## Working
 
