@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 11:55 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 12:20 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -512,6 +512,21 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   Push-Kandidat in Worktree `/Volumes/tmp/thesen-merge-wt`, Branch `thesen-r7-merge` = 217ce4d64 + Merge
   origin/main (konfliktfrei) + R5d (b0945e8c8). Nach grünem Gate 4: Ziel-Tests auf dem Merge-Stand (Compile
   ~40 min bei aktueller Last), dann Push, dann B4.
+
+### 02.09. 12:10 UTC — Gate 4: 80/4 → R7a-Tests hatten nie eine RxDB-Tabelle; Gate 5 läuft
+
+- Gate 4 Ziel-Tests: dieselben vier Tests rot, jetzt eine Ebene tiefer: „research writeback lead record does
+  not exist". `create_gap_fixture` schreibt den Lead per `upsert_rxdb_collection_record`, aber im Test-Root
+  existiert der RxDB-Store (`business-os-rxdb.sqlite3`) mit der Tabelle
+  `ctox_business_os__outbound_lead_generation_leads__v*` nicht; der Writer überspringt den Upsert dann still
+  (`RxdbCollectionWriter::open → None`). In Produktion legt der Browser-Peer die Tabellen an. Gegenprobe:
+  auch Sols Test `recovery_enqueues_missing_gap_task_for_completed_phase_a_command` (person_research_command)
+  ist rot — er lag außerhalb des Gate-Filters. Damit waren in R7a fünf Lead-Tests nie grün (KORREKTUR R7a).
+- **Fix (testseitig, kein Produktionscode):** `seed_rxdb_collection_table_for_tests(root, collection)` legt die
+  Tabelle nach dem bestehenden Muster aus `store_outbound_commands.rs` an; Fixture und Recovery-Test rufen sie.
+  Gate-Filter erweitert auf `person_research` (deckt beide Module).
+- **Gate 5** gestartet 12:14 UTC. Merge-Worktree `thesen-r7-merge` muss nach grünem Gate diese zwei
+  Testdateien nachziehen (Commit auf `thesen-r7`, dann `git merge thesen-r7` im Worktree).
 
 ## Working
 
