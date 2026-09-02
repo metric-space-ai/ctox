@@ -219,14 +219,27 @@ async function openModule(page, moduleId, url, timeoutMs) {
     try {
       opened = await page.evaluate(async (id) => {
         const app = window.CTOX_BUSINESS_OS_APP;
-        if (typeof app?.openModule !== 'function'
-          || !app.modules?.find?.((module) => module.id === id)) {
-          return false;
+        if (typeof app?.openModule === 'function'
+          && app.modules?.find?.((module) => module.id === id)) {
+          const target = new URL(location.href);
+          target.hash = id;
+          history.replaceState(history.state, '', target.href);
+          await app.openModule(id, { force: true });
+          return true;
         }
-        const target = new URL(location.href);
-        target.hash = id;
-        history.replaceState(history.state, '', target.href);
-        await app.openModule(id, { force: true });
+        const selector = [
+          `.desktop-icon[data-target="${CSS.escape(id)}"]`,
+          `.module-tab[data-target="${CSS.escape(id)}"]`,
+          `.start-menu-item[data-target="${CSS.escape(id)}"]`,
+        ].join(',');
+        const launcher = Array.from(document.querySelectorAll(selector)).find((element) => {
+          const box = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return box.width > 0 && box.height > 0
+            && style.visibility !== 'hidden' && style.display !== 'none';
+        });
+        if (!launcher) return false;
+        launcher.click();
         return true;
       }, moduleId);
     } catch (error) {
@@ -243,7 +256,9 @@ async function openModule(page, moduleId, url, timeoutMs) {
     const root = document.querySelector(selector);
     return {
       failed: root?.dataset.moduleLoadFailed === 'true',
-      failure: window.CTOX_BUSINESS_OS_APP?.qaModuleMountFailures?.[id] || null,
+      failure: globalThis.ctoxBusinessOsSmoke?.state?.qaModuleMountFailures?.[id]
+        || window.CTOX_BUSINESS_OS_APP?.qaModuleMountFailures?.[id]
+        || null,
       recovery_text: root?.querySelector('.shell-app-recovery')?.textContent?.trim() || '',
     };
   }, { id: moduleId, selector: rootSelector });

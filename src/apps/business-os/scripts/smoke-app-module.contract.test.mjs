@@ -19,10 +19,13 @@ test('generic smoke waits for the replicated catalog and rejects the recovery su
   assert.match(source, /root\?\.dataset\.moduleReady === 'true'/);
   assert.match(source, /root\?\.dataset\.moduleLoadFailed === 'true'/);
   assert.match(source, /qaModuleMountFailures/);
+  assert.match(source, /ctoxBusinessOsSmoke\?\.state\?\.qaModuleMountFailures/);
   assert.match(source, /history\.replaceState/);
   assert.match(source, /searchParams\.set\('rxdbSmoke', '1'\)/);
   assert.match(source, /execution context was destroyed\|cannot find context/);
   assert.match(source, /Business OS shell did not expose module/);
+  assert.match(source, /\.desktop-icon\[data-target=/);
+  assert.match(source, /launcher\.click\(\)/);
 });
 
 test('declared-scenario E2E uses the same deterministic mount gate', () => {
@@ -30,10 +33,13 @@ test('declared-scenario E2E uses the same deterministic mount gate', () => {
   assert.match(e2eSource, /root\?\.dataset\.moduleReady === 'true'/);
   assert.match(e2eSource, /root\?\.dataset\.moduleLoadFailed === 'true'/);
   assert.match(e2eSource, /qaModuleMountFailures/);
+  assert.match(e2eSource, /ctoxBusinessOsSmoke\?\.state\?\.qaModuleMountFailures/);
   assert.match(e2eSource, /history\.replaceState/);
   assert.match(e2eSource, /searchParams\.set\('rxdbSmoke', '1'\)/);
   assert.match(e2eSource, /execution context was destroyed\|cannot find context/);
   assert.match(e2eSource, /Business OS shell did not expose module/);
+  assert.match(e2eSource, /\.desktop-icon\[data-target=/);
+  assert.match(e2eSource, /launcher\.click\(\)/);
 });
 
 test('generic smoke fails same-origin HTTP request errors', () => {
