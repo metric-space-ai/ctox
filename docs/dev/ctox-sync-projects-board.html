@@ -73,12 +73,12 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 <header>
   <div class="eyebrow">Progress Board v2 · Orchestrator Fable · Projekt CTOX Sync / Workjet</div>
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
-  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4, F1 (#6), F2 (#7), Collective (#2), F3 (#8) und F2b (#9). T4-Beweis Lauf 3: Working Copy bestätigt, „This machine“-Auswahl fehlt → F2c (Sol), dann Lauf 4; CTOX #43 ist gemergt; RFC Session-Transfer ist als CTOX #44 gemergt (<code>docs/rfcs/workjet-session-transfer.md</code>). Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
+  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4, F1 (#6), F2 (#7), Collective (#2), F3 (#8) und F2b (#9). T4-Beweis Lauf 3: Working Copy bestätigt, „This machine“-Auswahl fehlt → F2c (Sol), dann Lauf 4; RFC Paket 1 als CTOX #45 offen; CTOX #43 ist gemergt; RFC Session-Transfer ist als CTOX #44 gemergt (<code>docs/rfcs/workjet-session-transfer.md</code>). Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-02 08:05 CEST</b></span>
+    <span>Stand <b>2026-09-02 08:20 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 2/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 1/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -86,7 +86,17 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- DONE -->
 <div class="col">
-  <h2>Done <small>30 Karten</small></h2>
+  <h2>Done <small>31 Karten</small></h2>
+
+  <div class="card">
+    <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">PKG-1 ctox</span></div>
+    <h3>RFC Paket 1 gelandet als PR #45: Session-Register, Transfer-Journal-Schema, Computer, record-scoped DataWrite</h3>
+    <p>Sol (04:05–07:35, Turn-Timeout ohne Commit) → WIP von Fable gesichert, auf main 9b7ba0f6e rebased, Commit <code>445c4d669</code>: <code>store_workjet_sessions.rs</code> (828 Zeilen, 4 Tests), <code>workjet_session_transfers</code>-Schema, <code>workjet_computers</code> voll verdrahtet (+ <code>device_binding_id</code>, <code>actor_epoch</code>, <code>last_seen_at_ms</code>, <code>replication_up</code>), <code>owned_by_actor</code>-DataWrite, Projektionsliste, Contract beidseitig regeneriert, Browser-RxDB neu gebaut. 18 Dateien, +2670/−34.</p>
+    <ul>
+      <li>Von Fable auf dem Rebase gefahren: Workjet-Suite 27 passed; beide Hash-Registry-Tests; <code>record_owned_data_write</code> 3; JS-Suite 111 passed / 2 skipped; deklarative Migrationen OK; rustfmt je Datei, diff-check sauber.</li>
+      <li>PR <a href="https://github.com/metric-space-ai/ctox/pull/45">metric-space-ai/ctox#45</a>. Baseline-rot bleibt der Explorer-Guard und <code>business_command_inventory_matches_exact_control_types</code> (siehe To-Do T11).</li>
+    </ul>
+  </div>
 
   <div class="card">
     <div class="pills"><span class="pill warn">teilweise bestanden, belegt</span><span class="pill acc">T4 lauf 3</span></div>
@@ -332,17 +342,9 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- WORKING -->
 <div class="col">
-  <h2>Working <small>4 Karten</small></h2>
+  <h2>Working <small>3 Karten</small></h2>
 
 
-
-  <div class="card">
-    <div class="pills"><span class="pill acc">PKG-1 produktion</span><span class="pill neutral">sol</span></div>
-    <h3>RFC Paket 1: Session-Register, Computerintegration, record-scoped Policy</h3>
-    <p>Gestartet 04:05 im Klon <code>~/.local/state/workjet-launchpads/ctox-pkg1</code> (Branch <code>codex/workjet-sessions-core</code> = main a6b21e587 + RFC 7238b4cc8, RFC im Baum als Vertrag). Brief <code>ctox-pkg1-launch/briefs/pkg1-sessions-core.md</code>: Collections <code>workjet_sessions</code>/<code>workjet_session_transfers</code> nach RFC §10, <code>workjet_computers</code> voll verdrahtet, <code>owned_by_actor</code>-DataWrite, Owner-Migration, Schema-Contract auf beiden Seiten per Generator, Browser-RxDB-Rebuild mit Cache-Bustern. Keine Lifecycle-Verben (Paket 2). Run <code>local-…T220445Z-443dea28</code>. Warmes Target, /Volumes/tmp 31 GiB frei.</p>
-    <p class="korrektur">Lauf 1 (04:05–07:35) endete mit <b>Turn-Timeout nach 5400 s</b>, ohne Commit: 18 Dateien geändert, +2670/−34, darunter <code>store_workjet_sessions.rs</code> (828 Zeilen, 4 Tests), beide Contract-Seiten, gebaute Browser-RxDB, <code>shared/db.js</code>/<code>sync.js</code>. Von Fable als WIP gesichert: Commit <code>fef51c0b4</code> („unverified“). Von Fable auf dem WIP geprüft: JS-Suite 111 passed / 2 skipped, deklarative Migrationen OK; Cargo: <code>workjet_session</code> 6, <code>record_owned_data_write</code> 3, <code>workjet_computer</code> 7 (2 neue), beide Hash-Registry-Tests, Workjet-Suite 27 passed; rustfmt je Datei sauber, diff-check leer. Einziger roter Test <code>business_command_inventory_matches_exact_control_types</code> ist Baseline auf GitHub main (sechs <code>kundenpipeline.*</code>-Dispatcher-Arme ohne Eintrag in <code>EXACT_CONTROL_TYPES</code>, fremde Sitzung). Branch auf main 9b7ba0f6e rebased (<code>d4ad1a765</code>), Gates laufen dort erneut; danach PR. Der Turn-Timeout kostete keinen Code, aber die Abnahme musste ich komplett selbst fahren.</p>
-    <p>Fertig = Gates A–G grün (workjet_session, record_owned_data_write, workjet_computer, Hash-Registry beidseitig, JS-Suite, 14 Alt-Tests); PR gegen main. Kollisionsrisiko: <code>modules/ctox/*</code> und <code>registry.json</code> sind im Hauptcheckout von der App-Store-Sitzung angefasst → Merge mit Sorgfalt.</p>
-  </div>
 
   <div class="card">
     <div class="pills"><span class="pill acc">F2c produktion</span><span class="pill neutral">sol</span></div>
@@ -360,7 +362,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- TO-DO -->
 <div class="col">
-  <h2>To-Do <small>10 Karten</small></h2>
+  <h2>To-Do <small>12 Karten</small></h2>
 
   <div class="card">
     <div class="pills"><span class="pill acc">T1</span><span class="pill neutral">grok-tauglich</span></div>
@@ -429,6 +431,20 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <div class="pills"><span class="pill acc">T10</span></div>
     <h3>Dublette greppy <code>817cfd5f…</code> serverseitig deduplizieren</h3>
     <div class="trigger"><b>Trigger:</b> O4.</div>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill acc">T11</span><span class="pill crit">baseline</span></div>
+    <h3>CTOX main: <code>business_command_inventory_matches_exact_control_types</code> rot</h3>
+    <p>Sechs <code>kundenpipeline.*</code>-Dispatcher-Arme in <code>command_plane.rs</code> ohne Eintrag in <code>EXACT_CONTROL_TYPES</code> (auf GitHub main 9b7ba0f6e, fremde Sitzung). Fix: Einträge ergänzen und Inventory per <code>tools/build_business_command_inventory.mjs</code> regenerieren.</p>
+    <div class="trigger"><b>Trigger:</b> Zuständige Sitzung (Kundenpipeline) oder Freigabe, es als Baseline-PR selbst zu machen. Grok-tauglich.</div>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill acc">T12</span></div>
+    <h3>RFC Paket 2: Transfer-Lifecycle-Verben, Zustandsautomat, Recovery</h3>
+    <p>Nach RFC §23 Paket 2 auf Basis PR #45; in ≤ 2-h-Scheiben mit Pflicht-Commits (Lehre #9).</p>
+    <div class="trigger"><b>Trigger:</b> #45 gemergt.</div>
   </div>
 </div>
 
