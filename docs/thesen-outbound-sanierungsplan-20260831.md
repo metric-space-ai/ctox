@@ -771,6 +771,27 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   XING-Profil-URLs als `person_key`, dreimal „Frederic Heilmann" und einer fremden Firmen-E-Mail
   (heiko.fischer@daw.de). Der Skill verbietet URLs als person_key jetzt; Altbestand muss separat bereinigt werden.
 
+### 02.09. 21:50–22:05 UTC — App-Agenten-Ablagen als Vertrag: Policy im Scraping-Bereich, Skill liest genau drei Orte
+
+- **Owner-Vorgabe:** Der gepflegte Rechercheablauf darf nicht im Prompt landen und muss dort liegen, wo der Agent
+  ihn auch ohne den ursprünglichen Auftrag findet; der Skill soll nicht „die App reflektieren", sondern nur die
+  vorgegebenen Bereiche lesen, die jede App für Agenteninformationen anlegen kann.
+- **Neuer typisierter Befehl `outbound.research_policy.publish`** (Rust, `store_outbound_commands.rs`): schreibt
+  Ablauf und Einstellungen als Scrape-Target `<app-id>-policy` (`target_kind: app-policy`,
+  `config.policy_contract: ctox.outbound.research_policy.v1`) über `scrape upsert-target`, zusätzlich als Record
+  `outbound_research_policies`. Manifest unter `runtime/scraping/app-policy/<app>-policy.json`.
+- **App 1.0.66 → 1.0.67 (beide deployt):** 1.0.66 schickt den Ablauf (Nachrecherche-Fassung, sonst Standard) plus
+  `research_instructions_variant` im Payload; 1.0.67 veröffentlicht ihn beim Speichern zusätzlich in den
+  Scraping-Bereich (`publishResearchPolicyToScrapeStore`). Prompt bleibt ein Satz.
+- **Skill (268 Zeilen)**: §2a „Der App-Ablauf ist der Auftrag (Schritte 0..x)" — laden statt annehmen, Rangfolge
+  über Quellen-/Feldreihenfolge, aber nie über Beleg- und Rückschreibregeln, jeder Schritt begründet abgehakt;
+  §2b **„Agenten-Ablagen der App, fester Vertrag — genau diese drei lesen"**: (1) Auftrag per `commands inspect`,
+  (2) `<app-id>-policy`-Target, (3) Quellen-Targets samt bereits gesammelter Datensätze. Ausdrücklich verboten:
+  App-Quellcode, UI, beliebige Collections. Auftrag schlägt Policy-Target; fehlt beides, Standardreihenfolge plus
+  Meldung. Schreiben ist Sache der App bzw. einer Adapteraufgabe.
+- Gate 14 auf dem Stand mit dem neuen Befehl: 113 grün / 1 rot (vorbestehend). **Push eab452a0a** 22:05 UTC.
+  B8 (151652af3) baute noch; B9 (eab452a0a) startet verkettet direkt danach (`claude-chain-build.ts`).
+
 ## Working
 
 | Karte | Worker / Log | Fertig heißt |
