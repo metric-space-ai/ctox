@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 17:40 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 18:10 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -620,6 +620,22 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   kein Handpatch mehr nötig. `gap-unlink-watch.service` gestoppt; keine Task-Links seit 16:00 UTC.
 - Nächster Schritt: Nutzer meldet sich an → Nachrecherche KUKA (lead_1cfi6y6, vorher 4/0/0) und Beiersdorf
   (lead_1awj3nw, vorher 8/1/0) → Messung mit `claude-proof-b4.ts` + `claude-lead-fields.ts`.
+
+### 02.09. 17:5x UTC — NACHRECHERCHE LIVE auf B5 (KUKA + Beiersdorf, Owner-Sitzung)
+
+- Ausgelöst im In-App-Browser der Nutzer-Sitzung (App „Outbound Lead Generation" → Lead → „Nachrecherche").
+  Befehle: KUKA `leadgen-lead-research-d6de4f9b-0394-44af-87f2-f8001217c6bb`, Beiersdorf
+  `leadgen-lead-research-9e64c66d-493c-48b2-a07e-adb6eb0823c5`, beide `client_context` Owner =
+  **michael.welsch@metric-space.ai** (Identitätskette R2/R4/R8 wirkt). Drei Auth-Assist-Requests
+  (leadfeeder, xing, dnbhoovers; später rocketreach) ebenfalls mit diesem Owner — **kein `ctox_harness` mehr**.
+- Phase A fertig → **genau ein Lückenschluss-Task je Lead**: KUKA `queue:system::0dd3c84df033431e0cfc07eb`,
+  Beiersdorf `queue:system::28ced93c8dd694bb9804b1da`; Metadatum `business_os_command_id` = Recherche-Befehl,
+  Workspace = Phase-A-Workspace, **keine `business_command_task_links`-Zeile** (B5 wirkt; die 4 neuen
+  Link-Zeilen gehören zu Auth-Assist-Befehlen). Leads: `research_phase=gap_closure`, `gap_task_id` gesetzt,
+  `research_status=needs_review` (Abweichung zur R7a-Beschreibung „running" — Beobachtung, kein Blocker).
+- Worker war mit Auth-Assist-Task `dnbhoovers.com` belegt (wartet auf Login) → die 4 Auth-Assist-Tasks
+  abgebrochen (OWNER-Thema Logins bleibt offen); Queue danach: nur die zwei Lückenschluss-Tasks, `busy False`.
+- Läuft: Poller `claude-b5-run-poll.ts` (Task-Status, `gap_closure/field_status.json`, `research_writeback`).
 
 ## Working
 
