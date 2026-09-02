@@ -78,7 +78,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <span>Stand <b>2026-09-02 09:45 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 3/3 (3a, 3b-2b, 4a) — nicht starten · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 2/3 (3a, 4a) · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -413,7 +413,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <div class="pills"><span class="pill acc">PKG-3b-2b produktion</span><span class="pill neutral">sol</span></div>
     <h3>Desktop: Guest→Host-Brücke für Transfer-Ereignisse, Renderer-Pause-Beobachter (Interrupt → Stillstand → <code>pause_ack</code>), ohne Adapter-Hard-Cancel</h3>
     <p>Gestartet 07:18 im Klon <code>workjet-f3c</code>, Branch <code>codex/workjet-session-pause-observer</code> auf 3b-1c (117f44823). Brief <code>workjet-f3c-launch/briefs/pkg3b2b-pause-observer.md</code>: Preload-Kanal <code>ctox-guest:session-transfer-event</code> (Schema-dekodiert), Host→Renderer-Relay <code>onSessionTransferEvent</code>, Registrierung der Rechner-IDs, reiner Planer <code>planPauseReaction</code>, Hook mit 40-s-Stillstandsfrist, kein Ack ohne Stillstand (RFC), Contract-Erweiterung um pause_ack. Run <code>local-2026-09-02T051811Z-19889937-a85a-4…</code>.</p>
-    <p>Fertig = tsgo 4 Pakete 0, Tests, build/pack, fmt/lint, Commits; danach 3b-3 (Hard-Cancel je Adapter) und Paket 4 (pack/apply).</p>
+    <p><b>Stand 07:50:</b> Run <code>completed</code>, 4 Commits (Contracts+Bridge, Planer+Ack, Interrupt/Wait/Ack, Registrierung nach Shell-Load; 21 Dateien, +957/−20). Registrierung über Renderer→Main-IPC, Ereignis-Dekodierung mit Invalid-Zähler, Stillstand-Wartezeit min(40 s, Deadline), genau ein Ack je Transfer, kein Ack bei Timeout (Toast). <b>Von mir verifiziert:</b> tsgo 4 Pakete 0, contracts 30, desktop 71, web 17, build/pack/fmt/lint 0. PR <a href="https://github.com/metric-space-ai/workjet/pull/17">Workjet #17</a> (gestapelt auf #16). <b>Vertragslücke gefunden:</b> Desktop darf <code>lastTerminalTurnId: null</code> senden, Shell und Rust verlangten einen String → auf CTOX-Seite optional gemacht (Rust <code>Option&lt;String&gt;</code> + Test, Shell reicht null durch; im Branch von #50, Test läuft).</p><p>Fertig = #16 gemergt → Rebase, CI, Merge; danach 3b-3 (Hard-Cancel je Adapter).</p>
   </div>
 
   <div class="card">
