@@ -18,7 +18,11 @@ describe('File Viewer module contract', () => {
     assert.match(viewerSource, /ctx\.setTitle\?\.\(name\)/);
     assert.doesNotMatch(viewerSource, /export const manifest/);
     assert.doesNotMatch(viewerSource, /desktop-apps\//);
-    assert.match(viewerHtml, /^<main class="ctox-workspace file-viewer"/);
+    // Der Wurzelknoten traegt die Shell-Grammatik plus die Modulklasse. Die
+    // Klassenliste darf wachsen (Shell-V2-Polish ergaenzte ctox-workspace--single),
+    // aber der Fragment-Kontrakt bleibt: ein <main> mit beiden Klassen.
+    assert.match(viewerHtml, /^<main class="[^"]*\bctox-workspace\b[^"]*"/);
+    assert.match(viewerHtml, /^<main class="[^"]*\bfile-viewer\b[^"]*"/);
     assert.doesNotMatch(viewerHtml, /<!doctype|<(?:html|head|script|style)\b/i);
   });
 
