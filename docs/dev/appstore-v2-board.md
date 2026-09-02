@@ -156,6 +156,18 @@ Phasen: 0 Boden · 1 Katalog/Loader · 2 Origin+Core-Repair · 3 Store-Kanal app
 
 ## Umgebungsfallen
 
+- **/Volumes/tmp IST EIN EIGENES, KLEINES VOLUME.** 02.09. brach ein cargo-test-Lauf
+  zweimal mit ENOSPC ab, obwohl `df /` 59 GiB zeigte: `df /Volumes/tmp` hatte nur 2,8 GiB.
+  Cargo-Targets fuer grosse Builds gehoeren auf die SYSTEMPLATTE (z. B.
+  ~/.cache/<name>), nicht nach /Volumes/tmp. Danach loeschen (13 GiB je Testbau).
+- **CARGO-LOCK STATT LANGSAMBAU.** Ein `cargo check` hing 40 min mit 2,5 s CPU-Zeit —
+  nicht langsam, sondern blockiert: eine fremde Sitzung hielt den Lock auf demselben
+  CARGO_TARGET_DIR ("Blocking waiting for file lock on build directory", von einem
+  grep-Filter verschluckt). Diagnose: `ps -o time= <pid>` (CPU-Zeit nahe null) und
+  `lsof <target>/debug/.cargo-lock`. Loesung: eigenes, exklusives Target.
+- **NICE LAESST SICH NICHT ZURUECKNEHMEN.** `nice -n 10` fuer Hoeflichkeit sorgte bei
+  Last 130+ fuer Verhungern; `renice -n 0` schlaegt als Nicht-root fehl. Ohne `nice`
+  starten oder neu starten.
 - **STEMPEL-HOHEIT ABGEGEBEN (17:0x):** die Parallelsitzung hat alle Cache-Buster auf ihr
   Schema `20260831-shell-v2-unified-v325` vereinheitlicht und dabei auch meine v326–v330
   ersetzt sowie den GEPINNTEN `workjet-theme.js?v=20260826-workjet-ui-contract-v1` überschrieben
@@ -183,6 +195,11 @@ Phasen: 0 Boden · 1 Katalog/Loader · 2 Origin+Core-Repair · 3 Store-Kanal app
 ## Fehlermuster
 
 1. Prämisse vor dem Auftrag messen (kundenpipeline: vermeintlicher Laufzeitkonflikt war keiner).
+2. Freien Platz auf dem RICHTIGEN Volume messen (`df` auf das Zielverzeichnis, nicht auf `/`).
+3. Einen haengenden Build als blockiert statt als langsam pruefen (CPU-Zeit, nicht Wanduhr).
+4. Fremde Regression von eigener trennen, bevor ein roter Waechter "reparieren" heisst:
+   file-viewer.test.mjs war rot, weil ein fremder Shell-V2-Polish-Commit die Klassenliste
+   erweiterte — der Waechter wurde nachgezogen, nicht abgeschwaecht.
 
 ## Evidenzkarte
 
