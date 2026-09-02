@@ -78,7 +78,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <span>Stand <b>2026-09-02 09:45 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 2/3 (3a, 3b-1c) · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 1/3 (3a) · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -399,7 +399,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <div class="pills"><span class="pill acc">PKG-3b-1c produktion</span><span class="pill neutral">sol</span></div>
     <h3>Thread aus Sync-Projekt registriert beim ersten Turn seine CTOX-Session (<code>session.create</code>) und trägt <code>workjetConfig.ctoxSession</code></h3>
     <p>Gestartet 07:00 im Klon <code>workjet-f3c</code>, Branch <code>codex/workjet-thread-session-binding</code> auf 3b-1b (a3d3ecd7d). Brief <code>workjet-f3c-launch/briefs/pkg3b1c-thread-session-binding.md</code>: Contract-Feld <code>ctoxSession {instanceId, sessionId, fenceEpoch} | null</code> mit Decoding-Default in den V2-Basisfeldern, reiner Resolver <code>workjetSessionBinding.ts</code> (Draft → CTOX-Projekt/Working Copy über Registry + Rechner), ChatView ruft vor <code>createThread</code> <code>createWorkjetSession</code>; Fehlschlag → Toast, Thread startet trotzdem; Server tabu (nur tsgo-Prüfung). Run <code>local-…T045929Z-a0c8c01f</code>.</p>
-    <p>Fertig = tsgo contracts/web/server/desktop 0, Tests grün, build, fmt/lint, Commits; dann PR auf #15 aufsetzen. Danach 3b-2: Pause-Observer (Projektion <code>pause_requested</code> → Server-Interrupt), Hard-Cancel-Vertrag der fünf Adapter, <code>pause_ack</code>.</p>
+    <p><b>Stand 07:14:</b> Run <code>completed</code>, 2 Commits (<code>bef09fae1</code> Contracts + Resolver, <code>117f44823</code> Registrierung beim ersten Turn; 7 Dateien, +546/−50): <code>WorkjetThreadConfig</code> V2 mit <code>ctoxSession</code> (Default null, V1-Normalisierung), Resolver prüft Registry ready/Instanz, Server-Projekt-ID + normalisierten Pfad, Rechner-Environment, aktive Working Copy; ChatView kapselt den Bootstrap in <code>startFirstTurn(workjetConfig)</code>, ruft davor <code>createWorkjetSession</code> (20-s-Timeout), Fehlschlag → null + Toast, Reihenfolge-Test in <code>ChatView.logic.test.ts</code>. Receipt: tsgo 4 Pakete 0, contracts 43, web 22 + 41, build, fmt, lint. Diff von mir gelesen (ChatView-Änderung ist überwiegend die Einrückung des gekapselten Bootstraps). <b>Mein Gate läuft</b> (Log <code>scratchpad/pkg3b1c-verify.log</code>).</p><p>Fertig = Gate grün → Rebase auf main (nach #15), PR, Merge. Danach 3b-2: Pause-Observer (Projektion <code>pause_requested</code> → Server-Interrupt), Hard-Cancel-Vertrag der fünf Adapter, <code>pause_ack</code>.</p>
   </div>
 
   <div class="card">
