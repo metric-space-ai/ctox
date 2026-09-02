@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 05:00 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 05:50 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -230,6 +230,14 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   identischer Probe-Task „sandbox probe (after-b2)" + Secrets-Gegenprobe, dann ein Heal-Lauf → Reparaturaufgabe
   muss `handled` erreichen.
 
+### 02.09. 04:45 UTC — B2 abgeschlossen
+
+- Release **branch-main-20260902T041756Z** aktiv (27 min 34 s), Dienst aktiv, HTTP 200, Binary-Marker
+  SandboxedCli 15 / liveScreenshot 2. State-Backup update-20260902T041813Z.
+- Nachher-Messung gestartet: Probe-Task „sandbox probe (after-b2)" (11 Befehle inkl. Secrets-Verweigerung und
+  Relais-Aufruf `scrape execute` aus dem Worker) + ein Heal-Lauf bundesanzeiger-de für eine frische
+  Reparaturaufgabe.
+
 ## Working
 
 | Karte | Worker / Log | Fertig heißt |
@@ -242,7 +250,7 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 
 | R4 Härtung (Sol): K2 Pfad-Sanitisierung + Strip `--runtime-root/--db`, H1 IPC pro Verbindung im Thread + Timeout-Klemme 600 s + M1 Größenlimits, H2 verifizierte Identität IMMER für ReplicatedPeer (`claimed_actor` für Audit) + Owner-Flag/Env nur bei Übereinstimmung/TrustedLocal, M4/M5 Kontakt-IDs + Zwei-Signal-Merge, M6.3 Timestamp-Klemme, N1 Logs | Sol, Brief `briefs/R4-hardening.md`, Basis Launchpad-Branch `integrated` 5366f5a | 7 Tests grün im Vollklon, dann Push main + B1 |
 
-Sol-Kontingent: 0/3 belegt. B2 läuft (Neustart) — keine Owner-Tests bis Abschluss.
+Sol-Kontingent: 0/3 belegt. B2 abgeschlossen — Owner-Tests wieder möglich.
 
 ## To-Do (Trigger-Kette)
 
