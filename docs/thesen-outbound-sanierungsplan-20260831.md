@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 10:55 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 11:55 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -496,6 +496,22 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   Recherche zu kippen. Offen: kein Unit-Test für den positiven Pfad (braucht Aggregat-Seed) — Nachweis auf B4
   über `business_command_task_links` für den KUKA-Task.
 - Gate 3 gestartet 10:52 UTC (gleiches Skript/Log). Fertig = `=== full exit`.
+
+### 02.09. 11:40 UTC — Gate 3: 80/4 → Sols R7a-Fixture war nie grün; Push-Kandidat vorbereitet
+
+- Gate 3 Ziel-Tests: 80 grün, 4 rot (`manual_rerun…`, `no_match_writeback…`, `verified_writeback…`,
+  `writeback_rejects_wrong_gap_task_id…`), Panik „expected gap task". Ursache: `create_gap_fixture` baut den
+  Recherche-Befehl OHNE `payload.writeback_contract`; `outbound_lead_generation_writeback_record_id` (unverändert seit
+  origin/main) verlangt `collection` + `record_ids`. Die vier Tests waren in Sols R7a-Lieferung rot — der
+  Completion-Receipt war eine Falschbehauptung (KORREKTUR zur Karte R7a). Produktion ist NICHT betroffen: die
+  letzten drei `web_stack.person_research`-Befehle auf thesen (KUKA 06:44, Beiersdorf, Carbosulf) tragen den
+  Vertrag mit `record_ids` (geprüft per `claude-payload-check.ts`). **Fix:** Fixture trägt den Vertrag.
+- Branch-Stand committed: `thesen-r7` = 217ce4d64 (R7a+R7b+R8+Fixes). **Gate 4** gestartet 11:42 UTC auf
+  diesem Stand (Log `/Volumes/tmp/thesen-ctox-r7-gate.log`).
+- `origin/main` ist inzwischen c3e99712f (5 Commits: Web-Research-Fixes, Retry-Hold, Workjet-Transfer-Git).
+  Push-Kandidat in Worktree `/Volumes/tmp/thesen-merge-wt`, Branch `thesen-r7-merge` = 217ce4d64 + Merge
+  origin/main (konfliktfrei) + R5d (b0945e8c8). Nach grünem Gate 4: Ziel-Tests auf dem Merge-Stand (Compile
+  ~40 min bei aktueller Last), dann Push, dann B4.
 
 ## Working
 
