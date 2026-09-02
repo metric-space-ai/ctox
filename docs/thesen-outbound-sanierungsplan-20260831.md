@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 09:45 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 10:00 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -408,6 +408,22 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   Tenant-Hotfix v2 mit demselben Muster gesetzt (Backup `ctox.bak2-20260902`), Probe „after-hotfix3" läuft.
 - Umgebungsfalle: Prüfungen auf Lesbarkeit müssen den Zugriff VERSUCHEN; Permission-Bits sind unter LSM-
   Sandboxes bedeutungslos.
+
+### 02.09. 07:1x — Owner-Frage „folgt der Agent dem Prompt mit dem Web-Stack?" — gemessen: NEIN
+
+- KUKA-Chat (`chat_a016e766…`) enthält genau zwei Nachrichten: (1) `user`: der 8.685-Zeichen-Auftrag mit dem
+  verbindlichen Rechercheablauf, (2) `ctox`: „Recherche für KUKA … abgeschlossen: 4 von 32 Feldern gefunden."
+  Kein LLM-Turn, keine Websuche, keine Seitenlektüre, kein Browser durch einen Agenten; die Tool-Aufrufe im
+  Zeitfenster stammen vom Repair-Worker (bundesanzeiger). Der Prompt wird dem Nutzer angezeigt, aber von
+  niemandem ausgeführt (`research_instructions` wird nur der Länge nach persistiert). Adapter = einzige Phase.
+- **KORREKTUR zu R8 (Fassung 3):** Die vier `ctox_harness`-Auth-Anfragen stammen NICHT vom Harness-Werkzeug,
+  sondern aus dem nativen Capture-Pfad: `person_research_command.rs:1357` baut `source-capture … --task-id
+  <FIRMENNAME>` ohne Besitzer, der Handler (`service/business_os.rs` ~2262–2290) reiht mit `"ctox_harness"`
+  und `owner=None` ein (zweite Schleife in business_os.rs:3271). R8 v2 (Harness-Werkzeug als Hauptursache)
+  gestoppt/verworfen, R8 v3 mit korrigierter Ursache gestartet (run …059e8552); Harness-Werkzeug bleibt als
+  Härtung B enthalten.
+- R7a geliefert (d335c04a9, 5 Dateien, +2236: neuer Steuerbefehl `outbound.lead.research_writeback`, Gap-Task
+  nach Phase A, Feldvertrag, Guard, Recovery; 15 neue Tests) und auf `thesen-r7` über R7b gestapelt; Gate läuft.
 
 ## Working
 
