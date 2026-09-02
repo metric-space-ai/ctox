@@ -1,6 +1,6 @@
 # SKF Nachrecherche — Kampagnen-Board (drone_bearing_design_verified)
 
-**Headline:** P1 FERTIG 21:47 (40/40 Slices, 138/138 Quellen gültig, 1.120 Claims); P2 Konsolidierung je Themenfeld startet (9 Sol-Briefs, 3 parallel); danach Generator v5, Import auf skf-vm, Export.
+**Headline:** P2 läuft (3/9 Themenfelder konsolidiert, KB-004/005/006 aktiv); P4-Pfad geändert: `ctox knowledge data import` stürzt im Release 0.3.22 ab (Polars ohne new-streaming) → Parquet direkt + Katalog-Update; Generator, Parquet-Writer, Import-Skript, Skillbook-Generator und Re-Dump stehen bereit.
 
 Owner-Auftrag 02.09.2026: „da müssen noch Stunden an nachträglicher Quellenauswertung rein“ — 138 verifizierte Quellen sind nur zu 17 inhaltlich ausgewertet (31 Claims), 121 Quellen hängen im Graph frei, Knowledge zeigt rohe Textfetzen, Messdaten nur aus SRC-0123.
 
@@ -39,6 +39,9 @@ Zielbild: jede der 138 Quellen inhaltlich ausgewertet (Relevanzurteil, 3–10 pr
 
 ## Environment traps
 
+- **skf-vm ctox 0.3.22 (branch-main-20260829T234251Z): ALLE Polars-Lazy-Verben von `ctox knowledge data` (head, count, export, import) panicken** mit `get_streaming_executor_builder() failed (hint: missing feature new-streaming?)`. Die Projektion liest eager (`read_rows_capped`) und läuft. Rückschreiben daher: Parquet mit identischem Schema (pyarrow, ZSTD) nach `~/.local/state/ctox/knowledge/data/<domain>/<key>.parquet` + `knowledge_data_tables` in `state/ctox/ctox.sqlite3` (bytes/updated_at, neue Zeile für `claims`). CTOX-Defekt separat melden: `src/core/knowledge/ops.rs` import/export/head/count nutzen `LazyFrame.collect()`.
+- **RxDB-Projektion bettet max. 5.000 Zeilen je Tabelle ein** (`KNOWLEDGE_TABLE_RXDB_ROW_CAP`). Deshalb: evidence_points ohne die 4.177 direct_measurement_row-Duplikate (Messzeilen leben in measured_load_points); measured_load_points = 926 P3-Zeilen zuerst + 4.177 UIUC = 5.103 → die letzten 103 UIUC-Zeilen werden nicht eingebettet (rows_complete=false). Folgekarte: Cap anheben oder Messtabelle splitten.
+- pyarrow braucht Python 3.13 (uv venv unter `/Volumes/tmp/skf-research-board/.venv`), esbuild lokal per npm im Board-Ordner.
 - skf-vm hat kein pdftotext/PyMuPDF → Extraktion lokal (poppler 26.04 unter /opt/homebrew).
 - `/Volumes/tmp` 97 % voll (15 GB frei) — Snapshots 1 GB, nach Kampagne löschen.
 - Evidence-Import: `normalize_evidence_rows_with_server_receipts` setzt `evidence_eligible=false` ohne passenden Snapshot → snapshot_path/sha256 aus source_catalog übernehmen.
