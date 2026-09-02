@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 03:20 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 03:40 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -148,6 +148,21 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   `~/upgrade-dev-<ts>.log` auf thesen, pid in `~/upgrade-dev.pid`). Erwartung 30–40 min; der Neustart
   beendet alle Browser-/Login-Sitzungen auf thesen. Wächter: `claude-wait-upgrade-thesen.ts`.
 
+### 02.09. 03:0x — B1 abgeschlossen und abgenommen (Technik-Ebene)
+
+- Release **branch-main-20260902T023408Z** aktiv (Build 26 min 42 s, previous branch-main-20260831T174442Z,
+  State-Backup update-20260902T023425Z), Dienst aktiv seit 03:01:04 UTC, HTTP 200, `ctox doctor` zeigt das
+  Release; Binary: 15 SandboxedCli-Marker, 2 liveScreenshot-Marker (Web-Stack-Live-Op intakt, Pin-Falle umgangen).
+- **Relais-Abnahme:** `--input-file /etc/hosts` → „path is outside allowed workspace prefix
+  …/scraping/targets/handelsregister-de" (abgelehnt); `--runtime-root /tmp/x` → „flag --runtime-root is not
+  allowed over the relay" (abgelehnt); relayter `scrape execute handelsregister-de` → `ok:true, succeeded,
+  2 records` (Daemon führt aus, Ausgabe kommt zurück). Socket `ctox_service.sock` vorhanden.
+- Modul 1.0.64 und Shell-Slot 0.1.25 unverändert (Upgrade tauscht nur das Binary). 0 Chromium-Prozesse.
+- Journal seit Neustart: nur ein RxDB-DB6-Hinweis (Vorgeschichte wird geprüft), keine neuen Fehlerklassen.
+- Offen für die fachliche Abnahme: (a) Reparaturaufgabe endet `handled` (kontrollierter Heal-Lauf
+  angestoßen), (b) Auth-Sitzung aus einem Recherche-Lauf gehört dem Nutzer (braucht Owner-Recherche),
+  (c) mehrere Personen im Lead (braucht Owner-Nachrecherche).
+
 ## Working
 
 | Karte | Worker / Log | Fertig heißt |
@@ -160,7 +175,7 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 
 | R4 Härtung (Sol): K2 Pfad-Sanitisierung + Strip `--runtime-root/--db`, H1 IPC pro Verbindung im Thread + Timeout-Klemme 600 s + M1 Größenlimits, H2 verifizierte Identität IMMER für ReplicatedPeer (`claimed_actor` für Audit) + Owner-Flag/Env nur bei Übereinstimmung/TrustedLocal, M4/M5 Kontakt-IDs + Zwei-Signal-Merge, M6.3 Timestamp-Klemme, N1 Logs | Sol, Brief `briefs/R4-hardening.md`, Basis Launchpad-Branch `integrated` 5366f5a | 7 Tests grün im Vollklon, dann Push main + B1 |
 
-Sol-Kontingent: 0/3 belegt. Tenant-Build B1 läuft — KEIN weiterer Deploy, keine Owner-Tests bis Abschluss.
+Sol-Kontingent: 0/3 belegt. B1 abgeschlossen — Owner-Tests wieder möglich.
 
 ## To-Do (Trigger-Kette)
 
