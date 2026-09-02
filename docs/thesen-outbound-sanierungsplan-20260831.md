@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 08:35 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 08:45 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -333,8 +333,16 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   Env-Dateien (der Daemon bekommt sie ohnehin über systemd `EnvironmentFile`). Auf thesen zusätzlich als
   Hotfix direkt im Wrapper gesetzt (Backup `~/.local/bin/ctox.bak-20260902`; der nächste Upgrade regeneriert
   den Wrapper aus dem gefixten Template). Erneuter Probe-Task „after-b3-hotfix" läuft.
-- Reparaturaufgabe nach B3 (`queue:system::6ace265f…`) lief noch gegen den alten Wrapper → Ergebnis nur als
-  Negativ-Kontrolle verwertbar; Duplikat `9499cee1…` storniert.
+- Duplikat `9499cee1…` storniert.
+- KORREKTUR 06:38 UTC: der erste Wrapper-Hotfix (06:2x) lief NIE — das SSH-Skript brach vor dem Absetzen ab
+  (JS-`String.raw` interpoliert `${HOME}` → „HOME is not defined"). Zweiter Versuch mit Plain-String: Wrapper
+  zeigt jetzt `-r` in Zeile 8/14, Syntax ok, interaktiv funktionsfähig. Der Probe-Task „after-b3-hotfix" lief
+  gegen den ALTEN Wrapper (ungültig); Bestätigungsprobe „after-hotfix2" eingereiht.
+- 06:35 UTC: Cloudflare 525 (SSL handshake failed) im In-App-Browser für ~1 min; Dienst lief ohne Neustart
+  weiter (NRestarts=0, lokal 200), von außen kurz darauf wieder 200 → transient am Edge/Ingress, nicht auf der VM.
+- Reparaturaufgabe `6ace265f…` (alter Wrapper) endete `handled` ohne neue Revision — die Schleife bricht nicht
+  mehr, der Worker kam nur mangels CLI nicht zur Registrierung; Negativkontrolle. Frische Reparaturaufgabe nach
+  Hotfix eingereiht.
 
 ## Working
 
