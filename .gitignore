@@ -67,6 +67,7 @@ tmp_intersolar_*.js
 /docs/dev/*
 !/docs/dev/REFACTORING-SYNC-PERFORMANCE-PLAN.md
 !/docs/dev/appstore-v2-board.md
+!/docs/dev/skf-nachrecherche-board.md
 !/docs/dev/beweise/
 /docs/dev/beweise/*
 !/docs/dev/beweise/refactoring-kampagne-baseline.md
