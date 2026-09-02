@@ -207,6 +207,20 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   id, ctox status über Wrapper und Binary, getent, resolv.conf, /run/systemd/resolve, bin-Listing, Socket,
   curl) läuft im Worker; dieselbe Probe nach B2 = Nachher-Messung.
 
+### 02.09. 04:4x — Vorher-Messung im Worker: Sandbox-Diagnose bestätigt UND zweiter Systemdefekt gefunden
+
+- Diagnose-Task `queue:system::86489f0c97639a536be6e67a` endete `failed` nach 5 Review-Runden. Worker-Rohausgabe
+  (aus der Worker-Sandbox): `/usr/local/bin/ctox status` → „Permission denied, EXIT=126", `cat /etc/resolv.conf`
+  → Permission denied, `ls /run/systemd/resolve/` → Permission denied, `ls …/current/bin/` → Permission denied,
+  `getent hosts` leer. Das ist exakt das Landlock-Bild aus R5 (Plattform-Defaults ohne /home/…, /run).
+- **Zweiter Defekt (Harness-Review-Gate):** Der Reviewer hat „alle neun Befehle selbst erneut ausgeführt" und
+  erhielt EXIT=0 mit echten Listings — weil das Reviewer-Profil laut HARNESS.md „full filesystem read-only"
+  ist, also eine ANDERE Sandbox. Er wertete die Worker-Ausgaben daraufhin als „fabricated" und ließ die
+  Aufgabe 5 Runden drehen, bis das Budget erschöpft war. Dasselbe Muster erklärt die 11-Slice-Schleifen der
+  Reparaturaufgaben (31.08.: 23 failed). Konsequenz: Review-Wiederholungen von Shell-Befehlen sind nur
+  beweiskräftig, wenn sie im selben Sandbox-Profil laufen — sonst sind sie ein Falschbefund-Generator.
+  → Karte Backlog „R6".
+
 ## Working
 
 | Karte | Worker / Log | Fertig heißt |
@@ -258,6 +272,10 @@ Sol-Kontingent: 0/3 belegt. B1 abgeschlossen — Owner-Tests wieder möglich.
 - Import als dauerhafter Business-Command statt Browser-Schreibschleife (Codex-Plan §1) —
   nach A1-Reproduktion entscheiden.
 
+- R6 (Harness): Das Review-Gate führt Worker-Shell-Befehle im Reviewer-Profil (voller Lesezugriff) erneut aus
+  und wertet Landlock-Verweigerungen des Workers als „fabricated" → endlose Rework-Schleifen. Fix: Nachlauf im
+  Worker-Profil oder EACCES/Denials als Umgebungsbeleg klassifizieren; nach R5/B2 messen, wie viele
+  Reparaturaufgaben noch drehen.
 - Härtung Identität (aus Selbstreview R2): Intake stempelt nur, wenn der Client KEINE Identität liefert; ein
   Browser-Client kann weiterhin `client_context.actor.id` frei setzen (vorbestehend). Ziel: verifizierte
   Sitzungsidentität VOR Client-Angaben, Ausnahmen nur für Server-/Harness-Ursprünge. Entscheidung nach Kimi-Review.
