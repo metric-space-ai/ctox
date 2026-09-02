@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 10:00 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 10:20 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -424,6 +424,21 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   Härtung B enthalten.
 - R7a geliefert (d335c04a9, 5 Dateien, +2236: neuer Steuerbefehl `outbound.lead.research_writeback`, Gap-Task
   nach Phase A, Feldvertrag, Guard, Recovery; 15 neue Tests) und auf `thesen-r7` über R7b gestapelt; Gate läuft.
+
+### 02.09. 07:2x — Integrationsstand und Plan bis zum Nachweis
+
+- Reparaturaufgabe `094332e8…` (bundesanzeiger, nach Hotfix v1) endete `handled` ohne Schleife, ohne neue
+  Revision (Worker: kein echter Portal-Drift) — Negativ-/Regelkontrolle ok; der Beweis „CLI aus dem Worker über
+  das Relais" kommt aus Probe „after-hotfix3" (CMD 11 → scrape_run-Zeile).
+- Branch `thesen-r7` = origin/main 8448ad77f + R7b (66cec9266) + R7a (94d7b0792, Konflikt EXACT_CONTROL_TYPES
+  gelöst: 75 Einträge inkl. `outbound.lead.research_writeback`). Gate (check + 21 Tests) läuft.
+- R5d (Wrapper-Template) wird auf `thesen-r7` gestapelt statt separat gepusht (mein `pkill` hatte den R5d-Gate-
+  Wrapper mit erwischt — Falle: `pkill -f "cargo check"` trifft auch die bash-Hülle mit demselben Text).
+- Reihenfolge: R7-Gate grün → R8 v3 einsammeln, stapeln, Gate → EIN Push → **B4** (vierter Neustart) →
+  Nachweis: (1) Probe im Worker: `ctox status`, `getent`, Relais-`scrape execute` erzeugt Lauf; (2) Owner-
+  Nachrecherche auf KUKA/Beiersdorf: Lead bleibt „läuft/gap_closure", genau ein Task „Lückenschluss: …",
+  Worker schreibt `gap_closure/field_status.json`, Rückschreibbefehl akzeptiert, Endstatus mit 32
+  Feldzuständen; Auth-Sitzungen gehören michael.welsch@…; (3) Feldzahl vorher/nachher je Lead.
 
 ## Working
 
