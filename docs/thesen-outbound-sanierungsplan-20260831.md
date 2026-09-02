@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 10:45 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 10:55 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -483,6 +483,19 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   Zeile `=== full exit <code> …`. Danach: Commit auf `thesen-r7`, R5d cherry-pick, Push, B4.
 - Umgebungsfalle (neu): **macOS hat kein `setsid`** — `setsid nohup … &` scheitert stumm; Gate 1 lief dadurch
   20 Minuten lang gar nicht. Hintergrundstart auf dem Mac: `(nohup script > log 2>&1 &)`.
+
+### 02.09. 10:51 UTC — Gate 2 (Ziel-Tests): 79 grün / 5 rot → Ursache FK, behoben; Gate 3 läuft
+
+- Harness-Crate nach Sols R8: `mcp_servers.get("…")` gegen `Constrained<HashMap>` → `get().get(..)`;
+  `cargo check -p ctox-core` grün (120 min bei Load 30–76 durch fremde Builds).
+- Ziel-Tests 10:51: 79 ok, 5 rot — alle in `person_research_gap_closure::tests`, Panik
+  `FOREIGN KEY constraint failed`: `business_command_task_links.command_id` referenziert
+  `business_command_aggregates`; in den R7a-Tests existiert der Recherche-Befehl dort nicht. **Fix:**
+  `link_business_command_task` prüft Existenz und bestehende Bindung (Befehl ↔ höchstens ein Task), liefert
+  `bool`; Lückenschluss-Ergebnis trägt `gap_closure.owner_linked`, Fehlbindung wird geloggt statt die
+  Recherche zu kippen. Offen: kein Unit-Test für den positiven Pfad (braucht Aggregat-Seed) — Nachweis auf B4
+  über `business_command_task_links` für den KUKA-Task.
+- Gate 3 gestartet 10:52 UTC (gleiches Skript/Log). Fertig = `=== full exit`.
 
 ## Working
 
