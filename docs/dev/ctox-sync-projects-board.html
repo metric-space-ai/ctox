@@ -78,7 +78,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <span>Stand <b>2026-09-02 09:45 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 2/3 (2b-2, T4b-3) · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 2/3 (2b-2, F3d) · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -389,6 +389,13 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
   </div>
 
   <div class="card">
+    <div class="pills"><span class="pill acc">F3d fix</span><span class="pill neutral">sol</span></div>
+    <h3>Registrierter lokaler Rechner („This machine“) bringt seine Server-Environment in den Business-OS-Code-Scope</h3>
+    <p>Gestartet 05:57 im Klon <code>workjet-f3c</code>, Branch <code>codex/workjet-local-computer-scope</code> auf Workjet main 9f4ca6bcf. Brief <code>workjet-f3c-launch/briefs/f3d-local-computer-in-code-scope.md</code>: Tests zuerst; Primary-Environment gehört zum Scope, wenn ein Computer mit <code>presentationKind: "local"</code> und <code>environmentId === primaryEnvironmentId</code> in <code>settings.workjet.computers</code> steht (Mitgliedschaftsbeweis = F2b/F2c-Registrierung); Relay-Regel unverändert, SSH/Bearer weiter ausgeschlossen; Whitelist nur <code>businessOsCodeScope.tsx</code> + Test. Run <code>local-…T035724Z-16a22d6d</code>.</p>
+    <p>Fertig = tsgo 0, Tests grün (inkl. entities/F3c-Dateien), build/fmt/lint, ein Commit; dann PR, Merge, T4b-Lauf 5 (Klon f3c, echtes Server-Pack, CDP :9224).</p>
+  </div>
+
+  <div class="card">
     <div class="pills"><span class="pill acc">PKG-2b-2 produktion</span><span class="pill neutral">sol</span></div>
     <h3>RFC Paket 2, Scheibe 3: apply_complete (3× Mismatch → failed), confirm_working_copy (atomarer Switch §12.6, neue Epoch), resume_ack, Recovery-Pass</h3>
     <p>Gestartet 05:23 im Klon <code>ctox-pkg2b</code> (rebased HEAD 70f4377b4 auf main 0615f22a4), Branch <code>codex/workjet-session-transfer-2b</code>. Brief <code>ctox-pkg2b-launch/briefs/pkg2b2-apply-confirm-resume-recovery.md</code>: Pflicht-Commit nach jedem der vier Schritte, Recovery als aufrufbare Funktion ohne Scheduler-Verdrahtung (Paket 3), §17-Codes apply_hash_mismatch / working_copy_id_mismatch / resume_timeout / transfer_expired / pause_timeout. Run <code>local-…T032307Z-d96d2b22</code>.</p>
@@ -399,7 +406,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <div class="pills"><span class="pill acc">T4b Lauf 3 beweis</span><span class="pill neutral">sol</span></div>
     <h3>Echte Session aus dem Sync-Projekt — gegen F3c (Server-Projekt beim Thread-Start)</h3>
     <p>Gestartet 05:23 aus Launchpad <code>workjet-t4b-launch</code>, Arbeitsort Klon <code>workjet-f3c</code> @ 65313cc9f (PR #13-Inhalt; Electron-Runtime und Server-dist per Symlink aus workjet-f3). Brief <code>workjet-t4b-launch/briefs/t4b-session-proof-run3.md</code>: Rebuild web + desktop pack, Profilkopie <code>/tmp/workjet-profile-t4b3</code>, CDP :9224, Evidence <code>evidence-run3/</code>; zusätzlich zu belegen: genau ein Sidebar-Eintrag, Hero „What should we build in …“, freier Composer, Computer-/Harness-Auswahl. Run <code>local-…T032330Z-2789c15f</code>.</p>
-    <p><b>Ergebnis 05:39: FAILED — aber UNGÜLTIG (Messfehler meinerseits).</b> Draft trug wieder die CTOX-Projekt-ID + worktreePath, Composer gesperrt, zwei „greppy“-Einträge (817cfd5f… und 71462c13…, beide Sync-Projekte, T10). Ursache: ich hatte <code>apps/server/dist</code> als Symlink auf workjet-f3 gelegt; <code>bin.mjs</code> liefert den Renderer aus <code>../../web/dist</code> relativ zu seinem echten Pfad → die App lief mit dem F3b-Renderer aus f3, nicht mit F3c. Falle #E11 unten. Server in f3c echt gepackt (05:41).</p><p><b>Lauf 4</b> gestartet 05:42, Brief <code>t4b-session-proof-run4.md</code> (zusätzlich Beweis, dass der geladene Renderer aus diesem Klon stammt: Asset-Hash), Profil t4b4, CDP :9224, Evidence <code>evidence-run4/</code>. Run <code>local-2026-09-02T034216Z-2272e7ad-a6ce-4…</code>.</p><p>Fertig = Harness-Antwort im Thread + Persistenz nach Neustart; oder failed mit dem nächsten konkreten Blocker.</p>
+    <p><b>Ergebnis 05:39: FAILED — aber UNGÜLTIG (Messfehler meinerseits).</b> Draft trug wieder die CTOX-Projekt-ID + worktreePath, Composer gesperrt, zwei „greppy“-Einträge (817cfd5f… und 71462c13…, beide Sync-Projekte, T10). Ursache: ich hatte <code>apps/server/dist</code> als Symlink auf workjet-f3 gelegt; <code>bin.mjs</code> liefert den Renderer aus <code>../../web/dist</code> relativ zu seinem echten Pfad → die App lief mit dem F3b-Renderer aus f3, nicht mit F3c. Falle #E11 unten. Server in f3c echt gepackt (05:41).</p><p><b>Lauf 4</b> gestartet 05:42, Brief <code>t4b-session-proof-run4.md</code> (zusätzlich Beweis, dass der geladene Renderer aus diesem Klon stammt: Asset-Hash), Profil t4b4, CDP :9224, Evidence <code>evidence-run4/</code>. Run <code>local-2026-09-02T034216Z-2272e7ad-a6ce-4…</code>.</p><p><b>Ergebnis 05:56: FAILED — gültiges negatives Ergebnis, Renderer nachweislich aus f3c (Asset <code>index-CTq0WMiP.js</code>).</b> „New thread“ → F3c ruft <code>project.create</code> → Server: „Active project 71462c13… already exists for workspace root /Users/michaelwelsch/Documents/greppy“. Das Server-Projekt existiert also, der Renderer sieht es nicht: <code>useProjects()</code> filtert über den Business-OS-Code-Scope, und <code>projectBusinessOsEnvironmentIds</code> nimmt im Code-Modus NUR Relay-Environments der Instanz auf („Primary … deliberately excluded“). Die lokale Server-Environment ist nie im Scope → kein Dedup (zwei greppy), Lookup leer, create kollidiert, Composer „Environment disconnected“, „No computers“, Harness „Not configured in this build“ (<code>useBusinessOsScopedEnvironments</code>, gleicher Scope). Evidence <code>evidence-run4/report.md</code>.</p><p>Fertig = Harness-Antwort im Thread + Persistenz nach Neustart (Lauf 5 nach F3d).</p>
   </div>
 
   <div class="card">
