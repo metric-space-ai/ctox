@@ -661,6 +661,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <tr><td>11</td><td>Gate im Klon gemessen, während ein Worker dort editierte → Compile-Fehler aus fremdem WIP (2b-1-Rebase-Gate)</td><td class="num">1</td><td>Vor jeder Messung: läuft ein Worker in diesem Klon? Dann warten oder in einem zweiten Klon messen</td></tr>
     <tr><td>12</td><td>Zwei Worker in denselben Klon geschickt (3a Rust + 3b-1a JS); der zweite hätte per <code>git checkout -b</code> den Branch des ersten gewechselt</td><td class="num">1</td><td>Je Worker ein Klon (<code>git clone --shared</code> ist billig); Launch-Skript prüft, dass der Zielklon keinen laufenden Run hat</td></tr>
     <tr><td>13</td><td>Symlink-geliehene Build-Artefakte liefern fremden Code (Server-dist → Renderer aus anderem Klon, T4b-Lauf 3)</td><td class="num">1</td><td>Artefakte im selben Klon bauen; Asset-Hash des geladenen Renderers belegen (Falle E11)</td></tr>
+    <tr><td>14</td><td>Beim Aufräumen den <code>--shared</code>-Elternklon (ctox-pkg2) gelöscht, obwohl pkg2b → pkg3 → pkg3b per Alternates-Kette an ihm hingen („unable to normalize alternate object path“, 07:47) — zwei Worker liefen darin</td><td class="num">1</td><td>Vor dem Löschen <code>grep -l &lt;Pfad&gt; */.git/objects/info/alternates</code>; Kette repariert (pkg2b → Hauptcheckout-Objekte, fehlende Objekte per <code>git fetch origin</code> nachgeladen, <code>fsck --connectivity-only</code> 0 Probleme in pkg2b/pkg3/pkg3b)</td></tr>
   </table></div>
 </section>
 
