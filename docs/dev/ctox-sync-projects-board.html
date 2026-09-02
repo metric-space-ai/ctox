@@ -78,7 +78,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <span>Stand <b>2026-09-02 09:45 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 0/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 0/3 · xAI 2/3 (T6-Probe gpu3, Panel A) · Kimi 1/3 · Z.ai 1/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -393,6 +393,20 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <h3>Registrierter lokaler Rechner („This machine“) bringt seine Server-Environment in den Business-OS-Code-Scope</h3>
     <p>Gestartet 05:57 im Klon <code>workjet-f3c</code>, Branch <code>codex/workjet-local-computer-scope</code> auf Workjet main 9f4ca6bcf. Brief <code>workjet-f3c-launch/briefs/f3d-local-computer-in-code-scope.md</code>: Tests zuerst; Primary-Environment gehört zum Scope, wenn ein Computer mit <code>presentationKind: "local"</code> und <code>environmentId === primaryEnvironmentId</code> in <code>settings.workjet.computers</code> steht (Mitgliedschaftsbeweis = F2b/F2c-Registrierung); Relay-Regel unverändert, SSH/Bearer weiter ausgeschlossen; Whitelist nur <code>businessOsCodeScope.tsx</code> + Test. Run <code>local-…T035724Z-16a22d6d</code>.</p>
     <p><b>Stand 06:06:</b> Run <code>completed</code>, Commit <code>415f45d18</code> (2 Dateien, +116/−21): neue reine Funktion <code>resolveBusinessOsCodeScopeEnvironmentIds</code> (Relay-Menge + Primary, wenn ein Computer <code>local</code> mit <code>environmentId === primary</code> registriert ist), Synchronizer liest <code>primaryEnvironmentIdAtom</code> + <code>settings.workjet.computers</code>, Rationale-Kommentar aktualisiert; Tests rot→grün (4 neue), Receipt: 6 Dateien 131 Tests, build, fmt, lint. Diff von mir gelesen (rein additiv, Relay-Regel unverändert). <b>Von mir verifiziert 06:06:</b> tsgo web 0 / desktop 0, 6 Testdateien 131 grün, fmt 0, lint 0. PR <a href="https://github.com/metric-space-ai/workjet/pull/14">Workjet #14</a>: CI rot nur im Baseline-Test <code>AppSidebarLayout.test.ts</code> → <b>gemergt 06:25 als Workjet main 2e75f3a0b</b>.</p><p><b>T4b-Lauf 5</b> sofort gegen diesen Klon gestartet 06:07 (Brief <code>t4b-session-proof-run5.md</code>, Profil t4b5, CDP :9224, Evidence <code>evidence-run5/</code>; Run <code>local-2026-09-02T040623Z-9f7621e2-bf4d-4…</code>). <b>Zwischenbefund 06:22 (evidence-run5/run1-c-draft-proof.json):</b> Hero „What should we build in …“ vorhanden; „Add a project to start“, „Choose a project above“, „Environment disconnected“, „No computers“, „Not configured in this build“ alle 0 Treffer; Harness Claude Code sichtbar — F3d wirkt im echten Electron. <b>Ergebnis 06:22: PASSED.</b> Aus der isolierten App (Klon f3c @ 415f45d18, Renderer aus diesem Klon) wurde für <code>workjet-t4-project</code> (Sidebar-Gruppe genau 1) auf dem registrierten Rechner „MacBook Pro von Michael (2)“ mit <b>Codex CLI</b> eine echte Session gestartet; Prompt „Antworte ausschließlich mit dem Wort OK.“ 04:12:13Z → Antwort <code>OK</code> sichtbar 04:12:51Z (38,1 s), Thread <code>7623c201…</code>. Nach App-Neustart derselbe Thread mit Prompt und Antwort in der Sidebar (okExactCount=2, projectGroupCount=1). Schutz: 9222 unverändert, alle fünf eigenen PIDs beendet, keine Harness-Reste. <b>Von mir geprüft:</b> Prompt und Thread-ID in run1-/run2-thread.json, Dev-App :9222 lebt, Profil-Prozesse 0. Nuance: für das Sync-Projekt gab es keinen <code>project.select</code>-Button in der Projektleiste; Start über den globalen New-thread-Dialog (Projekt dort eindeutig angeboten) — Notiz für T13.</p>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill acc">T6-0 messung</span><span class="pill neutral">grok · gpu3</span></div>
+    <h3>Umgebungsprobe auf gpu3-a4500 für den Zwei-Rechner-Transfertest (read-only)</h3>
+    <p>Gestartet 10:16 auf dem Remote-Worker „Standard Worker (high parallel workloads)“, Brief <code>ctox-pkg3-launch/briefs/t6-gpu3-environment-probe.md</code>: OS/GPU/Platte, git/node/codex/claude/greppy, CTOX-Binary und -Dienst, Workjet-Installation/Computer-Registrierung, Netz (nur eigene Sicht), Arbeitsverzeichnis. Run <code>run-1788336975490-3987758-748de9bc</code>.</p>
+    <p>Fertig = Tabelle Befund + „Blocker für T6“; daraus der Vorbereitungsbrief für gpu3 (CTOX-Dienst mit Sync zu Welsch, Workjet-Computer).</p>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill acc">PKG-5 discovery</span><span class="pill neutral">A grok · B kimi · C glm</span></div>
+    <h3>Panel: MCP-Transfer-Tools für Harnesses (Server-Route zur CTOX-Shell), Owner-Tool <code>resume</code>, Desktop/Mobile-Bedienung (RFC §21, Paket 5)</h3>
+    <p>Gestartet 10:17, byte-identischer Read-only-Brief <code>ctox-pkg3-launch/briefs/pkg5-discovery-mcp-tools-and-ui.md</code> an A (<code>local-2026-09-02T081732Z-fff89841-4f83…</code>), B (<code>local-2026-09-02T081739Z-a26079c1-0c88…</code>), C (<code>local-2026-09-02T081752Z-0f39df5d-b4ff…</code>). Kernfrage: wie erreicht der Workjet-Server (Node, MCP-Toolkits) die CTOX-Session-Commands ohne privaten Transport — Desktop-Main-Rückkanal, Crossmode-Client (gesperrt per Kommentar), CTOX-MCP-Kanal oder Delegation an den Renderer; dazu <code>resume</code>-Semantik, UI-Einhängepunkte, Scheibenplan.</p>
+    <p>Fertig = drei Berichte verglichen → konsolidierter Produktionsbrief PKG-5a.</p>
   </div>
 
   <div class="card">
