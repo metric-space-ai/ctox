@@ -691,6 +691,18 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 - KORREKTUR (eigener Fehler): „MCP-Rückschreibrechte" war falsch — MCP ist der Kanal externer Agenten; der Harness nutzt
   die CLI. `allowed_actions` in der App wieder entfernt.
 
+### 02.09. 20:29 UTC — Gate 11 grün (113/1 vorbestehend) → Push 65b356562 → B7-Build läuft
+
+- Gate 11 Ziel-Tests auf 65b356562: 113 grün, 1 rot (`outbound_lead_generation_exposes_native_scoped_person_research`,
+  vorbestehend). Push 20:30 UTC (Fast-Forward 88ee71264 → 65b356562). **B7-Build** gestartet 20:31 UTC
+  (`claude-upgrade-dev-thesen.ts 65b356562`, Wächter `claude-wait-upgrade-thesen.ts`).
+- Backlog T1 (Triage, nicht blockierend): volle `ctox`-Bin-Suite auf dem B6-Stand unter Volllast: 2908 grün / 155 rot
+  (Service-Loop-App-Recovery, Appsec-Pipeline, TUI-Settings, Runtime-Lifecycle, `merges_legacy_files_into_ctox_db`);
+  auf ruhiger Maschine wiederholen und gegen origin/main vor heute abgrenzen. Log-Verunreinigung durch Waisen-Binaries
+  erneut aufgetreten und beendet.
+- Nach B7: Nutzer meldet sich an → Nachrecherche KUKA/Beiersdorf über App 1.0.65 → Chat zeigt nur den Satz →
+  Agent mit Skill → `research_writeback` (Chat-Pfad) → Zählung mit `claude-lead-fields.ts`.
+
 ## Working
 
 | Karte | Worker / Log | Fertig heißt |
