@@ -96,6 +96,14 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
     M2/M3/M6.1–2 Backlog.
   - Niedrig: N1 argv in Logs (→ R4), N2 Capture nur `write_json`, N3 Socket ohne Peer-Auth,
     N4 Rollen-Positivliste zu eng („Account Manager", „Verkauf") → Backlog/Web-Stack.
+- Breitere Regression (127 grün / 5 rot) — alle 5 **vorbestehend auf origin/main 3731d4ba0**, nicht durch
+  R1–R3: `business_command_inventory_matches_exact_control_types` (6 `kundenpipeline.*`-Literale ohne
+  EXACT_CONTROL_TYPES-Eintrag, auf main vorhanden), `outbound_lead_generation_exposes_native_scoped_person_research`
+  (Test erwartet Fehler bei `payload.fields`, aber der neuere Normalizer in mcp_channel.rs:4802 entpackt
+  `{item:[…]}` → erster Fehler ist `include_private`; mcp_channel.rs von uns unberührt),
+  `appsec_worker_dispatches_business_os_web_stack_auth_assist_contract` (accepted vs pending_sync, seit
+  31.08. bekannt), `embed_texts_via_local_socket…` (Embedding-Socket-Umgebung), `continuity_prompt_contains_
+  document_and_diff_rules` (LCM-Prompttext). → Karte Backlog „main-Testbaseline reparieren (fremd)".
 
 ## Working
 
