@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 08:00 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 08:15 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -299,6 +299,21 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 - Probe-Task „sandbox probe (after-b3)" (schreibt `sandbox-probe-after-b3.txt` ins Workspace) und ein frischer
   Heal-Lauf (Reparaturaufgabe bundesanzeiger-de) eingereiht; Wächter aktiv.
 
+### 02.09. 06:0x — D7-Panel ausgewertet, R7a/R7b an Sol
+
+- Drei Prototypen (Grok, Kimi, GLM) unabhängig, Konsens mit Datei:Zeile-Belegen: Träger = Queue-Task nach
+  Phase A (Vorbild Repair-Task `execute.rs:352`), Lead bleibt `running` + `research_phase=gap_closure`; neuer
+  EXACT_CONTROL_TYPE `outbound.lead.research_writeback`, der `outbound_lead_generation_research_outcome_patch`
+  wiederverwendet (2-Quellen-Regel, person_key); Worker-Werkzeuge `ctox web search|read|browser-capture` und
+  `business-os commands dispatch` sind ledger-frei und laufen ohne Relais (main.rs:357–414) — dank R5/R5b
+  jetzt aus der Sandbox möglich; Review-Gate über Outcome-Witness (service.rs ~6846/12048) mit
+  `gap_closure/field_status.json` + Writeback-Nachweis; `no_match` nur mit ≥1 Suche + ≥2 Lektüren als
+  Artefakte; Turn-Budget 3600 s statt 180 s; Rework-Grenze; Guard je record_id; Idempotenz je Kommando.
+  Difficulty: Träger 2, Werkzeuge 1–3, Rückschreiben 3–4, Vertrag 3–4, App 2.
+- **R7a** (Kern: Träger, Status-Split, Prompt, Writeback-Befehl + Validierung, Guard/Recovery) und **R7b**
+  (Service: Witness-Artefakte, 3600-s-Budget, Rework-Grenze 3) an Sol, Whitelists disjunkt, gemeinsamer
+  Metadata-Schlüssel `person_research_gap_closure`. App-Anzeige (x/32, Feldstatus) folgt als A2 im App-Repo.
+
 ## Working
 
 | Karte | Worker / Log | Fertig heißt |
@@ -311,7 +326,7 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 
 | R4 Härtung (Sol): K2 Pfad-Sanitisierung + Strip `--runtime-root/--db`, H1 IPC pro Verbindung im Thread + Timeout-Klemme 600 s + M1 Größenlimits, H2 verifizierte Identität IMMER für ReplicatedPeer (`claimed_actor` für Audit) + Owner-Flag/Env nur bei Übereinstimmung/TrustedLocal, M4/M5 Kontakt-IDs + Zwei-Signal-Merge, M6.3 Timestamp-Klemme, N1 Logs | Sol, Brief `briefs/R4-hardening.md`, Basis Launchpad-Branch `integrated` 5366f5a | 7 Tests grün im Vollklon, dann Push main + B1 |
 
-Sol-Kontingent: 0/3 belegt. B3 abgeschlossen — Owner-Tests möglich (nach erneutem Login). D7-Panel (3 Prototypen) läuft.
+Sol-Kontingent: 2/3 belegt (R7a, R7b). B3 abgeschlossen — Owner-Tests möglich (nach erneutem Login).
 
 ## To-Do (Trigger-Kette)
 
