@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 03:40 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 04:10 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -170,6 +170,26 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 - Offen für die fachliche Abnahme: (a) Reparaturaufgabe endet `handled` (kontrollierter Heal-Lauf
   angestoßen), (b) Auth-Sitzung aus einem Recherche-Lauf gehört dem Nutzer (braucht Owner-Recherche),
   (c) mehrere Personen im Lead (braucht Owner-Nachrecherche).
+
+### 02.09. 04:0x — R1 fachlich NOCH NICHT wirksam: Worker kann `ctox` gar nicht erst starten (negatives Ergebnis)
+
+- Reparaturaufgabe `queue:system::36c31fa9e0ca33519745a3f4` (bundesanzeiger-de, 03:02 UTC) endete nach 11
+  Slices **failed**. Worker-Beleg, wörtlich: „`ctox` binary still EACCES (exit 126) when invoked via
+  /usr/local/bin/ctox → /home/ctox/.local/bin/ctox; `cat` of the target binary also EACCES; `getent hosts
+  www.bundesanzeiger.de` still empty; curl → Could not resolve host (exit 6)". Das Relais (R1) kam nie zum Zug.
+- Ursache (Code, origin/main): `managed_worker_sandbox_policy` setzt für Queue-Worker
+  `ReadOnlyAccess::Restricted { include_platform_defaults: true, readable_roots: [] }`; Landlock-Plattform-
+  Defaults sind nur /bin, /usr, /etc, /lib, /lib64, /dev, /proc (landlock.rs:35–44). Damit ist
+  (a) `/home/ctox/.local/lib/ctox/current/bin/ctox-real` (und der Wrapper in ~/.local/bin) nicht lesbar →
+  execve EACCES, und (b) `/etc/resolv.conf` → Symlink auf `/run/systemd/resolve/stub-resolv.conf` — `/run`
+  ist nicht lesbar → **kein DNS in jedem Worker** (erklärt auch frühere „temporary_unreachable"-Läufe aus
+  Workern). DAC-Rechte sind korrekt (alles ctox:ctox, 755/775) — es ist die Sandbox.
+- Der frühere Fehler „readonly database" stammte aus einer anderen Worker-Klasse (Reviewer: full read-only),
+  daher zwei verschiedene Fehlbilder für dieselbe Wurzel: Worker-Sandbox ohne Zugang zur CTOX-Installation.
+- **R5** (Sol): Standard-Leseroots für Managed-Worker = CTOX-Installationswurzel (aus `current_exe()`),
+  `~/.local/bin`, `/run/systemd/resolve` (DNS-Stub); Schreibroots unverändert; Tests. Danach Build B2 und
+  Probe-Task im Worker (`ctox status`, `getent hosts`, Relais-Aufruf).
+- Launchpad auf origin/main aktualisiert (Branch `main2`, inkl. execution/agent, landlock.rs, protocol.rs).
 
 ## Working
 
