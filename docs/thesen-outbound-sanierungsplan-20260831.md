@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 09:10 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 09:25 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -376,6 +376,27 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   Fehler mit Klartext.
 - UI-Nebenbefund: der Hinweis-Dialog („nur Nachrecherche möglich") blieb nach OK-Klick per Skript stehen (zwei
   gestapelte Dialoge) — Karte A1.
+
+### 02.09. 06:5x — Wurzel der verlorenen Identität gefunden (präzisiert R8)
+
+- Die vier Auth-Assist-Kommandos des KUKA-Laufs (dnbhoovers 06:43:12, leadfeeder :33, xing :49, rocketreach
+  geblockt) stammen ALLE aus dem CLI-Pfad `ctox business-os web-stack auth-assist-request` mit
+  `requesting_task_id = "KUKA Deutschland GmbH"` und `source_module = ctox_harness`. Aufrufer ist das Harness-
+  Werkzeug `ctox_web_auth_assist_request` (harness/core/src/tools/handlers/ctox_web.rs:314–328): der LLM-Agent
+  im Business-Chat (`inbound_channel business_os.llm.chat`) setzt den Firmennamen als Task-ID, das Werkzeug
+  reicht ihn 1:1 durch, hat selbst keinen Identitätskontext, und die Besitzer-Auflösung findet zu „KUKA
+  Deutschland GmbH" weder Task-Link noch Kommando → `ctox_harness`. R2s Kette (person_research →
+  `--owner-user-id`) deckt nur runtime-Scrape-Targets ab, nicht diesen Pfad.
+- Das ausgeführte Kommando selbst kannte den Nutzer: `native_authorization.actor.id = michael.welsch@…`, und das
+  RxDB-Doc trägt `client_context.actor` (via `recovered_from`), nur der Spiegel in `business_commands` nicht.
+- Die drei neuen Harness-Sitzungen füllen das Budget 3/3; Budget je Nutzer im Runtime-Store auf 6 gesetzt
+  (`runtime_env_kv CTOX_BROWSER_MAX_SESSIONS_PER_USER=6`), TTL-Reaping wird ab 06:58 UTC erwartet.
+- **R8 (nächster Rust-Auftrag):** (a) Harness-Werkzeug übergibt IMMER die durable Bindung des Turns (Chat-/
+  Thread-ID bzw. Queue-Task) als `--task-id` und, wenn bekannt, `--owner-user-id`; modellgelieferte Freitexte
+  sind kein Task-Bezug; (b) Besitzer-Auflösung zusätzlich über Chat/Thread → `business_chats.owner_user_id`
+  und über `native_authorization.actor.id` des referenzierten Kommandos (daemon-signiert); (c) Spiegel
+  `business_commands.client_context` erhält die verifizierte Identität; (d) Fallback nie mehr stumm
+  `ctox_harness`, sondern Auth-Assist mit `owner=unresolved` + Fehler an den Aufrufer.
 
 ## Working
 
