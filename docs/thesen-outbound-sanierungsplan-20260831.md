@@ -703,6 +703,30 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 - Nach B7: Nutzer meldet sich an → Nachrecherche KUKA/Beiersdorf über App 1.0.65 → Chat zeigt nur den Satz →
   Agent mit Skill → `research_writeback` (Chat-Pfad) → Zählung mit `claude-lead-fields.ts`.
 
+### 02.09. 21:12–21:19 UTC — ERSTER ECHTER AGENTENLAUF: KUKA 4 → 19 Felder, 32 Feldzustände, 5 Personen
+
+- B7 aktiv (`branch-main-20260902T203007Z`), Skill `outbound-lead-generation-research` im Binary registriert
+  (`ctox skills system show` → class `ctox_core`, state `stable`). App 1.0.65 im Browser geladen (Buster `…1.0.65`).
+- Falle: Nach dem Upgrade stand die Instanz ~40 min im Wartungsmodus (`ctox-maintenance.sqlite3`, Phase
+  `waiting_collections`, 96 %); Befehle wurden mit `CTOX_MAINTENANCE_READ_ONLY` abgelehnt. Ursache: Der Shell
+  quittiert Bereitschaft erst, wenn die Collections der offenen Module initial repliziert sind; `business_chats`
+  und `user_thread_states` standen auf `pending` (nicht Datenmenge: 0,7 bzw. 2,3 MB). **Ein Reload der Oberfläche
+  löste es** (`phase=completed`, 21:11 UTC). Backlog M-1: hängende Erst-Replikation nach Peer-Neustart.
+- **Lauf KUKA** (`leadgen-lead-research-3d466dcb…`, Chat-Task, Owner michael.welsch@…): Worker-Start 21:12:12 mit
+  dem Ein-Satz-Prompt, Abschluss 21:19:09. Ergebnis am Lead `lead_1cfi6y6`:
+  **19 gefüllte Felder (vorher 4), 32 Feldzustände (17 verified / 15 no_match), 5 Ansprechpartner (vorher 0),
+  49 Belege aus 9 Hosts** (online-handelsregister 16, kuka.com 10, northdata 8, firmendata 5, myguide 4, sellify 2,
+  dnbhoovers 2, leadfeeder 1, unternehmensverzeichnis 1). Werte inhaltlich plausibel (Anschrift Zugspitzstraße 140,
+  86165 Augsburg; Domain kuka.com; frühere Firmierung „KUKA Roboter GmbH"; Geschäftsführung mit Bestelldaten).
+  Keine Auth-Assist-Anfrage, kein Scrape-Lauf nötig.
+- Rückschreiben brauchte 4 Versuche (21:15:53 / 21:16:35 / 21:16:43 fehlgeschlagen, 21:16:57 angenommen). Gründe aus
+  der Projektion: (1) „invalid …research_writeback payload", (2) „verified result field `firma_geschaeftsfuehrung`
+  value does not match field_status value", (3) „verified person result field `person_email` requires person_key".
+  Der Agent hat sich selbst korrigiert; die drei Regeln stehen jetzt im Skill (Commit 7832befc1) → nächster Build.
+- Schwachpunkt für die nächste Runde: alle 11 `person_*`-Felder stehen auf `no_match`, obwohl 5 Personen im Lead
+  landeten (Feldstatus je Person vs. Personenliste). Skill-Ergänzung ist drin, Wirkung mit B8 messen.
+- Beiersdorf-Lauf gestartet 21:19 UTC (Queue-Task „Nachrecherche: Beiersdorf Manufacturing Leipzig GmbH").
+
 ## Working
 
 | Karte | Worker / Log | Fertig heißt |
