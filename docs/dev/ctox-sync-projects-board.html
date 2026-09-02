@@ -78,7 +78,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <span>Stand <b>2026-09-02 09:45 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 1/3 (F3b) · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 2/3 (F3b, 2b-1) · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -375,10 +375,17 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
   </div>
 
   <div class="card">
+    <div class="pills"><span class="pill acc">PKG-2b-1 produktion</span><span class="pill neutral">sol</span></div>
+    <h3>RFC Paket 2, Scheibe 2: transfer.pause_ack (→ packing) und transfer.pack_complete (→ packed → shipping), Manifest im Record</h3>
+    <p>Gestartet 04:41 im Klon <code>~/.local/state/workjet-launchpads/ctox-pkg2b</code> (Single-Branch-Klon von ctox-pkg2), Branch <code>codex/workjet-session-transfer-2b</code> auf 2a-HEAD 0938cbddf. Brief <code>ctox-pkg2b-launch/briefs/pkg2b1-pause-ack-pack-complete.md</code>: Pflicht-Commit nach pause_ack und nach pack_complete, Copy trotz Git-Quelle abgelehnt, eine Artefakt-Generation je Step, Schema-Contract tabu. Run <code>local-…T024109Z-31acc4f0</code>.</p>
+    <p>Fertig = 5 Alt-Tests + neue Tests grün, <code>workjet_</code> grün, Dispatcher-Inventar grün, Commits je Scheibe; danach 2b-2 (apply_complete, confirm_working_copy, resume_ack, Recovery-Pass).</p>
+  </div>
+
+  <div class="card">
     <div class="pills"><span class="pill acc">PKG-2a produktion</span><span class="pill neutral">sol</span></div>
     <h3>RFC Paket 2, Scheibe 1: transfer.start / abort / status, Zustandstabelle, Idempotenz, Fehlercodes</h3>
     <p>Gestartet 08:49 im Klon <code>~/.local/state/workjet-launchpads/ctox-pkg2</code>, Branch <code>codex/workjet-session-transfer-2a</code> auf main f699995ce. Brief <code>ctox-pkg2-launch/briefs/pkg2a-transfer-start-abort.md</code> mit harter Zeitregel: Commit nach jeder grünen Scheibe (Schritte 2, 4, 6), bei Zeitnot <code>status: partial</code> mit Restliste. Keine pause/pack/apply/confirm/resume-Verben (2b). Run <code>local-…T004854Z-1a01776d</code>.</p>
-    <p><b>KORREKTUR 04:19:</b> Sol lief zum zweiten Mal in das 5400-s-Turn-Limit (Run <code>failed</code>). Diesmal landete eine Scheibe: <code>584191010</code> Zustandstabelle. Den Rest (start/abort/status-Handler, +1000 Zeilen in <code>store_workjet_sessions.rs</code>, <code>command_plane.rs</code>, Inventory-JSON) habe ich als WIP <code>416d531ff</code> gesichert, <b>unverifiziert</b>. Gate läuft jetzt bei mir (Log <code>scratchpad/pkg2a-wip-gate.log</code>). Danach: grün → rustfmt, Rebase, PR; rot → kurzer Restbrief ≤ 45 min nur für die Fehler.</p><p>Fertig = <code>cargo test --bin ctox workjet_session_transfer</code> grün, 27 Alt-Tests grün, Inventory-Dispatcher-Test grün, Commits je Scheibe.</p>
+    <p><b>KORREKTUR 04:19:</b> Sol lief zum zweiten Mal in das 5400-s-Turn-Limit (Run <code>failed</code>). Diesmal landete eine Scheibe: <code>584191010</code> Zustandstabelle. Den Rest (start/abort/status-Handler, +1000 Zeilen in <code>store_workjet_sessions.rs</code>, <code>command_plane.rs</code>, Inventory-JSON) habe ich als WIP <code>416d531ff</code> gesichert, <b>unverifiziert</b>. Einziger Compile-Fehler war ein fehlender Helfer <code>redacted_transfer_reason</code> (von mir ergänzt, cbf608480 → gesquasht). <b>Von mir verifiziert auf dem WIP:</b> <code>workjet_session_transfer</code> 5/5 grün (State-Table, start+Replay ohne zweite Epoch, abort-Kompensation idempotent, status owner-scoped, Precondition-Fehlercodes), Dispatcher-Inventar grün, <code>workjet_</code> 32/32 grün, rustfmt clean, Inventory +3 Typen. Gesquasht zu 2 Commits, rebased auf origin/main a0a1abf49 (HEAD 0938cbddf), gepusht als <code>codex/workjet-session-transfer-2a</code>; Gate-Wiederholung auf dem rebased Stand läuft (Log <code>scratchpad/pkg2a-rebased-gate.log</code>), danach PR.</p><p>Fertig = <code>cargo test --bin ctox workjet_session_transfer</code> grün, 27 Alt-Tests grün, Inventory-Dispatcher-Test grün, Commits je Scheibe.</p>
   </div>
 
   <div class="card">
@@ -450,8 +457,8 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
   <div class="card">
     <div class="pills"><span class="pill acc">T12</span></div>
     <h3>RFC Paket 2: Transfer-Lifecycle-Verben, Zustandsautomat, Recovery</h3>
-    <p>Nach RFC §23 Paket 2 auf Basis PR #45; in ≤ 2-h-Scheiben mit Pflicht-Commits (Lehre #9).</p>
-    <div class="trigger"><b>Trigger:</b> #45 gemergt.</div>
+    <p>Nach RFC §23 Paket 2 auf Basis PR #45; in Scheiben mit Pflicht-Commits (Lehre #9): 2a start/abort/status (fertig, PR folgt), 2b-1 pause_ack/pack_complete (läuft), <b>2b-2</b> apply_complete (3× Mismatch → failed), confirm_working_copy (atomarer Switch, 7 Schritte §12.6, neue Epoch), resume_ack (nur Zielrechner), Recovery-Pass für abgelaufene deadline_at_ms (§12.8) als aufrufbare Funktion + Tests.</p>
+    <div class="trigger"><b>Trigger 2b-2:</b> 2b-1 verifiziert und committet (Klon ctox-pkg2b), Sol frei.</div>
   </div>
 </div>
 
