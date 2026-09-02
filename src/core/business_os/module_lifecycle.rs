@@ -32,6 +32,8 @@ use super::store_release_review::{
     release_review_data_access_projection,
 };
 use anyhow::Context;
+use base64::Engine;
+use ring::signature::{UnparsedPublicKey, ED25519};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -1846,6 +1848,187 @@ fn validate_local_catalog_module_source(module_dir: &Path, module_id: &str) -> a
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// APPSTORE-V2 P3B: signierter Store-Kanal (appstore.ctox.dev)
+//
+// Der offizielle Katalog wird ueber einen eigenen Store-Endpunkt verteilt statt
+// ueber GitHub-Tree-API plus Ganz-Repo-Zip. Vertrauensanker ist NICHT mehr der
+// Repo-Name, sondern eine Ed25519-Signatur ueber den Index UND jedes einzelne
+// Bundle, geprueft gegen einen in der Binary gepinnten Store-Schluessel.
+//
+// FAIL CLOSED: ohne gepinnten Schluessel ist der Kanal inaktiv und jeder
+// Versuch scheitert mit klarer Meldung. Ein unsignierter oder fremd signierter
+// Index darf nie als first-party gelten — sonst waere der Kanal schwaecher als
+// der Repo-Pin, den er ersetzt.
+// ---------------------------------------------------------------------------
+
+const APPSTORE_BASE_URL: &str = "https://appstore.ctox.dev";
+const APPSTORE_INDEX_SCHEMA: &str = "ctox.appstore.index.v1";
+
+/// Gepinnte Store-Schluessel: (key_id, SPKI base64). Die key_id entspricht dem
+/// `signing_key_id`, das `scripts/build-appstore-index.mjs` in den Index
+/// schreibt. LEER = Kanal inaktiv (Owner-Gate: Schluessel erzeugen und pinnen).
+const APPSTORE_SIGNING_KEYS: &[(&str, &str)] = &[];
+
+fn appstore_public_key(key_id: &str) -> anyhow::Result<Vec<u8>> {
+    anyhow::ensure!(
+        !APPSTORE_SIGNING_KEYS.is_empty(),
+        "the app store channel has no pinned signing key on this build; install from the local catalog instead"
+    );
+    let encoded = APPSTORE_SIGNING_KEYS
+        .iter()
+        .find(|(id, _)| *id == key_id)
+        .map(|(_, key)| *key)
+        .with_context(|| format!("app store index is signed by unknown key `{key_id}`"))?;
+    let spki = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .context("pinned app store key is not valid base64")?;
+    anyhow::ensure!(
+        spki.len() == 44,
+        "pinned app store key is not an Ed25519 SPKI"
+    );
+    Ok(spki[12..].to_vec())
+}
+
+/// Prueft eine Ed25519-Signatur (base64, wie vom Publisher geschrieben) ueber
+/// exakt diese Bytes. Eigene Funktion, damit Tests mit einem selbst erzeugten
+/// Schluesselpaar arbeiten koennen, ohne den gepinnten Satz anzufassen.
+pub(super) fn verify_appstore_signature(
+    payload: &[u8],
+    signature_b64: &str,
+    public_key: &[u8],
+) -> anyhow::Result<()> {
+    let signature = base64::engine::general_purpose::STANDARD
+        .decode(signature_b64.trim())
+        .context("app store signature is not valid base64")?;
+    UnparsedPublicKey::new(&ED25519, public_key)
+        .verify(payload, &signature)
+        .map_err(|_| anyhow::anyhow!("app store signature does not verify"))
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct AppstoreEntry {
+    pub(super) bundle_path: String,
+    pub(super) bundle_sha256: String,
+    pub(super) version: String,
+    pub(super) key_id: String,
+}
+
+/// Liest den signierten Index und liefert den Eintrag der gesuchten App.
+/// Reihenfolge ist Absicht: erst Signatur pruefen, dann Inhalt auswerten.
+pub(super) fn appstore_entry_from_signed_index(
+    index_bytes: &[u8],
+    signature_b64: &str,
+    module_id: &str,
+    public_key_for: impl Fn(&str) -> anyhow::Result<Vec<u8>>,
+) -> anyhow::Result<AppstoreEntry> {
+    let index: Value =
+        serde_json::from_slice(index_bytes).context("app store index is not valid JSON")?;
+    // Die Schluessel-ID steht im Index, waehlt aber nur AUS den gepinnten
+    // Schluesseln aus; sie kann keinen neuen einfuehren.
+    let key_id = index
+        .get("signing_key_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    anyhow::ensure!(
+        !key_id.is_empty(),
+        "app store index is unsigned; refusing to treat it as first-party"
+    );
+    verify_appstore_signature(index_bytes, signature_b64, &public_key_for(key_id)?)?;
+
+    let schema = index
+        .get("schema")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    anyhow::ensure!(
+        schema == APPSTORE_INDEX_SCHEMA,
+        "unexpected app store index schema `{schema}`"
+    );
+    let app = index
+        .get("apps")
+        .and_then(Value::as_array)
+        .context("app store index has no apps array")?
+        .iter()
+        .find(|entry| entry.get("id").and_then(Value::as_str) == Some(module_id))
+        .with_context(|| format!("app `{module_id}` is not published in the app store"))?;
+    let bundle_path = app
+        .get("bundle")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .context("app store entry has no bundle path")?;
+    // Der Pfad stammt aus signierten Daten, wird aber trotzdem auf einen
+    // relativen Pfad ohne Rueckwaertsschritte eingeschraenkt.
+    let bundle_path = source_relative_subpath(bundle_path)?;
+    let bundle_sha256 = app
+        .get("bundle_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit()))
+        .context("app store entry has no valid bundle_sha256")?;
+    Ok(AppstoreEntry {
+        bundle_path,
+        bundle_sha256: bundle_sha256.to_owned(),
+        version: app
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        key_id: key_id.to_owned(),
+    })
+}
+
+/// Prueft die Bundle-Bytes gegen Signatur UND den im Index signierten Hash.
+/// Beides ist noetig: die Signatur bindet den Herausgeber, der Hash bindet den
+/// Indexeintrag an genau diese Bytes.
+pub(super) fn verify_appstore_bundle(
+    bundle: &[u8],
+    signature_b64: &str,
+    entry: &AppstoreEntry,
+    public_key: &[u8],
+) -> anyhow::Result<()> {
+    verify_appstore_signature(bundle, signature_b64, public_key)?;
+    let actual = hex_sha256(bundle);
+    anyhow::ensure!(
+        actual == entry.bundle_sha256,
+        "app store bundle hash mismatch: index says {}, download is {actual}",
+        entry.bundle_sha256
+    );
+    Ok(())
+}
+
+/// Laedt Index, Signatur und Bundle vom Store und gibt verifizierte Bytes plus
+/// Herkunftsstempel zurueck.
+fn fetch_appstore_bundle(module_id: &str) -> anyhow::Result<(Vec<u8>, Value)> {
+    let index_bytes = fetch_archive_bytes(&format!("{APPSTORE_BASE_URL}/index.json"))?;
+    let index_sig = String::from_utf8(fetch_archive_bytes(&format!(
+        "{APPSTORE_BASE_URL}/index.json.sig"
+    ))?)
+    .context("app store index signature is not valid UTF-8")?;
+    let entry =
+        appstore_entry_from_signed_index(&index_bytes, &index_sig, module_id, appstore_public_key)?;
+
+    let bundle_url = format!("{APPSTORE_BASE_URL}/{}", entry.bundle_path);
+    let bundle = fetch_archive_bytes(&bundle_url)?;
+    let bundle_sig = String::from_utf8(fetch_archive_bytes(&format!("{bundle_url}.sig"))?)
+        .context("app store bundle signature is not valid UTF-8")?;
+    verify_appstore_bundle(
+        &bundle,
+        &bundle_sig,
+        &entry,
+        &appstore_public_key(&entry.key_id)?,
+    )?;
+
+    let descriptor = serde_json::json!({
+        "kind": "appstore",
+        "url": bundle_url,
+        "version": entry.version,
+        "bundle_sha256": entry.bundle_sha256,
+        "signing_key_id": entry.key_id,
+        "verified": true,
+        "trust_model": "ctox-first-party-source",
+    });
+    Ok((bundle, descriptor))
+}
+
 /// Entfernt jede Herkunftsangabe, die das Paket ueber sich selbst behauptet.
 /// Der Stempel wird ausschliesslich serverseitig aus der aufgeloesten Quelle
 /// geschrieben — sonst koennte ein hochgeladenes Zip sich selbst zur
@@ -1987,6 +2170,17 @@ pub fn install_app_module(
                     AppInstallPayload::Archive(fetch_archive_bytes(&url)?),
                 )
             }
+        }
+        "appstore" => {
+            // Signierter Store-Kanal: die Bytes sind erst first-party, wenn
+            // Index- UND Bundle-Signatur gegen einen gepinnten Schluessel
+            // verifizieren und der signierte Hash passt.
+            let (bundle, descriptor) = fetch_appstore_bundle(&module_id)?;
+            (
+                format!("apps/{module_id}"),
+                descriptor,
+                AppInstallPayload::Archive(bundle),
+            )
         }
         "local-catalog" => {
             let local_source = source_app_root.join("modules").join(&module_id);
@@ -2356,13 +2550,15 @@ mod tests {
         ModuleVersionListRequest, ModuleVersionRollbackRequest,
     };
     use super::{
-        compute_module_bundle, copy_dir_recursive, delete_installed_module,
-        ensure_rollback_collection_schema_compatible, first_party_local_catalog_source,
-        list_module_versions, module_catalog_source_id, module_policy_decision,
-        normalize_catalog_installed_manifest, record_module_release, record_module_version,
-        release_managed_shadow_source, rollback_module_to_version, sync_module_version_records,
-        validate_staged_catalog_module,
+        appstore_entry_from_signed_index, appstore_public_key, compute_module_bundle,
+        copy_dir_recursive, delete_installed_module, ensure_rollback_collection_schema_compatible,
+        first_party_local_catalog_source, hex_sha256, list_module_versions,
+        module_catalog_source_id, module_policy_decision, normalize_catalog_installed_manifest,
+        record_module_release, record_module_version, release_managed_shadow_source,
+        rollback_module_to_version, sync_module_version_records, validate_staged_catalog_module,
+        verify_appstore_bundle,
     };
+    use base64::Engine as _;
     use rusqlite::{params, Connection};
     use serde_json::Value;
     use std::fs;
@@ -3358,5 +3554,124 @@ mod tests {
             .to_string()
             .contains("core modules cannot be deleted"));
         Ok(())
+    }
+
+    // --- APPSTORE-V2 P3B: signierter Store-Kanal -----------------------------
+
+    fn appstore_test_keypair() -> (ring::signature::Ed25519KeyPair, Vec<u8>) {
+        let rng = ring::rand::SystemRandom::new();
+        let pkcs8 = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).expect("keypair");
+        let pair =
+            ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("parse keypair");
+        let public = ring::signature::KeyPair::public_key(&pair)
+            .as_ref()
+            .to_vec();
+        (pair, public)
+    }
+
+    fn appstore_sign(pair: &ring::signature::Ed25519KeyPair, payload: &[u8]) -> String {
+        base64::engine::general_purpose::STANDARD.encode(pair.sign(payload).as_ref())
+    }
+
+    fn appstore_index_json(bundle_sha: &str) -> Vec<u8> {
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema": "ctox.appstore.index.v1",
+            "generated_at": "2026-01-01T00:00:00Z",
+            "signing_key_id": "test-key",
+            "apps": [{
+                "id": "widget",
+                "version": "1.0.0",
+                "bundle": "apps/widget/widget-1.0.0.zip",
+                "bundle_sha256": bundle_sha,
+            }],
+        }))
+        .expect("index json")
+    }
+
+    /// Der Store-Kanal ist erst vertrauenswuerdig, wenn Index UND Bundle gegen
+    /// einen GEPINNTEN Schluessel verifizieren. Ein fremd signierter oder
+    /// unsignierter Index darf nie als first-party durchgehen — sonst waere der
+    /// Kanal schwaecher als der Repo-Pin, den er ersetzt.
+    #[test]
+    fn appstore_index_must_verify_against_a_pinned_key() -> anyhow::Result<()> {
+        let (pair, public) = appstore_test_keypair();
+        let bundle = b"PK\x03\x04 pretend zip";
+        let index = appstore_index_json(&hex_sha256(bundle));
+        let signature = appstore_sign(&pair, &index);
+        let pinned = move |_id: &str| Ok(public.clone());
+
+        // Gueltig signiert: Eintrag wird geliefert.
+        let entry = appstore_entry_from_signed_index(&index, &signature, "widget", pinned.clone())?;
+        assert_eq!(entry.bundle_path, "apps/widget/widget-1.0.0.zip");
+        assert_eq!(entry.key_id, "test-key");
+
+        // Fremder Schluessel: abgelehnt.
+        let (_other_pair, other_public) = appstore_test_keypair();
+        let foreign = move |_id: &str| Ok(other_public.clone());
+        let error = appstore_entry_from_signed_index(&index, &signature, "widget", foreign)
+            .expect_err("a foreign key must not verify");
+        assert!(error.to_string().contains("does not verify"));
+
+        // Manipulierter Index bei gueltiger Alt-Signatur: abgelehnt.
+        let mut tampered = index.clone();
+        tampered.extend_from_slice(b" ");
+        let error =
+            appstore_entry_from_signed_index(&tampered, &signature, "widget", pinned.clone())
+                .expect_err("a tampered index must not verify");
+        assert!(error.to_string().contains("does not verify"));
+
+        // Unsignierter Index (kein signing_key_id): abgelehnt, bevor der
+        // Inhalt ueberhaupt ausgewertet wird.
+        let unsigned = serde_json::to_vec(&serde_json::json!({
+            "schema": "ctox.appstore.index.v1",
+            "apps": [],
+        }))?;
+        let error = appstore_entry_from_signed_index(&unsigned, &signature, "widget", pinned)
+            .expect_err("an unsigned index must be refused");
+        assert!(error.to_string().contains("unsigned"));
+        Ok(())
+    }
+
+    /// Die Bundle-Bytes muessen BEIDES erfuellen: gueltige Signatur (bindet den
+    /// Herausgeber) und den im signierten Index stehenden Hash (bindet den
+    /// Eintrag an genau diese Bytes).
+    #[test]
+    fn appstore_bundle_needs_signature_and_matching_hash() -> anyhow::Result<()> {
+        let (pair, public) = appstore_test_keypair();
+        let bundle = b"PK\x03\x04 pretend zip";
+        let index = appstore_index_json(&hex_sha256(bundle));
+        let signature = appstore_sign(&pair, &index);
+        let public_for = {
+            let public = public.clone();
+            move |_id: &str| Ok(public.clone())
+        };
+        let entry = appstore_entry_from_signed_index(&index, &signature, "widget", public_for)?;
+
+        verify_appstore_bundle(bundle, &appstore_sign(&pair, bundle), &entry, &public)?;
+
+        // Andere Bytes, korrekt signiert: der Hash aus dem Index rettet uns.
+        let swapped = b"PK\x03\x04 different payload";
+        let error =
+            verify_appstore_bundle(swapped, &appstore_sign(&pair, swapped), &entry, &public)
+                .expect_err("a signed but swapped bundle must be rejected by the index hash");
+        assert!(error.to_string().contains("hash mismatch"));
+
+        // Richtige Bytes, falsche Signatur.
+        let (other_pair, _) = appstore_test_keypair();
+        let error =
+            verify_appstore_bundle(bundle, &appstore_sign(&other_pair, bundle), &entry, &public)
+                .expect_err("a foreign bundle signature must be rejected");
+        assert!(error.to_string().contains("does not verify"));
+        Ok(())
+    }
+
+    /// Ohne gepinnten Schluessel ist der Kanal INAKTIV, nicht offen.
+    #[test]
+    fn appstore_channel_fails_closed_without_a_pinned_key() {
+        let error = appstore_public_key("test-key").expect_err("no key is pinned on this build");
+        assert!(
+            error.to_string().contains("no pinned signing key"),
+            "unexpected: {error}"
+        );
     }
 }

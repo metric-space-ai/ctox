@@ -1,8 +1,8 @@
 # APPSTORE-V2 — Kampagnen-Board
 
-**Headline:** P0/P1/P3A/P5 gelandet; P2+P4+P6T2 fertig im Arbeitsbaum und warten
-auf EINEN gruenen cargo check — kritischer Pfad = fremder cargo-test-Lock auf
-/Volumes/tmp/ctox-check-target (PID 58382), danach commit-tree-Commit.
+**Headline:** ALLE PHASEN IMPLEMENTIERT (P0-P6). Offen nur noch das Owner-Gate
+fuer P3B: DNS appstore.ctox.dev + Store-Signaturschluessel pinnen — bis dahin
+faellt der Store-Kanal bewusst FAIL CLOSED aus.
 
 Zielbild (entscheidungsfrei bis auf OWNER-Karten unten):
 https://claude.ai/code/artifact/00f7ce23-1cb4-450d-bb26-a1f1f5fc2898
@@ -12,6 +12,23 @@ Phasen: 0 Boden · 1 Katalog/Loader · 2 Origin+Core-Repair · 3 Store-Kanal app
 
 ## Done
 
+- **[P2+P4+P6T2] GELANDET** — Commit `49396e130`, 53 Dateien. origin-Achse
+  (core|official|user) server-autoritativ, ctox.app_store.repair, local-catalog-
+  Install ohne Netz, F1-Fix, Nutzer-Apps (zip/url/fremd-github) als
+  untrusted-user-source hinter INSTANZWEITER apps.install-Autoritaet,
+  strip_forged_provenance_keys, local-modules deletable + uninstall raeumt beide
+  Wurzeln, Rubrik unabhaengig von Herkunft. Wiederhergestellt: P6-Teil-1-Slugs,
+  die `128aed748` zurueckgedreht hatte. Verifiziert: cargo check gruen, 6 Rust-
+  Waechter gruen, JS 4/4 + 27/27 + 23/23. Chirurgisch committet — fremder WIP in
+  server.rs/mcp_channel.rs/store_catalog_projections.rs blieb unberuehrt.
+- **[P3B] Nativer Store-Client GELANDET** — `appstore`-source_kind in
+  install_app_module: Index + Bundle von appstore.ctox.dev, Ed25519-Signatur
+  gegen GEPINNTEN Schluessel (Reihenfolge: erst Signatur, dann Inhalt), danach
+  der im signierten Index stehende sha256 gegen die Bytes. Ohne gepinnten
+  Schluessel FAIL CLOSED. Verifiziert: 3 Waechter gruen (fremder Schluessel,
+  manipulierter Index und unsignierter Index werden abgelehnt; signiertes aber
+  ausgetauschtes Bundle scheitert am Hash; ohne Key ist der Kanal inaktiv).
+  Log /Volumes/tmp/appstore-p3b-tests.log.
 - **[P4-Rest] Importer-Bypass GESCHLOSSEN — von Parallelsitzungen, nicht von uns.**
   Gemessen 02.09.: der Browser-Importer oeffnet den Verzeichnis-Picker nur noch
   `mode: 'read'` und schickt `ctox.business_os.app.create` ueber den Kommandobus;
@@ -108,32 +125,12 @@ Phasen: 0 Boden · 1 Katalog/Loader · 2 Origin+Core-Repair · 3 Store-Kanal app
 
 ## Working
 
-- **[P2+P4+P6T2] fertig im Arbeitsbaum, wartet auf cargo check** — ALLES geschrieben und
-  im Worktree (unkommittiert, ueberlebte den Sitzungsabbruch verifiziert):
-  * P2 origin/repair/local-catalog (Sol-Lauf `135757Z-50418a77`, integrated)
-  * F1-SICHERHEITSFIX (siehe Done)
-  * P4 Nutzer-Apps: zip/url/fremd-github installieren als `untrusted-user-source`,
-    aber NUR mit instanzweiter apps.install-Autoritaet (Modul-Grant reicht nicht);
-    Manifest-Selbstdeklaration von app_source/origin/trust_model wird vor dem
-    Stempeln entfernt; local-modules sind jetzt deletable und `uninstall_app_module`
-    raeumt beide Wurzeln.
-  * P6 Teil 2: workjetCategoryForModule nutzt `origin` statt PUBLIC_DISTRIBUTIONS.
-  Dateien: module_lifecycle.rs (+506/-77), module_manifest_loader.rs (+34/-3),
-  store.rs (+141/-20), command_plane.rs, business_command_inventory.json,
-  app-store/{index.js,index.css,index.html,module.json,locales/*}, workjet-theme.js.
-  Log: scratchpad/cargo-p2p4.log. FERTIG = cargo check gruen -> commit-tree-Commit
-  (Fremd-WIP in server.rs/mcp_channel.rs/store_catalog_projections.rs NICHT mitnehmen).
-  UMGEBUNG: fremde cargo-test-Sitzung (PID 58382) haelt den Lock auf
-  /Volumes/tmp/ctox-check-target; eigener Check haengt in "Blocking waiting for
-  file lock on build directory" und laeuft automatisch an.
+- (leer)
 
 ## To-Do
 - **[P3] Store-Kanal V1** (CI-Publisher + nativer Client + Kimi-Cyber-Review). TRIGGER: nach P2;
   DNS appstore.ctox.dev = OWNER-Handgriff.
-- **[P3B] nativer Store-Client** — `appstore`-Source-Kind: Index+Bundle von
-  appstore.ctox.dev holen (SSRF-geschuetzt), Ed25519-Signatur gegen gepinnten Store-Key
-  pruefen, sha256 des Bundles pruefen, als origin:official installieren. Faellt ohne
-  gepinnten Key FAIL-CLOSED aus. TRIGGER: nach P2/P4-Commit. Owner-Gate: DNS + Key.
+
 
 
 ## Backlog + Owner
@@ -141,8 +138,12 @@ Phasen: 0 Boden · 1 Katalog/Loader · 2 Origin+Core-Repair · 3 Store-Kanal app
 - **OWNER: kundenpipeline-Fork auflösen.** Ignorierte Kopie 0.3.1 (installed-modules/, mit
   core/-Dir + Zusatztests) vs. Core-Kopie 0.1.0 (modules/). Welche ist die Wahrheit? Bis zur
   Entscheidung wird nichts gelöscht; Serving nutzt die Core-Kopie.
-- **OWNER: DNS/Subdomain appstore.ctox.dev anlegen** (Voraussetzung P3-Deploy; Deploy-Mechanik
-  wie ctox.dev, siehe Memory project_ctox_dev_deploy).
+- **OWNER: DNS appstore.ctox.dev + Store-Signaturschluessel.** Der Client ist fertig und
+  getestet, aber inaktiv: `APPSTORE_SIGNING_KEYS` in module_lifecycle.rs ist leer
+  (fail closed). Noetig: (1) Ed25519-Schluesselpaar erzeugen, (2) oeffentlichen SPKI
+  base64 mit key_id dort pinnen, (3) `build-appstore-index.mjs --key <privkey>` in CI,
+  (4) DNS/Deploy wie ctox.dev (Memory project_ctox_dev_deploy). Erst danach kann eine
+  Instanz ueber den Store installieren.
 - **OWNER 3 (Default läuft): Rubrikliste** = 16 Workjet-Slugs, „REM Capital" wird
   Kunden-Sichtbarkeit statt Rubrik. Veto möglich bis P6-Start.
 - **Beobachtung:** `src/apps/business-os/runtime/qa/` (untracked Screenshots) verletzt
