@@ -399,7 +399,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <div class="pills"><span class="pill acc">T4b Lauf 3 beweis</span><span class="pill neutral">sol</span></div>
     <h3>Echte Session aus dem Sync-Projekt — gegen F3c (Server-Projekt beim Thread-Start)</h3>
     <p>Gestartet 05:23 aus Launchpad <code>workjet-t4b-launch</code>, Arbeitsort Klon <code>workjet-f3c</code> @ 65313cc9f (PR #13-Inhalt; Electron-Runtime und Server-dist per Symlink aus workjet-f3). Brief <code>workjet-t4b-launch/briefs/t4b-session-proof-run3.md</code>: Rebuild web + desktop pack, Profilkopie <code>/tmp/workjet-profile-t4b3</code>, CDP :9224, Evidence <code>evidence-run3/</code>; zusätzlich zu belegen: genau ein Sidebar-Eintrag, Hero „What should we build in …“, freier Composer, Computer-/Harness-Auswahl. Run <code>local-…T032330Z-2789c15f</code>.</p>
-    <p>Fertig = Harness-Antwort im Thread + Persistenz nach Neustart; oder failed mit dem nächsten konkreten Blocker (Computer-/Harness-Auswahl).</p>
+    <p><b>Ergebnis 05:39: FAILED — aber UNGÜLTIG (Messfehler meinerseits).</b> Draft trug wieder die CTOX-Projekt-ID + worktreePath, Composer gesperrt, zwei „greppy“-Einträge (817cfd5f… und 71462c13…, beide Sync-Projekte, T10). Ursache: ich hatte <code>apps/server/dist</code> als Symlink auf workjet-f3 gelegt; <code>bin.mjs</code> liefert den Renderer aus <code>../../web/dist</code> relativ zu seinem echten Pfad → die App lief mit dem F3b-Renderer aus f3, nicht mit F3c. Falle #E11 unten. Server in f3c echt gepackt (05:41).</p><p><b>Lauf 4</b> gestartet 05:42, Brief <code>t4b-session-proof-run4.md</code> (zusätzlich Beweis, dass der geladene Renderer aus diesem Klon stammt: Asset-Hash), Profil t4b4, CDP :9224, Evidence <code>evidence-run4/</code>. Run <code>local-2026-09-02T034216Z-2272e7ad-a6ce-4…</code>.</p><p>Fertig = Harness-Antwort im Thread + Persistenz nach Neustart; oder failed mit dem nächsten konkreten Blocker.</p>
   </div>
 
   <div class="card">
@@ -550,6 +550,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
   <h2>Umgebungsfallen</h2>
   <div class="grid2">
     <div class="panel"><h3>Checkouts</h3><ul>
+    <li><b>E11 Symlink-Server-dist liefert fremden Renderer:</b> <code>apps/server/dist/bin.mjs</code> löst den Client über <code>../../web/dist</code> relativ zu seinem ECHTEN Pfad auf. Ein per Symlink aus einem anderen Klon geliehenes Server-dist serviert dessen Web-Build — ein Beweislauf testet dann den falschen Code (T4b-Lauf 3, 05:39). Server-dist immer im selben Klon packen; im Brief den Asset-Hash des geladenen Renderers gegen <code>apps/web/dist/assets</code> belegen lassen.</li>
       <li><code>~/Documents/ctox</code>: 125 fremde Einträge, <code>main</code> ahead 3 / behind 17. Nie pauschal resetten.</li>
       <li><code>~/Documents/ctox-dev</code>: 2597 Einträge auf <code>fix/fleet-guest-config-timeout</code>; 30 Worktrees, 11 prunable. Rollouts nur aus <code>~/.codex/worktrees/ctox-dev-owner-identity</code>.</li>
       <li><code>~/Documents/workjet</code>: 241 Einträge, behind 10. Hunk-Attribution vor jedem Commit.</li>
