@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 06:45 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 07:40 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -260,6 +260,20 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   selbst korrigiert). Push auf origin/main (fast-forward auf c2dda6da0), anschließend Build B3 gestartet
   (dritter Neustart; Wächter läuft). Nachher-Messung danach mit dem Datei-schreibenden Probe-Task
   (`sandbox-probe-after-b3.txt` im Workspace) + frischer Reparaturaufgabe.
+
+### 02.09. 05:3x — A1-Reproduktion Teil 1 (Owner angemeldet, Viewport 1440×900, Shell 0.1.25, App 1.0.64, während B3 = read-only)
+
+- **Tabellen-/Shard-Umschaltung schließt die App: NICHT reproduziert.** JS-Klick auf `[data-action="view-mode"]`
+  (Tabelle→Shards→Tabelle) und echte Mausklicks auf beide Icons: Fenster bleibt, 3 Leads bleiben, keine
+  Konsolenfehler außer den erwarteten `CTOX_MAINTENANCE_READ_ONLY` (Build läuft). Codex' Befund bleibt
+  unbestätigt (evtl. Breiten-/Timing-abhängig); Karte auf „Beobachten".
+- **Importtyp-Wechsel behält Vorschau + Import-Knopf: REPRODUZIERT.** Freitext „KUKA Deutschland GmbH" →
+  „1 gültige, eindeutige Leads" + Knopf „Gültige Leads importieren"; Wechsel auf „URL" → Vorschau und Knopf
+  bleiben unter dem URL-Formular stehen (Screenshot in der Sitzung). Zusätzlich: Freitext „KUKA Deutschland
+  GmbH, Augsburg" wird als CSV mit Website-Spalte gelesen → „Website ist keine gültige HTTP(S)-URL", 0 Leads —
+  Komma in Name/Ort-Angaben killt den Import (UX-Defekt, neu).
+- Noch offen (brauchen Schreibpfad, nach B3): echter Import (IDB-closing), Sellify-Kampagnensuche, Nachrecherche
+  (Identität + Personen + Auth-Sitzung), „Erledigt – Recherche fortsetzen".
 
 ## Working
 
