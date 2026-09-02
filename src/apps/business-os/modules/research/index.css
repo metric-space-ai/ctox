@@ -2561,3 +2561,107 @@ a.research-source-row-meta:hover {
     height: 44px;
   }
 }
+
+/* Knowledge = consolidated engineering claims (table `claims`). One block per statement: identity and
+   provenance in the header, the claim itself as prose, its limitations muted, the verbatim evidence behind a
+   disclosure. Filters reuse the pane-tab look of the measurement mode switch. */
+.research-claim-filters {
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.research-claim-list {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.research-claim {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--research-line);
+  min-width: 0;
+}
+
+.research-claim:last-child {
+  border-bottom: 0;
+}
+
+.research-claim header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 9px;
+  align-items: center;
+  margin-bottom: 3px;
+  color: var(--research-muted);
+  font-size: 11.5px;
+}
+
+.research-claim header b {
+  color: var(--research-accent);
+  font-weight: 600;
+}
+
+.research-claim p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.research-claim-limits {
+  margin-top: 3px !important;
+  color: var(--research-muted);
+  font-size: 12px !important;
+}
+
+.research-claim-source {
+  border: 0;
+  background: none;
+  color: var(--research-accent);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+
+.research-claim-source:hover {
+  text-decoration: underline;
+}
+
+.research-claim details {
+  margin-top: 4px;
+}
+
+.research-claim summary {
+  color: var(--research-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.research-claim-evidence {
+  display: grid;
+  gap: 1px;
+  padding: 5px 0 5px 10px;
+  border-left: 1px solid var(--research-line);
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.research-claim-evidence b {
+  color: var(--research-accent);
+  font-weight: 600;
+}
+
+.research-claim-evidence span {
+  color: var(--research-muted);
+}
+
+.research-claim-evidence q {
+  color: var(--research-muted);
+  font-style: italic;
+}
+
+.research-claim-more {
+  margin: 8px 0 0;
+  color: var(--research-muted);
+  font-size: 12px;
+}

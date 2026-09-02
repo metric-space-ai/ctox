@@ -159,5 +159,7 @@
   "actionFailed": "Aktion fehlgeschlagen",
   "targetedResearchQueued": "Gezielte Nachrecherche wurde an CTOX übergeben.",
   "graphDocumentQueued": "Word-Dokument wurde an CTOX übergeben.",
-  "researchChatOpened": "Research-Aufgabe im Chat vorbereitet – zum Starten im Chat senden."
+  "researchChatOpened": "Research-Aufgabe im Chat vorbereitet – zum Starten im Chat senden.",
+  "noKnowledgeClaims": "Noch keine belegten Aussagen in dieser Knowledge Base.",
+  "confidence": "Konfidenz"
 }

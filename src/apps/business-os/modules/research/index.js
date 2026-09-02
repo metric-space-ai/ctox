@@ -8,7 +8,7 @@ import {
   sliceResearchGraphProjection,
 } from './research-graph-data.mjs';
 
-const BUILD = '20260728-research-knowledge-usability-v88';
+const BUILD = '20260902-research-claims-knowledge-v89';
 const DEFAULT_AXIS_X = 'evidence_strength';
 const DEFAULT_AXIS_Y = 'topic_fit';
 const ROW_LIMIT = 5000;
@@ -391,6 +391,10 @@ const state = {
   candidateModels: [],
   sourceRows: [],
   curatedRows: [],
+  claimRows: [],
+  evidenceRows: [],
+  knowledgeTopic: '',
+  knowledgeType: 'all',
   measurementRows: [],
   derivedMeasurementRows: [],
   graphNodeRows: [],
@@ -686,6 +690,12 @@ function bindEvents(root) {
     } else if (action === 'measurement-mode') {
       state.measurementMode = target.dataset.measurementMode === 'direct' ? 'direct' : 'derived';
       refreshMeasurementWorkbenchInPlace();
+    } else if (action === 'knowledge-book') {
+      state.knowledgeTopic = target.dataset.knowledgeBook || '';
+      renderCenter();
+    } else if (action === 'knowledge-type') {
+      state.knowledgeType = target.dataset.knowledgeType || 'all';
+      renderCenter();
     }
   });
   root.addEventListener('change', (event) => {
@@ -1278,6 +1288,8 @@ async function loadDashboardData() {
   state.candidateModels = [];
   state.sourceRows = [];
   state.curatedRows = [];
+  state.claimRows = [];
+  state.evidenceRows = [];
   state.measurementRows = [];
   state.derivedMeasurementRows = [];
   state.graphNodeRows = [];
@@ -1300,7 +1312,11 @@ async function loadDashboardData() {
   const derivedMeasurementTable = tableForKey(base, 'derived_bearing_loads');
   const graphNodeTable = tableForKey(base, task.payload?.graph_contract?.nodes_table_key || 'semantic_graph_nodes') || firstTableMatching(base, /semantic.*graph.*node|concept.*node/i);
   const graphEdgeTable = tableForKey(base, task.payload?.graph_contract?.edges_table_key || 'semantic_graph_edges') || firstTableMatching(base, /semantic.*graph.*edge|concept.*edge/i);
-  const [candidateRows, sourceRows, curatedRows, measurementRows, derivedMeasurementRows, graphNodeRows, graphEdgeRows] = await Promise.all([
+  // Consolidated engineering claims (one row per statement, several sources per claim). Optional: bases
+  // without a claims table fall back to the claim_support evidence rows below.
+  const claimTable = tableForKey(base, task.claims_table_key || 'claims') || firstTableMatching(base, /^claims$/i);
+  const evidenceTable = tableForKey(base, task.evidence_table_key || 'evidence_points') || firstTableMatching(base, /evidence.*point/i);
+  const [candidateRows, sourceRows, curatedRows, measurementRows, derivedMeasurementRows, graphNodeRows, graphEdgeRows, claimRows, evidenceRows] = await Promise.all([
     candidateTable ? fetchTableRows(candidateTable.id) : Promise.resolve([]),
     sourceTable ? fetchTableRows(sourceTable.id) : Promise.resolve([]),
     curatedTable && curatedTable.id !== sourceTable?.id ? fetchTableRows(curatedTable.id) : Promise.resolve([]),
@@ -1308,6 +1324,8 @@ async function loadDashboardData() {
     derivedMeasurementTable ? fetchTableRows(derivedMeasurementTable.id) : Promise.resolve([]),
     graphNodeTable ? fetchTableRows(graphNodeTable.id) : Promise.resolve([]),
     graphEdgeTable ? fetchTableRows(graphEdgeTable.id) : Promise.resolve([]),
+    claimTable ? fetchTableRows(claimTable.id) : Promise.resolve([]),
+    evidenceTable ? fetchTableRows(evidenceTable.id) : Promise.resolve([]),
   ]);
   state.candidateRows = candidateRows;
   state.sourceRows = sourceRows;
@@ -1316,6 +1334,8 @@ async function loadDashboardData() {
   state.derivedMeasurementRows = derivedMeasurementRows;
   state.graphNodeRows = graphNodeRows;
   state.graphEdgeRows = graphEdgeRows;
+  state.claimRows = claimRows;
+  state.evidenceRows = evidenceRows;
   state.candidateModels = buildSourceModels(task, candidateRows, [], []);
   state.sourceModels = buildSourceModels(task, sourceRows, curatedRows, measurementRows);
   const evidenceMeasurementRows = filterMeasurementRowsForEvidence(measurementRows, state.sourceModels);
@@ -1838,12 +1858,7 @@ function isMetadataCanonicalUrl(raw) {
 }
 
 function emptyScoreDimensions(axisDefs = BASE_AXES) {
-  return Object.fromEntries([...new Set([
-    ...BASE_AXES,
-    ...BEARING_AXES,
-    ...COMPETITIVE_AI_AXES,
-    ...(axisDefs || []),
-  ].map((axis) => axis.id))].map((id) => [id, null]));
+  return pickAxisScores({}, axisDefs);
 }
 
 function aggregateMeasurements(rows, sourceModels = null) {
@@ -1956,7 +1971,15 @@ function scoreDimensions(row, curated, measurements, task, axisDefs = BASE_AXES)
     .filter((axis) => axis.id !== 'portfolio_priority')
     .map((axis) => [scores[axis.id] ?? topicFitScore(task, text, row), Number(axis.weight || 1)]);
   if (weightedCriteria.length) scores.portfolio_priority = clampScore(weightedAverage(weightedCriteria));
-  return scores;
+  // Only the criteria this task is scored on are part of the source model. The other entries of the internal
+  // catalogue (buyer clarity, pricing clarity, … for competitive research) are meaningless for an engineering
+  // base and must never reach the UI, the export or the evaluation drawer.
+  return pickAxisScores(scores, axisDefs);
+}
+
+function pickAxisScores(scores, axisDefs = BASE_AXES) {
+  const ids = new Set([...(axisDefs || []).map((axis) => axis.id), 'portfolio_priority']);
+  return Object.fromEntries([...ids].map((id) => [id, scores[id] ?? null]));
 }
 
 function render() {
@@ -2161,7 +2184,7 @@ function renderCenter() {
             ${countedTabButton('sources', state.t('sources', 'Sources'), evidenceRankedSources().length)}
             ${countedTabButton('candidates', state.t('candidates', 'Candidates'), state.candidateModels.length)}
             ${countedTabButton('measurements', state.t('measurements', 'Measurements'), filterMeasurementRowsForEvidence(state.measurementRows, state.sourceModels).length)}
-            ${countedTabButton('knowledge', state.t('knowledge', 'Knowledge'), state.curatedRows.length)}
+            ${countedTabButton('knowledge', state.t('knowledge', 'Knowledge'), knowledgeClaims().length)}
             ${countedTabButton('reports', state.t('reports', 'Fachberichte'), researchReportsForTask(task).length)}
           </div>
           ${state.activeTab === 'sources' ? `
@@ -3683,22 +3706,122 @@ function tangentialEquivalentForce(row) {
   return explicit === null ? '' : explicit;
 }
 
+/* Knowledge = the consolidated engineering claims of the base (table `claims`), each with its knowledge
+   book, statement type, confidence, contributing sources and the verbatim evidence behind it. Bases without
+   a claims table fall back to the claim_support evidence rows so older domains keep working. */
+function clipText(value, max) {
+  const text = String(value || '');
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+const CLAIM_TYPE_LABELS = Object.freeze({
+  direct_measurement: 'Messung',
+  normative: 'Norm/Hersteller',
+  analytical: 'Analyse/Modell',
+  observation: 'Beobachtung',
+  assumption: 'Annahme',
+});
+
+function knowledgeClaims() {
+  if (state.claimRows.length) {
+    return state.claimRows.map((row) => ({
+      id: firstString(row, ['claim_id', 'id']),
+      text: firstString(row, ['claim_text', 'claim', 'statement']),
+      type: firstString(row, ['statement_type']),
+      confidence: firstString(row, ['confidence']),
+      book: firstString(row, ['knowledge_book', 'topic']),
+      limitations: firstString(row, ['limitations']),
+      sources: String(firstString(row, ['source_id']) || '').split(';').map((part) => part.trim()).filter(Boolean),
+      evidenceId: firstString(row, ['evidence_id']),
+    })).filter((claim) => claim.id && claim.text);
+  }
+  return state.evidenceRows
+    .filter((row) => firstString(row, ['evidence_kind']) === 'claim_support')
+    .map((row) => ({
+      id: firstString(row, ['claim_id', 'evidence_id']),
+      text: firstString(row, ['fact_value', 'exact_quote_or_value', 'quote']),
+      type: firstString(row, ['statement_type']),
+      confidence: firstString(row, ['confidence']),
+      book: '',
+      limitations: firstString(row, ['limitations']),
+      sources: [firstString(row, ['source_id'])].filter(Boolean),
+      evidenceId: firstString(row, ['evidence_id']),
+    })).filter((claim) => claim.id && claim.text);
+}
+
+function claimEvidence(claim) {
+  return state.evidenceRows.filter((row) => firstString(row, ['evidence_kind']) === 'claim_support'
+    && firstString(row, ['claim_id']) === claim.id);
+}
+
+function knowledgeBooks(claims) {
+  const counts = new Map();
+  for (const claim of claims) {
+    if (!claim.book) continue;
+    counts.set(claim.book, (counts.get(claim.book) || 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+}
+
 function renderKnowledgeTables(task) {
-  const base = knowledgeBaseForTask(task);
-  const tables = base?.tables || [];
-  return `
-    <div class="research-knowledge-list">
-      ${renderDataQualityNotices()}
-      ${renderListOrState(tables, collectionReadiness('knowledge_tables'), {
-        renderRows: (rows) => rows.map((table) => `
+  const all = knowledgeClaims();
+  if (!all.length) {
+    const base = knowledgeBaseForTask(task);
+    const tables = base?.tables || [];
+    return `<div class="research-knowledge-list">${renderDataQualityNotices()}${renderListOrState(tables, collectionReadiness('knowledge_tables'), {
+      renderRows: (rows) => rows.map((table) => `
         <button type="button" data-action="open-knowledge" data-table-id="${escapeHtml(table.id)}">
           <strong>${escapeHtml(table.title || table.table_key)}</strong>
           <span>${escapeHtml(table.table_key)} · ${Number(table.row_count || 0).toLocaleString(state.lang === 'de' ? 'de-DE' : 'en-US')} ${escapeHtml(state.t('rows', 'rows'))}</span>
-        </button>
-      `).join(''),
-        empty: state.t('noKnowledgeConnected', 'Keine Knowledge-Tabellen verknüpft.'),
-        syncing: state.t('syncingKnowledgeTables', 'Knowledge-Tabellen werden synchronisiert.'),
-      })}
+        </button>`).join(''),
+      empty: state.t('noKnowledgeClaims', 'Noch keine belegten Aussagen in dieser Knowledge Base.'),
+      syncing: state.t('syncingKnowledgeTables', 'Knowledge-Tabellen werden synchronisiert.'),
+    })}</div>`;
+  }
+  const books = knowledgeBooks(all);
+  const multi = all.filter((claim) => claim.sources.length > 1).length;
+  const types = new Map();
+  for (const claim of all) types.set(claim.type, (types.get(claim.type) || 0) + 1);
+  const book = state.knowledgeTopic;
+  const type = state.knowledgeType;
+  const rows = all.filter((claim) => (!book || claim.book === book)
+    && (type === 'all' || (type === 'multi' ? claim.sources.length > 1 : claim.type === type)));
+  const shown = rows.slice(0, ROW_LIMIT);
+  return `
+    ${renderDataQualityNotices()}
+    <div class="research-claim-filters ctox-pane-tabs" role="tablist" aria-label="Knowledge-Filter">
+      <button type="button" class="ctox-pane-tab${!book ? ' is-active' : ''}" data-action="knowledge-book" data-knowledge-book="" role="tab" aria-selected="${!book}">Alle Themen <span>${all.length}</span></button>
+      ${books.map(([name, count]) => `<button type="button" class="ctox-pane-tab${book === name ? ' is-active' : ''}" data-action="knowledge-book" data-knowledge-book="${escapeHtml(name)}" role="tab" aria-selected="${book === name}">${escapeHtml(name)} <span>${count}</span></button>`).join('')}
+    </div>
+    <div class="research-claim-filters ctox-pane-tabs" role="tablist" aria-label="Aussagenart">
+      <button type="button" class="ctox-pane-tab${type === 'all' ? ' is-active' : ''}" data-action="knowledge-type" data-knowledge-type="all" role="tab" aria-selected="${type === 'all'}">Alle <span>${all.length}</span></button>
+      <button type="button" class="ctox-pane-tab${type === 'multi' ? ' is-active' : ''}" data-action="knowledge-type" data-knowledge-type="multi" role="tab" aria-selected="${type === 'multi'}">Mehrere Quellen <span>${multi}</span></button>
+      ${[...types.entries()].sort((a, b) => b[1] - a[1]).map(([name, count]) => `<button type="button" class="ctox-pane-tab${type === name ? ' is-active' : ''}" data-action="knowledge-type" data-knowledge-type="${escapeHtml(name)}" role="tab" aria-selected="${type === name}">${escapeHtml(CLAIM_TYPE_LABELS[name] || name || '—')} <span>${count}</span></button>`).join('')}
+    </div>
+    <div class="research-claim-list">
+      ${shown.map((claim) => {
+        const evidence = claimEvidence(claim);
+        return `
+        <article class="research-claim">
+          <header>
+            <b>${escapeHtml(claim.id)}</b>
+            <span>${escapeHtml(CLAIM_TYPE_LABELS[claim.type] || claim.type || '—')}</span>
+            <span>${escapeHtml(state.t('confidence', 'Konfidenz'))} ${escapeHtml(claim.confidence || '—')}</span>
+            ${!book && claim.book ? `<span>${escapeHtml(claim.book)}</span>` : ''}
+            <span>${claim.sources.length} ${escapeHtml(claim.sources.length === 1 ? 'Quelle' : 'Quellen')}: ${claim.sources.map((id) => `<button type="button" class="research-claim-source" data-action="select-source" data-source-id="${escapeHtml(id)}">${escapeHtml(id)}</button>`).join(' ')}</span>
+          </header>
+          <p>${escapeHtml(claim.text)}</p>
+          ${claim.limitations ? `<p class="research-claim-limits">${escapeHtml(claim.limitations)}</p>` : ''}
+          ${evidence.length ? `<details><summary>${evidence.length} ${escapeHtml(evidence.length === 1 ? 'Beleg' : 'Belege')}</summary>${evidence.map((row) => `
+            <div class="research-claim-evidence">
+              <b>${escapeHtml(firstString(row, ['source_id']) || '')}</b>
+              <span>${escapeHtml(firstString(row, ['source_locator', 'table_file_column_row']) || '')}</span>
+              <q>${escapeHtml(clipText(firstString(row, ['quote', 'exact_quote_or_value']) || '', 600))}</q>
+            </div>`).join('')}</details>` : ''}
+        </article>`;
+      }).join('')}
+      ${rows.length > shown.length ? `<p class="research-claim-more">… ${rows.length - shown.length} weitere Aussagen.</p>` : ''}
+      ${rows.length ? '' : `<div class="research-empty">${escapeHtml(state.t('noKnowledgeClaims', 'Keine Aussagen für diesen Filter.'))}</div>`}
     </div>
   `;
 }
@@ -3830,7 +3953,7 @@ function computedDecisionNotes(source) {
   if (!top) {
     notes.push({ kind: 'risk', title: state.t('decisionNoteGate', 'Evidence gate active'), body: state.t('decisionNoteGateBody', 'Discovery-Kandidaten bleiben sichtbar, bis Verifizierung, Snapshot und HTTP-Erfolg vollständig vorliegen.') });
   }
-  if (source && source.dimensions.reuse_readiness < 60) {
+  if (source && Number.isFinite(Number(source.dimensions.reuse_readiness)) && source.dimensions.reuse_readiness < 60) {
     notes.push({ kind: 'risk', title: state.t('decisionNoteGap', 'Reuse gap'), body: state.t('decisionNoteGapBody', 'Diese Quelle braucht weitere Extraktion, bevor sie als belastbare Dashboard-Kennzahl dient.') });
   }
   if (!notes.some((note) => note.kind === 'risk')) {
@@ -6194,6 +6317,10 @@ function setCollectionReadinessForTest(name, snapshot) {
 
 export const __researchTestHooks = {
   buildSourceModels,
+  knowledgeClaims,
+  renderKnowledgeTables,
+  scoringDimensionsForTask,
+  setStateForTest: (patch) => Object.assign(state, patch),
   collapseResearchTaskLineages,
   collectionDiagnosticRows,
   dataEmptyShowsSyncing,

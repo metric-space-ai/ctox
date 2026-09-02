@@ -955,3 +955,86 @@ test('presentation layer stays compact and shell-native', async () => {
   assert.match(css, /\.research-ai-prompt-pre/);
   assert.match(css, /@keyframes research-spin/);
 });
+
+/* Guard (02.09.2026): a source model must only carry the criteria its task is actually scored on. The module
+   keeps an internal catalogue that also holds competitive-research criteria (buyer clarity, pricing clarity,
+   …); those are meaningless for an engineering base and used to leak into the UI, the drawer and the export. */
+test('source scoring exposes only the criteria of the task', async () => {
+  const bearingTask = { id: 'r1', knowledge_domain: 'drone_bearing_design_verified', title: 'Drone Bearing Design Verified', prompt: 'bearing loads propeller rpm thrust', criteria: '' };
+  const row = {
+    source_id: 'SRC-0001',
+    title: 'Bearing load measurements on a UAV propeller test stand',
+    source_url: 'https://example.test/a.pdf',
+    canonical_url: 'https://example.test/a.pdf',
+    snapshot_id: 'snapshot-src-0001',
+    snapshot_path: '/snap/a.pdf',
+    snapshot_hash: 'sha256:'.concat('a'.repeat(64)),
+    evidence_id: 'EVID-0001',
+    retrieved_at: '2026-07-25T10:00:00Z',
+    url_role: 'original_content',
+    content_scope: 'full_text',
+    verification_status: 'verified',
+    transport_verified: true,
+    content_extracted: true,
+    actual_full_text_or_data: true,
+    evidence_relevance_score: 100,
+    http_status: 200,
+    evidence_eligible: true,
+    source_tier: 'A',
+    source_type: 'article',
+  };
+  const [model] = hooks.buildSourceModels(bearingTask, [row], [], []);
+  const expected = new Set(hooks.scoringDimensionsForTask(bearingTask).map((axis) => axis.id));
+
+  assert.equal(model.evidenceEligible, true);
+  assert.deepEqual(new Set(Object.keys(model.dimensions)), expected);
+  for (const leaked of ['buyer_clarity', 'pricing_clarity', 'enterprise_readiness', 'autonomous_agent_depth', 'integration_api', 'proof_customer_evidence', 'trust_compliance', 'overlap']) {
+    assert.equal(Object.hasOwn(model.dimensions, leaked), false, leaked);
+  }
+  assert.ok(Number.isFinite(model.dimensions.portfolio_priority));
+
+  const ineligible = hooks.buildSourceModels(bearingTask, [{ source_id: 'SRC-0002', title: 'Metadata only' }], [], []);
+  assert.deepEqual(new Set(Object.keys(ineligible[0].dimensions)), expected);
+});
+
+/* Guard (02.09.2026): Knowledge shows the consolidated claims of the base — one block per statement with its
+   knowledge book, statement type, contributing sources and verbatim evidence — not a link list of tables and
+   not the raw text chunks that the evidence rows carry. */
+test('knowledge view lists consolidated claims with their evidence', async () => {
+  hooks.setStateForTest({
+    claimRows: [
+      { claim_id: 'CLM-1001', claim_text: 'Unwucht erzeugt eine drehzahlsynchrone radiale Erregerkraft, die mit dem Quadrat der Drehzahl wächst.', statement_type: 'direct_measurement', confidence: 'high', knowledge_book: 'Unwucht-, Vibrations- und transiente Lasten', source_id: 'SRC-0015;SRC-0125', evidence_id: 'EVID-CLAIM-1001', limitations: 'Gilt für die untersuchten Propellergrößen.' },
+      { claim_id: 'CLM-1002', claim_text: 'Der statische Sicherheitsfaktor eines Wälzlagers ist s0 = C0/P0.', statement_type: 'normative', confidence: 'high', knowledge_book: 'Statische und dynamische Lagerauslegung', source_id: 'SRC-0119', evidence_id: 'EVID-CLAIM-1002', limitations: '' },
+    ],
+    evidenceRows: [
+      { evidence_id: 'EVID-CLAIM-1001', claim_id: 'CLM-1001', evidence_kind: 'claim_support', source_id: 'SRC-0015', source_locator: 'Seite 4, Abschnitt 2.1', quote: 'the unbalance force is proportional to the square of the rotational speed' },
+      { evidence_id: 'EVID-REL-1', source_id: 'SRC-0015', evidence_kind: 'source_relevance', fact_value: 'Relevanzurteil, kein Claim' },
+    ],
+    knowledgeTopic: '',
+    knowledgeType: 'all',
+  });
+
+  const claims = hooks.knowledgeClaims();
+  assert.equal(claims.length, 2);
+  assert.deepEqual(claims[0].sources, ['SRC-0015', 'SRC-0125']);
+
+  const markup = hooks.renderKnowledgeTables({ id: 'r1' });
+  assert.match(markup, /CLM-1001/);
+  assert.match(markup, /drehzahlsynchrone radiale Erregerkraft/);
+  assert.match(markup, /Mehrere Quellen<\/?[^>]*> ?<span>1<\/span>|Mehrere Quellen <span>1<\/span>/);
+  assert.match(markup, /data-action="knowledge-book" data-knowledge-book="Statische und dynamische Lagerauslegung"/);
+  assert.match(markup, /data-action="select-source" data-source-id="SRC-0125"/);
+  assert.match(markup, /Seite 4, Abschnitt 2\.1/);
+  assert.doesNotMatch(markup, /Relevanzurteil, kein Claim/);
+  assert.doesNotMatch(markup, /data-action="open-knowledge"/);
+
+  hooks.setStateForTest({ knowledgeType: 'multi' });
+  const multiOnly = hooks.renderKnowledgeTables({ id: 'r1' });
+  assert.match(multiOnly, /CLM-1001/);
+  assert.doesNotMatch(multiOnly, /CLM-1002/);
+
+  // bases without a claims table keep working through the claim_support evidence rows
+  hooks.setStateForTest({ claimRows: [], knowledgeType: 'all' });
+  assert.equal(hooks.knowledgeClaims().length, 1);
+  hooks.setStateForTest({ claimRows: [], evidenceRows: [], knowledgeTopic: '', knowledgeType: 'all' });
+});

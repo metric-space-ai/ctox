@@ -159,5 +159,7 @@
   "actionFailed": "Action failed",
   "targetedResearchQueued": "Targeted research was handed off to CTOX.",
   "graphDocumentQueued": "Word document was handed off to CTOX.",
-  "researchChatOpened": "Research task prepared in chat – send it there to start."
+  "researchChatOpened": "Research task prepared in chat – send it there to start.",
+  "noKnowledgeClaims": "No evidence-backed claims in this knowledge base yet.",
+  "confidence": "Confidence"
 }
