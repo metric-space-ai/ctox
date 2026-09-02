@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 17:15 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 17:40 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -611,6 +611,15 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 - Lehre (Umgebungsfalle): `nohup … &` und `setsid nohup … &` aus dem SSH-Helper heraus starten auf thesen keinen
   überlebenden Prozess (der Helper bricht bei `pkill`-Exit 1 ab bzw. reißt die Gruppe mit); `systemd-run --user
   --unit <name> --collect <cmd>` funktioniert zuverlässig.
+
+### 02.09. 17:34 UTC — B5 AKTIV (`branch-main-20260902T170525Z`); Wrapper jetzt aus dem R5d-Template
+
+- Gate 9 (Nachkontrolle, 9cda2385f): 113 grün / 1 rot (vorbestehend) — B5 bestätigt.
+- B5 aktiv 17:34 UTC, `running True`, Queue leer (pending 0). Wrapper `/usr/local/bin/ctox` Zeilen 12/19 tragen
+  `2>/dev/null || true` **aus dem Template** (Upgrade lief vom B4-Binary aus, das R5d enthielt) → B4-1 geschlossen,
+  kein Handpatch mehr nötig. `gap-unlink-watch.service` gestoppt; keine Task-Links seit 16:00 UTC.
+- Nächster Schritt: Nutzer meldet sich an → Nachrecherche KUKA (lead_1cfi6y6, vorher 4/0/0) und Beiersdorf
+  (lead_1awj3nw, vorher 8/1/0) → Messung mit `claude-proof-b4.ts` + `claude-lead-fields.ts`.
 
 ## Working
 
