@@ -590,7 +590,9 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   der MCP-Session-Token tat das bereits. KORREKTUR zur Karte 14:40 (Task-Link).
 - **Gate 9** gestartet 16:44 UTC auf 9cda2385f. Danach Push → B5 → Nachrecherche. Nachweis auf B4 wäre
   wertlos gewesen (Task würde ohne Lauf „erledigt").
-- Worker-Probe „after-b4" (Task `queue:system::55f500a3…`) läuft; Ergebnis folgt.
+- Worker-Probe „after-b4" (Task `queue:system::55f500a3…`, Datei `sandbox-probe-after-b4.txt`): `ctox status` EXIT 0,
+  DNS ok, Socket ok, Secrets verweigert, **Relais `scrape execute` → `scrape_run-704d540d51116635` succeeded, 2 Datensätze**.
+  Ursache 1 auf B4 erneut bestätigt (mit handgepatchtem Wrapper).
 
 ## Working
 
