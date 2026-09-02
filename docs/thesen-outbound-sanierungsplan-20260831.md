@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 01:25 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 02:40 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -105,6 +105,23 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   31.08. bekannt), `embed_texts_via_local_socket…` (Embedding-Socket-Umgebung), `continuity_prompt_contains_
   document_and_diff_rules` (LCM-Prompttext). → Karte Backlog „main-Testbaseline reparieren (fremd)".
 
+### 02.09. 02:3x — R4 geliefert und integriert; N4 im Web-Stack erledigt
+
+- R4 (Sol, run …ea811059) `completed`, importiert und auf `thesen-rust-batch` als b52e382aa angewendet:
+  K2 Pfad-Sanitisierung (Dateien nur unterhalb `runtime/scraping/targets/<target_key>`,
+  `--runtime-root/--db` abgelehnt), H1 IPC-Verbindungen in Threads `ctox-ipc-<n>` + Timeout-Klemme 600 s
+  + 16/32-MiB-Limits, H2 verifizierte Identität IMMER für ReplicatedPeer (`claimed_actor` bleibt als Audit),
+  Owner-Flag/Env nur bei Übereinstimmung mit dem verifizierten Kommando-Besitzer, M4/M5 Kontakt-IDs +
+  Zwei-Signal-Merge, M6.3 Zeitstempel-Klemme, N1 Logs. **Nebenwirkung:** service.rs wurde komplett
+  rustfmt-normalisiert (1402 Diff-Zeilen; Datei war vorher nicht fmt-sauber) — bewusst akzeptiert,
+  erhöht Merge-Risiko für Parallelarbeit an service.rs.
+- N4 (Rollen-Positivliste) direkt im workjet-Klon behoben: workjet `thesen-person-contract` @ cdf64f856
+  (gepusht), ctox-Pin darauf (9bcc1a7f4), Spiegel `src/tools/web-stack/src/person_ranking.rs` gleichgezogen.
+- origin/main ist seit unserer Basis 3731d4ba0 um 10 Commits weiter (a10058bfb; Importer, Workjet-Sessions,
+  Harness-Scope) und berührt service.rs (+6) und service/business_os.rs (+17) → Rebase vor dem Push,
+  Probelauf in separatem Worktree.
+- Compile + 22 gezielte Tests (R1–R4) laufen im Vollklon; danach Push auf origin/main und B1.
+
 ## Working
 
 | Karte | Worker / Log | Fertig heißt |
@@ -117,7 +134,7 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 
 | R4 Härtung (Sol): K2 Pfad-Sanitisierung + Strip `--runtime-root/--db`, H1 IPC pro Verbindung im Thread + Timeout-Klemme 600 s + M1 Größenlimits, H2 verifizierte Identität IMMER für ReplicatedPeer (`claimed_actor` für Audit) + Owner-Flag/Env nur bei Übereinstimmung/TrustedLocal, M4/M5 Kontakt-IDs + Zwei-Signal-Merge, M6.3 Timestamp-Klemme, N1 Logs | Sol, Brief `briefs/R4-hardening.md`, Basis Launchpad-Branch `integrated` 5366f5a | 7 Tests grün im Vollklon, dann Push main + B1 |
 
-Sol-Kontingent: 1/3 belegt (R4).
+Sol-Kontingent: 0/3 belegt.
 
 ## To-Do (Trigger-Kette)
 
