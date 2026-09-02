@@ -490,6 +490,13 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
   </div>
 
   <div class="card">
+    <div class="pills"><span class="pill neutral">T13</span></div>
+    <h3>Sidebar: Projektleiste zeigt für ein Sync-Projekt mit lokaler Working Copy keinen <code>project.select</code>-Button</h3>
+    <p>Beobachtung T4b Lauf 5 (evidence-run5/report.md, Abschnitt B): <code>workjet-t4-project</code> hatte nach F3d in der persistenten Projektleiste keinen <code>project.select:&lt;id&gt;</code>-Button; Start ging über den globalen New-thread-Dialog, wo das Projekt eindeutig angeboten wurde. Prüfen, ob die Leiste nach Dedup (Server-Projekt statt Registry-Eintrag) das Projekt anders rendert oder es ein Anzeigefehler ist; Kaltstart-Beweis mit <code>project.select</code>-Klick als Gate.</p>
+    <div class="trigger"><b>Trigger:</b> Workjet #14 gemergt; Sol frei.</div>
+  </div>
+
+  <div class="card">
     <div class="pills"><span class="pill acc">T12</span></div>
     <h3>RFC Paket 2: Transfer-Lifecycle-Verben, Zustandsautomat, Recovery</h3>
     <p>Nach RFC §23 Paket 2 auf Basis PR #45; in Scheiben mit Pflicht-Commits (Lehre #9): 2a start/abort/status (fertig, PR folgt), 2b-1 pause_ack/pack_complete (läuft), <b>2b-2</b> apply_complete (3× Mismatch → failed), confirm_working_copy (atomarer Switch, 7 Schritte §12.6, neue Epoch), resume_ack (nur Zielrechner), Recovery-Pass für abgelaufene deadline_at_ms (§12.8) als aufrufbare Funktion + Tests.</p>
