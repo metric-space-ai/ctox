@@ -26,7 +26,7 @@
       "bottom": "diagnostics, export evidence, and selected document context"
     }
   },
-  "category": "Knowledge",
+  "category": "knowledge",
   "version": "1.0.0",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",

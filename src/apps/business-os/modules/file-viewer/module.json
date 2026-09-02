@@ -17,7 +17,7 @@
     "min_width": 520,
     "min_height": 400
   },
-  "category": "Workspace",
+  "category": "workspace",
   "version": "1.0.0",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",

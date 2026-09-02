@@ -42,7 +42,7 @@
     "right": "Kunden-Inspector, offene Posten, AI-Aktionen (Mahnlauf, Skonto, Gutschrift)",
     "third_pane_justification": "The financial inspector provides approval, open-item and customer context alongside the invoice editor; compact mode moves it into the shared drawer."
   },
-  "category": "Finance",
+  "category": "finance",
   "version": "0.1.2",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",

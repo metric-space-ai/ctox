@@ -2,7 +2,8 @@
 // License: Apache-2.0
 
 use super::module_lifecycle::{
-    load_installed_module_manifests, module_install_scope, module_ships_on_first_install,
+    installed_module_app_source, load_installed_module_manifests, module_install_scope,
+    module_ships_on_first_install,
 };
 use super::store::{
     augment_module_manifest_file_plane, backfill_local_module_icon,
@@ -83,6 +84,7 @@ pub(super) fn load_module_manifests(
             manifest.install_scope = scope;
             manifest.default_installed = true;
             manifest.source = if core { "core" } else { "internal" }.to_owned();
+            manifest.origin = "core".to_owned();
             manifest.core = core;
             manifest.editable = true;
             manifest.deletable = !core;
@@ -95,9 +97,13 @@ pub(super) fn load_module_manifests(
         .map(|manifest| (manifest.id.clone(), "source"))
         .collect::<HashMap<_, _>>();
     let mut collisions = Vec::new();
+    let mut installed_manifests = load_installed_module_manifests(root, installed_app_root)?;
+    for manifest in &mut installed_manifests {
+        manifest.origin = installed_module_origin(installed_app_root, &manifest.id).to_owned();
+    }
     append_lower_precedence_manifests(
         &mut manifests,
-        load_installed_module_manifests(root, installed_app_root)?,
+        installed_manifests,
         "installed",
         &mut winning_roots,
         &mut collisions,
@@ -133,6 +139,25 @@ pub(super) fn load_module_manifests(
         manifests,
         collisions,
     })
+}
+
+fn installed_module_origin(installed_app_root: &Path, module_id: &str) -> &'static str {
+    let first_party = installed_module_app_source(installed_app_root, module_id)
+        .and_then(|source| {
+            source
+                .get("trust_model")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .is_some_and(|trust_model| trust_model == "ctox-first-party-source");
+    // Everything else — notably `untrusted-user-source` (zip upload, download
+    // URL, foreign repository) and any missing stamp — is a user app. The
+    // stamp is server-written at install time; a manifest cannot claim it.
+    if first_party {
+        "official"
+    } else {
+        "user"
+    }
 }
 
 fn append_lower_precedence_manifests(
@@ -209,11 +234,16 @@ pub(super) fn load_local_module_manifests(
         }
         manifest.entry = format!("local-modules/{}/index.html", manifest.id);
         manifest.source = "local".to_owned();
+        manifest.origin = "user".to_owned();
         manifest.install_scope = "local".to_owned();
         manifest.default_installed = false;
         manifest.core = false;
         manifest.editable = true;
-        manifest.deletable = false;
+        // Local modules are operator/developer-mode user apps (origin: user).
+        // They used to be non-deletable, which left an imported app with no
+        // removal path in any surface — the uninstall command now handles the
+        // local-modules root as well.
+        manifest.deletable = true;
         manifests.push(manifest);
     }
     Ok(manifests)
@@ -289,6 +319,7 @@ pub(super) fn upsert_module_manifest(
 
     let mut manifest: ModuleManifest = serde_json::from_value(manifest_value)?;
     manifest.source = if is_core { "core" } else { "installed" }.to_owned();
+    manifest.origin = if is_core { "core" } else { "user" }.to_owned();
     manifest.install_scope = if is_core { "core" } else { "installed" }.to_owned();
     manifest.default_installed = is_core;
     manifest.core = is_core;

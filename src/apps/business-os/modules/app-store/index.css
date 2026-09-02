@@ -19,10 +19,25 @@
 .shell-window[data-shell-contract="v2"] .app-store-module .ctox-pane-title { margin-top: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.1; }
 .shell-window[data-shell-contract="v2"] .app-store-module .store-filterbar { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); box-sizing: border-box; padding: 0; flex-wrap: nowrap; overflow-x: auto; }
 
-/* Local-app state stays on the module's Development category accent. */
+/* Local-app state stays on the module's Development category accent.
+   position:relative ist Vertragsteil, nicht Kosmetik: der Modul-Root ist der
+   Containing Block fuer JEDES Overlay des Moduls (Kontextmenue, versteckter
+   Datei-Dialog, Export-Anker). Nichts montiert auf document.body, nichts
+   verlaesst das App-Fenster. */
 .app-store-module[data-app-store-root] {
+  position: relative;
   --app-store-local-accent: var(--app-accent);
   --app-store-local-ink: var(--app-accent-foreground);
+}
+
+/* Modul-eigenes Kontextmenue: absolut zum Modul-Root, nie position:fixed, und
+   auf den Root-Kasten begrenzt statt auf den Viewport (base.css setzt 100vw). */
+.app-store-module[data-app-store-root] > .ctox-context-menu {
+  position: absolute;
+  z-index: 240;
+  max-width: calc(100% - 16px);
+  max-height: calc(100% - 16px);
+  overflow: auto;
 }
 
 /* --- Sidebar layout glue (kit .ctox-pane-body > flex column) --- */

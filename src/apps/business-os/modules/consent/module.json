@@ -18,7 +18,7 @@
     "left": "Filter",
     "center": "Einwilligungen"
   },
-  "category": "Operations",
+  "category": "operations",
   "version": "0.2.2",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",

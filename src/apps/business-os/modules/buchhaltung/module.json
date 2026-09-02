@@ -24,7 +24,7 @@
     "right": "Zugeordnete Belege, AI-Vorschläge & Begleitaktionen",
     "third_pane_justification": "Belegvorschau, Kontierungshilfen und zugehörige Aktionen müssen bei breiten Finanzarbeitsplätzen neben Journal und Konten sichtbar bleiben; in kompakten Fenstern verschiebt die Shell sie in den gemeinsamen Drawer."
   },
-  "category": "Finance",
+  "category": "finance",
   "version": "1.0.2",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",

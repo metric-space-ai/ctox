@@ -24,7 +24,7 @@
     "right": "Contact card, related business records, and CTOX agent attribution",
     "third_pane_justification": "The contact and linked-record inspector must stay visible beside long communication timelines in wide mode; compact mode moves it into the shared drawer."
   },
-  "category": "Collaboration",
+  "category": "collaboration",
   "version": "1.0.2",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",

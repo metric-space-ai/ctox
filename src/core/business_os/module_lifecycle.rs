@@ -13,17 +13,18 @@ use super::store::{
     materialize_runtime_app_starter_artifacts_at, module_asset_revision, module_catalog_source_id,
     module_governance_map, module_manifest_collection_ids, module_manifest_path,
     module_policy_decision, normalize_source_relative_path, now_ms, open_store,
-    parse_business_app_semver_major, remove_module_from_layout_value, resolve_module_source_root,
-    resolve_module_source_root_for_root, runtime_app_starter_is_owned, rxdb_desktop_file_chunks,
-    rxdb_desktop_file_document, sanitize_git_ref, save_module_layout, save_module_source_record,
-    seed_session_user, session_can_modify_module, session_has_workspace_permission,
-    source_relative_subpath, source_sanitize_slug, update_module_catalog_stamp_hash,
-    validate_github_repo, validate_runtime_app_starter_artifacts, validate_staged_catalog_module,
-    version_summary_row, write_module_source_snapshot, AppStoreInstallRequest, BusinessCommand,
-    BusinessOsSession, CommandOrigin, ModuleDeleteRequest, ModuleInstallTemplateRequest,
-    ModuleManifest, ModuleReleaseRequest, ModuleRollbackRequest,
-    ModuleSourceRollbackSnapshotRequest, ModuleSourceSaveMutation, ModuleVersionListRequest,
-    ModuleVersionRollbackRequest, RuntimeAppStarterAction, TemplateManifest,
+    parse_business_app_semver_major, remove_module_from_layout_value, resolve_business_os_app_root,
+    resolve_module_source_root, resolve_module_source_root_for_root, runtime_app_starter_is_owned,
+    rxdb_desktop_file_chunks, rxdb_desktop_file_document, sanitize_git_ref, save_module_layout,
+    save_module_source_record, seed_session_user, session_can_modify_module,
+    session_has_workspace_permission, source_relative_subpath, source_sanitize_slug,
+    update_module_catalog_stamp_hash, validate_github_repo, validate_runtime_app_starter_artifacts,
+    validate_staged_catalog_module, version_summary_row, write_module_source_snapshot,
+    AppStoreInstallRequest, AppStoreRepairRequest, BusinessCommand, BusinessOsSession,
+    CommandOrigin, ModuleDeleteRequest, ModuleInstallTemplateRequest, ModuleManifest,
+    ModuleReleaseRequest, ModuleRollbackRequest, ModuleSourceRollbackSnapshotRequest,
+    ModuleSourceSaveMutation, ModuleVersionListRequest, ModuleVersionRollbackRequest,
+    RuntimeAppStarterAction, TemplateManifest,
 };
 use super::store_projections::upsert_business_record;
 use super::store_release_review::{
@@ -1137,10 +1138,15 @@ pub(super) fn delete_installed_module(
     if is_core_module(&module_id) {
         anyhow::bail!("core modules cannot be deleted");
     }
-    let target = app_root.join("installed-modules").join(&module_id);
-    if !target.is_dir() {
-        anyhow::bail!("installed module not found: {module_id}");
-    }
+    // A user app lives either in installed-modules/ (pipeline install) or in
+    // local-modules/ (operator/developer mode). Both are origin:user and both
+    // must be removable through the one uninstall path; before this, local
+    // modules had no removal route at all.
+    let module_root = ["installed-modules", "local-modules"]
+        .into_iter()
+        .find(|dir| app_root.join(dir).join(&module_id).is_dir())
+        .context(format!("installed module not found: {module_id}"))?;
+    let target = app_root.join(module_root).join(&module_id);
 
     let layout_path = root.join("runtime").join("business-os-module-layout.json");
     let original_layout_bytes =
@@ -1155,7 +1161,7 @@ pub(super) fn delete_installed_module(
     remove_module_from_layout_value(&mut layout, &module_id);
 
     let staged = app_root
-        .join("installed-modules")
+        .join(module_root)
         .join(format!(".module-delete-{module_id}-{}", Uuid::new_v4()));
     anyhow::ensure!(
         !staged.exists(),
@@ -1790,6 +1796,106 @@ fn fetch_archive_bytes(url: &str) -> anyhow::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+enum AppInstallPayload {
+    Archive(Vec<u8>),
+    LocalCatalog(PathBuf),
+}
+
+fn validate_local_catalog_module_source(module_dir: &Path, module_id: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        module_dir.is_dir(),
+        "local catalog module directory is missing: {}",
+        module_dir.display()
+    );
+    let manifest_path = module_dir.join("module.json");
+    anyhow::ensure!(
+        manifest_path.is_file(),
+        "local catalog module manifest is missing: {}",
+        manifest_path.display()
+    );
+    let manifest: Value =
+        serde_json::from_slice(&fs::read(&manifest_path)?).with_context(|| {
+            format!(
+                "failed to parse local catalog module manifest {}",
+                manifest_path.display()
+            )
+        })?;
+    let manifest_id = manifest
+        .get("id")
+        .and_then(Value::as_str)
+        .map(source_sanitize_slug)
+        .context("local catalog module manifest is missing 'id'")?;
+    anyhow::ensure!(
+        manifest_id == module_id,
+        "local catalog module id `{manifest_id}` does not match requested module `{module_id}`"
+    );
+    anyhow::ensure!(
+        !is_core_module(module_id),
+        "core module `{module_id}` cannot be runtime-installed from the local catalog"
+    );
+    let install_scope = manifest
+        .get("install_scope")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    anyhow::ensure!(
+        install_scope == "store",
+        "local catalog module `{module_id}` must declare install_scope `store`, found `{install_scope}`"
+    );
+    Ok(())
+}
+
+/// Entfernt jede Herkunftsangabe, die das Paket ueber sich selbst behauptet.
+/// Der Stempel wird ausschliesslich serverseitig aus der aufgeloesten Quelle
+/// geschrieben — sonst koennte ein hochgeladenes Zip sich selbst zur
+/// verifizierten First-Party-App erklaeren und damit `origin: official` und
+/// das Vertrauensmodell faelschen.
+pub(super) fn strip_forged_provenance_keys(manifest: &mut Value) {
+    if let Some(object) = manifest.as_object_mut() {
+        for forged in ["app_source", "origin", "trust_model", "verified"] {
+            object.remove(forged);
+        }
+    }
+}
+
+/// Resolve the curated on-disk copy of a first-party module so an install can
+/// skip the network. The location is derived from the module id alone and is
+/// never taken from the request: a requester-supplied subpath only decides
+/// *whether* the canonical location is meant, never *which* directory is
+/// installed. Anything else would let a caller point the "verified first-party"
+/// stamp at arbitrary directories under the data root (their own runtime app,
+/// an upload staging dir) and thereby bypass the same-origin trust gate that
+/// blocks zip/url/foreign-github payloads.
+fn first_party_local_catalog_source(
+    source_app_root: &Path,
+    subpath: &str,
+    module_id: &str,
+) -> anyhow::Result<Option<PathBuf>> {
+    let canonical_subpath = format!("modules/{module_id}");
+    if !subpath.is_empty() && !subpath.eq_ignore_ascii_case(&canonical_subpath) {
+        // The caller asked for a different location inside the repository.
+        // Fall back to the network path rather than silently substituting
+        // another directory.
+        return Ok(None);
+    }
+    let candidate = source_app_root.join("modules").join(module_id);
+    if !candidate.join("module.json").is_file() {
+        return Ok(None);
+    }
+    validate_local_catalog_module_source(&candidate, module_id)?;
+    Ok(Some(candidate))
+}
+
+fn local_catalog_app_source(module_id: &str) -> Value {
+    serde_json::json!({
+        "kind": "local-catalog",
+        "subpath": format!("modules/{module_id}"),
+        "verified": true,
+        "trust_model": "ctox-first-party-source"
+    })
+}
+
 /// Read the `app_source` descriptor from an installed module's manifest.
 pub(super) fn installed_module_app_source(
     installed_app_root: &Path,
@@ -1820,8 +1926,8 @@ pub fn install_app_module(
     // Resolve the install source. GitHub repos and legacy download URLs are
     // fetched through the SSRF-guarded agent (PublicOnlyResolver) so an
     // attacker-supplied source can never reach loopback/metadata/private hosts.
-    // Zip uploads are read from the RxDB chunk store (WebRTC data plane) — never
-    // over HTTP.
+    // Zip uploads are read from the RxDB chunk store (WebRTC data plane), while
+    // local-catalog installs copy the curated source tree without network I/O.
     let source_kind = if !request.source_kind.trim().is_empty() {
         request.source_kind.trim().to_ascii_lowercase()
     } else if !request.repo.trim().is_empty() {
@@ -1831,21 +1937,65 @@ pub fn install_app_module(
     } else {
         "url".to_owned()
     };
-    let (effective_source_path, app_source_base, zip_bytes) = match source_kind.as_str() {
+    let source_app_root = resolve_business_os_app_root(root)?;
+    let (effective_source_path, app_source_base, install_payload) = match source_kind.as_str() {
         "github" => {
             let repo = validate_github_repo(&request.repo)?;
             let git_ref = sanitize_git_ref(&request.git_ref)?;
             let subpath = source_relative_subpath(&request.subpath)?;
-            let url = github_archive_url(&repo, &git_ref);
-            let descriptor = serde_json::json!({
-                "kind": "github",
-                "repo": repo.clone(),
-                "ref": git_ref,
-                "subpath": subpath,
-                "verified": repo == "metric-space-ai/ctox",
-                "trust_model": if repo == "metric-space-ai/ctox" { "ctox-first-party-source" } else { "untrusted-third-party" },
-            });
-            (subpath, descriptor, fetch_archive_bytes(&url)?)
+            if repo == "metric-space-ai/ctox" {
+                if let Some(local_source) =
+                    first_party_local_catalog_source(&source_app_root, &subpath, &module_id)?
+                {
+                    eprintln!(
+                        "[business-os] using local-catalog source for first-party github module `{module_id}`"
+                    );
+                    (
+                        format!("modules/{module_id}"),
+                        local_catalog_app_source(&module_id),
+                        AppInstallPayload::LocalCatalog(local_source),
+                    )
+                } else {
+                    let url = github_archive_url(&repo, &git_ref);
+                    let descriptor = serde_json::json!({
+                        "kind": "github",
+                        "repo": repo,
+                        "ref": git_ref,
+                        "subpath": subpath,
+                        "verified": true,
+                        "trust_model": "ctox-first-party-source",
+                    });
+                    (
+                        subpath,
+                        descriptor,
+                        AppInstallPayload::Archive(fetch_archive_bytes(&url)?),
+                    )
+                }
+            } else {
+                let url = github_archive_url(&repo, &git_ref);
+                let descriptor = serde_json::json!({
+                    "kind": "github",
+                    "repo": repo,
+                    "ref": git_ref,
+                    "subpath": subpath,
+                    "verified": false,
+                    "trust_model": "untrusted-user-source",
+                });
+                (
+                    subpath,
+                    descriptor,
+                    AppInstallPayload::Archive(fetch_archive_bytes(&url)?),
+                )
+            }
+        }
+        "local-catalog" => {
+            let local_source = source_app_root.join("modules").join(&module_id);
+            validate_local_catalog_module_source(&local_source, &module_id)?;
+            (
+                format!("modules/{module_id}"),
+                local_catalog_app_source(&module_id),
+                AppInstallPayload::LocalCatalog(local_source),
+            )
         }
         "zip" => {
             let file_id = request.file_id.trim();
@@ -1854,8 +2004,13 @@ pub fn install_app_module(
             let bytes = load_desktop_file_bytes(root, file_id)?;
             (
                 subpath,
-                serde_json::json!({ "kind": "zip", "file_id": file_id }),
-                bytes,
+                serde_json::json!({
+                    "kind": "zip",
+                    "file_id": file_id,
+                    "verified": false,
+                    "trust_model": "untrusted-user-source",
+                }),
+                AppInstallPayload::Archive(bytes),
             )
         }
         "url" | "" => {
@@ -1866,53 +2021,58 @@ pub fn install_app_module(
             let url = request.download_url.trim().to_owned();
             (
                 request.source_path.clone(),
-                serde_json::json!({ "kind": "url", "url": url.clone() }),
-                fetch_archive_bytes(&url)?,
+                serde_json::json!({
+                    "kind": "url",
+                    "url": url.clone(),
+                    "verified": false,
+                    "trust_model": "untrusted-user-source",
+                }),
+                AppInstallPayload::Archive(fetch_archive_bytes(&url)?),
             )
         }
         other => anyhow::bail!("unsupported install source kind '{other}'"),
     };
 
-    // Extract ZIP to a temporary directory
     let temp_dir = std::env::temp_dir().join(format!("ctox-app-install-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_dir)
-        .with_context(|| format!("Failed to create temp extract dir {}", temp_dir.display()))?;
+    let found_dir = match install_payload {
+        AppInstallPayload::LocalCatalog(source) => source,
+        AppInstallPayload::Archive(zip_bytes) => {
+            fs::create_dir_all(&temp_dir).with_context(|| {
+                format!("Failed to create temp extract dir {}", temp_dir.display())
+            })?;
+            let cursor = std::io::Cursor::new(zip_bytes);
+            let mut archive = zip::ZipArchive::new(cursor)
+                .context("Failed to open downloaded archive as a zip file")?;
 
-    let cursor = std::io::Cursor::new(zip_bytes);
-    let mut archive =
-        zip::ZipArchive::new(cursor).context("Failed to open downloaded archive as a zip file")?;
-
-    for i in 0..archive.len() {
-        let mut file = archive
-            .by_index(i)
-            .context("Failed to read file from zip archive")?;
-        let filepath = match file.enclosed_name() {
-            Some(path) => path.to_owned(),
-            None => continue,
-        };
-        let outpath = temp_dir.join(filepath);
-        if file.is_dir() {
-            fs::create_dir_all(&outpath)?;
-        } else {
-            if let Some(p) = outpath.parent() {
-                if !p.exists() {
-                    fs::create_dir_all(&p)?;
+            for i in 0..archive.len() {
+                let mut file = archive
+                    .by_index(i)
+                    .context("Failed to read file from zip archive")?;
+                let filepath = match file.enclosed_name() {
+                    Some(path) => path.to_owned(),
+                    None => continue,
+                };
+                let outpath = temp_dir.join(filepath);
+                if file.is_dir() {
+                    fs::create_dir_all(&outpath)?;
+                } else {
+                    if let Some(parent) = outpath.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    let mut outfile = fs::File::create(&outpath)?;
+                    std::io::copy(&mut file, &mut outfile)?;
                 }
             }
-            let mut outfile = fs::File::create(&outpath)?;
-            std::io::copy(&mut file, &mut outfile)?;
-        }
-    }
 
-    // Search recursively for the directory containing module.json
-    let found_dir =
-        find_module_json_dir_for_install(&temp_dir, &module_id, &effective_source_path)?
-            .with_context(|| {
-                format!(
-                    "No module.json for module '{}' found in the downloaded repository archive",
-                    module_id
-                )
-            })?;
+            find_module_json_dir_for_install(&temp_dir, &module_id, &effective_source_path)?
+                .with_context(|| {
+                    format!(
+                        "No module.json for module '{}' found in the downloaded archive",
+                        module_id
+                    )
+                })?
+        }
+    };
 
     // Read and parse module.json to ensure it's a valid manifest
     let manifest_path = found_dir.join("module.json");
@@ -1947,19 +2107,34 @@ pub fn install_app_module(
             .context("Failed to stage extracted module files")?;
 
         // Stamp source provenance. Same-origin runtime modules are executable
-        // code, so untrusted third-party archives remain blocked until an
-        // isolated sandbox exists. The first-party repository is an explicit
-        // trust root and the recorded module bundle hash binds the installed
-        // revision for later update/release evidence.
+        // code, so the provenance stamp is SERVER-WRITTEN from the resolved
+        // source kind and never read out of the payload: a manifest that
+        // declares its own app_source/origin/trust_model must not be able to
+        // promote itself into the first-party trust root.
+        strip_forged_provenance_keys(&mut manifest);
         let app_source = app_source_base;
         let trusted_source = app_source
             .get("verified")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        anyhow::ensure!(
-            trusted_source,
-            "untrusted third-party apps cannot run same-origin; install a CTOX first-party source or wait for the sandbox runtime"
-        );
+        // Untrusted sources (zip upload, download URL, foreign repository) are
+        // installable, but they stay marked untrusted for the whole lifecycle
+        // and they need instance-wide install authority — a per-module grant
+        // (the routine founder delegation) must never unlock running foreign
+        // code in the Business OS origin. The alternative is worse than this
+        // audited path: the browser App Importer already writes arbitrary
+        // module code into local-modules/ with no policy check, no version
+        // record and no provenance at all.
+        if !trusted_source {
+            anyhow::ensure!(
+                session_has_workspace_permission(
+                    root,
+                    session,
+                    BusinessOsPermission::AppsInstall,
+                )?,
+                "installing an unverified app requires instance-wide apps.install authority (chef or admin); a module-scoped grant is not sufficient"
+            );
+        }
         manifest["app_source"] = app_source;
         normalize_catalog_installed_manifest(&mut manifest, &module_id, &staging)?;
         fs::write(
@@ -1998,6 +2173,174 @@ pub fn install_app_module(
     }))
 }
 
+fn restore_repair_backups(backups: &[(PathBuf, PathBuf)]) -> anyhow::Result<()> {
+    for (active, backup) in backups.iter().rev() {
+        if !backup.exists() {
+            continue;
+        }
+        anyhow::ensure!(
+            !active.exists(),
+            "cannot restore repaired module shadow because {} already exists",
+            active.display()
+        );
+        fs::rename(backup, active).with_context(|| {
+            format!(
+                "failed to restore repaired module shadow {} from {}",
+                active.display(),
+                backup.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+pub fn repair_app_module(
+    root: &Path,
+    app_root: &Path,
+    session: &BusinessOsSession,
+    request: AppStoreRepairRequest,
+) -> anyhow::Result<Value> {
+    let module_id = source_sanitize_slug(&request.module_id);
+    anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+    anyhow::ensure!(
+        module_policy_decision(root, session, BusinessOsPermission::AppsInstall, &module_id)?
+            .allowed,
+        "chef or admin role required to repair modules"
+    );
+
+    let source_app_root = resolve_business_os_app_root(root)?;
+    if !is_core_module(&module_id) {
+        let local_source = source_app_root.join("modules").join(&module_id);
+        if !local_source.join("module.json").is_file() {
+            anyhow::bail!(
+                "module `{module_id}` is not a core module and has no local catalog source at {}",
+                local_source.display()
+            );
+        }
+        validate_local_catalog_module_source(&local_source, &module_id)?;
+        let install = install_app_module(
+            root,
+            app_root,
+            session,
+            AppStoreInstallRequest {
+                module_id: module_id.clone(),
+                download_url: String::new(),
+                source_path: String::new(),
+                source_kind: "local-catalog".to_owned(),
+                repo: String::new(),
+                git_ref: String::new(),
+                subpath: String::new(),
+                file_id: String::new(),
+            },
+        )?;
+        return Ok(serde_json::json!({
+            "ok": true,
+            "module_id": module_id,
+            "repaired": true,
+            "changed": true,
+            "source": "local-catalog",
+            "install": install
+        }));
+    }
+
+    let served_source = source_app_root.join("modules").join(&module_id);
+    anyhow::ensure!(
+        served_source.join("module.json").is_file(),
+        "core module `{module_id}` has no served source at {}",
+        served_source.display()
+    );
+    let shadows = [
+        app_root.join("installed-modules").join(&module_id),
+        app_root.join("local-modules").join(&module_id),
+    ];
+    for shadow in &shadows {
+        anyhow::ensure!(
+            !shadow.exists() || shadow.is_dir(),
+            "core module shadow is not a directory: {}",
+            shadow.display()
+        );
+    }
+
+    let mut backups = Vec::new();
+    let stage_result = (|| -> anyhow::Result<()> {
+        for shadow in shadows.iter().filter(|shadow| shadow.is_dir()) {
+            let parent = shadow
+                .parent()
+                .context("core module shadow has no parent")?;
+            let backup = parent.join(format!(
+                ".module-repair-backup-{module_id}-{}",
+                Uuid::new_v4()
+            ));
+            fs::rename(shadow, &backup).with_context(|| {
+                format!(
+                    "failed to stage core module shadow {} for repair",
+                    shadow.display()
+                )
+            })?;
+            backups.push((shadow.clone(), backup));
+        }
+        Ok(())
+    })();
+    if let Err(error) = stage_result {
+        if let Err(restore_error) = restore_repair_backups(&backups) {
+            return Err(anyhow::anyhow!(
+                "core module repair staging failed ({error:#}); restoring staged shadows also failed ({restore_error:#})"
+            ));
+        }
+        return Err(error.context("failed to stage core module shadows for repair"));
+    }
+
+    let changed = !backups.is_empty();
+    if changed {
+        let created_by = session_user_id(session).unwrap_or("").to_string();
+        if let Err(error) = record_module_version(
+            root,
+            &source_app_root,
+            &module_id,
+            "repair",
+            "Repaired core module",
+            &created_by,
+        ) {
+            if let Err(restore_error) = restore_repair_backups(&backups) {
+                return Err(anyhow::anyhow!(
+                    "core module repair version recording failed ({error:#}); restoring staged shadows also failed ({restore_error:#})"
+                ));
+            }
+            return Err(error.context("core module repair rolled back"));
+        }
+    }
+
+    let removed = backups
+        .iter()
+        .map(|(active, _)| {
+            active
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    for (_, backup) in &backups {
+        fs::remove_dir_all(backup).with_context(|| {
+            format!(
+                "failed to remove repaired core module backup {}",
+                backup.display()
+            )
+        })?;
+    }
+    sync_module_catalog_projection_now(root)?;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "module_id": module_id,
+        "repaired": true,
+        "changed": changed,
+        "source": "core",
+        "removed": removed
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::policy::BusinessOsPermission;
@@ -2014,10 +2357,11 @@ mod tests {
     };
     use super::{
         compute_module_bundle, copy_dir_recursive, delete_installed_module,
-        ensure_rollback_collection_schema_compatible, list_module_versions,
-        module_catalog_source_id, module_policy_decision, normalize_catalog_installed_manifest,
-        record_module_release, record_module_version, release_managed_shadow_source,
-        rollback_module_to_version, sync_module_version_records, validate_staged_catalog_module,
+        ensure_rollback_collection_schema_compatible, first_party_local_catalog_source,
+        list_module_versions, module_catalog_source_id, module_policy_decision,
+        normalize_catalog_installed_manifest, record_module_release, record_module_version,
+        release_managed_shadow_source, rollback_module_to_version, sync_module_version_records,
+        validate_staged_catalog_module,
     };
     use rusqlite::{params, Connection};
     use serde_json::Value;
@@ -2915,6 +3259,104 @@ mod tests {
         )?;
         assert_eq!(release_rows, 2);
 
+        Ok(())
+    }
+
+    // APPSTORE-V2 / Sicherheitsbefund F1 (Kimi-Review 31.08.2026): die
+    // GitHub->lokal-Bevorzugung darf den Installationsort NIEMALS aus dem
+    // Request ableiten. Sonst zeigt ein Angreifer den Stempel
+    // `verified: true / ctox-first-party-source` auf ein beliebiges
+    // Verzeichnis unter dem Datenwurzelpfad (z. B. seine eigene Runtime-App)
+    // und umgeht damit das Trust-Gate, das Zip/URL/Fremd-GitHub blockiert.
+    #[test]
+    fn first_party_local_source_ignores_requester_supplied_paths() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let source_app_root = temp.path().join("src/apps/business-os");
+        let curated = source_app_root.join("modules/widget");
+        fs::create_dir_all(&curated)?;
+        fs::write(
+            curated.join("module.json"),
+            serde_json::json!({ "id": "widget", "install_scope": "store" }).to_string(),
+        )?;
+
+        // Ein untergeschobenes Verzeichnis mit passendem, selbst deklariertem
+        // Manifest darf nie gewinnen - egal wie der Subpath darauf zeigt.
+        let planted = temp
+            .path()
+            .join("runtime/business-os/installed-modules/evil");
+        fs::create_dir_all(&planted)?;
+        fs::write(
+            planted.join("module.json"),
+            serde_json::json!({ "id": "widget", "install_scope": "store" }).to_string(),
+        )?;
+
+        for hostile in [
+            "runtime/business-os/installed-modules/evil",
+            "modules/other",
+            "src/apps/business-os/modules/widget/../../../../runtime",
+        ] {
+            let resolved = first_party_local_catalog_source(&source_app_root, hostile, "widget")?;
+            assert!(
+                resolved.is_none(),
+                "requester subpath `{hostile}` must not select a local source"
+            );
+        }
+
+        // Der kanonische Subpath (und der leere Default) treffen genau den
+        // kuratierten Katalogpfad.
+        for canonical in ["", "modules/widget"] {
+            let resolved = first_party_local_catalog_source(&source_app_root, canonical, "widget")?
+                .expect("canonical subpath resolves the curated catalog copy");
+            assert_eq!(resolved, curated);
+        }
+
+        Ok(())
+    }
+
+    // APPSTORE-V2 P4: local-modules/ ist der Entwickler-/Betreiber-Modus und
+    // damit origin:user. Vor P4 luden diese Apps als deletable:false und
+    // hatten in KEINER Oberflaeche einen Entfernungsweg.
+    #[test]
+    fn local_modules_are_removable_through_the_uninstall_path() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        let app_root = resolve_business_os_installed_app_root(root);
+        let local_dir = app_root.join("local-modules").join("widget");
+        fs::create_dir_all(&local_dir)?;
+        fs::write(
+            local_dir.join("module.json"),
+            serde_json::json!({
+                "id": "widget",
+                "title": "Widget",
+                "entry": "local-modules/widget/index.html",
+                "install_scope": "local"
+            })
+            .to_string(),
+        )?;
+        fs::write(local_dir.join("index.html"), "<main></main>")?;
+
+        delete_installed_module(
+            &app_root,
+            root,
+            ModuleDeleteRequest {
+                module_id: "widget".to_owned(),
+            },
+        )?;
+        assert!(!local_dir.exists(), "the local module directory is removed");
+
+        // Core-Apps bleiben unantastbar.
+        let core_error = delete_installed_module(
+            &app_root,
+            root,
+            ModuleDeleteRequest {
+                module_id: "desktop".to_owned(),
+            },
+        )
+        .expect_err("core modules must stay non-deletable");
+        assert!(core_error
+            .to_string()
+            .contains("core modules cannot be deleted"));
         Ok(())
     }
 }

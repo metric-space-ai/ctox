@@ -1,34 +1,34 @@
-import { CtoxResizer } from './shared/resizer.js?v=20260831-shell-v2-unified-v325';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260831-shell-v2-unified-v325';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260831-shell-v2-unified-v325';
-import { createAppActions } from './shared/app-actions.js?v=20260831-shell-v2-unified-v325';
+import { CtoxResizer } from './shared/resizer.js?v=20260901-shell-v2-unified-v333';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260901-shell-v2-unified-v333';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260901-shell-v2-unified-v333';
+import { createAppActions } from './shared/app-actions.js?v=20260901-shell-v2-unified-v333';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260831-shell-v2-unified-v325';
+} from './shared/app-lifecycle.js?v=20260901-shell-v2-unified-v333';
 import {
   BusinessOsPermissions,
   canModifyBusinessModule,
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260831-shell-v2-unified-v325';
+} from './shared/permissions.js?v=20260901-shell-v2-unified-v333';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260831-shell-v2-unified-v325';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260831-shell-v2-unified-v325';
+} from './shared/branding.js?v=20260901-shell-v2-unified-v333';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260901-shell-v2-unified-v333';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260831-shell-v2-unified-v325';
+} from './shared/presentation.js?v=20260901-shell-v2-unified-v333';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -39,9 +39,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260831-shell-v2-unified-v325';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260831-shell-v2-unified-v325';
-import { createDocumentsFacade } from './shared/documents.js?v=20260831-shell-v2-unified-v325';
+} from './shared/shell-permissions-ui.js?v=20260901-shell-v2-unified-v333';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260901-shell-v2-unified-v333';
+import { createDocumentsFacade } from './shared/documents.js?v=20260901-shell-v2-unified-v333';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -49,26 +49,26 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260831-shell-v2-unified-v325';
+} from './shared/maintenance-state.js?v=20260901-shell-v2-unified-v333';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260831-shell-v2-unified-v325';
+} from './shared/workspace-session.js?v=20260901-shell-v2-unified-v333';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260831-shell-v2-unified-v325';
+} from './shared/taskbar-pins.js?v=20260901-shell-v2-unified-v333';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
   WORKJET_CATEGORY_IDS,
   workjetCategoryForModule,
   workjetCategoryForTarget,
-} from './shared/workjet-theme.js?v=20260831-shell-v2-unified-v325';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260831-shell-v2-unified-v325';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260831-shell-v2-unified-v325';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260831-shell-v2-unified-v325';
+} from './shared/workjet-theme.js?v=20260901-shell-v2-unified-v333';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260901-shell-v2-unified-v333';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260901-shell-v2-unified-v333';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260901-shell-v2-unified-v333';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -83,7 +83,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260831-crew-telemetry-v332';
+const APP_BUILD = '20260901-shell-v2-unified-v333';
 const WORKJET_UI_CONTRACT_BUILD = '6121ac0cd76c1abad54d6d6e7e3483bb4f31f3ed36f4f1eb24d329a8ce99b5b6';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -2393,7 +2393,7 @@ async function toggleShellV2VersionMenu(mod, context = {}) {
     </header>
     <div class="shell-v2-version-menu-actions">
       <button type="button" data-v2-menu-action="history">Versionshistorie</button>
-      ${canSource ? '<button type="button" data-v2-menu-action="source">Im Source Code Editor öffnen</button>' : ''}
+      ${canSource ? '<button type="button" data-v2-menu-action="source">Code-Modus (Quellcode dieser App)</button>' : ''}
       <button type="button" data-v2-menu-action="coding" ${canOpenCodingAgent ? '' : `disabled title="${canCode ? 'Coding-Agent-App ist nicht verfügbar' : 'Keine Berechtigung: apps.modify'}"`}>Im Coding Agent öffnen</button>
     </div>
     <div class="shell-v2-version-history" data-v2-version-history aria-live="polite">
@@ -10743,7 +10743,7 @@ const OFFLINE_FALLBACK_CATALOG = {
         "center": "desktop surface",
         "right": "agent context"
       },
-      "category": "Workspace",
+      "category": "workspace",
       "version": "1.0.1",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -10790,7 +10790,7 @@ const OFFLINE_FALLBACK_CATALOG = {
         "min_width": 640,
         "min_height": 480
       },
-      "category": "Development",
+      "category": "development",
       "version": "1.1.1",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -10855,7 +10855,7 @@ const OFFLINE_FALLBACK_CATALOG = {
         "min_width": 640,
         "min_height": 480
       },
-      "category": "Development",
+      "category": "development",
       "version": "1.0.0",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -10923,7 +10923,7 @@ const OFFLINE_FALLBACK_CATALOG = {
         "min_width": 640,
         "min_height": 480
       },
-      "category": "Workspace",
+      "category": "workspace",
       "version": "1.0.0",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -10986,7 +10986,7 @@ const OFFLINE_FALLBACK_CATALOG = {
         "min_width": 520,
         "min_height": 400
       },
-      "category": "Workspace",
+      "category": "workspace",
       "version": "1.0.0",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -11058,7 +11058,7 @@ const OFFLINE_FALLBACK_CATALOG = {
         "min_width": 640,
         "min_height": 480
       },
-      "category": "Security",
+      "category": "security",
       "version": "0.2.0",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -11136,7 +11136,7 @@ const OFFLINE_FALLBACK_CATALOG = {
         "top": "browser tabs and address bar",
         "center": "web page"
       },
-      "category": "Workspace",
+      "category": "workspace",
       "version": "0.2.6",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -11200,7 +11200,7 @@ const OFFLINE_FALLBACK_CATALOG = {
         "right": "Live task artifact: free HTML the agent maintains about its run",
         "third_pane_justification": "The agent's self-published progress artifact must stay visible while chatting — hiding it would blind the user to the running task."
       },
-      "category": "Development",
+      "category": "development",
       "version": "0.2.6",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -11247,7 +11247,7 @@ const OFFLINE_FALLBACK_CATALOG = {
     {
       "id": "importer",
       "title": "App Importer",
-      "description": "Bring a coding-agent app into CTOX: pick a folder or a GitHub repo, transcode React/TypeScript to plain ESM, review the report, and install it as a versioned Business OS app.",
+      "description": "Start a durable CTOX harness job that snapshots a public GitHub repository or local project folder and ports its workflows into a validated Shell-V2 Business OS app.",
       "entry": "modules/importer/index.html",
       "collections": [],
       "layout": {
@@ -11256,22 +11256,22 @@ const OFFLINE_FALLBACK_CATALOG = {
         "shell_geometry_contract": "business-os-v2-global-1",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-importer\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-importer\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0ea5e9\" /><stop offset=\"100%\" stop-color=\"#6366f1\" /></linearGradient></defs><rect x=\"3\" y=\"9\" width=\"18\" height=\"12\" rx=\"2.5\" fill=\"url(#grad-importer)\" fill-opacity=\"0.12\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></rect><path d=\"M12 3v9\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M8.5 8.5 12 12l3.5-3.5\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path></svg>",
         "left": "Source: folder or GitHub",
-        "center": "Transcode report and module details",
-        "right": "Install into local-modules"
+        "center": "Durable porting and validation progress",
+        "right": "Live application evidence"
       },
-      "category": "Development",
-      "version": "0.1.0",
+      "category": "development",
+      "version": "0.2.0",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
       "tags": [
         "import",
         "porting",
-        "react",
-        "typescript",
+        "shell-v2",
+        "harness",
         "coding-agent"
       ],
       "store": {
-        "summary": "The hand-over moment: a coding agent conceived the app, the importer raises it — transcoded to plain ESM, versioned, yours.",
+        "summary": "Turn a public GitHub repository or local source snapshot into a durable, agent-ported and validated Shell-V2 app.",
         "repository": "metric-space-ai/ctox",
         "source_path": "modules/importer",
         "installable": false,
@@ -11321,7 +11321,7 @@ const OFFLINE_FALLBACK_CATALOG = {
         "center": "Set, rotate and remove credentials",
         "right": "Security notes"
       },
-      "category": "Security",
+      "category": "security",
       "version": "0.1.2",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -11399,7 +11399,7 @@ const OFFLINE_FALLBACK_CATALOG = {
         "min_width": 640,
         "min_height": 480
       },
-      "category": "System",
+      "category": "system",
       "version": "1.1.1",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -11471,7 +11471,7 @@ const OFFLINE_FALLBACK_CATALOG = {
           "bottom": "diagnostics, export evidence, and selected document context"
         }
       },
-      "category": "Knowledge",
+      "category": "knowledge",
       "version": "1.0.0",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -11543,7 +11543,7 @@ const OFFLINE_FALLBACK_CATALOG = {
         "center": "Dashboards of automation widgets (the three CTOX-programmed parts: trigger logic, widget code, order prompt), Karten ⇄ Liste",
         "right": ""
       },
-      "category": "Operations",
+      "category": "operations",
       "version": "1.0.2",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -11632,7 +11632,7 @@ const OFFLINE_FALLBACK_CATALOG = {
         "min_width": 360,
         "min_height": 480
       },
-      "category": "Knowledge",
+      "category": "knowledge",
       "version": "1.1.7",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -11695,7 +11695,7 @@ const OFFLINE_FALLBACK_CATALOG = {
         "right": "Command dashboard and formatting shortcuts",
         "third_pane_justification": "Editor-type app (IA-Karte): left = books/tags nav + note list, main = rich-text editor; the third pane is the justified reference/metadata surface of the editor layout."
       },
-      "category": "Productivity",
+      "category": "productivity",
       "version": "1.0.2",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -11767,7 +11767,7 @@ const OFFLINE_FALLBACK_CATALOG = {
         "min_width": 640,
         "min_height": 480
       },
-      "category": "Governance",
+      "category": "governance",
       "version": "1.1.2",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -11841,7 +11841,7 @@ const OFFLINE_FALLBACK_CATALOG = {
           "bottom": "Knowledge table diagnostics and raw row evidence"
         }
       },
-      "category": "Research",
+      "category": "research",
       "version": "1.0.14",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -11912,7 +11912,7 @@ const OFFLINE_FALLBACK_CATALOG = {
           "bottom": "diagnostics, export evidence, and selected spreadsheet context"
         }
       },
-      "category": "Analytics",
+      "category": "analytics",
       "version": "1.0.1",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -11985,7 +11985,7 @@ const OFFLINE_FALLBACK_CATALOG = {
         "min_width": 640,
         "min_height": 480
       },
-      "category": "System",
+      "category": "system",
       "version": "0.2.4",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -12062,7 +12062,7 @@ const OFFLINE_FALLBACK_CATALOG = {
         "min_width": 640,
         "min_height": 480
       },
-      "category": "Operations",
+      "category": "operations",
       "version": "1.0.2",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -12135,7 +12135,7 @@ const OFFLINE_FALLBACK_CATALOG = {
         "min_width": 640,
         "min_height": 480
       },
-      "category": "Operations",
+      "category": "operations",
       "version": "0.1.0",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",

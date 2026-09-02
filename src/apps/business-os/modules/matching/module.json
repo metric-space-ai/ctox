@@ -23,7 +23,7 @@
     },
     "third_pane_justification": "Matching is an evidence app (IA-Karte): left = requirements, main = ranked match workbench; the third pane is the parsed CV/object evidence for the selected match — hidden by default, auto-reveals on selection."
   },
-  "category": "Operations",
+  "category": "operations",
   "version": "1.0.2",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",

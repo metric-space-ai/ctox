@@ -25,7 +25,7 @@
       "bottom": "diagnostics, export evidence, and selected spreadsheet context"
     }
   },
-  "category": "Analytics",
+  "category": "analytics",
   "version": "1.0.1",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",

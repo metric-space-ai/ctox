@@ -90,19 +90,30 @@ export function isPublicWorkjetModule(moduleDef) {
 }
 
 export function workjetCategoryForModule(moduleDef, fallback = 'imported') {
-  if (!isPublicWorkjetModule(moduleDef)) return normalizeWorkjetCategory(fallback);
   const manifest = moduleDef?.manifest && typeof moduleDef.manifest === 'object' && !Array.isArray(moduleDef.manifest)
     ? moduleDef.manifest
     : {};
-  return normalizeWorkjetCategory(
-    moduleDef.category
-      || moduleDef.store?.category
-      || moduleDef.layout?.category
-      || manifest.category
-      || manifest.store?.category
-      || manifest.layout?.category,
-    fallback,
-  );
+  const declared = moduleDef?.category
+    || moduleDef?.store?.category
+    || moduleDef?.layout?.category
+    || manifest.category
+    || manifest.store?.category
+    || manifest.layout?.category;
+  // Die Rubrik ist unabhängig von der Herkunft (APPSTORE-V2 K5): Apps mit
+  // server-autoritativem origin behalten ihre deklarierte Rubrik; nur
+  // origin:user ohne kanonische Rubrik fällt auf 'imported'. Projektionen
+  // alter Daemons ohne origin-Feld laufen weiter über die alte
+  // Public-Distribution-Heuristik, damit ein Alt-Binary mit neuer Shell
+  // kohärent bleibt.
+  const origin = String(moduleDef?.origin || manifest.origin || '').trim().toLowerCase();
+  if (origin === 'core' || origin === 'official') {
+    return normalizeWorkjetCategory(declared, fallback);
+  }
+  if (origin === 'user') {
+    return normalizeWorkjetCategory(declared, 'imported');
+  }
+  if (!isPublicWorkjetModule(moduleDef)) return normalizeWorkjetCategory(fallback);
+  return normalizeWorkjetCategory(declared, fallback);
 }
 
 export function workjetCategoryForTarget(target, fallback = 'imported') {

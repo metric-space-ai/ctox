@@ -34,7 +34,7 @@
     "left": "campaign and sequence selection",
     "center": "campaign, sequence, qualification, and sending workbench"
   },
-  "category": "Sales",
+  "category": "sales",
   "version": "0.2.3",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",

@@ -141,8 +141,18 @@ async function loadModuleMarkup() {
   return doc.body.innerHTML;
 }
 
+// Betreiber-Regel "nichts ausserhalb der App": jede Montage des Moduls geht in
+// den App-Host, nie auf document.body. Ein body-Overlay faengt Zeiger-Events
+// ueber dem GANZEN Desktop ab und macht Fenster unverschiebbar.
+function overlayHost() {
+  if (els.overlayHost?.isConnected) return els.overlayHost;
+  const root = els.root || state.ctx?.host || null;
+  return root?.querySelector?.('[data-app-store-root]') || root;
+}
+
 function bindElements(root) {
   els.root = root;
+  els.overlayHost = root.querySelector('[data-app-store-root]') || root;
   els.leftPane = root.querySelector('.store-left');
   els.centerPane = root.querySelector('.store-center');
   els.well = root.querySelector('.store-well');
@@ -352,6 +362,8 @@ async function triggerCardAction(appId, actionType) {
   } else if (actionType === 'release') {
     if (!canReleaseAppStoreItem(state, item)) return;
     await openReleaseDialog(item);
+  } else if (actionType === 'repair') {
+    await repairSystemItem(item);
   } else if (actionType === 'uninstall') {
     if (!canUninstallAppStoreItem(state, item)) return;
     await uninstallInstalledItem(item);
@@ -417,6 +429,32 @@ async function refreshMarketplace({ force = false } = {}) {
     state.marketplaceMessage = error?.message || String(error);
   }
   render();
+}
+
+
+// Kanonische Rubrik-Slugs (WORKJET_CATEGORY_IDS) -> Anzeigenamen.
+const CATEGORY_LABELS = {
+  workspace: 'Arbeitsplatz',
+  collaboration: 'Zusammenarbeit',
+  productivity: 'Produktivität',
+  development: 'Entwicklung',
+  engineering: 'Engineering',
+  knowledge: 'Wissen',
+  research: 'Recherche',
+  sales: 'Vertrieb',
+  recruiting: 'Recruiting',
+  finance: 'Finanzen',
+  operations: 'Betrieb',
+  governance: 'Governance',
+  security: 'Sicherheit',
+  analytics: 'Analytik',
+  system: 'System',
+  imported: 'Importiert',
+};
+
+function categoryLabel(value) {
+  const slug = String(value || '').trim().toLowerCase();
+  return CATEGORY_LABELS[slug] || String(value || '');
 }
 
 function catalogItems() {
@@ -545,7 +583,11 @@ function normalizeItem(item, kind) {
     installable,
     module_class: moduleClass,
     editable: item.editable === true && kind !== 'system',
-    deletable: item.deletable === true && kind === 'installed',
+    // APPSTORE-V2 P4: Nutzer-Apps sind sowohl pipeline-installiert
+    // (kind 'installed') als auch Betreiber-/Entwickler-Module (kind 'local').
+    // Beide sind origin:user und beide muessen entfernbar sein; der Server
+    // haelt Core-Apps ohnehin nicht-loeschbar.
+    deletable: item.deletable === true && (kind === 'installed' || kind === 'local'),
     manifest_sha256: item.manifest_sha256 || '',
     local_manifest_path: item.local_manifest_path || '',
     installed_version: installedVersion,
@@ -558,6 +600,7 @@ function normalizeItem(item, kind) {
     release_projection: releaseProjection,
     version_state: versionStateFor(id),
     latest_release: release,
+    origin: String(item.origin || '').trim().toLowerCase(),
     app_source: (item.app_source && typeof item.app_source === 'object') ? item.app_source : null,
     instance_visible: item.instance_visible !== false,
     raw: item,
@@ -598,7 +641,7 @@ function syncCategoryOptions() {
   const current = [...els.categoryFilter.options].map((option) => option.value);
   if (wanted.join('|') !== current.join('|')) {
     els.categoryFilter.innerHTML = '<option value="all">Alle Kategorien</option>'
-      + categories.map((category) => `<option value="${escapeAttr(category)}">${escapeHtml(category)}</option>`).join('');
+      + categories.map((category) => `<option value="${escapeAttr(category)}">${escapeHtml(categoryLabel(category))}</option>`).join('');
   }
   const clamped = wanted.includes(state.categoryFilter) ? state.categoryFilter : 'all';
   els.categoryFilter.value = clamped;
@@ -731,7 +774,8 @@ function downloadJsonFile(filename, payload) {
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = filename;
-  document.body.appendChild(anchor);
+  anchor.style.display = 'none';
+  overlayHost()?.appendChild(anchor);
   anchor.click();
   anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -988,6 +1032,9 @@ function cardActionsHtml(item, operation, cardStatus, { includeDetails = true } 
   } else if (item.kind === 'system') {
     actionsHtml += `<button type="button" class="ctox-button ctox-button--sm is-primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">${escapeHtml(state.t('actionOpen', 'Öffnen'))}</button>`;
     actionsHtml += versionsButtonHtml(item);
+    if (canInstallBusinessApps(appStorePermissionOptions(state))) {
+      actionsHtml += `<button type="button" class="ctox-button ctox-button--sm" data-card-action="repair" title="${escapeHtml(state.t('actionRepairTitle', 'Auf Auslieferungsstand zurücksetzen (lokale Quelle, ohne Internet)'))}" aria-label="${escapeHtml(item.title)} reparieren">${escapeHtml(state.t('actionRepair', 'Reparieren'))}</button>`;
+    }
   } else {
     // Local / Installed non-system apps
     actionsHtml += `
@@ -1027,7 +1074,7 @@ function renderCard(item, { compact = false } = {}) {
   card.classList.toggle('is-operating', operation?.kind === 'running');
   card.tabIndex = 0;
   card.setAttribute('aria-selected', item.id === state.selectedId ? 'true' : 'false');
-  card.setAttribute('aria-label', `${item.title}. ${statusLabel(cardStatus)}. ${item.category}.`);
+  card.setAttribute('aria-label', `${item.title}. ${statusLabel(cardStatus)}. ${categoryLabel(item.category)}.`);
 
   if (compact) {
     // Maximum density: one line, title + one short meta. Nothing wraps, so
@@ -1074,7 +1121,7 @@ function shardMetaFor(item) {
   const version = item.installed_version && item.installed_version !== '-'
     ? item.installed_version
     : item.available_version;
-  return [item.category, version]
+  return [categoryLabel(item.category), version]
     .map((part) => String(part || '').trim())
     .filter((part) => part && part !== '-')
     .join(' · ');
@@ -1086,7 +1133,7 @@ function rowMetaFor(item, cardStatus, operation) {
   if (operation?.kind === 'running' || operation?.kind === 'error') {
     return statusLabel(cardStatus);
   }
-  return statusLabel(cardStatus) || item.category || '';
+  return statusLabel(cardStatus) || categoryLabel(item.category) || '';
 }
 
 function releaseProjectionBadgeHtml(item) {
@@ -1176,10 +1223,15 @@ function renderDetails() {
   if (els.detailIcon) els.detailIcon.innerHTML = iconMarkupForItem(item);
   if (els.detailTitle) els.detailTitle.textContent = item.title;
   if (els.detailVersion) els.detailVersion.textContent = item.lifecycle?.version || item.version;
-  if (els.detailCategory) els.detailCategory.textContent = item.category;
+  if (els.detailCategory) els.detailCategory.textContent = categoryLabel(item.category);
+
   if (els.detailDeveloper) els.detailDeveloper.textContent = item.developer;
   if (els.detailLicense) els.detailLicense.textContent = item.license;
-  if (els.detailSource) els.detailSource.textContent = item.source;
+  if (els.detailSource) {
+    els.detailSource.textContent = item.origin
+      ? `${appOriginLabel(item.origin)} · ${item.source || item.origin}`
+      : item.source;
+  }
   if (els.detailStatus) els.detailStatus.textContent = statusLabel(item.status);
   if (els.detailActions) {
     const operation = operationForItem(item);
@@ -1305,7 +1357,7 @@ async function installFromGithub() {
     render();
     return;
   }
-  if (!window.confirm(`Aus EXTERNER Quelle installieren?\n\nRepo: ${repo}\nRef: ${gitRef || 'HEAD'}\nModul: ${moduleId}\n\nExterne Apps sind zunächst NICHT verifiziert und erhalten keine Datenrechte bis zur Prüfung.`)) {
+  if (!window.confirm(`Aus EXTERNER Quelle installieren?\n\nRepo: ${repo}\nRef: ${gitRef || 'HEAD'}\nModul: ${moduleId}\n\nDiese App wird als EIGENE, UNVERIFIZIERTE App installiert. Sie läuft mit dem gleichen Zugriff wie andere Apps — installiere nur Quellen, denen du vertraust. Erfordert instanzweite Installationsrechte (Chef/Admin).`)) {
     return;
   }
   await runStoreCommand({
@@ -1427,7 +1479,7 @@ function pickZipFile() {
       input.remove();
       resolve(file);
     }, { once: true });
-    document.body.appendChild(input);
+    overlayHost()?.appendChild(input);
     input.click();
   });
 }
@@ -1447,7 +1499,7 @@ async function installFromZip() {
     return;
   }
   const subpath = (window.prompt('Pfad zum Modul im Zip (leer = Wurzel):', '') || '').trim();
-  if (!window.confirm(`App aus EXTERNER Zip-Datei installieren?\n\nDatei: ${file.name}\nModul: ${moduleId}\n\nExterne Apps sind zunächst NICHT verifiziert und erhalten keine Datenrechte bis zur Prüfung.`)) {
+  if (!window.confirm(`App aus EXTERNER Zip-Datei installieren?\n\nDatei: ${file.name}\nModul: ${moduleId}\n\nDiese App wird als EIGENE, UNVERIFIZIERTE App installiert. Sie läuft mit dem gleichen Zugriff wie andere Apps — installiere nur Quellen, denen du vertraust. Erfordert instanzweite Installationsrechte (Chef/Admin).`)) {
     return;
   }
   let fileId;
@@ -1543,6 +1595,34 @@ async function uninstallInstalledItem(item) {
       module_id: item.id,
     },
   });
+}
+
+async function repairSystemItem(item) {
+  if (!canInstallBusinessApps(appStorePermissionOptions(state))) {
+    state.status = { kind: 'error', text: 'Du darfst System-Apps nicht reparieren.' };
+    render();
+    return;
+  }
+  if (!confirm(`${item.title} auf den Auslieferungsstand zurücksetzen? Überschattende Laufzeitkopien werden gesichert und entfernt.`)) return;
+  await runStoreCommand({
+    label: `${item.title} wird repariert...`,
+    success: `${item.title} auf Auslieferungsstand zurückgesetzt.`,
+    commandType: 'ctox.app_store.repair',
+    moduleId: item.id,
+    payload: {
+      module_id: item.id,
+    },
+  });
+}
+
+// Herkunfts-Achse einer App (origin: core | official | user) — nicht zu
+// verwechseln mit dem Versions-origin (install/repair/rollback) darunter.
+function appOriginLabel(origin) {
+  const slug = String(origin || '').trim().toLowerCase();
+  if (slug === 'core') return 'Core-App (mitgeliefert)';
+  if (slug === 'official') return 'Offizieller Katalog';
+  if (slug === 'user') return 'Eigene App';
+  return '';
 }
 
 function originLabel(origin) {
@@ -2283,7 +2363,7 @@ function scopeTitle(scope) {
   const t = state.t;
   return {
     all: t('scopeTitleAll', 'Alle Anwendungen'),
-    marketplace: t('scopeTitleMarketplace', 'GitHub Marketplace'),
+    marketplace: t('scopeTitleMarketplace', 'Offizieller Katalog'),
     template: t('scopeTitleTemplate', 'Templates'),
     installed: t('scopeTitleInstalled', 'Installierte Apps'),
     system: t('scopeTitleSystem', 'System Apps'),
@@ -2551,7 +2631,7 @@ function ensureAppStoreContextMenuElement(state) {
   const menu = document.createElement('div');
   menu.className = 'ctox-context-menu app-store-context-menu';
   menu.hidden = true;
-  document.body.append(menu);
+  overlayHost()?.append(menu);
   state.contextMenu = menu;
   return menu;
 }
@@ -2714,12 +2794,18 @@ function renderAppStoreContextMenu(state, context, x, y) {
   menu.hidden = false;
   menu.style.left = '0px';
   menu.style.top = '0px';
+  // Das Menue haengt im App-Host, nicht am Viewport: Zeigerkoordinaten werden
+  // in Host-Koordinaten umgerechnet und auf den Host-Kasten geklemmt, damit das
+  // Overlay das eigene Fenster nie verlaesst.
   const rect = menu.getBoundingClientRect();
+  const hostRect = menu.offsetParent?.getBoundingClientRect()
+    || overlayHost()?.getBoundingClientRect()
+    || { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
   const clampNumber = (val, min, max) => Math.min(max, Math.max(min, val));
-  const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
-  const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
-  menu.style.left = `${clampNumber(x, 8, maxLeft)}px`;
-  menu.style.top = `${clampNumber(y, 8, maxTop)}px`;
+  const maxLeft = Math.max(8, hostRect.width - rect.width - 8);
+  const maxTop = Math.max(8, hostRect.height - rect.height - 8);
+  menu.style.left = `${clampNumber(x - hostRect.left, 8, maxLeft)}px`;
+  menu.style.top = `${clampNumber(y - hostRect.top, 8, maxTop)}px`;
 
   const form = menu.querySelector('[data-app-store-context-chat-form]');
   const textarea = menu.querySelector('[data-app-store-context-message]');

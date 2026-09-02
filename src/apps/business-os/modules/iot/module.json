@@ -30,7 +30,7 @@
     "center": "Dashboards of automation widgets (the three CTOX-programmed parts: trigger logic, widget code, order prompt), Karten ⇄ Liste",
     "right": ""
   },
-  "category": "Operations",
+  "category": "operations",
   "version": "1.0.2",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",

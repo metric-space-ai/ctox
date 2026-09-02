@@ -1,7 +1,8 @@
 # APPSTORE-V2 — Kampagnen-Board
 
-**Headline:** P1.2 + P3A gelandet; kritischer Pfad = P1.1-Patch anwenden, sobald die
-Cargo-Baseline des (verschmutzten) Hauptbaums grün gemeldet ist.
+**Headline:** P0/P1/P3A/P5 gelandet; P2+P4+P6T2 fertig im Arbeitsbaum und warten
+auf EINEN gruenen cargo check — kritischer Pfad = fremder cargo-test-Lock auf
+/Volumes/tmp/ctox-check-target (PID 58382), danach commit-tree-Commit.
 
 Zielbild (entscheidungsfrei bis auf OWNER-Karten unten):
 https://claude.ai/code/artifact/00f7ce23-1cb4-450d-bb26-a1f1f5fc2898
@@ -10,6 +11,46 @@ Phasen: 0 Boden · 1 Katalog/Loader · 2 Origin+Core-Repair · 3 Store-Kanal app
 ---
 
 ## Done
+
+- **[P4-Rest] Importer-Bypass GESCHLOSSEN — von Parallelsitzungen, nicht von uns.**
+  Gemessen 02.09.: der Browser-Importer oeffnet den Verzeichnis-Picker nur noch
+  `mode: 'read'` und schickt `ctox.business_os.app.create` ueber den Kommandobus;
+  nativ materialisiert `materialize_business_os_app_import_source` in einen
+  Snapshot unter `runtime/business-os/app-imports/<command_id>/` und verlangt
+  `install_target=runtime-installed-module`. KEIN Schreibpfad nach local-modules/
+  mehr (grep ueber alle business_os-Rustdateien: nur Lesen, Loeschen, Tests).
+  Commits fremd: `04f689358` (durable harness jobs), `574df1d7e` (native ack),
+  `6734be3d1`. Damit ist Befund L der Ausgangsanalyse (Importer umgeht Policy,
+  Versionsledger und Provenance) erledigt.
+- **[F1] SICHERHEITSBEFUND in P2 gefunden UND behoben (Kimi-Review 31.08., von Fable am
+  Code bestaetigt)** — die GitHub->lokal-Abkuerzung leitete das Quellverzeichnis aus dem
+  REQUEST ab (`root.join(subpath)`, nur gegen `..` gefiltert). Ein Nutzer mit Founder-Rechten
+  auf eine eigene App haette sein eigenes Verzeichnis als `verified:true /
+  ctox-first-party-source` installieren koennen -> Umgehung genau des Trust-Gates, das
+  Zip/URL/Fremd-GitHub blockiert, plus `origin:official` in der Projektion. NIE COMMITTET
+  (starb im Arbeitsbaum). Fix: `first_party_local_catalog_source` nimmt kein `root` mehr,
+  leitet den Pfad allein aus der Modul-ID ab (`<source_app_root>/modules/<id>`); ein
+  Request-Subpath entscheidet nur noch OB, nie WELCHES Verzeichnis. Regressionstest
+  `first_party_local_source_ignores_requester_supplied_paths` mit 3 feindlichen Pfaden.
+- **KORREKTUR: P6 Teil 1 wurde von fremdem Commit `128aed748` zurueckgedreht** (thesen-
+  outbound-Sitzung committete Title-Case-Kategorien ueber die Slugs, in 38 Manifesten +
+  registry.json + app.js-Fallback). Im Arbeitsbaum wiederhergestellt (Diff nachgemessen:
+  ausschliesslich `"category":`-Zeilen), geht mit dem naechsten Commit erneut rein.
+- **[P1.3] Store liest nur noch die Server-Projektion** — GitHub-Discovery komplett raus
+  (api.github.com/raw-Fetches, mergeMarketplace, DESKTOP_APPS-Merge), Refresh lädt die
+  Projektion; Kopf/Locales „Offizieller Katalog"; Wächter auf neuen Vertrag. Visuell im
+  Geometrie-Labor nachgeprüft. Commits `93228b38a`, `72770889e`, `23e7ed6a0`.
+- **[P6 Teil 1] Rubrik-Slugs kanonisch** — 39 Manifeste auf die 16 Workjet-Slugs,
+  Generator erzwingt Slugs, Store zeigt lokalisierte Labels. Teil 2 (imported=origin:user)
+  wartet auf P2. Commit `31016bf1b`.
+- **[P5] Code-Modus ausgesprochen** — Mechanik existierte (integrierte Fenster-Modi
+  app|source|versions inkl. Agent-Panel); Titelmenü-Eintrag heißt jetzt „Code-Modus",
+  desktop-apps/README.md dokumentiert code-editor als Shell-Komponente. Labor 37/37.
+  Commit `14a347e6d`. OFFEN als Restlast: Klick-Durchstich auf laufender Instanz
+  (Labor mountet Apps einzeln, nicht das Titelmenü).
+- **BEFUND (Labor-Screenshot): explorer-Leerzustand** zeigt überlappende
+  Kopf-Fragmente („Geändert"/„Details") ohne Daten — Kosmetik im Sol-Port, App sonst OK.
+
 
 - **[P1.2b] explorer + file-viewer als Core-Module gelandet** — Sol-Port (Run
   `123104Z-d4712c24`, integrated) + Fable-Shell-Umbau: DESKTOP_APPS geleert (IDs stabil,
@@ -67,31 +108,33 @@ Phasen: 0 Boden · 1 Katalog/Loader · 2 Origin+Core-Repair · 3 Store-Kanal app
 
 ## Working
 
-- **[P1.1 + P0.3] Loader-Patch anwenden** — Sol-Lauf `121437Z-2d73f775` COMPLETED und
-  importiert; Patch liegt in /Volumes/tmp/appstore-v2-p11-loader.patch (+324/−545, 4 Dateien:
-  neues module_manifest_loader.rs 298 Z., server.rs −325, store.rs −216, mod.rs +1).
-  Review erledigt: Semantik kanonisch (asset_revision, file plane, customer_apps-Gate,
-  Scope-Demotion), Kollisionen = Warnung + ModuleManifestLoad.collisions, Vorrang
-  source→installed→local erhalten, upsert_module_manifest_command als Alias erhalten.
-  WARTET auf: grüne Cargo-Baseline des Hauptbaums (läuft, Task bf0vrof2q, warmes Target
-  runtime/build/cargo-target 9.1G). Danach: git apply → cargo check → Commit (server.rs-
-  Vorbestand siehe Umgebungsfalle unten!).
+- **[P2+P4+P6T2] fertig im Arbeitsbaum, wartet auf cargo check** — ALLES geschrieben und
+  im Worktree (unkommittiert, ueberlebte den Sitzungsabbruch verifiziert):
+  * P2 origin/repair/local-catalog (Sol-Lauf `135757Z-50418a77`, integrated)
+  * F1-SICHERHEITSFIX (siehe Done)
+  * P4 Nutzer-Apps: zip/url/fremd-github installieren als `untrusted-user-source`,
+    aber NUR mit instanzweiter apps.install-Autoritaet (Modul-Grant reicht nicht);
+    Manifest-Selbstdeklaration von app_source/origin/trust_model wird vor dem
+    Stempeln entfernt; local-modules sind jetzt deletable und `uninstall_app_module`
+    raeumt beide Wurzeln.
+  * P6 Teil 2: workjetCategoryForModule nutzt `origin` statt PUBLIC_DISTRIBUTIONS.
+  Dateien: module_lifecycle.rs (+506/-77), module_manifest_loader.rs (+34/-3),
+  store.rs (+141/-20), command_plane.rs, business_command_inventory.json,
+  app-store/{index.js,index.css,index.html,module.json,locales/*}, workjet-theme.js.
+  Log: scratchpad/cargo-p2p4.log. FERTIG = cargo check gruen -> commit-tree-Commit
+  (Fremd-WIP in server.rs/mcp_channel.rs/store_catalog_projections.rs NICHT mitnehmen).
+  UMGEBUNG: fremde cargo-test-Sitzung (PID 58382) haelt den Lock auf
+  /Volumes/tmp/ctox-check-target; eigener Check haengt in "Blocking waiting for
+  file lock on build directory" und laeuft automatisch an.
 
 ## To-Do
-- **[P1.3] Store-UI-Katalogquellen auf Server-Projektion reduzieren** (app-store/index.js:468–508).
-  TRIGGER: nach P1.2.
-- **[P2] origin-Feld + Core-Repair + local-catalog-Install.** TRIGGER: nach P1.
 - **[P3] Store-Kanal V1** (CI-Publisher + nativer Client + Kimi-Cyber-Review). TRIGGER: nach P2;
   DNS appstore.ctox.dev = OWNER-Handgriff.
-- **[P4] Nutzer-Apps-Pipeline** (Zip/GitHub-Link als origin:user, Importer auf Kommando,
-  Deinstallation). TRIGGER: nach P2, parallel zu P3 möglich.
-- **[P5] Code-Modus sichtbar + Agent-Panel integriert** — deutlich kleiner als geplant
-  (siehe P5-Messung): sichtbarer Modus-Umschalter am v2-Fenster (heute nur über
-  Titel-Klick-Menü erreichbar), Agent-Panel des eingebetteten Editors als Coding-Weg im
-  Fenster, coding-agents-Querstart bleibt. desktop-apps/code-editor bleibt als
-  Shell-Komponente (nicht App) — Doku entsprechend. Route: Fable direkt + Kimi-Pixelreview.
-  Geometrie-Labor + assert-shell-v2-contract Pflicht. TRIGGER: nach P1.2 (app.js-Konflikt).
-- **[P6] Rubriken kanonisieren** (16 Slugs, Mapping, PUBLIC_DISTRIBUTIONS raus). TRIGGER: nach P1.
+- **[P3B] nativer Store-Client** — `appstore`-Source-Kind: Index+Bundle von
+  appstore.ctox.dev holen (SSRF-geschuetzt), Ed25519-Signatur gegen gepinnten Store-Key
+  pruefen, sha256 des Bundles pruefen, als origin:official installieren. Faellt ohne
+  gepinnten Key FAIL-CLOSED aus. TRIGGER: nach P2/P4-Commit. Owner-Gate: DNS + Key.
+
 
 ## Backlog + Owner
 
@@ -112,6 +155,11 @@ Phasen: 0 Boden · 1 Katalog/Loader · 2 Origin+Core-Repair · 3 Store-Kanal app
 
 ## Umgebungsfallen
 
+- **STEMPEL-HOHEIT ABGEGEBEN (17:0x):** die Parallelsitzung hat alle Cache-Buster auf ihr
+  Schema `20260831-shell-v2-unified-v325` vereinheitlicht und dabei auch meine v326–v330
+  ersetzt sowie den GEPINNTEN `workjet-theme.js?v=20260826-workjet-ui-contract-v1` überschrieben
+  → 2 rote Wächter in workjet-shell-integration.test.mjs (deren Kampagne, nicht unsere).
+  Regel: KEINE eigenen APP_BUILD-Bumps mehr; Straggler v330 wurde auf unified-v325 angeglichen.
 - **PARALLELE SITZUNG IM BAUM (seit ~14:42):** jemand editiert live modules/calendar
   (calendar-view-adapter.js, index.js) und modules/importer (index.css/html/js, Kopfband-
   Umbau). Diese Dateien NICHT anfassen, NIE mitcommitten. Ihre Arbeit hat nebenbei die

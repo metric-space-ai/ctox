@@ -81,3 +81,49 @@ test('targets and rendered elements use the same canonical category refs', () =>
   assert.equal(properties['--shell-category-accent'], 'var(--workjet-category-security-accent)');
   assert.equal(properties['--shell-category-border'], 'var(--workjet-category-security-accent-border)');
 });
+
+// APPSTORE-V2 P6 Teil 2: Die Rubrik ist unabhaengig von der Herkunft. Vorher
+// entschied PUBLIC_DISTRIBUTIONS ueber die Rubrik — weil dieses Set weder
+// 'catalog-module' noch 'ctox-runtime-installed-module' kannte, verloren ALLE
+// Katalog-Apps und jede installierte App im Startmenue ihre deklarierte
+// Rubrik und landeten unter 'imported', waehrend der Store die echte zeigte.
+test('the rubric follows the declared category, not the app origin', () => {
+  // Katalog-App: origin official, Distribution steht NICHT in der alten
+  // Public-Liste — trotzdem behaelt sie ihre Rubrik.
+  assert.equal(workjetCategoryForModule({
+    id: 'buchhaltung',
+    origin: 'official',
+    category: 'finance',
+    store: { distribution: 'catalog-module' },
+  }), 'finance');
+
+  // Laufzeit-installierte App, ebenfalls ausserhalb der alten Public-Liste.
+  assert.equal(workjetCategoryForModule({
+    id: 'kundenpipeline',
+    origin: 'official',
+    category: 'operations',
+    store: { distribution: 'ctox-runtime-installed-module' },
+  }), 'operations');
+
+  // Eigene App des Nutzers: behaelt ihre Rubrik, wenn sie eine kanonische hat.
+  assert.equal(workjetCategoryForModule({
+    id: 'meine-app',
+    origin: 'user',
+    category: 'sales',
+  }), 'sales');
+
+  // Nur eine Nutzer-App OHNE kanonische Rubrik faellt auf 'imported'.
+  assert.equal(workjetCategoryForModule({
+    id: 'meine-app',
+    origin: 'user',
+    category: 'voellig-erfunden',
+  }), 'imported');
+
+  // Rueckwaertskompatibilitaet: Projektionen alter Daemons ohne origin-Feld
+  // laufen weiter ueber die alte Heuristik (Alt-Binary + neue Shell).
+  assert.equal(workjetCategoryForModule({
+    id: 'legacy',
+    category: 'finance',
+    store: { distribution: 'catalog-module' },
+  }), 'imported');
+});

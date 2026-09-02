@@ -29,7 +29,7 @@
     "right": "Nachrichtenkontext, Routing-Evidenz und Kampagnensteuerung",
     "third_pane_justification": "Der Nachrichten- oder Kampagnenkontext bleibt beim Scannen der Mail-Liste sichtbar; in schmalen Fenstern stapelt die App die Bereiche."
   },
-  "category": "Collaboration",
+  "category": "collaboration",
   "version": "1.0.0",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",

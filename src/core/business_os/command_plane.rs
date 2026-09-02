@@ -262,11 +262,12 @@ fn with_business_command_replay_receipt(
     Ok(response)
 }
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 60] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 61] = [
     "ctox.app.access.grant",
     "ctox.app.access.revoke",
     "ctox.app.action.run",
     "ctox.app_store.install",
+    "ctox.app_store.repair",
     "ctox.app_store.uninstall",
     "ctox.business_os.audit.list",
     "ctox.business_os.audit.retention",
@@ -1012,6 +1013,7 @@ fn dispatch_business_command(
         | "ctox.app.access.grant"
         | "ctox.app.access.revoke"
         | "ctox.app_store.install"
+        | "ctox.app_store.repair"
         | "ctox.app_store.uninstall" => handle_app_lifecycle_command(root, command_id, command)
             .map(BusinessCommandDispatchOutcome::Returned),
         "web_stack.person_research" => super::person_research_command::start(root, command.clone())

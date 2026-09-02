@@ -18,7 +18,7 @@
     "left": "Subjekt- und Statusfilter",
     "center": "Nachweise mit Ablauf und Verifikationsstatus"
   },
-  "category": "Operations",
+  "category": "operations",
   "version": "0.2.1",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",

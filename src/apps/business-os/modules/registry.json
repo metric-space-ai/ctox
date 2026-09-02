@@ -19,7 +19,7 @@
         "center": "desktop surface",
         "right": "agent context"
       },
-      "category": "Workspace",
+      "category": "workspace",
       "version": "1.0.1",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -66,7 +66,7 @@
         "min_width": 640,
         "min_height": 480
       },
-      "category": "Development",
+      "category": "development",
       "version": "1.1.1",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -138,7 +138,7 @@
         "min_width": 640,
         "min_height": 480
       },
-      "category": "Security",
+      "category": "security",
       "version": "0.2.0",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -216,7 +216,7 @@
         "top": "browser tabs and address bar",
         "center": "web page"
       },
-      "category": "Workspace",
+      "category": "workspace",
       "version": "0.2.6",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -285,7 +285,7 @@
         "right": "Zugeordnete Belege, AI-Vorschläge & Begleitaktionen",
         "third_pane_justification": "Belegvorschau, Kontierungshilfen und zugehörige Aktionen müssen bei breiten Finanzarbeitsplätzen neben Journal und Konten sichtbar bleiben; in kompakten Fenstern verschiebt die Shell sie in den gemeinsamen Drawer."
       },
-      "category": "Finance",
+      "category": "finance",
       "version": "1.0.2",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -356,7 +356,7 @@
         "right": "Bookings and holds context for the selected booking page",
         "third_pane_justification": "The bookings and holds auditing context belongs to a selected booking page and must stay beside the calendar grid in wide mode; it is hidden by default, auto-reveals on selection, and stacks below the grid in compact mode."
       },
-      "category": "Productivity",
+      "category": "productivity",
       "version": "1.0.2",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -421,7 +421,7 @@
         "right": "Live task artifact: free HTML the agent maintains about its run",
         "third_pane_justification": "The agent's self-published progress artifact must stay visible while chatting — hiding it would blind the user to the running task."
       },
-      "category": "Development",
+      "category": "development",
       "version": "0.2.6",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -481,7 +481,7 @@
         "left": "Filter",
         "center": "Einwilligungen"
       },
-      "category": "Operations",
+      "category": "operations",
       "version": "0.2.2",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -549,7 +549,7 @@
         "right": "Contact card, related business records, and CTOX agent attribution",
         "third_pane_justification": "The contact and linked-record inspector must stay visible beside long communication timelines in wide mode; compact mode moves it into the shared drawer."
       },
-      "category": "Collaboration",
+      "category": "collaboration",
       "version": "1.0.2",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -614,7 +614,7 @@
         "min_width": 640,
         "min_height": 480
       },
-      "category": "Development",
+      "category": "development",
       "version": "1.0.0",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -675,7 +675,7 @@
         "center": "Set, rotate and remove credentials",
         "right": "Security notes"
       },
-      "category": "Security",
+      "category": "security",
       "version": "0.1.2",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -753,7 +753,7 @@
         "min_width": 640,
         "min_height": 480
       },
-      "category": "System",
+      "category": "system",
       "version": "1.1.1",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -825,7 +825,7 @@
         "left": "Customer segments, saved views and review inbox",
         "center": "Customer account list, opportunity pipeline and task workbench"
       },
-      "category": "Sales",
+      "category": "sales",
       "version": "1.0.1",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -892,7 +892,7 @@
         "left": "Kandidatenliste und CV-Import",
         "center": "Original-PDF, Split-Ansicht und Druckansicht"
       },
-      "category": "Recruiting",
+      "category": "recruiting",
       "version": "0.1.2",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -964,7 +964,7 @@
           "bottom": "diagnostics, export evidence, and selected document context"
         }
       },
-      "category": "Knowledge",
+      "category": "knowledge",
       "version": "1.0.0",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -1024,7 +1024,7 @@
         "left": "Filter",
         "center": "E-Signatur"
       },
-      "category": "Operations",
+      "category": "operations",
       "version": "0.2.1",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -1090,7 +1090,7 @@
         "min_width": 640,
         "min_height": 480
       },
-      "category": "Workspace",
+      "category": "workspace",
       "version": "1.0.0",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -1153,7 +1153,7 @@
         "min_width": 520,
         "min_height": 400
       },
-      "category": "Workspace",
+      "category": "workspace",
       "version": "1.0.0",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -1200,7 +1200,7 @@
     {
       "id": "importer",
       "title": "App Importer",
-      "description": "Bring a coding-agent app into CTOX: pick a folder or a GitHub repo, transcode React/TypeScript to plain ESM, review the report, and install it as a versioned Business OS app.",
+      "description": "Start a durable CTOX harness job that snapshots a public GitHub repository or local project folder and ports its workflows into a validated Shell-V2 Business OS app.",
       "entry": "modules/importer/index.html",
       "collections": [],
       "layout": {
@@ -1209,22 +1209,22 @@
         "shell_geometry_contract": "business-os-v2-global-1",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-importer\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-importer\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0ea5e9\" /><stop offset=\"100%\" stop-color=\"#6366f1\" /></linearGradient></defs><rect x=\"3\" y=\"9\" width=\"18\" height=\"12\" rx=\"2.5\" fill=\"url(#grad-importer)\" fill-opacity=\"0.12\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></rect><path d=\"M12 3v9\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M8.5 8.5 12 12l3.5-3.5\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path></svg>",
         "left": "Source: folder or GitHub",
-        "center": "Transcode report and module details",
-        "right": "Install into local-modules"
+        "center": "Durable porting and validation progress",
+        "right": "Live application evidence"
       },
-      "category": "Development",
-      "version": "0.1.0",
+      "category": "development",
+      "version": "0.2.0",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
       "tags": [
         "import",
         "porting",
-        "react",
-        "typescript",
+        "shell-v2",
+        "harness",
         "coding-agent"
       ],
       "store": {
-        "summary": "The hand-over moment: a coding agent conceived the app, the importer raises it — transcoded to plain ESM, versioned, yours.",
+        "summary": "Turn a public GitHub repository or local source snapshot into a durable, agent-ported and validated Shell-V2 app.",
         "repository": "metric-space-ai/ctox",
         "source_path": "modules/importer",
         "installable": false,
@@ -1273,7 +1273,7 @@
         "left": "Filter",
         "center": "Bewerbungseingang"
       },
-      "category": "Operations",
+      "category": "operations",
       "version": "0.2.1",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -1332,7 +1332,7 @@
         "left": "Filter",
         "center": "Interviews"
       },
-      "category": "Recruiting",
+      "category": "recruiting",
       "version": "0.2.1",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -1414,7 +1414,7 @@
         "right": "Kunden-Inspector, offene Posten, AI-Aktionen (Mahnlauf, Skonto, Gutschrift)",
         "third_pane_justification": "The financial inspector provides approval, open-item and customer context alongside the invoice editor; compact mode moves it into the shared drawer."
       },
-      "category": "Finance",
+      "category": "finance",
       "version": "0.1.2",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -1488,7 +1488,7 @@
         "center": "Dashboards of automation widgets (the three CTOX-programmed parts: trigger logic, widget code, order prompt), Karten ⇄ Liste",
         "right": ""
       },
-      "category": "Operations",
+      "category": "operations",
       "version": "1.0.2",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -1577,7 +1577,7 @@
         "min_width": 360,
         "min_height": 480
       },
-      "category": "Knowledge",
+      "category": "knowledge",
       "version": "1.1.7",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -1650,7 +1650,7 @@
         "min_width": 640,
         "min_height": 480
       },
-      "category": "Operations",
+      "category": "operations",
       "version": "0.1.0",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -1725,7 +1725,7 @@
         "right": "Nachrichtenkontext, Routing-Evidenz und Kampagnensteuerung",
         "third_pane_justification": "Der Nachrichten- oder Kampagnenkontext bleibt beim Scannen der Mail-Liste sichtbar; in schmalen Fenstern stapelt die App die Bereiche."
       },
-      "category": "Collaboration",
+      "category": "collaboration",
       "version": "1.0.0",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -1794,7 +1794,7 @@
         },
         "third_pane_justification": "Matching is an evidence app (IA-Karte): left = requirements, main = ranked match workbench; the third pane is the parsed CV/object evidence for the selected match — hidden by default, auto-reveals on selection."
       },
-      "category": "Operations",
+      "category": "operations",
       "version": "1.0.2",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -1854,7 +1854,7 @@
         "left": "Subjekt- und Statusfilter",
         "center": "Nachweise mit Ablauf und Verifikationsstatus"
       },
-      "category": "Operations",
+      "category": "operations",
       "version": "0.2.1",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -1917,7 +1917,7 @@
         "right": "Command dashboard and formatting shortcuts",
         "third_pane_justification": "Editor-type app (IA-Karte): left = books/tags nav + note list, main = rich-text editor; the third pane is the justified reference/metadata surface of the editor layout."
       },
-      "category": "Productivity",
+      "category": "productivity",
       "version": "1.0.2",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -1993,7 +1993,7 @@
         "left": "campaign and sequence selection",
         "center": "campaign, sequence, qualification, and sending workbench"
       },
-      "category": "Sales",
+      "category": "sales",
       "version": "0.2.3",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -2054,7 +2054,7 @@
         "left": "Filter",
         "center": "Vermittlungen"
       },
-      "category": "Recruiting",
+      "category": "recruiting",
       "version": "0.2.1",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -2124,7 +2124,7 @@
         "min_width": 640,
         "min_height": 480
       },
-      "category": "Governance",
+      "category": "governance",
       "version": "1.1.2",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -2198,7 +2198,7 @@
           "bottom": "Knowledge table diagnostics and raw row evidence"
         }
       },
-      "category": "Research",
+      "category": "research",
       "version": "1.0.14",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -2268,7 +2268,7 @@
           "bottom": "Schnelleingabe & Massenaktionen"
         }
       },
-      "category": "Operations",
+      "category": "operations",
       "version": "1.0.2",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -2339,7 +2339,7 @@
           "bottom": "diagnostics, export evidence, and selected spreadsheet context"
         }
       },
-      "category": "Analytics",
+      "category": "analytics",
       "version": "1.0.1",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -2399,7 +2399,7 @@
         "left": "Filter",
         "center": "Vorstellungen"
       },
-      "category": "Recruiting",
+      "category": "recruiting",
       "version": "0.2.1",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -2488,7 +2488,7 @@
         "right": "Customer context, ticket links, SLA, macros, and CTOX Agent suggestions",
         "third_pane_justification": "Support operators need customer identity, linked tickets, SLA state, and CTOX suggestions visible while reading and replying; moving this context into drawers would force repeated context switches during every conversation."
       },
-      "category": "Operations",
+      "category": "operations",
       "version": "0.1.2",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -2562,7 +2562,7 @@
         "min_width": 640,
         "min_height": 480
       },
-      "category": "System",
+      "category": "system",
       "version": "0.2.4",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
@@ -2639,7 +2639,7 @@
         "min_width": 640,
         "min_height": 480
       },
-      "category": "Operations",
+      "category": "operations",
       "version": "1.0.2",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",

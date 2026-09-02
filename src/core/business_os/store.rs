@@ -40,7 +40,7 @@ use super::module_lifecycle::{
 };
 pub use super::module_lifecycle::{
     delete_installed_module_command, install_app_module, install_template_module_command,
-    list_module_versions, record_module_release, rollback_module_release,
+    list_module_versions, record_module_release, repair_app_module, rollback_module_release,
     rollback_module_source_snapshot, rollback_module_to_version,
 };
 pub(super) use super::module_manifest_loader::{
@@ -706,8 +706,8 @@ pub struct AppStoreInstallRequest {
     pub download_url: String,
     #[serde(default)]
     pub source_path: String,
-    /// Source kind: "" / "url" (legacy `download_url`), "github". (zip uploads
-    /// install through the chunk store, not this request.)
+    /// Source kind: "" / "url" (legacy `download_url`), "github", "zip", or
+    /// "local-catalog" for an offline curated source-tree install.
     #[serde(default)]
     pub source_kind: String,
     /// GitHub "owner/name" when `source_kind = "github"`.
@@ -727,6 +727,11 @@ pub struct AppStoreInstallRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppStoreUninstallRequest {
+    pub module_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AppStoreRepairRequest {
     pub module_id: String,
 }
 
@@ -1051,6 +1056,8 @@ pub(super) struct ModuleManifest {
     creator_user_id: String,
     #[serde(default)]
     pub(super) source: String,
+    #[serde(default)]
+    pub(super) origin: String,
     #[serde(default)]
     pub(super) core: bool,
     #[serde(default)]
@@ -4518,6 +4525,7 @@ pub(super) fn load_marketplace_module_manifests(
             .unwrap_or_else(|| format!("https://github.com/{repo}/archive/refs/heads/main.zip"));
         manifest_value["module_id"] = Value::String(module_id);
         manifest_value["source"] = Value::String("ctox-local-catalog".to_owned());
+        manifest_value["origin"] = Value::String("official".to_owned());
         manifest_value["repo"] = Value::String(repo.to_owned());
         manifest_value["source_path"] = Value::String(source_path);
         manifest_value["download_url"] = Value::String(download_url);
@@ -5675,8 +5683,12 @@ pub fn uninstall_app_module(
         anyhow::bail!("Core modules cannot be uninstalled");
     }
 
-    let dest_dir = app_root.join("installed-modules").join(&module_id);
-    if !dest_dir.is_dir() {
+    // Both user-app roots are removable: installed-modules/ (pipeline install)
+    // and local-modules/ (operator/developer mode).
+    let installed_anywhere = ["installed-modules", "local-modules"]
+        .into_iter()
+        .any(|dir| app_root.join(dir).join(&module_id).is_dir());
+    if !installed_anywhere {
         anyhow::bail!("Module '{}' is not installed", module_id);
     }
 
@@ -12923,6 +12935,36 @@ pub(super) fn handle_app_lifecycle_command(
                 |session| {
                     let installed_app_root = resolve_business_os_installed_app_root(root);
                     let outcome = install_app_module(root, &installed_app_root, &session, request)?;
+                    return write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "completed",
+                        None,
+                        Some("completed"),
+                        outcome,
+                    );
+                },
+            )?
+            .into_outcome();
+        }
+        "ctox.app_store.repair" => {
+            let request: AppStoreRepairRequest = serde_json::from_value(command.payload.clone())
+                .context("invalid ctox.app_store.repair payload")?;
+            let module_id_for_policy = request.module_id.clone();
+            return enforce_command_policy(
+                root,
+                &command,
+                |_| {
+                    let module_id = source_sanitize_slug(&module_id_for_policy);
+                    anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+                    Ok(CommandPolicyRequirement::scoped(
+                        BusinessOsPermission::AppsInstall,
+                        BusinessOsScope::module(module_id, false),
+                    ))
+                },
+                |session| {
+                    let installed_app_root = resolve_business_os_installed_app_root(root);
+                    let outcome = repair_app_module(root, &installed_app_root, &session, request)?;
                     return write_rxdb_control_command_outcome(
                         root,
                         &command,
@@ -25492,7 +25534,12 @@ pub(super) mod tests {
                 serde_json::to_vec_pretty(&serde_json::json!({
                     "id": module_id,
                     "title": "Inventory",
-                    "entry": "index.js"
+                    "entry": "index.js",
+                    // APPSTORE-V2 P4: unverifizierte Nutzer-Apps laufen jetzt
+                    // durch die VOLLE Katalogvalidierung statt vorher am
+                    // Trust-Gate zu sterben — die Fixture muss deshalb eine
+                    // gueltige App sein, nicht nur ein Zip mit Manifest.
+                    "version": "0.1.0"
                 }))?
                 .as_slice(),
             )?;
@@ -27698,13 +27745,20 @@ pub(super) mod tests {
             )?
             .allowed
         );
+        // APPSTORE-V2 P4: a module-scoped grant is the routine per-app
+        // delegation. It must never be enough to run unverified foreign code
+        // in the Business OS origin — that needs instance-wide authority.
         let granted_error =
             install_app_module(root, &installed_app_root, &granted_session, request.clone())
-                .expect_err("the explicit install grant must reach the later trust gate");
+                .expect_err("a module-scoped grant must not authorize an untrusted install");
         assert_eq!(
             granted_error.to_string(),
-            "untrusted third-party apps cannot run same-origin; install a CTOX first-party source or wait for the sandbox runtime"
+            "installing an unverified app requires instance-wide apps.install authority (chef or admin); a module-scoped grant is not sufficient"
         );
+        assert!(!installed_app_root
+            .join("installed-modules")
+            .join("inventory")
+            .exists());
 
         assert!(
             !module_policy_decision(
@@ -27782,8 +27836,20 @@ pub(super) mod tests {
         Ok(())
     }
 
+    /// APPSTORE-V2 P4: Ein Zip-Upload ist eine Nutzer-App. Vor P4 starb er
+    /// deterministisch am Trust-Gate ("untrusted third-party apps cannot run
+    /// same-origin") und konnte NIE installiert werden — waehrend der Browser-
+    /// Importer daneben ungeprueft Code nach local-modules/ schrieb. Jetzt
+    /// traegt instanzweite Autoritaet den Upload durch dieselbe Pipeline wie
+    /// jede andere App.
+    ///
+    /// Der Test belegt den Durchgang durch das Gate, nicht den kompletten
+    /// Install: die Katalogvalidierung ruft einen externen Node-Validator, den
+    /// es in einer Tempdir-Instanz nicht gibt. Genau dieses spaetere Scheitern
+    /// IST der Beweis — der Aufruf kommt am Berechtigungs- und Trust-Gate
+    /// vorbei und erreicht die Validierung.
     #[test]
-    fn app_store_zip_upload_is_rejected_by_same_origin_trust_gate() -> anyhow::Result<()> {
+    fn app_store_zip_upload_reaches_validation_for_instance_admins() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -27798,16 +27864,43 @@ pub(super) mod tests {
             &test_session("ops-admin", "admin"),
             request,
         )
-        .expect_err("a zip upload must be rejected by the same-origin trust gate");
+        .expect_err("the tempdir instance has no app validator");
+        let message = error.to_string();
         assert_eq!(
-            error.to_string(),
-            "untrusted third-party apps cannot run same-origin; install a CTOX first-party source or wait for the sandbox runtime"
+            message, "Business OS app validator is unavailable",
+            "an instance admin must pass the trust gate and reach catalog validation"
         );
-        assert!(!installed_app_root
-            .join("installed-modules")
-            .join("inventory")
-            .exists());
+        assert!(
+            !message.contains("untrusted third-party"),
+            "the blanket same-origin block must be gone"
+        );
         Ok(())
+    }
+
+    /// Ein Paket darf seine eigene Herkunft nicht behaupten: der Stempel wird
+    /// serverseitig aus der aufgeloesten Quelle geschrieben. Sonst erklaerte
+    /// sich ein Upload selbst zur verifizierten First-Party-App und bekaeme
+    /// `origin: official`.
+    #[test]
+    fn staged_manifests_cannot_declare_their_own_provenance() {
+        let mut manifest = serde_json::json!({
+            "id": "inventory",
+            "version": "0.1.0",
+            "app_source": { "kind": "local-catalog", "verified": true },
+            "origin": "official",
+            "trust_model": "ctox-first-party-source",
+            "verified": true,
+        });
+        crate::business_os::module_lifecycle::strip_forged_provenance_keys(&mut manifest);
+        for forged in ["app_source", "origin", "trust_model", "verified"] {
+            assert!(
+                manifest.get(forged).is_none(),
+                "`{forged}` must never survive from the payload into the stamped manifest"
+            );
+        }
+        // Alles andere bleibt unangetastet.
+        assert_eq!(manifest["id"].as_str(), Some("inventory"));
+        assert_eq!(manifest["version"].as_str(), Some("0.1.0"));
     }
 
     /// SG4/C-1. Writing file chunks used to need only authentication, while
@@ -32045,12 +32138,17 @@ pub(super) mod tests {
             )?
             .allowed
         );
+        // APPSTORE-V2 P4: Instanzweite Autoritaet traegt einen unverifizierten
+        // Install durch das Gate in die Pipeline; er wird gestempelt, nicht
+        // blockiert. Die Tempdir-Instanz hat keinen Node-Validator, deshalb ist
+        // dessen Fehlen hier der Beweis fuer den Durchgang.
         let admin_error =
             install_app_module(root, &installed_app_root, &admin_session, request.clone())
-                .expect_err("the admin install path must reach the later trust gate");
+                .expect_err("the tempdir instance has no app validator");
         assert_eq!(
             admin_error.to_string(),
-            "untrusted third-party apps cannot run same-origin; install a CTOX first-party source or wait for the sandbox runtime"
+            "Business OS app validator is unavailable",
+            "an admin must pass the trust gate and reach catalog validation"
         );
 
         assert!(

@@ -32,7 +32,7 @@
     "min_width": 640,
     "min_height": 480
   },
-  "category": "System",
+  "category": "system",
   "version": "1.1.1",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",

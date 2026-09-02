@@ -48,7 +48,7 @@
     "top": "browser tabs and address bar",
     "center": "web page"
   },
-  "category": "Workspace",
+  "category": "workspace",
   "version": "0.2.6",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",

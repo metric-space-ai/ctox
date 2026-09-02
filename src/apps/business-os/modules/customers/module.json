@@ -30,7 +30,7 @@
     "left": "Customer segments, saved views and review inbox",
     "center": "Customer account list, opportunity pipeline and task workbench"
   },
-  "category": "Sales",
+  "category": "sales",
   "version": "1.0.1",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",
