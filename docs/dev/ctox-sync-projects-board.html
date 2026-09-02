@@ -78,7 +78,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <span>Stand <b>2026-09-02 09:45 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 2/3 (2a, F3b) · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 1/3 (F3b) · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -378,7 +378,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <div class="pills"><span class="pill acc">PKG-2a produktion</span><span class="pill neutral">sol</span></div>
     <h3>RFC Paket 2, Scheibe 1: transfer.start / abort / status, Zustandstabelle, Idempotenz, Fehlercodes</h3>
     <p>Gestartet 08:49 im Klon <code>~/.local/state/workjet-launchpads/ctox-pkg2</code>, Branch <code>codex/workjet-session-transfer-2a</code> auf main f699995ce. Brief <code>ctox-pkg2-launch/briefs/pkg2a-transfer-start-abort.md</code> mit harter Zeitregel: Commit nach jeder grünen Scheibe (Schritte 2, 4, 6), bei Zeitnot <code>status: partial</code> mit Restliste. Keine pause/pack/apply/confirm/resume-Verben (2b). Run <code>local-…T004854Z-1a01776d</code>.</p>
-    <p>Fertig = <code>cargo test --bin ctox workjet_session_transfer</code> grün, 27 Alt-Tests grün, Inventory-Dispatcher-Test grün, Commits je Scheibe.</p>
+    <p><b>KORREKTUR 04:19:</b> Sol lief zum zweiten Mal in das 5400-s-Turn-Limit (Run <code>failed</code>). Diesmal landete eine Scheibe: <code>584191010</code> Zustandstabelle. Den Rest (start/abort/status-Handler, +1000 Zeilen in <code>store_workjet_sessions.rs</code>, <code>command_plane.rs</code>, Inventory-JSON) habe ich als WIP <code>416d531ff</code> gesichert, <b>unverifiziert</b>. Gate läuft jetzt bei mir (Log <code>scratchpad/pkg2a-wip-gate.log</code>). Danach: grün → rustfmt, Rebase, PR; rot → kurzer Restbrief ≤ 45 min nur für die Fehler.</p><p>Fertig = <code>cargo test --bin ctox workjet_session_transfer</code> grün, 27 Alt-Tests grün, Inventory-Dispatcher-Test grün, Commits je Scheibe.</p>
   </div>
 
   <div class="card">
