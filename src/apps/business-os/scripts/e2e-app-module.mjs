@@ -289,18 +289,28 @@ async function pollUntil(fn, timeoutMs, intervalMs = 500) {
 async function openModule(page, moduleId, url, timeoutMs) {
   const rootSelector = `[data-module-root="${moduleId}"]`;
   await page.goto(withoutModuleHash(url), { waitUntil: 'domcontentloaded', timeout: timeoutMs });
-  await page.waitForFunction((id) => {
-    const app = window.CTOX_BUSINESS_OS_APP;
-    return typeof app?.openModule === 'function'
-      && Boolean(app.modules?.find?.((module) => module.id === id));
-  }, moduleId, { timeout: timeoutMs, polling: 250 });
-  await page.evaluate(async (id) => {
-    const app = window.CTOX_BUSINESS_OS_APP;
-    const target = new URL(location.href);
-    target.hash = id;
-    history.replaceState(history.state, '', target.href);
-    await app.openModule(id, { force: true });
-  }, moduleId);
+  const deadline = Date.now() + timeoutMs;
+  let opened = false;
+  while (!opened && Date.now() <= deadline) {
+    try {
+      opened = await page.evaluate(async (id) => {
+        const app = window.CTOX_BUSINESS_OS_APP;
+        if (typeof app?.openModule !== 'function'
+          || !app.modules?.find?.((module) => module.id === id)) {
+          return false;
+        }
+        const target = new URL(location.href);
+        target.hash = id;
+        history.replaceState(history.state, '', target.href);
+        await app.openModule(id, { force: true });
+        return true;
+      }, moduleId);
+    } catch (error) {
+      if (!/execution context was destroyed|cannot find context/i.test(String(error?.message || error))) throw error;
+    }
+    if (!opened) await page.waitForTimeout(250);
+  }
+  if (!opened) throw new Error(`Business OS shell did not expose module ${moduleId} before timeout`);
   await page.waitForFunction((selector) => {
     const root = document.querySelector(selector);
     return root?.dataset.moduleReady === 'true';
