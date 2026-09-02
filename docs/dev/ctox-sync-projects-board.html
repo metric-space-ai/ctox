@@ -606,6 +606,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
   <h2>Umgebungsfallen</h2>
   <div class="grid2">
     <div class="panel"><h3>Checkouts</h3><ul>
+    <li><b>E12 Platte:</b> Systemplatte chronisch knapp (07:36: 6,3 GiB frei, /Volumes/tmp 98 %). Profilkopien nach jedem Beweislauf löschen, gemergte idle Klone entfernen (<code>pgrep -f &lt;Pfad&gt;</code> = 0 vorher), Cargo-Target (16 GB) zwischen Paketen prüfen. Owner-Hinweis 07:36.</li>
     <li><b>E11 Symlink-Server-dist liefert fremden Renderer:</b> <code>apps/server/dist/bin.mjs</code> löst den Client über <code>../../web/dist</code> relativ zu seinem ECHTEN Pfad auf. Ein per Symlink aus einem anderen Klon geliehenes Server-dist serviert dessen Web-Build — ein Beweislauf testet dann den falschen Code (T4b-Lauf 3, 05:39). Server-dist immer im selben Klon packen; im Brief den Asset-Hash des geladenen Renderers gegen <code>apps/web/dist/assets</code> belegen lassen.</li>
       <li><code>~/Documents/ctox</code>: 125 fremde Einträge, <code>main</code> ahead 3 / behind 17. Nie pauschal resetten.</li>
       <li><code>~/Documents/ctox-dev</code>: 2597 Einträge auf <code>fix/fleet-guest-config-timeout</code>; 30 Worktrees, 11 prunable. Rollouts nur aus <code>~/.codex/worktrees/ctox-dev-owner-identity</code>.</li>
@@ -677,7 +678,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <tr><td>Desktop-E2E</td><td class="mono">Registry-Key workjet:project-registry:v1:managed%3A322084e5-… · Screenshot /var/folders/hf/…/CUAService/Workjet Screenshot 2026-09-01 at 10.04.42 PM.jpeg</td></tr>
     <tr><td>T4b-Beweisläufe</td><td class="mono">~/.local/state/workjet-launchpads/workjet-t4b-launch/evidence-run2/ (failed) · evidence-run3/ (ungültig) · evidence-run4/ (failed, Ursache) · evidence-run5/ (PASSED: report.md, run1-thread-details.json, run2-thread-details.json)</td></tr>
     <tr><td>PKG-3 Discovery-Berichte</td><td class="mono">~/.local/state/workjet-launchpads/ctox-pkg3-launch/reports/A-grok.md · B-kimi.md · C-glm.md · briefs/pkg3a-fence-in-pi-turn.md · briefs/pkg3b1a-session-control-shell.md</td></tr>
-    <tr><td>Klone (je Worker einer)</td><td class="mono">ctox-pkg2 (2a) · ctox-pkg2b (2b) · ctox-pkg3 (3a) · ctox-pkg3b (3b-1a) · workjet-f3 (F3b, T4b-2/3) · workjet-f3c (F3c/F3d, T4b-4/5; echtes Server-Pack)</td></tr>
+    <tr><td>Klone (je Worker einer)</td><td class="mono">aktiv: ctox-pkg3 (3a) · ctox-pkg3b (3b-1a/2a → 4a) · ctox-pkg2b (2b, Referenz) · workjet-f3 (Electron-Runtime 792 MB; f3c symlinkt) · workjet-f3c (F3c/F3d, 3b-1b/1c/2b) — entfernt 07:38 (gemergt, idle): ctox-pkg1/pkg2/wp1-e2e/wp2-baseline/transfer-rfc, workjet-f1/f2/t2t3, Profilkopien t4/t4b*/f2c-verify* (4 GB frei; Original e2e.DBuZgk unangetastet)</td></tr>
     <tr><td>Workjet-UI-Gate</td><td class="mono">~/Documents/workjet/runtime/workjet-ui-testing/e4312d899983862b3cad4aea45b9d19d27dedc8f/2026-09-01T05-33-19-671Z-3c3554/</td></tr>
     <tr><td>Grok-Smoke, Workjet-Probe, Extrakte</td><td class="mono">Scratchpad 6f580cc6-…: health.json · webstack.txt · users.txt · assistant.txt</td></tr>
   </table></div>
