@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 09:25 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 09:35 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -410,7 +410,10 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 
 | R4 Härtung (Sol): K2 Pfad-Sanitisierung + Strip `--runtime-root/--db`, H1 IPC pro Verbindung im Thread + Timeout-Klemme 600 s + M1 Größenlimits, H2 verifizierte Identität IMMER für ReplicatedPeer (`claimed_actor` für Audit) + Owner-Flag/Env nur bei Übereinstimmung/TrustedLocal, M4/M5 Kontakt-IDs + Zwei-Signal-Merge, M6.3 Timestamp-Klemme, N1 Logs | Sol, Brief `briefs/R4-hardening.md`, Basis Launchpad-Branch `integrated` 5366f5a | 7 Tests grün im Vollklon, dann Push main + B1 |
 
-Sol-Kontingent: 2/3 belegt (R7a, R7b). B3 abgeschlossen — Owner-Tests möglich (nach erneutem Login).
+| R8 Identitätskette (Sol): Harness-Werkzeug `ctox_web_auth_assist_request` übergibt die durable Bindung des Turns (Command-Session-Token bzw. Owner/Chat-ID aus der Thread-Konfiguration), nie den Modelltext; daemon-seitige Auflösung über Session-Token, Chat-Besitzer, `native_authorization.actor`; kein stummer `ctox_harness`-Fallback; Spiegel bekommt actor | Sol, Brief `briefs/R8-auth-identity-chain.md`, run local-2026-09-02T065826Z-af20d602 | Auth-Sitzung aus einer Owner-Nachrecherche gehört dem Owner; ohne Bindung Fehler statt Harness-Sitzung |
+| R7b (Service: Witness/Budget/Rework) geliefert (8383d0d), auf origin/main-Basis angewendet (66cec9266, Branch `thesen-r7`); Gate läuft. R7a (Kern) läuft noch bei Sol. | Sol | R7a+R7b zusammen gepusht, Build B4 |
+
+Sol-Kontingent: 2/3 belegt (R7a, R8). B3 abgeschlossen, Owner angemeldet.
 
 ## To-Do (Trigger-Kette)
 
