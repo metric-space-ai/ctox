@@ -75,10 +75,10 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
   <div class="headline"><strong>Kritischer Pfad:</strong> Stufe 1–3 des Zielbilds sind im Code und per Electron-Kaltstart belegt: virtuelles Projekt in CTOX Sync, Working Copy auf diesem Rechner, Rechner automatisch gewählt, Session startbar (Workjet main 664ced80c). Jetzt läuft Stufe 4, die Übergabe: RFC (CTOX #44) → Paket 1 gemergt (#45) → Paket 2a auf Sol (start/abort/status) → 2b → Coding-Fence → Git-Pfad → Zwei-Rechner-Test. Parallel als nächster Beweis: eine echte Session aus der App starten (T4b). Baseline-rot bleiben Sidebar-Layout-Test (Workjet) und Explorer-Guard/Inventory-Test (CTOX), beide Fremd-Anteile.</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-02 09:25 CEST</b></span>
+    <span>Stand <b>2026-09-02 09:32 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 2/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 2/3 (2a, T4b) · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -356,9 +356,16 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 
 <!-- WORKING -->
 <div class="col">
-  <h2>Working <small>3 Karten</small></h2>
+  <h2>Working <small>4 Karten</small></h2>
 
 
+
+  <div class="card">
+    <div class="pills"><span class="pill acc">T4b beweis</span><span class="pill neutral">sol</span></div>
+    <h3>Echte Session aus der App: Prompt an lokalen Harness, Antwort im Thread, persistent</h3>
+    <p>Gestartet 09:08 gegen den bestehenden Build im Klon <code>workjet-f3</code> @ fef2f59f3 (= main). Brief <code>workjet-t4b-launch/briefs/t4b-session-proof.md</code>: Profilkopie <code>/tmp/workjet-profile-t4b</code>, CDP :9223, Projekt <code>workjet-t4-project</code>, „New thread“, Harness bevorzugt Codex CLI, Prompt „Antworte ausschließlich mit dem Wort OK.“, bis 180 s auf Antwort warten, Neustart, Thread persistent; Schutzregeln wie T4 plus Nachweis, welche Harness-Prozesse gestartet und beendet wurden. Run <code>local-…T010829Z-ecf7c34f</code>.</p>
+    <p>Fertig = Evidence unter <code>workjet-t4b-launch/evidence/</code>; ein negatives Ergebnis ist gültig.</p>
+  </div>
 
   <div class="card">
     <div class="pills"><span class="pill acc">PKG-2a produktion</span><span class="pill neutral">sol</span></div>
