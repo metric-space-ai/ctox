@@ -78,7 +78,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <span>Stand <b>2026-09-02 09:45 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 2/3 (4a, 3b-3) · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 1/3 (3b-3) · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -406,7 +406,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <div class="pills"><span class="pill acc">PKG-4a produktion</span><span class="pill neutral">sol</span></div>
     <h3>Git-Artefaktpfad als reine Rust-Bibliothek + CLI: Pack (Bundle, Patch, Untracked-Tar, Manifest, Hashes) und Apply (frischer Temp-Ordner, Hash-Nachweis, atomares Rename)</h3>
     <p>Gestartet 07:34 im Klon <code>ctox-pkg3b</code> (frei seit 3b-2a), Branch <code>codex/workjet-transfer-git-pack</code> auf CTOX main 8448ad77f. Brief <code>ctox-pkg3-launch/briefs/pkg4a-git-pack-apply.md</code>: Modul <code>workjet_transfer_git.rs</code> ohne Store/Netz, Manifest-Block identisch zum <code>git</code>-Objekt aus pack_complete (2b-1), Fehlercodes <code>target_working_copy_dirty</code>/<code>apply_hash_mismatch</code>/<code>unsupported_file_type</code>, CLI <code>ctox workjet-transfer pack|apply</code>; RFC-Gate-Test (Temp-Repo dirty+untracked+binär+symlink, Pack/Apply zwischen Tempdirs, Hashgleichheit, nichtleeres Ziel abgelehnt, manipuliertes Artefakt erkannt). Run <code>local-2026-09-02T053123Z-dd4c2f1b-5adf-4…</code>.</p>
-    <p>Fertig = A–D grün, Commits je Schritt; danach 4b (desktop_files-Verknüpfung + Aufruf aus pack_complete/apply_complete, Retention).</p>
+    <p><b>KORREKTUR 09:03:</b> Run <code>failed</code> — viertes 5400-s-Turn-Timeout (Fehlermuster #9), diesmal OHNE einen einzigen Commit: das Modul <code>workjet_transfer_git.rs</code> (1282 Zeilen inkl. Tests, Pack/Apply/Tar/Manifest) + CLI-Arm in <code>main.rs</code> lagen nur im Arbeitsbaum; dazu paketweit formatierte fremde Dateien (<code>context/lcm/*</code>, Fehlermuster #6) — von mir zurückgesetzt. WIP als <code>7b49eb5c8</code> gesichert, <b>unverifiziert</b>; Gate <code>cargo test --bin ctox workjet_transfer_git</code> in der Warteschlange hinter den zwei laufenden Cargo-Läufen (Log <code>scratchpad/pkg4a-gate.log</code>). Lehre systematisch gespeichert: Rust-Scheiben ≤ 30 min/≈300 Zeilen, erster Commit spätestens nach 30 min.</p><p>Fertig = Gate grün → Squash, Rebase, PR; rot → Restbrief nur für die Fehler. Danach 4b (desktop_files-Verknüpfung + Aufruf aus pack_complete/apply_complete, Retention).</p>
   </div>
 
   <div class="card">
@@ -661,10 +661,10 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <tr><td>3</td><td>Gegen veralteten Zustand getestet (toter Renderer, alter Token)</td><td class="num">2</td><td>Nach Core-Neustart: Reconnect + Token neu ausstellen, dann erst messen</td></tr>
     <tr><td>4</td><td>Admin-Merge über rote Baseline-Guards (PR #41)</td><td class="num">1</td><td>WP-2 zuerst; Rot dokumentiert auf Karte, nicht verschwiegen</td></tr>
     <tr><td>5</td><td>Arbeit in fremd-dirty Checkouts, Attribution unklar</td><td class="num">3</td><td>Isolierte Worktrees; textueller Split als Patch</td></tr>
-    <tr><td>6</td><td><code>cargo fmt</code> formatiert fremde Dateien mit</td><td class="num">1</td><td><code>rustfmt</code> je Datei</td></tr>
+    <tr><td>6</td><td><code>cargo fmt</code> formatiert fremde Dateien mit (4a-Worker: context/lcm/*)</td><td class="num">2</td><td><code>rustfmt</code> je Datei</td></tr>
     <tr><td>7</td><td>Polling-Spam statt Stundencheck (Web-Stack-Thread)</td><td class="num">1</td><td>Monitore mit Terminalbedingung, Stundenkadenz</td></tr>
     <tr><td>8</td><td>Computer-Use mit falscher Tastensyntax → externer Fehlversand</td><td class="num">1</td><td>Keine Tastenkombinationen in fremden Apps ohne Trockenlauf</td></tr>
-    <tr><td>9</td><td>Worker-Turn-Timeout (5400 s) beendet Rust-Paket ohne Commit; Brief erlaubte, verlangte aber keine Zwischen-Commits (seit Pflicht-Commits: 2a und 3a verloren nur den letzten Schritt)</td><td class="num">3</td><td>Briefs ≤ 2 h schneiden; Commit je grüner Scheibe verpflichtend; WIP sofort selbst committen</td></tr>
+    <tr><td>9</td><td>Worker-Turn-Timeout (5400 s) beendet Rust-Paket ohne Commit; Brief erlaubte, verlangte aber keine Zwischen-Commits (seit Pflicht-Commits: 2a und 3a verloren nur den letzten Schritt; 4a: eine 1282-Zeilen-Scheibe ohne Commit)</td><td class="num">4</td><td>Briefs ≤ 2 h schneiden; Commit je grüner Scheibe verpflichtend; WIP sofort selbst committen</td></tr>
     <tr><td>10</td><td>Brief ohne Vorbedingung (Server-Pack) → blockierter Beweislauf</td><td class="num">1</td><td>Startsequenz aus dem Referenzlauf vollständig abschreiben (Server, Web, Desktop)</td></tr>
     <tr><td>11</td><td>Gate im Klon gemessen, während ein Worker dort editierte → Compile-Fehler aus fremdem WIP (2b-1-Rebase-Gate)</td><td class="num">1</td><td>Vor jeder Messung: läuft ein Worker in diesem Klon? Dann warten oder in einem zweiten Klon messen</td></tr>
     <tr><td>12</td><td>Zwei Worker in denselben Klon geschickt (3a Rust + 3b-1a JS); der zweite hätte per <code>git checkout -b</code> den Branch des ersten gewechselt</td><td class="num">1</td><td>Je Worker ein Klon (<code>git clone --shared</code> ist billig); Launch-Skript prüft, dass der Zielklon keinen laufenden Run hat</td></tr>
