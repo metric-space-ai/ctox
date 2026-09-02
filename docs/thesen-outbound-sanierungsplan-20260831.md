@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 02:40 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 03:05 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -121,6 +121,22 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   Harness-Scope) und berührt service.rs (+6) und service/business_os.rs (+17) → Rebase vor dem Push,
   Probelauf in separatem Worktree.
 - Compile + 22 gezielte Tests (R1–R4) laufen im Vollklon; danach Push auf origin/main und B1.
+
+### 02.09. 03:0x — R4 getestet, zwei rote Tests selbst behoben, Branch auf main rebased
+
+- R4-Testlauf: 17/19 grün; rot waren `web_stack_auth_owner_resolution_prefers_flag_then_env_then_task` und
+  `web_stack_auth_assist_reuses_active_task_across_request_ids` (beide `left: None`). Ursache: R4 hatte die
+  verifizierte Besitzer-Suche auf `client_context.owner_user_id` verengt — server-eingereihte Auth-Assist-
+  Kommandos tragen den Besitzer in `payload.owner_user_id`/`actor.id`; nicht vertrauenswürdige Aufrufer
+  liefen damit fail-closed ins Leere. Fix a0a1abf49: Reihenfolge `client_context.owner_user_id` → `actor.id`
+  → `user_id` → `payload.owner_user_id`. Danach 9/10 web_stack_auth-Tests grün (rot nur der vorbestehende
+  appsec-Test).
+- Scratch-Volume /Volumes/tmp war zu 100 % voll (Linker scheiterte): 31 GB veraltete Build-Caches entfernt
+  (ctox-codex-owner-identity-target, ctox-leak-check-target, ws-target-main). Noch dort: workjet 89 GB,
+  ctox-rustfix-target 31 GB (alt), DeepSeek 27 GB, state-backups 25 GB.
+- Branch `thesen-rust-batch` auf origin/main a10058bfb rebased (7 Commits, konfliktfrei): 0765cec0e R1,
+  ba0e75c0b R2, a82f1eb61 R3, 643863f5d Pin d54bbdcce, 3a9100ed7 Pin cdf64f856, 814c2bc2b R4, a0a1abf49 Fix.
+  Finaler Gate-Lauf (check + 22 Tests) läuft → dann Push auf origin/main.
 
 ## Working
 
