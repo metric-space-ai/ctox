@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 03:05 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 03:20 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -138,6 +138,16 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   ba0e75c0b R2, a82f1eb61 R3, 643863f5d Pin d54bbdcce, 3a9100ed7 Pin cdf64f856, 814c2bc2b R4, a0a1abf49 Fix.
   Finaler Gate-Lauf (check + 22 Tests) läuft → dann Push auf origin/main.
 
+### 02.09. 03:1x — Gate grün, auf main gepusht, Build B1 gestartet
+
+- Finaler Gate-Lauf auf dem rebasten Branch: `cargo check -p ctox` fehlerfrei, **19/19 Tests grün**
+  (R1 5, R2 4 + R4 3, R3 4 + R4 3). Push: origin/main = **a0a1abf49** (7 Commits, fast-forward auf a10058bfb).
+- workjet: Branch `thesen-person-contract` @ cdf64f856 gepusht; main dort nicht fast-forwardbar → PR
+  geöffnet (Link in Evidenzkarte). Der ctox-Pin zeigt auf den Commit, unabhängig vom Merge.
+- **B1 gestartet** (`claude-upgrade-dev-thesen.ts a0a1abf49`, abgesetzt via setsid/nohup, Log
+  `~/upgrade-dev-<ts>.log` auf thesen, pid in `~/upgrade-dev.pid`). Erwartung 30–40 min; der Neustart
+  beendet alle Browser-/Login-Sitzungen auf thesen. Wächter: `claude-wait-upgrade-thesen.ts`.
+
 ## Working
 
 | Karte | Worker / Log | Fertig heißt |
@@ -150,7 +160,7 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 
 | R4 Härtung (Sol): K2 Pfad-Sanitisierung + Strip `--runtime-root/--db`, H1 IPC pro Verbindung im Thread + Timeout-Klemme 600 s + M1 Größenlimits, H2 verifizierte Identität IMMER für ReplicatedPeer (`claimed_actor` für Audit) + Owner-Flag/Env nur bei Übereinstimmung/TrustedLocal, M4/M5 Kontakt-IDs + Zwei-Signal-Merge, M6.3 Timestamp-Klemme, N1 Logs | Sol, Brief `briefs/R4-hardening.md`, Basis Launchpad-Branch `integrated` 5366f5a | 7 Tests grün im Vollklon, dann Push main + B1 |
 
-Sol-Kontingent: 0/3 belegt.
+Sol-Kontingent: 0/3 belegt. Tenant-Build B1 läuft — KEIN weiterer Deploy, keine Owner-Tests bis Abschluss.
 
 ## To-Do (Trigger-Kette)
 
