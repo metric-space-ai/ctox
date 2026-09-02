@@ -78,7 +78,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <span>Stand <b>2026-09-02 09:45 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 3/3 (3a, 3b-1a, 3b-1b) — nicht starten · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 2/3 (3a, 3b-1b) · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -406,7 +406,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <div class="pills"><span class="pill acc">PKG-3b-1a produktion</span><span class="pill neutral">sol</span></div>
     <h3><code>globalThis.workjetSessionControl</code> in der Business-OS-Shell (session.list/create, transfer.start/status/abort) + Mobile-Bridge <code>session.control</code> (RFC §21)</h3>
     <p>Gestartet 06:41 im eigenen Klon <code>ctox-pkg3b</code> (2b-2-Stand), Branch <code>codex/workjet-session-control-shell</code>. Brief <code>ctox-pkg3-launch/briefs/pkg3b1a-session-control-shell.md</code>: exakt das <code>workjetProjectControl</code>-Muster (Command-Bus, <code>until: 'terminal'</code>, Projektion, kein HTTP), Outcome aus dem terminalen <code>business_commands</code>-Dokument, Test nach Muster <code>workjet-project-control.test.mjs</code>, „guest“ aus den alten Testnamen entfernen. Run <code>local-2026-09-02T044000Z-cae4f839-116e-4…</code>. <b>KORREKTUR 06:39:</b> erster Start lief im 3a-Klon (Branch-Wechsel-Kollision, Fehlermuster #12) — nach 2 min gestoppt, Klon unverändert, Neustart im eigenen Klon.</p>
-    <p>Fertig = A–E des Briefs grün, Commits; dann Rebase auf main, PR. Danach 3b-1b (Workjet-Desktop: IPC <code>requestWorkjetSessionControl</code> + <code>session.create</code> beim Thread-Start aus Sync-Projekt).</p>
+    <p><b>Stand 06:58:</b> Run <code>completed</code>, 2 Commits (<code>8cb418845</code> Shell-Control-Plane, <code>9a010b3eb</code> Mobile-Bridge + Tests; +519/−3): fünf Aktionen über den Command-Bus, Outcome aus dem terminalen <code>business_commands</code>-Dokument (<code>readTerminalCommandOutcome</code>), Sessions bounded projiziert, „guest“ aus den alten Testnamen entfernt. <b>Von mir verifiziert:</b> session-control-Test 3/3, project-control-Test 3/3, <code>node --check</code> beide Dateien, Diff ohne fetch/HTTP/guest. Worker meldet JS-Suite 105/6/2 (6 = fehlendes lokales Playwright, 9 Shared-Fehler sind Baseline außerhalb der Whitelist). <b>Meine Ergänzung</b> <code>normalizeWorkjetTransferOutcome</code> (3. Commit): Transfer-Aktionen liefern <code>{ action, outcome }</code> mit camelCase-Schlüsseln (transferId/errorCode/message/fenceEpoch/session/transfer ≤ 64 KiB) — das ist der Vertrag, den 3b-1b auf Workjet-Seite erwartet.</p><p>Fertig = nach Merge von #48: <code>rebase --onto main</code>, PR, CI, Merge.</p>
   </div>
 
   <div class="card">
