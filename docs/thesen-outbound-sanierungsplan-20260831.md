@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 12:20 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 14:45 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -527,6 +527,22 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   Gate-Filter erweitert auf `person_research` (deckt beide Module).
 - **Gate 5** gestartet 12:14 UTC. Merge-Worktree `thesen-r7-merge` muss nach grünem Gate diese zwei
   Testdateien nachziehen (Commit auf `thesen-r7`, dann `git merge thesen-r7` im Worktree).
+
+### 02.09. 14:40 UTC — Gate 6: 112 grün / 2 rot (1 vorbestehend, 1 Fixture) → Gate 7 auf dem Push-Kandidaten
+
+- Gate 5 scheiterte am Modulpfad des neuen Test-Helfers (`super::` statt `crate::business_os::`); Gate 6
+  (13:53–14:38 UTC, Filter `person_research outcome_witness core_state`): **112 grün, 2 rot**:
+  `outbound_lead_generation_exposes_native_scoped_person_research` (vorbestehend auf origin/main, s. o.) und
+  `recovery_enqueues_missing_gap_task_for_completed_phase_a_command` (Sols Recovery-Test ohne
+  `writeback_contract` → Resolver liefert None → 0 statt 1; Fixture ergänzt). Die fünf R7a/R7b-Kernpfade
+  (Lückenschluss-Task, Zeuge, Writeback, Abbruch, Guard) sind damit erstmals grün.
+- Log-Verunreinigung erkannt: verwaiste Testbinaries abgebrochener Gates (PPID 1) schrieben weiter in dasselbe
+  Log (ererbter FD) → scheinbare mcp_channel-/rxdb_peer-Ausfälle; maßgeblich ist nur die `test result`-Zeile.
+  Drei Waisen beendet (3 h, 1 h 42, 2 h 14 Laufzeit); Merkregel gespeichert.
+- Fixtures committed: `thesen-r7` = 31d7a2ca0. **Push-Kandidat `thesen-r7-merge` = 12b08eae1** (= 31d7a2ca0 +
+  Merge origin/main c3e99712f, konfliktfrei + R5d b0945e8c8). `ctox-rustfix` steht jetzt auf diesem Stand.
+- **Gate 7** gestartet 14:40 UTC auf 12b08eae1 (sauberer Baum). Grün = Ziel-Tests ≤ 1 rot (nur der
+  vorbestehende MCP-Test) → Push nach origin/main → B4.
 
 ## Working
 
