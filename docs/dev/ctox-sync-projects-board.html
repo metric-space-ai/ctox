@@ -73,9 +73,9 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
 <header>
   <div class="eyebrow">Progress Board v2 · Orchestrator Fable · Projekt CTOX Sync / Workjet</div>
   <h1>Virtuelle Projekte, netzweite Sessions, Rechnerübergabe</h1>
-  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4, F1 (#6), F2 (#7), Collective (#2), F3 (#8) und F2b (#9). T4-Beweis Lauf 3: Working Copy bestätigt, „This machine“-Auswahl fehlt → F2c als #10 offen, Lauf 4 läuft; RFC Paket 1 ist als CTOX #45 gemergt, Paket 2a (Lifecycle-Verben start/abort/status) startet; CTOX #43 ist gemergt; RFC Session-Transfer ist als CTOX #44 gemergt (<code>docs/rfcs/workjet-session-transfer.md</code>). Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
+  <div class="headline"><strong>Kritischer Pfad:</strong> Workjet main hat #3, #4, F1 (#6), F2 (#7), Collective (#2), F3 (#8), F2b (#9) und F2c (#10). T4-Beweis Lauf 4 läuft gegen genau diesen Stand; RFC Paket 1 ist als CTOX #45 gemergt, Paket 2a (Lifecycle-Verben start/abort/status) startet; CTOX #43 ist gemergt; RFC Session-Transfer ist als CTOX #44 gemergt (<code>docs/rfcs/workjet-session-transfer.md</code>). Danach ein kombinierter Electron-Kaltstart-Beweis für F1+F2+F3 gegen die laufende Dev-App mit Welsch-Profil. Baseline-rot bleibt nur der Sidebar-Layout-Test (Fremd-Anteil).</div>
   <div class="stamp">
-    <span>Stand <b>2026-09-02 09:00 CEST</b></span>
+    <span>Stand <b>2026-09-02 09:14 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
     <span>Provider-Konkurrenz <b>Sol 2/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
@@ -92,7 +92,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <div class="pills"><span class="pill ok">verifiziert</span><span class="pill acc">F2c workjet</span></div>
     <h3>„This machine“ beim Kaltstart aus persistierten Settings gewählt: PR #10</h3>
     <p>Sol (07:56–08:48) mit dem echten Profil: Ursache war ein Hydrations-Effekt, der durch den aus IndexedDB geladenen <code>primaryServerConfigAtom</code> vor einem verbundenen <code>primaryServerWelcomeAtom</code> feuerte (<code>useSettings.ts:356–366</code>); der erste RPC-Schreibversuch scheiterte, der alte Hydrator merkte sich die Umgebung trotzdem. Fix: Erfolgsmarkierung erst nach bestätigter Persistenz plus In-Flight-Sperre (<code>state/workjetSettings.ts:40–68</code>); Reproduktionstest mit den echten drei Rechnern (<code>evidence/profile-config.json</code>, lokale Environment <code>385a20df…</code>). Commit <code>fef2f59f3</code>, 4 Dateien, +164/−41.</p>
-    <ul><li>Von Fable nachgefahren: <code>tsgo</code> Web 0, Desktop 0; Vitest 7 Dateien / 138 Tests; Build/Pack Exit 0; fmt/diff-check sauber. PR <a href="https://github.com/metric-space-ai/workjet/pull/10">metric-space-ai/workjet#10</a>.</li></ul>
+    <ul><li>Von Fable nachgefahren: <code>tsgo</code> Web 0, Desktop 0; Vitest 7 Dateien / 138 Tests; Build/Pack Exit 0; fmt/diff-check sauber. PR <a href="https://github.com/metric-space-ai/workjet/pull/10">metric-space-ai/workjet#10</a> gemergt → <code>664ced80c</code> (09:12; Test 2987/2988, nur Baseline).</li></ul>
   </div>
 
   <div class="card">
