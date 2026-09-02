@@ -78,7 +78,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <span>Stand <b>2026-09-02 09:45 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 2/3 (F3b, 2b-1) · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 3/3 (F3b, 2b-1, T4b-2) — nicht starten · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -372,6 +372,13 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <h3>Drafts aus Sync-Projekten bleiben offen; Thread landet unter dem Projekt</h3>
     <p>Gestartet 09:40 im Klon <code>workjet-f3</code>, Branch <code>codex/workjet-synced-project-draft</code> auf main 664ced80c. Brief <code>workjet-f3b-launch/briefs/f3b-synced-project-draft.md</code>: fehlschlagenden Test zuerst, <code>draftInActiveInstance</code> über Projekt-/Working-Copy-Zuordnung statt Environment-String, Thread-Gruppierung in der Sidebar für Sync-Projekte, WorkjetProjectFlow-Assertions minimal. Run <code>local-…T013950Z-6d1eeec2</code>.</p>
     <p><b>Stand 04:45:</b> Commit <code>afedff53f</code> im Klon (9 Dateien, +356/−18): neuer reiner Helfer <code>routes/-_chat.draft.$draftId.logic.ts</code> liefert <code>active | pending | foreign</code> (pending solange die Projekt-Registry lädt, active wenn das Sync-Projekt eine aktive Working Copy auf einem Rechner der Draft-Environment hat, <code>workjetProjectMatchesDraftSession</code> in <code>availableProjects.ts</code>), Sidebar gruppiert Sync-Projekt-Threads. <b>Von mir verifiziert:</b> tsgo web 0 / desktop 0, <code>vp test --project unit</code> 4 Dateien 117 grün, <code>vp build</code> grün, fmt clean, lint 0. PR <a href="https://github.com/metric-space-ai/workjet/pull/12">Workjet #12</a> offen, CI läuft. Worker-Run selbst noch nicht terminal.</p><p>Fertig = CI grün (Baseline-Rot Sidebar-Layout erlaubt), gemergt; danach T4b-Lauf 2.</p>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill acc">T4b Lauf 2 beweis</span><span class="pill neutral">sol</span></div>
+    <h3>Echte Session aus dem Sync-Projekt starten, Antwort des Harness, Persistenz nach Neustart — gegen F3b</h3>
+    <p>Gestartet 04:43 aus Launchpad <code>workjet-t4b-launch</code>, Arbeitsort Klon <code>workjet-f3</code> @ afedff53f (PR #12-Inhalt, noch nicht gemergt). Brief <code>workjet-t4b-launch/briefs/t4b-session-proof-run2.md</code>: Pflicht-Rebuild web + desktop pack vor dem Start, Profilkopie <code>/tmp/workjet-profile-t4b2</code>, CDP :9223, Evidence <code>workjet-t4b-launch/evidence-run2/</code>, Prompt „Antworte ausschließlich mit dem Wort OK.“, 180 s Antwortfenster, Neustart-Persistenz. Run <code>local-…T024301Z-40e3d684</code>.</p>
+    <p>Fertig = Thread geöffnet ohne Redirect, Harness-Antwort im Thread, Thread nach Neustart gelistet, Schutznachweis 9222 unverändert; negatives Ergebnis ist gültig.</p>
   </div>
 
   <div class="card">
