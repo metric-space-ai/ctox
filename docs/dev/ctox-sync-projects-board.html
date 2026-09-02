@@ -78,7 +78,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <span>Stand <b>2026-09-02 09:45 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 2/3 (3a, 3b-1b) · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 1/3 (3a) · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -399,7 +399,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <div class="pills"><span class="pill acc">PKG-3b-1b produktion</span><span class="pill neutral">sol</span></div>
     <h3>Workjet-Desktop-Plumbing für Session-Control: Contracts, IPC-Kanal, Preload, Pooled-Guest-Aufruf, Web-Wrapper (Spiegel von <code>requestProjectControl</code>)</h3>
     <p>Gestartet 06:43 im Klon <code>workjet-f3c</code> (frei seit T4b-5), Branch <code>codex/workjet-session-control-plumbing</code> auf Workjet main 2e75f3a0b. Brief <code>workjet-f3c-launch/briefs/pkg3b1b-session-control-plumbing.md</code>: Vertrag der fünf Aktionen (session.list/create, transfer.start/status/abort) mit Session-/Outcome-Schemas, dieselben Fehlercodes und Größen-/Decode-Disziplin, <code>ensurePooled</code>-Retry im Web-Wrapper; Tests nach den Projekt-Mustern; kein Thread-Start-Aufruf, kein Server (3b-1c). Run <code>local-…T044235Z-2f18536e</code>.</p>
-    <p>Fertig = tsgo contracts/desktop/web 0, Tests grün, build + pack, fmt/lint, Commits; PR nach Merge des CTOX-Gegenstücks (3b-1a) testbar im Kaltstart.</p>
+    <p><b>Stand 06:56:</b> Run <code>completed</code>, 2 Commits (<code>af9c350a7</code> Contracts, <code>a3d3ecd7d</code> Desktop+Web-Plumbing; 11 Dateien, +616): Request/Projection/Outcome/Response/Result-Schemas, IPC-Kanal + Methode (excess-property-error), Guest-Ausdruck mit fester Schablone und nur schema-validiertem Request, 256-KiB-Cap, Preload, Web-Wrapper mit ensurePooled-Retry. <b>Von mir verifiziert:</b> tsgo contracts/desktop/web 0 Fehler, vitest desktop 67, web 5, contracts 29, fmt 0, lint 0. PR <a href="https://github.com/metric-space-ai/workjet/pull/15">Workjet #15</a> offen, CI läuft. Vertragsabgleich: das CTOX-Outcome-Schema hat optionale (nicht nullbare) Schlüssel und kein <code>fenceEpoch</code> — die Shell (3b-1a) wurde von mir entsprechend angepasst (Commit 167c7281c).</p><p>Fertig = CI (Baseline-Rot erlaubt) → Merge; danach 3b-1c.</p>
   </div>
 
   <div class="card">
