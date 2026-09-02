@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 15:55 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 16:15 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -555,6 +555,18 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 - **Gate 8** gestartet 15:49 UTC auf e46d3a1d5 (gleiches Skript/Log). Regel: gepusht wird nur der exakt
   gemessene Stand; bewegt sich main erneut nur in JS-Dateien, wird nach Merge ohne weiteres Gate gepusht.
 - Zeitplan (lokal): Gate 8 ~16:35 UTC → Push → B4 ~17:05 UTC aktiv → Nachrecherche ~17:10 UTC (19:10 Uhr).
+
+### 02.09. 16:06 UTC — PUSH e46d3a1d5 → origin/main; Build B4 läuft auf thesen
+
+- Gate 8 auf e46d3a1d5: 112 grün, 2 rot — der vorbestehende MCP-Test und
+  `person_research_execute_is_idempotent_and_record_bound` (in Isolation 3/3 grün → Flackern im Parallellauf,
+  keine Regression; als Backlog-Notiz „flaky" geführt).
+- **Push 16:06 UTC:** `origin/main` 57dc87f39 → **e46d3a1d5** (Fast-Forward). Inhalt: R7a, R7b, R8 v3, R5d,
+  Guard-Resolver, Task-Link/Token, Fixture-Fixes.
+- **B4:** `ctox upgrade --dev` gestartet 16:06 UTC, Release `branch-main-20260902T160618Z` (Quelle validiert,
+  Build läuft; ~27 min). Wächter: `claude-wait-upgrade-thesen.ts`. Nach Aktivierung: Nutzer meldet sich neu an.
+- Workjet-Läufe markiert: R7a `…055758Z-07c9bb8a`, R7b `…055759Z-e176f415`, R8 v3 `…071046Z-059e8552` →
+  integrated; R8 v1/v2 → abandoned.
 
 ## Working
 
