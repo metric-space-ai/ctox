@@ -78,7 +78,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <span>Stand <b>2026-09-02 09:45 CEST</b></span>
     <span>Quelle <b>3 Codex-Handover (22:15–22:16) + eigene Messungen</b></span>
     <span>Board-Datei <b class="mono">docs/dev/ctox-sync-projects-board.html</b></span>
-    <span>Provider-Konkurrenz <b>Sol 0/3 · xAI 2/3 (T6-Probe gpu3, Panel A) · Kimi 1/3 · Z.ai 1/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
+    <span>Provider-Konkurrenz <b>Sol 0/3 · xAI 1/3 (Panel A) · Kimi 1/3 · Z.ai 1/3 · xAI 0/3 · Kimi 0/3 · Z.ai 0/3</b></span>
   </div>
 </header>
 
@@ -399,7 +399,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
     <div class="pills"><span class="pill acc">T6-0 messung</span><span class="pill neutral">grok · gpu3</span></div>
     <h3>Umgebungsprobe auf gpu3-a4500 für den Zwei-Rechner-Transfertest (read-only)</h3>
     <p>Gestartet 10:16 auf dem Remote-Worker „Standard Worker (high parallel workloads)“, Brief <code>ctox-pkg3-launch/briefs/t6-gpu3-environment-probe.md</code>: OS/GPU/Platte, git/node/codex/claude/greppy, CTOX-Binary und -Dienst, Workjet-Installation/Computer-Registrierung, Netz (nur eigene Sicht), Arbeitsverzeichnis. Run <code>run-1788336975490-3987758-748de9bc</code>.</p>
-    <p>Fertig = Tabelle Befund + „Blocker für T6“; daraus der Vorbereitungsbrief für gpu3 (CTOX-Dienst mit Sync zu Welsch, Workjet-Computer).</p>
+    <p><b>Ergebnis 10:20 (Report <code>ctox-pkg3-launch/reports/T6-0-gpu3-probe.md</code>):</b> gpu3: Linux, Tailscale online (100.71.114.101; Mac „macbook-pro-von-michael-2“ direkt erreichbar), git/node/Claude Code/greppy/<b>Codex CLI 0.146.0</b> vorhanden, GitHub-HTTPS ok, <code>~/Documents</code> vorhanden. <b>Blocker 1:</b> CTOX 0.3.22 läuft als <code>ctox.service</code>, aber der Sync-Peer repliziert nicht (<code>replicationUp:false</code>, <code>dataChannelOpen:false</code>, kein „Welsch“ im Peer-Status; Signaling gegen <code>signaling.ctox.dev</code> zuvor HTTP 410 Gone). <b>Blocker 2:</b> keine Workjet-Computer-Registrierung (kein <code>workjet</code>-CLI, keine Computer-/Device-Dateien; gpu3 ist nur Worker-Host). <b>Eng:</b> Root-FS 99 % (9,6 GB frei); Worker-PATH ohne <code>~/.local/bin</code>.</p>
   </div>
 
   <div class="card">
@@ -561,6 +561,20 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
   </div>
 
     <div class="card">
+    <div class="pills"><span class="pill acc">T6-1</span></div>
+    <h3>gpu3: CTOX-Sync zur Instanz Welsch wiederherstellen (Signaling 410 Gone, Peer repliziert nicht)</h3>
+    <p>Befund T6-0: <code>ctox.service</code> 0.3.22 aktiv, Peer <code>replicationUp:false</code>, Signaling <code>signaling.ctox.dev</code> antwortete 410. Zu klären: ist der Signaling-Endpunkt umgezogen (ctox.dev-Deploy, siehe T9 TURN/STUN) oder braucht gpu3 eine neue Kopplung (Invite/Pairing an Welsch — Owner-Aktion, da Zugangsdaten)? Messbrief: Peer-Status, konfigurierte Signaling-URL, Version vs. Welsch-Release; kein Neustart ohne Befund.</p>
+    <div class="trigger"><b>Trigger:</b> sofort möglich (read-only Messung); Reparatur ggf. OWNER (Pairing).</div>
+  </div>
+
+  <div class="card">
+    <div class="pills"><span class="pill acc">T6-2</span></div>
+    <h3>gpu3 als Workjet-Computer registrieren (Ziel-Rechner für die Übergabe)</h3>
+    <p>Befund T6-0: keine Computer-Registrierung auf gpu3. Weg: aus der Workjet-Desktop-App (Settings → Computers) einen Rechner der Art <code>ssh</code>/<code>tailscale</code> für gpu3 anlegen (Tailscale-IP 100.71.114.101, Codex CLI vorhanden), damit <code>workjet_computers</code> in CTOX Sync und die Working-Copy-/Session-Bindung greifen. Kaltstart-Beweis wie T4, aber Ziel gpu3. Root-FS 99 % vorher entlasten (nur Build-Caches, wie E12).</p>
+    <div class="trigger"><b>Trigger:</b> T6-1 grün (Sync gpu3 ↔ Welsch).</div>
+  </div>
+
+  <div class="card">
     <div class="pills"><span class="pill acc">T12</span></div>
     <h3>RFC Paket 2: Transfer-Lifecycle-Verben, Zustandsautomat, Recovery</h3>
     <p>Nach RFC §23 Paket 2 auf Basis PR #45; in Scheiben mit Pflicht-Commits (Lehre #9): 2a start/abort/status (fertig, PR folgt), 2b-1 pause_ack/pack_complete (läuft), <b>2b-2</b> apply_complete (3× Mismatch → failed), confirm_working_copy (atomarer Switch, 7 Schritte §12.6, neue Epoch), resume_ack (nur Zielrechner), Recovery-Pass für abgelaufene deadline_at_ms (§12.8) als aufrufbare Funktion + Tests.</p>
