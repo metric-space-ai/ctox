@@ -217,6 +217,7 @@ Sol-Kontingent: 0/3 belegt. Tenant-Build B1 läuft — KEIN weiterer Deploy, kei
 
 ## Evidenzkarte
 
+- workjet-PR für den Web-Stack: https://github.com/metric-space-ai/workjet/pull/11 (Branch thesen-person-contract @ cdf64f856).
 - Board: diese Datei (committed) + stabile Artifact-URL: https://claude.ai/code/artifact/76c22911-7059-44b9-98b2-408f5e7d0b0b (Rendering: Scratchpad thesen-outbound-board.html, bei Updates neu publizieren).
 - Sol-Läufe R1/R2/R3: local-2026-09-01T214228Z-e2266936-869e-49a3-9f68-a7fbb0501ac0 / local-2026-09-01T214231Z-b3bd36e5-8f7d-4b13-9944-96a861dea3ca / local-2026-09-01T214233Z-2fc882cf-5fc1-49b8-91b8-721f3ec774f0 (runs.jsonl im Launchpad).
 - App-Repo: `~/Documents/thesen-apps` (privat, lokal). Tenant-Deploy-Skripte:
