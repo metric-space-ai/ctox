@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 04:10 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 04:35 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -190,6 +190,22 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   `~/.local/bin`, `/run/systemd/resolve` (DNS-Stub); Schreibroots unverändert; Tests. Danach Build B2 und
   Probe-Task im Worker (`ctox status`, `getent hosts`, Relais-Aufruf).
 - Launchpad auf origin/main aktualisiert (Branch `main2`, inkl. execution/agent, landlock.rs, protocol.rs).
+
+### 02.09. 04:3x — R5 geliefert, integriert (Gate läuft), Vorher-Messung im Worker läuft
+
+- R5 (Sol, run …4c227e2f) `completed`: nur `direct_session.rs` (+204/−12). Lesewurzeln = Release-Wurzel aus
+  `current_exe()` + `lib/ctox/current`-Alias + PATH-Verzeichnisse mit `ctox` + `/usr/local/bin` +
+  `/run/systemd/resolve`, `/run/resolvconf` + Elternverzeichnis des aufgelösten `/etc/resolv.conf`; auf Linux
+  immer `Restricted` mit Plattform-Defaults ∪ Defaults ∪ Zusatzwurzeln. Schreibwurzeln unverändert.
+  Auf origin/main 388dad97e angewendet (Branch `thesen-r5`, Commit 39b3de7b4); Gate (check + 3 Tests) läuft.
+- Sicherheitsprüfung der neuen Leseroots (selbst): `current/` enthält den Symlink `runtime` → State-Root mit
+  `ctox-secrets.key`/`ctox-secrets.sqlite3` (0600). Landlock-Regeln hängen am Ziel-Inode; ein Zugriff über
+  den Symlink landet im State-Root-Baum, der NICHT freigegeben ist → Secrets bleiben unlesbar. Der Worker
+  liest sein Repair-Bundle über sein eigenes Workspace (cwd, Schreibwurzel). Nach B2 im Probe-Task gegenprüfen
+  (`cat …/ctox-secrets.key` muss EACCES liefern).
+- Vorher-Messung: Diagnose-Task `queue:system::86489f0c97639a536be6e67a` („sandbox probe (baseline)", 9 Befehle:
+  id, ctox status über Wrapper und Binary, getent, resolv.conf, /run/systemd/resolve, bin-Listing, Socket,
+  curl) läuft im Worker; dieselbe Probe nach B2 = Nachher-Messung.
 
 ## Working
 
