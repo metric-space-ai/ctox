@@ -1,6 +1,6 @@
 # SKF Nachrecherche — Kampagnen-Board (drone_bearing_design_verified)
 
-**Headline:** Phase 0 läuft (Snapshots → Texte lokal); kritischer Pfad = Textextraktion fertig → Sol-Slices starten (3 parallel, OpenAI-Pool).
+**Headline:** P1 läuft — Sol-Slices 01–03 seit 19:39 (3/3 OpenAI-Pool belegt, Pump startet die nächsten automatisch); kritischer Pfad = 40 Slices × ~45–75 min / 3 parallel ≈ 10–16 h, danach Konsolidierung.
 
 Owner-Auftrag 02.09.2026: „da müssen noch Stunden an nachträglicher Quellenauswertung rein“ — 138 verifizierte Quellen sind nur zu 17 inhaltlich ausgewertet (31 Claims), 121 Quellen hängen im Graph frei, Knowledge zeigt rohe Textfetzen, Messdaten nur aus SRC-0123.
 
@@ -16,7 +16,8 @@ Zielbild: jede der 138 Quellen inhaltlich ausgewertet (Relevanzurteil, 3–10 pr
 
 ## Working
 
-- **[P0d] Snapshots → lokal → Text.** rsync der 138 Dateien nach `/Volumes/tmp/skf-research-board/snapshots/` (Log `rsync.log`), danach automatisch `extract-texts.py` → `texts/SRC-XXXX.txt` mit `[[PAGE n]]`-Markern (Log `nachrecherche/logs/extract.log`, Statistik `texts/_stats.json`). Fertig = 138 Textdateien, Liste der Kleinst-/Fehl-Extraktionen.
+- **[P1] Sol-Slices 01–03 laufen** (Run-IDs in `nachrecherche/runs.json`; Ereignisse `nachrecherche/logs/<slice>.events.log`; Pump `nachrecherche/pump.py` alle 120 s, Log `logs/pump.log`). Pump validiert fertige Slices (`validate.py`, Zitat-Substring-Prüfung gegen texts/) und markiert nur grüne Slices `integrated`; rote → `needs_review` für Fable. Sol 3/3 — nicht zusätzlich starten.
+- **[P0d] Snapshots → lokal → Text.** rsync der 138 Dateien nach `/Volumes/tmp/skf-research-board/snapshots/` (Log `rsync.log`), danach automatisch `extract-texts.py` → `texts/SRC-XXXX.txt` mit `[[PAGE n]]`-Markern (Log `nachrecherche/logs/extract.log`, Statistik `texts/_stats.json`). ERLEDIGT 19:36: 138 Textdateien, 18,5 Mio Zeichen, keine Fehlextraktion; Riesen: SRC-0119 5,0 M (SKF-Katalog), SRC-0121 1,3 M, SRC-0067 0,58 M; ZIP-Listen auf 90 k gekürzt. 40 Slices (`nachrecherche/slices.json`, Briefs `nachrecherche/briefs/`), sechs Briefs mit Gezielt-lesen-Hinweis.
 
 ## To-Do
 
@@ -41,7 +42,7 @@ Zielbild: jede der 138 Quellen inhaltlich ausgewertet (Relevanzurteil, 3–10 pr
 
 ## Error patterns
 
-1. (leer)
+1. Warteschleife `while pgrep -f "rsync …"` fand ihren eigenen sh-Prozess und endete nie (1×) — bei pgrep-Wartern Muster wählen, das den eigenen Aufruf nicht matcht.
 
 ## Evidence map
 
