@@ -658,6 +658,39 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
   Nach B6: Nachrecherche KUKA + Beiersdorf erneut (neue Befehle → neue Tasks; die `failed`-Tasks bleiben als
   Beleg), dann Messung.
 
+### 02.09. 18:40–20:25 UTC — KURSWECHSEL (Owner-Vorgabe): Button = ein Satz, Skill = das Wissen, Harness = die Arbeit, CLI = der einzige Weg
+
+- **Zielbild (Owner):** Button „Nachrecherche" baut nur einen Prompt und öffnet den Chat. Der Harness bekommt den
+  Task wie jeden anderen, mit Skill. Der Skill erklärt universell den Web-Stack (Browser inkl. Streaming-Unblocking
+  mit Fortsetzung, Scraping-Skripte in SQLite) und je App Ein-/Ausgabe. CLI-Befehle wirken auf SQLite, Sync pusht in
+  die UI. Kein MCP im Harness-Pfad, keine Sonder-Orchestrierung.
+- **Ist-Soll-Befund (aus dem Code):** (1) App sendete `control_command: true` + `web_stack.person_research` → nativer
+  Adapter-Stapel, kein Agenten-Turn — der Roman im Chat war die Nutzer-Nachricht der App. (2) Skill
+  `outbound-lead-generation-research` existierte nirgends (App verlangte ihn); `prospect-research` (219 Zeilen) war da,
+  aber ohne Outbound-Bezug und ungenutzt. (3) Kein CLI zum Record-Lesen; Weg ist `commands inspect <id>` auf den
+  eigenen Auftrag. (4) Rückschreiben nur per `commands dispatch outbound.lead.research_writeback`, Handler verlangte
+  Lückenschluss-Task. (5) Meine R7a/R7b/R8/B5/B6-Orchestrierung ist für diesen Weg unnötig (bleibt schlafend, wird nur
+  von nativen `web_stack.person_research`-Befehlen ausgelöst, die die App nicht mehr sendet).
+- **Umgesetzt:**
+  - Skill `src/skills/system/research/outbound-lead-generation-research/SKILL.md` (neu): vollständiger CLI-Katalog
+    aus den Usage-Texten (`ctox web …`, `ctox scrape …`, `ctox business-os web-stack …`, `commands inspect/dispatch`),
+    SQLite-Tabellen (`scrape_target`, `scrape_script_revision`, `scrape_source_revision`, `scrape_run`,
+    `scrape_record_latest`) und Arbeitsverzeichnis, 32 Felder, Quellenreihenfolge, Belegregeln, Unblocking mit
+    Fortsetzung (`auth-assist-request` → `auth-assist-status --session-id` → `browser-automation --session-id` /
+    `source-capture --session-id` / `context-capture`), Rückschreib-Payload exakt nach `ResearchWritebackRequest`.
+  - Handler `handle_research_writeback`: `gap_task_id` optional; leer = Chat-Auftrag (`research_command_id` =
+    `business_os.chat.task`), Feldsatz = gemeldete Felder (kanonisch geprüft), keine Phase-Vorbedingung;
+    Queue-Task-Pfad unverändert. Lückenschluss-Task bekommt `suggested_skill` = der Skill. Commits 30fc209b4, 65b356562.
+  - App 1.0.65 (thesen-apps 2258058): Prompt = `Starte eine Outbound Nachrecherche für <Firma> [<lead>] (Auftrag <cmd>).`,
+    kein `control_command`, kein `command_type`, `payload.lead_snapshot` (data + contacts). **Deployt 20:24 UTC** nach
+    `runtime/business-os/local-modules/outbound-lead-generation` (Backup `…before-1.0.65-20260902T202407Z`), live 1.0.65.
+- **Gate 11** läuft (30fc209b4+65b356562, Filter person_research/outcome_witness/core_state). Danach Push → B7-Build
+  (Skill ist im Binary eingebettet; ohne B7 findet der Harness den Skill nicht) → Nachrecherche → Zählung.
+- Befund zu Owner-Fragen: kein Score für Scraping-Skripte in SQLite (nur `record-template-example --challenge-score`
+  für Template-Beispiele); keine App-Zuordnung außer `scrape_target.target_kind` (`prospect-research`).
+- KORREKTUR (eigener Fehler): „MCP-Rückschreibrechte" war falsch — MCP ist der Kanal externer Agenten; der Harness nutzt
+  die CLI. `allowed_actions` in der App wieder entfernt.
+
 ## Working
 
 | Karte | Worker / Log | Fertig heißt |
