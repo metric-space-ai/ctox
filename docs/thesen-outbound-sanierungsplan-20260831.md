@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 16:50 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 17:15 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -593,6 +593,24 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 - Worker-Probe „after-b4" (Task `queue:system::55f500a3…`, Datei `sandbox-probe-after-b4.txt`): `ctox status` EXIT 0,
   DNS ok, Socket ok, Secrets verweigert, **Relais `scrape execute` → `scrape_run-704d540d51116635` succeeded, 2 Datensätze**.
   Ursache 1 auf B4 erneut bestätigt (mit handgepatchtem Wrapper).
+
+### 02.09. 17:05 UTC — B5 gepusht OHNE lokales Gate (Nutzerentscheid: Tempo), Build läuft; Live-Wächter auf B4
+
+- Nutzerfrage „warum immer ein Komplett-Compile": Rust-Binary → jede Verhaltensänderung braucht den
+  Tenant-Build (~27 min, unvermeidbar); das lokale Gate (~45 min) ist Kontrolle, keine Voraussetzung. Für B5
+  (kleiner, im Kern subtraktiver Fix) umgedreht: Push zuerst, Gate 9 läuft parallel als Nachkontrolle.
+- `origin/main` war erneut bewegt (24920c9ff, Tenant-Smoke für importierte Apps). Merge konfliktfrei →
+  **Push 8fc855795** (= B5 9cda2385f + main). **B5-Build** gestartet 17:05 UTC, Release
+  `branch-main-20260902T170525Z`; Wächter `claude-wait-upgrade-thesen.ts`. Nach Aktivierung: Wrapper Zeile 11
+  prüfen (B4-1), Nutzer meldet sich neu an, Nachrecherche KUKA + Beiersdorf.
+- Live-Überbrückung auf B4: transiente User-Unit `gap-unlink-watch.service` (Skript `/tmp/gap-unlink-watch.py`,
+  Log `/tmp/gap-unlink-watch.log`) entfernt neue `business_command_task_links`-Zeilen von Lückenschluss-Tasks
+  binnen 0,5 s (nur Links ab 17:06 UTC). KORREKTUR: erste Fassung war zu breit und löste den Juli-Link des
+  abgebrochenen Tasks „Nachrecherche Firma: WITTENSTEIN SE" (queue:system::753f32ca…) — wiederhergestellt.
+  Unit nach B5 stoppen (`systemctl --user stop gap-unlink-watch`).
+- Lehre (Umgebungsfalle): `nohup … &` und `setsid nohup … &` aus dem SSH-Helper heraus starten auf thesen keinen
+  überlebenden Prozess (der Helper bricht bei `pkill`-Exit 1 ab bzw. reißt die Gruppe mit); `systemd-run --user
+  --unit <name> --collect <cmd>` funktioniert zuverlässig.
 
 ## Working
 
