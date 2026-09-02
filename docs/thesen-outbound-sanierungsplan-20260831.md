@@ -1,4 +1,4 @@
-# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 18:10 UTC)
+# THESEN Outbound Lead Generation — Sanierungsboard (Stand 02.09.2026, 19:30 UTC)
 
 **Headline / kritischer Pfad:** Die Recherche läuft (7/7 completed, Beiersdorf 01.09. 16:47
 UTC: 8 Felder, 45 Belege, 6 Quellen inkl. Sellify), aber vier strukturelle Ursachen halten
@@ -636,6 +636,27 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 - Worker war mit Auth-Assist-Task `dnbhoovers.com` belegt (wartet auf Login) → die 4 Auth-Assist-Tasks
   abgebrochen (OWNER-Thema Logins bleibt offen); Queue danach: nur die zwei Lückenschluss-Tasks, `busy False`.
 - Läuft: Poller `claude-b5-run-poll.ts` (Task-Status, `gap_closure/field_status.json`, `research_writeback`).
+
+### 02.09. 18:42 UTC — Befund B5-1: beide Lückenschluss-Worker nach 8 s tot → B6 gepusht, Build läuft
+
+- Journal: `prompt worker start … Lückenschluss KUKA` 18:42:33 → `prompt worker end … error=Business OS command
+  authorization permission changed` 18:42:41; Beiersdorf identisch (18:42:42 → 18:42:44). Beide Tasks
+  `route_status=failed`, keine Workspace-Dateien, kein Turn. Leads bleiben `gap_closure` mit totem Task.
+- Ursache (eigener Fehler, Edit D aus 10:xx UTC): der Session-Token für Lückenschluss-Tasks ruft
+  `revalidate_business_command_execution_authorization` auf dem **Recherche-Befehl** auf; dessen
+  Native-Authorization ist ein Control-Command-Receipt, `revalidate_queue_native_authorization` vergleicht aber
+  gegen das Queue-Command-Permission-Ziel → „permission changed" → Job-Fehler vor dem ersten Turn.
+- **Fix B6 = dd3edf92b:** Token nur noch für `business_os.chat.task` (ursprüngliches Verhalten); Lückenschluss-
+  Tasks laufen ohne gebundene MCP-Session, Owner über Task-Metadaten. Folge: der Worker kann
+  `ctox_web_auth_assist_request` nicht selbst auslösen → Login-Quellen enden `action_required` ohne
+  Auth-Assist-Referenz. **Backlog B7:** rechercheb­efehls-taugliche Revalidierung + Token für Lückenschluss-Tasks.
+- **Backlog B8:** Setup-Fehler vor dem ersten Turn setzen den Lückenschluss-Task sofort auf `failed` (kein
+  Retry, keine 3-Runden-Logik, Lead bleibt „läuft"). Braucht Requeue oder Terminal-Disposition mit Lead-Status.
+- Beobachtung: Suchmaschinen waren während Phase A rate-limitiert (google/brave „skipped after rate limit",
+  duckduckgo/bing „low relevance") — Umgebungsfaktor für die Feldquote.
+- Push 88ee71264 (B6 + main), **B6-Build** gestartet 19:27 UTC; Kontroll-Gate 10 lokal auf 88ee71264 gestartet.
+  Nach B6: Nachrecherche KUKA + Beiersdorf erneut (neue Befehle → neue Tasks; die `failed`-Tasks bleiben als
+  Beleg), dann Messung.
 
 ## Working
 
