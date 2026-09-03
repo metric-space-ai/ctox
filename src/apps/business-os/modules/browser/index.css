@@ -987,7 +987,10 @@
   margin: -9px 0 0 -9px;
   border: 2px solid var(--accent, #e8833a);
   border-radius: 50%;
-  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.45);
+  /* Der Shell-V2-Vertrag verbietet box-shadow (Waechter in browser.test.mjs).
+     Der dunkle Trennring wird als outline gesetzt - gleiche Wirkung, keine
+     Schattenflaeche. */
+  outline: 2px solid rgba(0, 0, 0, 0.45);
 }
 .browser-precise-mark::before,
 .browser-precise-mark::after {
@@ -1007,7 +1010,7 @@
   border-radius: 8px;
   border: 1px solid var(--border-1, #333);
   background: var(--surface-1, #16181c);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+  /* Kein box-shadow (Shell-V2-Vertrag): die Abhebung traegt der Rahmen. */
   pointer-events: auto;
 }
 .browser-precise-panel textarea {

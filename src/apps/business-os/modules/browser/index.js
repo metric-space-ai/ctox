@@ -3434,7 +3434,13 @@ function renderControls(ctx, refs, state) {
   // current surface cannot safely navigate the existing one.
   if (refs.go) refs.go.disabled = false;
   if (refs.controllerAcquire) {
-    refs.controllerAcquire.disabled = !hasSession || isStopped || !surfaceFocused || canControl;
+    // NICHT am Fokus aufhaengen. Ein Klick AUF diesen Knopf ist die
+    // Interaktion, die die Uebernahme rechtfertigt - ein deaktivierter Knopf
+    // kann diesen Klick nie empfangen. Meldet die Huelle kein `is-focused`
+    // (gemessen am 03.09.2026 auf THESEN: visibilityState=hidden,
+    // hasFocus()=false bei offenem Fenster), war die Sitzung dauerhaft
+    // unbedienbar UND der einzige Ausweg gesperrt.
+    refs.controllerAcquire.disabled = !hasSession || isStopped || canControl;
   }
   if (refs.controllerRelease) {
     refs.controllerRelease.disabled = !hasSession || isStopped || !canControl;
@@ -3499,6 +3505,15 @@ function frameEmptyText(state) {
     return runtimeError || 'Kein laufender Browser-Prozess. Starten Sie die Sitzung erneut.';
   }
   if (status === 'stopped' || status === 'closed') return t('frameClosed', 'Browser-Fenster geschlossen');
+  // Eine abgelaufene Steuerpacht sieht aus wie ein haengendes Bild: der
+  // Bildtakt fragt ohne Pacht gar nicht erst, und die Buehne meldete
+  // "Browser-Inhalt wird geladen", waehrend die Sitzung "Bereit" zeigte.
+  // Am 03.09.2026 auf THESEN gemessen: Pacht seit 4,7 Stunden abgelaufen.
+  const pachtEndeMs = Number(session.controller_lease_expires_at_ms || 0);
+  const pachtTot = !Number.isFinite(pachtEndeMs) || pachtEndeMs <= Date.now();
+  if (['active', 'running', 'capturing'].includes(status) && pachtTot) {
+    return 'Steuerung abgelaufen. Klicken Sie auf „Steuerung übernehmen“, um Bild und Eingabe zurückzuholen.';
+  }
   if (status === 'requested' || status === 'starting' || status === 'pending_command') return t('frameStarting', 'Browser wird gestartet');
   return t('frameLoading', 'Browser-Inhalt wird geladen');
 }
@@ -3752,6 +3767,18 @@ function shouldRenewControllerLease(session, actorId, now = Date.now(), options 
 // Anders als die Erneuerung braucht das Neuholen KEIN fokussiertes Fenster —
 // sonst bliebe genau die Falle bestehen. Es verlangt aber, dass die Sitzung
 // uns gehoert, und es laeuft nur, wenn nicht schon ein Versuch unterwegs ist.
+// Jeder stille Abbruch hier kostete Stunden Fehlersuche: die Sitzung meldete
+// "Bereit", nichts geschah, und keine Zeile sagte warum. Der Grund wird jetzt
+// EINMAL je Wechsel protokolliert (nicht bei jedem 30-s-Takt).
+function merkeReacquireGrund(session, grund) {
+  try {
+    const schluessel = `${session?.id || '-'}|${grund}`;
+    if (globalThis.__ctoxBrowserReacquireGrund === schluessel) return;
+    globalThis.__ctoxBrowserReacquireGrund = schluessel;
+    console.info(`[browser] Steuerung wird NICHT zurueckgeholt: ${grund}`, { session: session?.id || '' });
+  } catch { /* Diagnose darf nie stoeren */ }
+}
+
 function shouldReacquireControllerLease(session, actorId, now = Date.now(), options = {}) {
   const { reacquireInFlight = false, lastReacquireAtMs = 0 } = options;
   if (reacquireInFlight) return false;
@@ -3761,16 +3788,25 @@ function shouldReacquireControllerLease(session, actorId, now = Date.now(), opti
   const actorIds = Array.isArray(actorId)
     ? actorId.map((value) => String(value || '')).filter(Boolean)
     : [String(actorId || '')].filter(Boolean);
-  if (!session?.id || !actorIds.length) return false;
+  if (!session?.id || !actorIds.length) {
+    merkeReacquireGrund(session, session?.id ? 'kein angemeldeter Nutzer' : 'keine Sitzung');
+    return false;
+  }
   // Fremd gesteuerte Sitzungen nicht an uns reissen.
   const controller = String(session.controller_user_id || '');
-  if (controller && !actorIds.includes(controller)) return false;
+  if (controller && !actorIds.includes(controller)) {
+    merkeReacquireGrund(session, `Sitzung gehoert ${controller}`);
+    return false;
+  }
   // Eine tote Sitzung braucht einen START, keine Pacht. Ohne diese Zeile hielt
   // die Wiederbeschaffung genau den Zustand fest, den sie heilen sollte: am
   // 15.08.2026 gemessen 259 erfolgreiche acquire in 48 h auf einer Sitzung mit
   // status=disconnected. Die stets gueltige Pacht liess submitAddress den
   // Navigations-Zweig waehlen und machte den Start-Zweig unerreichbar.
-  if (browserSessionNeedsStart(session)) return false;
+  if (browserSessionNeedsStart(session)) {
+    merkeReacquireGrund(session, 'Sitzung braucht einen Start, keine Pacht');
+    return false;
+  }
   const expiresAt = Number(session.controller_lease_expires_at_ms || 0);
   if (!Number.isFinite(expiresAt) || expiresAt <= now) return true;
   // Gleicher Nutzer, andere Pacht: ein anderes Fenster haelt die Steuerung —

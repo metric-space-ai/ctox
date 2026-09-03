@@ -67,5 +67,11 @@
   "adaptersLoading": "Loading adapters …",
   "adaptersFailed": "Adapters could not be loaded: ",
   "adaptersEmpty": "No scraping adapters yet. They are created in the Outbound app under “Sources & access”.",
-  "adaptersManagedHint": "Managed in the Outbound app (“Sources & access”)."
+  "adaptersManagedHint": "Managed in the Outbound app (“Sources & access”).",
+  "preciseType": "Insert",
+  "preciseTypeEnter": "Insert + Enter",
+  "preciseClick": "Click",
+  "preciseDblClick": "Double click",
+  "preciseRightClick": "Right click",
+  "preciseClose": "Close"
 }

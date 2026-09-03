@@ -258,7 +258,7 @@ assert.equal(
   'shared/assets/workjet-icons/operator-selection-v1/browser.jpg',
   'Shell V2 must receive the approved large Browser raster icon',
 );
-assert.equal(moduleDefinition.version, 'v0.2.6');
+assert.equal(moduleDefinition.version, '0.2.7');
 const registeredBrowser = moduleRegistry.modules.find((module) => module.id === 'browser');
 assert.ok(registeredBrowser, 'Browser must remain present in the immutable module registry');
 assert.equal(registeredBrowser.layout.shell_geometry_contract, moduleDefinition.layout.shell_geometry_contract);

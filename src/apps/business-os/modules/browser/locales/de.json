@@ -67,5 +67,11 @@
   "adaptersLoading": "Adapter werden geladen …",
   "adaptersFailed": "Adapter konnten nicht geladen werden: ",
   "adaptersEmpty": "Noch keine Scraping-Adapter. Sie entstehen in der Outbound-App unter „Quellen & Zugänge“.",
-  "adaptersManagedHint": "Verwaltet in der Outbound-App („Quellen & Zugänge“)."
+  "adaptersManagedHint": "Verwaltet in der Outbound-App („Quellen & Zugänge“).",
+  "preciseType": "Einfügen",
+  "preciseTypeEnter": "Einfügen + Enter",
+  "preciseClick": "Klick",
+  "preciseDblClick": "Doppelklick",
+  "preciseRightClick": "Rechtsklick",
+  "preciseClose": "Schließen"
 }
