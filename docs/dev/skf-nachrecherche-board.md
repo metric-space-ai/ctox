@@ -1,6 +1,6 @@
 # SKF Nachrecherche — Kampagnen-Board (drone_bearing_design_verified)
 
-**Headline:** PR #57 (Skill-Methodik + App) ist mergefähig, CI durch: 8 grün, 5 rot und alle 5 vorbestehend/CI-defekt, keiner berührt die 8 PR-Dateien. OWNER-Entscheid: mergen? Danach `ctox upgrade --dev` auf skf und Skill-Probe.
+**Headline:** PR #57 GEMERGT (main `41991e2b5`, 03.09. 07:11 UTC); `ctox upgrade --dev` läuft auf skf.ctox.dev (Log `~/.local/state/ctox/logs/upgrade-dev-20260903T071159Z.log`). Danach Skill-Probe: `ctox skills system show systematic-research --json` muss die Auswertungsschleife tragen.
 
 Owner-Auftrag 02.09.2026: „da müssen noch Stunden an nachträglicher Quellenauswertung rein“ — 138 verifizierte Quellen sind nur zu 17 inhaltlich ausgewertet (31 Claims), 121 Quellen hängen im Graph frei, Knowledge zeigt rohe Textfetzen, Messdaten nur aus SRC-0123.
 
@@ -26,7 +26,7 @@ Zielbild: jede der 138 Quellen inhaltlich ausgewertet (Relevanzurteil, 3–10 pr
 
 ## Working
 
-- (nichts aktiv; Pump-Schleifen beendet)
+- **[F8] `ctox upgrade --dev` auf skf.ctox.dev** (gestartet 03.09. 07:12 UTC, abgesetzt per setsid, Log `~/.local/state/ctox/logs/upgrade-dev-20260903T071159Z.log`, Monitor läuft). Vorzustand: Release `branch-main-20260902T105322Z`, 82 GB frei, 6 Kerne, 22 GB RAM. Fertig = neues Release aktiv UND `ctox skills system show systematic-research --json` liefert einen Body mit „Evaluate Every Admitted Source". Achtung: der Modul-Hotpatch v1.0.16 wird vom Upgrade überschrieben — das ist gewollt, der neue Build enthält die Änderung aus main.
 
 ## Working (alt)
 
@@ -36,6 +36,7 @@ Zielbild: jede der 138 Quellen inhaltlich ausgewertet (Relevanzurteil, 3–10 pr
 
 ## To-Do
 
+- ERLEDIGT (Owner-Freigabe 03.09.) **PR #57 gemergt**, Squash auf main `41991e2b5`, Branch gelöscht. Alte Karte:
 - **OWNER: PR #57 mergen?** https://github.com/metric-space-ai/ctox/pull/57 ist `MERGEABLE`/`UNSTABLE`, main ist nicht branch-protected. Fable hat gefragt und keine Freigabe erhalten; Merge auf einen geteilten Hauptzweig mit fremder laufender Arbeit ist kein Selbstentscheid. Nach Merge: `ctox upgrade --dev` auf skf, dann `ctox skills system show systematic-research --json` (muss die Auswertungsschleife tragen).
 - **[F9] CI-Defekt gefunden (nicht von uns):** `4:3 tablet launch smoke` in `.github/workflows/business-os-mobile-ci.yml` übergibt ein Python-Heredoc an `reactivecircus/android-emulator-runner`, dessen `script:` zeilenweise per `sh -c` läuft → `import os, struct` landet in der Shell, exit 127, deterministisch bei jedem Lauf. Fix: Prüfskript als Datei ablegen oder einzeiliges `python3 -c`. Im PR dokumentiert.
 - **[F8] PR #57 → Release.** https://github.com/metric-space-ai/ctox/pull/57 (Branch `feat/research-evaluation-methodology`, Commit `341d4e28b`, aus sauberem Klon `/Volumes/tmp/ctox-research-pr` von `github/main` gebaut, Suite 51/51). TRIGGER: CI grün → mergen; danach `ctox upgrade --dev` auf skf, dann `ctox skills system show systematic-research --json` prüfen (muss die Auswertungsschleife tragen). Konfliktauflösung gegen main dokumentiert: Build-Stempel v98, Rubrik-Slug „Research" von main behalten, neue Locale-Schlüssel beider Seiten vereinigt.
