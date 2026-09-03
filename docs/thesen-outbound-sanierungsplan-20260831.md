@@ -792,6 +792,46 @@ Nachmessung. Messskripte (rein lesend): `~/Documents/ctox-dev/output/claude-stat
 - Gate 14 auf dem Stand mit dem neuen Befehl: 113 grün / 1 rot (vorbestehend). **Push eab452a0a** 22:05 UTC.
   B8 (151652af3) baute noch; B9 (eab452a0a) startet verkettet direkt danach (`claude-chain-build.ts`).
 
+### 03.09. 04:00–06:20 UTC — App-Durchgang begonnen; fünf Fehlerklassen, drei behoben
+
+Owner: „die app läuft mal so überhaupt nicht" / „du musst die app einmal systematisch durchgehen."
+
+**Behoben und ausgerollt:**
+- **1.0.70 Dialoge öffneten nie.** Die app-eigenen Dialoge (Quellen-Einstellungen, Zugangsdaten) hängten die
+  Ebene korrekt in `ctx.host`, setzten aber nie `is-open`. CSS: ohne die Klasse `opacity: 0` UND
+  `pointer-events: none` — unsichtbar, und jeder Klick/Tastendruck ging an das Fenster darunter. Genau das
+  wirkte wie „Dialog öffnet unter dem Dialog" und „ich kann nichts eingeben".
+- **1.0.71 Passwortmanager über der App.** `autocomplete="username"/"current-password"` luden macOS-Schlüsselbund,
+  1Password, LastPass, Bitwarden ein. Jetzt Unterdrückungs-Marker; Zugangsdaten gehören in den Secret Store.
+- **1.0.72 „48 Kontakte zurückgestellt".** Zustand statt Aufgabe: 48 Zeilen, Dubletten, Fremdfirmen, keine
+  Handlung. Jetzt: eine Meldung mit Konsequenz und Knopf „Prüfung wiederholen" (leert die Zwischenspeicher),
+  höchstens fünf gesperrte Kontakte mit Grund, Fremdfirmen als Datenfehler markiert.
+
+**KORREKTUR zu „wo sind die Fixes hin":** Nichts überschrieben. Die Datei vor meinem ersten Deploy war
+bytegleich mit der lokalen Fassung (`2b522835037de9fa`, 368496 B). Der Repo-Verlauf beginnt allerdings erst mit
+der Momentaufnahme vom 31.08.; frühere Direktänderungen auf der Instanz wären schon vorher verloren gewesen.
+
+**Bestandsaufnahme (Skript über index.js):** 52 `data-action`-Werte, keine toten Knöpfe (`lead-sort` ist ein
+Select), 4 Dialogstellen, 19 Render-Funktionen, 48 Meldungsstellen — davon **9 ohne Handlungsangabe**, 12
+Zustands-Etiketten.
+
+**Live-Audit der vier Lead-Ansichten (KUKA):**
+| Ansicht | „fehlt/offen"-Zeilen | Dubletten |
+| --- | --- | --- |
+| Übersicht | 15 | „zu prüfen" ×5 |
+| Unternehmen | 2 | Firmenname ×3, „3 Quellen" ×3 |
+| Personen | 19 | „Geschäftsführung" ×5, „0 Quellen" ×7 |
+| Einordnung | 15 | „eintragen" ×15 |
+
+**Offene Owner-Befunde (Reihenfolge noch zu bestätigen):** Personen als Reiter mit Detailbereich statt Liste;
+Adapter-Skript ist in der App nicht lesbar (nativer Lesepfad fehlt); Befehlskanal reißt unter Last ab und
+erscheint als „Sellify-Abgleich fehlgeschlagen"/„business_commands was cancelled"; Shell landet nach Reload
+im Wiederherstellungsbildschirm; 9 Meldungen ohne Handlung.
+
+**Kampagne pausiert** (03.09. 06:05 UTC): Die 18 Agentenläufe machten die Instanz für die Bedienung unbrauchbar.
+Restliche Aufträge abgebrochen, ein Lauf läuft aus. Zwischenstand: 210 Felder (vorher 146), 256 Feldzustände
+(vorher 21), 48 Kontakte (vorher 29); 8 Leads mit vollen 32 Feldzuständen. Neustart nach dem UI-Durchgang.
+
 ## Working
 
 | Karte | Worker / Log | Fertig heißt |
