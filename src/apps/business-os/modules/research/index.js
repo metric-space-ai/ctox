@@ -8,7 +8,7 @@ import {
   sliceResearchGraphProjection,
 } from './research-graph-data.mjs';
 
-const BUILD = '20260902-research-claims-knowledge-v89';
+const BUILD = '20260903-research-evaluation-wiring-v90';
 const DEFAULT_AXIS_X = 'evidence_strength';
 const DEFAULT_AXIS_Y = 'topic_fit';
 const ROW_LIMIT = 5000;
