@@ -10501,6 +10501,54 @@ function moduleCatalogFingerprint(catalog) {
   }
 }
 
+async function loadQaInstalledModuleCandidate() {
+  const params = new URLSearchParams(window.location.search);
+  if (!isLocalBusinessOsSurface() || !params.has('rxdbSmoke')) return null;
+  const moduleId = String(params.get('qaInstalledModule') || '').trim();
+  if (!moduleId) return null;
+  if (!/^[a-z0-9](?:[a-z0-9_-]{0,126}[a-z0-9])?$/.test(moduleId)) {
+    throw new Error('qaInstalledModule must be a normalized module id');
+  }
+  const response = await fetch(
+    `installed-modules/${encodeURIComponent(moduleId)}/module.json?v=${APP_BUILD}`,
+    { cache: 'no-store' },
+  );
+  if (!response.ok) {
+    throw new Error(`QA installed module manifest request failed (${response.status})`);
+  }
+  const manifest = await response.json();
+  const expectedEntry = `installed-modules/${moduleId}/index.html`;
+  if (manifest?.id !== moduleId || manifest?.entry !== expectedEntry || manifest?.install_scope !== 'installed') {
+    throw new Error(`QA installed module manifest does not match ${moduleId}`);
+  }
+  return {
+    ...manifest,
+    runtime_installed: true,
+    installed: true,
+    instance_visible: true,
+    qa_only: true,
+    source: 'installed',
+    lifecycle: {
+      ...(manifest.lifecycle || {}),
+      runtime_installed: true,
+      local_module: true,
+      visibility_state: 'private',
+    },
+  };
+}
+
+function withQaInstalledModuleCandidate(catalog, candidate) {
+  if (!candidate) return catalog;
+  const modules = normalizeModuleList(catalog?.modules)
+    .filter((mod) => mod.id !== candidate.id);
+  modules.push(candidate);
+  return {
+    ...(catalog || {}),
+    modules,
+    source: `${catalog?.source || 'business-os-shell'}+qa-installed-module`,
+  };
+}
+
 async function loadModuleLayout() {
   return readModuleLayout();
 }
@@ -10514,8 +10562,12 @@ async function loadTemplates() {
 }
 
 async function loadModuleCatalog(timeoutMs = 60000, options = {}) {
+  const qaInstalledModuleCandidate = await loadQaInstalledModuleCandidate();
+  const finalizeCatalog = (catalog) => normalizeModuleCatalog(
+    withQaInstalledModuleCandidate(catalog, qaInstalledModuleCandidate),
+  );
   if (allowsCompleteQaModuleCatalog()) {
-    return normalizeModuleCatalog(await loadPackagedModuleCatalog());
+    return finalizeCatalog(await loadPackagedModuleCatalog());
   }
   const coll = state.db?.collection?.('business_module_catalog');
   if (!coll) throw new Error('business_module_catalog collection is required for shell module metadata');
@@ -10543,10 +10595,10 @@ async function loadModuleCatalog(timeoutMs = 60000, options = {}) {
           updated_at_ms: Date.now(),
           source: cachedCatalog.source || 'business-os-shell',
         };
-        return normalizeModuleCatalog(mergedCatalog);
+        return finalizeCatalog(mergedCatalog);
       }
     }
-    return normalizeModuleCatalog(cachedCatalog);
+    return finalizeCatalog(cachedCatalog);
   }
 
   const syncStart = state.sync?.startCollection?.('business_module_catalog');
@@ -10558,7 +10610,7 @@ async function loadModuleCatalog(timeoutMs = 60000, options = {}) {
     // The packaged catalog is only a cold-start UI fallback. The persisted
     // business_module_catalog is owned by the native CTOX runtime so freshly
     // created installed modules cannot be shadowed by the shell seed.
-    return normalizeModuleCatalog(shellCatalog);
+    return finalizeCatalog(shellCatalog);
   }
 
   await syncStart;
@@ -10567,7 +10619,7 @@ async function loadModuleCatalog(timeoutMs = 60000, options = {}) {
   while (Date.now() < deadline) {
     try {
       const data = await readModuleCatalogProjection(coll);
-      if (data) return normalizeModuleCatalog(data);
+      if (data) return finalizeCatalog(data);
     } catch (error) {
       lastError = error;
     }
@@ -13682,6 +13734,7 @@ const LAUNCHER_CATEGORY_LABELS = Object.freeze({
   governance: { de: '⚖️ Governance', en: '⚖️ Governance' },
   security: { de: '🔒 Sicherheit', en: '🔒 Security' },
   analytics: { de: '◌ Analytics', en: '◌ Analytics' },
+  entertainment: { de: '✦ Unterhaltung', en: '✦ Entertainment' },
   system: { de: '🧠 System', en: '🧠 System' },
   imported: { de: '◫ Weitere Apps', en: '◫ Other apps' },
 });

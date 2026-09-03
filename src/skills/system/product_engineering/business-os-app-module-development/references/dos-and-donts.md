@@ -7,8 +7,9 @@
 - Use plain HTML fragments, CSS, and browser ESM.
 - Use structured file-edit tools for app files. In CTOX Codex runs, use
   `apply_patch`; use shell commands for inspection, validation, and tests.
-- Include `icon.svg` and set `"icon": "icon.svg"` in the runtime
-  `module.json`.
+- Include one local app tile icon and set `"icon"` to either `icon.svg` or
+  `icon.png` in the runtime `module.json`. PNG icons must be square, 60–1024
+  px, and no larger than 512 KiB.
 - Export `mount(ctx)` from `index.js`.
 - Render into `ctx.host`.
 - Put `data-context-record-id`/`-record-type`/`-label` on every record row/card/tree node so the shell right-click hands the agent that record (see module-contract "Agent Context").

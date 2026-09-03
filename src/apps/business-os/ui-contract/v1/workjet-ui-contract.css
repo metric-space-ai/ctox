@@ -103,6 +103,10 @@
   --workjet-category-analytics-accent-foreground: #ffffff;
   --workjet-category-analytics-accent-soft: #e0e7ff;
   --workjet-category-analytics-accent-border: #a5b4fc;
+  --workjet-category-entertainment-accent: #db2777;
+  --workjet-category-entertainment-accent-foreground: #ffffff;
+  --workjet-category-entertainment-accent-soft: #fce7f3;
+  --workjet-category-entertainment-accent-border: #f9a8d4;
   --workjet-category-system-accent: #64748b;
   --workjet-category-system-accent-foreground: #ffffff;
   --workjet-category-system-accent-soft: #e2e8f0;
@@ -181,6 +185,8 @@
   --workjet-category-security-accent-border: #b91c1c;
   --workjet-category-analytics-accent-soft: #1e1b4b;
   --workjet-category-analytics-accent-border: #4f46e5;
+  --workjet-category-entertainment-accent-soft: #500724;
+  --workjet-category-entertainment-accent-border: #be185d;
   --workjet-category-system-accent-soft: #1e293b;
   --workjet-category-system-accent-border: #475569;
   --workjet-category-imported-accent-soft: #27272a;

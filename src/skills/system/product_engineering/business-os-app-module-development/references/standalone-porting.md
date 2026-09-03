@@ -42,7 +42,8 @@ Required `ctx` boundary:
 ## Porting Steps
 
 1. Create `module.json`, `collections.schema.json`, `schema.js`, `index.html`,
-   `index.css`, `index.js`, `icon.svg`, and focused tests.
+   `index.css`, `index.js`, one local `icon.svg` or `icon.png`, and focused
+   tests.
 2. Move the standalone app's root render into `mount(ctx)`.
 3. Replace direct storage, localStorage, IndexedDB, REST, or in-memory stores
    with `ctx.db.collection('<module_scoped_collection>')`.

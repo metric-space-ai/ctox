@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 
 const source = readFileSync(fileURLToPath(new URL('./smoke-app-module.mjs', import.meta.url)), 'utf8');
 const e2eSource = readFileSync(fileURLToPath(new URL('./e2e-app-module.mjs', import.meta.url)), 'utf8');
+const shellSource = readFileSync(fileURLToPath(new URL('../app.js', import.meta.url)), 'utf8');
+const authoringSource = readFileSync(fileURLToPath(new URL('../../../core/service/service_business_os_app_authoring.rs', import.meta.url)), 'utf8');
 
 test('generic smoke treats a visible mounted non-CRUD app as valid', () => {
   assert.match(source, /No primary create action is required for a generic mount smoke/);
@@ -22,10 +24,19 @@ test('generic smoke waits for the replicated catalog and rejects the recovery su
   assert.match(source, /ctoxBusinessOsSmoke\?\.state\?\.qaModuleMountFailures/);
   assert.match(source, /history\.replaceState/);
   assert.match(source, /searchParams\.set\('rxdbSmoke', '1'\)/);
+  assert.match(source, /searchParams\.set\('qaInstalledModule', moduleId\)/);
   assert.match(source, /execution context was destroyed\|cannot find context/);
   assert.match(source, /Business OS shell did not expose module/);
   assert.match(source, /\.desktop-icon\[data-target=/);
   assert.match(source, /launcher\.click\(\)/);
+});
+
+test('import smoke mounts one local installed candidate without publishing it globally', () => {
+  assert.match(shellSource, /params\.has\('rxdbSmoke'\)/);
+  assert.match(shellSource, /params\.get\('qaInstalledModule'\)/);
+  assert.match(shellSource, /installed-modules\/\$\{encodeURIComponent\(moduleId\)\}\/module\.json/);
+  assert.match(authoringSource, /run_business_os_app_smoke/);
+  assert.doesNotMatch(authoringSource, /write_module_catalog_projection_to_rxdb/);
 });
 
 test('declared-scenario E2E uses the same deterministic mount gate', () => {

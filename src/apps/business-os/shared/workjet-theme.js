@@ -18,6 +18,7 @@ export const WORKJET_CATEGORY_IDS = Object.freeze([
   'governance',
   'security',
   'analytics',
+  'entertainment',
   'system',
   'imported',
 ]);
@@ -33,6 +34,7 @@ const CATEGORY_ALIASES = Object.freeze({
   'web-data-research': 'research',
   dev: 'development',
   engineering: 'engineering',
+  unterhaltung: 'entertainment',
 });
 
 const PUBLIC_DISTRIBUTIONS = new Set([

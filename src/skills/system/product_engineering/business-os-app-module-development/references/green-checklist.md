@@ -29,8 +29,9 @@ Use this before claiming a Business OS app is done.
 - The target directory is correct for runtime or source mode.
 - Three relevant shipped Business OS apps were chosen and inspected.
 - The app is vanilla HTML/CSS/browser ESM with no build step.
-- Runtime `module.json` sets `"icon": "icon.svg"` and the module directory
-  contains a local `icon.svg`.
+- Runtime `module.json` sets `"icon"` to `icon.svg` or `icon.png` and the
+  module directory contains that local file. PNG icons are square, 60–1024
+  px, and no larger than 512 KiB.
 - Runtime `module.json` sets root `launch_kind` to `desktop-app`, writes the
   canonical `presentation` object (minimum 640×480), and keeps
   `layout.shell: windowed` only as a compatibility hint.

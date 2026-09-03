@@ -17,7 +17,7 @@ schema.js
 index.html
 index.css
 index.js
-icon.svg
+icon.svg or icon.png
 core/records.mjs
 core/automation.mjs
 locales/en.json
@@ -39,9 +39,10 @@ new `index.js`.
 - `index.html` is the app's local HTML fragment. It must not contain `<!doctype>`, `<html>`, `<head>`, `<body>`, `<link>`, `<script>`, `<meta>`, `<title>`, or inline `<style>`.
 - `index.css` is plain CSS scoped under a module root class.
 - `index.js` is browser ESM and exports `mount(ctx)`.
-- Runtime apps must include `icon.svg` and set `"icon": "icon.svg"` in
-  `module.json`. Do not use remote icons, `icon_url`, `icon_path`, or inline SVG
-  fields in runtime manifests.
+- Runtime apps must include one local `icon.svg` or `icon.png` and set
+  `"icon"` to the matching filename in `module.json`. PNG icons must be square,
+  60–1024 px, and no larger than 512 KiB. Do not use remote icons, `icon_url`,
+  `icon_path`, or inline SVG fields in runtime manifests.
 - `mount(ctx)` renders into `ctx.host`, wires handlers, subscribes to data, and returns optional cleanup.
 - For runtime-installed apps, `mount(ctx)` must load `index.html` itself, or
   render an equivalent primary UI into `ctx.host` itself. Do not assume the
@@ -296,9 +297,10 @@ Use existing shipped apps as concrete examples, but adapt them to the requested 
 
 Do not copy these source-module manifest fields into runtime-installed apps:
 
-- `layout.icon_svg` or any inline SVG markup. Put SVG markup in `icon.svg`.
+- `layout.icon_svg` or any inline SVG markup. Put SVG markup in `icon.svg`, or
+  use a local validated `icon.png`.
 - `icon_url`, `icon_path`, or remote icon references. Runtime apps use local
-  `"icon": "icon.svg"`.
+  `"icon": "icon.svg"` or `"icon": "icon.png"`.
 - `store.installable`, `store.editable_after_install`, or source-store distribution flags.
 - `entry: modules/<id>/index.html`. Runtime apps use `installed-modules/<module-id>/index.html`.
 - `layout.right` unless the app truly needs a persistent third pane and `layout.third_pane_justification` explains the workflow need.

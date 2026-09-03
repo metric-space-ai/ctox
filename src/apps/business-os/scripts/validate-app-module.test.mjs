@@ -174,7 +174,17 @@ function writeInstalledModule(root, moduleId, overrides = {}) {
     '',
   ].join('\n'));
   writeFileSync(join(dir, 'index.js'), overrides.indexJs || installedIndexJs(moduleId, collectionName));
-  writeFileSync(join(dir, 'icon.svg'), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"></svg>\n');
+  if (overrides.manifest?.icon === 'icon.png') {
+    const png = Buffer.alloc(24);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png, 0);
+    png.writeUInt32BE(13, 8);
+    Buffer.from('IHDR').copy(png, 12);
+    png.writeUInt32BE(512, 16);
+    png.writeUInt32BE(512, 20);
+    writeFileSync(join(dir, 'icon.png'), png);
+  } else {
+    writeFileSync(join(dir, 'icon.svg'), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"></svg>\n');
+  }
   writeJson(join(dir, 'locales/de.json'), { title: moduleId });
   writeJson(join(dir, 'locales/en.json'), { title: moduleId });
   writeFileSync(join(dir, 'tests/basic.test.mjs'), overrides.testJs || [
@@ -720,7 +730,16 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   });
   const run = runValidator(root, 'missingicon', '--installed');
   assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /module\.json icon must be icon\.svg/);
+  assert.match(run.stderr, /module\.json icon must be icon\.svg or icon\.png/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'pngicon', {
+    manifest: { icon: 'icon.png' },
+  });
+  const run = runValidator(root, 'pngicon', '--installed');
+  assert.equal(run.status, 0, run.stderr);
 }
 
 {
@@ -992,7 +1011,6 @@ function writeSourceModule(root, moduleId, overrides = {}) {
     automationJs: [
       'export function buildFollowUpCommand(record = {}) {',
       '  return {',
-      "    type: 'ctox.ticket.local.create',",
       "    command_type: 'ctox.ticket.local.create',",
       "    module: 'ticketautomation',",
       "    record_id: record.id || 'demo',",
@@ -1013,7 +1031,6 @@ function writeSourceModule(root, moduleId, overrides = {}) {
       "import assert from 'node:assert/strict';",
       "import { buildFollowUpCommand } from '../core/automation.mjs';",
       "const command = buildFollowUpCommand({ id: 'demo', title: 'Demo' });",
-      "assert.equal(command.type, 'ctox.ticket.local.create');",
       "assert.equal(command.command_type, 'ctox.ticket.local.create');",
       "assert.equal(command.payload.status, 'open');",
       '',
@@ -1059,6 +1076,28 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /must dispatch at least one automation through ctx\.commandBus\.dispatch/);
   assert.match(run.stderr, /must include a supported automation command: business_os\.chat\.task or ctox\.ticket\.\*/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'entertainmentapp', {
+    manifest: {
+      category: 'entertainment',
+      data_runtime: { version: 1, sync: 'realtime', scope: 'actor', actions: {} },
+    },
+    indexHtml: '<main class="validator-module ctox-pane">Interactive canvas</main>\n',
+    indexJs: [
+      'export async function mount(ctx) {',
+      "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
+      "  const records = ctx.db.collection('entertainmentapp_records');",
+      '  void records;',
+      '  return () => { ctx.host.innerHTML = ""; };',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'entertainmentapp', '--installed');
+  assert.equal(run.status, 0, `${run.stderr}\n${run.stdout}`);
 }
 
 {

@@ -561,13 +561,6 @@ fn business_os_app_module_validation_feedback(
         if import_source_kind.is_empty() {
             return Ok(None);
         }
-        if let Err(err) = crate::business_os::store::write_module_catalog_projection_to_rxdb(root) {
-            return Ok(Some(render_business_os_app_module_validation_feedback(
-                job,
-                &target,
-                &format!("App catalog projection before browser smoke failed: {err:#}"),
-            )));
-        }
         let smoke_args = vec!["--installed".to_string(), "--json".to_string()];
         let smoke = match super::business_os_app_testing::run_business_os_app_smoke(
             root,

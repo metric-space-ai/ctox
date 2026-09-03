@@ -61,7 +61,8 @@ The reference catalog is not a copy-paste manifest template. Many shipped
 source apps are packaged shell modules and may contain source-only fields such
 as `layout.icon_svg`, `store.installable`, `entry: modules/...`, or a persistent
 third pane. For runtime-created apps, follow the module contract and validator:
-use `"icon": "icon.svg"` plus a local `icon.svg`,
+use `"icon": "icon.svg"` plus a local `icon.svg`, or `"icon": "icon.png"`
+plus a square local PNG (60–1024 px, at most 512 KiB),
 `installed-modules/<module-id>/index.html`, no store install flags, and no third
 pane unless the workflow truly needs it.
 

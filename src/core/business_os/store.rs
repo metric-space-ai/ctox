@@ -4450,11 +4450,12 @@ pub(crate) fn local_external_data_source_declarations(root: &Path) -> anyhow::Re
 }
 
 pub(super) fn backfill_local_module_icon(manifest: &mut ModuleManifest, module_dir: &Path) {
-    if manifest.icon.trim().is_empty()
-        && manifest.icon_path.trim().is_empty()
-        && module_dir.join("icon.svg").is_file()
-    {
-        manifest.icon = "icon.svg".to_owned();
+    if manifest.icon.trim().is_empty() && manifest.icon_path.trim().is_empty() {
+        if module_dir.join("icon.svg").is_file() {
+            manifest.icon = "icon.svg".to_owned();
+        } else if module_dir.join("icon.png").is_file() {
+            manifest.icon = "icon.png".to_owned();
+        }
     }
 }
 
@@ -4464,8 +4465,12 @@ pub(super) fn ensure_local_icon_manifest_value(manifest: &mut Value, module_dir:
         .and_then(Value::as_str)
         .unwrap_or_default()
         .trim();
-    if existing_icon.is_empty() && module_dir.join("icon.svg").is_file() {
-        manifest["icon"] = Value::String("icon.svg".to_owned());
+    if existing_icon.is_empty() {
+        if module_dir.join("icon.svg").is_file() {
+            manifest["icon"] = Value::String("icon.svg".to_owned());
+        } else if module_dir.join("icon.png").is_file() {
+            manifest["icon"] = Value::String("icon.png".to_owned());
+        }
     }
 }
 
@@ -9346,6 +9351,17 @@ pub fn complete_business_command_from_app_validation_success(
     }
     let mut terminal_queue_task = channels::load_queue_task(root, task_id)?;
     let completed_at_ms = now_ms() as i64;
+    // Imported apps must prove a real Shell-V2 mount before lifecycle ACLs or
+    // the global module catalog can expose them. Static validation alone does
+    // not establish that index.js can mount in the target shell.
+    let import_source_revision =
+        business_os_app_import_source_revision(root, &command_id, &command)?;
+    let smoke_status = if import_source_revision.is_some() {
+        verify_business_os_app_import_smoke_success(root, &command_id, &module_id)?;
+        "passed"
+    } else {
+        "not_required"
+    };
     ensure_app_create_actor_lifecycle_assignment(
         root,
         &conn,
@@ -9359,14 +9375,6 @@ pub fn complete_business_command_from_app_validation_success(
         runtime_app_delivery_evidence(root, &module_id)?;
     let native_schema_refresh =
         refresh_native_peer_after_runtime_app_schema_change(root, &module_id, &install_target)?;
-    let import_source_revision =
-        business_os_app_import_source_revision(root, &command_id, &command)?;
-    let smoke_status = if import_source_revision.is_some() {
-        verify_business_os_app_import_smoke_success(root, &command_id, &module_id)?;
-        "passed"
-    } else {
-        "not_required"
-    };
     let result_payload = serde_json::json!({
             "module_id": module_id,
             "install_target": install_target,
@@ -28552,6 +28560,119 @@ pub(super) mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(founder_count, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn imported_app_missing_smoke_evidence_is_not_published_to_catalog() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let module_id = "broken-import";
+        let command_id = "cmd_app_import_without_smoke";
+        seed_test_business_os_app_root(root)?;
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": command_id,
+                "module": "creator",
+                "type": "ctox.business_os.app.create",
+                "record_id": module_id,
+                "payload": {
+                    "title": "Import Broken App",
+                    "instruction": "Port the supplied app.",
+                    "module_id": module_id,
+                    "install_target": "runtime-installed-module",
+                    "target": "app"
+                },
+                "client_context": {
+                    "source": "business-os-app-creator-native-test",
+                    "target": "app"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queued task id")?
+            .to_string();
+        channels::lease_queue_task(root, &task_id, "ctox-service-test")?;
+        channels::transition_business_command_for_task(
+            root,
+            &task_id,
+            "leased",
+            None,
+            None,
+            None,
+            "test importer worker leased",
+        )?;
+        thread::sleep(Duration::from_millis(1100));
+        write_minimal_runtime_app_artifacts(root, module_id)?;
+
+        let payload = serde_json::json!({
+            "title": "Import Broken App",
+            "instruction": "Port the supplied app.",
+            "module_id": module_id,
+            "install_target": "runtime-installed-module",
+            "target": "app",
+            "import_source": {
+                "kind": "github",
+                "repository_url": "https://github.com/example/broken-import",
+                "ref": "main"
+            }
+        });
+        let conn = open_store(root)?;
+        conn.execute(
+            "UPDATE business_commands SET payload_json = ?1 WHERE command_id = ?2",
+            params![serde_json::to_string(&payload)?, command_id],
+        )?;
+        drop(conn);
+        let snapshot_root = root
+            .join("runtime/business-os/app-imports")
+            .join(command_id);
+        fs::create_dir_all(&snapshot_root)?;
+        fs::write(
+            snapshot_root.join("source-manifest.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "command_id": command_id,
+                "module_id": module_id,
+                "resolved_revision": "0123456789abcdef"
+            }))?,
+        )?;
+
+        let error = complete_business_command_from_app_validation_success(
+            root,
+            &task_id,
+            Some(module_id),
+            "static validation passed without smoke",
+        )
+        .expect_err("missing smoke evidence must block importer publication");
+        assert!(
+            format!("{error:#}").contains("app import smoke evidence is missing"),
+            "unexpected error: {error:#}"
+        );
+        if let Some(catalog) =
+            load_rxdb_collection_record(root, "business_module_catalog", "module-catalog")?
+        {
+            assert!(
+                !catalog
+                    .get("modules")
+                    .and_then(Value::as_array)
+                    .is_some_and(|modules| modules.iter().any(|module| {
+                        module.get("id").and_then(Value::as_str) == Some(module_id)
+                    })),
+                "an importer failure must not publish the module to the catalog"
+            );
+        }
+        let conn = open_store(root)?;
+        let founder_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_module_acl WHERE module_id = ?1",
+            params![module_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            founder_count, 0,
+            "failed import must not assign lifecycle ACLs"
+        );
         Ok(())
     }
 

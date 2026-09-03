@@ -97,8 +97,8 @@ Do not rebuild any of these locally.
   via `listActionIcons()` in `shared/icons.js`). Static SVGs follow the same
   style: `viewBox="0 0 24 24"`, `fill="none"`, `stroke="currentColor"`,
   stroke-width 1.8, round caps. Do not mix icon styles or invent new ones.
-- The app tile icon (`icon.svg`) may use the gradient module-icon style; UI
-  action icons stay monochrome so they inherit control states.
+- The app tile icon (`icon.svg` or `icon.png`) may use the gradient module-icon
+  style; UI action icons stay monochrome so they inherit control states.
 
 ## UX Patterns
 
@@ -279,7 +279,7 @@ Rules that go with it:
   timeout when it never fired (see coding-agents `applyArtifactSrcdoc`).
 - **Icon-rail variant for selector-only left panes.** When the left pane is a
   pure switcher (projects/apps, no metadata to scan), it may collapse to a
-  56px icon rail BY DEFAULT: 40px app icons (module `icon.svg`, monogram
+  56px icon rail BY DEFAULT: 40px app icons (module `icon.svg` or `icon.png`, monogram
   fallback on load error), names as a floating hover chip (`position: fixed`
   on `document.body` so pane clipping can't swallow it; remove it on
   unmount), selection as an accent outline on the icon. Make the pane a size

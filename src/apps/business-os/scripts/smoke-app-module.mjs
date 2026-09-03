@@ -144,13 +144,15 @@ function parseArgs(argv) {
 function withModuleHash(baseUrl, moduleId) {
   const url = new URL(baseUrl);
   url.searchParams.set('rxdbSmoke', '1');
+  url.searchParams.set('qaInstalledModule', moduleId);
   url.hash = moduleId;
   return url.href;
 }
 
-function withoutModuleHash(baseUrl) {
+function withoutModuleHash(baseUrl, moduleId) {
   const url = new URL(baseUrl);
   url.searchParams.set('rxdbSmoke', '1');
+  url.searchParams.set('qaInstalledModule', moduleId);
   url.hash = '';
   return url.href;
 }
@@ -212,7 +214,7 @@ async function waitForPrimaryCreateAction(page, moduleId, timeoutMs) {
 
 async function openModule(page, moduleId, url, timeoutMs) {
   const rootSelector = `[data-module-root="${moduleId}"]`;
-  await page.goto(withoutModuleHash(url), { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+  await page.goto(withoutModuleHash(url, moduleId), { waitUntil: 'domcontentloaded', timeout: timeoutMs });
   const deadline = Date.now() + timeoutMs;
   let opened = false;
   while (!opened && Date.now() <= deadline) {

@@ -2004,6 +2004,7 @@ fn app_development_contract(
         "index.css",
         "index.js",
         "icon.svg",
+        "icon.png",
         "core/records.mjs",
         "core/automation.mjs",
         "lib/*.mjs",
@@ -9944,6 +9945,13 @@ mod tests {
             .iter()
             .any(|path| path.as_str()
                 == Some("runtime/business-os/installed-modules/mcp-inventory/module.json")));
+        assert!(result
+            .pointer("/development_contract/source_files")
+            .and_then(Value::as_array)
+            .context("expected development_contract.source_files")?
+            .iter()
+            .any(|path| path.as_str()
+                == Some("runtime/business-os/installed-modules/mcp-inventory/icon.png")));
         let skill_resources = result
             .pointer("/development_contract/skill_resources")
             .and_then(Value::as_array)
