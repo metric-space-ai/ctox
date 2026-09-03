@@ -1,6 +1,6 @@
 # SKF Nachrecherche — Kampagnen-Board (drone_bearing_design_verified)
 
-**Headline:** PR https://github.com/metric-space-ai/ctox/pull/57 offen (Skill-Methodik + App), CI läuft — damit kommt die Methodik über das nächste Binary auf die Instanzen. App-Verdrahtung ist auf skf.ctox.dev bereits ausgeliefert (v1.0.16).
+**Headline:** PR #57 (Skill-Methodik + App) ist mergefähig, CI durch: 8 grün, 5 rot und alle 5 vorbestehend/CI-defekt, keiner berührt die 8 PR-Dateien. OWNER-Entscheid: mergen? Danach `ctox upgrade --dev` auf skf und Skill-Probe.
 
 Owner-Auftrag 02.09.2026: „da müssen noch Stunden an nachträglicher Quellenauswertung rein“ — 138 verifizierte Quellen sind nur zu 17 inhaltlich ausgewertet (31 Claims), 121 Quellen hängen im Graph frei, Knowledge zeigt rohe Textfetzen, Messdaten nur aus SRC-0123.
 
@@ -36,6 +36,8 @@ Zielbild: jede der 138 Quellen inhaltlich ausgewertet (Relevanzurteil, 3–10 pr
 
 ## To-Do
 
+- **OWNER: PR #57 mergen?** https://github.com/metric-space-ai/ctox/pull/57 ist `MERGEABLE`/`UNSTABLE`, main ist nicht branch-protected. Fable hat gefragt und keine Freigabe erhalten; Merge auf einen geteilten Hauptzweig mit fremder laufender Arbeit ist kein Selbstentscheid. Nach Merge: `ctox upgrade --dev` auf skf, dann `ctox skills system show systematic-research --json` (muss die Auswertungsschleife tragen).
+- **[F9] CI-Defekt gefunden (nicht von uns):** `4:3 tablet launch smoke` in `.github/workflows/business-os-mobile-ci.yml` übergibt ein Python-Heredoc an `reactivecircus/android-emulator-runner`, dessen `script:` zeilenweise per `sh -c` läuft → `import os, struct` landet in der Shell, exit 127, deterministisch bei jedem Lauf. Fix: Prüfskript als Datei ablegen oder einzeiliges `python3 -c`. Im PR dokumentiert.
 - **[F8] PR #57 → Release.** https://github.com/metric-space-ai/ctox/pull/57 (Branch `feat/research-evaluation-methodology`, Commit `341d4e28b`, aus sauberem Klon `/Volumes/tmp/ctox-research-pr` von `github/main` gebaut, Suite 51/51). TRIGGER: CI grün → mergen; danach `ctox upgrade --dev` auf skf, dann `ctox skills system show systematic-research --json` prüfen (muss die Auswertungsschleife tragen). Konfliktauflösung gegen main dokumentiert: Build-Stempel v98, Rubrik-Slug „Research" von main behalten, neue Locale-Schlüssel beider Seiten vereinigt.
 - **[F8-alt] Skill-Änderung wartet auf CTOX-Release.** `ctox skills system show systematic-research --json` meldet `source_path=embedded:skills/…` — der Skill kommt aus dem Binary, ein Hotpatch der Dateien im Release-Baum wirkt zur Laufzeit NICHT. Die Dateien auf skf entsprechen bereits `main` (Backup unter `~/.local/state/ctox/hotpatch-backups/skill-20260903T…`). Wirksam wird die Methodik dort mit dem nächsten Binary. Die App-Verdrahtung (Prompt, Kriterien, Tabellenvertrag) wirkt dagegen sofort und ist ausgeliefert.
 
@@ -79,6 +81,9 @@ Zielbild: jede der 138 Quellen inhaltlich ausgewertet (Relevanzurteil, 3–10 pr
 - Workjet-Snapshot-Limit 64 MiB → Launchpad-Repo, absolute Datenpfade unter /Volumes/tmp im Brief (Daten, nicht Repo).
 
 ## Error patterns
+
+4. `git apply` ist atomar: eine einzige nicht anwendbare Datei (hier `docs/dev/…`, die es auf `main` noch nicht gibt) verwirft den GANZEN Patch, obwohl die Ausgabe „Applied patch to X cleanly" für alle anderen meldet. Patch auf die Dateien einschränken, die im Ziel existieren.
+5. `git clone --shared <lokal>` erbt `origin` = lokales Repo; ein `fetch origin main` holt dann den lokalen (hier: 190 Commits fremde Arbeit) statt den Server-Stand. Im Klon einen zweiten Remote auf den echten Server legen und von dort branchen.
 
 2. `pdftotext -layout` verschränkt zweispaltige Paper zeilenweise → wörtliche Zitate zerreißen (SRC-0002: 6/9 Zitate „nicht gefunden“). Fix 19:50: Re-Extraktion in Lesereihenfolge für alle nicht laufenden Quellen; Validator prüft zusätzlich Wortfolge im Fenster (≥ 90 %).
 3. `runs mark integrated` ohne vorherigen `result import` → workspace_rejected (1×); Pump macht jetzt import → mark.
