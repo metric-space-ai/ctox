@@ -999,23 +999,33 @@ async function enforceMcpClientPolicy(request, policy) {
     return { ok: true };
   }
   const body = await safeJson(request);
-  const tools = mcpToolNamesFromBody(body);
-  for (const tool of tools) {
+  const calls = mcpToolCallsFromBody(body);
+  for (const { tool, argumentsValue } of calls) {
     const decision = managedToolPolicyDecision(tool, policy);
     if (!decision.ok) {
       return decision;
+    }
+    const moduleDecision = managedModulePolicyDecision(tool, argumentsValue, policy);
+    if (!moduleDecision.ok) {
+      return moduleDecision;
     }
   }
   return { ok: true };
 }
 
-function mcpToolNamesFromBody(body) {
+function mcpToolCallsFromBody(body) {
   const values = Array.isArray(body) ? body : [body];
   return values
     .filter((value) => value && typeof value === "object")
     .filter((value) => value.method === "tools/call")
-    .map((value) => value.params && typeof value.params.name === "string" ? value.params.name.trim() : "")
-    .filter(Boolean);
+    .map((value) => ({
+      tool: value.params && typeof value.params.name === "string" ? value.params.name.trim() : "",
+      argumentsValue:
+        value.params?.arguments && typeof value.params.arguments === "object" && !Array.isArray(value.params.arguments)
+          ? value.params.arguments
+          : {}
+    }))
+    .filter(({ tool }) => Boolean(tool));
 }
 
 function managedToolPolicyDecision(tool, policy) {
@@ -1036,6 +1046,43 @@ function managedToolPolicyDecision(tool, policy) {
   }
   return { ok: true };
 }
+
+function managedModulePolicyDecision(tool, argumentsValue, policy) {
+  if (policy.allowedModules.length === 0) {
+    return { ok: true };
+  }
+  const moduleId = tool === "business_os.open_link"
+    ? cleanContextValue(argumentsValue.module_or_collection)
+    : cleanContextValue(argumentsValue.module_id);
+  if (!moduleId && MODULE_SCOPED_TOOLS.has(tool)) {
+    return {
+      ok: false,
+      message: `Managed MCP token requires a module id for ${tool}`,
+      field: "allowedModules"
+    };
+  }
+  if (moduleId && !policy.allowedModules.includes(moduleId)) {
+    return {
+      ok: false,
+      message: `Managed MCP token does not allow module ${moduleId}`,
+      field: "allowedModules"
+    };
+  }
+  return { ok: true };
+}
+
+const MODULE_SCOPED_TOOLS = new Set([
+  "business_os.get_module",
+  "business_os.prepare_app_source",
+  "business_os.list_app_files",
+  "business_os.read_app_file",
+  "business_os.search_app_source",
+  "business_os.write_app_file",
+  "business_os.validate_app",
+  "business_os.smoke_app",
+  "business_os.e2e_app",
+  "business_os.open_link"
+]);
 
 const READ_TOOLS = new Set([
   "business_os.status",
@@ -1091,6 +1138,7 @@ function normalizeManagedMcpPolicy(value) {
     allowApprovals: booleanOr(source.allowApprovals, false),
     allowExternalEffects: booleanOr(source.allowExternalEffects, false),
     rateLimitPerMinute: integerBetween(source.rateLimitPerMinute, 1, 600, 60),
+    allowedModules: stringList(source.allowedModules).slice(0, 50),
     allowedTools: stringList(source.allowedTools).slice(0, 50),
     deniedTools: stringList(source.deniedTools).slice(0, 50)
   };

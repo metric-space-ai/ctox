@@ -276,6 +276,70 @@ test("managed ctox.dev read-only token blocks upsert_record at the gateway", asy
   assert.equal(routed, false);
 });
 
+test("managed app-development tokens are limited to their single module", async () => {
+  let routed = 0;
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({
+      ok: true,
+      context: {
+        channel: "ctox_dev_managed_mcp",
+        surface: "business_os_mcp",
+        actor: "ctox-dev:user:user_1",
+        workspace: "tenant:tenant_1",
+        client_id: "ctox-dev:mcp-token:token_1",
+        instance_id: "welsch.ctox.dev",
+        auth_source: "ctox_dev_managed_mcp_token"
+      },
+      policy: {
+        allowReads: true,
+        allowWrites: true,
+        allowApprovals: false,
+        allowExternalEffects: false,
+        allowedModules: ["radio-globe"],
+        allowedTools: ["business_os.write_app_file"],
+        deniedTools: []
+      }
+    }),
+    { headers: { "content-type": "application/json" } }
+  );
+  const env = {
+    CTOX_MANAGED_MCP_AUTH_URL: "https://ctox.dev/api/managed-mcp/client-auth",
+    CTOX_MANAGED_MCP_AUTH_TOKEN: "gateway-secret",
+    MCP_REQUIRE_CLIENT_IDENTITY: "true",
+    BUSINESS_OS_MCP_SESSIONS: fakeSessionsBinding(async () => {
+      routed += 1;
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { ok: true } }));
+    })
+  };
+  const requestFor = (id, moduleId) => handleRequest(
+    new Request("https://mcp.ctox.dev/mcp/welsch.ctox.dev", {
+      method: "POST",
+      headers: { authorization: "Bearer ctox_mcp_live_token" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        method: "tools/call",
+        params: {
+          name: "business_os.write_app_file",
+          arguments: moduleId ? { module_id: moduleId, path: "index.js", content: "export const ok=true" } : {}
+        }
+      })
+    }),
+    env
+  );
+
+  const allowed = await requestFor(1, "radio-globe");
+  const otherModule = await requestFor(2, "black-hole-studio");
+  const missingModule = await requestFor(3, null);
+
+  assert.equal(allowed.status, 200);
+  assert.equal(otherModule.status, 403);
+  assert.equal((await otherModule.json()).error.data.field, "allowedModules");
+  assert.equal(missingModule.status, 403);
+  assert.equal((await missingModule.json()).error.data.field, "allowedModules");
+  assert.equal(routed, 1);
+});
+
 test("decision hub tools obey managed read and write policy", async () => {
   let routed = 0;
   globalThis.fetch = async () => new Response(
