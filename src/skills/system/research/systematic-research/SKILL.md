@@ -18,10 +18,16 @@ A research run is not a search result or a prose answer. It must leave:
 
 1. a complete candidate ledger, including duplicates and rejections;
 2. a verified source catalog containing canonical original content only;
-3. a persisted literature/discovery graph;
-4. claim-to-evidence-to-snapshot-to-source lineage;
-5. the requested Knowledge tables, Skillbooks, Runbooks, and/or document;
-6. an explicit saturation record.
+3. **a content evaluation of every admitted source** — a relevance verdict and
+   its engineering claims, not just the fact that the file was fetched;
+4. a persisted literature/discovery graph in which every admitted source is
+   connected through at least one claim or relevance edge;
+5. claim-to-evidence-to-snapshot-to-source lineage;
+6. the requested Knowledge tables, Skillbooks, Runbooks, and/or document;
+7. an explicit saturation record.
+
+A corpus of verified but unread sources is a failed run. Verification proves
+that the bytes are authentic; it says nothing about what the source contains.
 
 Search snippets, metadata records, abstracts, DOI resolver pages, and
 `ctox_deep_research` inventories are candidates, never evidence.
@@ -204,6 +210,73 @@ Run this loop until the saturation gate passes:
 Using one search surface, stopping after one envelope, or failing to inspect
 the references of relevant scientific papers is a discovery failure.
 
+## Mandatory Second Loop: Evaluate Every Admitted Source
+
+Discovery ends with a verified corpus. It does not end the run. Every source in
+`source_catalog` is then read and evaluated. Skipping this leaves the typical
+failure mode: hundreds of verified sources, a handful of claims, and a graph in
+which most sources hang unconnected.
+
+Work in slices of about five sources so a failure never costs the whole corpus,
+and write each result immediately.
+
+For every admitted source produce exactly one evaluation record:
+
+1. **Relevance verdict** — `core` (delivers the target quantities directly),
+   `context` (transferable method, norm, adjacent measurement), or `off_topic`
+   (no bearing on the question; keep it, mark it, do not silently drop it).
+2. **Summary** — subject, method (test rig, simulation, norm, dataset), main
+   findings with numbers and units, limits.
+3. **Claims** — 3 to 10 for a relevant source, at most 12. Each claim is:
+   - a self-contained engineering statement in the operator's language, with
+     numbers and units, 40-400 characters, no citation apparatus, no URLs;
+   - `statement_type` ∈ `direct_measurement`, `normative`, `analytical`,
+     `assumption`, `observation`;
+   - a **verbatim quote** from the extracted original, 25-400 characters,
+     copied, never paraphrased or reconstructed from memory;
+   - a locator the reader can follow (page, section, table, file);
+   - the knowledge book / topic it belongs to;
+   - limitations: scope, assumptions, transferability;
+   - the numeric values as `quantity`/`value`/`unit`/`condition` when present.
+4. **Tabular data flag** — does the source carry extractable measurement rows,
+   which quantities, how many operating points, is extraction feasible.
+5. **Related sources** — other admitted sources this one agrees with,
+   contradicts, extends, cites, or shares a dataset with.
+6. **Open questions** the source leaves for the engineering task.
+
+Rules that make the result usable instead of decorative:
+
+- The claim states what the **source** says, never your own conclusion.
+- Every number in a claim must be in the quote or at the quoted location.
+- No text fragments, no metadata (authors, DOI, publisher) as a claim.
+- An `off_topic` source gets at most two claims explaining what it does carry.
+- Verify each quote mechanically against the extracted text before accepting
+  the record. A quote that cannot be found is a defect of the record, not of
+  the check. Tolerate only whitespace and hyphenation artefacts of the text
+  extraction, never changed words.
+
+Extract text once per source and evaluate from that text. For PDFs use reading
+order, not layout mode: layout mode interleaves two-column papers line by line
+and tears verbatim quotes apart.
+
+## Consolidate Across Sources
+
+Single-source claims are the raw material, not the result. After the evaluation
+loop, cluster the claims per knowledge book:
+
+- A cluster is one engineering statement supported by **at least two different
+  sources**. Claims from the same source never form a cluster alone.
+- The canonical claim covers all members; numbers only when the members agree,
+  otherwise give the range or drop the number. Never invent a value.
+- `statement_type` of a cluster is the strongest common type
+  (direct_measurement > normative > analytical > observation > assumption);
+  confidence is the lowest of its members.
+- Where sources disagree, do **not** cluster. Record a contradiction with both
+  sides, what exactly differs, and the likely cause (different boundary
+  conditions, scale, method, bearing variant).
+- Record, per knowledge book, which statements rest on a single source — those
+  are the gaps that justify the next research round.
+
 ## Typed Tool Rules
 
 - Managed runs use the directly exposed `ctox_scholarly_search`,
@@ -296,6 +369,13 @@ Do not claim completion until:
 
 - all candidate and graph rows are persisted;
 - every admitted source passes the Evidence gate;
+- **every admitted source carries a relevance verdict and, unless off_topic, at
+  least two claims** — an unevaluated verified source blocks completion;
+- **every claim quote is mechanically verified against the extracted original**;
+- **cross-source consolidation ran** and contradictions plus single-source gaps
+  are recorded per knowledge book;
+- **every admitted source is connected in the graph** through at least one
+  claim or relevance edge;
 - every claim resolves through immutable lineage;
 - direct and derived data remain separated;
 - the requested durable outputs are imported and linked;

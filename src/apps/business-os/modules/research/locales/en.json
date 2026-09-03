@@ -88,7 +88,7 @@
   "evidenceNoteText": "Use the existing knowledge base as a starting point. Score only supported sources and separate raw candidates from curated dashboard results.",
   "adjustLeftWidth": "Adjust left column width",
   "adjustRightWidth": "Adjust right column width",
-  "defaultPromptText": "Generate a clear dashboard based on the {0} knowledge base. Use source_catalog as a raw source base, curated tables for evaluation, and score only supported sources.",
+  "defaultPromptText": "Produce an evidence-backed research dashboard for the {0} knowledge base. Discover and verify sources (source_candidates then source_catalog), then evaluate EVERY admitted source and write its supported claims with verbatim quote and locator into claims. Consolidate identical statements across sources, record contradictions, and connect every source in the semantic graph.",
   "defaultPromptGeneric": "Create a compact Web Research Dashboard based on the selected knowledge base.",
   "decisionNoteEv1": "Use strongest evidence first",
   "decisionNoteEv1Body": "{0} is currently the strongest dashboard anchor.",
@@ -161,5 +161,6 @@
   "graphDocumentQueued": "Word document was handed off to CTOX.",
   "researchChatOpened": "Research task prepared in chat – send it there to start.",
   "noKnowledgeClaims": "No evidence-backed claims in this knowledge base yet.",
-  "confidence": "Confidence"
+  "confidence": "Confidence",
+  "defaultCriteriaText": "Start from the existing knowledge base and keep raw candidates separate from verified sources. Evaluate EVERY admitted source: a relevance verdict (core/context/off_topic) and 3-10 supported claims with a verbatim quote, locator, statement type and limitations in the claims table. Then consolidate identical statements across sources into one claim with several pieces of evidence and record contradictions. A verified but unevaluated source counts as open work."
 }

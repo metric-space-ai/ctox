@@ -88,7 +88,7 @@
   "evidenceNoteText": "Nutze die vorhandene Knowledge Base als Ausgangspunkt. Score nur belegte Quellen und trenne Rohkandidaten von kuratierten Dashboard-Ergebnissen.",
   "adjustLeftWidth": "Linke Spaltenbreite anpassen",
   "adjustRightWidth": "Rechte Spaltenbreite anpassen",
-  "defaultPromptText": "Erzeuge ein übersichtliches Dashboard auf Basis der Knowledge Base {0}. Nutze source_catalog als Rohquellenbasis, kuratierte Tabellen als Auswertung und Score nur belegte Quellen.",
+  "defaultPromptText": "Erzeuge ein belegtes Research-Dashboard auf Basis der Knowledge Base {0}. Finde und verifiziere Quellen (source_candidates, dann source_catalog), werte danach JEDE aufgenommene Quelle inhaltlich aus und schreibe ihre belegten Aussagen mit wörtlichem Zitat und Fundstelle nach claims. Konsolidiere gleiche Aussagen quellenübergreifend, halte Widersprüche fest und verbinde jede Quelle im semantischen Graphen.",
   "defaultPromptGeneric": "Erstelle ein kompaktes Web Research Dashboard auf Basis der ausgewählten Knowledge Base.",
   "decisionNoteEv1": "Use strongest evidence first",
   "decisionNoteEv1Body": "{0} ist aktuell der stärkste Dashboard-Anker.",
@@ -161,5 +161,6 @@
   "graphDocumentQueued": "Word-Dokument wurde an CTOX übergeben.",
   "researchChatOpened": "Research-Aufgabe im Chat vorbereitet – zum Starten im Chat senden.",
   "noKnowledgeClaims": "Noch keine belegten Aussagen in dieser Knowledge Base.",
-  "confidence": "Konfidenz"
+  "confidence": "Konfidenz",
+  "defaultCriteriaText": "Nutze die vorhandene Knowledge Base als Ausgangspunkt und trenne Rohkandidaten von belegten Quellen. Werte JEDE aufgenommene Quelle inhaltlich aus: Relevanzurteil (core/context/off_topic) und 3-10 belegte Aussagen mit wörtlichem Zitat, Fundstelle, Aussagenart und Grenzen in die Tabelle claims. Fasse anschließend gleiche Aussagen aus mehreren Quellen zu einem Claim mit mehreren Belegen zusammen und weise Widersprüche aus. Eine verifizierte, aber nicht ausgewertete Quelle gilt als offene Arbeit."
 }

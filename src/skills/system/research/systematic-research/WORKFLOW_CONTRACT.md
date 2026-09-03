@@ -454,6 +454,43 @@ every manifest source must have a matching eligible Evidence entry. URL aliases,
 duplicate records, Wikipedia or other tertiary encyclopedias remain discovery
 candidates only and never increase the verified source count.
 
+### `claims` table — the consolidated engineering statements
+
+Discovery fills `source_catalog`; the evaluation loop fills `claims`. It is the
+table the Knowledge view and every report read from, so it is required for any
+research base that admits more than a handful of sources.
+
+Columns (stable order):
+
+| column | meaning |
+| --- | --- |
+| `claim_id` | `CLM-<4+ digits>`, stable across runs |
+| `claim_text` | the engineering statement in the operator's language, 40-400 chars |
+| `statement_type` | `direct_measurement`, `normative`, `analytical`, `assumption`, `observation` |
+| `evidence_id` | primary evidence row backing the claim |
+| `source_id` | one source, or several joined by `;` for a consolidated claim |
+| `exact_short_quote_or_table_ref` | verbatim quote or table reference, ≤ 300 chars |
+| `confidence` | `high`, `medium`, `low` — for a cluster the lowest of its members |
+| `limitations` | scope, assumptions, transferability; empty string when none |
+| `knowledge_book` | the topic label the claim belongs to |
+
+Every claim also has one `evidence_points` row per contributing source with
+`evidence_kind=claim_support`, the verbatim `quote`, the `source_locator`, and
+the same run/command IDs. Relevance verdicts are written as
+`evidence_kind=source_relevance` rows carrying the verdict in `fact_label`
+(`relevance:core|context|off_topic`) and the reasoning in `fact_value`; they are
+never used alone to support a quantitative claim.
+
+`direct_measurement_row` evidence duplicates the measurement tables row for row.
+Keep those rows in the measurement table only — the RxDB projection embeds at
+most 5 000 rows per table, and a duplicated evidence table pushes the claims out
+of the browser.
+
+Graph consequence: a consolidated claim is one `evidence` node with a
+`supports` edge from **each** contributing source and one `part_of` edge to its
+topic. Sources whose only contribution is a relevance verdict still get an edge,
+so no admitted source is left unconnected.
+
 ### Breadth before depth — facet the query, never settle for one pull
 
 A single `ctox web deep-research --query "<topic>"` returns one ranked

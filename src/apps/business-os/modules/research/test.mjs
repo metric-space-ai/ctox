@@ -1038,3 +1038,38 @@ test('knowledge view lists consolidated claims with their evidence', async () =>
   assert.equal(hooks.knowledgeClaims().length, 1);
   hooks.setStateForTest({ claimRows: [], evidenceRows: [], knowledgeTopic: '', knowledgeType: 'all' });
 });
+
+/* Guard (03.09.2026): a research run must not stop at "sources verified". The task the app seeds carries the
+   claims table in its contract and asks, in prompt and criteria, for a content evaluation of every admitted
+   source plus cross-source consolidation — otherwise the agent produces a large verified corpus with a
+   handful of claims and an unconnected graph, which is exactly the failure this wiring exists to prevent. */
+test('seeded research task demands per-source evaluation and consolidation', async () => {
+  const contract = hooks.RESEARCH_TABLE_CONTRACT;
+  assert.ok(contract.claims, 'claims table missing from the research table contract');
+  for (const column of ['claim_id', 'claim_text', 'statement_type', 'evidence_id', 'source_id', 'exact_short_quote_or_table_ref', 'confidence', 'limitations', 'knowledge_book']) {
+    assert.ok(contract.claims.columns.includes(column), `claims column ${column}`);
+  }
+
+  const prompt = hooks.defaultPromptForKnowledgeBase({ domain: 'drone_bearing_design_verified', title: 'Drone Bearing', tables: [] });
+  assert.match(prompt, /JEDE aufgenommene Quelle|EVERY admitted source/);
+  assert.match(prompt, /claims/);
+  assert.match(prompt, /[Kk]onsolidiere|[Cc]onsolidate/);
+
+  const de = JSON.parse(await readFile(new URL('./locales/de.json', import.meta.url), 'utf8'));
+  const en = JSON.parse(await readFile(new URL('./locales/en.json', import.meta.url), 'utf8'));
+  for (const [lang, dict] of [['de', de], ['en', en]]) {
+    assert.ok(dict.defaultCriteriaText, `${lang}: defaultCriteriaText missing`);
+    assert.match(dict.defaultCriteriaText, /claims/, `${lang}: criteria must name the claims table`);
+    assert.ok(dict.defaultPromptText.includes('claims'), `${lang}: prompt must name the claims table`);
+  }
+
+  // the skill carries the same methodology, so an agent run without the app still evaluates every source
+  const skill = await readFile(new URL('../../../../skills/system/research/systematic-research/SKILL.md', import.meta.url), 'utf8');
+  assert.match(skill, /Evaluate Every Admitted Source/);
+  assert.match(skill, /Consolidate Across Sources/);
+  assert.match(skill, /least two claims\*\* — an unevaluated verified source blocks completion/);
+  assert.match(skill, /verbatim quote/);
+  const contractDoc = await readFile(new URL('../../../../skills/system/research/systematic-research/WORKFLOW_CONTRACT.md', import.meta.url), 'utf8');
+  assert.match(contractDoc, /`claims` table/);
+  assert.match(contractDoc, /claim_support/);
+});

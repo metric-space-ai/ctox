@@ -167,6 +167,20 @@ const RESEARCH_TABLE_CONTRACT = Object.freeze({
       'source_tier',
     ],
   },
+  claims: {
+    title: 'Claims',
+    columns: [
+      'claim_id',
+      'claim_text',
+      'statement_type',
+      'evidence_id',
+      'source_id',
+      'exact_short_quote_or_table_ref',
+      'confidence',
+      'limitations',
+      'knowledge_book',
+    ],
+  },
   evaluation_matrix: {
     title: 'Evaluation Matrix',
     columns: [
@@ -959,12 +973,14 @@ async function ensureTasksFromKnowledgeBases() {
       id: `research_${slugId(base.domain)}`,
       title: base.title,
       prompt: defaultPromptForKnowledgeBase(base),
-      criteria: state.t('evidenceNoteText', 'Nutze die vorhandene Knowledge Base als Ausgangspunkt. Score nur belegte Quellen und trenne Rohkandidaten von kuratierten Dashboard-Ergebnissen.'),
+      criteria: state.t('defaultCriteriaText', 'Nutze die vorhandene Knowledge Base als Ausgangspunkt und trenne Rohkandidaten von belegten Quellen. Werte JEDE aufgenommene Quelle inhaltlich aus: Relevanzurteil (core/context/off_topic) und 3-10 belegte Aussagen mit wörtlichem Zitat, Fundstelle, Aussagenart und Grenzen in die Tabelle claims. Fasse anschließend gleiche Aussagen aus mehreren Quellen zu einem Claim mit mehreren Belegen zusammen und weise Widersprüche aus. Eine verifizierte, aber nicht ausgewertete Quelle gilt als offene Arbeit.'),
       status: 'ready',
       knowledge_domain: base.domain,
       candidate_catalog_key: tableKey(base, ['source_candidates']) || 'source_candidates',
       source_catalog_key: tableKey(base, ['source_catalog', 'sources', 'curated_sources']) || 'source_catalog',
       curated_table_key: tableKey(base, ['evaluation_matrix', 'load_data_library', 'curated_sources', 'source_library']) || 'evaluation_matrix',
+      claims_table_key: tableKey(base, ['claims']) || 'claims',
+      evidence_table_key: tableKey(base, ['evidence_points']) || 'evidence_points',
       measurements_table_key: defaultMeasurementsTableKey(base),
       x_axis: defaultAxisPairForTask(base).x,
       y_axis: defaultAxisPairForTask(base).y,
@@ -5732,7 +5748,7 @@ function firstString(row, keys) {
 
 function defaultPromptForKnowledgeBase(base) {
   if (!base) return state.t('defaultPromptGeneric', 'Erstelle ein kompaktes Web Research Dashboard auf Basis der ausgewählten Knowledge Base.');
-  return state.t('defaultPromptText', `Erzeuge ein übersichtliches Dashboard auf Basis der Knowledge Base ${base.domain}. Nutze source_catalog als Rohquellenbasis, kuratierte Tabellen als Auswertung und Score nur belegte Quellen.`, base.domain);
+  return state.t('defaultPromptText', `Erzeuge ein belegtes Research-Dashboard auf Basis der Knowledge Base ${base.domain}. Finde und verifiziere Quellen (source_candidates → source_catalog), werte danach JEDE aufgenommene Quelle inhaltlich aus und schreibe ihre belegten Aussagen mit wörtlichem Zitat und Fundstelle nach claims. Konsolidiere gleiche Aussagen quellenübergreifend, halte Widersprüche fest und verbinde jede Quelle im semantischen Graphen.`, base.domain);
 }
 
 function topicFitScore(task, text, row) {
@@ -6316,6 +6332,8 @@ function setCollectionReadinessForTest(name, snapshot) {
 }
 
 export const __researchTestHooks = {
+  RESEARCH_TABLE_CONTRACT,
+  defaultPromptForKnowledgeBase,
   buildSourceModels,
   knowledgeClaims,
   renderKnowledgeTables,
