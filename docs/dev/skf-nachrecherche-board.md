@@ -1,6 +1,6 @@
 # SKF Nachrecherche — Kampagnen-Board (drone_bearing_design_verified)
 
-**Headline:** Methodik ist jetzt Vertrag: Skill (systematic-research) und App-Verdrahtung verlangen die Auswertung JEDER Quelle und die Konsolidierung. App v1.0.16 auf skf.ctox.dev ausgeliefert; die Skill-Änderung wirkt erst mit dem nächsten CTOX-Release (Skill ist im Binary eingebettet).
+**Headline:** PR https://github.com/metric-space-ai/ctox/pull/57 offen (Skill-Methodik + App), CI läuft — damit kommt die Methodik über das nächste Binary auf die Instanzen. App-Verdrahtung ist auf skf.ctox.dev bereits ausgeliefert (v1.0.16).
 
 Owner-Auftrag 02.09.2026: „da müssen noch Stunden an nachträglicher Quellenauswertung rein“ — 138 verifizierte Quellen sind nur zu 17 inhaltlich ausgewertet (31 Claims), 121 Quellen hängen im Graph frei, Knowledge zeigt rohe Textfetzen, Messdaten nur aus SRC-0123.
 
@@ -36,7 +36,8 @@ Zielbild: jede der 138 Quellen inhaltlich ausgewertet (Relevanzurteil, 3–10 pr
 
 ## To-Do
 
-- **[F8] Skill-Änderung wartet auf CTOX-Release.** `ctox skills system show systematic-research --json` meldet `source_path=embedded:skills/…` — der Skill kommt aus dem Binary, ein Hotpatch der Dateien im Release-Baum wirkt zur Laufzeit NICHT. Die Dateien auf skf entsprechen bereits `main` (Backup unter `~/.local/state/ctox/hotpatch-backups/skill-20260903T…`). Wirksam wird die Methodik dort mit dem nächsten Binary. Die App-Verdrahtung (Prompt, Kriterien, Tabellenvertrag) wirkt dagegen sofort und ist ausgeliefert.
+- **[F8] PR #57 → Release.** https://github.com/metric-space-ai/ctox/pull/57 (Branch `feat/research-evaluation-methodology`, Commit `341d4e28b`, aus sauberem Klon `/Volumes/tmp/ctox-research-pr` von `github/main` gebaut, Suite 51/51). TRIGGER: CI grün → mergen; danach `ctox upgrade --dev` auf skf, dann `ctox skills system show systematic-research --json` prüfen (muss die Auswertungsschleife tragen). Konfliktauflösung gegen main dokumentiert: Build-Stempel v98, Rubrik-Slug „Research" von main behalten, neue Locale-Schlüssel beider Seiten vereinigt.
+- **[F8-alt] Skill-Änderung wartet auf CTOX-Release.** `ctox skills system show systematic-research --json` meldet `source_path=embedded:skills/…` — der Skill kommt aus dem Binary, ein Hotpatch der Dateien im Release-Baum wirkt zur Laufzeit NICHT. Die Dateien auf skf entsprechen bereits `main` (Backup unter `~/.local/state/ctox/hotpatch-backups/skill-20260903T…`). Wirksam wird die Methodik dort mit dem nächsten Binary. Die App-Verdrahtung (Prompt, Kriterien, Tabellenvertrag) wirkt dagegen sofort und ist ausgeliefert.
 
 - **[F6] Sichtprüfung Web Research auf skf.ctox.dev nachholen.** Serverseite gesund: Peer `replicationUp=true`, `dataChannelOpen=true`, Wartungsmodus `phase=completed` (geprüft 23:38). Browser dieser Sitzung: Sync bleibt „0/3", `CTOX_BUSINESS_OS_STATUS.snapshot()` leer, Modulliste 1.0.14 obwohl HTTP 1.0.15 liefert (per `fetch` mit eigenem Buster belegt, Build `20260902-research-claims-knowledge-v89`, `research-claim-list` im ausgelieferten Code). Geladener Buster laut `performance.getEntriesByType('resource')`: `…C2cfcde4a3f0a66a13a72…C1.0.14` — Manifest-Hash der NEUEN module.json, Versionssuffix alt. TRIGGER: Browser mit funktionierender Replikation (Nutzer-Chrome oder `ctox web browser-automation` auf der Instanz).
 
