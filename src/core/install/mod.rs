@@ -3568,13 +3568,27 @@ fn backup_state_root(state_root: &Path) -> Result<PathBuf> {
     // SQLite files locked for as long as a session runs. Backing them up buys
     // nothing and made every upgrade abort on a live guest (welsch,
     // 2026-08-20: "state backup aborted ... first_party_sets.db").
-    let browser_profiles = state_root.join("browser").join("profiles");
-    let skip_browser_profiles = browser_profiles.clone();
+    // 03.09.2026 auf THESEN: derselbe Abbruch noch einmal, nur einen Ordner
+    // weiter. Die AUFNAHME-Profile liegen unter `browser/captures/<id>/
+    // chrome-profile` und waren nicht ausgenommen; ein laufender Scrape hielt
+    // `PowerBookmarks.db` gesperrt und das Upgrade brach ab, bevor irgendetwas
+    // umgeschaltet war. `interactive-reference` ist die heruntergeladene
+    // Chromium-Installation - reiner Cache, dreistellige Megabyte.
+    let browser_root = state_root.join("browser");
+    let skip_browser_roots = [
+        browser_root.join("profiles"),
+        browser_root.join("captures"),
+        browser_root.join("interactive-reference"),
+    ];
+    let skip_roots_for_copy = skip_browser_roots.clone();
     copy_filtered(state_root, &backup_root, &|path, is_dir| {
         if path == backup_root {
             return true;
         }
-        if path.starts_with(&skip_browser_profiles) {
+        if skip_roots_for_copy
+            .iter()
+            .any(|root| path.starts_with(root))
+        {
             return true;
         }
         let Some(name) = path.file_name().and_then(OsStr::to_str) else {
@@ -3598,7 +3612,10 @@ fn backup_state_root(state_root: &Path) -> Result<PathBuf> {
         )
     })?;
     for database in collect_sqlite_database_files(state_root) {
-        if database.starts_with(&browser_profiles) {
+        if skip_browser_roots
+            .iter()
+            .any(|root| database.starts_with(root))
+        {
             continue;
         }
         let Ok(relative) = database.strip_prefix(state_root) else {
