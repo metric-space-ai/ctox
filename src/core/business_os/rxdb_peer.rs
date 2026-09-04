@@ -2661,6 +2661,13 @@ async fn run_native_peer(
     if repaired_revisions > 0 {
         eprintln!("[business-os] repaired {repaired_revisions} legacy business_commands revisions");
     }
+    let clamped_documents = clamp_oversized_projected_documents(&database_path)
+        .context("clamp oversized projected Business OS documents")?;
+    if clamped_documents > 0 {
+        eprintln!(
+            "[business-os] trimmed {clamped_documents} oversized projected documents that were stalling replication"
+        );
+    }
     let database = open_database(database_path.clone()).await?;
     let database_write_lock = Arc::new(AsyncMutex::new(()));
 
@@ -7963,6 +7970,82 @@ fn repair_legacy_business_command_revisions(database_path: &Path) -> anyhow::Res
     }
     transaction.commit()?;
     Ok(repaired)
+}
+
+/// Trims documents that already sit in the projection above the peer wire
+/// budget.
+///
+/// `clamp_projected_document_to_wire_budget` in `store.rs` guards every NEW
+/// write, but a store that already carries an oversized document keeps stalling
+/// the browser's initial replication for that whole collection — the write path
+/// never touches those rows again. Measured on the THESEN tenant on
+/// 2026-09-04: five completed commands (one with a 2.5 MB `result`) held six
+/// collections at `initialReplicationState: pending` indefinitely.
+///
+/// Runs once per peer bring-up, next to the legacy-revision repair, and uses
+/// the same revision contract: `revision` column and `data._rev` are written
+/// together, with the height incremented so peers pull the trimmed document.
+fn clamp_oversized_projected_documents(database_path: &Path) -> anyhow::Result<usize> {
+    if !database_path.is_file() {
+        return Ok(0);
+    }
+    let mut conn = Connection::open(database_path)?;
+    let tables = {
+        let mut statement = conn.prepare(
+            "SELECT name FROM sqlite_master
+             WHERE type = 'table' AND name LIKE 'ctox_business_os__%'",
+        )?;
+        let mapped = statement.query_map([], |row| row.get::<_, String>(0))?;
+        mapped.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let transaction = conn.transaction()?;
+    let mut clamped = 0usize;
+    for table in tables {
+        let quoted = sqlite_quote_identifier(&table);
+        let rows = {
+            let Ok(mut statement) = transaction.prepare(&format!(
+                "SELECT id, revision, data FROM {quoted} WHERE length(data) > ?1"
+            )) else {
+                continue;
+            };
+            let Ok(mapped) =
+                statement.query_map(params![store::MAX_PROJECTED_DOCUMENT_BYTES as i64], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })
+            else {
+                continue;
+            };
+            let Ok(rows) = mapped.collect::<rusqlite::Result<Vec<_>>>() else {
+                continue;
+            };
+            rows
+        };
+        for (id, stored_revision, raw) in rows {
+            let Ok(mut document) = serde_json::from_str::<Value>(&raw) else {
+                continue;
+            };
+            store::clamp_projected_document_to_wire_budget(&table, &id, &mut document);
+            let trimmed = serde_json::to_string(&document)?;
+            if trimmed.len() >= raw.len() {
+                continue;
+            }
+            let revision = store::next_projected_rxdb_revision(Some(stored_revision.as_str()));
+            if let Some(object) = document.as_object_mut() {
+                object.insert("_rev".to_string(), Value::String(revision.clone()));
+            }
+            transaction.execute(
+                &format!("UPDATE {quoted} SET revision = ?1, data = ?2 WHERE id = ?3"),
+                params![revision, serde_json::to_string(&document)?, id],
+            )?;
+            clamped += 1;
+        }
+    }
+    transaction.commit()?;
+    Ok(clamped)
 }
 
 pub(super) async fn open_database(database_path: PathBuf) -> anyhow::Result<Arc<RxDatabase>> {

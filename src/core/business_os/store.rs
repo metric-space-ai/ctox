@@ -1231,6 +1231,12 @@ fn attached_rxdb_table_columns(conn: &Connection, table: &str) -> anyhow::Result
     Ok(columns)
 }
 
+/// Public alias for the peer's boot-time clamp pass: the revision contract for
+/// a directly written projection row lives here, not in the peer.
+pub(super) fn next_projected_rxdb_revision(previous: Option<&str>) -> String {
+    next_direct_rxdb_revision(previous)
+}
+
 fn next_direct_rxdb_revision(previous: Option<&str>) -> String {
     let height = previous
         .and_then(|revision| revision.split_once('-').map(|(height, _)| height))
