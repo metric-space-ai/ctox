@@ -347,3 +347,36 @@ Push brauchte nur länger als ich zunächst annahm — ich hatte vorschnell
 geschrieben, sie käme nicht an.
 
 **Stand: 17 von 19 Firmen tragen Rechercheergebnisse.**
+
+
+---
+
+## 9. Warum die Warteschlange kroch (04.09.2026, 19:20 UTC)
+
+Zwei Recherchen (BÜFA, CHEMOFAST) lagen seit 18:09 auf `urgent` und wurden
+trotzdem nicht bearbeitet. Der Grund waren **sieben Aufgaben im Zustand
+`running` mit Leases vom 28. bis 31. August** — bis zu einer Woche alt:
+
+| Aufgabe | Lease seit |
+|---|---|
+| outbound sellify lookup · person | 28.08. 08:53 |
+| web stack auth assist request · sellify.com | 28.08. 09:39 |
+| outbound sellify lookup · company | 28.08. 09:53 |
+| Erster Käfer-Submit timed out … | 30.08. 15:07 |
+| web stack auth assist request · linkedin.com | 30.08. 18:44 |
+| Recherche-Adapter abgleichen | 31.08. 06:12 |
+| Recherche-Adapter abgleichen | 31.08. 08:17 |
+
+Sie belegten die Arbeitsplätze dauerhaft; von den laufenden Aufgaben war genau
+eine echt. Nach dem Stornieren meldet die Queue nur noch einen Lease
+(BEWI RAW). **Das ist die eigentliche Erklärung dafür, dass Recherchen den
+ganzen Tag „nicht starteten".**
+
+**Nebenbefund:** Die RxDB-Projektion der Warteschlange zeigte die sieben nach
+dem Stornieren weiter als `running`, während die maßgebliche Queue-Sicht
+`count: 1` meldet. Eine Stornierung geleaster Aufgaben erreicht die Projektion
+also nicht — im CTOX-Modul sieht der Nutzer damit Aufgaben laufen, die es nicht
+mehr gibt. Offen.
+
+**Offen für den Eigentümer:** Es gibt keinen automatischen Verfall abgelaufener
+Leases. Eine Aufgabe, deren Arbeiter stirbt, blockiert ihren Platz unbegrenzt.
