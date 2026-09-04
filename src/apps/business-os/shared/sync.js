@@ -112,6 +112,11 @@ const UNREGISTERED_SWEEP_RETRY_MS = 15000;
 const STALLED_RECONNECT_MIN_AGE_MS = 30000;
 const COLLECTION_START_QUEUE_STEP_TIMEOUT_MS = 3_000;
 const COLLECTION_RESTART_GAP_MS = 500;
+// Feldmessung 04.09.2026 (THESEN): sieben Kollektionen standen dauerhaft auf
+// initialReplicationState 'pending' und durchliefen wiederholt 'restarting'.
+// Ohne Herkunftsvermerk am Datensatz laesst sich nicht belegen, WELCHER Pfad
+// den raumweiten Neustart ausloest. Der Zaehler ist reine Diagnose.
+let restartCounter = 0;
 const DESKTOP_ICON_SAFE_FIELDS = new Set([
   'id',
   'target_type',
@@ -1823,6 +1828,9 @@ async function startWebRtcReplication({
         lastError: null,
         lastLifecycleEvent: serializeError(error),
         reconnectingSince: new Date().toISOString(),
+        lastRestartReason: 'replication-error',
+        lastRestartAt: new Date().toISOString(),
+        restartCount: (restartCounter += 1),
       });
       scheduleRestart?.(collection, 15000);
       return;
@@ -1865,6 +1873,13 @@ async function startWebRtcReplication({
       status: observedActive ? 'reconnecting' : 'connecting',
       connectionStatus: observedActive ? 'reconnecting' : 'connecting',
       reconnectingSince,
+      ...(observedActive
+        ? {
+          lastRestartReason: 'became-inactive',
+          lastRestartAt: new Date().toISOString(),
+          restartCount: (restartCounter += 1),
+        }
+        : {}),
     });
     if (observedActive) scheduleRestart?.(collection, 750);
   });
@@ -2152,6 +2167,13 @@ function watchInitialReplication({
         connectionStatus: 'reconnecting',
         initialReplicationState: 'stalled',
         reconnectingSince: new Date().toISOString(),
+        // Ohne diesen Vermerk laesst sich im Feld nicht unterscheiden, ob eine
+        // Kollektion vom Stillstandswaechter, vom Fehlerpfad oder vom
+        // Heartbeat-Sweep neu gestartet wurde - der Neustart trifft ueber
+        // scheduleRestartOfUnhealthyCollections immer den ganzen Raum.
+        lastRestartReason: 'initial-replication-stalled',
+        lastRestartAt: new Date().toISOString(),
+        restartCount: (restartCounter += 1),
       });
       scheduleRestart?.(collection, 1000);
     }, INITIAL_REPLICATION_STALL_MS);
@@ -2191,6 +2213,9 @@ function watchInitialReplication({
             connectionStatus: 'reconnecting',
             initialReplicationState: 'stalled-waiting-for-peer',
             reconnectingSince: new Date().toISOString(),
+            lastRestartReason: 'peer-never-ready',
+            lastRestartAt: new Date().toISOString(),
+            restartCount: (restartCounter += 1),
           });
           scheduleRestart?.(collection, 1000);
           return;
