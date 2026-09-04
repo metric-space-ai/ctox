@@ -380,3 +380,23 @@ mehr gibt. Offen.
 
 **Offen für den Eigentümer:** Es gibt keinen automatischen Verfall abgelaufener
 Leases. Eine Aufgabe, deren Arbeiter stirbt, blockiert ihren Platz unbegrenzt.
+
+
+### Durchsatz: die Warteschlange schoepft ihre Kapazitaet nicht aus (19:45 UTC)
+
+Nach dem Stornieren der sieben Leichen meldet die Queue dauerhaft
+**1 geleast, 23 wartend** — obwohl vorher acht Aufgaben gleichzeitig im Zustand
+`running` standen (sieben davon Leichen). Die Kapazitaet liegt also bei
+mindestens acht, genutzt wird eine.
+
+CHEMOFAST steht seit 18:09 auf `urgent`/`pending` und wartet, waehrend nur BÜFA
+laeuft. Damit dauert eine Kampagne mit 19 Firmen viele Stunden statt einer.
+
+**Nicht geklaert:** was serialisiert. Kandidaten sind eine Begrenzung je
+Thread-Key oder Modul, oder eine Leasing-Schleife, die je Durchlauf nur eine
+Aufgabe vergibt. Ich habe es gemessen, nicht diagnostiziert — und aendere
+nichts auf Verdacht.
+
+**Fuer den Eigentümer:** Das ist der naechste Hebel fuer die Durchlaufzeit. Ein
+Recherchelauf dauert 20-60 Minuten; seriell sind das fuer 19 Firmen leicht
+zwoelf Stunden, parallel zu acht waeren es unter zwei.
