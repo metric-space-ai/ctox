@@ -294,3 +294,34 @@ keine übergroßen Dokumente. Zwei getrennte Befunde, nicht einer.
 15, Destilla 14, Beiersdorf 12, ANGUS 9, Aeroxon 9, Carbosulf 9, Additiv-Chemie
 8, Cereda 8, Chemisches Laboratorium 8, Chemotechnik 8, DrinkStar 7). Vier
 stehen noch aus: BEWI, BNT (läuft), BÜFA, CHEMOFAST.
+
+
+---
+
+## 8. Warum vier Firmen nie ein Ergebnis lieferten (04.09.2026, 17:50 UTC)
+
+BEWI RAW, BNT Chemicals, BÜFA Composite und CHEMOFAST standen auf null Feldern,
+obwohl ihre Recherchen mehrfach liefen. Der Grund steht im Fortschrittsprotokoll
+des Agenten selbst — alle sieben Schritte abgeschlossen, Schritt 6 lautet:
+
+> „Writeback-Befehl via CLI (**Sandbox blockiert SQLite — writeback nicht
+> möglich**)"
+
+Die Recherche war also **inhaltlich fertig**: Identität und Register, Website,
+Anschrift und Kommunikation über das Impressum, Kennzahlen, Ansprechpartner je
+Kategorie (bei BEWI: 3 aktive Geschäftsführer, 2 ehemalige, 1 HR-Kontakt). Sie
+ging verloren, weil der Agent den Rückschreibweg selbst wählen musste und die
+CLI nahm, die in der Sandbox gesperrt ist.
+
+**Ursache:** Der `writeback_contract` nannte das Ziel (`collection`,
+`record_ids`, `min_independent_sources`), aber **nicht den Weg**.
+
+**Fix (App 1.0.99):** Der Vertrag nennt jetzt den Mechanismus ausdrücklich —
+`command_type: 'outbound.lead.research_writeback'`,
+`mechanism: 'business_command'`, `forbidden_mechanisms: [cli, shell, terminal,
+sqlite, direct_sql]` samt Klartextnotiz, dass ein Writeback über diese Wege die
+gesamte Recherche verliert.
+
+**Lehre:** Ein Vertrag, der ein Ziel vorschreibt, aber den Weg offenlässt, ist
+kein Vertrag. 15 von 19 Läufen trafen den richtigen Weg von selbst — die vier,
+die ihn verfehlten, sahen für den Nutzer aus wie „Recherche funktioniert nicht".
