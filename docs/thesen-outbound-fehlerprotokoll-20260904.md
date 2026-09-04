@@ -253,3 +253,44 @@ Betroffen sind fünf Kollektionen: `business_chats`, `desktop_icons`,
 `restartCollections` / `startCollection`), und ich fasse ihn erst an, wenn ich
 belegen kann, warum `startCollection` eine Kollektion ohne Transport als
 `connected` meldet — nicht auf Verdacht.
+
+
+---
+
+## 7. Abnahme nach dem Upgrade (04.09.2026, 17:40–18:15 UTC)
+
+Release `branch-main-20260904T161717Z` ist aktiv. Alles hier ist im Browser auf
+`thesen.ctox.dev` geklickt oder auf dem Server gezählt, nichts abgeleitet.
+
+### Belegt behoben
+
+| # | Sache | Beleg |
+|---|---|---|
+| B1 | Kein Chatfenster beim Recherchestart | Klick auf „Auswahl nachrecherchieren" für BNT Chemicals → Hinweis „1 Recherche gestartet.", drei Chatfenster offen, das aktive zeigt „Starte eine Outbound Nachrecherche für BNT Chemicals GmbH [lead_oppq64] … Task angelegt und in der CTOX Queue." |
+| B2 | Getrennte Knöpfe fehlten | Beide sichtbar und aktiv: „Auswahl neu recherchieren (1)" / „Auswahl nachrecherchieren (1)" |
+| B3 | Nachrecherche bricht wortlos ab | Klick auf „neu recherchieren" bei einer Sellify-Firma → Klartext: „Diese Firma wird bereits in Sellify geführt (BNT Chemicals GmbH, contact_id 17612). Hier ist nur eine Nachrecherche möglich." |
+| B5 | Chateingabe wird beim Tippen geleert | Getippter Text über 21 s in 7 Messungen unverändert, Fokus bleibt |
+| — | Draht-Budget blockiert ganze Kollektionen | Der ehemals 2,5-MB-Befehl ist jetzt 1790 Byte; sein `result` trägt `{"_omitted":true,"_omitted_bytes":2584138,"_omitted_reason":"exceeds peer wire budget"}` bei sauberer Revision `8-9600113617ac47309f351baf5406e4d9`. Null übergroße Dokumente in allen geprüften Tabellen. |
+| — | Geisterkampagne im Browser | „Kampagnen 1 · Chemie 19" — „Chemie Test 2026" ist auch lokal verschwunden, die Löschungen kommen an |
+| — | Startzeit des Schreibtischs | 55 s statt zuvor 149–423 s im selben Browser |
+| — | Personenwechsel im Lead-Detail | 4 Personen → 4 verschiedene Detailinhalte (Prüfsummen 1504304017 / −2126636825 / −889926336 / 1935792417) |
+| — | Überschriebene Ergebnisse | Live beobachtet: Hinweis „2 überschriebene Rechercheergebnisse wiederhergestellt." |
+
+### Nicht abschließend belegt
+
+| # | Sache | Warum |
+|---|---|---|
+| B12 | Anmeldesitzungen für alle Nutzer | Der ausgelieferte Code ist geprüft (Modul 0.3.0, `$or` über eigene Sitzungen **oder** `purpose=web_stack_auth`, Filter lässt beides durch). Die Datenschutz-Hälfte ist belegt: von 86 persönlichen Sitzungen des Kontos `ctox` erscheint keine. Der volle Nachweis braucht eine zweite Anmeldung; die zwei fremden Anmelde-Sitzungen (`local-dev`) sind älter als die zwölf angezeigten. |
+| — | Fünf Kollektionen auf `initialReplicationState: pending` | `user_thread_states`, `desktop_icons`, `business_chats`, `outbound_lead_generation_leads`, `-adapters`. **Ohne einen einzigen Neustart** (`lastRestartReason` leer) — die Daten fließen nachweislich, `awaitInitialReplication` löst nur nicht auf. Nach dem Upgrade kein Kreislauf mehr, aber die Meldung stimmt nicht. |
+
+**KORREKTUR zu Abschnitt 6:** Das Draht-Budget war real und ist behoben, es war
+aber **nicht** die Ursache dieser fünf Kollektionen — die haben nachweislich
+keine übergroßen Dokumente. Zwei getrennte Befunde, nicht einer.
+
+### Datenstand
+
+19 Firmen in einer Kampagne „Chemie". **15 tragen Rechercheergebnisse**
+(Calvatis 24 Felder, Dreidoppel 21, AKEMI 16, BOOMEX 15, Chemische Fabrik Berg
+15, Destilla 14, Beiersdorf 12, ANGUS 9, Aeroxon 9, Carbosulf 9, Additiv-Chemie
+8, Cereda 8, Chemisches Laboratorium 8, Chemotechnik 8, DrinkStar 7). Vier
+stehen noch aus: BEWI, BNT (läuft), BÜFA, CHEMOFAST.
