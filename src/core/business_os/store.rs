@@ -10842,6 +10842,7 @@ fn upsert_rxdb_collection_record_with_writer(
     // record is scrubbed too. The verified token lives only in the native
     // business_commands.client_context_json column, which peers never receive.
     redact_document_client_context_secrets(&mut payload);
+    clamp_projected_document_to_wire_budget(table, record_id, &mut payload);
     let mut columns = vec!["id".to_string(), "data".to_string()];
     let mut values = vec![
         SqlValue::Text(record_id.to_string()),
@@ -21750,7 +21751,7 @@ fn business_os_app_import_prompt_block(manifest: &Value) -> anyhow::Result<Strin
         .and_then(Value::as_str)
         .context("app import manifest has no resolved revision")?;
     Ok(format!(
-        "\nImported application source (immutable evidence):\n- source_directory: {source_directory}\n- source_kind: {}\n- resolved_revision: {revision}\n- manifest_sha256: {}\n- file_count: {}\n- total_bytes: {}\n\nPorting contract:\n- Treat source_directory as read-only evidence. Write only the requested runtime-installed module target.\n- Reimplement the complete user workflows as a functional Shell-V2 app; do not translate framework syntax mechanically.\n- The delivered app must have no QML, Quickshell, mpv, Python, shell, or original native runtime dependency.\n- Use shell-provided database handles for app-owned RxDB collections; do not import upstream rxdb or create an HTTP data bridge.\n- Browser media playback must use HTMLAudioElement with HTTPS streams. Filter or clearly mark HTTP-only streams; do not add an SSRF/media proxy.\n- Add deterministic fixtures for external APIs and audio, then run static validation and the real browser smoke before claiming completion.\n\nBounded implementation contract:\n- After the required plan update, inspect only the skill entrypoint, the source entrypoints, and one closest reference app before authoring. One bounded reference-catalog query is enough.\n- Within the first 12 tool calls, create app_directory and every validator-required file as a minimal functional skeleton. Improve it in place after the first validation run.\n- Continue from any existing target artifacts on later slices. Do not restart source or reference discovery, and never leave app_directory absent at the end of a slice.\n",
+        "\nImported application source (immutable evidence):\n- source_directory: {source_directory}\n- source_kind: {}\n- resolved_revision: {revision}\n- manifest_sha256: {}\n- file_count: {}\n- total_bytes: {}\n\nPorting contract:\n- Treat source_directory as read-only evidence. Write only the requested runtime-installed module target.\n- Run and inspect the source first. Record every visible surface, control, interaction, dataset size, persistence path, animation, canvas/WebGL behavior, and responsive breakpoint as a behavior inventory.\n- Reimplement the complete user workflows as a functional Shell-V2 app; preserve the source product behavior and visual hierarchy instead of translating framework syntax mechanically. Do not replace real data with a short fixture, reduce an interactive visualization to decoration, or silently omit workflows.\n- The delivered app must have no QML, Quickshell, mpv, Python, shell, or original native runtime dependency.\n- Treat a one-file HTML input as source material. Package its complete implementation through static local relative browser-ESM imports and never read the original desktop path after snapshot materialization.\n- Vendor every executable dependency locally. Remote scripts, stylesheets, import maps, dynamic HTTP(S) imports, workers, package loaders, and CDN code are forbidden. Explicit domain APIs or media streams may remain remote only as data and must never be evaluated as code.\n- Use shell-provided database handles for app-owned RxDB collections; do not import upstream rxdb or create an HTTP data bridge.\n- Add deterministic fixtures for required external data/media boundaries. Do not claim completion until static validation, validate, smoke, declared end-to-end scenarios, and real Shell-V2 visual/interaction proof pass at default size, 640x480, and 360px. A load event or non-empty DOM alone is not render proof for canvas/WebGL apps.\n\nBounded implementation contract:\n- After the required plan update, inspect only the skill entrypoint, the source entrypoints, and one closest reference app before authoring. One bounded reference-catalog query is enough.\n- Within the first 12 tool calls, create app_directory and every validator-required file as a minimal functional skeleton. Improve it in place after the first validation run.\n- Continue from any existing target artifacts on later slices. Do not restart source or reference discovery, and never leave app_directory absent at the end of a slice.\n",
         manifest.get("kind").and_then(Value::as_str).unwrap_or("unknown"),
         manifest.get("manifest_sha256").and_then(Value::as_str).unwrap_or(""),
         manifest.get("file_count").and_then(Value::as_u64).unwrap_or(0),
@@ -22165,6 +22166,105 @@ fn redact_client_context_secrets(client_context: &Value) -> Value {
 /// FINAL payload after any merge with the existing record, so a token that
 /// survived a deep-merge from an earlier (browser-authored) document is also
 /// stripped.
+/// Maximum serialized size of a single projected document.
+///
+/// A document larger than this stalls the browser's initial replication for the
+/// WHOLE collection: `initialReplicationAt` stays null, no error is raised, and
+/// every other record in that collection becomes invisible. Measured on the
+/// THESEN tenant on 2026-09-04: one completed `outbound.sellify.lookup` command
+/// carried a 2.5 MB `result`, and `business_commands`, `business_chats`,
+/// `desktop_icons` and `outbound_lead_generation_leads` never finished their
+/// initial replication as a result.
+///
+/// `retain_projectable_knowledge_item` in `rxdb_peer.rs` drops such documents,
+/// which is right for catalog entries. A command or a lead must NOT disappear —
+/// its status is load-bearing for the UI — so the oversized payload fields are
+/// replaced by a marker instead and the record itself keeps replicating. The
+/// untruncated value stays in the native store.
+pub(super) const MAX_PROJECTED_DOCUMENT_BYTES: usize = 262_144;
+
+/// Fields that carry identity, status or lifecycle. Never trimmed: without them
+/// the record would replicate but say nothing.
+const WIRE_BUDGET_PROTECTED_FIELDS: &[&str] = &[
+    "id",
+    "_rev",
+    "_deleted",
+    "is_deleted",
+    "_meta",
+    "_attachments",
+    "command_id",
+    "task_id",
+    "command_type",
+    "status",
+    "route_status",
+    "title",
+    "module",
+    "source_module",
+    "updated_at_ms",
+    "created_at_ms",
+    "campaign",
+    "name",
+    "research_status",
+    "validation_status",
+];
+
+pub(super) fn clamp_projected_document_to_wire_budget(
+    table: &str,
+    record_id: &str,
+    payload: &mut Value,
+) {
+    let total = serde_json::to_vec(&*payload)
+        .map(|raw| raw.len())
+        .unwrap_or(0);
+    if total <= MAX_PROJECTED_DOCUMENT_BYTES {
+        return;
+    }
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    // Largest field first: trimming one huge `result` usually suffices, and
+    // trimming the fewest fields keeps the most information on the wire.
+    let mut candidates: Vec<(String, usize)> = object
+        .iter()
+        .filter(|(key, _)| !WIRE_BUDGET_PROTECTED_FIELDS.contains(&key.as_str()))
+        .map(|(key, value)| {
+            (
+                key.clone(),
+                serde_json::to_vec(value).map(|raw| raw.len()).unwrap_or(0),
+            )
+        })
+        .collect();
+    candidates.sort_by(|left, right| right.1.cmp(&left.1));
+
+    let mut remaining = total;
+    let mut trimmed: Vec<String> = Vec::new();
+    for (key, bytes) in candidates {
+        if remaining <= MAX_PROJECTED_DOCUMENT_BYTES {
+            break;
+        }
+        if bytes < 1024 {
+            break;
+        }
+        object.insert(
+            key.clone(),
+            serde_json::json!({
+                "_omitted": true,
+                "_omitted_bytes": bytes,
+                "_omitted_reason": "exceeds peer wire budget",
+            }),
+        );
+        remaining = remaining.saturating_sub(bytes).saturating_add(96);
+        trimmed.push(key);
+    }
+    if trimmed.is_empty() {
+        return;
+    }
+    eprintln!(
+        "[business-os] trimmed oversized projected document {record_id} in {table}: {total} bytes exceeded the {MAX_PROJECTED_DOCUMENT_BYTES} byte wire budget; replaced fields [{}] with a marker so the collection keeps replicating",
+        trimmed.join(", ")
+    );
+}
+
 pub(super) fn redact_document_client_context_secrets(payload: &mut Value) {
     let Some(object) = payload.as_object_mut() else {
         return;
@@ -28585,7 +28685,7 @@ pub(super) mod tests {
                     "target": "app"
                 },
                 "client_context": {
-                    "source": "business-os-app-creator-native-test",
+                    "source": "business-os-mcp",
                     "target": "app"
                 }
             }),
@@ -28596,15 +28696,6 @@ pub(super) mod tests {
             .context("expected queued task id")?
             .to_string();
         channels::lease_queue_task(root, &task_id, "ctox-service-test")?;
-        channels::transition_business_command_for_task(
-            root,
-            &task_id,
-            "leased",
-            None,
-            None,
-            None,
-            "test importer worker leased",
-        )?;
         thread::sleep(Duration::from_millis(1100));
         write_minimal_runtime_app_artifacts(root, module_id)?;
 
@@ -28621,11 +28712,21 @@ pub(super) mod tests {
             }
         });
         let conn = open_store(root)?;
-        conn.execute(
+        let updated = conn.execute(
             "UPDATE business_commands SET payload_json = ?1 WHERE command_id = ?2",
             params![serde_json::to_string(&payload)?, command_id],
         )?;
+        assert_eq!(updated, 1, "expected to update the accepted import command");
+        let stored = load_business_command(&conn, command_id)?;
+        assert!(
+            stored
+                .payload
+                .get("import_source")
+                .is_some_and(Value::is_object),
+            "test command must retain import_source"
+        );
         drop(conn);
+
         let snapshot_root = root
             .join("runtime/business-os/app-imports")
             .join(command_id);
@@ -29100,7 +29201,10 @@ pub(super) mod tests {
         assert!(prompt.contains("source_directory: /tmp/source"));
         assert!(prompt.contains("functional Shell-V2 app"));
         assert!(prompt.contains("QML, Quickshell, mpv, Python, shell"));
-        assert!(prompt.contains("HTMLAudioElement with HTTPS streams"));
+        assert!(prompt.contains("behavior inventory"));
+        assert!(prompt.contains("static local relative browser-ESM imports"));
+        assert!(prompt.contains("Remote scripts, stylesheets, import maps"));
+        assert!(prompt.contains("real Shell-V2 visual/interaction proof"));
         assert!(prompt.contains("shell-provided database handles"));
         assert!(prompt.contains("Within the first 12 tool calls"));
         assert!(prompt.contains("Do not restart source or reference discovery"));
