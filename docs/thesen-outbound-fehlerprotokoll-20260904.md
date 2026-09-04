@@ -217,3 +217,32 @@ passiert, wenn Daten fließen. Der Erst-Pull erreicht sein Ende deshalb nie.
 Beides ist zu beheben. Das Draht-Budget ist gefixt (`ad9a3cddc`, `7f4507090`),
 der Neustart-Kreislauf noch nicht — er braucht eine Messung, welches Signal
 während des lokalen Anwendens stillsteht, bevor ich daran etwas ändere.
+
+
+### Nachtrag 15:00 UTC — der Kreislauf, genau vermessen
+
+Ich habe eine Messsonde in den Browser gelegt (alle 4 s `ctoxBusinessOsSyncDiagnostics`)
+und einen vollständigen Zyklus aufgezeichnet:
+
+1. `business_chats` zieht Daten: 15,3 MB empfangen, 1787 Frames, 966 Frames in
+   der Warteschlange, Bestätigungsverzögerung 846 ms (~40 KB/s).
+2. `status` wechselt auf `restarting`.
+3. Danach: `status: connected`, `active: true`, `initialReplicationState: pending`
+   — aber **`transport` fehlt vollständig** (`getTransportStatus()` liefert nichts,
+   `receivedBytes` bleibt über drei Minuten bei 0).
+
+Die Kollektion gilt also als verbunden und aktiv, hat aber keinen Transport mehr.
+Sie kann nichts empfangen; und weil das Fortschrittssignal des Wächters aus genau
+diesen Transportzahlen gebildet wird, ist es leer, der Wächter erklärt sie erneut
+für stillstehend und startet neu. Der Neustart trifft über
+`scheduleRestartOfUnhealthyCollections` den **ganzen Raum**, also verlieren alle
+Kollektionen gleichzeitig ihren Fortschritt.
+
+Betroffen sind fünf Kollektionen: `business_chats`, `desktop_icons`,
+`outbound_lead_generation_leads`, `outbound_lead_generation_adapters`,
+`outbound_lead_generation_imports`.
+
+**Noch nicht behoben.** Der Fix gehört in `shared/sync.js` (Neustartpfad
+`restartCollections` / `startCollection`), und ich fasse ihn erst an, wenn ich
+belegen kann, warum `startCollection` eine Kollektion ohne Transport als
+`connected` meldet — nicht auf Verdacht.
