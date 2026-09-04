@@ -191,3 +191,29 @@ Knowledge-Items.
 größten ungeschützten Felder statt den Datensatz zu verwerfen (Identität, Status
 und Lebenszyklus bleiben unangetastet); `clamp_oversized_projected_documents`
 räumt beim Start des Peers die Altlast auf. Beides braucht ein Upgrade.
+
+
+### Nachtrag 14:45 UTC — zwei Ursachen, nicht eine
+
+Ich hatte oben geschrieben, das Draht-Budget erkläre alle sechs hängenden
+Kollektionen. Das ist **zu weit gegriffen**. Nach dem Kappen der fünf
+übergroßen Befehle waren 13 von 18 Kollektionen fertig; fünf hängen weiter,
+und die haben nachweislich keine übergroßen Dokumente (Leads max. 56 KB,
+Chats max. 15 KB, Schreibtischsymbole max. 434 B).
+
+**Zweite, unabhängige Ursache — Neustart-Kreislauf:** Die Transportzahlen von
+`business_chats` zeigten einen laufenden Erst-Pull mit 15,3 MB empfangen,
+966 Frames in der Warteschlange und **846 ms Bestätigungsverzögerung** (rund
+40 KB/s). 30 Sekunden später standen dieselben Zähler wieder auf **0** — die
+Verbindung war neu aufgebaut und der gesamte Fortschritt verworfen. Der
+Stillstandswächter in `shared/sync.js` (`INITIAL_REPLICATION_STALL_MS = 45_000`)
+setzt die Replikation zurück, wenn sich sein Fortschrittssignal 45 Sekunden
+lang nicht ändert — was während eines langen lokalen Schreibvorgangs auch dann
+passiert, wenn Daten fließen. Der Erst-Pull erreicht sein Ende deshalb nie.
+
+**Beleg für die Wirkung:** Der Schreibtischstart brauchte im selben Browser
+128 s, dann 423 s, dann über 1000 s.
+
+Beides ist zu beheben. Das Draht-Budget ist gefixt (`ad9a3cddc`, `7f4507090`),
+der Neustart-Kreislauf noch nicht — er braucht eine Messung, welches Signal
+während des lokalen Anwendens stillsteht, bevor ich daran etwas ändere.
