@@ -231,12 +231,19 @@ und einen vollständigen Zyklus aufgezeichnet:
    — aber **`transport` fehlt vollständig** (`getTransportStatus()` liefert nichts,
    `receivedBytes` bleibt über drei Minuten bei 0).
 
-Die Kollektion gilt also als verbunden und aktiv, hat aber keinen Transport mehr.
-Sie kann nichts empfangen; und weil das Fortschrittssignal des Wächters aus genau
-diesen Transportzahlen gebildet wird, ist es leer, der Wächter erklärt sie erneut
-für stillstehend und startet neu. Der Neustart trifft über
-`scheduleRestartOfUnhealthyCollections` den **ganzen Raum**, also verlieren alle
-Kollektionen gleichzeitig ihren Fortschritt.
+**KORREKTUR (15:10):** Ich hatte daraus geschlossen, die Kollektion habe keinen
+Transport mehr. Das ist nicht belegt — `getTransportStatus()` in
+`replication-webrtc.mjs:1021` liefert immer ein Objekt, das Fehlen kann also
+ebenso eine Lücke in der Diagnoseaufzeichnung nach dem Neustart sein. Gesichert
+ist nur: `initialReplicationState` bleibt `pending`, `status` durchläuft
+`restarting`, und die Zähler stehen danach auf 0.
+
+Ebenfalls geprüft und **ausgeschlossen**: Mehrfach-Tab-Folgemodus. Der messende
+Tab war `role: leader`, es gab keine Folge-Brücken.
+
+Der Neustart trifft über `scheduleRestartOfUnhealthyCollections` den **ganzen
+Raum**, nicht nur die stockende Kollektion — das ist im Code belegt und erklärt,
+warum alle Kollektionen gleichzeitig bei 0 anfangen.
 
 Betroffen sind fünf Kollektionen: `business_chats`, `desktop_icons`,
 `outbound_lead_generation_leads`, `outbound_lead_generation_adapters`,
