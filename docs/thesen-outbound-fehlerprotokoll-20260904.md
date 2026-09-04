@@ -400,3 +400,44 @@ nichts auf Verdacht.
 **Fuer den Eigentümer:** Das ist der naechste Hebel fuer die Durchlaufzeit. Ein
 Recherchelauf dauert 20-60 Minuten; seriell sind das fuer 19 Firmen leicht
 zwoelf Stunden, parallel zu acht waeren es unter zwei.
+
+
+---
+
+## 10. Kampagne vollstaendig (04.09.2026, 20:00 UTC)
+
+**Alle 19 Firmen der Kampagne „Chemie" tragen Rechercheergebnisse.** Jede steht
+auf `needs_review` mit 7 bis 21 belegten Feldern:
+
+| Firma | Felder | Firma | Felder |
+|---|---|---|---|
+| Dreidoppel | 21 | Aeroxon Insect Control | 9 |
+| BÜFA Composite Systems | 20 | Carbosulf Chemische Werke | 9 |
+| AKEMI chem. techn. Spezialfabrik | 16 | Additiv-Chemie Luers | 8 |
+| CHEMOFAST Anchoring | 16 | Cereda | 8 |
+| BOOMEX | 15 | Chem. Laboratorium Dr. Kurt Richter | 8 |
+| Calvatis | 15 | Chemotechnik Abstatt | 8 |
+| Chemische Fabrik Berg | 15 | DrinkStar | 7 |
+| Destilla | 14 | | |
+| Beiersdorf Manufacturing Leipzig | 12 | | |
+| BNT Chemicals | 11 | | |
+| BEWI RAW | 10 | | |
+
+Die vier, die morgens noch spurlos verschwanden, sind alle dabei: BNT 11,
+BEWI 10, BÜFA 20, CHEMOFAST 16.
+
+**Im Browser abgenommen:** eine Kampagne „Chemie" mit 19 Leads, 18 davon auf
+„Prüfung nötig" (CHEMOFAST war zum Messzeitpunkt gerade fertig geworden und zog
+noch nach), Synchronisation abgeschlossen, Geisterkampagne endgültig
+verschwunden.
+
+### Was offen bleibt
+
+| # | Sache | Warum offen |
+|---|---|---|
+| 1 | Kein automatischer Verfall abgelaufener Leases | Stirbt ein Arbeiter, blockiert seine Aufgabe ihren Platz unbegrenzt. Heute kostete das den ganzen Tag. Braucht eine Aufräumregel im Queue-System. |
+| 2 | Warteschlange nutzt ihre Kapazitaet nicht | 1 geleast bei 23 wartend. Was serialisiert, habe ich gemessen, nicht diagnostiziert. |
+| 3 | RxDB-Projektion zeigt stornierte Leases als `running` | Der Nutzer sieht im CTOX-Modul Aufgaben laufen, die es nicht mehr gibt. |
+| 4 | Fuenf Kollektionen melden `initialReplicationState: pending` | Ohne Neustarts, Daten fliessen nachweislich. Meldung stimmt nicht, Wirkung unklar. |
+| 5 | B12 nicht end-to-end belegt | Code geprueft und ausgeliefert; voller Nachweis braucht eine zweite Nutzeranmeldung. |
+| 6 | B4 Unblocking dnbhoovers | Braucht die Quellenanmeldung des Eigentuemers. |
