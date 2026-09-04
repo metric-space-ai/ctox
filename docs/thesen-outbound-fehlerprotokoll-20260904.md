@@ -325,3 +325,25 @@ gesamte Recherche verliert.
 **Lehre:** Ein Vertrag, der ein Ziel vorschreibt, aber den Weg offenlässt, ist
 kein Vertrag. 15 von 19 Läufen trafen den richtigen Weg von selbst — die vier,
 die ihn verfehlten, sahen für den Nutzer aus wie „Recherche funktioniert nicht".
+
+
+### Beleg für den Writeback-Fix (18:40 UTC)
+
+Nach dem Neustart der vier verlorenen Recherchen mit App 1.0.99:
+
+| Firma | vorher | nachher |
+|---|---|---|
+| BNT Chemicals | `failed`, 0 Felder | **`needs_review`, 11 Felder** |
+| BEWI RAW | `failed`, 0 Felder | **`needs_review`, 8 Felder** |
+| BÜFA Composite | `failed`, 0 Felder | läuft |
+| CHEMOFAST | `failed`, 0 Felder | läuft |
+
+Gleiche Firmen, gleicher Rechercheweg — einziger Unterschied ist der genannte
+Rückschreibweg im Vertrag. Die Diagnose aus Abschnitt 8 ist damit belegt.
+
+**Außerdem gelandet:** Dreidoppel (21 Felder) und Carbosulf (9) stehen jetzt
+serverseitig auf `needs_review`. Meine Wiederherstellung war durchgekommen, der
+Push brauchte nur länger als ich zunächst annahm — ich hatte vorschnell
+geschrieben, sie käme nicht an.
+
+**Stand: 17 von 19 Firmen tragen Rechercheergebnisse.**
