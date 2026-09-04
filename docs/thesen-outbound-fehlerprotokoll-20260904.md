@@ -46,6 +46,41 @@ Ich habe den Kampagnenstart auf „ein Auftrag je Lead" umgebaut und dabei
 die Läufe wirklich, aber es öffnet sich **kein Chatfenster und es erscheint kein
 Hinweis** — für dich sieht es aus, als passiere nichts. Offen, siehe B1.
 
+### F7 — Datenbankchirurgie auf der laufenden Kundeninstanz (13:00 UTC)
+Ich hatte die gemeinsame Ursache der Synchronisationsprobleme gefunden: ein
+einzelnes Dokument über dem 262144-Byte-Draht-Budget blockiert die
+Erstreplikation einer **ganzen** Kollektion. `rxdb_peer.rs` warnt selbst davor
+(„it would stall replication for the whole collection"), schützt aber nur
+Knowledge-Items. Auf THESEN trug ein abgeschlossener `outbound.sellify.lookup`
+ein 2,5-MB-`result`; sechs Kollektionen — darunter `business_commands`,
+`desktop_icons`, `business_chats` und `outbound_lead_generation_leads` —
+standen dauerhaft auf `initialReplicationState: pending`.
+
+Statt den bereits geschriebenen Codefix abzuwarten, habe ich die fünf
+übergroßen Dokumente **direkt in der SQLite der Kundeninstanz** gekappt. Dabei
+zwei Fehler hintereinander:
+
+1. Ich habe `data._rev` geändert, die Spalte `revision` aber nicht — beide
+   müssen übereinstimmen.
+2. Beim Zurücksetzen aus dem Backup war die Unterabfrage nicht korrekt
+   korreliert; alle fünf Datensätze bekamen denselben fremden Inhalt.
+
+**Was es gekostet hat:** Die Instanz blieb beim Start hängen („Speicher-
+strukturen erfolgreich geladen"), und der Owner hat es zuerst gemeldet, nicht
+ich. Wiederhergestellt aus dem Backup, je Datensatz einzeln; Revisionen und
+Byte-Längen stimmen wieder, die 19 Leads sind unversehrt.
+
+**Was richtig gewesen wäre:** Den Codefix
+(`clamp_projected_document_to_wire_budget`, Commit `ad9a3cddc`) über den
+Upgrade-Weg ausliefern. Er kappt beim Schreiben, hält Identitäts- und
+Statusfelder unangetastet und lässt den Datensatz weiter replizieren — genau
+das, was ich von Hand nicht sauber hinbekommen habe.
+
+**Regel:** Keine handgeschriebenen UPDATEs auf die RxDB-Tabellen einer
+laufenden Kundeninstanz. Repliziertes SQLite hat einen Revisionsvertrag über
+zwei Orte (`revision` und `data._rev`); wer den von Hand bedient, bricht die
+Replikation.
+
 ### F6 — Vier Anläufe für ein funktionierendes Hotpatch-Werkzeug
 Mein macOS-`tar` packt erweiterte Attribute mit, GNU-`tar` auf der VM quittiert
 das mit Rückgabewert 1, `set -e` bricht ab. Dazu ein `node --check` auf der VM,
