@@ -160,3 +160,34 @@ Zeit gekostet oder in die falsche Richtung geschickt.
 Kampagne **„Chemie Test 2026"**, 19 Leads, alle anderen Kampagnen gelöscht.
 Zum Zeitpunkt dieses Dokuments: 3 Läufe aktiv, 2 im Start, 14 offen.
 Die Läufe starten korrekt — nur ohne sichtbare Rückmeldung (B1).
+
+---
+
+## 6. Gemeinsame Ursache — gefunden am 04.09.2026, 14:30 UTC
+
+Ein einzelnes projiziertes Dokument über dem Draht-Budget von 262144 Byte
+blockiert die **Erstreplikation einer ganzen Kollektion**. `initialReplicationAt`
+bleibt null, es wird kein Fehler geworfen, und jeder andere Datensatz dieser
+Kollektion bleibt im Browser unsichtbar. `rxdb_peer.rs` beschreibt genau das im
+Kommentar zu `retain_projectable_knowledge_item` — der Schutz galt aber nur für
+Knowledge-Items.
+
+**Messung auf THESEN:** ein abgeschlossener `outbound.sellify.lookup` trug ein
+2,5-MB-`result`. Sechs Kollektionen standen dauerhaft auf `pending`:
+`business_commands`, `business_chats`, `desktop_icons`, `user_thread_states`,
+`outbound_lead_generation_adapters`, `outbound_lead_generation_leads`.
+
+**Das erklärt zusammen:**
+
+| Beobachtung | Erklärung |
+|---|---|
+| B1 „kein Chatfenster beim Recherchestart" | Der Chat wird erzeugt (belegt: Aufgabe **und** Chat um 14:27:15 für BEWI RAW), erreicht den Browser aber nicht — `business_chats` steht. Kein App-Fehler. |
+| B6 Rechtsklick öffnet leeren Chat | dieselbe Kollektion |
+| B11 „Daten brauchen ~168 s" | Schreibtisch und Leads warten auf eine Replikation, die nie abschließt; die Startzeit stieg im Test von 128 s auf 423 s |
+| Geister-Kampagne „Chemie Test 2026" | Löschungen sind serverseitig korrekt (`deleted=1` **und** `_deleted=1`), erreichen den lokalen Speicher aber nie |
+| „Als anderer Nutzer sehe ich keine Daten" | ein frischer lokaler Speicher bekommt die Erstbefüllung nicht |
+
+**Fix:** `clamp_projected_document_to_wire_budget` kappt beim Schreiben die
+größten ungeschützten Felder statt den Datensatz zu verwerfen (Identität, Status
+und Lebenszyklus bleiben unangetastet); `clamp_oversized_projected_documents`
+räumt beim Start des Peers die Altlast auf. Beides braucht ein Upgrade.
