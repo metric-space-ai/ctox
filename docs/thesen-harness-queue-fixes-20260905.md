@@ -31,3 +31,21 @@ Baseline: root `cargo check` passes. Root `cargo fmt --check` already fails on
 unrelated formatting in the supplied checkout (including pre-existing service,
 context, projection and execution files); those changes are not reformatted by
 this work. Each slice retains only formatting changes belonging to its edits.
+
+## Befund 2 — bounded scrape repair admission
+
+The scrape failure handler previously called generic queue creation for every
+failed probe. Its prompt includes the run identity, so generic request hashing
+does not deduplicate a target across runs. Admission now holds an IMMEDIATE
+SQLite transaction and reuses any open repair with the same target type/key,
+including legacy metadata without target_type. A running repair's own failing
+probe therefore returns its current lease instead of creating its successor.
+
+After failure, at most three attempts are admitted, delayed by 5 and 10 minutes.
+Further requests return the final failed task with an explicit exhausted-budget
+reason. Operator cancellation remains stopped. Successful repair resets the
+consecutive-failure budget.
+
+Both real-store tests pass: three distinct submissions produce one open leased
+task, and three failures enforce persisted cooldowns plus terminal exhaustion.
+Tied timestamps are ordered by persisted attempt number.

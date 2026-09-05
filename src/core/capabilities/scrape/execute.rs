@@ -344,8 +344,10 @@ pub(crate) fn execute_scrape_with_outcome(
             repair_request_path.as_ref(),
         );
         let suggested_skill = repair_skill_for_status(classification.status);
-        Some(serde_json::to_value(channels::create_queue_task(
+        Some(serde_json::to_value(channels::create_scrape_repair_queue_task(
             root,
+            "scrape",
+            &target.view.target_key,
             channels::QueueTaskCreateRequest {
                 title: format!("repair scrape target {}", target.view.target_key),
                 prompt: repair_prompt,

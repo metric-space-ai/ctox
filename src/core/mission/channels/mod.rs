@@ -2862,6 +2862,9 @@ pub fn set_queue_task_route_status(
     Ok(true)
 }
 
+mod repair_queue;
+pub use repair_queue::create_scrape_repair_queue_task;
+
 pub fn create_queue_task(root: &Path, request: QueueTaskCreateRequest) -> Result<QueueTaskView> {
     create_queue_task_with_metadata(root, request)
 }
