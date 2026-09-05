@@ -654,6 +654,150 @@
       "type": "object",
       "version": 0
     },
+    "ctox_crew_learnings": {
+      "additionalProperties": false,
+      "indexes": [
+        [
+          "member_id",
+          "created_at_ms"
+        ],
+        [
+          "member_id",
+          "confirmed_by_owner"
+        ],
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "archived": {
+          "type": "boolean"
+        },
+        "confirmed_by_owner": {
+          "type": "boolean"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "evidence_run_id": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "insight",
+            "pitfall",
+            "preference"
+          ],
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "scope": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "text": {
+          "maxLength": 400,
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "member_id",
+        "text",
+        "kind",
+        "confirmed_by_owner",
+        "archived",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_crew_members": {
+      "additionalProperties": false,
+      "indexes": [
+        [
+          "archived",
+          "state"
+        ],
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "active_task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "archived": {
+          "type": "boolean"
+        },
+        "color": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 60,
+          "type": "string"
+        },
+        "shape": {
+          "enum": [
+            "round",
+            "square",
+            "triangle",
+            "blob"
+          ],
+          "type": "string"
+        },
+        "soul": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "specialties": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "state": {
+          "enum": [
+            "home",
+            "on_duty",
+            "resting_after_failure"
+          ],
+          "type": "string"
+        },
+        "stats": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "shape",
+        "color",
+        "archived",
+        "state",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
     "ctox_harness_events": {
       "additionalProperties": true,
       "indexes": [

@@ -119,6 +119,8 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   communication_messages: "10d120234ec23bbe98124d255599f44d2ef68ecb5ff29787b9b647aaf6537b6f",
   communication_threads: "2111d907ee8cc8c7c2c4e9f10a43bc56f217071dbee0610a96b0457ef6473a8d",
   ctox_bug_reports: "f7329368ad5144b8ea740600265f06c6ac19ad049de751cec92818d9d9de94b5",
+  ctox_crew_learnings: "8b03cb3646ac24eb76c5facb491ad5c2a65d324b9c901351a64ec26673ac2e9d",
+  ctox_crew_members: "f970c60287f30817cfee50bc835f6e542d8ffec75f23208b8068836f9aa11b3c",
   ctox_harness_events: "0bce9f675a1a3a088a33d9bfe4b48cdaeae1a5e6972cc3f3c7e7086cd6eac576",
   ctox_harness_status: "c190044b6226c4f11546e66a05f2d3b1e00d224074f40bb2646dc72cc5be809c",
   ctox_queue_tasks: "8f33e3d4b2de956ca8b7c9f522a3c7bcb6669ac767e61e534936e8fa406b77f3",

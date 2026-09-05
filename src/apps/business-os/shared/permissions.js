@@ -21,6 +21,8 @@ export const BusinessOsPermissions = Object.freeze({
   DataWrite: 'data.write',
   CtoxTaskCreate: 'ctox.task.create',
   CtoxTaskManage: 'ctox.task.manage',
+  CrewManage: 'ctox.crew.manage',
+
   ExternalApprove: 'external.approve',
   SupportRead: 'support.read',
   SupportTriage: 'support.triage',
@@ -96,7 +98,12 @@ export function canUseBusinessPermission({
   const actor = businessActorFromSession(session, governance);
   const normalizedScopeId = String(scopeId || '').trim();
   const model = permissionModelFromGovernance(governance);
+  if (permission === BusinessOsPermissions.CrewManage) {
+    return roleCanManage(actor.role) || (actor.role === 'founder' && scopeType === 'record'
+      && ['ctox.crew.learning.confirm', 'ctox.crew.learning.update'].includes(normalizedScopeId));
+  }
   const moduleAssigned = scopeType === 'module'
+
     && isModuleAssignedToActor(governance, normalizedScopeId, actor.id);
   const effectiveAssigned = Boolean(assigned || moduleAssigned);
 
@@ -154,7 +161,12 @@ export function canUseBusinessExplicitOrAssignedPermission({
   const actor = businessActorFromSession(session, governance);
   const normalizedScopeId = String(scopeId || '').trim();
   const model = permissionModelFromGovernance(governance);
+  if (permission === BusinessOsPermissions.CrewManage) {
+    return roleCanManage(actor.role) || (actor.role === 'founder' && scopeType === 'record'
+      && ['ctox.crew.learning.confirm', 'ctox.crew.learning.update'].includes(normalizedScopeId));
+  }
   if (explicitGrantAllows(model, actor, permission, scopeType, normalizedScopeId)) return true;
+
   if (scopeType === 'module' && moduleAssignmentAllows(model, actor.id, normalizedScopeId, permission)) return true;
   if (scopeType === 'module' && isModuleAssignedToActor(governance, normalizedScopeId, actor.id)) return true;
   return false;

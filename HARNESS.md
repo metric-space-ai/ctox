@@ -746,3 +746,42 @@ These are the main implementation files for the current harness behavior:
 
 If this document drifts, update it from these files first. Do not paper over
 missing liveness, review, outcome, or spawn evidence with prompt text.
+
+## Crew-Identität
+
+Die Core-Migration der Kommunikations-Queue legt vier feste Mitglieder (Milo,
+Nori, Lumi, Pico) idempotent an. Ihre IDs, Formen, Farben und `soul_json` bleiben
+bei Neustarts und Migrationen erhalten. `crew_members` und
+`crew_member_learnings` sind die Autorität; `crew_attempts` bindet ein Mitglied
+an genau eine Attempt-ID und verbucht dessen Ergebnis höchstens einmal.
+
+Vor der Worker-Ausführung wählt `crew::select` als reine Funktion: manuelle
+Zuordnung vor Thread-Kontinuität, danach Spezialitäten, passende Erfolge und
+Fehlschläge der letzten 24 Stunden. Bei Gleichstand entscheiden letzte Aktivität
+und ID. Archivierte Mitglieder werden nicht neu ausgewählt. Ein wiederaufgenommener
+Versuch behält seine ursprüngliche Identität. Die wörtliche Begründung steht im
+Harness-Flow-Ereignis `crew_selected` und in dessen Cockpit-Projektion.
+
+`{{CREW_SOUL_BLOCK}}` wird deterministisch aus fünf Achsen, Charakter, Stimme und
+Statistik gerendert. Höchstens acht bestätigte und zwei ausdrücklich unbestätigte,
+zum Scope passende Learnings werden angefügt. Der Block ist auf 4.000 UTF-8-Bytes
+begrenzt, steht auf dem tatsächlichen Prompt-Pfad nach dem CTO-Systemkontext und
+den Ausführungsregeln und verleiht keine zusätzlichen Befugnisse.
+
+Der bestehende finale Worker-Text darf ein JSON-Objekt `crew_retrospective`
+enthalten (bevorzugt in einem reservierten `ctox-crew`-Codeblock): `retrospective` mit höchstens 300 Zeichen
+und höchstens drei `learnings` mit `text` (400 Zeichen), `kind` und `scope`.
+Der Server akzeptiert nur diese typisierten Felder, lehnt Pfade und
+Credential-Muster ab und dedupliziert normalisierten Text je Mitglied.
+`insight` benötigt Erfolg und bestandenen Review; `pitfall` darf aus einem
+Fehlschlag stammen; `preference` benötigt ein wörtliches, belegtes Owner-Zitat.
+Der sichtbare Antworttext enthält diesen Metadatenblock nicht; die vollständige
+Nachricht bleibt als Attempt-Evidenz erhalten. Owner-Zitate werden gegen den
+nativ autorisierten Admin/Chef-Command geprüft, nicht gegen die Behauptung des
+Workers. Ungültige Abschlüsse erzeugen keine Learnings. Alles wird zunächst unbestätigt
+gespeichert, ohne zusätzlichen Modellaufruf. Der Projektions-Pump verbucht Stats
+und Rückblick transaktional; Retention lässt höchstens 200 Learnings je Mitglied
+stehen und entfernt zuerst die ältesten unbestätigten.
+
+`ctox crew list` und `ctox crew show <id>` lesen diese Core-Identität ohne Browser.
+Queue-Zulassung, Review-Gates, Kapazität und Wiederholungssemantik bleiben unverändert.

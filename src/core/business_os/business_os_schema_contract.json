@@ -3944,6 +3944,150 @@
     ],
     "additionalProperties": true
   },
+  "ctox_crew_learnings": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "member_id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "text": {
+        "type": "string",
+        "maxLength": 400
+      },
+      "kind": {
+        "type": "string",
+        "enum": [
+          "insight",
+          "pitfall",
+          "preference"
+        ]
+      },
+      "scope": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "evidence_run_id": {
+        "type": "string"
+      },
+      "confirmed_by_owner": {
+        "type": "boolean"
+      },
+      "archived": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "member_id",
+      "text",
+      "kind",
+      "confirmed_by_owner",
+      "archived",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      [
+        "member_id",
+        "created_at_ms"
+      ],
+      [
+        "member_id",
+        "confirmed_by_owner"
+      ],
+      "updated_at_ms"
+    ],
+    "additionalProperties": false
+  },
+  "ctox_crew_members": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "name": {
+        "type": "string",
+        "maxLength": 60
+      },
+      "shape": {
+        "type": "string",
+        "enum": [
+          "round",
+          "square",
+          "triangle",
+          "blob"
+        ]
+      },
+      "color": {
+        "type": "string"
+      },
+      "archived": {
+        "type": "boolean"
+      },
+      "state": {
+        "type": "string",
+        "enum": [
+          "home",
+          "on_duty",
+          "resting_after_failure"
+        ]
+      },
+      "active_task_id": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "soul": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "specialties": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "stats": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "shape",
+      "color",
+      "archived",
+      "state",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      [
+        "archived",
+        "state"
+      ],
+      "updated_at_ms"
+    ],
+    "additionalProperties": false
+  },
   "ctox_harness_events": {
     "version": 0,
     "primaryKey": "id",

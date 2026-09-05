@@ -1,0 +1,15 @@
+{
+  "member": {
+    "id": "crew-milo", "name": "Milo", "shape": "round", "color": "#1685ee",
+    "archived": false, "state": "home", "active_task_id": null, "updated_at_ms": 1788642000000,
+    "soul": {"sketch": "Sorgfältig prüfen."}, "specialties": {"modules": ["ctox"]},
+    "stats": {"tasks_total": 2, "succeeded": 1, "failed": 1}
+  },
+  "public_fields": ["id", "name", "shape", "color", "archived", "state", "active_task_id", "updated_at_ms"],
+  "learning": {
+    "id": "crew-learning:fixture", "member_id": "crew-milo", "text": "Vor dem Import das Schema prüfen.",
+    "kind": "insight", "scope": {"module": "reports"}, "evidence_run_id": "attempt-fixture",
+    "confirmed_by_owner": false, "archived": false, "created_at_ms": 1788642000000, "updated_at_ms": 1788642000000
+  },
+  "commands": ["ctox.crew.member.create", "ctox.crew.member.update", "ctox.crew.learning.confirm", "ctox.crew.learning.update", "ctox.crew.learning.delete", "ctox.crew.assign"]
+}

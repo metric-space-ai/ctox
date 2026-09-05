@@ -1,7 +1,7 @@
 # Auftrag CREW-COCKPIT · PR-1 „Harness-Cockpit Foundation“ und PR-2 „Crew-Identität im Harness“
 
 Auftraggeber: Fable (Orchestrator). Implementierer: Codex-Thread `01a07107-d27c-7e80-a1dc-2311f60ad0bb`.
-Kontext und Befunde: `docs/dev/crew-cockpit-board-20260905.md` (vollständig lesen, bevor du beginnst).
+Lies in dieser Reihenfolge, bevor du beginnst: `docs/dev/crew-cockpit-vision.md` (wofür wir bauen: das Zuhause der Crew, die Wesen, die visuelle Sprache), dann `docs/dev/crew-cockpit-board-20260905.md` (Befunde, Zielbild, Umgebungsfallen). Rollen: Fable orchestriert und reviewt, du setzt um und meldest Abweichungen im PR-Text statt eigene Ziele zu setzen.
 
 ## 0. Rolle, Ziel und Arbeitsweise
 
@@ -81,6 +81,20 @@ Keine UI-Änderung. Keine Crew-Identität (nur die `null`-Felder). Keine Ticket-
 - Neue Tests, mindestens: Projektion enthält die neuen Felder und schreibt `null` beim Löschen; Retention hält die Grenzen (Tasks, Events, Runs); `ctox_harness_status` wird bei Worker-Start und -Stop geschrieben; Policy verweigert jeden neuen Control-Command für Rolle User und erlaubt ihn für Admin; Pause verhindert neue Leases, lässt die laufende Slice enden; `ctox_runs`-Zeile entsteht nach Finalisierung mit Kostenfeldern; Chat erhält Zwischenstand bei `retry_wait` mit `user_message`.
 - `ctox business-os repair queue-projections --dry-run` gegen einen Test-Root läuft ohne Vollscan.
 - Doku: `docs/ctox-rxdb.md` (neue Collections, Felder, Policy, Retention), `HARNESS.md` Abschnitt „Cockpit-Projektionen und Steuerbefehle“ mit Verweis auf die persistierten Quellen.
+
+## 2j · Lehren aus PR-1, verbindlich für PR-2 und alle weiteren PRs
+
+Aus Review und Abnahme von PR #58 (05.09.2026):
+
+1. **Nicht-blockierend heißt der ganze Pfad.** Kein synchroner SQLite-Read oder -Write im Harness-Turn-Pfad, auch nicht „nur ein kleiner Lookup“. Werte kommen aus dem, was der Worker schon in der Hand hat, oder werden auf dem Projektions-Pump aufgelöst.
+2. **Unbekannt ist nicht „nein“ und nicht „null“.** Ein Fehler beim Ermitteln eines Flags darf das Flag nicht auf `false` setzen (Ereignis verschwindet), ein Fehler beim Parsen einer Konfiguration darf den Harness nicht anhalten, und ein unparsebarer Zeitwert darf nie `null` in ein `required`- oder Index-Feld schreiben. Regel: Dokument nicht projizieren und einmal loggen, oder auf den kanonischen Zeitstempel zurückfallen.
+3. **Jede Behauptung über Alttests braucht eine Baseline.** „Betroffene Pfade unverändert“ zählt nicht; gemessen wird derselbe Test `--exact` auf Basis-Commit und Head mit demselben Target. Ergebnis in den PR-Text.
+4. **Gebundene Abfragen überall,** nicht nur im Repair-Pfad: Keyset-Paging, echte `LIMIT`s, keine `LIMIT (SELECT COUNT(*))`-Attrappen. Indizes werden per `EXPLAIN QUERY PLAN`-Test bewiesen, nicht deklariert.
+5. **Grant-Materialisierung folgt der Policy.** Jede Collection, die die Policy als server-autoritativ oder rollenbeschränkt einstuft, darf von keiner Migration Standard-Grants bekommen; Test: nach Bring-up null Grants für sie.
+6. **Audit spiegelt nie rohe Payloads.** Whitelist der Felder, Kappung freier Texte auf 1000 Zeichen.
+7. **Umgebung:** `/Volumes/tmp` ist knapp; `TMPDIR` und Cargo-Targets auf die Systemplatte (`~/.cache/ctox-crew-cockpit-*`), das Target erst löschen, wenn Fable es freigibt. Das Pi-Sidecar-Bundle (`npm ci && npm run build` in `src/core/coding_agents/pi-sidecar`) ist Voraussetzung für jeden `cargo build` in einem frischen Worktree.
+8. **Zwischenmeldungen:** Beim Start jedes Auftrags in zwei Sätzen bestätigen, wofür gebaut wird (Vision) und an welchem Abschnitt gearbeitet wird; Queue-Nachrichten von Fable werden zwischen Schritten zugestellt und haben Vorrang vor eigenem Plan.
+9. **Nichts löschen, was nicht deins ist;** fremde Cargo-Targets und Verzeichnisse auf `/Volumes/tmp` bleiben unangetastet.
 
 ## 3. PR-2 · Crew-Identität im Harness
 

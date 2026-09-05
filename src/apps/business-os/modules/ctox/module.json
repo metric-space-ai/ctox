@@ -10,6 +10,8 @@
     "business_workspace_branding",
     "ctox_queue_tasks",
     "ctox_runs",
+    "ctox_crew_members",
+    "ctox_crew_learnings",
     "ctox_harness_events",
     "ctox_harness_status",
     "ctox_bug_reports",
