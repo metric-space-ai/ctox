@@ -1116,12 +1116,27 @@ pub fn open_store(root: &Path) -> anyhow::Result<Connection> {
     let path = business_os_store_path(root);
     let conn = open_store_connection(&path)?;
     ensure_store_schema_once(&path, &conn)?;
+    register_queue_projection_hooks();
+    Ok(conn)
+}
+
+fn register_queue_projection_hooks() {
     channels::register_queue_projection_hooks(
         attach_business_os_projection_store,
         refresh_attached_queue_projections,
     );
-    Ok(conn)
 }
+
+/// A standalone queue CLI process has not opened the Business OS store yet.
+/// Register the existing projection transaction hooks before any mutation.
+pub(crate) fn handle_queue_cli(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    register_queue_projection_hooks();
+    crate::queue::handle_queue_command(root, args)
+}
+
+#[cfg(test)]
+#[path = "store_queue_cli_tests.rs"]
+mod queue_cli_tests;
 
 fn database_is_attached(conn: &Connection, name: &str) -> anyhow::Result<bool> {
     Ok(conn

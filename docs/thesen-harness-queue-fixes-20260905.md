@@ -69,3 +69,19 @@ ctox queue capacity [--workers N]; 1 restores serial admission.
 The acceptance test creates five independent pending tasks, observes four actual
 leased rows and one pending row, and proves a second admission cannot overbook
 the pool before worker startup. Each admitted job uses an isolated session.
+
+## Befund 4 — queue CLI projection registration
+
+Queue projection hooks were registered by open_store only. A fresh queue CLI
+process could cancel a lease without opening that store, silently leaving its
+materialized native RxDB document running. The CLI entry now registers the same
+hooks before dispatch; cancellation retains the existing transactional projection.
+
+A subprocess test starts without any open_store call, executes cancel through
+the CLI entry, then verifies canonical cancelled state and the native
+ctox_queue_tasks document, including a new matching document/column revision.
+
+The RxDB Rust suite passes. The root JS suite has three baseline guard failures:
+two inventory differences absent in the clean origin clone, and an identifier
+guard that already fails in six active files on origin/main. No guard was
+weakened. No browser replication source was changed by this slice.
