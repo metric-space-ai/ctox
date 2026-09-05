@@ -37575,12 +37575,20 @@ Use shell tools to create or update these files."
             shared
                 .active_worker_lease_keys
                 .insert("unrelated-live-worker-key".to_string());
+            assert!(durable_queue_dispatch_blocked_locked(
+                &shared,
+                DurableQueueDispatchGuard::StrictIdle,
+            ));
         }
         run_orphaned_queue_lease_sweep(&root, &state);
         assert_eq!(queue_task_route_status(&root, &task.message_key), "pending");
         let shared = lock_shared_state(&state);
         assert!(shared.busy);
         assert_eq!(shared.worker_active_count, 1);
+        assert!(durable_queue_dispatch_blocked_locked(
+            &shared,
+            DurableQueueDispatchGuard::StrictIdle,
+        ));
         assert!(shared
             .active_worker_lease_keys
             .contains("unrelated-live-worker-key"));

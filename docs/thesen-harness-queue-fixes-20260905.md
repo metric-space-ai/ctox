@@ -4,11 +4,13 @@ Customer evidence: `thesen-outbound-fehlerprotokoll-20260904.md`, sections 8–1
 including the operator's corrected canonical/projection distinction on September 5.
 No customer instance was accessed or changed for this work.
 
-## Befund 1 — withdrawn as a customer incident
+## Befund 1 — customer measurement withdrawn; independent sweep defect retained
 
 The operator's final ID join establishes that all seven alleged lease corpses
-are cancelled routing rows, with stale running projections. Befund 1 is
-withdrawn. No further lease-sweep changes are part of this follow-up.
+are cancelled routing rows, with stale running projections. That customer
+measurement is withdrawn; the independently reproduced sweep defect remains
+valid. This follow-up strengthens its guard-interaction test, without changing
+lease-sweep runtime behavior.
 
 The current tree already issues 15-minute leases, renews them every 60 seconds,
 and reclaims expired/incomplete leases at boot and in mission maintenance.
@@ -23,6 +25,28 @@ Only `PromptWorkerActivity` now registers and unregisters live worker lease
 keys. The sweep protects those and explicitly buffered prompts, rather than
 all cached inflight keys. TTL, heartbeat and transactional recovery remain the
 existing authoritative mechanisms.
+
+Source anchors in the clean landing clone at 5a16d0061:
+- src/core/service/service.rs:15104 is the corrected protection set in
+  run_orphaned_queue_lease_sweep (function starts at line 15086). The parent of
+  fix d349bf537 shows the faulty busy/inflight protection at service.rs:15034:
+  `if shared.busy { keys.extend(shared.leased_message_keys_inflight.iter().cloned()); }`.
+- src/core/service/service.rs:16379 is durable_queue_dispatch_blocked_locked:
+  busy, app recovery or lease admission blocks dispatch; otherwise a positive
+  worker_active_count blocks either legacy dispatch mode.
+- src/core/service/service.rs:38510 is
+  incident_sweep_reclaims_orphans_while_an_unrelated_worker_is_busy. It creates
+  and expires a real SQLite queue lease, retains its key in the inflight cache,
+  and registers a different active worker key. Throughout the sweep, busy=true
+  and worker_active_count=1. Explicit assertions check StrictIdle dispatch is
+  blocked before and after the sweep, while the foreign expired lease becomes
+  pending and the unrelated worker remains protected. Thus recovery does not
+  wait for the dispatch guard to become idle. Worker liveness is modeled by the
+  persisted-lease/shared-state fixture; this is not a wall-clock endurance test.
+
+Build hygiene: the Pi-sidecar bundle is a local build prerequisite only. Before
+each commit, inspect git status and the staged path list; no generated bundle,
+dist output or node_modules belongs in these incident commits.
 
 Acceptance tests:
 - `incident_lease_heartbeat_preserves_live_work_then_expiry_requeues_it`
