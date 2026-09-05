@@ -119,4 +119,4 @@ Große Leerflächen, Text-Labels statt Hierarchie („nicht erfasst“ ×5, „k
 - Live-Command welsch: `business_commands/cmd_b964f8bc-2130-42df-80f8-53e7fe9b2961` (RxDB im Browser), Task `queue:system::41c33261fb7b96906277e159`.
 - Lokale Maintenance: `http://127.0.0.1:8765/api/business-os/ctox/maintenance`; Peer-Status `~/.local/lib/ctox/releases/business-os-shell-v0.1.44/runtime/business-os-rxdb-peer.status.json`.
 - Briefs: `docs/dev/crew-cockpit-brief-pr1-pr2.md` (dieser Commit), weitere folgen im selben Verzeichnis.
-- Board-Artefakt: URL wird nach erster Veröffentlichung hier eingetragen.
+- Board-Artefakt: https://claude.ai/code/artifact/9b10debc-a89e-443d-a93e-8a69d8c86d0b (stabile URL, bei jedem Update dieselbe Datei neu veröffentlichen).
