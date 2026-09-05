@@ -31,3 +31,17 @@ Routing-State (`communication_routing_state`), nie in der Projektion allein.
 3. Regressionsliste im Browser durchklicken.
 4. Befund 2/3/4 sofort messen (Routing-State + App); Befund 1 per Probe; Befund 5 an der nächsten realen Recherche.
 5. Ergebnis mit Zahlen in dieses Dokument, dann Push auf `main`.
+
+## Baseline VOR dem Upgrade (05.09.2026, 06:38 UTC, Release branch-main-20260904T161717Z)
+
+| Messung | Wert vorher |
+|---|---|
+| Befund 3: Routing-State | 0 `leased`, 30 `pending` — Kapazitätsbefehl existiert nicht |
+| Befund 4: Projektion `running` vs Routing-State `leased` | **7 vs 0** — sieben Phantome (alle im Routing-State `cancelled` seit 28.–31.08.) |
+| Befund 2: doppelte offene Titel | **24 Dubletten** (19× evi-gv-at, 3× maps-google-com, 2× handelsregister-de) — vierte Welle; von Hand auf je eine reduziert (21 storniert, 9 offen) |
+| Befund 5: Leads mit Ergebnis | 19 / 19 (`research_status`), keiner mit 0 Feldern |
+| Befund 1: aktive Leases | keine zum Messzeitpunkt |
+
+Erwartung nach dem Upgrade: Befund 4 → 0 Phantome (oder Reconciler räumt sie);
+Befund 2 → über 24 h keine Dubletten mehr; Befund 3 → nach `capacity --workers 4`
+mehrere `leased` bei Rückstau; Befund 5 → an der nächsten Recherche; Befund 1 → per Probe.
