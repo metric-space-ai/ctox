@@ -1181,6 +1181,75 @@ fn queue_thread_refresh_failure_does_not_leave_a_committed_lease() {
 }
 
 #[test]
+fn incident_lease_heartbeat_preserves_live_work_then_expiry_requeues_it() {
+    let root = std::env::temp_dir().join(format!(
+        "ctox-incident-lease-heartbeat-{}",
+        uuid::Uuid::new_v4()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let task = create_queue_task(
+        &root,
+        QueueTaskCreateRequest {
+            title: "incident heartbeat acceptance".to_string(),
+            prompt: "Research with a bounded queue lease".to_string(),
+            thread_key: "incident/heartbeat".to_string(),
+            workspace_root: None,
+            priority: "urgent".to_string(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: None,
+        },
+    )
+    .unwrap();
+    lease_queue_task(&root, &task.message_key, "worker-before-restart").unwrap();
+    record_queue_lease_worker(
+        &root,
+        &[task.message_key.clone()],
+        "worker-before-restart",
+        "attempt-1",
+    )
+    .unwrap();
+    assert_eq!(
+        renew_message_leases(&root, "worker-before-restart", &[task.message_key.clone()]).unwrap(),
+        1
+    );
+    let sweep = release_stale_queue_task_leases(&root, "new-daemon", &HashSet::new()).unwrap();
+    assert!(sweep.released.is_empty());
+    assert!(sweep.failures.is_empty());
+
+    // Advance the persisted clock beyond TTL without another heartbeat;
+    // opening the store again models a worker/process disappearing.
+    let conn = open_channel_db(&resolve_db_path(&root, None)).unwrap();
+    conn.execute("UPDATE communication_routing_state SET lease_expires_at='2000-01-01T00:00:00Z' WHERE message_key=?1", params![task.message_key]).unwrap();
+    drop(conn);
+    let sweep = release_stale_queue_task_leases(&root, "new-daemon", &HashSet::new()).unwrap();
+    assert_eq!(sweep.released, vec![task.message_key.clone()]);
+    assert!(sweep.failures.is_empty());
+    assert_eq!(
+        load_queue_task(&root, &task.message_key)
+            .unwrap()
+            .unwrap()
+            .route_status,
+        "pending"
+    );
+    let conn = open_channel_db(&resolve_db_path(&root, None)).unwrap();
+    let cleared: bool = conn.query_row("SELECT lease_owner IS NULL AND leased_at IS NULL AND lease_expires_at IS NULL AND lease_worker_id IS NULL FROM communication_routing_state WHERE message_key=?1", params![task.message_key], |row| row.get(0)).unwrap();
+    assert!(cleared);
+    assert_eq!(
+        renew_message_leases(&root, "worker-before-restart", &[task.message_key.clone()]).unwrap(),
+        0
+    );
+    assert!(
+        release_stale_queue_task_leases(&root, "new-daemon", &HashSet::new())
+            .unwrap()
+            .released
+            .is_empty()
+    );
+    drop(conn);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn stale_queue_task_lease_releases_to_pending() {
     let root = std::env::temp_dir().join(format!(
         "ctox-queue-stale-{}",

@@ -955,6 +955,9 @@ struct SharedState {
     durable_queue_lease_in_progress: bool,
     pending_prompts: VecDeque<QueuedPrompt>,
     leased_message_keys_inflight: HashSet<String>,
+    // Only a live PromptWorkerActivity owns these keys. Routing cache entries
+    // alone do not prove that a worker still exists.
+    active_worker_lease_keys: HashSet<String>,
     current_goal_preview: Option<String>,
     active_source_label: Option<String>,
     recent_events: VecDeque<String>,
@@ -976,6 +979,7 @@ impl Default for SharedState {
             durable_queue_lease_in_progress: false,
             pending_prompts: VecDeque::new(),
             leased_message_keys_inflight: HashSet::new(),
+            active_worker_lease_keys: HashSet::new(),
             current_goal_preview: None,
             active_source_label: None,
             recent_events: VecDeque::new(),
@@ -4660,6 +4664,12 @@ impl PromptWorkerActivity {
         {
             let mut shared = lock_shared_state(state);
             shared.worker_active_count = shared.worker_active_count.saturating_add(1);
+            shared
+                .active_worker_lease_keys
+                .extend(job.leased_message_keys.iter().cloned());
+            shared
+                .active_worker_lease_keys
+                .extend(job.leased_ticket_event_keys.iter().cloned());
             shared.worker_phase = Some(format!("{}: running", job.source_label));
             if shared.current_goal_preview.is_none() {
                 shared.current_goal_preview = Some(job.preview.clone());
@@ -4755,6 +4765,13 @@ impl Drop for PromptWorkerActivity {
         }
         let (leaked_message_keys, leaked_ticket_event_keys) = {
             let mut shared = lock_shared_state(&self.state);
+            for key in self
+                .leased_message_keys
+                .iter()
+                .chain(&self.leased_ticket_event_keys)
+            {
+                shared.active_worker_lease_keys.remove(key);
+            }
             let (leaked_message_keys, leaked_ticket_event_keys) = if self.leases_released {
                 (Vec::new(), Vec::new())
             } else {
@@ -14262,9 +14279,7 @@ fn run_orphaned_queue_lease_sweep(root: &Path, state: &Arc<Mutex<SharedState>>) 
             keys.extend(prompt.leased_message_keys.iter().cloned());
             keys.extend(prompt.leased_ticket_event_keys.iter().cloned());
         }
-        if shared.busy {
-            keys.extend(shared.leased_message_keys_inflight.iter().cloned());
-        }
+        keys.extend(shared.active_worker_lease_keys.iter().cloned());
         keys
     };
     match channels::release_stale_queue_task_leases(root, CHANNEL_ROUTER_LEASE_OWNER, &active_keys)
@@ -37415,6 +37430,90 @@ Use shell tools to create or update these files."
         assert!(!is_non_work_tui_probe(
             "CTO1, beantworte die Founder-Mail sauber"
         ));
+    }
+
+    #[test]
+    fn incident_sweep_reclaims_orphans_while_an_unrelated_worker_is_busy() {
+        let _serial = orphaned_queue_lease_sweep_test_lock();
+        clear_orphaned_queue_lease_sweep_gate_for_tests();
+        let root = temp_root("incident-orphans-during-live-worker");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "incident orphan beside live worker".to_string(),
+                prompt: "Recover the orphan without waiting for the other worker".to_string(),
+                thread_key: "incident/orphan-busy".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .unwrap();
+        channels::lease_queue_task(&root, &task.message_key, CHANNEL_ROUTER_LEASE_OWNER).unwrap();
+        expire_queue_task_lease(&root, &task.message_key);
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.busy = true;
+            shared.worker_active_count = 1;
+            shared
+                .leased_message_keys_inflight
+                .insert(task.message_key.clone());
+            shared
+                .active_worker_lease_keys
+                .insert("unrelated-live-worker-key".to_string());
+        }
+        run_orphaned_queue_lease_sweep(&root, &state);
+        assert_eq!(queue_task_route_status(&root, &task.message_key), "pending");
+        let shared = lock_shared_state(&state);
+        assert!(shared.busy);
+        assert_eq!(shared.worker_active_count, 1);
+        assert!(shared
+            .active_worker_lease_keys
+            .contains("unrelated-live-worker-key"));
+        drop(shared);
+        clear_orphaned_queue_lease_sweep_gate_for_tests();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn incident_boot_reclaims_seven_expired_leases_from_previous_workers() {
+        let root = temp_root("incident-seven-orphans-at-boot");
+        let mut keys = Vec::new();
+        for index in 0..7 {
+            let task = channels::create_queue_task(
+                &root,
+                channels::QueueTaskCreateRequest {
+                    title: format!("incident orphan {index}"),
+                    prompt: "Resume research after daemon restart".to_string(),
+                    thread_key: format!("incident/orphan/{index}"),
+                    workspace_root: None,
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: None,
+                },
+            )
+            .unwrap();
+            channels::lease_queue_task(&root, &task.message_key, "previous-daemon").unwrap();
+            expire_queue_task_lease(&root, &task.message_key);
+            keys.push(task.message_key);
+        }
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        release_stale_service_communication_leases_on_boot(&root, &state);
+        for key in &keys {
+            assert_eq!(queue_task_route_status(&root, key), "pending");
+        }
+        release_stale_service_communication_leases_on_boot(&root, &state);
+        assert_eq!(
+            channels::list_queue_tasks(&root, &["pending".to_string()], 100)
+                .unwrap()
+                .len(),
+            7
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
