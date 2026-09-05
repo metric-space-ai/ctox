@@ -1,6 +1,7 @@
 # THESEN Queue/Harness acceptance — 2026-09-05
 
-Customer evidence: `thesen-outbound-fehlerprotokoll-20260904.md`, sections 8–10.
+Customer evidence: `thesen-outbound-fehlerprotokoll-20260904.md`, sections 8–11,
+including the operator's corrected canonical/projection distinction on September 5.
 No customer instance was accessed or changed for this work.
 
 ## Befund 1 — lease recovery during unrelated work
@@ -10,8 +11,13 @@ and reclaims expired/incomplete leases at boot and in mission maintenance.
 However, `run_orphaned_queue_lease_sweep` treated every cached inflight key as
 live whenever the global `busy` flag was true. An unrelated active worker
 therefore protected an expired orphan from recovery indefinitely. This is a
-reproduced code defect consistent with the incident; the customer's historical
-in-memory routing cache is unavailable, so it is not proof of its exact contents.
+reproduced code defect, not a proven explanation of the customer's seven old
+`running` documents. Those seven records were observed in the RxDB projection;
+their existence as canonical `leased` routing rows is not established. The
+operator found only two same-day leased-to-cancelled process events, with empty
+expiry/worker fields, and no July/August leases in that log. The historical
+in-memory routing cache is unavailable. Findings 3 and 4 therefore remain
+separate, evidenced explanations of serialization and stale displayed work.
 
 Only `PromptWorkerActivity` now registers and unregisters live worker lease
 keys. The sweep protects those and explicitly buffered prompts, rather than
@@ -20,12 +26,46 @@ existing authoritative mechanisms.
 
 Acceptance tests:
 - `incident_lease_heartbeat_preserves_live_work_then_expiry_requeues_it`
+- `incident_sweep_reclaims_old_leases_without_expiry_or_worker_id`
 - `incident_boot_reclaims_seven_expired_leases_from_previous_workers`
 - `incident_sweep_reclaims_orphans_while_an_unrelated_worker_is_busy`
 
-All three pass against the real isolated SQLite stores. The boot test also
-checks a second boot does not duplicate the seven tasks. Lease expiry checks
-all ownership fields clear and the previous owner cannot renew the released row.
+These tests use real isolated SQLite stores. The missing-expiry test injects
+both SQL NULL and an empty string, with old leased_at and NULL lease_worker_id,
+through a raw SQLite connection immediately before the real sweep. It verifies
+pending state, cleared ownership, and idempotent recovery. The seven-row boot
+test is a synthetic batch, now including both missing-expiry forms, and checks
+that a second boot does not duplicate tasks. The heartbeat test also checks
+that the previous owner cannot renew a released row.
+
+### September 5 follow-up: actual origin/main lease fields
+
+Verified against origin/main at 48c351c48:
+- Both lease_queue_task and lease_messages write lease_expires_at = now +
+  15 minutes in the admission transaction; lease_worker_id initially is NULL.
+- PromptWorkerActivity::start calls record_queue_lease_worker after admission.
+  This is a separate, best-effort write: an error is logged and execution
+  continues. Its heartbeat renews lease_expires_at every 60 seconds.
+- open_channel_db runs the routing schema backfill: for a leased row with
+  NULL expiry it derives datetime(leased_at, '+15 minutes'). It does not give
+  old work a fresh TTL from the time the store opens.
+- release_stale_queue_task_leases selects expired leases and explicitly
+  selects NULL/blank expiry (also incomplete owner/leased_at). Active worker
+  keys and buffered prompts remain protected. Thus absence of an expiry
+  alone does not prevent recovery on this source revision.
+
+The customer release's reason for empty fields is not established by this
+source inspection. Process-event JSON must distinguish an absent key from an
+explicit JSON null: json_type(row_before_json, '$.lease_expires_at') returns
+SQL NULL for absence and the string 'null' for explicit null. Event triggers
+capture the table columns present when installed (process_mining.rs,
+install_table_triggers/build_trigger_sql); the event log alone is not a direct
+read of today's canonical row. No customer measurement is inferred here.
+
+Follow-up developer validation: cargo test incident_ -- --test-threads=1
+passes all 12 incident tests, including the NULL/blank sweep and boot cases;
+cargo check passes. cargo fmt --check still reports the documented unrelated
+baseline differences; the added test's formatting is corrected.
 
 Baseline: root `cargo check` passes. Root `cargo fmt --check` already fails on
 unrelated formatting in the supplied checkout (including pre-existing service,

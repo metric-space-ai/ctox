@@ -37547,6 +37547,20 @@ Use shell tools to create or update these files."
             expire_queue_task_lease(&root, &task.message_key);
             keys.push(task.message_key);
         }
+        // Synthetic batch, not evidence of seven canonical tenant leases.
+        // Inject both legacy missing-expiry forms after all fixture creation
+        // so no helper can backfill them before the actual boot entry point.
+        let conn = rusqlite::Connection::open(crate::paths::core_db(&root)).unwrap();
+        for (key, expiry) in [(&keys[0], None), (&keys[1], Some(""))] {
+            conn.execute(
+                "UPDATE communication_routing_state
+                 SET leased_at='2000-01-01T00:00:00Z', lease_expires_at=?2,
+                     lease_worker_id=NULL WHERE message_key=?1",
+                params![key, expiry],
+            )
+            .unwrap();
+        }
+        drop(conn);
         let state = Arc::new(Mutex::new(SharedState::default()));
         release_stale_service_communication_leases_on_boot(&root, &state);
         for key in &keys {

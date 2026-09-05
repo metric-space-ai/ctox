@@ -1250,6 +1250,87 @@ fn incident_lease_heartbeat_preserves_live_work_then_expiry_requeues_it() {
 }
 
 #[test]
+fn incident_sweep_reclaims_old_leases_without_expiry_or_worker_id() {
+    for missing_expiry in [None, Some("")] {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-incident-legacy-lease-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let task = create_queue_task(
+            &root,
+            QueueTaskCreateRequest {
+                title: "legacy lease without expiry".to_string(),
+                prompt: "Recover work whose worker disappeared".to_string(),
+                thread_key: "incident/legacy-lease".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .unwrap();
+        lease_queue_task(&root, &task.message_key, "previous-daemon").unwrap();
+        // A raw connection preserves the legacy shape until the production
+        // sweep opens the store. Do not backfill between injection and sweep.
+        let conn = Connection::open(resolve_db_path(&root, None)).unwrap();
+        let bounded_without_worker: bool = conn
+            .query_row(
+                "SELECT datetime(lease_expires_at) > datetime(leased_at)
+                        AND lease_worker_id IS NULL
+                 FROM communication_routing_state WHERE message_key=?1",
+                params![task.message_key],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(bounded_without_worker);
+        conn.execute(
+            "UPDATE communication_routing_state
+             SET leased_at='2000-01-01T00:00:00Z', lease_expires_at=?2,
+                 lease_worker_id=NULL WHERE message_key=?1",
+            params![task.message_key, missing_expiry],
+        )
+        .unwrap();
+        let legacy_shape: bool = conn
+            .query_row(
+                "SELECT route_status='leased' AND leased_at='2000-01-01T00:00:00Z'
+                        AND lease_expires_at IS ?2 AND lease_worker_id IS NULL
+                 FROM communication_routing_state WHERE message_key=?1",
+                params![task.message_key, missing_expiry],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(legacy_shape);
+        drop(conn);
+
+        let sweep = release_stale_queue_task_leases(&root, "new-daemon", &HashSet::new()).unwrap();
+        assert!(sweep.failures.is_empty());
+        assert_eq!(sweep.released, vec![task.message_key.clone()]);
+        let conn = Connection::open(resolve_db_path(&root, None)).unwrap();
+        let recovered: bool = conn
+            .query_row(
+                "SELECT route_status='pending' AND lease_owner IS NULL
+                        AND leased_at IS NULL AND lease_expires_at IS NULL
+                        AND lease_worker_id IS NULL
+                 FROM communication_routing_state WHERE message_key=?1",
+                params![task.message_key],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(recovered);
+        drop(conn);
+        assert!(
+            release_stale_queue_task_leases(&root, "new-daemon", &HashSet::new())
+                .unwrap()
+                .released
+                .is_empty()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 fn stale_queue_task_lease_releases_to_pending() {
     let root = std::env::temp_dir().join(format!(
         "ctox-queue-stale-{}",
