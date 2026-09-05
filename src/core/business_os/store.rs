@@ -1138,6 +1138,10 @@ pub(crate) fn handle_queue_cli(root: &Path, args: &[String]) -> anyhow::Result<(
 #[path = "store_queue_cli_tests.rs"]
 mod queue_cli_tests;
 
+#[path = "store_queue_reconcile.rs"]
+mod queue_reconcile;
+pub(crate) use queue_reconcile::reconcile_stale_queue_projections;
+
 fn database_is_attached(conn: &Connection, name: &str) -> anyhow::Result<bool> {
     Ok(conn
         .prepare("PRAGMA database_list")?

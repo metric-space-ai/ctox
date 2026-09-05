@@ -835,6 +835,10 @@ pub(super) fn enrich_queue_projection_payload(
         return;
     };
     object.insert(
+        "message_key".to_string(),
+        Value::String(task.message_key.clone()),
+    );
+    object.insert(
         "status".to_string(),
         Value::String(normalize_queue_status(route_status).to_string()),
     );

@@ -2030,6 +2030,7 @@ fn release_stale_service_communication_leases_on_boot(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
 ) {
+    reconcile_stale_queue_projections_for_service(root, state, &HashSet::new());
     recover_person_research_commands_for_service(root, state, "boot");
     match recover_abandoned_business_os_app_queue_tasks(root, state, 16) {
         Ok(updated) if updated > 0 => push_event(
@@ -14289,6 +14290,24 @@ fn mark_business_os_backup_retention_sweep_ran(root: &Path) -> Result<()> {
 const ORPHANED_QUEUE_LEASE_SWEEP_SECS: u64 = 60;
 static ORPHANED_QUEUE_LEASE_SWEEP_GATE: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
 
+fn reconcile_stale_queue_projections_for_service(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    active_keys: &HashSet<String>,
+) {
+    match crate::business_os::store::reconcile_stale_queue_projections(root, active_keys) {
+        Ok(0) => {}
+        Ok(count) => push_event(
+            state,
+            format!("Reconciled {count} stale running queue projection(s)"),
+        ),
+        Err(err) => push_event(
+            state,
+            format!("Queue projection reconciliation failed: {err}"),
+        ),
+    }
+}
+
 /// lease-2 (F-002): release or settle queue-task leases whose heartbeat
 /// stopped (lease expired or lease fields incomplete) and that no live
 /// in-process owner holds. Idempotent: only `leased` rows move, released
@@ -14316,6 +14335,7 @@ fn run_orphaned_queue_lease_sweep(root: &Path, state: &Arc<Mutex<SharedState>>) 
         keys.extend(shared.active_worker_lease_keys.iter().cloned());
         keys
     };
+    reconcile_stale_queue_projections_for_service(root, state, &active_keys);
     match channels::release_stale_queue_task_leases(root, CHANNEL_ROUTER_LEASE_OWNER, &active_keys)
     {
         Ok(sweep) if !sweep.released.is_empty() || !sweep.failures.is_empty() => {
@@ -37476,6 +37496,51 @@ Use shell tools to create or update these files."
         assert!(!is_non_work_tui_probe(
             "CTO1, beantworte die Founder-Mail sauber"
         ));
+    }
+
+    #[test]
+    fn incident_service_boot_and_sweep_reconcile_native_only_running_projection() {
+        let _serial = orphaned_queue_lease_sweep_test_lock();
+        for boot in [true, false] {
+            clear_orphaned_queue_lease_sweep_gate_for_tests();
+            let root = temp_root("incident-native-only-projection");
+            drop(channels::open_channel_db(&crate::paths::core_db(&root)).unwrap());
+            drop(crate::business_os::store::open_store(&root).unwrap());
+            let conn =
+                rusqlite::Connection::open(crate::business_os::store::rxdb_store_path(&root))
+                    .unwrap();
+            conn.execute_batch(
+                "CREATE TABLE ctox_business_os__ctox_queue_tasks__v1 (
+                    id TEXT PRIMARY KEY, revision TEXT, deleted INTEGER DEFAULT 0,
+                    lastWriteTime REAL DEFAULT 1, data TEXT NOT NULL);
+                 INSERT INTO ctox_business_os__ctox_queue_tasks__v1 (id, revision, data)
+                 VALUES ('orphan-native-id', '1-old',
+                    '{\"id\":\"orphan-native-id\",\"status\":\"running\",\"updated_at_ms\":1,\"_rev\":\"1-old\"}');",
+            )
+            .unwrap();
+            let state = Arc::new(Mutex::new(SharedState::default()));
+            if boot {
+                release_stale_service_communication_leases_on_boot(&root, &state);
+            } else {
+                run_orphaned_queue_lease_sweep(&root, &state);
+            }
+            let payload: String = conn
+                .query_row(
+                    "SELECT data FROM ctox_business_os__ctox_queue_tasks__v1 WHERE id='orphan-native-id'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let payload: Value = serde_json::from_str(&payload).unwrap();
+            assert_eq!(payload["status"], "failed", "boot={boot}");
+            assert!(payload["error"]
+                .as_str()
+                .unwrap()
+                .contains("no canonical queue row"));
+            drop(conn);
+            let _ = std::fs::remove_dir_all(root);
+        }
+        clear_orphaned_queue_lease_sweep_gate_for_tests();
     }
 
     #[test]

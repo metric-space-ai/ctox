@@ -14,8 +14,8 @@ therefore protected an expired orphan from recovery indefinitely. This is a
 reproduced code defect, not a proven explanation of the customer's seven old
 `running` documents. Those seven records were observed in the RxDB projection;
 their existence as canonical `leased` routing rows is not established. The
-operator found only two same-day leased-to-cancelled process events, with empty
-expiry/worker fields, and no July/August leases in that log. The historical
+operator found only two same-day leased-to-cancelled process events, with no
+expiry/worker keys in their JSON, and no July/August leases in that log. The historical
 in-memory routing cache is unavailable. Findings 3 and 4 therefore remain
 separate, evidenced explanations of serialization and stale displayed work.
 
@@ -54,8 +54,12 @@ Verified against origin/main at 48c351c48:
   keys and buffered prompts remain protected. Thus absence of an expiry
   alone does not prevent recovery on this source revision.
 
-The customer release's reason for empty fields is not established by this
-source inspection. Process-event JSON must distinguish an absent key from an
+The operator subsequently confirmed a live canonical lease with expiry and
+worker identity. The claim that the tenant never writes these fields is
+withdrawn: the event-JSON count was a measurement error. The 18-minute gap
+between leased_at and the observed expiry is compatible with heartbeat renewal
+of a 15-minute lease; it does not establish an 18-minute base TTL.
+Process-event JSON must distinguish an absent key from an
 explicit JSON null: json_type(row_before_json, '$.lease_expires_at') returns
 SQL NULL for absence and the string 'null' for explicit null. Event triggers
 capture the table columns present when installed (process_mining.rs,
@@ -125,6 +129,50 @@ The RxDB Rust suite passes. The initial root JS run had three baseline guard fai
 two inventory differences absent in the clean origin clone, and an identifier
 guard that already fails in six active files on origin/main. No guard was
 weakened. No browser replication source was changed by this slice.
+
+### Befund 4 follow-up — stale native-only queue projections
+
+The normal business_command_queue_task_payload and queue_task_payload writers
+store QueueTaskView.message_key as the document id. They historically omit a
+separate message_key property. Its absence alone does not establish an orphan
+or a ticket_self_work_items origin. The customer reports one canonical leased
+row versus seven running documents; their concrete source cannot be identified
+from titles alone. Document id/command_id/task_id are needed to join the sources.
+Newly written queue payloads also include message_key for explicit traceability.
+
+The existing repair_queue_projections CLI reads only business_records and is
+not an automatic daemon reconciler. Native-only documents can therefore survive
+there indefinitely; the mutation hook also skips queue rows with no matching
+business_records mirror. The new reconciler scans stale running/leased
+projections in both stores at boot and on the 60-second lease maintenance tick.
+It uses the existing ten-minute projection recovery TTL, without an environment
+toggle. It resolves id/message_key/task_id and business_command_task_links,
+protects unexpired canonical leases and current/buffered worker keys, and
+projects pending/terminal canonical states. Missing sources or expired leases
+produce failed with an explicit repair/error reason. Canonical queue and command
+rows are not mutated by this projection-only pass.
+
+Core-state inspection and both projection writes share one attached IMMEDIATE
+transaction, fencing concurrent lease admission and avoiding partial repairs.
+Revisions and native last-write metadata advance; fresh/terminal native documents
+and tombstones are preserved. Tests cover seven native-only orphans, a mirror-only
+orphan, live leases whose documents lack message_key, command-link resolution,
+canonical pending/cancelled outcomes, terminal command outcomes, current-worker
+protection, rollback on native write failure, and the actual boot/maintenance
+entry points. No browser runtime source changes are required.
+
+Developer verification of this follow-up: all 16 incident tests and all seven
+existing store_projections tests pass, including the historical repair guard.
+The native RxDB manifest suite passes serially (368 unit, 31 conformance,
+one error-contract guard and one idle-budget test). The divergent checkout's
+JS suite retains its three baseline inventory failures (110 pass); these
+assertions are unchanged. The clean origin clone remains the release check.
+
+Clean-clone follow-up verification also passes: 16 incident tests, seven
+existing projection tests, all 113 JS tests, and the serial native RxDB suite
+(366 unit + 31 conformance + two guards). cargo check passes. The new tests
+use the repository's Rust 2021 formatting; the unrelated Office/LCM formatting
+baseline remains outside this slice.
 
 ## Befund 5 — typed writeback capability and terminal completion evidence
 
