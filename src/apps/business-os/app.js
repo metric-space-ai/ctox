@@ -12780,7 +12780,7 @@ async function waitForProjectedWorkjetComputer(
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      await bridge?.awaitInSync?.();
+      await waitForSyncBridgeReady(bridge, Math.max(1, deadline - Date.now()));
       const doc = await collection.findOne(computerId).exec();
       const rawComputer = doc?.toJSON?.() || doc;
       if (rawComputer?.owner_user_id === ownerUserId && rawComputer?.status === status) {
@@ -13029,7 +13029,7 @@ async function waitForProjectedWorkjetProject(
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      await bridge?.awaitInSync?.();
+      await waitForSyncBridgeReady(bridge, Math.max(1, deadline - Date.now()));
       const doc = await collection.findOne(projectId).exec();
       const rawProject = doc?.toJSON?.() || doc;
       if (rawProject?.owner_user_id === ownerUserId
@@ -13076,7 +13076,7 @@ async function waitForProjectedWorkjetWorkingCopy(
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      await bridge?.awaitInSync?.();
+      await waitForSyncBridgeReady(bridge, Math.max(1, deadline - Date.now()));
       const docs = await collection.find({
         selector: {
           project_id: { $eq: projectId },
@@ -13421,7 +13421,7 @@ async function waitForProjectedWorkjetSession(
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      await bridge?.awaitInSync?.();
+      await waitForSyncBridgeReady(bridge, Math.max(1, deadline - Date.now()));
       let rawSession = null;
       if (sessionId) {
         const doc = await collection.findOne(sessionId).exec();
