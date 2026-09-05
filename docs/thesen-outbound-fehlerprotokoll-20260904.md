@@ -441,3 +441,54 @@ verschwunden.
 | 4 | Fuenf Kollektionen melden `initialReplicationState: pending` | Ohne Neustarts, Daten fliessen nachweislich. Meldung stimmt nicht, Wirkung unklar. |
 | 5 | B12 nicht end-to-end belegt | Code geprueft und ausgeliefert; voller Nachweis braucht eine zweite Nutzeranmeldung. |
 | 6 | B4 Unblocking dnbhoovers | Braucht die Quellenanmeldung des Eigentuemers. |
+
+
+---
+
+## 11. KORREKTUR zu Abschnitt 8–10: Es gab keine „sieben wochenalten Leases" (05.09.2026, 06:00 UTC)
+
+Ich hatte am 04.09. sieben Aufgaben als „seit Wochen geleast" beschrieben und
+daraus Befund 1 (kein Lease-Verfall) abgeleitet. Nachgemessen auf der
+Kundeninstanz, gegen den Routing-State (`communication_routing_state`, die
+Wahrheit der Queue) statt gegen die Projektion:
+
+| Id (Projektion `status=running`) | Routing-State | seit |
+|---|---|---|
+| queue:system::5cb6be0045dbced617666180 | **cancelled** | 28.08. 09:15 |
+| queue:system::a39b9a3f0114ca53298822d3 | **cancelled** | 28.08. 09:50 |
+| queue:system::874c7789b4b239a43f296542 | **cancelled** | 28.08. 10:09 |
+| queue:system::69ed8448d83beed58b28959a | **cancelled** | 30.08. 15:12 |
+| queue:system::aa0ab1ab313716ff9d2a8bab | **cancelled** | 30.08. 18:47 |
+| queue:system::b12733bd9ea7a1c3495ed1b6 | **cancelled** | 31.08. 08:18 |
+| queue:system::880197035f207a79bd41ac71 | **cancelled** | 31.08. 08:18 |
+
+Alle sieben sind seit Ende August storniert. Nur die **Projektion**
+(`ctox_business_os__ctox_queue_tasks__v1`) zeigt sie bis heute als
+`running/leased`. Sie haben nie einen Arbeitsplatz belegt.
+
+**Was daraus folgt:**
+- **Befund 1 (Lease-Verfall) ist zurückgezogen.** Der Lease-Mechanismus ist
+  intakt: die live geleaste Zeile trägt `lease_expires_at` (18-Minuten-TTL)
+  und `lease_worker_id`.
+- **Befund 4 ist der eigentliche Fehler:** `ctox queue cancel` geht direkt in
+  den Queue-Handler; die Projektions-Hooks werden erst beim Öffnen des
+  Business-OS-Stores registriert (Codex-Befund aus dem Code). Was bei
+  geschlossenem Store storniert wird, erreicht die Projektion nie.
+- **Befund 3 hat eine Ursache im Code:** ein globaler Dispatch-Guard vergibt
+  keine neue Lease, solange `busy` gesetzt ist oder ein Worker aktiv ist
+  (Codex). Die 9 wartenden Aufgaben sind lease-fähig (kein `retry_not_before`,
+  kein `hold_reason`, kein `wait_entity`) und werden nur deshalb nicht vergeben.
+  Das ist die Durchsatzbremse.
+- Meine „Stornierung der sieben" am 04.09. hat zwei taggleiche Leases
+  getroffen (`1f581ae0…`, `2e9cd8fa…`), nicht diese sieben. Dass BÜFA danach
+  sofort geleast wurde, war der frei gewordene eine Platz des Guards — kein
+  Beleg für Lease-Leichen. Ich hatte Korrelation als Ursache gemeldet.
+
+**Messfehler, der das verursacht hat:** Ich habe die Projektion als Wahrheit
+gelesen. Die Projektion ist ein Abbild und kann veralten; die Queue-Wahrheit
+ist `communication_routing_state`. Regel ab jetzt: Queue-Zustände immer dort
+messen, die Projektion nur als das prüfen, was sie ist — ein Abbild.
+
+Zusatz: `ctox_process_events` serialisiert für `communication_routing_state`
+weder `lease_expires_at` noch `lease_worker_id` ins `row_after`-JSON. Eine
+Zählung darüber ergibt null und täuscht „Feld wird nie gesetzt" vor.
