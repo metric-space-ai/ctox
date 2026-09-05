@@ -4,20 +4,20 @@ Customer evidence: `thesen-outbound-fehlerprotokoll-20260904.md`, sections 8–1
 including the operator's corrected canonical/projection distinction on September 5.
 No customer instance was accessed or changed for this work.
 
-## Befund 1 — lease recovery during unrelated work
+## Befund 1 — withdrawn as a customer incident
+
+The operator's final ID join establishes that all seven alleged lease corpses
+are cancelled routing rows, with stale running projections. Befund 1 is
+withdrawn. No further lease-sweep changes are part of this follow-up.
 
 The current tree already issues 15-minute leases, renews them every 60 seconds,
 and reclaims expired/incomplete leases at boot and in mission maintenance.
 However, `run_orphaned_queue_lease_sweep` treated every cached inflight key as
 live whenever the global `busy` flag was true. An unrelated active worker
 therefore protected an expired orphan from recovery indefinitely. This is a
-reproduced code defect, not a proven explanation of the customer's seven old
-`running` documents. Those seven records were observed in the RxDB projection;
-their existence as canonical `leased` routing rows is not established. The
-operator found only two same-day leased-to-cancelled process events, with no
-expiry/worker keys in their JSON, and no July/August leases in that log. The historical
-in-memory routing cache is unavailable. Findings 3 and 4 therefore remain
-separate, evidenced explanations of serialization and stale displayed work.
+reproduced independent code defect, not the cause of the customer's seven old
+`running` documents. Its existing regression tests and fix remain in place.
+The measured incident is now conclusively assigned to Befund 4.
 
 Only `PromptWorkerActivity` now registers and unregisters live worker lease
 keys. The sweep protects those and explicitly buffered prompts, rather than
@@ -114,6 +114,18 @@ The acceptance test creates five independent pending tasks, observes four actual
 leased rows and one pending row, and proves a second admission cannot overbook
 the pool before worker startup. Each admitted job uses an isolated session.
 
+The original guard is durable_queue_dispatch_blocked_locked in
+src/core/service/service.rs (origin/main 9b3f44e09:16379). It checks busy,
+app_recovery_active, durable_queue_lease_in_progress and worker_active_count.
+It prevents overlapping work in the legacy shared execution/session state and
+competing recovery/admission. The bounded pool in service_queue_capacity.rs
+retains those exclusion rules for shared work, but admits independently isolated
+Business OS research conversations concurrently. Default 4 is intentional;
+there is no need to retain default 1 for those isolated conversations. One
+thread still has one worker, preserving its ordered context. The operator's
+nine pending rows have no retry/dependency holds, consistent with the measured
+global serialization. These settings were already landed in 62cc1fd7a.
+
 ## Befund 4 — queue CLI projection registration
 
 Queue projection hooks were registered by open_store only. A fresh queue CLI
@@ -135,10 +147,31 @@ weakened. No browser replication source was changed by this slice.
 The normal business_command_queue_task_payload and queue_task_payload writers
 store QueueTaskView.message_key as the document id. They historically omit a
 separate message_key property. Its absence alone does not establish an orphan
-or a ticket_self_work_items origin. The customer reports one canonical leased
-row versus seven running documents; their concrete source cannot be identified
-from titles alone. Document id/command_id/task_id are needed to join the sources.
+or a ticket_self_work_items origin. The final customer ID join proves that all
+seven running documents have canonical cancelled rows, acknowledged August
+28–31. They are historical cancel/projection mismatches, not missing queue rows.
 Newly written queue payloads also include message_key for explicit traceability.
+
+Confirmed IDs and canonical acknowledgement times (UTC):
+
+| Queue ID suffix (`queue:system::`) | Canonical acked_at |
+|---|---|
+| 5cb6be0045dbced617666180 | 2026-08-28 09:15 |
+| a39b9a3f0114ca53298822d3 | 2026-08-28 09:50 |
+| 874c7789b4b239a43f296542 | 2026-08-28 10:09 |
+| 69ed8448d83beed58b28959a | 2026-08-30 15:12 |
+| aa0ab1ab313716ff9d2a8bab | 2026-08-30 18:47 |
+| b12733bd9ea7a1c3495ed1b6 | 2026-08-31 08:18 |
+| 880197035f207a79bd41ac71 | 2026-08-31 08:18 |
+
+Their projections retained status=running, route_status=leased,
+task_status=running and lease_owner=ctox-service. The reconciler must preserve
+the canonical cancelled outcome rather than relabel these as failed or requeue
+them. A dedicated seven-row test now reproduces precisely that mismatch.
+It includes freshly rewritten running documents and a lingering worker key:
+neither may override the known canonical cancelled state. Terminal/pending
+canonical outcomes are projected immediately; only missing/expired sources
+wait for the orphan projection TTL.
 
 The existing repair_queue_projections CLI reads only business_records and is
 not an automatic daemon reconciler. Native-only documents can therefore survive
@@ -154,8 +187,9 @@ rows are not mutated by this projection-only pass.
 
 Core-state inspection and both projection writes share one attached IMMEDIATE
 transaction, fencing concurrent lease admission and avoiding partial repairs.
-Revisions and native last-write metadata advance; fresh/terminal native documents
-and tombstones are preserved. Tests cover seven native-only orphans, a mirror-only
+Revisions and native last-write metadata advance; terminal native documents
+and tombstones are preserved, and fresh orphans retain their grace period.
+Tests cover seven native-only orphans, a mirror-only
 orphan, live leases whose documents lack message_key, command-link resolution,
 canonical pending/cancelled outcomes, terminal command outcomes, current-worker
 protection, rollback on native write failure, and the actual boot/maintenance
@@ -173,6 +207,45 @@ existing projection tests, all 113 JS tests, and the serial native RxDB suite
 (366 unit + 31 conformance + two guards). cargo check passes. The new tests
 use the repository's Rust 2021 formatting; the unrelated Office/LCM formatting
 baseline remains outside this slice.
+
+### Final acceptance clarification: closed-store queue mutations
+
+The strengthened fixture exposed an additional merge defect:
+enrich_queue_projection_payload removed absent lease_owner/leased_at/acked_at
+from its new payload, while upsert_attached_rxdb_record merges into the old
+document. Removed fields therefore survived in native RxDB. The projector now
+writes explicit nulls for cleared values. Cancel/Fail tests seed an old owner
+and lease timestamp and verify they disappear, with acked_at matching the
+canonical row. Existing status and completion guards are retained.
+
+The queue CLI registers its projection hooks before dispatch, independently of
+open_store. The fresh-process acceptance now covers cancel and fail, then
+reopens the Business OS store and checks both its mirror and native RxDB
+status/revision. Cancellation also checks the cleared lease owner and persisted
+acknowledgement. An unreviewed complete request must fail the existing durable
+completion guard and leave the running projection/revision unchanged; the test
+checks the guard error, absence of an accepted completion proof and unchanged
+state rather than granting an unverified success. The rejected transaction also
+rolls back its attempted proof insert.
+The existing canonical_queue_ack_refreshes_queue_and_command_without_repair
+test separately covers projection from the native failed-ack path.
+Automatic historical reconciliation
+is already wired at daemon boot and every 60 seconds; it does not require an
+operator repair command or a database edit. There is deliberately no recursive
+reconciliation call from open_store itself.
+
+### Process-event JSON diagnostic, recorded separately
+
+The operator confirms lease_expires_at and lease_worker_id are absent from the
+historical routing event row_after JSON despite populated canonical columns.
+process_mining.rs::install_table_triggers/build_trigger_sql capture the column
+list at installation. table_triggers_current checks the process schema version
+and existence of the three trigger names, not whether table columns changed.
+This permits old trigger JSON shapes after additive schema changes. The
+historical event count is not a measurement of lease field population. A
+column-aware trigger refresh requires a separate migration/recorder regression
+check; it is recorded here without changing routing or event capture in this
+queue-projection acceptance slice.
 
 ## Befund 5 — typed writeback capability and terminal completion evidence
 

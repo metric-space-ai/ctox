@@ -4,6 +4,71 @@
 use super::*;
 
 #[test]
+fn incident_reconcile_seven_cancelled_routes_with_historical_running_projections(
+) -> anyhow::Result<()> {
+    let temp = fixture()?;
+    let root = temp.path();
+    let old = BUSINESS_OS_QUEUE_ORPHAN_REPAIR_AGE_MS + 60_000;
+    let mut keys = Vec::new();
+    for index in 0..7 {
+        let task = task(root, &format!("historical-cancel-{index}"))?;
+        let core = Connection::open(crate::paths::core_db(root))?;
+        core.execute(
+            "UPDATE communication_routing_state
+             SET route_status='cancelled', acked_at='2000-01-01T00:00:00Z'
+             WHERE message_key=?1",
+            params![task.message_key],
+        )?;
+        drop(core);
+        // A recently rewritten projection must not mask an older canonical cancel.
+        seed(
+            root,
+            &task.message_key,
+            if index < 4 { old } else { 0 },
+            "running",
+        )?;
+        let rxdb = Connection::open(rxdb_store_path(root))?;
+        rxdb.execute(
+            "UPDATE ctox_business_os__ctox_queue_tasks__v1
+             SET data=json_set(data, '$.route_status', 'leased', '$.task_status', 'running',
+                              '$.lease_owner', 'ctox-service', '$.status_note', 'Review feedback applied')
+             WHERE id=?1",
+            params![task.message_key],
+        )?;
+        keys.push(task.message_key);
+    }
+    // Even a not-yet-cleared worker key cannot override durable cancellation.
+    let active_keys = HashSet::from([keys[0].clone()]);
+    assert_eq!(reconcile_stale_queue_projections(root, &active_keys)?, 7);
+    let conn = open_store(root)?;
+    for key in keys {
+        let payload = native(root, &key)?;
+        for field in ["status", "route_status", "task_status", "terminal_status"] {
+            assert_eq!(payload[field], "cancelled", "{key}: {field}");
+        }
+        assert!(payload["lease_owner"].is_null());
+        assert_eq!(payload["message_key"], key);
+        let mirror: String = conn.query_row(
+            "SELECT json_extract(payload_json, '$.status') FROM business_records
+             WHERE collection='ctox_queue_tasks' AND record_id=?1",
+            params![key],
+            |row| row.get(0),
+        )?;
+        assert_eq!(mirror, "cancelled");
+        let core = Connection::open(crate::paths::core_db(root))?;
+        let unchanged: bool = core.query_row(
+            "SELECT route_status='cancelled' AND acked_at='2000-01-01T00:00:00Z'
+             FROM communication_routing_state WHERE message_key=?1",
+            params![key],
+            |row| row.get(0),
+        )?;
+        assert!(unchanged);
+    }
+    assert_eq!(reconcile_stale_queue_projections(root, &HashSet::new())?, 0);
+    Ok(())
+}
+
+#[test]
 fn incident_reconcile_expired_projection_protects_current_worker_keys() -> anyhow::Result<()> {
     let temp = fixture()?;
     let root = temp.path();

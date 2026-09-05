@@ -874,7 +874,9 @@ pub(super) fn enrich_queue_projection_payload(
     {
         object.insert("lease_owner".to_string(), Value::String(owner.to_string()));
     } else {
-        object.remove("lease_owner");
+        // Native projection writes merge into an existing document. Omitting
+        // cleared lease fields would retain the previous worker indefinitely.
+        object.insert("lease_owner".to_string(), Value::Null);
     }
     if let Some(leased_at) = task
         .leased_at
@@ -887,7 +889,7 @@ pub(super) fn enrich_queue_projection_payload(
             Value::String(leased_at.to_string()),
         );
     } else {
-        object.remove("leased_at");
+        object.insert("leased_at".to_string(), Value::Null);
     }
     if let Some(acked_at) = task
         .acked_at
@@ -897,7 +899,7 @@ pub(super) fn enrich_queue_projection_payload(
     {
         object.insert("acked_at".to_string(), Value::String(acked_at.to_string()));
     } else {
-        object.remove("acked_at");
+        object.insert("acked_at".to_string(), Value::Null);
     }
 }
 

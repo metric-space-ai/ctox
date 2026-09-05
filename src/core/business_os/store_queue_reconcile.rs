@@ -21,20 +21,23 @@ pub(crate) fn reconcile_stale_queue_projections(
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let now = now_ms() as i64;
     let cutoff = now.saturating_sub(BUSINESS_OS_QUEUE_ORPHAN_REPAIR_AGE_MS);
-    let mut candidates = BTreeMap::<String, Value>::new();
+    let mut candidates = BTreeMap::<String, (Value, i64)>::new();
     {
         let mut statement = tx.prepare(
-            "SELECT record_id, payload_json FROM business_os_projection.business_records
+            "SELECT record_id, payload_json, updated_at_ms FROM business_os_projection.business_records
              WHERE collection='ctox_queue_tasks' AND deleted=0
                AND json_valid(payload_json)
-               AND json_extract(payload_json, '$.status') IN ('running','leased')
-               AND updated_at_ms <= ?1",
+               AND json_extract(payload_json, '$.status') IN ('running','leased')",
         )?;
-        for row in statement.query_map(params![cutoff], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        for row in statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
         })? {
-            let (id, raw_json) = row?;
-            candidates.insert(id, serde_json::from_str(&raw_json)?);
+            let (id, raw_json, updated) = row?;
+            candidates.insert(id, (serde_json::from_str(&raw_json)?, updated));
         }
     }
     // Native-only documents are invisible to the historical repair CLI. Read
@@ -62,21 +65,24 @@ pub(crate) fn reconcile_stale_queue_projections(
              FROM {qualified} WHERE id=?1"
         ));
         let mut statement = tx.prepare(&format!(
-            "SELECT id, data FROM {qualified}
+            "SELECT id, data, CAST(COALESCE(json_extract(data, '$.updated_at_ms'), {last_write}, 0) AS INTEGER) FROM {qualified}
              WHERE json_valid(data) AND {deleted}=0
-               AND json_extract(data, '$.status') IN ('running','leased')
-               AND COALESCE(json_extract(data, '$.updated_at_ms'), {last_write}, 0) <= ?1"
+               AND json_extract(data, '$.status') IN ('running','leased')"
         ))?;
-        for row in statement.query_map(params![cutoff], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        for row in statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
         })? {
-            let (id, raw_json) = row?;
-            candidates.insert(id, serde_json::from_str(&raw_json)?);
+            let (id, raw_json, updated) = row?;
+            candidates.insert(id, (serde_json::from_str(&raw_json)?, updated));
         }
     }
     let mut repaired = 0;
-    for (id, mut payload) in candidates {
-        // Never resurrect a native tombstone or overwrite a fresh/terminal
+    for (id, (mut payload, mut projection_updated)) in candidates {
+        // Never resurrect a native tombstone or overwrite a terminal
         // native document merely because its business_records mirror is stale.
         if let Some(sql) = &native_current_sql {
             if let Some((raw_json, deleted, updated)) = tx
@@ -91,7 +97,6 @@ pub(crate) fn reconcile_stale_queue_projections(
             {
                 let current: Value = serde_json::from_str(&raw_json)?;
                 if deleted
-                    || updated > cutoff as f64
                     || !matches!(
                         current.get("status").and_then(Value::as_str),
                         Some("running" | "leased")
@@ -100,6 +105,7 @@ pub(crate) fn reconcile_stale_queue_projections(
                     continue;
                 }
                 payload = current;
+                projection_updated = updated as i64;
             }
         }
         let command_id = first_string_field(&payload, &["command_id"]);
@@ -130,10 +136,6 @@ pub(crate) fn reconcile_stale_queue_projections(
         let mut source = None;
         let mut live = false;
         for key in &keys {
-            if active_keys.contains(key) {
-                live = true;
-                break;
-            }
             let route = tx
                 .query_row(
                     "SELECT route_status,
@@ -151,18 +153,28 @@ pub(crate) fn reconcile_stale_queue_projections(
                 )
                 .optional()?;
             if let Some((status, owns_live_lease)) = route {
-                if owns_live_lease {
+                if owns_live_lease
+                    || (active_keys.contains(key)
+                        && matches!(status.as_str(), "leased" | "running"))
+                {
                     live = true;
                     break;
                 }
                 if source.is_none() {
                     source = Some((key.clone(), status));
                 }
+            } else if active_keys.contains(key) {
+                live = true;
+                break;
             }
         }
         if live {
             continue;
         }
+        // A known canonical outcome wins immediately. Only an orphan/expired
+        // lease needs the grace period; rewriting an incorrect projection must
+        // not postpone a durable cancellation indefinitely.
+        let stale = projection_updated <= cutoff;
         let (route_status, reason) = if let Some((key, status)) = &source {
             payload["message_key"] = Value::String(key.clone());
             match status.as_str() {
@@ -170,8 +182,9 @@ pub(crate) fn reconcile_stale_queue_projections(
                     status.clone(),
                     format!("Stale running projection reconciled from canonical queue state {status}."),
                 ),
-                _ => ("failed".to_string(),
+                _ if stale => ("failed".to_string(),
                     "Stale running projection has no live canonical queue lease after the projection TTL.".to_string()),
+                _ => continue,
             }
         } else {
             let command_status = if let Some(command_id) = command_id.as_deref() {
@@ -186,8 +199,9 @@ pub(crate) fn reconcile_stale_queue_projections(
             match command_status.as_deref().and_then(projection_route_status_for_command_status) {
                 Some(status) if matches!(status, "handled" | "failed" | "cancelled" | "blocked") => (
                     status.to_string(), "Stale running projection reconciled from terminal business command.".to_string()),
-                _ => ("failed".to_string(),
+                _ if stale => ("failed".to_string(),
                     "Orphaned running projection: no canonical queue row or terminal business command found after the projection TTL.".to_string()),
+                _ => continue,
             }
         };
         let status = normalize_queue_status(&route_status);
