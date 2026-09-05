@@ -45,3 +45,23 @@ Routing-State (`communication_routing_state`), nie in der Projektion allein.
 Erwartung nach dem Upgrade: Befund 4 → 0 Phantome (oder Reconciler räumt sie);
 Befund 2 → über 24 h keine Dubletten mehr; Befund 3 → nach `capacity --workers 4`
 mehrere `leased` bei Rückstau; Befund 5 → an der nächsten Recherche; Befund 1 → per Probe.
+
+## Ergebnis NACH dem Upgrade (05.09.2026, Release branch-main-20260905T072559Z, umgeschaltet 07:53 UTC)
+
+Upgrade 07:26:06–07:53 UTC (27,5 min), Start automatisch nach Ende der laufenden
+BOOMEX-Recherche (die mit 23 Feldern abschloss, vorher 15). Beim Start war nur eine
+Scraper-Reparatur geleast, keine Recherche.
+
+| Befund | Messung nach dem Upgrade | Stand |
+|---|---|---|
+| 3 Kapazität | `ctox queue capacity` → `max_workers 4, workers_per_thread 1, scope independent business_os.chat.task sessions, storage SQLite runtime store` (explizit gesetzt). Eine Minute nach dem Umschalten **2 `leased`** gleichzeitig (07:53:19 / 07:53:20, beide Worker `21b39433…`, 15-min-Ablauf), 11 `pending`. Vorher nie mehr als 1. | **belegt** (2 von max. 4; mehr braucht mehr unabhängige Aufgaben im Rückstau) |
+| 4 Projektion (neu) | Aufgabe `ebe4782bea95…` (Auth-Assist xing): Projektion `queued/pending/rev 1-civfwsvgrf` → `ctox queue cancel` im frischen CLI-Prozess → Projektion **`cancelled/cancelled`, lease_owner null, rev `2-1887bf89…`** um 07:56:57; Routing-State `cancelled`. | **belegt** |
+| 4 Projektion (Altlast) | 7 Phantome unverändert (Reconciler `9b3f44e09` + Merge-Fix `5a16d0061` sind NICHT in diesem Release; sie belegen keine Kapazität). | offen bis zum zweiten Upgrade |
+| 2 Reparatur-Dubletten | 4× `evi-gv-at` offen, alle **ohne** `scrape_repair`-Metadatum → vom alten Release erzeugt (nach meiner Bereinigung um 06:38, vor dem Umschalten). Drei per CLI storniert. Neue Einreihungen tragen das Metadatum; Dubletten-Freiheit über 24 h zu beobachten. | nicht widerlegt, 24-h-Messung offen |
+| 1 Lease-Sweep | Zwei live Leases mit `lease_expires_at` (+15 min) und `lease_worker_id`. Probe „Worker stirbt" noch nicht gefahren. | Probe offen |
+| 5 Writeback | 19/19 Leads mit Ergebnis, keiner mit 0 Feldern. App 1.0.100 liefert `payload.writeback_contract` mit `mechanism`/`command_type`. End-to-end (persistierter Vertrag → `business_os.execute_writeback` → Felder) braucht eine neue Recherche aus dem Browser. | **blockiert: Browser-Sitzung nach dem Upgrade abgemeldet**, Anmeldung durch den Eigentümer nötig |
+| Regression Browser | — | **blockiert** (Anmeldung) |
+
+Nächste Schritte: (a) Eigentümer meldet sich im Browser an → Regressionsliste + Befund-5-Lauf
+(DrinkStar, 7 Felder); (b) zweites Upgrade mit `5a16d0061` (Reconciler + Merge-Fix) → Phantome 7 → 0;
+(c) 24-h-Beobachtung Dubletten; (d) Probe Befund 1 bei Gelegenheit.
