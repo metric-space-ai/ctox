@@ -27,7 +27,7 @@ Routing-State (`communication_routing_state`), nie in der Projektion allein.
 ## Ablauf
 
 1. Befund 1–4 auf `origin/main` (Befund 5 darf nachziehen) → ein Upgrade `ctox upgrade --dev`.
-2. Nach dem Umschalten: `ctox queue capacity --workers 4`.
+2. Nach dem Umschalten: `ctox queue capacity --workers 4` — **Achtung: der Code-Standard ist bereits 4** (`unwrap_or(4)` in `service_queue_capacity.rs`), nicht 1 wie zunächst angenommen. Parallelität greift also sofort nach dem Umschalten; das explizite Setzen macht sie zur dokumentierten Entscheidung. Erste Beobachtung direkt danach: welche vier Aufgaben werden geleast (Recherche, Auth-Assist, Reparatur?).
 3. Regressionsliste im Browser durchklicken.
 4. Befund 2/3/4 sofort messen (Routing-State + App); Befund 1 per Probe; Befund 5 an der nächsten realen Recherche.
 5. Ergebnis mit Zahlen in dieses Dokument, dann Push auf `main`.
