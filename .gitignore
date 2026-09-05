@@ -70,6 +70,8 @@ tmp_intersolar_*.js
 !/docs/dev/skf-nachrecherche-board.md
 !/docs/dev/beweise/
 /docs/dev/beweise/*
+!/docs/dev/crew-cockpit-board-20260905.md
+!/docs/dev/crew-cockpit-brief-*.md
 !/docs/dev/beweise/refactoring-kampagne-baseline.md
 !/docs/dev/beweise/raw/
 /docs/dev/beweise/raw/*
