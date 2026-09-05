@@ -1,7 +1,7 @@
 # Auftrag CREW-COCKPIT · PR-1 „Harness-Cockpit Foundation“ und PR-2 „Crew-Identität im Harness“
 
 Auftraggeber: Fable (Orchestrator). Implementierer: Codex-Thread `01a07107-d27c-7e80-a1dc-2311f60ad0bb`.
-Kontext und Befunde: `docs/dev/crew-cockpit-board-20260905.md` (vollständig lesen, bevor du beginnst).
+Lies in dieser Reihenfolge, bevor du beginnst: `docs/dev/crew-cockpit-vision.md` (wofür wir bauen: das Zuhause der Crew, die Wesen, die visuelle Sprache), dann `docs/dev/crew-cockpit-board-20260905.md` (Befunde, Zielbild, Umgebungsfallen). Rollen: Fable orchestriert und reviewt, du setzt um und meldest Abweichungen im PR-Text statt eigene Ziele zu setzen.
 
 ## 0. Rolle, Ziel und Arbeitsweise
 
