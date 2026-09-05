@@ -364,6 +364,49 @@ success. Clean-clone validation additionally exercises native dispatch.
 
 ### Initial replication pending — cause not established
 
+September 5 bounded field-hypothesis probe:
+
+The operator reports pending only for browser-writable collections
+(user_thread_states, desktop_icons, business_chats,
+outbound_lead_generation_leads and outbound_lead_generation_adapters), while
+read-only projections completed. Nineteen local leads outlived the server-side
+campaign deletion. After the wire-budget upgrade there were no further restarts,
+status remained connected, data flowed, and no lastError explained the pending
+initial state. These observations motivate, but do not prove, an unacknowledged
+or repeatedly rejected first push.
+
+initial-sync-stale-browser-smoke.mjs now seeds a real unsynced Chromium
+IndexedDB document and drives the unchanged browser replication state machine.
+It subscribes to awaitInitialReplication BEFORE peer readiness, like the shell.
+Only the native RPC boundary is simulated; no tenant, signaling or production
+WebRTC transport is contacted. The primary store, pull/push loops, conflict
+resolution, checkpoint updates and initial deferred are real implementation code.
+
+| Controlled server response | Pull calls | Push calls | Initial result | Browser result |
+|---|---:|---:|---|---|
+| Newer state returned on pull | 2 | 0 | complete | Native revision, non-pushable |
+| Tombstone returned on pull | 2 | 0 | complete | Native tombstone, non-pushable |
+| Newer state returned as push conflict after empty pull | 1 | 1 | complete | Native revision, non-pushable |
+| Tombstone returned as push conflict after empty pull | 1 | 1 | complete | Native tombstone, non-pushable |
+| Same newer revision repeatedly rejects push, without a master HLC | 1 | 3 | complete | Local write retained, error and retry |
+
+The developer probe completed each initial barrier in 4–25 ms. The repeated
+conflict emits `masterWrite conflicts remained for outbound_lead_generation_leads`,
+retains the local pushable document, leaves the push checkpoint unadvanced and
+arms push retry. This reflects pushToRemotePeers using Promise.allSettled and
+reporting errors rather than rejecting its aggregate initial barrier; completion
+of this barrier is not proof that every local write was accepted by the server.
+For a newer master HLC, resolveWholeDocumentLwwConflicts absorbs the master row
+with replication origin, preventing another local push. These paths are in
+src/apps/business-os/rxdb/src/replication-webrtc.mjs:1539, 1640 and 1771 in the
+tested source; runPeerReady connects the initial pull/push at line 1378.
+
+Result: the proposed stale-local-versus-newer/deleted-master scenario does NOT
+reproduce permanent pending without an error. Lost wire acknowledgements and the
+actual native permission/handler response were not simulated as proven customer
+facts. The customer cause remains OPEN. Investigation stops at this requested
+boundary; no replication runtime behavior or readiness flag is changed.
+
 awaitInitialReplication returns initialReplication. Peer acceptance chains a
 pull drain followed by a push drain, then resolves the original deferred.
 This is a barrier for both directions; evidence that documents flow alone does
