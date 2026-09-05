@@ -1,3 +1,15 @@
+fn validate_command_writeback_contract(contract: &Value) -> Result<()> {
+    if contract.get("command_type").is_some()
+        || contract.get("mechanism").and_then(Value::as_str) == Some("business_command")
+    {
+        anyhow::ensure!(
+            crate::business_os::mcp_channel::supports_command_writeback(contract),
+            "writeback contract incomplete: expected mechanism=business_command, command_type=outbound.lead.research_writeback, collection=outbound_lead_generation_leads and nonempty record_ids; allowed_actions cannot substitute for this command contract"
+        );
+    }
+    Ok(())
+}
+
 fn command_writeback_failure(root: &Path, job: &QueuedPrompt) -> Result<Option<String>> {
     if metadata_string(&job.queue_task_metadata, "business_os_command_type").as_deref()
         != Some("business_os.chat.task")
@@ -11,19 +23,16 @@ fn command_writeback_failure(root: &Path, job: &QueuedPrompt) -> Result<Option<S
         let Some(contract) = context.pointer("/command/payload/writeback_contract") else {
             continue;
         };
-        if contract.get("mechanism").and_then(Value::as_str) != Some("business_command")
-            || contract.get("command_type").and_then(Value::as_str)
-                != Some("outbound.lead.research_writeback")
-        {
+        if let Err(error) = validate_command_writeback_contract(contract) {
+            return Ok(Some(error.to_string()));
+        }
+        if !crate::business_os::mcp_channel::supports_command_writeback(contract) {
             continue;
         }
         let parent_id = context
             .pointer("/command/command_id")
             .and_then(Value::as_str)
             .context("writeback parent command id missing")?;
-        if !crate::business_os::mcp_channel::supports_command_writeback(contract) {
-            return Ok(Some("Business command writeback failed: unsupported or incomplete persisted writeback contract; no fallback through CLI, shell or SQLite is permitted.".into()));
-        }
         let command_type = contract["command_type"]
             .as_str()
             .context("writeback command type missing")?;
@@ -56,6 +65,73 @@ fn command_writeback_failure(root: &Path, job: &QueuedPrompt) -> Result<Option<S
 #[cfg(test)]
 mod command_writeback_tests {
     use super::*;
+
+    #[test]
+    fn incident_incomplete_command_writeback_fails_before_turn_and_cannot_complete() -> Result<()> {
+        let contracts = [
+            serde_json::json!({"command_type": "outbound.lead.research_writeback"}),
+            serde_json::json!({"mechanism": "business_command"}),
+            serde_json::json!({"mechanism": "business_command",
+                "command_type": "outbound.lead.research_writeback",
+                "collection": "outbound_lead_generation_leads", "record_ids": []}),
+            serde_json::json!({"command_type": "outbound.lead.research_writeback",
+                "allowed_actions": [{"module_id": "outbound-lead-generation",
+                    "action_id": "web_stack.person_research"}]}),
+        ];
+        for contract in contracts {
+            let temp = tempfile::tempdir()?;
+            let root = temp.path();
+            let (capability, _) =
+                crate::business_os::store::issue_business_os_capability_token_for_managed_user(
+                    root,
+                    "operator",
+                    "Operator",
+                    "admin",
+                    chrono::Utc::now().timestamp_millis(),
+                )?;
+            let accepted = crate::business_os::store::accept_rxdb_business_command_with_origin(
+                root,
+                serde_json::json!({
+                    "id": "incomplete-research", "module": "outbound-lead-generation",
+                    "command_type": "business_os.chat.task", "record_id": "lead-a",
+                    "payload": {"instruction": "Research and write back", "mode": "data",
+                        "writeback_contract": contract},
+                    "client_context": {"capability_token": capability}
+                }),
+                crate::business_os::store::CommandOrigin::ReplicatedPeer,
+            )?;
+            let key = accepted["task_id"].as_str().context("queue task missing")?;
+            let job = queued_prompt_from_queue_task(
+                channels::load_queue_task(root, key)?.context("queue task missing")?,
+            );
+            let mut options = chat_turn_session_options_for_queue_job(&job);
+            let error = configure_business_os_mcp_session_for_queue_job(root, &job, &mut options)
+                .expect_err("an incomplete writeback contract must stop the turn")
+                .to_string();
+            assert!(error.contains("writeback contract incomplete"), "{error}");
+            assert!(options.business_os_mcp_command_session.is_none());
+            assert!(!runtime_error_is_transient_api_failure(&error));
+            assert!(!founder_email_worker_error_is_retryable(&job, &error));
+            assert!(!matches!(
+                classify_agent_failure(&error),
+                lcm::AgentOutcome::TurnTimeout
+            ));
+            assert_eq!(failed_worker_route_status(false, false, false), "failed");
+            let context = channels::inspect_business_command_for_task(root, key)?.unwrap();
+            assert!(completion_review_scope_from_command_context(&context).is_none());
+            let state = Arc::new(Mutex::new(SharedState::default()));
+            match run_completion_review(root, &state, &job, "Research completed", 1, None) {
+                CompletionReviewDisposition::TerminalQueueFailure { summary } => {
+                    assert!(
+                        summary.contains("writeback contract incomplete"),
+                        "{summary}"
+                    );
+                }
+                _ => panic!("resumed work must not complete with an incomplete writeback contract"),
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn incident_command_only_contract_enables_mcp_and_requires_successful_correlated_writeback(

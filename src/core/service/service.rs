@@ -10299,19 +10299,18 @@ fn configure_business_os_mcp_session_for_queue_job(
     if command.get("command_type").and_then(Value::as_str) != Some("business_os.chat.task") {
         return Ok(false);
     }
-    let Some(writeback_contract) = command
-        .pointer("/payload/writeback_contract")
-        .filter(|contract| {
-            crate::business_os::mcp_channel::supports_command_writeback(contract)
-                || contract
-                    .get("allowed_actions")
-                    .and_then(Value::as_array)
-                    .is_some_and(|actions| !actions.is_empty())
-        })
-        .cloned()
-    else {
+    let Some(writeback_contract) = command.pointer("/payload/writeback_contract") else {
         return Ok(false);
     };
+    validate_command_writeback_contract(writeback_contract)?;
+    if !crate::business_os::mcp_channel::supports_command_writeback(writeback_contract)
+        && !writeback_contract
+            .get("allowed_actions")
+            .and_then(Value::as_array)
+            .is_some_and(|actions| !actions.is_empty())
+    {
+        return Ok(false);
+    }
     let payload_hash = command
         .get("payload_hash")
         .and_then(Value::as_str)
@@ -10435,6 +10434,9 @@ fn completion_review_scope_from_command_context(context: &Value) -> Option<revie
         && mode == Some("data")
         && dependencies_empty
         && attachments_empty
+        && context
+            .pointer("/command/payload/writeback_contract/command_type")
+            .is_none()
         && context
             .pointer("/command/payload/writeback_contract/mechanism")
             .and_then(Value::as_str)

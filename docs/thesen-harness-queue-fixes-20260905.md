@@ -273,6 +273,68 @@ queue-projection acceptance slice.
 
 ## Befund 5 — typed writeback capability and terminal completion evidence
 
+### App contract and native handler verification
+
+The customer app owns the contract; its 1.0.99 source is not in this repository.
+For a business_os.chat.task, put this object in payload.writeback_contract:
+
+```json
+{
+  "mechanism": "business_command",
+  "command_type": "outbound.lead.research_writeback",
+  "collection": "outbound_lead_generation_leads",
+  "record_ids": ["<lead-id>"],
+  "forbidden_mechanisms": ["cli", "shell", "sqlite"]
+}
+```
+
+No allowed_actions entry is needed for this native command. Activation starts
+in src/core/service/service.rs:10738 (clean origin/main at 51d1a3953), calling
+src/core/business_os/mcp_writeback.rs:7, supports_command_writeback. That predicate
+reads mechanism, command_type, collection and the nonempty string record_ids
+scope. The outer persisted command must be business_os.chat.task and the queue
+job must carry business_os_command_id. Authorization is revalidated before a
+signed, isolated MCP session exposes business_os.execute_writeback.
+forbidden_mechanisms is descriptive contract data, not the activation switch;
+the bounded native tool and completion receipt checks enforce the writeback path.
+
+The separate app-action shape, parsed in mcp_channel.rs:590, is:
+
+```json
+{
+  "allowed_actions": [
+    {
+      "module_id": "<installed-module-id>",
+      "action_id": "<declared-app-action-id>",
+      "operation_ids": ["<operation-id>"]
+    }
+  ]
+}
+```
+
+allowed_actions is an array of objects, not command_type strings or objects
+named action/collection. module_id and action_id are required nonempty strings;
+operation_ids is an optional string array that bounds action operations.
+Do not substitute the research writeback command name for a declared app action.
+An allowed_actions list does not override mechanism or command_type: a declared
+native command contract still must be complete.
+
+The incomplete-contract follow-up now rejects command_type-bearing contracts
+(or mechanism=business_command) that fail the native contract predicate, before
+model invocation, with `writeback contract incomplete`. Completion review also
+rejects these contracts terminally, including resumed results, and excludes
+them from the semantic-answer-only shortcut. Regression fixtures cover a lone
+command_type, a lone mechanism, empty record_ids, and an unrelated allowed_actions
+list that must not mask the malformed command contract. The existing valid
+command-only activation and correlated-receipt test remains in place.
+
+The native handler is real in the clean origin clone: dispatch is registered at
+src/core/business_os/command_plane.rs:1226 and calls
+src/core/business_os/person_research_gap_closure.rs:363, handle_research_writeback.
+Its verified_writeback_completes_lead_and_retains_gap_audit_id regression checks
+completed lead persistence. These are inspected existing implementations; no
+handler is reconstructed from documentation and neither file is changed here.
+
 The harness enabled signed Business OS MCP sessions only for nonempty
 allowed_actions. The app's mechanism=business_command contract has command_type,
 collection and record_ids instead, and was therefore ignored. The semantic-only
