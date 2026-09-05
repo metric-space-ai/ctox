@@ -81,7 +81,80 @@ A subprocess test starts without any open_store call, executes cancel through
 the CLI entry, then verifies canonical cancelled state and the native
 ctox_queue_tasks document, including a new matching document/column revision.
 
-The RxDB Rust suite passes. The root JS suite has three baseline guard failures:
+The RxDB Rust suite passes. The initial root JS run had three baseline guard failures:
 two inventory differences absent in the clean origin clone, and an identifier
 guard that already fails in six active files on origin/main. No guard was
 weakened. No browser replication source was changed by this slice.
+
+## Befund 5 — typed writeback capability and terminal completion evidence
+
+The harness enabled signed Business OS MCP sessions only for nonempty
+allowed_actions. The app's mechanism=business_command contract has command_type,
+collection and record_ids instead, and was therefore ignored. The semantic-only
+review shortcut also treated that contract as requiring no action.
+
+The harness now recognizes the native research writeback contract and exposes
+business_os.execute_writeback. It requires a signed internal command session,
+revalidates the originating actor, checks server DataWrite/module/collection
+policy, and binds record_id, module and research_command_id from the persisted
+contract. Cross-record, cross-parent and gap-task substitution are rejected.
+The actual write runs through the existing native business command dispatcher;
+a build without that handler fails rather than recursively queueing work.
+Identical payloads reuse the same native command identity.
+
+Completion requires a completed native writeback receipt for every contracted
+record and the exact originating research command. Missing/failed/foreign
+receipts yield TerminalQueueFailure, including when the worker claims success
+after a sandbox-blocked CLI or SQLite writeback. The semantic-only shortcut is
+disabled for business_command writeback contracts. The prompt names the tool
+and requires retaining research artifacts on failure.
+
+The developer checkout lacks the research_writeback native handler already
+present on origin/main; the clean clone is authoritative for that integration.
+Local tests cover command-only session activation, cross-scope rejection,
+failed and foreign receipts, and terminal rejection of the observed false
+success. Clean-clone validation additionally exercises native dispatch.
+
+### Initial replication pending — cause not established
+
+awaitInitialReplication returns initialReplication. Peer acceptance chains a
+pull drain followed by a push drain, then resolves the original deferred.
+This is a barrier for both directions; evidence that documents flow alone does
+not establish which drain or peer negotiation is outstanding. Existing
+checkpoint/reconnect/catchup smoke tests do not reproduce the customer's
+five-collection permanent pending state. There is no captured outstanding
+request/ack/checkpoint trace from that run in the incident protocol.
+
+No replication implementation change is made without that evidence. In
+particular, readiness is not forced true or resolved on the first document.
+The next useful evidence is the affected pool's negotiated peers, pull/push
+in-progress state, pending request IDs and matching acknowledgements at the
+time awaitInitialReplication remains pending.
+
+### Clean-clone validation update
+
+origin/main advanced independently with a3f3e90c5, removing the pre-existing
+customer identifiers from active source comments. The landing clone was rebased
+onto that update before further pushes. With browser test dependencies present,
+the full JS/RxDB suite passes: 113 passed, 0 failed, 0 skipped.
+
+The clean-clone RxDB unit suite initially hit a global db_count assertion in
+parallel execution (365 passed, 1 failed). Its serial run passes all 366 unit
+tests. No RxDB implementation or guard assertion was changed for this work.
+
+The required clean-clone cargo test --manifest-path src/core/rxdb/Cargo.toml
+-- --test-threads=1 also passes: 366 unit, 31 conformance, 1 error-contract
+guard and 1 idle-budget test. The 17 existing native research/gap-writeback
+tests pass, including completed lead persistence and correlation rejection.
+
+Broader baseline checks are not fully green. Before the writeback slice, the
+clean origin clone's 100-test MCP module suite already has 14 failures (86 pass):
+missing customers/outbound/support/mcp-inventory fixture modules and related
+permission/expected-validation differences. The divergent developer checkout
+has one additional existing person-research idempotency failure.
+
+cargo fmt --check was run on both trees. Pre-existing formatting differences
+remain in clean-clone office_engine.rs and context/lcm/{mod.rs,tests.rs}.
+Formatting introduced by these queue/writeback slices is corrected. These
+unrelated baseline failures are not represented as a green overall release
+gate and their assertions are not changed or bypassed.

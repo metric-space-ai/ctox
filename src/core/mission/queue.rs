@@ -228,7 +228,9 @@ pub fn handle_queue_command(root: &Path, args: &[String]) -> Result<()> {
             if args.iter().any(|arg| arg == "--workers") && workers.is_none() {
                 anyhow::bail!("queue capacity --workers requires a value");
             }
-            print_json(&crate::service::configure_queue_worker_capacity(root, workers)?)
+            print_json(&crate::service::configure_queue_worker_capacity(
+                root, workers,
+            )?)
         }
         "add" => {
             if args.iter().any(|arg| arg == "--help" || arg == "-h") {

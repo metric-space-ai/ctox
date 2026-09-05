@@ -344,27 +344,29 @@ pub(crate) fn execute_scrape_with_outcome(
             repair_request_path.as_ref(),
         );
         let suggested_skill = repair_skill_for_status(classification.status);
-        Some(serde_json::to_value(channels::create_scrape_repair_queue_task(
-            root,
-            "scrape",
-            &target.view.target_key,
-            channels::QueueTaskCreateRequest {
-                title: format!("repair scrape target {}", target.view.target_key),
-                prompt: repair_prompt,
-                thread_key,
-                workspace_root: Some(repair_workspace.to_string_lossy().into_owned()),
-                priority: priority.to_string(),
-                suggested_skill: Some(suggested_skill.to_string()),
-                parent_message_key: None,
-                extra_metadata: Some(json!({
-                    "scrape_repair": {
-                        "target_key": target.view.target_key,
-                        "run_id": run_id,
-                        "workspace_root": repair_workspace,
-                    }
-                })),
-            },
-        )?)?)
+        Some(serde_json::to_value(
+            channels::create_scrape_repair_queue_task(
+                root,
+                "scrape",
+                &target.view.target_key,
+                channels::QueueTaskCreateRequest {
+                    title: format!("repair scrape target {}", target.view.target_key),
+                    prompt: repair_prompt,
+                    thread_key,
+                    workspace_root: Some(repair_workspace.to_string_lossy().into_owned()),
+                    priority: priority.to_string(),
+                    suggested_skill: Some(suggested_skill.to_string()),
+                    parent_message_key: None,
+                    extra_metadata: Some(json!({
+                        "scrape_repair": {
+                            "target_key": target.view.target_key,
+                            "run_id": run_id,
+                            "workspace_root": repair_workspace,
+                        }
+                    })),
+                },
+            )?,
+        )?)
     } else {
         None
     };

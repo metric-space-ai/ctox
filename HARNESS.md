@@ -353,6 +353,24 @@ inside that transaction. A caller therefore cannot receive an error after the
 lease has already committed and accidentally leave a durable task without an
 active or buffered worker.
 
+Independent Business OS chat queue tasks with explicit thread identity may use
+isolated harness sessions concurrently. The typed queue worker capacity is
+stored in SQLite under queue.worker_capacity (default 4, range 1–8), managed
+with ctox queue capacity [--workers N]. Each thread retains one worker;
+app authoring and jobs that share context retain serial dispatch. Slots are
+reserved before thread startup and released through worker cleanup or lease
+expiry. The orphan sweep protects live worker registrations, never the entire
+inflight cache merely because an unrelated worker is busy.
+
+A research writeback contract with mechanism=business_command, command_type,
+collection and record_ids enables a signed, scoped Business OS MCP session even
+without allowed_actions. business_os.execute_writeback dispatches the native
+outbound.lead.research_writeback command and binds it to that parent and lead.
+Server authorization and native field/evidence validation remain mandatory.
+Completion requires a completed receipt for the same parent and each contracted
+lead. Missing, failed or foreign writeback evidence produces terminal queue
+failure; a prose success after forbidden CLI/shell/SQLite writeback cannot pass.
+
 Post-review writeback uses the inverse ordering. Chat/artifact data may be
 staged while the command is `validating`, but active Business OS command/queue
 compatibility projections are published only after the terminal owner commits
@@ -386,7 +404,8 @@ message, deployment, record, or other state changed still requires
 authoritative evidence from that system.
 
 Typed Business OS `business_os.chat.task` commands in `mode=data`, without
-dependencies or attachments, use a bounded semantic review scope: no tools,
+dependencies, attachments, allowed actions or a business-command writeback
+contract, use a bounded semantic review scope: no tools,
 no workspace/runtime/mission loading, and one 120-second review turn. This
 narrows evidence gathering but does not skip review. The task goal and contract
 come from the original durable command payload (`title` plus the first present

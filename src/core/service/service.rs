@@ -2280,7 +2280,13 @@ fn run_work_hours_dispatch_tick(root: &Path, state: &Arc<Mutex<SharedState>>) ->
         return Ok(());
     }
     for job in lease_business_queue_capacity(root, state)? {
-        push_event(state, format!("Leased independent Business OS task {} within queue capacity", job.goal));
+        push_event(
+            state,
+            format!(
+                "Leased independent Business OS task {} within queue capacity",
+                job.goal
+            ),
+        );
         start_prompt_worker(root.to_path_buf(), state.clone(), job);
     }
     match maybe_next_idle_dispatch_prompt(root, state)? {
@@ -8220,6 +8226,17 @@ fn run_completion_review(
     conversation_id: i64,
     _mission_state: Option<&lcm::MissionStateRecord>,
 ) -> CompletionReviewDisposition {
+    match command_writeback_failure(root, job) {
+        Ok(Some(summary)) => return CompletionReviewDisposition::TerminalQueueFailure { summary },
+        Ok(None) => {}
+        Err(error) => {
+            return CompletionReviewDisposition::TerminalQueueFailure {
+                summary: format!(
+                    "Business command writeback evidence could not be verified: {error}"
+                ),
+            }
+        }
+    }
     let owner_visible = derive_owner_visible_for_review(&job.source_label);
     let db_path = crate::paths::core_db(&root);
     let review_skill_path = root
@@ -9047,7 +9064,7 @@ fn assurance_conversation_id_for_job(root: &Path, job: &QueuedPrompt) -> i64 {
 
 fn business_os_chat_execution_prompt(job: &QueuedPrompt) -> String {
     format!(
-        "{}\n\nBusiness OS chat execution rules:\n- Your final assistant message is shown verbatim to a non-technical business user inside a small chat bubble. Write it as a direct, concise answer addressed to that user.\n- Answer in the user's language (German unless the request is clearly in another language).\n- If the user asks you to create, export, save, or convert a file, write that file inside the current workspace root only. CTOX will publish every workspace file to Business OS Files after the task completes.\n- For created files, name each file in the final answer and tell the user it is available in Files. CSV exports are also published as editable records in Spreadsheets. Do not mention server-local absolute paths.\n- Do NOT include internal reasoning, chain-of-thought, planning notes, tool transcripts, command output, internal file paths, diffs, stack traces, raw JSON, or queue/command/task IDs. Do NOT paste source code or large data dumps unless the user explicitly asked for code — summarize the result in plain words instead.\n- Light Markdown is allowed (short paragraphs, **bold**, bullet lists, and fenced code blocks only when the user actually asked for code). Keep it brief.\n- Never write Business OS SQLite files or RxDB tables directly. If the canonical command context contains an explicit `writeback_contract`, fulfill only that bounded contract through the policy-gated Business OS MCP or an allowed typed Business OS command, then verify the readback. Without an explicit contract, do not mutate Business OS records.\n- Do not update queue rows, command rows, chat rows, or runtime status tables yourself.\n- Do not call `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or equivalent direct SQL for this Business OS command.\n- You may inspect referenced files or readonly state when needed to answer accurately.\n- The CTOX service will persist your final answer back into the Business OS chat and acknowledge the queue item.",
+        "{}\n\nBusiness OS chat execution rules:\n- Your final assistant message is shown verbatim to a non-technical business user inside a small chat bubble. Write it as a direct, concise answer addressed to that user.\n- Answer in the user's language (German unless the request is clearly in another language).\n- If the user asks you to create, export, save, or convert a file, write that file inside the current workspace root only. CTOX will publish every workspace file to Business OS Files after the task completes.\n- For created files, name each file in the final answer and tell the user it is available in Files. CSV exports are also published as editable records in Spreadsheets. Do not mention server-local absolute paths.\n- Do NOT include internal reasoning, chain-of-thought, planning notes, tool transcripts, command output, internal file paths, diffs, stack traces, raw JSON, or queue/command/task IDs. Do NOT paste source code or large data dumps unless the user explicitly asked for code — summarize the result in plain words instead.\n- Light Markdown is allowed (short paragraphs, **bold**, bullet lists, and fenced code blocks only when the user actually asked for code). Keep it brief.\n- Never write Business OS SQLite files or RxDB tables directly. If the canonical command context contains an explicit `writeback_contract`, fulfill only that bounded contract through the policy-gated Business OS MCP or an allowed typed Business OS command, then verify the readback. For mechanism=business_command and command_type=outbound.lead.research_writeback, call business_os.execute_writeback with record_id and payload (field_status and result); the server supplies the originating research_command_id. CLI, shell, terminal, SQLite and direct SQL cannot satisfy that contract. A failed tool result or missing successful receipt means the research task failed; retain the research artifacts. Without an explicit contract, do not mutate Business OS records.\n- Do not update queue rows, command rows, chat rows, or runtime status tables yourself.\n- Do not call `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or equivalent direct SQL for this Business OS command.\n- You may inspect referenced files or readonly state when needed to answer accurately.\n- The CTOX service will persist your final answer back into the Business OS chat and acknowledge the queue item.",
         job.prompt
     )
 }
@@ -10284,10 +10301,11 @@ fn configure_business_os_mcp_session_for_queue_job(
     let Some(writeback_contract) = command
         .pointer("/payload/writeback_contract")
         .filter(|contract| {
-            contract
-                .get("allowed_actions")
-                .and_then(Value::as_array)
-                .is_some_and(|actions| !actions.is_empty())
+            crate::business_os::mcp_channel::supports_command_writeback(contract)
+                || contract
+                    .get("allowed_actions")
+                    .and_then(Value::as_array)
+                    .is_some_and(|actions| !actions.is_empty())
         })
         .cloned()
     else {
@@ -10416,6 +10434,10 @@ fn completion_review_scope_from_command_context(context: &Value) -> Option<revie
         && mode == Some("data")
         && dependencies_empty
         && attachments_empty
+        && context
+            .pointer("/command/payload/writeback_contract/mechanism")
+            .and_then(Value::as_str)
+            != Some("business_command")
         && allowed_actions_empty)
         .then(|| review::ReviewScope::SemanticAnswerOnly {
             policy_id: "business-os.data-chat.semantic-answer.v1".to_string(),
@@ -14320,7 +14342,9 @@ fn run_orphaned_queue_lease_sweep(root: &Path, state: &Arc<Mutex<SharedState>>) 
                 let mut shared = lock_shared_state(state);
                 for key in &sweep.released {
                     shared.parallel_queue_jobs.remove(key);
-                    shared.leased_message_keys_inflight.retain(|entry| entry != key);
+                    shared
+                        .leased_message_keys_inflight
+                        .retain(|entry| entry != key);
                 }
             }
             let released_count = sweep.released.len();
@@ -15726,6 +15750,7 @@ fn idle_durable_queue_empty_backoff(consecutive_empty_probes: u32) -> Duration {
 include!("service_business_os_app_recovery.rs");
 
 include!("service_queue_capacity.rs");
+include!("service_command_writeback.rs");
 
 fn queued_prompt_from_queue_task(task: channels::QueueTaskView) -> QueuedPrompt {
     QueuedPrompt {

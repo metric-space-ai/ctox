@@ -33,6 +33,9 @@ use super::policy::{
     PolicyDecision,
 };
 use super::store;
+#[path = "mcp_writeback.rs"]
+mod command_writeback;
+pub(crate) use command_writeback::supports_command_writeback;
 
 const DEFAULT_LIMIT: usize = 25;
 const MAX_LIMIT: usize = 100;
@@ -1447,6 +1450,11 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
                 optional_action_payload("payload"),
             ]),
         ),
+        write_tool(
+            "business_os.execute_writeback",
+            "Persist completed lead research via its contracted native business_command. Requires the signed research task session. Supply record_id and payload {field_status, result:{fields,person_records,evidence}}. The server binds module and research_command_id; no CLI, shell or SQLite access is needed. Check the returned status; failed writeback means the task is not complete.",
+            object_schema(vec![required_string("record_id"), required_object("payload")]),
+        ),
         read_tool(
             "business_os.get_command_status",
             "Use this when you need the current status for a Business OS command.",
@@ -2637,6 +2645,9 @@ fn call_tool_inner(
     enforce_argument_scope_policy(root, &context, tool_name, &arguments)?;
     enforce_rate_limit(root, &context)?;
     let result = match tool_name {
+        "business_os.execute_writeback" => {
+            command_writeback::execute(root, &context, &arguments, trusted_gateway_context)?
+        }
         "meeting.schedule" => {
             enforce_business_os_mcp_policy(root, &context, tool_name, &arguments)?;
             let provider = required_arg(&arguments, "provider")?;
@@ -6217,6 +6228,7 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         }
         "business_os.reject" | "business_os.request_changes" => McpToolPolicyClass::Approval,
         "web_browser_prepare"
+        | "business_os.execute_writeback"
         | "business_os.execute_action"
         | "appsec_assessment_create"
         | "appsec_lab_create"
