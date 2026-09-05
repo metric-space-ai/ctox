@@ -82,6 +82,20 @@ Keine UI-Änderung. Keine Crew-Identität (nur die `null`-Felder). Keine Ticket-
 - `ctox business-os repair queue-projections --dry-run` gegen einen Test-Root läuft ohne Vollscan.
 - Doku: `docs/ctox-rxdb.md` (neue Collections, Felder, Policy, Retention), `HARNESS.md` Abschnitt „Cockpit-Projektionen und Steuerbefehle“ mit Verweis auf die persistierten Quellen.
 
+## 2j · Lehren aus PR-1, verbindlich für PR-2 und alle weiteren PRs
+
+Aus Review und Abnahme von PR #58 (05.09.2026):
+
+1. **Nicht-blockierend heißt der ganze Pfad.** Kein synchroner SQLite-Read oder -Write im Harness-Turn-Pfad, auch nicht „nur ein kleiner Lookup“. Werte kommen aus dem, was der Worker schon in der Hand hat, oder werden auf dem Projektions-Pump aufgelöst.
+2. **Unbekannt ist nicht „nein“ und nicht „null“.** Ein Fehler beim Ermitteln eines Flags darf das Flag nicht auf `false` setzen (Ereignis verschwindet), ein Fehler beim Parsen einer Konfiguration darf den Harness nicht anhalten, und ein unparsebarer Zeitwert darf nie `null` in ein `required`- oder Index-Feld schreiben. Regel: Dokument nicht projizieren und einmal loggen, oder auf den kanonischen Zeitstempel zurückfallen.
+3. **Jede Behauptung über Alttests braucht eine Baseline.** „Betroffene Pfade unverändert“ zählt nicht; gemessen wird derselbe Test `--exact` auf Basis-Commit und Head mit demselben Target. Ergebnis in den PR-Text.
+4. **Gebundene Abfragen überall,** nicht nur im Repair-Pfad: Keyset-Paging, echte `LIMIT`s, keine `LIMIT (SELECT COUNT(*))`-Attrappen. Indizes werden per `EXPLAIN QUERY PLAN`-Test bewiesen, nicht deklariert.
+5. **Grant-Materialisierung folgt der Policy.** Jede Collection, die die Policy als server-autoritativ oder rollenbeschränkt einstuft, darf von keiner Migration Standard-Grants bekommen; Test: nach Bring-up null Grants für sie.
+6. **Audit spiegelt nie rohe Payloads.** Whitelist der Felder, Kappung freier Texte auf 1000 Zeichen.
+7. **Umgebung:** `/Volumes/tmp` ist knapp; `TMPDIR` und Cargo-Targets auf die Systemplatte (`~/.cache/ctox-crew-cockpit-*`), das Target erst löschen, wenn Fable es freigibt. Das Pi-Sidecar-Bundle (`npm ci && npm run build` in `src/core/coding_agents/pi-sidecar`) ist Voraussetzung für jeden `cargo build` in einem frischen Worktree.
+8. **Zwischenmeldungen:** Beim Start jedes Auftrags in zwei Sätzen bestätigen, wofür gebaut wird (Vision) und an welchem Abschnitt gearbeitet wird; Queue-Nachrichten von Fable werden zwischen Schritten zugestellt und haben Vorrang vor eigenem Plan.
+9. **Nichts löschen, was nicht deins ist;** fremde Cargo-Targets und Verzeichnisse auf `/Volumes/tmp` bleiben unangetastet.
+
 ## 3. PR-2 · Crew-Identität im Harness
 
 **Objective:** Crew-Mitglieder werden durable Personen. Beim Lease wählt der Harness deterministisch das passendste Mitglied; dessen Seele, Lebenslauf und relevante Learnings gehen in den Prompt; nach jedem Versuch schreibt das Mitglied Rückblick und Learnings; jedes Mitglied hat einen Stundenzettel. Der Harness bleibt seriell: genau ein Mitglied ist je aktiver Slice im Einsatz.
