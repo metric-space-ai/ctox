@@ -49,3 +49,23 @@ consecutive-failure budget.
 Both real-store tests pass: three distinct submissions produce one open leased
 task, and three failures enforce persisted cooldowns plus terminal exhaustion.
 Tied timestamps are ordered by persisted attempt number.
+
+## Befund 3 — explicit global serialization
+
+durable_queue_dispatch_blocked_locked and enqueue_prompt deliberately admit no
+second durable task while any worker is active. Historical eight running rows
+are not evidence of eight live execution slots.
+
+A bounded pool now admits independent business_os.chat.task jobs with explicit
+thread identity and isolated harness sessions. It reserves slots before spawning
+and preserves one worker per thread. App authoring, external communications,
+tickets and shared sessions retain the existing serial policy. Expired startup
+reservations are removed by the normal lease sweep.
+
+Typed QueueWorkerCapacity reads queue.worker_capacity solely from the SQLite
+runtime store: default 4, supported range 1–8. Operators inspect/change it with
+ctox queue capacity [--workers N]; 1 restores serial admission.
+
+The acceptance test creates five independent pending tasks, observes four actual
+leased rows and one pending row, and proves a second admission cannot overbook
+the pool before worker startup. Each admitted job uses an isolated session.

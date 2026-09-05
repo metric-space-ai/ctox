@@ -958,6 +958,7 @@ struct SharedState {
     // Only a live PromptWorkerActivity owns these keys. Routing cache entries
     // alone do not prove that a worker still exists.
     active_worker_lease_keys: HashSet<String>,
+    parallel_queue_jobs: BTreeMap<String, QueuedPrompt>,
     current_goal_preview: Option<String>,
     active_source_label: Option<String>,
     recent_events: VecDeque<String>,
@@ -980,6 +981,7 @@ impl Default for SharedState {
             pending_prompts: VecDeque::new(),
             leased_message_keys_inflight: HashSet::new(),
             active_worker_lease_keys: HashSet::new(),
+            parallel_queue_jobs: BTreeMap::new(),
             current_goal_preview: None,
             active_source_label: None,
             recent_events: VecDeque::new(),
@@ -2276,6 +2278,10 @@ fn start_work_hours_dispatcher(root: PathBuf, state: Arc<Mutex<SharedState>>) {
 fn run_work_hours_dispatch_tick(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
     if !crate::service::working_hours::accepts_work(root) {
         return Ok(());
+    }
+    for job in lease_business_queue_capacity(root, state)? {
+        push_event(state, format!("Leased independent Business OS task {} within queue capacity", job.goal));
+        start_prompt_worker(root.to_path_buf(), state.clone(), job);
     }
     match maybe_next_idle_dispatch_prompt(root, state)? {
         Some(IdleDispatchPrompt::InMemory(queued)) => {
@@ -4663,6 +4669,11 @@ impl PromptWorkerActivity {
     fn start(root: &Path, state: &Arc<Mutex<SharedState>>, job: &QueuedPrompt) -> Self {
         {
             let mut shared = lock_shared_state(state);
+            if queue_job_has_independent_business_session(job) {
+                for key in &job.leased_message_keys {
+                    shared.parallel_queue_jobs.insert(key.clone(), job.clone());
+                }
+            }
             shared.worker_active_count = shared.worker_active_count.saturating_add(1);
             shared
                 .active_worker_lease_keys
@@ -4771,6 +4782,7 @@ impl Drop for PromptWorkerActivity {
                 .chain(&self.leased_ticket_event_keys)
             {
                 shared.active_worker_lease_keys.remove(key);
+                shared.parallel_queue_jobs.remove(key);
             }
             let (leaked_message_keys, leaked_ticket_event_keys) = if self.leases_released {
                 (Vec::new(), Vec::new())
@@ -14304,6 +14316,13 @@ fn run_orphaned_queue_lease_sweep(root: &Path, state: &Arc<Mutex<SharedState>>) 
                     ),
                 );
             }
+            {
+                let mut shared = lock_shared_state(state);
+                for key in &sweep.released {
+                    shared.parallel_queue_jobs.remove(key);
+                    shared.leased_message_keys_inflight.retain(|entry| entry != key);
+                }
+            }
             let released_count = sweep.released.len();
             if released_count == 0 {
                 return;
@@ -15705,6 +15724,8 @@ fn idle_durable_queue_empty_backoff(consecutive_empty_probes: u32) -> Duration {
 }
 
 include!("service_business_os_app_recovery.rs");
+
+include!("service_queue_capacity.rs");
 
 fn queued_prompt_from_queue_task(task: channels::QueueTaskView) -> QueuedPrompt {
     QueuedPrompt {

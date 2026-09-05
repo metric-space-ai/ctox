@@ -48,7 +48,7 @@ const QUEUE_USAGE: &str = "usage:
   ctox queue restore --message-key <key> [--priority <urgent|high|normal|low>] [--note <text>]
   ctox queue cleanup-scope [--all-open] [--match-run-id <id>] [--match-thread-prefix <prefix>] [--match-workspace-prefix <path>] [--match-title-prefix <prefix>] [--source-label <label>] [--message-key <key>] [--status <pending|leased|blocked|failed|handled|cancelled|review_rework>]... [--limit <n>] [--dry-run] [--cancel-open|--release-open|--block-open] [--stop-watchers] [--watcher-pattern <text>] [--reason <text>]
   ctox queue assert-clean-scope [--all-open] [--match-run-id <id>] [--match-thread-prefix <prefix>] [--match-workspace-prefix <path>] [--match-title-prefix <prefix>] [--source-label <label>] [--message-key <key>] [--status <pending|leased|blocked|failed|handled|cancelled|review_rework>]... [--limit <n>] [--empty]
-  ctox queue repair";
+  ctox queue capacity [--workers <1..8>]\n  ctox queue repair";
 
 #[cfg(test)]
 static QUEUE_BRIDGE_DB_OPEN_COUNTS: OnceLock<Mutex<HashMap<std::path::PathBuf, u64>>> =
@@ -220,6 +220,16 @@ pub fn handle_queue_command(root: &Path, args: &[String]) -> Result<()> {
         return Ok(());
     }
     match command {
+        "capacity" => {
+            let workers = find_flag_value(args, "--workers")
+                .map(str::parse::<usize>)
+                .transpose()
+                .context("queue capacity --workers must be an integer between 1 and 8")?;
+            if args.iter().any(|arg| arg == "--workers") && workers.is_none() {
+                anyhow::bail!("queue capacity --workers requires a value");
+            }
+            print_json(&crate::service::configure_queue_worker_capacity(root, workers)?)
+        }
         "add" => {
             if args.iter().any(|arg| arg == "--help" || arg == "-h") {
                 println!("{QUEUE_ADD_USAGE}");
