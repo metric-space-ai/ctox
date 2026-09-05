@@ -1,5 +1,24 @@
-fn validate_command_writeback_contract(contract: &Value) -> Result<()> {
-    if contract.get("command_type").is_some()
+fn command_targets_outbound_lead_writeback(command: &Value) -> bool {
+    command.get("command_type").and_then(Value::as_str) == Some("business_os.chat.task")
+        && command.get("module").and_then(Value::as_str) == Some("outbound-lead-generation")
+        && command.pointer("/payload/mode").and_then(Value::as_str) == Some("data")
+        && (command
+            .pointer("/payload/writeback_contract/collection")
+            .and_then(Value::as_str)
+            == Some("outbound_lead_generation_leads")
+            || command
+                .pointer("/payload/writeback_contract/allowed_collections")
+                .and_then(Value::as_array)
+                .is_some_and(|collections| {
+                    collections.iter().any(|collection| {
+                        collection.as_str() == Some("outbound_lead_generation_leads")
+                    })
+                }))
+}
+
+fn validate_command_writeback_contract(command: &Value, contract: &Value) -> Result<()> {
+    if command_targets_outbound_lead_writeback(command)
+        || contract.get("command_type").is_some()
         || contract.get("mechanism").and_then(Value::as_str) == Some("business_command")
     {
         anyhow::ensure!(
@@ -23,7 +42,7 @@ fn command_writeback_failure(root: &Path, job: &QueuedPrompt) -> Result<Option<S
         let Some(contract) = context.pointer("/command/payload/writeback_contract") else {
             continue;
         };
-        if let Err(error) = validate_command_writeback_contract(contract) {
+        if let Err(error) = validate_command_writeback_contract(&context["command"], contract) {
             return Ok(Some(error.to_string()));
         }
         if !crate::business_os::mcp_channel::supports_command_writeback(contract) {
@@ -67,8 +86,61 @@ mod command_writeback_tests {
     use super::*;
 
     #[test]
+    fn incident_legacy_lead_contract_validation_preserves_other_data_chat_scopes() {
+        let legacy_contract = serde_json::json!({
+            "collection": "outbound_lead_generation_leads",
+            "allowed_collections": ["outbound_lead_generation_leads"],
+            "record_ids": ["lead-a"], "min_independent_sources": 2
+        });
+        let command = serde_json::json!({
+            "command_type": "business_os.chat.task", "module": "outbound-lead-generation",
+            "payload": {"mode": "data", "writeback_contract": legacy_contract}
+        });
+        assert!(validate_command_writeback_contract(&command, &legacy_contract).is_err());
+        for (pointer, value) in [
+            ("/module", "other-module"),
+            ("/payload/mode", "conversation"),
+            ("/command_type", "other.command"),
+        ] {
+            let mut other = command.clone();
+            *other.pointer_mut(pointer).unwrap() = Value::String(value.to_string());
+            assert!(validate_command_writeback_contract(&other, &legacy_contract).is_ok());
+        }
+        let mut other_collection = command.clone();
+        other_collection["payload"]["writeback_contract"] = serde_json::json!({
+            "collection": "other_records", "allowed_collections": ["other_records"],
+            "record_ids": ["record-a"]
+        });
+        assert!(validate_command_writeback_contract(
+            &other_collection,
+            &other_collection["payload"]["writeback_contract"]
+        )
+        .is_ok());
+        let mut missing_collection = command.clone();
+        missing_collection["payload"]["writeback_contract"]
+            .as_object_mut()
+            .unwrap()
+            .remove("collection");
+        assert!(validate_command_writeback_contract(
+            &missing_collection,
+            &missing_collection["payload"]["writeback_contract"]
+        )
+        .is_err());
+        let plain_chat = serde_json::json!({"command": {
+            "command_type": "business_os.chat.task", "module": "outbound-lead-generation",
+            "payload": {"mode": "data", "instruction": "Explain this table"}
+        }});
+        assert!(completion_review_scope_from_command_context(&plain_chat).is_some());
+    }
+
+    #[test]
     fn incident_incomplete_command_writeback_fails_before_turn_and_cannot_complete() -> Result<()> {
         let contracts = [
+            // Persisted App 1.0.99 shape: the native fields existed only on
+            // the app task envelope, not inside command.payload.
+            serde_json::json!({"collection": "outbound_lead_generation_leads",
+                "allowed_collections": ["outbound_lead_generation_leads"],
+                "record_ids": ["lead-a"], "min_independent_sources": 2}),
             serde_json::json!({"command_type": "outbound.lead.research_writeback"}),
             serde_json::json!({"mechanism": "business_command"}),
             serde_json::json!({"mechanism": "business_command",
@@ -103,6 +175,11 @@ mod command_writeback_tests {
             let key = accepted["task_id"].as_str().context("queue task missing")?;
             let job = queued_prompt_from_queue_task(
                 channels::load_queue_task(root, key)?.context("queue task missing")?,
+            );
+            let context = channels::inspect_business_command_for_task(root, key)?.unwrap();
+            assert_eq!(
+                context.pointer("/command/payload/writeback_contract"),
+                Some(&contract)
             );
             let mut options = chat_turn_session_options_for_queue_job(&job);
             let error = configure_business_os_mcp_session_for_queue_job(root, &job, &mut options)

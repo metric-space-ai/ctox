@@ -10302,7 +10302,7 @@ fn configure_business_os_mcp_session_for_queue_job(
     let Some(writeback_contract) = command.pointer("/payload/writeback_contract") else {
         return Ok(false);
     };
-    validate_command_writeback_contract(writeback_contract)?;
+    validate_command_writeback_contract(&command, writeback_contract)?;
     if !crate::business_os::mcp_channel::supports_command_writeback(writeback_contract)
         && !writeback_contract
             .get("allowed_actions")
@@ -10441,10 +10441,11 @@ fn completion_review_scope_from_command_context(context: &Value) -> Option<revie
             .pointer("/command/payload/writeback_contract/mechanism")
             .and_then(Value::as_str)
             != Some("business_command")
-        && allowed_actions_empty)
-        .then(|| review::ReviewScope::SemanticAnswerOnly {
-            policy_id: "business-os.data-chat.semantic-answer.v1".to_string(),
-        })
+        && allowed_actions_empty
+        && !command_targets_outbound_lead_writeback(&context["command"]))
+    .then(|| review::ReviewScope::SemanticAnswerOnly {
+        policy_id: "business-os.data-chat.semantic-answer.v1".to_string(),
+    })
 }
 
 fn completion_review_writeback_action_guard_outcome(
