@@ -40,7 +40,7 @@ Stand: 2026-09-05 12:40 · Orchestrator: Fable · Implementierer: Codex-Thread `
 
 ### Backlog + Owner
 
-- **OWNER: Live-Abnahme-Instanz für PR-3/4.** thesen ist eine Kundeninstanz und läuft auf einem main-Stand vor PR-1; ein `ctox upgrade --dev` dort ist ein Eingriff beim Kunden. Vorschlag: welsch (Demo) per Control-Plane auf aktuellen main upgraden (Muster `ctox-dev/output/welsch-office-upgrade-core-20260905.sh`) und dort `currentSlot: null` setzen, damit src/ live ist; Abnahme dann auf welsch. Bis zur Entscheidung: lokaler Beweis im echten Shell-Fenster mit Fixture-Daten.
+- **Entscheidung Fable (06.09. 08:20): Live-Abnahme für PR-3/4 auf welsch (Demo), nicht auf thesen (Kundeninstanz).** welsch per Control-Plane auf aktuellen main upgraden (Muster `ctox-dev/output/welsch-office-upgrade-core-20260905.sh`, Owner hat welsch zum Testen freigegeben) und `currentSlot: null` setzen, damit src/ live ist; danach Shell-Datei-Deploy. Zeitpunkt: nach Merge von PR-3. Bis dahin lokaler Beweis im echten Shell-Fenster mit Fixture-Daten. thesen bleibt unangetastet (OWNER, falls dort gewünscht).
 - **OWNER: Sichtbarkeit `ctox_harness_status` für Rolle „User“?** Vorschlag: Admin + Founder sehen alles; User sieht nur eigene Tasks und Crew-Namen, keine Kosten. Bis Entscheidung wird Vorschlag umgesetzt.
 - ~~OWNER: Lokale Instanz reparieren~~ → erledigt, siehe D4 (Owner hat mir die drei Punkte übertragen, 05.09. 12:46).
 - ~~OWNER: welsch-Upgrade~~ → geklärt, siehe D5.
