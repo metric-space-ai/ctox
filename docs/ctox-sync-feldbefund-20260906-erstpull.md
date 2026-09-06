@@ -227,3 +227,19 @@ Sofortmaßnahme für Nutzer bis zum Fix: Threads-Modul nicht laufen lassen (es s
 Leiste als „0 Threads · Läuft" automatisch; ein Schließen-Knopf fehlt). Eigentlicher Fix gehört ins
 Threads-Modul (Refresh-Schleife, zwei 200er-Abfragen je Lauf) und/oder in die Bedarfsladung
 (Abfragen auf nicht-`live`-Kollektionen dürfen die Befehlszustellung nicht verdrängen).
+
+## Fix (06./07.09.2026)
+
+- **App 1.0.101** (Hotpatch 21:45 UTC): Ein Timeout des Sellify-Vorabgleichs bricht die Recherche nicht
+  mehr ab; sie startet ohne Vorwissen (Sellify wird im Lauf erneut geprüft, nichts wird nach Sellify
+  geschrieben), der Nutzer bekommt „Sellify hat nicht rechtzeitig geantwortet – Recherche startet ohne
+  Vorwissen". Nur ein echter Abgleichsfehler bricht ab; die harte Weiche (followup ohne Treffer) greift
+  bei Timeout nicht.
+- **Shell `762c4c8da`** (origin/main): `modules/threads/index.js` — `wireRealtime()` pollt nur noch bei
+  sichtbarem Modul (`visibilityState`, `host.offsetParent`), nie überlappend (`state.refreshInFlight`,
+  Single-Flight in `refresh()`), 30 s statt 10 s, Nachsync bei `visibilitychange`. JS-Suite 117/117,
+  Identifier-Guard grün. Auslieferung auf thesen per `ctox upgrade --dev` (startet automatisch, sobald
+  keine Recherche geleast ist) — bringt zwangsläufig auch die übrigen Commits von `main` seit dem 05.09.
+  mit (`previous_release` bleibt für Rollback).
+- Nicht adressiert (Sync-Engine, für die Engineure): Bedarfsabfragen dürfen Befehls-Frames nicht
+  verdrängen (Priorität/eigene Bahn); `user_thread_states` wird nie `live`.
