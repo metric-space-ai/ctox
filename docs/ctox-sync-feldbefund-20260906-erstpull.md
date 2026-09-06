@@ -104,3 +104,23 @@ Kollektionen geht, Pull von leads/user_thread_states endet nie, Push geht gar ni
 frischem und mit altem Speicher. Verdächtig ist die native Peer-Sitzung (läuft seit dem
 Upgrade-Neustart 05.09. 07:53). Nächster Schritt: Dienstneustart bei leerer Queue, danach dieselbe
 Messung.
+
+## Nachtrag 19:20 UTC: Dienstneustart — Pull heilt, Push-Test läuft
+
+`systemctl --user restart ctox` (SSH-Aufruf hing, der Dienst startete tatsächlich um **19:10:08**;
+multiplexed replication für 201 Kollektionen um 19:10:15 oben). Browser: `peer_connection_lost` →
+Reconnect 19:05:55 (Signaling) / `business_commands` neu verbunden 19:11:18.
+
+- **Pull nach dem Neustart in Ordnung:** der frische lokale Speicher (0 Leads) füllte sich —
+  „Kampagnen 1 · Chemie 19", 19 Leads sichtbar. Der Zustand bleibt trotzdem `catching-up`,
+  `firstPullCompletedAtMs 0` (die Zustandsmeldung ist unabhängig davon falsch).
+- Ein Recherchestart um 19:10:11 fiel in die Boot-Lücke (vor 19:10:15) und kam nie an — ungültig.
+- Neuer Push-Test 19:19:31 (Cereda + DrinkStar, „2 Recherchen werden gestartet …"):
+  `business_commands` `pushInProgress true`, gesendete Frames 24 → 27, geplant 3131 / in
+  Warteschlange 3128 (3 dauerhaft unversandt), `pendingAcks 0`, Journal 1 ausstehend (Login-Schreib-
+  vorgang von 18:54, seit 25 min nicht zugestellt). Serverseitiges Ergebnis: siehe unten.
+- Code-Diff der nativen Annahmepfade zwischen Release 04.09. (4f28b66e8) und 05.09. (e9a346e38):
+  rxdb_peer.rs 2 Zeilen (Kommentar), store.rs 19 Zeilen (Projektions-Hooks) — kein Push-Pfad
+  berührt. Das Release ist nicht die Ursache.
+- Nebenbefund im Boot-Log: optionale Kollektion `workjet_computers` wird wegen Schema-Hash-Wechsel
+  (RxDB DB6) übersprungen — vorbestehend, unabhängig.
