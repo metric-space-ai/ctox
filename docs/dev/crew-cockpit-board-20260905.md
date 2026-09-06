@@ -2,7 +2,9 @@
 
 Stand: 2026-09-05 12:40 · Orchestrator: Fable · Implementierer: Codex-Thread `01a07107-d27c-7e80-a1dc-2311f60ad0bb` (Arbeit landet in PRs gegen `metric-space-ai/ctox` main)
 
-**Headline (06.09. 06:40):** PR-1 (`b4294678f`), PR-2 (`b0e24d470`) und PR-2b (`ca1c0e362`) sind gemergt: Harness sichtbar und steuerbar, Crew als Entität mit gehärtetem Lebenszyklus. Kritischer Pfad ist jetzt PR-3 „Das Zuhause der Crew“ (Neubau `modules/ctox`), freigegeben an den Worker. Danach PR-4 Crew-Leiste, PR-5 Tickets.
+**Headline (06.09. 09:25): STOPP.** Der Neubau der CTOX-App (PR #62) wurde vom Owner abgelehnt: das Gute der App war entfernt, das Neue schlechter. Ursache: mein Brief („Neubau“, Abschnitt „Was weg muss“). PR #62 ist ungemergt, main hat weiterhin die bestehende App (`modules/ctox/index.js` 4912 Zeilen, Wesen aus `business-chat.js`). **Owner-Anweisung 09:20: keine weiteren Aufträge an Codex.** Der revidierte Auftrag „Optimierung der bestehenden App“ (`docs/dev/crew-cockpit-brief-pr3-optimize.md`) ist geschrieben, aber NICHT gesendet; er dokumentiert, was zu tun wäre. Weiteres Vorgehen entscheidet der Owner.
+
+**Headline (06.09. 06:40, historisch):** PR-1 (`b4294678f`), PR-2 (`b0e24d470`) und PR-2b (`ca1c0e362`) sind gemergt: Harness sichtbar und steuerbar, Crew als Entität mit gehärtetem Lebenszyklus. Kritischer Pfad ist jetzt PR-3 „Das Zuhause der Crew“ (Neubau `modules/ctox`), freigegeben an den Worker. Danach PR-4 Crew-Leiste, PR-5 Tickets.
 
 ## Kanban
 
