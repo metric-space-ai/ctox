@@ -66,3 +66,25 @@ Nach einem harten Neuladen derselben Seite (gleiche IndexedDB) und erneutem Öff
 Erst-Pull; imports `pending/live`; user_thread_states `pending/catching-up`. Die Anzeige kommt
 also aus dem lokalen Speicher; der erste Seitenaufruf nach der Anmeldung zeigte 25 Minuten lang
 nichts. Für den Nutzer: „nach dem Login leer, nach F5 voll" — reproduzierbar, nicht erklärt.
+
+## Nachtrag 18:53 UTC: Der Push ist in dieser Sitzung tot — Recherchestarts kommen nie an
+
+Fünf Recherchestarts aus der App (18:41 DrinkStar; 18:47 vier weitere) zeigten lokal
+„N Recherchen werden gestartet …", erzeugten aber **keinen** Befehl auf dem Server: seit 18:00 UTC
+null Zeilen in `business_commands` und in jeder anderen Kollektion, Routing-State leer, kein
+Chatfenster, Leads fallen lokal auf „Prüfung nötig" zurück.
+
+Browser-Diagnose `business_commands` (18:53): `initialReplicationState complete`,
+`collectionReadinessState never-synced`, `pushInProgress true`, `pullInProgress false`,
+`sentFrames 3`, `queuedFrames 1533`, `sentScheduledFrames 1538` (5 Frames nie gesendet = die
+fünf Starts), `pendingAcks 0`, `lastAckLagMs 365`, `backpressureStallCount 0`,
+`activePeerCount 1`. `commandPlane.counters {}` — kein einziger Befehl gezählt.
+Journal: 26 ausstehende Schreibvorgänge / 45,9 KB, ältester 18:09:35 (vor App-Öffnung).
+Eine RxDB-`find()` auf `business_commands` hing > 45 s.
+
+Der Pull dagegen funktioniert (19 Leads nach Reload sichtbar). Wirkung für den Nutzer: **Klick
+auf „Recherchieren" tut nichts** — der Zustand vom 04.09. („es passiert absolut gar nichts"),
+diesmal nicht wegen der App, sondern weil kein Schreibvorgang den Browser verlässt.
+
+Nächster Test: lokalen Speicher (IndexedDB) dieses Browser-Fensters löschen, neu laden, eine
+Recherche starten. Landet sie, blockiert der älteste Journaleintrag als Kopf der Schlange.
