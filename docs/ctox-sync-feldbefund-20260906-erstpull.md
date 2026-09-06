@@ -148,3 +148,17 @@ es jeden Browser? Test: Eigentümer startet eine Nachrecherche im eigenen Browse
 Hinweis für die Sync-Engineure: Auf `origin/main` (06.09.) liegen seit dem Tenant-Release Commits
 wie „fix(sync): stop retired background transfers at awaited boundaries", „preserve direct bridges
 and isolate DB runtime coordinators" — möglicherweise genau diese Klasse. Nicht verifiziert.
+
+## KORREKTUR 20:20 UTC: Messfehler in allen „seit X"-Abfragen dieses Dokuments
+
+Alle serverseitigen Aussagen der Form „seit 18:00 / seit dem Neustart **null** Zeilen" beruhen auf
+`lastWriteTime/1000 >= strftime('%s', …)`. `strftime` liefert TEXT, die linke Seite ist REAL; SQLite
+wertet REAL < TEXT, der Vergleich ist **immer falsch**. Eine Abfrage ohne Zeitfilter zeigt vier
+`outbound.sellify.lookup`-Befehle als `completed` um 19:44:46, 19:45:26 und 20:06:37 (2×) — aus dem
+Browser des Eigentümers, also **kommen Schreibvorgänge aus dem Browser sehr wohl an**.
+
+Damit sind zurückzunehmen bzw. neu zu messen: „Push tot", „kein Befehl seit 18:00", „Recherchestarts
+erreichen den Server nie", „frischer Speicher ändert nichts (Server null Zeilen)". **Bestehen bleiben**
+die Browser-Zähler (`sentFrames` konstant, Warteschlange wächst, `catching-up` ohne Erst-Pull) und die
+Beobachtung „App nach Login 25 min leer, Reload heilt die Anzeige" — sie stammen nicht aus dieser
+Abfrage. Die Neu-Messung mit korrektem Vergleich folgt unten.
