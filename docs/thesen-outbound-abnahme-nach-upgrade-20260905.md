@@ -65,3 +65,25 @@ Scraper-Reparatur geleast, keine Recherche.
 Nächste Schritte: (a) Eigentümer meldet sich im Browser an → Regressionsliste + Befund-5-Lauf
 (DrinkStar, 7 Felder); (b) zweites Upgrade mit `5a16d0061` (Reconciler + Merge-Fix) → Phantome 7 → 0;
 (c) 24-h-Beobachtung Dubletten; (d) Probe Befund 1 bei Gelegenheit.
+
+## Nachmessung 06.09.2026, 17:00 UTC (33 h nach dem Umschalten)
+
+| Messung | Wert | Bewertung |
+|---|---|---|
+| Queue | 0 `leased`, 0 `pending` | leer, kein Rückstau |
+| Befund 2 Dubletten | **0 doppelte offene Titel über 33 h** (vorher vier Wellen in 24 h) | belegt über den Beobachtungszeitraum |
+| Befund 3 Kapazität | `max_workers 4`, in der Umschaltminute 2 parallel geleast | belegt (Maximum 4 nur mit ≥4 unabhängigen Aufgaben messbar) |
+| Befund 4 neu | Cancel projiziert sofort (05.09. 07:56:57) | belegt |
+| Befund 4 Altlast | 7 Phantome unverändert | offen — Reconciler `9b3f44e09`/`5a16d0061` nicht ausgeliefert |
+| Befund 5 | Leads 19/19, 249 Felder gesamt, Minimum 7, keiner mit 0 Feldern. **Der neue Writeback-Guard hat noch nie gefeuert** (0 Treffer `Business command writeback failed`) — kein Task mit dem 1.0.100-Vertrag ist bisher gelaufen; der jüngste Nachrecherche-Befehl (05.09. 08:24) trägt noch den alten Vertrag (Daemon-Recovery kopiert das ursprüngliche Payload). | End-to-end offen |
+| Seit Umschaltung `failed` | 14 Routing-Übergänge auf `failed`, darunter Beiersdorf („research contract is materially unmet: 2 von 8 Personen-Kategorien … Finite review budget exhausted 5/5") und eine Recovery-Aufgabe („10-path requirement structurally unsatisfiable"). **Das ist der Review-Mechanismus, der Endlosschleifen terminal stoppt — nicht der neue Guard.** Die Writebacks landeten trotzdem: Beiersdorf 12 → 18 Felder, BOOMEX 23. | erwartetes Verhalten, aber im CTOX-Modul als Fehler sichtbar |
+| Testdaten | Writeback-Versuche mit Ids `…-writeback-test`, `…-test-v6-…` für BOOMEX vom Worker selbst; ein Versuch gegen `lead_test_001` wurde **abgelehnt**, kein solcher Lead existiert (54 Datensätze, 19 aktiv) | keine Verunreinigung |
+
+**Blockiert:** Browser-Regression und Befund-5-End-to-end — die Browser-Sitzung ist seit dem
+Upgrade abgemeldet, kein Chrome verbunden; Anmeldung nur durch den Eigentümer.
+
+**Upgrade 2 zurückgestellt:** `origin/main` liegt 93 Commits / 38.865 Zeilen vor dem
+ausgelieferten Stand (Sync-Engine 51 Dateien, RxDB 34, Shell 91; darunter „production peer
+crash and data-preserving recovery", „rejected cutover and verified production rollback").
+Ein `ctox upgrade --dev` würde das komplett und ungeprüft auf die Kundeninstanz bringen — nur
+für sieben kosmetische Phantome. Entscheidung des Eigentümers.
