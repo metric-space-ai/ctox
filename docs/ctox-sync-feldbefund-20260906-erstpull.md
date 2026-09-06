@@ -209,3 +209,21 @@ gestartet werden (2 Fehler): Der Sellify-Abgleich ist fehlgeschlagen … bitte e
 120-s-Timeout des Vorabgleichs. Um 20:39:15/17 wurden zwei Lookups binnen Sekunden `completed`
 (vermutlich erneuter Klick) — im Eigentümer-Browser könnte die Latenz nach dem Dienstneustart
 bereits kurz sein; nicht belegt, welcher Dialog dort folgte.
+
+## 20:46 UTC: Beweis — mit ausgesetzten Sturm-Kollektionen kommt ein Recherchestart in 27 s an
+
+Klick „Auswahl nachrecherchieren" (DrinkStar) um **20:45:16** → `outbound.sellify.lookup` `completed`
+**20:45:38** → `business_os.chat.task` „Nachrecherche: DrinkStar GmbH" **accepted 20:45:43**, mit
+`payload.writeback_contract.mechanism = business_command` (App 1.0.100). Round-trip **27 s** statt
+15–20 min. Einziger Unterschied zu den sieben gescheiterten Starts davor: vor dem Start des
+Threads-Moduls `sync.suspendCollections(['ctox_task_approval_requests','user_thread_states'])`.
+
+Damit ist die Kette belegt: Threads-Modul-Schleife → Sendewarteschlange voll → Befehlslatenz
+15–20 min → 120-s-Vorabgleich der App bricht ab → keine Recherche. Der Sendezähler
+`business_commands.frameTransport.sentFrames` (3) ist dabei **kein** verlässliches Maß für
+gesendete Befehle (Befehl kam an, Zähler blieb bei 3) — nicht als Beleg verwenden.
+
+Sofortmaßnahme für Nutzer bis zum Fix: Threads-Modul nicht laufen lassen (es startet in der
+Leiste als „0 Threads · Läuft" automatisch; ein Schließen-Knopf fehlt). Eigentlicher Fix gehört ins
+Threads-Modul (Refresh-Schleife, zwei 200er-Abfragen je Lauf) und/oder in die Bedarfsladung
+(Abfragen auf nicht-`live`-Kollektionen dürfen die Befehlszustellung nicht verdrängen).
