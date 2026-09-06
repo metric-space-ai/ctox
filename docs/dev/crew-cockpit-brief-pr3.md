@@ -13,6 +13,10 @@
 
 Lies zuerst `docs/dev/crew-cockpit-vision.md`, dann `docs/dev/crew-cockpit-board-20260905.md`, dann `docs/dev/crew-cockpit-brief-pr1-pr2.md` §2j (Lehren) und §6 der PR-Texte von PR #58 und PR-2 (Verträge). Rollen: Fable orchestriert und reviewt, du setzt um; Abweichungen im PR-Text, keine eigenen Ziele.
 
+## Arbeitsweise (verbindlich, wie §0 des PR-1/2-Briefs)
+
+Basis `origin/main` (enthält #58, #59, #61). Branch `crew-cockpit/pr3-crew-home`, Worktree `/Volumes/tmp/worktrees/ctox/crew-cockpit/pr3-crew-home`. TMPDIR und Cargo-Target auf der Systemplatte (`~/.cache/ctox-crew-cockpit-*`); vor jedem großen Build `df -h /` (unter 15 GiB frei nicht bauen), Target erst nach Freigabe löschen. Rust wird hier kaum angefasst (nur `shared/permissions.js`-Mirror ist JS); Browser-Arbeit prüft man mit den Node-Suites, dem Shell-V2-Vertrag, dem Geometrie-Labor und einem echten Browser. Commits in grünen Scheiben spätestens alle 45 Minuten, jede Scheibe sichtbar (Screenshot der Ansicht in `~/.codex/task-evidence/crew-cockpit/pr3/`). Draft-PR früh öffnen, Abschlussbericht nach §4 des PR-1/2-Briefs, dann anhalten; Merge durch Fable nach Review (Code + unabhängiges UI/UX-Review durch Kimi) als Merge-Commit, sofern Michael nichts anderes sagt. Beim Start in zwei Sätzen bestätigen, wofür du baust und mit welcher Ansicht du beginnst. Lehren aus §2j gelten unverändert; zusätzlich für Browser-Code: keine `find()` ohne Selektor und Limit, kein `innerHTML`-Vollneuaufbau auf Live-Updates, alle Strings aus `locales/*.json` in beiden Sprachen, nichts außerhalb des App-Hosts rendern.
+
 ## 0. Ziel in einem Satz
 
 Die CTOX-App wird das Zuhause der Crew: Man sieht, welches Wesen gerade arbeitet und woran, warum etwas wartet oder gescheitert ist, was es gekostet hat, und man kann eingreifen; die anderen Wesen sind zu Hause, jedes mit Profil, Seele, Lebenslauf, Learnings und Stundenzettel. Kein Poster, keine Leerflächen, keine Enum-Namen, kein Zufall.
