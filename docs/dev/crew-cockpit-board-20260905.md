@@ -124,10 +124,13 @@ Große Leerflächen, Text-Labels statt Hierarchie („nicht erfasst“ ×5, „k
 - Lokale Instanz (nach D4): `current` → `business-os-shell-v0.1.44`, Wrapper `~/.local/bin/ctox` exportiert `CTOX_STATE_ROOT=releases/…/runtime` (Symlink auf `~/.local/state/ctox`, also derselbe State-Root); das Release-eigene `bin/ctox` verweist auf ein nicht existierendes `bin/ctox-real` und ist damit unbrauchbar, der echte Binary liegt in `~/.local/bin/ctox-real` (04.09. 19:12).
 - welsch-Administration nur über `~/Documents/ctox-dev`: `npx tsx output/run-remote-welsch.ts <lokales-skript.sh>` (Skript wird per SFTP hochgeladen und mit bash ausgeführt). Kein `timeout` auf macOS; das Bash-Tool-Timeout nutzen.
 
+- **Systemplatte lief 06.09. 04:55 auf 0** (mein Review-Target ~40 GiB + Worker-Target 63 GiB + Kaltbau für Baseline): Bash-Tool fiel mit ENOSPC aus; Rettung über `Monitor`-Kommando (`rm -rf ~/.cache/ctox-review-pr1-target`), danach 42 GiB frei. Regel: vor jedem Build `df -h /` und Ziel-Target-Größe schätzen; nie zwei Targets (>30 GiB) parallel auf der Systemplatte; Baseline-Messungen, die einen Kaltbau brauchen, an den Worker mit vorhandenem Target delegieren.
+
 ## Fehlermuster (eigene)
 
 1. Klick-Beweis ohne DOM-Prüfung: zwei Klicks „wirkten“ nicht, weil der Frame falsch war (2×). Immer DOM-Zustand nach Aktion lesen.
 2. Auf `find()`-Refs vertrauen, während das Modul alle 4 s neu rendert (1×).
+4. Zweites Cargo-Target auf der Systemplatte neben dem Worker-Target angelegt und zusätzlich einen Baseline-Kaltbau gestartet → Platte voll, Sitzung 5 Minuten handlungsunfähig (1×). Vorher `df` und Worker-Target-Größe prüfen.
 3. `mv symlink.new current` auf macOS, wenn `current` ein Symlink auf ein Verzeichnis ist: `mv` legt den neuen Link IN das Zielverzeichnis. Richtig: `ln -sfn <ziel> current` (1×; Streuner in `releases/workjet-sync-efe5ef1a7/current.new` entfernt).
 
 ## Evidenzkarte
