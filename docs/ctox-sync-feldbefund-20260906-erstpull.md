@@ -187,3 +187,25 @@ Zusammengesetzte Ursache (belegt bis auf den letzten Schritt):
 
 Nicht mehr haltbar: „Push tot" (Korrektur oben). Weiter offen: ob das Schließen des Threads-Moduls
 die Warteschlange leert und Recherchestarts wieder binnen Sekunden ankommen (Test läuft).
+
+## 20:42 UTC: Schleife im Threads-Modul belegt — und der Gegenbeweis
+
+`modules/threads/index.js`: `refresh()` (Zeile 442) lädt bei jedem Aufruf `ctox_task_approval_requests`
+zweimal (`recentQuery(200, {status:'pending'})` und `recentQuery(200)`), dazu `user_thread_states`
+u. a.; `refresh()` wird von einem `setInterval` (Zeile 416), von Bereitschaftswechseln
+(`wireReadiness` → `render`) und ~20 weiteren Stellen ausgelöst. Jede `find()` auf einer nicht
+`live`-Kollektion ist eine Bedarfsabfrage über den Draht. Solange `user_thread_states` in
+`catching-up` hängt, feuern Bereitschaftswechsel dauerhaft → Abfragesturm → Sendewarteschlange voll.
+
+**Gegenbeweis:** Seite neu geladen und — bevor das Threads-Modul startete —
+`sync.suspendCollections(['ctox_task_approval_requests','user_thread_states'])` (bei 136 s).
+Ergebnis nach 264 s: `outbound_lead_generation_leads` **`live`, `firstPullCompletedAtMs` gesetzt**
+(zum ersten Mal heute), App „Daten werden synchronisiert (4/5)", 19 Leads; Sendewarteschlange 490
+statt > 3400. Der Stau des Threads-Moduls blockiert also den Erst-Pull anderer Kollektionen und die
+Befehlszustellung. Der Recherche-Klick-Test mit leerer Warteschlange folgt.
+
+Eigentümer-Browser (Screenshot ~20:04): „Auswahl neu recherchieren (2)" → „Kein Lead konnte
+gestartet werden (2 Fehler): Der Sellify-Abgleich ist fehlgeschlagen … bitte erneut versuchen" =
+120-s-Timeout des Vorabgleichs. Um 20:39:15/17 wurden zwei Lookups binnen Sekunden `completed`
+(vermutlich erneuter Klick) — im Eigentümer-Browser könnte die Latenz nach dem Dienstneustart
+bereits kurz sein; nicht belegt, welcher Dialog dort folgte.
