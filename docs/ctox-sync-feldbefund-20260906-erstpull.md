@@ -162,3 +162,28 @@ erreichen den Server nie", „frischer Speicher ändert nichts (Server null Zeil
 die Browser-Zähler (`sentFrames` konstant, Warteschlange wächst, `catching-up` ohne Erst-Pull) und die
 Beobachtung „App nach Login 25 min leer, Reload heilt die Anzeige" — sie stammen nicht aus dieser
 Abfrage. Die Neu-Messung mit korrektem Vergleich folgt unten.
+
+## Neu-Messung mit korrektem Vergleich (20:33 UTC) — Diagnose: 15–20 Minuten Latenz, nicht „tot"
+
+`typeof(lastWriteTime)=real`, `typeof(strftime('%s',…))=text`; mit `datetime(lastWriteTime/1000,'unixepoch') >= '…'`:
+
+- **24 Befehle seit 19:10:15**, alle `outbound.sellify.lookup` / `completed`, in Schüben:
+  18:58:26 (7), 19:06:14 (3), 19:40:50 (4), dazu 19:44:46, 19:45:26, 20:06:37 (2). Das sind die
+  Vorabgleiche der Recherchestarts aus meinem Fenster (Klicks 18:41, 18:47, 19:10, 19:19) und aus
+  dem Browser des Eigentümers (~20:04). **Round-trip Klick → completed: 17–21 Minuten.**
+- **Null `business_os.chat.task`-Aufgaben seit 18:00**, Routing-State und Queue-Projektion heute
+  leer. Die App wartet auf den Vorabgleich max. 120 s (`researchLead`, Timeout 120000 für
+  Varianten-Läufe) und bricht dann ab: beim Eigentümer als Dialog „Der Sellify-Abgleich ist
+  fehlgeschlagen … bitte erneut versuchen" (Screenshot 20:0x), in meinen Sammelläufen still
+  (`suppressAlerts`). **Deshalb wird nie eine Recherche eingereiht.**
+
+Zusammengesetzte Ursache (belegt bis auf den letzten Schritt):
+1. Das laufende Threads-Modul erzeugt einen Bedarfsabfrage-Sturm auf `ctox_task_approval_requests`
+   (zwei `recentQuery`, modules/threads/index.js:447-448; 3793 Konsolenmeldungen, 0 Abschlüsse).
+2. Diese Frames füllen die Sendewarteschlange des Browsers (queued 3098 → 3491 in 8 min,
+   `sentFrames` nahezu konstant); Befehls-Frames stehen dahinter an → 15–20 min Latenz.
+3. Der 120-s-Vorabgleich der App läuft in diese Latenz und bricht ab.
+4. Vermutlich derselbe Stau hält den Erst-Pull großer Kollektionen in `catching-up`.
+
+Nicht mehr haltbar: „Push tot" (Korrektur oben). Weiter offen: ob das Schließen des Threads-Moduls
+die Warteschlange leert und Recherchestarts wieder binnen Sekunden ankommen (Test läuft).
