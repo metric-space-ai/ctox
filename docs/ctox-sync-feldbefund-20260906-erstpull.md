@@ -124,3 +124,27 @@ Reconnect 19:05:55 (Signaling) / `business_commands` neu verbunden 19:11:18.
   berührt. Das Release ist nicht die Ursache.
 - Nebenbefund im Boot-Log: optionale Kollektion `workjet_computers` wird wegen Schema-Hash-Wechsel
   (RxDB DB6) übersprungen — vorbestehend, unabhängig.
+
+## Nachtrag 19:28 UTC: Sender im Browser steht — Abfragesturm des Threads-Moduls, Push-Frames drainen nie
+
+- Konsole: `[V1.5] fetch:start {collection: ctox_task_approval_requests, fingerprint: bd442eba… | 0836ebb8…, limit 200}`
+  im Sekundentakt, 3793 Meldungen verworfen, nie ein Abschluss. Verursacher: das laufende
+  Threads-Modul (`modules/threads/index.js:447-448`, zwei `recentQuery`-Ladevorgänge pending/alle
+  auf dieselbe Kollektion, die sich offenbar gegenseitig invalidieren).
+- `business_commands` frameTransport nach dem Neustart: `sentFrames` **30 und dann konstant**,
+  `queuedFrames` 3098 → 3490 in 8 min, `sentScheduledFrames` immer +4 (vier Push-Frames dauerhaft
+  unversandt), `pendingAcks 0`, `bufferedAmount` ~260 B, `backpressureStallCount 0`. Empfang läuft
+  (Leads kamen nach dem Neustart). Der Sender ruft `send()` schlicht nicht mehr auf.
+- `sync.suspendCollections(['ctox_task_approval_requests'])`: ok, aber kein Effekt — `sentFrames`
+  bleibt 30, Warteschlange bleibt 3491. Der Sturm ist also Symptom oder Auslöser, nicht der
+  einzige Grund: Die Drain-Schleife ist tot (vgl. docs/ctox-rxdb.md „Send-queue wedge",
+  `DrainResetGuard` greift hier nicht).
+- Zwei weitere Recherchestarts (19:19:31, Cereda + DrinkStar) kamen nie an; Cereda fiel lokal auf
+  „Prüfung nötig" zurück.
+
+Offen und entscheidend: Ist das spezifisch für dieses Browser-Fenster (Chromium-Pane) oder trifft
+es jeden Browser? Test: Eigentümer startet eine Nachrecherche im eigenen Browser, Server-Poll läuft.
+
+Hinweis für die Sync-Engineure: Auf `origin/main` (06.09.) liegen seit dem Tenant-Release Commits
+wie „fix(sync): stop retired background transfers at awaited boundaries", „preserve direct bridges
+and isolate DB runtime coordinators" — möglicherweise genau diese Klasse. Nicht verifiziert.
