@@ -88,3 +88,19 @@ diesmal nicht wegen der App, sondern weil kein Schreibvorgang den Browser verlä
 
 Nächster Test: lokalen Speicher (IndexedDB) dieses Browser-Fensters löschen, neu laden, eine
 Recherche starten. Landet sie, blockiert der älteste Journaleintrag als Kopf der Schlange.
+
+## Nachtrag 19:01 UTC: Frischer lokaler Speicher ändert nichts → Peer-Sitzung, nicht Browser-Journal
+
+IndexedDB des Origins gelöscht (23 DBs), Seite neu geladen (Sitzung blieb, Shell nach 81 s
+bereit, Haupt-DB neu angelegt), App geöffnet:
+- nach 267 s: leads `catching-up`, `firstPullCompletedAtMs 0`, 391 Frames / 4,0 MB über den
+  Raum empfangen, `retryCount 0`, `resumeRequestCount 0`, 1 Peer; App zeigt 0 Leads.
+- Journal: 2 ausstehende Schreibvorgänge (3,7 KB, Login-Schreibvorgänge der Shell) — auf dem
+  Server seit 18:50 UTC **null** neue Zeilen in irgendeiner Kollektion.
+- Natives Journal: keine Zeile über diesen Browser (kein Handshake, kein Checkpoint).
+
+Damit ist Hypothese 1 (alter Journaleintrag als Kopf der Schlange) widerlegt. Pull kleiner
+Kollektionen geht, Pull von leads/user_thread_states endet nie, Push geht gar nicht — mit
+frischem und mit altem Speicher. Verdächtig ist die native Peer-Sitzung (läuft seit dem
+Upgrade-Neustart 05.09. 07:53). Nächster Schritt: Dienstneustart bei leerer Queue, danach dieselbe
+Messung.
