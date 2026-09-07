@@ -137,6 +137,8 @@ Große Leerflächen, Text-Labels statt Hierarchie („nicht erfasst“ ×5, „k
 
 ## Umgebungsfallen
 
+- **Lokales `ctox upgrade --dev` (06.09. 08:50–07.09. 05:11) scheiterte im Rust-Build:** `rxdb_peer.rs` gegen `JsonSchemaType` aus `~/.local/state/workjet-launchpads/ctox-push-wirebudget/src/core/rxdb` (fremdes Launchpad einer anderen Sitzung) aufgelöst → E0599 `as_deref`. Der Installer löschte das Release-Verzeichnis danach; die Ursache des Pfad-Overrides (Patch/Symlink) ließ sich nicht mehr belegen. Konsequenz: Screenshots kommen aus einem selbst gebauten Branch-Binary (`~/.cache/ctox-opt-target/debug/ctox`), nicht aus dem Installer. Zehn Stunden Kompilierzeit unter Last 40–80 auf 10 Kernen; Systemplatte fiel dabei von 89 auf 32 GiB frei (fremde Targets), `~/.cache/ctox-upgrade-target` gelöscht.
+
 - Codex-Worker-cwd ist `~/Documents/ctox` (137 hinter / 233 vor origin/main). PR-Arbeit nur in Worktrees unter `/Volumes/tmp/worktrees/ctox/<branch>` von `origin/main`; nie den Checkout selbst editieren.
 - `/Volumes/tmp` ist klein (ENOSPC am 02.09.); Cargo-Target vor Builds mit `df -h` prüfen, sonst `~/.cache/ctox-crew-cockpit-target`. Target nach Gebrauch löschen (≈13 GiB je Testbau).
 - `cargo fmt` nur je Datei (`rustfmt <datei>`), nie paketweit.
