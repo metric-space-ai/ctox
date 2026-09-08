@@ -544,13 +544,15 @@ try {
       input.value = 'Bitte als CTOX Task verarbeiten';
       input.dispatchEvent(new InputEvent('input', { bubbles: true }));
       document.querySelector('.ctox-chat-window.is-active [data-chat-send]').click();
-      await window.chatHarness.waitFor(() => /Warte auf die CTOX Queue-Projektion/.test(document.body.innerText || ''));
+      await window.chatHarness.waitFor(() => /Annahme durch CTOX noch nicht bestätigt/.test(document.body.innerText || ''));
       return window.chatHarness.collect();
     });
     results.push({ scenario: 'transient-command-timeout-after-send', metrics: after });
     expect(after.activeTaskClass.includes('is-task-queued'), `transient command timeout must keep chat queued, got ${after.activeTaskClass}`);
     expect(!after.activeTaskClass.includes('is-task-failed'), `transient command timeout must not mark failed, got ${after.activeTaskClass}`);
-    expect(after.activeMessageText.includes('Warte auf die CTOX Queue-Projektion'), 'transient command timeout must explain that tracking continues');
+    expect(after.activeMessageText.includes('Annahme durch CTOX noch nicht bestätigt'), 'transient command timeout must explain that tracking continues');
+    expect(!after.activeMessageText.includes('Task an CTOX übergeben'), 'an unconfirmed timeout must not claim native acceptance');
+    expect(!after.activeMessageText.includes('pending_sync'), 'pending receipt enum must not leak as visible text');
     expect(!after.activeMessageText.includes('queued'), `transient status must not leak as chrome text, got ${after.activeMessageText}`);
   });
 
