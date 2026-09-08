@@ -103,26 +103,6 @@ fn auth_assist_recovery_boot_preserves_legacy_request_and_incomplete_plan() {
         let task_id = auth_request_fixture(root.path(), command_id, true);
         if had_worker_lease {
             channels::lease_queue_task(root.path(), &task_id, CHANNEL_ROUTER_LEASE_OWNER).unwrap();
-            channels::transition_business_command_for_task(
-                root.path(),
-                &task_id,
-                "leased",
-                None,
-                None,
-                None,
-                "legacy worker leased",
-            )
-            .unwrap();
-            channels::transition_business_command_for_task(
-                root.path(),
-                &task_id,
-                "running",
-                None,
-                None,
-                None,
-                "legacy worker started",
-            )
-            .unwrap();
         }
         let steps = ["Open login", "Owner completes MFA", "Confirm login"].map(|label| {
             lcm::TaskExecutionPlanStepInput {
@@ -152,13 +132,23 @@ fn auth_assist_recovery_boot_preserves_legacy_request_and_incomplete_plan() {
         assert_eq!(original_plan["total_steps"], 3);
         // Reproduce the persisted pre-fix aggregate. No live worker exists in
         // the new process; the missing-lease variant models outcome recovery.
-        let conn = channels::open_channel_db(&crate::paths::core_db(root.path())).unwrap();
-        conn.execute(
-            "UPDATE business_command_aggregates SET command_type='web_stack.auth_assist.request'
+        let mut conn = channels::open_channel_db(&crate::paths::core_db(root.path())).unwrap();
+        // Install a pre-upgrade snapshot under one writer reservation. No
+        // synthetic worker should race projection startup while preparing
+        // the database of a process that has already exited.
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+        tx.execute(
+            "UPDATE business_command_aggregates
+             SET command_type='web_stack.auth_assist.request',
+                 execution_phase=CASE WHEN ?2 THEN 'running' ELSE 'queued' END,
+                 attempt=CASE WHEN ?2 THEN 1 ELSE 0 END
              WHERE command_id=?1",
-            [command_id],
+            params![command_id, had_worker_lease],
         )
         .unwrap();
+        tx.commit().unwrap();
         let original_intent: String = conn
             .query_row(
                 "SELECT intent_json FROM business_command_aggregates WHERE command_id=?1",
