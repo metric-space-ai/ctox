@@ -1078,7 +1078,7 @@ const shellMessages = {
     bootSchemasDone: 'Speicherstrukturen erfolgreich geladen.',
     moduleTitles: {
       desktop: 'Desktop',
-      ctox: 'CTOX',
+      ctox: 'Crew',
       documents: 'Dokumente',
       spreadsheets: 'Tabellen',
       knowledge: 'Knowledge',
@@ -1197,7 +1197,7 @@ const shellMessages = {
     bootSchemasDone: 'Storage structures loaded.',
     moduleTitles: {
       desktop: 'Desktop',
-      ctox: 'CTOX',
+      ctox: 'Crew',
       documents: 'Documents',
       spreadsheets: 'Spreadsheets',
       knowledge: 'Knowledge',
