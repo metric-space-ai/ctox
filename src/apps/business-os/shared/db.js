@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260908-shell-v2-webrtc-readiness-v359';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260908-shell-v2-sync-leases-v360';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',

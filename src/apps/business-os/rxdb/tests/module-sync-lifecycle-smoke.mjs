@@ -6,7 +6,7 @@ const shellSource = await readFile(new URL('../../app.js', import.meta.url), 'ut
 
 assert.match(syncSource, /async leaseModule\(moduleManifest/,
   'sync runtime must expose a scoped module lease');
-assert.match(syncSource, /collectionLeaseCounts\.set\(normalized/,
+assert.match(syncSource, /bridges\.acquire\(normalized/,
   'collection bridges must be reference counted');
 assert.match(syncSource, /remaining <= 0 && !pinnedCollections\.has\(normalized\)/,
   'the last app lease must stop only an unpinned collection bridge');

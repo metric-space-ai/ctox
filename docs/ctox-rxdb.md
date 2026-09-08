@@ -166,6 +166,29 @@ A second scenario verifies that a rejected session still receives an explicit
 denial under load. This scheduling boundary alone does not establish native
 command latency, wire backpressure behavior or complete browser acceptance.
 
+Browser collection leases follow the runtime's current bridge, not the
+replication object that happened to exist at acquisition. The local
+`CollectionSyncRegistry` owns bridge promises, their resolved projection and
+the live lease set; resource counts are derived from that set. Late completion
+or rejection of a replaced promise cannot publish over the current bridge.
+Restart and suspend retain leases; explicit collection stop and runtime shutdown
+revoke them. Releasing an old revoked lease cannot decrement a new lease.
+
+A lease exposes the authoritative `bridge` and `subscribeBridge(listener)`, whose
+subscription is released on lease release/revocation. Command readiness follows
+these transitions within its original deadline, without restarting the room or
+resubmitting the command. Command master-change observers unsubscribe from the
+old state and attach to the current one. Document transfers use the same live
+lease; they no longer assign a private bridge after follower promotion.
+Existing app-adapter assignments are accepted only when they identify the
+current runtime bridge (or its current pending promise). They cannot mutate
+lease ownership, install a stale bridge or revive a revoked lease. Removing
+those redundant assignments from separately maintained app adapters remains
+an integration cleanup; the registry is the sole bridge writer throughout.
+Registry, command and document lifecycle regressions run through
+`collection-lease-lifecycle-smoke.mjs`. These component tests do not replace
+the real browser/native command, reload and performance acceptance.
+
 The shell readiness mapping applies the same rule. Obsolete
 `httpBridgeStatus`/`httpBridgePulledAt` fields cannot establish initial
 replication, streaming readiness or an advertised checkpoint epoch. Their

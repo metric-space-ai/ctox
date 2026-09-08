@@ -22,9 +22,9 @@ import {
   collectionTopic,
   nativeRxdbPeerReady,
   normalizeCollectionReadinessState,
-} from './sync-contract.js?v=20260908-shell-v2-webrtc-readiness-v359';
-import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260908-shell-v2-webrtc-readiness-v359';
-import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20260908-shell-v2-webrtc-readiness-v359';
+} from './sync-contract.js?v=20260908-shell-v2-sync-leases-v360';
+import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260908-shell-v2-sync-leases-v360';
+import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20260908-shell-v2-sync-leases-v360';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
@@ -34,7 +34,7 @@ const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 // those builds made the new tab follow the old, failed bridge forever. The
 // release epoch isolates only the local BroadcastChannel/Web Lock; both builds
 // still replicate through the same server-authoritative WebRTC room.
-const MULTI_TAB_COORDINATOR_EPOCH = '20260908-shell-v2-webrtc-readiness-v359';
+const MULTI_TAB_COORDINATOR_EPOCH = '20260908-shell-v2-sync-leases-v360';
 const CTOX_BROWSER_CAPABILITIES = [
   'ctox-control-plane-v1',
   'ctox-role-bound-signaling-v1',
@@ -146,19 +146,20 @@ const RETRYABLE_CONTROL_PLANE_CODES = new Set([
 const signalingErrorHandlers = new Set();
 let signalingErrorObserverInstalled = false;
 
+import { CollectionSyncRegistry } from './sync-collection-registry.js?v=1';
+
 export function createSyncRuntime({
   db,
   config,
   onDiagnostic,
   capabilityTokenProvider = getBusinessOsCapabilityToken,
 }) {
-  const bridges = new Map();
+  const bridges = new CollectionSyncRegistry();
   const activeCollections = new Set();
   // Direct shell/service consumers pin a bridge until they explicitly stop
   // it. App windows use reference-counted leases instead, so closing the last
   // window can return the sync runtime to its pre-launch resource baseline.
   const pinnedCollections = new Set();
-  const collectionLeaseCounts = new Map();
   const suspendedCollections = new Set();
   let globalRestartTimer = null;
   let unregisteredSweepTimer = null;
@@ -187,7 +188,7 @@ export function createSyncRuntime({
     root.dataset.syncBridgeCount = String(bridges.size);
     root.dataset.syncPinnedCollectionCount = String(pinnedCollections.size);
     root.dataset.syncLeaseCount = String(
-      [...collectionLeaseCounts.values()].reduce((sum, count) => sum + count, 0),
+      bridges.leaseCounts().reduce((sum, [, count]) => sum + count, 0),
     );
   };
   publishResourceBudget();
@@ -318,10 +319,10 @@ export function createSyncRuntime({
   };
   const stopAllBridges = async () => {
     const bridgePromises = [...bridges.values()];
+    bridges.revokeAllLeases();
     bridges.clear();
     activeCollections.clear();
     pinnedCollections.clear();
-    collectionLeaseCounts.clear();
     publishResourceBudget();
     const states = await Promise.allSettled(bridgePromises);
     for (const state of states) {
@@ -689,52 +690,38 @@ export function createSyncRuntime({
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
       const normalized = normalizeCollectionName(collection);
       if (!normalized) throw new Error('collection is required.');
-      collectionLeaseCounts.set(normalized, (collectionLeaseCounts.get(normalized) || 0) + 1);
-      publishResourceBudget();
-      let released = false;
-      let bridge = null;
-      try {
-        bridge = await this.startCollection(normalized, { pin: false });
-      } catch (error) {
-        releaseCollectionLease(normalized);
-        if (!pinnedCollections.has(normalized)) {
-          await this.stopCollection(normalized, { preservePin: true }).catch(() => null);
+      const lease = bridges.acquire(normalized, reason, async (remaining) => {
+        publishResourceBudget();
+        if (remaining <= 0 && !pinnedCollections.has(normalized)) {
+          await syncRuntime.stopCollection(normalized, { preservePin: true }).catch(() => null);
+          if (isModuleDemandOnlyCollection(normalized)) {
+            recordCollection(normalized, {
+              status: 'skipped',
+              connectionStatus: 'demand-only',
+              reason: 'demand-only-lease-released',
+              active: false,
+              frameTransport: null,
+              lastError: null,
+              reconnectingSince: null,
+            });
+          }
         }
+      });
+      publishResourceBudget();
+      try {
+        await this.startCollection(normalized, { pin: false });
+        return lease;
+      } catch (error) {
+        await lease.release();
         throw error;
       }
-      return {
-        mode: 'leased',
-        collection: normalized,
-        reason,
-        bridge,
-        async release() {
-          if (released) return false;
-          released = true;
-          const remaining = releaseCollectionLease(normalized);
-          if (remaining <= 0 && !pinnedCollections.has(normalized)) {
-            await syncRuntime.stopCollection(normalized, { preservePin: true }).catch(() => null);
-            if (isModuleDemandOnlyCollection(normalized)) {
-              recordCollection(normalized, {
-                status: 'skipped',
-                connectionStatus: 'demand-only',
-                reason: 'demand-only-lease-released',
-                active: false,
-                frameTransport: null,
-                lastError: null,
-                reconnectingSince: null,
-              });
-            }
-          }
-          return true;
-        },
-      };
     },
     async startCollection(collection, options = {}) {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
       collection = normalizeCollectionName(collection);
       if (!collection) throw new Error('collection is required.');
       const coordinator = await ensureMultiTabCoordinator();
-      if (isModuleDemandOnlyCollection(collection) && !collectionLeaseCounts.get(collection)) {
+      if (isModuleDemandOnlyCollection(collection) && !bridges.leaseCount(collection)) {
         const error = new Error(`${collection} is demand-only and must be started through leaseCollection().`);
         error.code = DEMAND_ONLY_COLLECTION_START_ERROR;
         recordCollection(collection, {
@@ -887,7 +874,7 @@ export function createSyncRuntime({
         });
         return bridge;
       } catch (error) {
-        bridges.delete(collection);
+        if (bridges.get(collection) === bridgePromise) bridges.delete(collection);
         publishResourceBudget();
         const serialized = serializeError(error);
         recordCollection(collection, { status: 'failed', lastError: serialized });
@@ -898,7 +885,7 @@ export function createSyncRuntime({
     async stopCollection(collection, options = {}) {
       collection = normalizeCollectionName(collection);
       activeCollections.delete(collection);
-      if (!options?.preserveLeases) collectionLeaseCounts.delete(collection);
+      if (!options?.preserveLeases) bridges.revokeLeases(collection);
       if (!options?.preservePin) pinnedCollections.delete(collection);
       const bridgePromise = bridges.get(collection);
       bridges.delete(collection);
@@ -936,7 +923,7 @@ export function createSyncRuntime({
         .map(normalizeCollectionName)
         .filter(Boolean))];
       const restartable = requested.filter((collection) => (
-        !isModuleDemandOnlyCollection(collection) || collectionLeaseCounts.get(collection) > 0
+        !isModuleDemandOnlyCollection(collection) || bridges.leaseCount(collection) > 0
       ));
       for (const collection of requested) {
         if (restartable.includes(collection)) continue;
@@ -1096,20 +1083,9 @@ export function createSyncRuntime({
         activeCollections: [...activeCollections].sort(),
         bridgeCollections: [...bridges.keys()].sort(),
         pinnedCollections: [...pinnedCollections].sort(),
-        leaseCounts: Object.fromEntries([...collectionLeaseCounts.entries()].sort()),
+        leaseCounts: Object.fromEntries(bridges.leaseCounts().sort()),
       };
     },
-  };
-  const releaseCollectionLease = (collection) => {
-    const current = collectionLeaseCounts.get(collection) || 0;
-    const next = Math.max(0, current - 1);
-    if (next) {
-      collectionLeaseCounts.set(collection, next);
-    } else {
-      collectionLeaseCounts.delete(collection);
-    }
-    publishResourceBudget();
-    return next;
   };
   async function waitForLeadership(coordinator, timeoutMs) {
     const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
