@@ -169,6 +169,9 @@ jobs:
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
         with:
           key: full-ctox-host-dev-no-debug
+          # Preserve compiled dependencies when a later acceptance gate fails.
+          # The full source build and every assertion still run on each revision.
+          cache-on-failure: true
           workspaces: |
             . -> ${{ runner.temp }}/ctox-full-host-target
             src/core/sync -> ${{ runner.temp }}/ctox-full-host-target
