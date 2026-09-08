@@ -3,12 +3,23 @@
 const fs = require('fs');
 const path = require('path');
 
+async function withDeadline(work, timeoutMs, message) {
+  let timer;
+  try {
+    return await Promise.race([
+      work,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message())), timeoutMs); }),
+    ]);
+  } finally { clearTimeout(timer); }
+}
+
 // Each role receives its own browser profile and server-authenticated bootstrap.
 // Signed capabilities go only to this fixture's local document/control origin;
 // records and commands still travel through the real WebRTC data plane.
 async function runThreadsRightClickPeers({
   chromium, launchOptions, runtimeRoot, smokeUrl, capabilities,
   smokeMode, threadsScaleSeed, browserDiagnostics, evidenceDir, readNativeAuthorizationState,
+  workflowTimeoutMs = 300000, closeTimeoutMs = 5000,
 }) {
   const origin = new URL(smokeUrl).origin;
   const contexts = [];
@@ -23,6 +34,9 @@ async function runThreadsRightClickPeers({
     snapshots: [], deliveredCapabilities: [], deliveredCapabilityCount: 0,
   };
   const pendingCapabilityReads = new Set();
+  let workflowError = null;
+  let workflowFinished = false;
+  let workflowPhase = 'opening-profiles';
   const persistAuthorizationEvidence = () => {
     if (!evidenceDir) return;
     fs.mkdirSync(evidenceDir, { recursive: true });
@@ -125,10 +139,28 @@ async function runThreadsRightClickPeers({
     await requester.exposeFunction('__ctoxReviewThreadsApproval', async (request) => (
       reviewer.evaluate(runReviewerInBrowser, request)
     ));
-    const result = await requester.evaluate(runRequesterInBrowser, { smokeMode, threadsScaleSeed });
+    await requester.exposeFunction('__ctoxReportThreadsPhase', (phase) => {
+      if (workflowFinished) return;
+      // Only fixture-owned phase labels are persisted, never browser records.
+      if (!['open-threads-module', 'start-thread-collections', 'direct-denial',
+        'context-data', 'context-ask', 'context-app', 'reviewer-approval'].includes(phase)) return;
+      workflowPhase = phase;
+      snapshotAuthorization('workflow:' + phase);
+    });
+    workflowPhase = 'requester-start';
+    snapshotAuthorization('workflow:' + workflowPhase);
+    // Playwright evaluate has no timeout. A blocked module/dispatch promise must
+    // produce failure evidence and enter teardown before CI kills the process.
+    const result = await withDeadline(
+      requester.evaluate(runRequesterInBrowser, { smokeMode, threadsScaleSeed }),
+      workflowTimeoutMs, () => `threads workflow exceeded ${workflowTimeoutMs} ms in ${workflowPhase}`,
+    );
+    workflowFinished = true;
     console.log('threads_authenticated_peers=' + JSON.stringify(identities));
     return { ...result, authenticatedPeers: identities, isolatedBrowserProfiles: true };
   } catch (error) {
+    workflowError = error;
+    workflowFinished = true;
     await Promise.allSettled([...pendingCapabilityReads]);
     snapshotAuthorization('workflow-failed');
     for (let index = 0; index < contexts.length; index += 1) {
@@ -149,9 +181,17 @@ async function runThreadsRightClickPeers({
     }
     throw error;
   } finally {
-    for (const context of contexts.reverse()) await context.close().catch(() => {});
+    workflowFinished = true;
+    const closed = await Promise.allSettled(contexts.map((context, index) => withDeadline(
+      context.close(), closeTimeoutMs, () => `threads browser profile ${index} did not close`,
+    )));
+    const closeErrors = closed.filter(result => result.status === 'rejected').map(result => result.reason);
     await Promise.allSettled([...pendingCapabilityReads]);
-    snapshotAuthorization('profiles-closed');
+    snapshotAuthorization(closeErrors.length ? 'profile-close-failed' : 'profiles-closed');
+    if (closeErrors.length) {
+      console.error('threads_profile_close_failed=' + closeErrors.length);
+      if (!workflowError) throw new AggregateError(closeErrors, 'threads browser profile cleanup failed');
+    }
   }
 }
 
@@ -416,6 +456,7 @@ async function runRequesterInBrowser({ smokeMode, threadsScaleSeed }) {
     }, 30000, `threads right-click ${mode} command persisted`);
   };
 
+  await globalThis.__ctoxReportThreadsPhase('open-threads-module');
   await ensureThreadsModuleCollections();
   await waitFor(() => {
     const raw = state.db?.raw || {};
@@ -429,6 +470,7 @@ async function runRequesterInBrowser({ smokeMode, threadsScaleSeed }) {
       missing: names.filter((name) => !raw[name]),
     };
   }, 30000, 'threads right-click collections available');
+  await globalThis.__ctoxReportThreadsPhase('start-thread-collections');
   await Promise.all([
     'business_commands',
     'business_users',
@@ -438,6 +480,7 @@ async function runRequesterInBrowser({ smokeMode, threadsScaleSeed }) {
 
   const deniedCommandId = `cmd_${crypto.randomUUID()}`;
   let deniedDispatchError = '';
+  await globalThis.__ctoxReportThreadsPhase('direct-denial');
   try {
     await state.commandBus.dispatch({
       id: deniedCommandId,
@@ -483,8 +526,11 @@ async function runRequesterInBrowser({ smokeMode, threadsScaleSeed }) {
     };
   }, 30000, 'threads right-click direct native denial');
 
+  await globalThis.__ctoxReportThreadsPhase('context-data');
   const dataCommand = await submitContextMode({ mode: 'data', message: dataPrompt, userId: reviewerId });
+  await globalThis.__ctoxReportThreadsPhase('context-ask');
   const askCommand = await submitContextMode({ mode: 'ask', message: askPrompt, userId: reviewerId });
+  await globalThis.__ctoxReportThreadsPhase('context-app');
   const appCommand = await submitContextMode({
     mode: 'app',
     message: appPrompt,
@@ -515,6 +561,7 @@ async function runRequesterInBrowser({ smokeMode, threadsScaleSeed }) {
   if (commandStatus?.version !== 'business-os-advanced-status-v1' || commandStatus.ok !== true) {
     throw new Error(`threads right-click command status unhealthy: ${JSON.stringify(commandStatus)}`);
   }
+  await globalThis.__ctoxReportThreadsPhase('reviewer-approval');
   const { projections, rendered, approvalDecision, status, authenticatedReviewer } =
     await globalThis.__ctoxReviewThreadsApproval({
       targetModule, targetRecordId, appTargetRecordId, threadsCollections,

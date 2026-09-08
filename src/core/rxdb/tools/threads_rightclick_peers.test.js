@@ -9,7 +9,7 @@ const { runThreadsRightClickPeers } = require('./threads_rightclick_peers.js');
 
 // Driver-contract tests only: actual shell/WebRTC behavior is tested by the
 // full native smoke mode. These guard credential routing and teardown.
-function driver({ wrongSecondActor = false, failReview = false, deliveredToken = null } = {}) {
+function driver({ wrongSecondActor = false, failReview = false, deliveredToken = null, hangRequester = false, hangClose = false } = {}) {
   const contexts = [];
   const chromium = {
     async launchPersistentContext(profile) {
@@ -40,6 +40,8 @@ function driver({ wrongSecondActor = false, failReview = false, deliveredToken =
         async evaluate(fn, args) {
           this.calls.push(fn.name);
           if (fn.name === 'runRequesterInBrowser') {
+            await this.bindings.__ctoxReportThreadsPhase('open-threads-module');
+            if (hangRequester) return new Promise(() => {});
             return this.bindings.__ctoxReviewThreadsApproval({ reviewerId: 'threads-reviewer' });
           }
           if (fn.name === 'runReviewerInBrowser') {
@@ -58,7 +60,11 @@ function driver({ wrongSecondActor = false, failReview = false, deliveredToken =
         async route(matcher, handler) { this.matcher = matcher; this.handler = handler; },
         async newPage() { return page; },
         pages() { return [page]; },
-        async close() { this.closed = true; },
+        async close() {
+          this.closeAttempted = true;
+          if (hangClose) return new Promise(() => {});
+          this.closed = true;
+        },
       };
       contexts.push(context);
       return context;
@@ -81,6 +87,8 @@ async function run(options, assertions) {
     browserDiagnostics: { warnings: 0, errors: 0, requestFailures: 0, assetResponseErrors: 0 },
     evidenceDir: options.evidence ? path.join(runtimeRoot, 'evidence') : undefined,
     readNativeAuthorizationState: options.readNativeAuthorizationState,
+    workflowTimeoutMs: options.workflowTimeoutMs,
+    closeTimeoutMs: options.closeTimeoutMs,
   });
   try { await assertions(promise, fake.contexts, runtimeRoot); }
   finally {
@@ -127,6 +135,28 @@ test('a reviewer failure propagates and closes both profiles', async () => {
   await run({ failReview: true }, async (result, contexts) => {
     await assert.rejects(result, /native review failed/);
     assert.ok(contexts.every((context) => context.closed));
+  });
+});
+
+test('an unresolved browser evaluation fails with its phase and closes both profiles', { timeout: 3000 }, async () => {
+  await run({ evidence: true, hangRequester: true, workflowTimeoutMs: 25 }, async (result, contexts, runtimeRoot) => {
+    await assert.rejects(result, /threads workflow exceeded 25 ms in open-threads-module/);
+    assert.equal(contexts.length, 2);
+    assert.ok(contexts.every(context => context.closed));
+    const evidence = JSON.parse(fs.readFileSync(path.join(runtimeRoot, 'evidence/threads-authorization.json'), 'utf8'));
+    assert.ok(evidence.snapshots.some(snapshot => snapshot.phase === 'workflow:open-threads-module'));
+    assert.ok(evidence.snapshots.some(snapshot => snapshot.phase === 'workflow-failed'));
+    assert.equal(evidence.snapshots.at(-1).phase, 'profiles-closed');
+  });
+});
+
+test('an unresolved profile close fails acceptance without claiming cleanup succeeded', { timeout: 3000 }, async () => {
+  await run({ evidence: true, hangClose: true, closeTimeoutMs: 25 }, async (result, contexts, runtimeRoot) => {
+    await assert.rejects(result, /threads browser profile cleanup failed/);
+    assert.ok(contexts.every(context => context.closeAttempted && !context.closed));
+    const evidence = JSON.parse(fs.readFileSync(path.join(runtimeRoot, 'evidence/threads-authorization.json'), 'utf8'));
+    assert.equal(evidence.snapshots.at(-1).phase, 'profile-close-failed');
+    assert.equal(evidence.snapshots.some(snapshot => snapshot.phase === 'profiles-closed'), false);
   });
 });
 
