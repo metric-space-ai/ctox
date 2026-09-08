@@ -112,7 +112,7 @@ const assert = (condition, message) => {
 {
   const db = makeDb({
     commandAck: {
-      status: 'blocked',
+      status: 'accepted',
       replication_phase: 'native_observed',
       execution_mode: 'queue',
       execution_phase: 'blocked',

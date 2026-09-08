@@ -64,7 +64,9 @@ pub(crate) fn claim_business_command_with_queue(
                 )
                 .optional()?;
             if let Some(task_id) = task_id {
-                if super::auth_assist::preserve_request(&tx, &task_id, &claim.command_id)? {
+                if claim.command_type == super::auth_assist::REQUEST_TYPE
+                    && super::auth_assist::preserve_request(&tx, &task_id, &claim.command_id)?
+                {
                     let task = load_queue_task_from_conn(&tx, &task_id)?
                         .context("auth-assist task missing")?;
                     refresh_queue_projection_tasks(root, &tx, std::slice::from_ref(&task))?;

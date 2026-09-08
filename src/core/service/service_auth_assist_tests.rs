@@ -1,6 +1,38 @@
 use super::*;
 use serde_json::json;
 
+#[test]
+fn auth_assist_recovery_keeps_ordinary_command_lease_guard() {
+    let root = tempfile::tempdir().unwrap();
+    let task_id = auth_request_fixture(root.path(), "ordinary-command", true);
+    let error = channels::transition_business_command_for_task(
+        root.path(),
+        &task_id,
+        "leased",
+        None,
+        None,
+        None,
+        "no owned lease",
+    )
+    .expect_err("ordinary commands still need their real worker lease");
+    assert!(
+        error
+            .to_string()
+            .contains("requires an owned, expiring queue lease before leased"),
+        "{error}"
+    );
+    let task = channels::load_queue_task(root.path(), &task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.route_status, "pending");
+    assert!(task.lease_owner.is_none());
+    assert_eq!(
+        channels::business_command_projection(root.path(), "ordinary-command").unwrap()
+            ["execution_phase"],
+        "queued",
+    );
+}
+
 fn auth_request_fixture(root: &Path, command_id: &str, legacy: bool) -> String {
     channels::claim_business_command_with_queue(
         root,
@@ -116,6 +148,8 @@ fn auth_assist_recovery_boot_preserves_legacy_request_and_incomplete_plan() {
         )
         .unwrap()
         .expect("durable incomplete plan");
+        assert_eq!(original_plan["completed_steps"], 0);
+        assert_eq!(original_plan["total_steps"], 3);
         // Reproduce the persisted pre-fix aggregate. No live worker exists in
         // the new process; the missing-lease variant models outcome recovery.
         let conn = channels::open_channel_db(&crate::paths::core_db(root.path())).unwrap();
