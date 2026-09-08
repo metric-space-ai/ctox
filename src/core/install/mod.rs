@@ -22,6 +22,20 @@ use crate::inference::runtime_env;
 use crate::secrets;
 use crate::service;
 
+mod watchdog_pause;
+
+fn pause_upgrade_watchdog() -> Result<watchdog_pause::SystemWatchdogPause> {
+    let service_dir = env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home_dir().map(|home| home.join(".config")))
+        .map(|config| config.join("systemd/user"));
+    let installed = cfg!(target_os = "linux")
+        && service_dir.is_some_and(|dir| {
+            dir.join("ctox-watchdog.timer").exists() || dir.join("ctox-watchdog.service").exists()
+        });
+    watchdog_pause::pause(installed).context("cannot pause watchdog for release switch")
+}
+
 const INSTALL_MANIFEST_FILE_NAME: &str = "install_manifest.json";
 const UPDATE_STATE_FILE_NAME: &str = "update_state.json";
 const MAINTENANCE_STORE_FILE_NAME: &str = "ctox-maintenance.sqlite3";
@@ -1884,7 +1898,7 @@ fn adopt_installation(
     switch_current_release(&current_link, &release_root)?;
     sync_managed_launch_binaries(install_root, &current_link, state_root)?;
     write_managed_wrapper(install_root, state_root)?;
-    refresh_service_unit(&current_link, state_root, Some(install_root))?;
+    refresh_service_unit(&current_link, state_root, Some(install_root), true)?;
     let manifest = InstallManifest {
         schema_version: 1,
         install_root: install_root.to_path_buf(),
@@ -2064,6 +2078,7 @@ fn apply_update(
         "CTOX wechselt auf das neue Release",
     )?;
     progress_step("switching current symlink and restarting service if required");
+    let _watchdog_pause = pause_upgrade_watchdog()?;
     if let Err(err) = stop_background_for_release_switch(&layout.active_root) {
         let error_message = err.to_string();
         persist_update_phase(
@@ -2084,7 +2099,12 @@ fn apply_update(
     }
     sync_managed_launch_binaries(&install_root, &current_link, &layout.state_root)?;
     write_managed_wrapper(&install_root, &layout.state_root)?;
-    if let Err(err) = refresh_service_unit(&current_link, &layout.state_root, Some(&install_root)) {
+    if let Err(err) = refresh_service_unit(
+        &current_link,
+        &layout.state_root,
+        Some(&install_root),
+        false,
+    ) {
         rollback_to_previous_release(
             &install_root,
             &current_link,
@@ -2203,6 +2223,7 @@ fn rollback_update(root: &Path) -> Result<RollbackResult> {
     let should_restart = service::service_status_snapshot(&layout.active_root)
         .map(|status| status.running || status.autostart_enabled || has_runnable_queue_work)
         .unwrap_or(false);
+    let _watchdog_pause = pause_upgrade_watchdog()?;
     stop_background_for_release_switch(&layout.active_root)?;
     if let Some(backup_path) = update_state.and_then(|entry| entry.state_backup_path) {
         restore_state_backup(&backup_path, &layout.state_root)?;
@@ -2210,7 +2231,12 @@ fn rollback_update(root: &Path) -> Result<RollbackResult> {
     switch_current_release(&current_link, &previous_release_root)?;
     sync_managed_launch_binaries(&install_root, &current_link, &layout.state_root)?;
     write_managed_wrapper(&install_root, &layout.state_root)?;
-    refresh_service_unit(&current_link, &layout.state_root, Some(&install_root))?;
+    refresh_service_unit(
+        &current_link,
+        &layout.state_root,
+        Some(&install_root),
+        false,
+    )?;
     if should_restart {
         let _ = service::start_background(&current_link);
     }
@@ -2410,7 +2436,8 @@ fn rollback_to_previous_release(
         stop_background_for_release_switch,
         |current_link| {
             sync_managed_launch_binaries(install_root, current_link, state_root)?;
-            refresh_service_unit(current_link, state_root, Some(install_root))?;
+            write_managed_wrapper(install_root, state_root)?;
+            refresh_service_unit(current_link, state_root, Some(install_root), false)?;
             if should_restart {
                 service::start_background(current_link)?;
             }
@@ -2434,7 +2461,7 @@ fn recover_previous_release_preserving_state(
 }
 
 fn stop_background_for_release_switch(root: &Path) -> Result<()> {
-    service::stop_background_guarded(root, false)
+    service::stop_background_for_release_switch_guarded(root)
         .map(|_| ())
         .map_err(|err| {
             anyhow::anyhow!("refusing to switch CTOX release while service stop is not safe: {err}")
@@ -4122,6 +4149,7 @@ fn refresh_service_unit(
     current_root: &Path,
     state_root: &Path,
     install_root: Option<&Path>,
+    start_watchdog: bool,
 ) -> Result<()> {
     if cfg!(target_os = "macos") {
         refresh_launchd_signaling_agent(current_root)?;
@@ -4144,12 +4172,13 @@ fn refresh_service_unit(
         .map(|entry| format!("Environment=CTOX_INSTALL_ROOT={}\n", entry.display()))
         .unwrap_or_default();
     let contents = format!(
-        "[Unit]\nDescription=CTOX Background Service\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=0\n\n[Service]\nType=simple\nWorkingDirectory={}\nEnvironment=CTOX_ROOT={}\nEnvironment=CTOX_STATE_ROOT={}\n{}EnvironmentFile=-%h/.config/ctox/business-os.env\nEnvironmentFile=-%h/.config/ctox/business-bridge.env\nExecStart={} service --foreground\nRestart=always\nRestartSec=5\nKillMode=control-group\nTimeoutStopSec=20\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=CTOX Background Service\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=0\n\n[Service]\nType=simple\nWorkingDirectory={}\nEnvironment=CTOX_ROOT={}\nEnvironment=CTOX_STATE_ROOT={}\n{}EnvironmentFile=-%h/.config/ctox/business-os.env\nEnvironmentFile=-%h/.config/ctox/business-bridge.env\nExecStart={} service --foreground\nRestart=always\nRestartSec=5\nKillMode=control-group\nTimeoutStopSec={}\n\n[Install]\nWantedBy=default.target\n",
         current_root.display(),
         current_root.display(),
         state_root.display(),
         install_root_export,
-        wrapper.display()
+        wrapper.display(),
+        service::SERVICE_LIFECYCLE_TIMEOUTS.release_switch_shutdown().as_secs()
     );
     fs::write(&service_file, contents)
         .with_context(|| format!("failed to write {}", service_file.display()))?;
@@ -4167,9 +4196,12 @@ fn refresh_service_unit(
     let _ = Command::new("systemctl")
         .args(["--user", "enable", "ctox.service"])
         .status();
-    let _ = Command::new("systemctl")
-        .args(["--user", "enable", "--now", "ctox-watchdog.timer"])
-        .status();
+    let mut timer = Command::new("systemctl");
+    timer.args(["--user", "enable"]);
+    if start_watchdog {
+        timer.arg("--now");
+    }
+    let _ = timer.arg("ctox-watchdog.timer").status();
     Ok(())
 }
 

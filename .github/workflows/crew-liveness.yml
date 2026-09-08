@@ -12,6 +12,10 @@ on:
       - 'src/core/service/service_auth_assist_tests.rs'
       - 'src/core/mission/channels/outbound_review.rs'
       - '.github/workflows/crew-liveness.yml'
+      - 'install.sh'
+      - 'src/core/install/**'
+      - 'src/core/service/lifecycle_timeouts.rs'
+      - 'tests/install_rebuild_cutover_smoke.sh'
   workflow_dispatch:
 
 permissions:
@@ -70,6 +74,14 @@ jobs:
             "$CREW_TEST_BINARY" "$filter" --test-threads=1 || failed=1
           done
           exit "$failed"
+      - name: Installer release cutover regressions
+        if: ${{ always() && steps.compile.outcome == 'success' }}
+        run: |
+          export CARGO_MANIFEST_DIR="$GITHUB_WORKSPACE"
+          export LD_LIBRARY_PATH="$CARGO_TARGET_DIR/debug/deps:$(rustc --print target-libdir)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          "$CREW_TEST_BINARY" install:: --test-threads=1
+          "$CREW_TEST_BINARY" lifecycle_timeouts:: --test-threads=1
+          bash tests/install_rebuild_cutover_smoke.sh
       - name: Clippy
         if: ${{ always() && steps.compile.outcome == 'success' }}
         run: cargo clippy --locked --bin ctox --tests

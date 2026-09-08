@@ -200,7 +200,7 @@ const BUSINESS_OS_APP_REQUIRED_ARTIFACTS: &[&str] = &[
 const REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 5;
 const MAX_REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 5;
 const MAX_REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 5;
-const SERVICE_SHUTDOWN_TIMEOUT_SECS: u64 = 15;
+use super::SERVICE_LIFECYCLE_TIMEOUTS;
 const SERVICE_SHUTDOWN_POLL_MILLIS: u64 = 150;
 const SYSTEMCTL_USER_TIMEOUT_SECS: u64 = 5;
 const CTO_DRIFT_KIND: &str = "cto-drift-correction";
@@ -2543,7 +2543,8 @@ pub fn start_background(root: &Path) -> Result<String> {
         let windows_status = crate::service::windows_service::status()?;
         if windows_status.installed {
             crate::service::windows_service::start()?;
-            for _ in 0..200 {
+            let deadline = Instant::now() + SERVICE_LIFECYCLE_TIMEOUTS.startup;
+            while Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(300));
                 if service_status_snapshot(root)?.running {
                     return Ok(format!(
@@ -2552,7 +2553,10 @@ pub fn start_background(root: &Path) -> Result<String> {
                     ));
                 }
             }
-            anyhow::bail!("CTOX Windows service did not become healthy within 60 seconds");
+            anyhow::bail!(
+                "CTOX Windows service did not become healthy within {:?}",
+                SERVICE_LIFECYCLE_TIMEOUTS.startup
+            );
         }
     }
     let _systemd_cache_guard = SystemdCacheInvalidator;
@@ -2572,11 +2576,11 @@ pub fn start_background(root: &Path) -> Result<String> {
         // SQLite migrations, model registry boot).  The previous 6 s
         // timeout silently returned `Ok` when the service had not actually
         // come up, leaving the caller (the upgrade pipeline) believing
-        // the daemon was running while production stayed down.  60 s with
-        // a hard error on miss closes that silent-failure window.
-        let attempts: usize = 200;
+        // the daemon was running while production stayed down. Share the
+        // cold bring-up budget with the release-switch stop path.
+        let deadline = Instant::now() + SERVICE_LIFECYCLE_TIMEOUTS.startup;
         let interval = Duration::from_millis(300);
-        for _ in 0..attempts {
+        while Instant::now() < deadline {
             thread::sleep(interval);
             let status = service_status_snapshot(root)?;
             if status.running {
@@ -2588,7 +2592,7 @@ pub fn start_background(root: &Path) -> Result<String> {
         }
         anyhow::bail!(
             "CTOX systemd service did not come up within {:?} of `systemctl --user start {}`. Inspect `journalctl --user -u {}` for the boot failure.",
-            interval * (attempts as u32),
+            SERVICE_LIFECYCLE_TIMEOUTS.startup,
             SYSTEMD_USER_UNIT_NAME,
             SYSTEMD_USER_UNIT_NAME,
         );
@@ -2603,9 +2607,9 @@ pub fn start_background(root: &Path) -> Result<String> {
         cleanup_stale_service_runtime(root)?;
         let _ = launchd_bootout();
         launchd_bootstrap_and_start(root)?;
-        let attempts: usize = 200;
+        let deadline = Instant::now() + SERVICE_LIFECYCLE_TIMEOUTS.startup;
         let interval = Duration::from_millis(300);
-        for _ in 0..attempts {
+        while Instant::now() < deadline {
             thread::sleep(interval);
             let status = service_status_snapshot(root)?;
             if status.running {
@@ -2617,7 +2621,7 @@ pub fn start_background(root: &Path) -> Result<String> {
         }
         anyhow::bail!(
             "CTOX launchd service did not come up within {:?} of `launchctl kickstart {}`. Inspect `launchctl print {}/{}` and {} for the boot failure.",
-            interval * (attempts as u32),
+            SERVICE_LIFECYCLE_TIMEOUTS.startup,
             launchd_target_label(),
             launchd_user_domain(),
             LAUNCHD_USER_LABEL,
@@ -2728,6 +2732,16 @@ pub fn stop_background_guarded(root: &Path, force: bool) -> Result<String> {
 }
 
 pub fn stop_background(root: &Path) -> Result<String> {
+    stop_background_with_timeout(root, SERVICE_LIFECYCLE_TIMEOUTS.shutdown)
+}
+
+/// Upgrade-only budget; the app-task admission guard is never bypassed.
+pub fn stop_background_for_release_switch_guarded(root: &Path) -> Result<String> {
+    ensure_background_stop_allowed(root)?;
+    stop_background_with_timeout(root, SERVICE_LIFECYCLE_TIMEOUTS.release_switch_shutdown())
+}
+
+fn stop_background_with_timeout(root: &Path, shutdown_timeout: Duration) -> Result<String> {
     #[cfg(windows)]
     {
         let windows_status = crate::service::windows_service::status()?;
@@ -2736,13 +2750,14 @@ pub fn stop_background(root: &Path) -> Result<String> {
                 return Ok("CTOX Windows service is already stopped.".to_string());
             }
             crate::service::windows_service::stop()?;
-            for _ in 0..100 {
+            let deadline = Instant::now() + shutdown_timeout;
+            while Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(150));
                 if !crate::service::windows_service::status()?.running {
                     return Ok("CTOX Windows service stopped.".to_string());
                 }
             }
-            anyhow::bail!("CTOX Windows service did not stop within 15 seconds");
+            anyhow::bail!("CTOX Windows service did not stop within {shutdown_timeout:?}");
         }
     }
     let _systemd_cache_guard = SystemdCacheInvalidator;
@@ -2757,7 +2772,9 @@ pub fn stop_background(root: &Path) -> Result<String> {
         let had_systemd_service = systemd.active || systemd.enabled || systemd.pid.is_some();
         let mut systemd_failures = Vec::new();
         if systemd.active || systemd.enabled {
-            if let Err(err) = systemctl_user(["stop", SYSTEMD_USER_UNIT_NAME]) {
+            // Queue the stop without the five-second systemctl client limit
+            // interrupting a cold daemon; the bounded residue poll owns waiting.
+            if let Err(err) = systemctl_user(["--no-block", "stop", SYSTEMD_USER_UNIT_NAME]) {
                 systemd_failures.push(format!("systemd stop: {err}"));
             }
             if let Err(err) = systemctl_user(["disable", SYSTEMD_USER_UNIT_NAME]) {
@@ -2770,7 +2787,7 @@ pub fn stop_background(root: &Path) -> Result<String> {
         }
         let cleaned = cleanup_orphan_service_processes(root, None)?;
         let cleaned_surfaces = cleanup_orphan_business_os_surface_processes(root)?;
-        if wait_for_service_shutdown(root, Duration::from_secs(SERVICE_SHUTDOWN_TIMEOUT_SECS))? {
+        if wait_for_service_shutdown(root, shutdown_timeout)? {
             if !supervisor::persistent_backends_idle(root)? {
                 anyhow::bail!(
                     "CTOX service stop did not complete cleanly: {}",
@@ -2824,7 +2841,7 @@ pub fn stop_background(root: &Path) -> Result<String> {
         }
         let cleaned = cleanup_orphan_service_processes(root, None)?;
         let cleaned_surfaces = cleanup_orphan_business_os_surface_processes(root)?;
-        if wait_for_service_shutdown(root, Duration::from_secs(SERVICE_SHUTDOWN_TIMEOUT_SECS))? {
+        if wait_for_service_shutdown(root, shutdown_timeout)? {
             if !supervisor::persistent_backends_idle(root)? {
                 anyhow::bail!(
                     "CTOX service stop did not complete cleanly: {}",
@@ -2874,7 +2891,7 @@ pub fn stop_background(root: &Path) -> Result<String> {
                 .set("content-type", "application/json")
                 .send_string("{}");
         }
-        if wait_for_service_shutdown(root, Duration::from_secs(SERVICE_SHUTDOWN_TIMEOUT_SECS))? {
+        if wait_for_service_shutdown(root, shutdown_timeout)? {
             return Ok("CTOX service stopped.".to_string());
         }
     }
@@ -2900,7 +2917,7 @@ pub fn stop_background(root: &Path) -> Result<String> {
     if let Some(err) = preflight_backend_shutdown_error.as_ref() {
         eprintln!("ctox preflight backend shutdown reported residue: {err}");
     }
-    if wait_for_service_shutdown(root, Duration::from_secs(SERVICE_SHUTDOWN_TIMEOUT_SECS))? {
+    if wait_for_service_shutdown(root, shutdown_timeout)? {
         if !supervisor::persistent_backends_idle(root)? {
             anyhow::bail!(
                 "CTOX service stop did not complete cleanly: {}",
