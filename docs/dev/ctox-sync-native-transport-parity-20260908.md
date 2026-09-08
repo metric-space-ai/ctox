@@ -15,6 +15,33 @@ SHA256 is `184f540331b64132fc28a2eaae7aae09baadfc3c6e6eb0dbda2110b9355bd9e6`.
 The strengthened rollback-trigger test added after this source is not covered
 by this result.
 
+The subsequent [run 34246138597](https://github.com/metric-space-ai/ctox/actions/runs/34246138597)
+at source `0f798f17300c6ed47d81e5231ed4ba361fe67542` passes both native
+platforms, the 12 completion tests and six transaction tests, including the
+stronger linked-projection rollback trigger. Its warm budget remains red:
+30 complete samples, p50 **432 ms**, p95 **544.35 ms**. All 21 collections
+complete in 34.593 / 43.070 / 18.633 seconds across the reloads.
+The exact built merge is `b40cd16590f984746eeb11aa7f37e3a515b9c760`;
+binary SHA256 is
+`ad3f9c68a28bb815f4eeb96ea19c940429bf4a80beb4960bce3e9eca4f485e7b`.
+
+Main `365927a3ce666927d3b9173626f567673f6f98cb` is integrated before the
+current context-submit change. The global context form now presents its pending
+chat through the existing chat submission handler before backend acceptance;
+the old dispatch-then-open sequence is removed. Crew identity, command ID,
+authorization and object context are retained. The targeted facade test and
+75 existing chat tests pass locally, as do the static shell contract and
+data-plane guards. These are not end-to-end acceptance.
+
+CI now includes the existing shell geometry and chat behavior harnesses and
+the real browser/native context action scenario, with a new **150 ms**
+submission-to-visible-prompt gate. This gate and the current source's actual
+browser/native behavior remain unverified. Local browser and Rust runs are
+deferred because the shared capacity gate rejects insufficient tmp space and
+high swap use. No tenant is upgraded; PR #69 remains draft. Generic draft/open
+hydration, database lifecycle recovery and the architecture-wide acceptance
+criteria remain open.
+
 The command-scoped writer and deferred queue-store attachment preserve core
 claim/idempotency, outbox and projection ordering. Their 30-sample subphase
 medians are initial RxDB projection 49.293 ms, core completion 8.741 ms,

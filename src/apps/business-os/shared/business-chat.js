@@ -563,6 +563,12 @@ export function initBusinessChat({
     if (createNewChat) state.chats.push(chat);
     if (detail.title) chat.title = String(detail.title).trim() || chat.title;
     chat.contextMeta = chatContextMetaFromDetail(detail);
+    const handedMember = String(detail.crew_member_id || detail.crewMemberId || '').trim();
+    if (handedMember) {
+      chat.crew_member_id = handedMember;
+      const identity = detail.crew_identity || detail.crewIdentity || (state.crewMembers || []).find((member) => member.id === handedMember);
+      if (identity?.name) chat.crewIdentity = { name: String(identity.name), shape: String(identity.shape || ''), color: String(identity.color || '') };
+    }
     markChatExpandedByUser(state, chat, presentationTicket);
     focusChatForUser(state, chat);
     chat.draft = '';
@@ -579,6 +585,7 @@ export function initBusinessChat({
         onPending: () => {
           persistChatState({ state, db, remote: false }).catch(() => {});
           renderChatRoot({ root, state, commandBus, db, getActiveModule });
+          detail.onPresented?.({ command_id: chat.lastTrackingId });
         },
       });
       if (!submission) {

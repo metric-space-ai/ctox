@@ -1,14 +1,14 @@
-import { CtoxResizer } from './shared/resizer.js?v=20260908-shell-v2-crew-language-v354';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260908-shell-v2-crew-language-v354';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260908-shell-v2-crew-language-v354';
-import { createAppActions } from './shared/app-actions.js?v=20260908-shell-v2-crew-language-v354';
+import { CtoxResizer } from './shared/resizer.js?v=20260908-shell-v2-context-submit-v355';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260908-shell-v2-context-submit-v355';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260908-shell-v2-context-submit-v355';
+import { createAppActions } from './shared/app-actions.js?v=20260908-shell-v2-context-submit-v355';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/app-lifecycle.js?v=20260908-shell-v2-context-submit-v355';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -16,20 +16,20 @@ import {
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/permissions.js?v=20260908-shell-v2-context-submit-v355';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260908-shell-v2-crew-language-v354';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/branding.js?v=20260908-shell-v2-context-submit-v355';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260908-shell-v2-context-submit-v355';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/presentation.js?v=20260908-shell-v2-context-submit-v355';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -40,9 +40,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260908-shell-v2-crew-language-v354';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260908-shell-v2-crew-language-v354';
-import { createDocumentsFacade } from './shared/documents.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/shell-permissions-ui.js?v=20260908-shell-v2-context-submit-v355';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260908-shell-v2-context-submit-v355';
+import { createDocumentsFacade } from './shared/documents.js?v=20260908-shell-v2-context-submit-v355';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -50,16 +50,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/maintenance-state.js?v=20260908-shell-v2-context-submit-v355';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/workspace-session.js?v=20260908-shell-v2-context-submit-v355';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/taskbar-pins.js?v=20260908-shell-v2-context-submit-v355';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -67,9 +67,9 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260908-shell-v2-crew-language-v354';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260908-shell-v2-crew-language-v354';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260908-shell-v2-crew-language-v354';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260908-shell-v2-context-submit-v355';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260908-shell-v2-context-submit-v355';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260908-shell-v2-context-submit-v355';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -84,7 +84,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260908-shell-v2-crew-language-v354';
+const APP_BUILD = '20260908-shell-v2-context-submit-v355';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -7559,7 +7559,7 @@ function createContextActionsFacade(moduleLike) {
       const extraClientContext = options.client_context && typeof options.client_context === 'object'
         ? options.client_context
         : {};
-      return state.commandBus.dispatch({
+      const command = {
         id: commandId,
         command_id: commandId,
         module: moduleId,
@@ -7594,7 +7594,15 @@ function createContextActionsFacade(moduleLike) {
           ...(options.visible_scope ? { visible_scope: options.visible_scope } : {}),
           ...(options.actor ? { actor: options.actor } : {}),
         },
-      }, { until: 'local' });
+      };
+      if (options.openChat === true) {
+        return submitBusinessChatTask(moduleLike, {
+          ...command,
+          onPresented: options.onPresented,
+          crew_identity: options.crew_identity,
+        });
+      }
+      return state.commandBus.dispatch(command, { until: 'local' });
     },
   });
 }
@@ -7741,6 +7749,9 @@ async function submitBusinessChatTask(moduleLike, options = {}) {
       window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
         detail: {
           resolveSubmission: (submission) => finish(resolve, submission),
+          onPresented: options.onPresented,
+          crew_member_id: payload.crew_member_id || '',
+          crew_identity: options.crew_identity || null,
           rejectSubmission: (error) => finish(reject, error instanceof Error ? error : new Error(String(error || 'Task konnte nicht übergeben werden.'))),
         text: prompt,
         title,
@@ -15316,7 +15327,10 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
     }
 
     try {
-      const result = await createContextActionsFacade(mod).dispatch(mode, {
+      await createContextActionsFacade(mod).dispatch(mode, {
+        openChat: true,
+        onPresented: hideGlobalCtoxContextMenu,
+        crew_identity: crew?.id ? { name: crew.name, shape: crew.shape, color: crew.color } : null,
         context,
         prompt: instruction,
         title,
@@ -15336,16 +15350,6 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
         },
         visible_scope: agentScope,
         actor: agentScope.actor,
-      });
-      openBusinessChat({
-        title,
-        module: mod.id,
-        source_module: mod.id,
-        record_id: context.record_id || mod.id,
-        command_id: result?.command_id || result?.id || '',
-        thread_key: `business-os/${mod.id}/${context.record_id || 'module'}`,
-        reuseActive: false,
-        ...(crew?.id ? { crew_member_id: crew.id, crew_identity: { name: crew.name, shape: crew.shape, color: crew.color } } : {}),
       });
       hideGlobalCtoxContextMenu();
     } catch (error) {

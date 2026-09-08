@@ -1223,6 +1223,28 @@ flush order, follower failover deadlines and the WebRTC-only data path are
 unchanged. The reconnect race is covered by `command-bus-projection-smoke.mjs`
 and the pending chat message by `shared/business-chat.test.mjs`.
 
+### Context prompt presentation and command acceptance
+
+The global context action can bind its existing command to the existing
+Business Chat submission handler. The handler renders the pending prompt and
+then calls `onPresented` to close the context menu, before awaiting command
+acceptance. This callback is only a presentation signal. The command keeps its
+ID, actor, visible scope, object context and selected crew member; no second
+dispatch or subsequent chat-open event is needed. Non-presentational context
+actions retain their local-receipt contract.
+
+The real `business-os-threads-rightclick-ui` browser/native scenario measures
+from form submission through a visible active chat containing the prompt,
+a closed context menu and two animation frames. It requires this presentation
+measurement to stay below 150 ms and retains its native command and permission
+assertions. This is separate from the warm end-to-end command p50 below
+300 ms. The new browser measurement has not yet passed; the focused facade
+contract test is not a substitute for it.
+
+The generic draft/open handler still waits for chat and crew hydration.
+This change does not establish its responsiveness, database lifecycle
+recovery or critical-collection boot p95 below five seconds.
+
 ## 11. Test map
 
 ### 10.1 Browser suite (`src/apps/business-os/rxdb/tests/`)

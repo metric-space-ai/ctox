@@ -11119,7 +11119,30 @@ function ensureCtoxSmokeBinary() {
           }
           textarea.value = message;
           textarea.dispatchEvent(new Event('input', { bubbles: true }));
+          const submittedAt = performance.now();
           form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+          if (!needsApproval) {
+            await waitFor(() => {
+              const promptWindow = [...document.querySelectorAll('.ctox-chat-window.is-active')]
+                .find((element) => element.textContent.includes(message));
+              const rect = promptWindow?.getBoundingClientRect();
+              const style = promptWindow ? getComputedStyle(promptWindow) : null;
+              return {
+                ok: Boolean(rect && rect.width > 0 && rect.height > 0
+                  && rect.bottom > 0 && rect.top < innerHeight
+                  && rect.right > 0 && rect.left < innerWidth
+                  && style.display !== 'none' && style.visibility !== 'hidden'
+                  && Number(style.opacity) > 0
+                  && !document.querySelector('.ctox-global-context-menu:not([hidden])')),
+              };
+            }, 5000, 'context prompt visible before native receipt');
+            await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const firstPaintMs = performance.now() - submittedAt;
+            console.log('context_prompt_first_paint=' + JSON.stringify({ mode, firstPaintMs }));
+            if (firstPaintMs >= 150) {
+              throw new Error(`Context prompt first paint exceeded 150ms: ${firstPaintMs.toFixed(1)}ms`);
+            }
+          }
           await waitFor(() => ({
             ok: !document.querySelector('.ctox-global-context-menu:not([hidden])'),
             status: document.querySelector('.ctox-global-context-menu .ctox-context-status')?.textContent?.trim() || '',

@@ -203,6 +203,29 @@ jobs:
             | tee "$RUNNER_TEMP/ctox-host-proof/command-completion-tests.log"
           cargo test --locked --bin ctox -- mission::channels::tests::business_command mission::channels::tests::business_control --test-threads=2 \
             | tee "$RUNNER_TEMP/ctox-host-proof/command-transaction-tests.log"
+      - name: Shell and chat presentation regressions
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          node src/apps/business-os/scripts/assert-shell-v2-contract.mjs
+          node src/apps/business-os/scripts/shell-v2-geometry-lab.mjs \
+            --apps ctox --widths 1180,1000,720 \
+            --output-dir "$RUNNER_TEMP/ctox-host-proof/shell-geometry"
+          BUSINESS_CHAT_BEHAVIOR_OUTPUT_DIR="$RUNNER_TEMP/ctox-host-proof/chat-behavior" \
+            node src/apps/business-os/scripts/assert-business-chat-behavior.mjs
+      - name: Context prompt first paint and authorized native command
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -o pipefail
+          CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox" \
+            SMOKE_MODE=business-os-threads-rightclick-ui SMOKE_PAGE_PATH=/index.html \
+            BUSINESS_PORT=8879 SIGNALING_PORT=18878 \
+            SMOKE_PROCESS_LIFECYCLE_PATH="$RUNNER_TEMP/ctox-host-proof/context-chat-processes.json" \
+            node src/core/rxdb/tools/browser_rust_smoke.js \
+            | tee "$RUNNER_TEMP/ctox-host-proof/context-chat-browser.log"
       - name: Measure warm Browser-WebRTC-CTOX command roundtrips
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         timeout-minutes: 10
