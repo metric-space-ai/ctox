@@ -136,6 +136,13 @@ start without a WebRTC-capable sync contract — `createSyncRuntime` throws
 
 **Any HTTP fallback for these records is a regression, not a feature.**
 
+The shell readiness mapping applies the same rule. Obsolete
+`httpBridgeStatus`/`httpBridgePulledAt` fields cannot establish initial
+replication, streaming readiness or an advertised checkpoint epoch. Their
+unused acceptance branches have been removed. The
+`shell-webrtc-readiness-smoke.mjs` regression executes the actual shell mapping
+against obsolete HTTP diagnostics and valid native WebRTC diagnostics.
+
 This is mechanically enforced by
 `src/apps/business-os/rxdb/tests/data-plane-guard-smoke.mjs`, a ratchet guard
 whose allowlist may only change with an explicit architecture decision
