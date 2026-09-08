@@ -3792,6 +3792,19 @@ function trackButtonLabel(message) {
 function friendlyCrewMessage(text) {
   const value = String(text || '');
   const de = chatUiIsGerman();
+  if (value === 'Aufgabe in der CTOX Queue angelegt. Fortschritt und Antwort erscheinen hier.') {
+    return de ? 'Die Crew hat deine Aufgabe erhalten. Fortschritt und Antwort erscheinen hier.'
+      : 'The crew has received your task. Progress and the reply will appear here.';
+  }
+  if (/^CTOX konnte die Aufgabe nicht ausführen: CTOX chat could not continue because the model API is (temporarily unavailable|rate-limited)\./.test(value)) {
+    return /rate-limited/.test(value)
+      ? (de ? 'Die Crew konnte die Aufgabe nicht abschließen: Der Modelldienst hat zu viele Anfragen erhalten.' : 'The crew could not complete the task: The model service received too many requests.')
+      : (de ? 'Die Crew konnte die Aufgabe nicht abschließen: Der Modelldienst war nicht erreichbar.' : 'The crew could not complete the task: The model service was unavailable.');
+  }
+  if (/^Der Versuch wird wiederholt: Harness retry feedback injected after runtime failure: direct session (error|timeout)/.test(value)) {
+    return de ? 'Die Crew versucht es erneut. Die Verbindung zum Modelldienst wurde unterbrochen.'
+      : 'The crew is trying again. The connection to the model service was interrupted.';
+  }
   if (/^Task angelegt und in der CTOX Queue\.(?: Antwort erscheint hier, sobald (?:CTOX ihn|der CTOX Service ihn) verarbeitet\.)?$/.test(value)) {
     return de
       ? 'Deine Aufgabe steht auf der Aufgabenliste. Die Antwort erscheint hier, sobald die Crew sie bearbeitet hat.'

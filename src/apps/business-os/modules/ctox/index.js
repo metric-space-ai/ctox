@@ -1,6 +1,6 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260909-shell-v2-crew-compact-v356';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260909-shell-v2-crew-compact-v357';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
 
@@ -20,7 +20,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260909-shell-v2-crew-compact-v356';
+const CTOX_STYLE_BUILD = '20260909-shell-v2-crew-compact-v357';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -2325,6 +2325,9 @@ function taskStatusSteps(task, state) {
 function renderMain(state) {
   const t = labels[state.lang];
   const model = state.model;
+  // Locale readiness can arrive before the first data hydration. Keep the
+  // existing loading surface until the model is available.
+  if (!model) return;
   const timelineIndex = clampIndex(state.selectedStepIndex, model.timeline.length);
   const selectedTask = getSelectedTask(state);
   const taskStepView = selectedTask ? selectedTaskStepView(selectedTask, state) : null;
@@ -3210,6 +3213,9 @@ function buildInboundChannels(tasks, accounts = []) {
   for (const account of accounts || []) {
     if (!account?.channel || account._deleted === true || account.is_deleted === true || account.enabled === false) continue;
     const key = normalizeInboundChannel(account.channel);
+    // Native accounts also contain internal scheduling routes; those are not
+    // communication adapters, matching the native channel summary.
+    if (['queue', 'cron', 'plan'].includes(key)) continue;
     // A task's module is provenance, not an installed communication adapter.
     if (!channels.has(key)) channels.set(key, { id: key, label: inboundChannelLabel(key), count: 0, active: false });
   }
@@ -3478,7 +3484,7 @@ function taskDrawer(task, state, { editorOnly = false } = {}) {
   const summary = taskDetailText(itemSummary(task) || '', state);
   const resultSummaryText = String(task.resultSummary || '').trim() === promptField.text
     ? '' : taskDetailText(task.resultSummary || '', state);
-  const target = displayPathLike(task.target || task.commandId || task.taskId || '');
+
   const sourceLine = [
     displayWorkSource(task.source || task.moduleId || 'ctox'),
     formatShortTimestamp(task.createdAt || task.startedAt || task.timestamp),
@@ -3502,7 +3508,7 @@ function taskDrawer(task, state, { editorOnly = false } = {}) {
     <section class="ctox-callout ${['blocked', 'failed'].includes(normalizeCommandStatus(task.routeStatus || task.status)) ? 'is-danger' : 'is-info'} ctox-task-status-strip">
       <div>
         <strong class="ctox-badge ${statusBadgeVariant(statusClass(task.routeStatus || task.status))}">${escapeHtml(displayStatus(task.routeStatus || task.status, state.lang))}</strong>
-        ${target ? `<small>${escapeHtml(target)}</small>` : ''}
+
       </div>
       ${taskSummaryReason(task, state) ? `<p class="ctox-task-reason-line">${escapeHtml(taskSummaryReason(task, state))}</p>` : ''}
       ${taskLeaseLineMarkup(task, state)}
@@ -3536,7 +3542,7 @@ function taskDrawer(task, state, { editorOnly = false } = {}) {
         <label class="ctox-task-edit-field">
           <span class="ctox-field-label">${escapeHtml(t.priority)}</span>
           <select class="ctox-select" name="priority" ${canModifyCtoxApp(state) ? '' : 'disabled'}>
-            ${['urgent', 'high', 'normal', 'low'].map((priority) => `<option value="${priority}" ${String(task.priority || 'normal') === priority ? 'selected' : ''}>${escapeHtml(displayPriority(priority))}</option>`).join('')}
+            ${['urgent', 'high', 'normal', 'low'].map((priority) => `<option value="${priority}" ${String(task.priority || 'normal') === priority ? 'selected' : ''}>${escapeHtml(displayPriority(priority, state.lang))}</option>`).join('')}
           </select>
         </label>
       </div>
@@ -3637,11 +3643,10 @@ function taskLeaseLineMarkup(task, state) {
   const memberBit = member
     ? `<button type="button" class="ctox-task-member" data-open-crew-member="${escapeAttr(member.id)}"><span class="ctox-flow-creature-shell ctox-task-member-portrait">${memberCreatureHtml(member, state)}</span>${escapeHtml(task.crewMemberId === member.id ? member.name : `${t.assignedTo} ${member.name}`)}</button>`
     : '';
-  if (task.leaseOwner) bits.push(`${t.leaseOwner}: ${task.leaseOwner}${task.leaseExpiresAt ? ` (${t.until} ${formatClockTime(task.leaseExpiresAt)})` : ''}`);
+
   if (Number.isFinite(task.attempt) && task.attempt > 0) bits.push(`${t.attemptLabel} ${task.attempt}`);
   if (!bits.length && !memberBit) return '';
-  const selection = taskSelectionSentence(task, state);
-  return `<small class="ctox-task-lease-line">${memberBit}${bits.map((bit) => `<span>${escapeHtml(bit)}</span>`).join('')}</small>${selection ? `<small class="ctox-task-selection-line">${escapeHtml(selection)}</small>` : ''}`;
+  return `<small class="ctox-task-lease-line">${memberBit}${bits.map((bit) => `<span>${escapeHtml(bit)}</span>`).join('')}</small>`;
 }
 
 function canResumeCtoxTask(task) {
@@ -6631,9 +6636,11 @@ function displayPathLike(value) {
   return displayWorkSource(value);
 }
 
-function displayPriority(priority) {
-  const labelsByPriority = { urgent: 'Urgent', high: 'High', normal: 'Normal', low: 'Low' };
-  return labelsByPriority[priority] || displayStatus(priority, 'en');
+function displayPriority(priority, lang = 'de') {
+  const labelsByPriority = lang === 'en'
+    ? { urgent: 'Urgent', high: 'High', normal: 'Normal', low: 'Low' }
+    : { urgent: 'Dringend', high: 'Hoch', normal: 'Normal', low: 'Niedrig' };
+  return labelsByPriority[priority] || displayStatus(priority, lang);
 }
 
 const HOLD_REASON_KEYS = {
@@ -6697,7 +6704,12 @@ function taskSummaryReason(task, state) {
 }
 
 function taskDiagnosticMarkup(task, state) {
-  const note = String(task.statusNote || task.error || '').trim();
+  const note = [
+    task.statusNote || task.error,
+    taskSelectionSentence(task, state),
+    task.leaseOwner ? `${labels[state.lang].leaseOwner}: ${task.leaseOwner}` : '',
+    task.target || task.commandId || task.taskId,
+  ].map(value => String(value || '').trim()).filter(Boolean).join('\n\n');
   if (!note) return '';
   return `<details class="ctox-task-diagnostics"><summary>${state.lang === 'de' ? 'Technische Details' : 'Technical details'}</summary><pre>${escapeHtml(note)}</pre></details>`;
 }
@@ -6854,6 +6866,7 @@ function escapeAttr(value) {
 }
 
 export const __ctoxTestHooks = {
+  taskLeaseLineMarkup,
   taskPromptDisplay,
   aggregateFlowMetrics,
   crewHomeMarkup,
