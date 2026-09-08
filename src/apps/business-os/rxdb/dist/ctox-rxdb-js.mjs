@@ -4299,6 +4299,7 @@ var CtoxWebRtcNativePeer = class {
       sequence: queue.nextSequence++
     });
     queue.queuedBytes += itemBytes;
+    if (item.inline && item.priority === "high") queue.controlWake?.();
     this.recordTransportStatus({
       queuedFrames: this.transportStats.queuedFrames + 1,
       lastSendPriority: item.priority
@@ -4447,20 +4448,26 @@ var CtoxWebRtcNativePeer = class {
         return { ok: false, error };
       }
     );
-    while (!settled && this.connections.get(connection.remotePeerId) === connection && connection.channel?.readyState === "open") {
-      const result2 = await Promise.race([
-        wrapped,
-        delay(50).then(() => null)
-      ]);
-      if (result2) {
-        if (result2.ok) return result2.value;
-        throw result2.error;
+    const queue = connection.sendQueue;
+    if (!queue) return ackPromise;
+    try {
+      while (!settled && this.connections.get(connection.remotePeerId) === connection && connection.channel?.readyState === "open") {
+        const enqueued = new Promise((resolve) => {
+          queue.controlWake = resolve;
+        });
+        await this.drainHighPriorityInlineFrames(connection);
+        const result2 = await Promise.race([wrapped, enqueued.then(() => null)]);
+        if (result2) {
+          if (result2.ok) return result2.value;
+          throw result2.error;
+        }
       }
-      await this.drainHighPriorityInlineFrames(connection);
+      const result = await wrapped;
+      if (result.ok) return result.value;
+      throw result.error;
+    } finally {
+      queue.controlWake = null;
     }
-    const result = await wrapped;
-    if (result.ok) return result.value;
-    throw result.error;
   }
   async drainHighPriorityInlineFrames(connection) {
     const queue = connection.sendQueue;
@@ -5829,6 +5836,9 @@ var CtoxWebRtcNativePeer = class {
     globalThis.CTOX_RXDB_AUX_STATUS = auxiliary;
     const base = {
       ...this.transportStats,
+      pageHidden: globalThis.document?.hidden === true,
+      // Evidence of a delayed page timer, not proof that Chrome caused it.
+      throttled: globalThis.document?.hidden === true && Number(this.transportStats.lastPageTimerDelayMs || 0) >= 750 && Date.now() - Number(this.transportStats.lastPageTimerSampleAtMs || 0) < 3e4,
       collection: collectionNameFromTopic(this.options.room),
       topic: this.options.room,
       localSignalingPeerId: this.localSignalingPeerId || null,
@@ -5932,12 +5942,16 @@ var CtoxWebRtcNativePeer = class {
       return;
     }
     if (this.transportStatusEmitTimer) return;
+    const waitMs = Math.max(0, TRANSPORT_STATUS_EMIT_MIN_INTERVAL_MS - elapsed);
+    const expectedAtMs = now + waitMs;
     this.transportStatusEmitTimer = setTimeout(() => {
       this.transportStatusEmitTimer = null;
       if (this.closed) return;
       this.lastTransportStatusEmitAtMs = Date.now();
+      this.transportStats.lastPageTimerDelayMs = Math.max(0, this.lastTransportStatusEmitAtMs - expectedAtMs);
+      this.transportStats.lastPageTimerSampleAtMs = this.lastTransportStatusEmitAtMs;
       this.events.emit("transport-status", this.getTransportStatus());
-    }, Math.max(0, TRANSPORT_STATUS_EMIT_MIN_INTERVAL_MS - elapsed));
+    }, waitMs);
   }
   refreshSendQueueStatus(connection = null) {
     let high = 0;

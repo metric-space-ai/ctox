@@ -401,6 +401,9 @@ export class CtoxWebRtcNativePeer {
       sequence: queue.nextSequence++,
     });
     queue.queuedBytes += itemBytes;
+    // ACKs arriving during a bulk send must wake the control drain directly.
+    // Page timers can be throttled in a hidden tab, even with an open channel.
+    if (item.inline && item.priority === 'high') queue.controlWake?.();
     this.recordTransportStatus({
       queuedFrames: this.transportStats.queuedFrames + 1,
       lastSendPriority: item.priority,
@@ -555,20 +558,26 @@ export class CtoxWebRtcNativePeer {
         return { ok: false, error };
       },
     );
-    while (!settled && this.connections.get(connection.remotePeerId) === connection && connection.channel?.readyState === 'open') {
-      const result = await Promise.race([
-        wrapped,
-        delay(50).then(() => null),
-      ]);
-      if (result) {
-        if (result.ok) return result.value;
-        throw result.error;
+    const queue = connection.sendQueue;
+    // Direct sendFramed callers have no scheduler to drain.
+    if (!queue) return ackPromise;
+    try {
+      while (!settled && this.connections.get(connection.remotePeerId) === connection && connection.channel?.readyState === 'open') {
+        // Arm before draining: an enqueue during the await must not be lost.
+        const enqueued = new Promise((resolve) => { queue.controlWake = resolve; });
+        await this.drainHighPriorityInlineFrames(connection);
+        const result = await Promise.race([wrapped, enqueued.then(() => null)]);
+        if (result) {
+          if (result.ok) return result.value;
+          throw result.error;
+        }
       }
-      await this.drainHighPriorityInlineFrames(connection);
+      const result = await wrapped;
+      if (result.ok) return result.value;
+      throw result.error;
+    } finally {
+      queue.controlWake = null;
     }
-    const result = await wrapped;
-    if (result.ok) return result.value;
-    throw result.error;
   }
 
   async drainHighPriorityInlineFrames(connection) {
@@ -2112,6 +2121,11 @@ export class CtoxWebRtcNativePeer {
     globalThis.CTOX_RXDB_AUX_STATUS = auxiliary;
     const base = {
       ...this.transportStats,
+      pageHidden: globalThis.document?.hidden === true,
+      // Evidence of a delayed page timer, not proof that Chrome caused it.
+      throttled: globalThis.document?.hidden === true
+        && Number(this.transportStats.lastPageTimerDelayMs || 0) >= 750
+        && Date.now() - Number(this.transportStats.lastPageTimerSampleAtMs || 0) < 30_000,
       collection: collectionNameFromTopic(this.options.room),
       topic: this.options.room,
       localSignalingPeerId: this.localSignalingPeerId || null,
@@ -2224,12 +2238,16 @@ export class CtoxWebRtcNativePeer {
       return;
     }
     if (this.transportStatusEmitTimer) return;
+    const waitMs = Math.max(0, TRANSPORT_STATUS_EMIT_MIN_INTERVAL_MS - elapsed);
+    const expectedAtMs = now + waitMs;
     this.transportStatusEmitTimer = setTimeout(() => {
       this.transportStatusEmitTimer = null;
       if (this.closed) return;
       this.lastTransportStatusEmitAtMs = Date.now();
+      this.transportStats.lastPageTimerDelayMs = Math.max(0, this.lastTransportStatusEmitAtMs - expectedAtMs);
+      this.transportStats.lastPageTimerSampleAtMs = this.lastTransportStatusEmitAtMs;
       this.events.emit('transport-status', this.getTransportStatus());
-    }, Math.max(0, TRANSPORT_STATUS_EMIT_MIN_INTERVAL_MS - elapsed));
+    }, waitMs);
   }
 
   refreshSendQueueStatus(connection = null) {
