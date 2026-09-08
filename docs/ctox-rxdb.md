@@ -1306,8 +1306,16 @@ document admission because its actor differs from the existing WebRTC peer.
 The fixture switches session globals and command capabilities without
 replacing the authenticated peer. Do not weaken native same-actor checks
 or accept a missing failed-command projection as successful authorization
-testing. The role/peer setup must be corrected before this scenario can
-accept prompt performance. Its separate actual warm-command fixture has
+testing. The corrected fixture uses two clean persistent browser profiles
+with separate native-issued bearer capabilities on the fixture's own HTTP
+origin. Each shell bootstraps its actual server-verified actor and opens its
+own WebRTC peer. Requester commands remain on the requester profile; native
+projections, reviewer notification, approval UI and decision are checked on
+the reviewer profile. No browser session globals are overwritten. The old
+inline actor-switch implementation is removed into a dedicated two-peer
+fixture; native permission assertions and the 150 ms gate remain intact.
+Execution of this fixture is pending. This tests managed bearer identity,
+not password-login/logout acceptance. Its separate actual warm-command fixture has
 30 complete samples with p50 369.5 ms and p95 525.95 ms, still failing the
 300 ms gate. All 21 collections complete in 34.951 / 42.754 / 17.497 s
 across reload/restart; this does not establish critical-boot p95 below 5 s.

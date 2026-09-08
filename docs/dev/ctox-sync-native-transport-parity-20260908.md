@@ -241,6 +241,20 @@ actor; the fixture waits in vain for a command-plane role-denial projection.
 This requires a correctly authenticated actor/peer fixture, not relaxed
 server authorization. The prompt first-paint gate is still unmeasured there.
 
+The following fixture correction moves the requester/reviewer browser bodies
+into `tools/threads_rightclick_peers.js`. Two fresh persistent profiles
+bootstrap through the existing native capability bearer authentication.
+Authorization headers are attached only to the fixture's own HTTP origin;
+records and commands retain their WebRTC path. Each profile must expose its
+expected server-authenticated actor/role and the same instance. The requester
+retains denial, context and prompt assertions. A reviewer-page callback
+checks the durable projections and reviewer notification, renders and clicks
+the approval, and verifies reauthorization. The old session-global/token-cache
+switch is deleted; no native authorization is weakened. Browser warning/error
+evidence includes both peers, with bounded failure screenshots and text.
+This fixture has not yet completed a native run; it does not accept the
+separate password-login/logout or architecture-wide gates.
+
 The same run has 30/30 complete warm commands with no timing issues:
 p50 369.5 ms, p95 525.95 ms (FAIL), min264/max543 ms. Parsed native
 subphase diagnostics have no parse errors. All 21 collections complete
