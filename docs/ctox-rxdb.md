@@ -202,6 +202,26 @@ latency. This proves neither coding-harness execution nor exactly-once external
 effects. The existing Office restart scenarios are separate app acceptance;
 their recovery behavior is not used as evidence for this stricter Sync gate.
 
+Browser demand-query admission also separates a pending handshake from an
+active native query stream. Unauthenticated/unavailable collection transports
+remain in the existing bounded queue (128 requests, 1 MiB of queued envelopes).
+They do not consume the six active stream slots. The scheduler admits the first
+currently ready queued request, rechecks authorization readiness before
+dispatch, and reserves its slot synchronously before another caller can enter.
+A queued peer that loses authorization returns to readiness waiting. Cancellation
+and transport teardown remove only that owner's requests; a later handshake
+cannot revive a removed request. The existing 60-second peer-readiness wait
+remains bounded. Already dispatched requests retain their existing RPC,
+collector and retry behavior.
+
+`query-admission-readiness-smoke.mjs` exercises the built bundle with a simulated
+peer router: blocked handshakes beside a healthy peer, a full waiting queue,
+identical IDs on different transports, abort-before-authentication and loss of
+authorization while queued. This is a component regression, not WebRTC E2E or
+proof of the production latency target. It was added after six unauthenticated
+queries reproducibly occupied all active slots without sending any RPC and
+blocked an already authenticated peer.
+
 The shell readiness mapping applies the same rule. Obsolete
 `httpBridgeStatus`/`httpBridgePulledAt` fields cannot establish initial
 replication, streaming readiness or an advertised checkpoint epoch. Their

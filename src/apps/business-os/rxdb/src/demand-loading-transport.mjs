@@ -224,11 +224,11 @@ export function createDemandLoadingTransport({
           .then(resolve, reject)
           .finally(() => {
             queryStreamState.active = Math.max(0, queryStreamState.active - 1);
-            const next = queryStreamState.queue.shift();
-            if (next) queueMicrotask(typeof next === 'function' ? next : next.run);
+            drainReadyQueryRequests();
           });
       };
-      if (queryStreamState.active < CLIENT_QUERY_STREAM_LIMIT) run();
+      const ready = Boolean(resolvePeerId());
+      if (ready && queryStreamState.active < CLIENT_QUERY_STREAM_LIMIT) run();
       else {
         const queuedBytes = queryStreamState.queue.reduce(
           (total, entry) => total + Math.max(0, Number(entry?.estimatedBytes) || 0),
@@ -244,10 +244,54 @@ export function createDemandLoadingTransport({
           reject(error);
           return;
         }
-        queryStreamState.queue.push({ requestId, run, reject, owner: transportOwner, estimatedBytes });
+        const entry = {
+          requestId, run, reject, owner: transportOwner, estimatedBytes,
+          isReady: () => Boolean(resolvePeerId()), waitingForPeer: false,
+        };
+        queryStreamState.queue.push(entry);
         updatePeaks();
+        entry.waitForReady = () => {
+          if (entry.waitingForPeer) return;
+          entry.waitingForPeer = true;
+          // Pending authorization is admitted within the same count/byte budget,
+          // but cannot occupy a stream slot needed by an already-ready peer.
+          waitForPeerId(AUTHORIZED_PEER_WAIT_TIMEOUT_MS, () => !queryStreamState.queue.includes(entry))
+            .then(peerId => {
+              entry.waitingForPeer = false;
+              const index = queryStreamState.queue.indexOf(entry);
+              if (index < 0) return; // Cancelled, aborted or already removed.
+              if (!peerId) {
+                queryStreamState.queue.splice(index, 1);
+                reject(new Error('PEER_UNAVAILABLE'));
+              }
+              drainReadyQueryRequests();
+            }, error => {
+              entry.waitingForPeer = false;
+              const index = queryStreamState.queue.indexOf(entry);
+              if (index < 0) return;
+              queryStreamState.queue.splice(index, 1);
+              reject(error);
+              drainReadyQueryRequests();
+            });
+        };
+        if (!ready) entry.waitForReady();
       }
     });
+  }
+
+  function drainReadyQueryRequests() {
+    while (queryStreamState.active < CLIENT_QUERY_STREAM_LIMIT) {
+      const index = queryStreamState.queue.findIndex(entry => {
+        if (entry.isReady()) return true;
+        entry.waitForReady();
+        return false;
+      });
+      if (index < 0) return;
+      const [entry] = queryStreamState.queue.splice(index, 1);
+      // Reserve synchronously. A queued microtask would leave a free slot that
+      // another caller can steal before this admitted request starts.
+      entry.run();
+    }
   }
 
   async function requestQueryFetchWithRetry(envelope) {
@@ -510,7 +554,8 @@ export function createDemandLoadingTransport({
     const error = createQueryCancelError(reason);
     for (const entry of queryStreamState.queue) {
       const queuedRequestId = queuedQueryRequestId(entry);
-      if (queuedRequestId && (queuedRequestId === raw || queuedRequestId.startsWith(prefix))) {
+      if (entry.owner === transportOwner && queuedRequestId
+        && (queuedRequestId === raw || queuedRequestId.startsWith(prefix))) {
         rejectedIds.push(queuedRequestId);
         metrics.queryCollectorsRejected += 1;
         entry.reject(error);
@@ -653,12 +698,14 @@ export function createDemandLoadingTransport({
     return channelState === 'open' && !['closed', 'failed', 'disconnected'].includes(String(peerState));
   }
 
-  async function waitForPeerId(timeoutMs = AUTHORIZED_PEER_WAIT_TIMEOUT_MS) {
+  async function waitForPeerId(timeoutMs = AUTHORIZED_PEER_WAIT_TIMEOUT_MS, cancelled = () => false) {
     const immediate = resolvePeerId();
     if (immediate) return immediate;
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      if (cancelled()) return '';
       await delay(QUERY_PEER_WAIT_POLL_MS);
+      if (cancelled()) return '';
       const peerId = resolvePeerId();
       if (peerId) return peerId;
     }
