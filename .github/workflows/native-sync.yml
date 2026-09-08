@@ -47,14 +47,12 @@ jobs:
         working-directory: ctox
     env:
       CARGO_TERM_COLOR: always
-      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/ctox-browser-chromium
-      npm_config_cache: ${{ runner.temp }}/ctox-browser-npm
     steps:
       - name: Configure disposable build storage
         shell: bash
         working-directory: ${{ runner.temp }}
         run: |
-          printf 'CARGO_TARGET_DIR=%s/ctox-native-sync-target\nTMPDIR=%s\n' "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'CARGO_TARGET_DIR=%s/ctox-native-sync-target\nTMPDIR=%s\nPLAYWRIGHT_BROWSERS_PATH=%s/ctox-browser-chromium\nnpm_config_cache=%s/ctox-browser-npm\n' "$RUNNER_TEMP" "$RUNNER_TEMP" "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           path: ctox
