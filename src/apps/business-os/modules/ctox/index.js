@@ -2363,6 +2363,7 @@ function renderMain(state) {
   // Without a selected task and without current data the workspace itself
   // carries the state line; the footer must not repeat it.
   const stateInWorkspace = !selectedTask && Boolean(state.ctx) && dataState(state).kind !== 'ready';
+  const dataNotice = stateInWorkspace ? '' : (dataStatusMarkup(state) || (!syncIsConnected(state) ? escapeHtml(t.syncDisconnected) : ''));
   main.innerHTML = `
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
@@ -2399,10 +2400,10 @@ function renderMain(state) {
       </div>
     </div>`}
     <details class="ctox-history-fold" ${state.historyOpen && hasHistory ? 'open' : ''} ${hasHistory ? '' : 'hidden'}>
-      <summary>${escapeHtml(t.timeline)}${!syncIsConnected(state) && !stateInWorkspace ? `<span class="ctox-history-connection">${escapeHtml(t.syncDisconnected)}</span>` : ''}</summary>
+      <summary>${escapeHtml(t.timeline)}${dataNotice ? `<span class="ctox-history-connection">${dataNotice}</span>` : ''}</summary>
       <div class="ctox-history-content">${history}${executionProgressBar(metrics, state)}${metricsStripMarkup(metrics, elapsedSeconds, live, state)}</div>
     </details>
-    ${!hasHistory && !syncIsConnected(state) && !stateInWorkspace ? `<footer class="ctox-harness-footer is-disconnected" data-harness-health-tooltip>${dataStatusMarkup(state) || escapeHtml(t.syncDisconnected)}</footer>` : ''}
+    ${!hasHistory && dataNotice ? `<footer class="ctox-harness-footer" data-harness-health-tooltip>${dataNotice}</footer>` : ''}
   `;
   restoreFlowViewport(state, previousViewport);
   const editor = main.querySelector('[data-job-panel]');
