@@ -22196,7 +22196,7 @@ fn redact_client_context_secrets(client_context: &Value) -> Value {
 /// A document larger than this stalls the browser's initial replication for the
 /// WHOLE collection: `initialReplicationAt` stays null, no error is raised, and
 /// every other record in that collection becomes invisible. Measured on the
-/// THESEN tenant on 2026-09-04: one completed `outbound.sellify.lookup` command
+/// affected tenant on 2026-09-04: one completed `outbound.sellify.lookup` command
 /// carried a 2.5 MB `result`, and `business_commands`, `business_chats`,
 /// `desktop_icons` and `outbound_lead_generation_leads` never finished their
 /// initial replication as a result.

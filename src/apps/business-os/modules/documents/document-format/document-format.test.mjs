@@ -3,10 +3,21 @@ import test from 'node:test';
 
 import JSZip from '../../../vendor/jszip/jszip.mjs';
 import {
+  createBlankDocx,
+  importDocx,
   materializeDocxMergeFields,
   materializeDocxTextReplacements,
   mergeDocxFields,
 } from '../../../vendor/document-format.mjs';
+
+test('creates a real empty DOCX with one editable paragraph', async () => {
+  const bytes = await createBlankDocx();
+  assert.deepEqual([...bytes.slice(0, 2)], [0x50, 0x4b]);
+  const imported = await importDocx(bytes);
+  assert.equal(imported.document.body.blocks.length, 1);
+  assert.equal(imported.document.body.blocks[0].type, 'paragraph');
+  assert.deepEqual(imported.document.body.blocks[0].runs, []);
+});
 
 function complexField(instruction, resultText) {
   return {

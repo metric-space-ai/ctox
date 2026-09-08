@@ -34,6 +34,17 @@ export async function importDocx(input: ArrayBuffer | Uint8Array | Blob): Promis
   };
 }
 
+export async function createBlankDocx(): Promise<Uint8Array> {
+  const document: WordPortDocument = {
+    type: "document",
+    body: {
+      type: "body",
+      blocks: [{ type: "paragraph", runs: [] }],
+    },
+  };
+  return exportWordPortDocumentToDocx(document);
+}
+
 export async function mergeDocxFields(
   input: ArrayBuffer | Uint8Array | Blob,
   values: Record<string, unknown>,

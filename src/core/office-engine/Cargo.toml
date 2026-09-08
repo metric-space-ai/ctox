@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-only"
 
+# The conversion CLI is independently buildable, like the RxDB crate.
+[workspace]
+
 [lib]
 path = "../business_os/office_engine.rs"
 

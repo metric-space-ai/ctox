@@ -2,6 +2,11 @@
 // Run: node src/core/rxdb/tools/build_webrtc_rxdb_protocol_contract.mjs
 
 export const CTOX_RXDB_PROTOCOL = "ctox-rxdb-protocol-v1";
+export const CTOX_PEER_ROLES = Object.freeze({
+  browser: "browser",
+  native: "ctox_instance",
+  worker: "workjet_executor"
+});
 export const CTOX_PROTOCOL_PHASE = "rxdb-protocol-handshake";
 export const CTOX_REQUIRED_PROTOCOL_CAPABILITIES = Object.freeze([
   "ctox-schema-hash-v1",

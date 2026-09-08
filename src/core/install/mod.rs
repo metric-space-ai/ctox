@@ -487,6 +487,10 @@ struct GitHubReleaseResponse {
     published_at: Option<String>,
     #[serde(default)]
     assets: Vec<GitHubReleaseAsset>,
+    #[serde(default)]
+    draft: bool,
+    #[serde(default)]
+    prerelease: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2646,15 +2650,15 @@ fn fetch_remote_release(
                     html_url: None,
                     published_at: None,
                     assets: Vec::new(),
+                    draft: false,
+                    prerelease: false,
                 });
             }
             let endpoint = match &request {
-                RemoteReleaseRequest::Latest => {
-                    format!(
-                        "{}/repos/{repo}/releases/latest",
-                        api_base.trim_end_matches('/')
-                    )
-                }
+                RemoteReleaseRequest::Latest => format!(
+                    "{}/repos/{repo}/releases?per_page=100",
+                    api_base.trim_end_matches('/')
+                ),
                 RemoteReleaseRequest::Tag(tag) => format!(
                     "{}/repos/{repo}/releases/tags/{}",
                     api_base.trim_end_matches('/'),
@@ -2663,13 +2667,49 @@ fn fetch_remote_release(
                 RemoteReleaseRequest::Branch(_) => unreachable!("handled above"),
             };
             let body = github_api_get_json(channel, &endpoint)?;
-            let release: GitHubReleaseResponse =
-                serde_json::from_str(&body).with_context(|| {
+            let release = match request {
+                RemoteReleaseRequest::Latest => {
+                    let releases: Vec<GitHubReleaseResponse> = serde_json::from_str(&body)
+                        .with_context(|| {
+                            format!("failed to decode GitHub release list from {endpoint}")
+                        })?;
+                    select_latest_core_release(releases).with_context(|| {
+                        format!("GitHub returned no stable CTOX core release from {endpoint}")
+                    })?
+                }
+                RemoteReleaseRequest::Tag(_) => serde_json::from_str(&body).with_context(|| {
                     format!("failed to decode GitHub release response from {endpoint}")
-                })?;
+                })?,
+                RemoteReleaseRequest::Branch(_) => unreachable!("handled above"),
+            };
             Ok(release)
         }
     }
+}
+
+fn select_latest_core_release(
+    releases: impl IntoIterator<Item = GitHubReleaseResponse>,
+) -> Option<GitHubReleaseResponse> {
+    releases.into_iter().find(|release| {
+        !release.draft && !release.prerelease && is_ctox_core_release_tag(&release.tag_name)
+    })
+}
+
+fn is_ctox_core_release_tag(tag: &str) -> bool {
+    let Some(version) = tag.strip_prefix('v') else {
+        return false;
+    };
+    let mut segments = version.split('.');
+    matches!(
+        (segments.next(), segments.next(), segments.next(), segments.next()),
+        (Some(major), Some(minor), Some(patch), None)
+            if !major.is_empty()
+                && !minor.is_empty()
+                && !patch.is_empty()
+                && major.bytes().all(|byte| byte.is_ascii_digit())
+                && minor.bytes().all(|byte| byte.is_ascii_digit())
+                && patch.bytes().all(|byte| byte.is_ascii_digit())
+    )
 }
 
 fn target_bundle_asset_name() -> Option<&'static str> {
@@ -3568,7 +3608,7 @@ fn backup_state_root(state_root: &Path) -> Result<PathBuf> {
     // SQLite files locked for as long as a session runs. Backing them up buys
     // nothing and made every upgrade abort on a live guest (welsch,
     // 2026-08-20: "state backup aborted ... first_party_sets.db").
-    // 03.09.2026 auf THESEN: derselbe Abbruch noch einmal, nur einen Ordner
+    // 03.09.2026 auf einer betroffenen Instanz: derselbe Abbruch, nur einen Ordner
     // weiter. Die AUFNAHME-Profile liegen unter `browser/captures/<id>/
     // chrome-profile` und waren nicht ausgenommen; ein laufender Scrape hielt
     // `PowerBookmarks.db` gesperrt und das Upgrade brach ab, bevor irgendetwas
@@ -4604,6 +4644,35 @@ mod tests {
             Some("ctox-macos-arm64.tar.gz")
         );
         assert_eq!(target_bundle_asset_name_for("windows", "aarch64"), None);
+    }
+
+    #[test]
+    fn latest_core_release_ignores_newer_shell_release() {
+        let release = |tag_name: &str, draft: bool, prerelease: bool| GitHubReleaseResponse {
+            tag_name: tag_name.to_string(),
+            name: None,
+            tarball_url: format!("https://example.test/{tag_name}.tar.gz"),
+            html_url: None,
+            published_at: None,
+            assets: Vec::new(),
+            draft,
+            prerelease,
+        };
+        let selected = select_latest_core_release([
+            release("business-os-shell-v0.1.44", false, false),
+            release("v0.4.0", false, true),
+            release("v0.3.27", false, false),
+        ])
+        .expect("a stable core release");
+        assert_eq!(selected.tag_name, "v0.3.27");
+    }
+
+    #[test]
+    fn core_release_tag_requires_plain_three_part_semver() {
+        assert!(is_ctox_core_release_tag("v0.3.27"));
+        assert!(!is_ctox_core_release_tag("business-os-shell-v0.1.44"));
+        assert!(!is_ctox_core_release_tag("v0.4.0-rc.1"));
+        assert!(!is_ctox_core_release_tag("0.3.27"));
     }
 
     #[test]

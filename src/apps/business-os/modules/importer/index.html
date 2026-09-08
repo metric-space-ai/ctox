@@ -29,7 +29,7 @@
       <header class="imp-stage-header">
         <span class="imp-eyebrow" data-imp-copy="sourceEyebrow">Import source</span>
         <h2 data-imp-copy="sourceHeading">Port an existing app into Shell V2.</h2>
-        <p data-imp-copy="sourceIntro">A public GitHub repository starts immediately. A local folder is first secured through CTOX DB.</p>
+        <p data-imp-copy="sourceIntro">A public GitHub repository starts immediately. A local file or folder is first secured through CTOX DB.</p>
       </header>
       <form class="imp-github" data-imp-github-form>
         <label for="imp-github-url" data-imp-copy="githubLabel">Public GitHub repository</label>
@@ -42,6 +42,11 @@
         </div>
       </form>
       <div class="imp-divider"><span data-imp-copy="or">or</span></div>
+      <button type="button" class="imp-folder" data-imp-pick-file>
+        <span class="imp-folder-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M6 3h8l4 4v14H6V3Z" /><path d="M14 3v5h5" /></svg></span>
+        <span><strong data-imp-copy="fileHeading">Choose one app file</strong><small data-imp-file-hint data-imp-copy="fileHint">Ideal for self-contained HTML apps; the file is synced securely with CTOX.</small></span>
+        <span class="imp-folder-arrow" aria-hidden="true">→</span>
+      </button>
       <button type="button" class="imp-folder" data-imp-pick-folder>
         <span class="imp-folder-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5v-9Z" /></svg></span>
               <span><strong data-imp-copy="folderHeading">Choose project folder</strong><small data-imp-source-hint data-imp-copy="sourceHint">Read-only selection; files are synced securely with CTOX.</small></span>

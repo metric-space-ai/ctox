@@ -2,6 +2,11 @@
 
 // src/apps/business-os/rxdb/src/protocol-contract.generated.mjs
 var CTOX_RXDB_PROTOCOL = "ctox-rxdb-protocol-v1";
+var CTOX_PEER_ROLES = Object.freeze({
+  browser: "browser",
+  native: "ctox_instance",
+  worker: "workjet_executor"
+});
 var CTOX_PROTOCOL_PHASE = "rxdb-protocol-handshake";
 var CTOX_REQUIRED_PROTOCOL_CAPABILITIES = Object.freeze([
   "ctox-schema-hash-v1",
@@ -9478,7 +9483,7 @@ var SharedRoomPeer = class {
       // Phase 3: the room is the bare sync_room — NOT a per-collection topic.
       room: this.room,
       clientId: browserInitiatorPeerId(this.room),
-      role: "browser",
+      role: CTOX_PEER_ROLES.browser,
       capabilities: BROWSER_CAPABILITIES,
       iceServers: this.iceServers,
       iceServersRefreshUrl: this.iceServersRefreshUrl,
@@ -9644,7 +9649,7 @@ var SharedRoomPeer = class {
     const registration = collection && this.collections.get(collection) || this.representativeCollection();
     if (!registration) {
       return buildProtocolPayload({
-        role: "browser",
+        role: CTOX_PEER_ROLES.browser,
         peerSessionId: `browser:${this.room}`,
         peerGeneration: 1,
         capabilities: BROWSER_CAPABILITIES
@@ -9807,7 +9812,7 @@ var SharedRoomPeer = class {
       this.fanout("handshake-error", error);
       throw error;
     }
-    if (normalizedRemoteProtocol?.peerSession?.role !== "ctox_instance") {
+    if (normalizedRemoteProtocol?.peerSession?.role !== CTOX_PEER_ROLES.native) {
       this.peer?.removeConnection?.(peerId, "non-native-peer-role");
       return null;
     }
@@ -10094,7 +10099,7 @@ var CtoxWebRtcReplicationState = class {
       peerSessionId: `browser:${this.topic}`,
       peerGeneration: 1,
       checkpoint,
-      role: "browser",
+      role: CTOX_PEER_ROLES.browser,
       capabilities: BROWSER_CAPABILITIES,
       capabilityToken: typeof capabilityToken === "string" ? capabilityToken : null,
       deviceProof
@@ -10638,7 +10643,7 @@ var CtoxWebRtcReplicationState = class {
   // signal, and pull-and-replace any newer authoritative state. This does NOT
   // throw — throwing would re-arm the infinite push retry the finding is about.
   async reconcileTerminalPushRejection(documents, peerId, rejection) {
-    const origin = this.replicationOriginForPeer(peerId) || { role: "ctox_instance", peerId, sessionId: "", collection: this.collection.name };
+    const origin = this.replicationOriginForPeer(peerId) || { role: CTOX_PEER_ROLES.native, peerId, sessionId: "", collection: this.collection.name };
     let reconciledIds = [];
     try {
       reconciledIds = await this.collection.storageCollection.reconcileRejectedLocalWrites(documents, {
@@ -10842,7 +10847,7 @@ var CtoxWebRtcReplicationState = class {
       this.publishTransportStatus();
       return null;
     }
-    const demandReplicationOrigin = () => this.replicationOriginForPeer(this.activeRemotePeerId) || { role: "ctox_instance", peerId: this.activeRemotePeerId || "", sessionId: "", collection: this.collection.name };
+    const demandReplicationOrigin = () => this.replicationOriginForPeer(this.activeRemotePeerId) || { role: CTOX_PEER_ROLES.native, peerId: this.activeRemotePeerId || "", sessionId: "", collection: this.collection.name };
     this.demandLoader = queryDemandEnabled ? createQueryDemandLoader({
       storageCollection: this.collection.storageCollection,
       sidecar: this.demandSidecar,

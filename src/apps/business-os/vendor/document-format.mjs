@@ -19681,6 +19681,16 @@ async function importDocx(input) {
     diagnostics: pkg.diagnostics ?? []
   };
 }
+async function createBlankDocx() {
+  const document = {
+    type: "document",
+    body: {
+      type: "body",
+      blocks: [{ type: "paragraph", runs: [] }]
+    }
+  };
+  return exportWordPortDocumentToDocx(document);
+}
 async function mergeDocxFields(input, values, options = {}) {
   const pkg = await openWordPortPackage(input);
   const document = await importDocxToWordPortDocument(pkg);
@@ -20007,6 +20017,7 @@ function tableToMarkdown(table) {
 }
 export {
   DOCUMENT_FORMAT_ESM_VERSION,
+  createBlankDocx,
   exportMarkdown,
   getDocumentText,
   importDocx,

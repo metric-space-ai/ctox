@@ -18,6 +18,7 @@ pub(super) fn handle_appsec_business_command(
         return handle_appsec_app_audit_command(root, &command.payload);
     }
     let mut args = Vec::new();
+    let release_review = command.command_type == "ctox.appsec.release.review";
     if command.command_type != "ctox.appsec.state.sync" {
         push_appsec_state_dir_arg(root, &command.payload, &mut args)?;
     }
@@ -29,6 +30,11 @@ pub(super) fn handle_appsec_business_command(
         }
         "ctox.appsec.review" => {
             args.extend(["review", "--json"].map(str::to_string));
+        }
+        "ctox.appsec.release.review" => {
+            args.extend(
+                ["report", "--format", "json", "--gate", "go-live", "--json"].map(str::to_string),
+            );
         }
         "ctox.appsec.tools.doctor" => {
             args.extend(["tools", "doctor"].map(str::to_string));
@@ -759,7 +765,84 @@ pub(super) fn handle_appsec_business_command(
         }
         other => anyhow::bail!("unsupported AppSec Business OS command type: {other}"),
     }
-    crate::run_projected_appsec_command(root, &args)
+    let outcome = crate::run_projected_appsec_command(root, &args)?;
+    if release_review {
+        return appsec_release_review_result(outcome);
+    }
+    Ok(outcome)
+}
+
+fn appsec_release_review_result(report: Value) -> anyhow::Result<Value> {
+    let completion_review = report
+        .get("completion_review")
+        .cloned()
+        .context("native AppSec release review is missing completion evidence")?;
+    let release_decision = report.get("release_decision").cloned();
+    anyhow::ensure!(
+        completion_review.is_object(),
+        "native AppSec release review completion evidence is not an object"
+    );
+    let blockers = completion_review
+        .get("blockers")
+        .and_then(Value::as_array)
+        .cloned()
+        .context("native AppSec release review completion blockers are unreadable")?;
+    let blocker_count = completion_review
+        .get("blocker_count")
+        .and_then(Value::as_u64)
+        .context("native AppSec release review completion blocker count is unreadable")?;
+    let completion_closable = completion_review
+        .get("closable")
+        .and_then(Value::as_bool)
+        .context("native AppSec release review completion decision is unreadable")?;
+    anyhow::ensure!(
+        blocker_count == blockers.len() as u64,
+        "native AppSec release review completion blocker count does not match its blocker list"
+    );
+    anyhow::ensure!(
+        completion_closable == blockers.is_empty(),
+        "native AppSec release review completion decision contradicts its blockers"
+    );
+    let report_complete = report
+        .get("report_complete")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let release_approved = report.get("ok").and_then(Value::as_bool) == Some(true)
+        && report_complete
+        && completion_closable
+        && blocker_count == 0
+        && blockers.is_empty()
+        && release_decision
+            .as_ref()
+            .and_then(|value| value.get("decision"))
+            .and_then(Value::as_str)
+            == Some("ready")
+        && release_decision
+            .as_ref()
+            .and_then(|value| value.get("go_live_approved"))
+            .and_then(Value::as_bool)
+            == Some(true);
+    let reason = release_decision
+        .as_ref()
+        .and_then(|value| value.get("reason"))
+        .and_then(Value::as_str)
+        .or_else(|| report.get("error").and_then(Value::as_str))
+        .unwrap_or("required release evidence is incomplete")
+        .to_string();
+    Ok(serde_json::json!({
+        "version": "ctox.business_os.appsec_release_review.v1",
+        "ok": true,
+        "command": "ctox.appsec.release.review",
+        "status": if release_approved { "ready" } else { "blocked" },
+        "release_approved": release_approved,
+        "report_complete": report_complete,
+        "reason": reason,
+        "blocker_count": blocker_count,
+        "blockers": blockers,
+        "release_decision": release_decision,
+        "completion_review": completion_review,
+        "report": report,
+    }))
 }
 
 fn handle_appsec_app_audit_command(root: &Path, payload: &Value) -> anyhow::Result<Value> {
@@ -1297,12 +1380,126 @@ mod tests {
         appsec_business_command_requires_data_write, BusinessCommand, CommandOrigin,
         APPSEC_MODULE_ID,
     };
-    use super::handle_appsec_business_command;
+    use super::{appsec_release_review_result, handle_appsec_business_command};
     use serde_json::Value;
     use sha2::{Digest, Sha256};
     use std::fs;
     use std::path::{Path, PathBuf};
     use tempfile::tempdir;
+
+    #[test]
+    fn native_release_review_approves_only_complete_go_live_evidence() -> anyhow::Result<()> {
+        assert!(appsec_business_command_requires_data_write(
+            "ctox.appsec.release.review"
+        ));
+        let result = appsec_release_review_result(serde_json::json!({
+            "ok": true,
+            "report_complete": true,
+            "completion_review": {
+                "closable": true,
+                "blocker_count": 0,
+                "blockers": []
+            },
+            "release_decision": {
+                "decision": "ready",
+                "go_live_approved": true,
+                "reason": "all required evidence is current"
+            }
+        }))?;
+        assert_eq!(result.get("status").and_then(Value::as_str), Some("ready"));
+        assert_eq!(
+            result.get("release_approved").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(result.get("blocker_count").and_then(Value::as_u64), Some(0));
+        Ok(())
+    }
+
+    #[test]
+    fn native_release_review_reports_stale_evidence_as_a_blocked_decision() -> anyhow::Result<()> {
+        let result = appsec_release_review_result(serde_json::json!({
+            "ok": false,
+            "report_complete": false,
+            "error": "completion evidence changed after finish",
+            "completion_review": {
+                "closable": false,
+                "blocker_count": 1,
+                "blockers": [{"code": "stale-finish-evidence"}]
+            }
+        }))?;
+        assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            result.get("status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            result.get("release_approved").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(result.get("blocker_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            result.pointer("/blockers/0/code").and_then(Value::as_str),
+            Some("stale-finish-evidence")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn native_release_review_does_not_trust_ready_over_completion_blockers() -> anyhow::Result<()> {
+        let result = appsec_release_review_result(serde_json::json!({
+            "ok": true,
+            "report_complete": true,
+            "completion_review": {
+                "closable": false,
+                "blocker_count": 1,
+                "blockers": [{"code": "delta-audit-pending"}]
+            },
+            "release_decision": {
+                "decision": "ready",
+                "go_live_approved": true,
+                "reason": "inconsistent upstream decision"
+            }
+        }))?;
+        assert_eq!(
+            result.get("status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            result.get("release_approved").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(result.get("blocker_count").and_then(Value::as_u64), Some(1));
+        Ok(())
+    }
+
+    #[test]
+    fn native_release_review_rejects_inconsistent_completion_counts() {
+        let error = appsec_release_review_result(serde_json::json!({
+            "ok": true,
+            "report_complete": true,
+            "completion_review": {
+                "closable": true,
+                "blocker_count": 1,
+                "blockers": []
+            },
+            "release_decision": {
+                "decision": "ready",
+                "go_live_approved": true
+            }
+        }))
+        .expect_err("contradictory completion evidence must fail closed");
+        assert!(error.to_string().contains("blocker count"), "{error:#}");
+    }
+
+    #[test]
+    fn native_release_review_rejects_unreadable_gate_output() {
+        let error = appsec_release_review_result(serde_json::json!({"ok": false}))
+            .expect_err("missing gate evidence must fail closed");
+        assert!(
+            error.to_string().contains("missing completion evidence"),
+            "{error:#}"
+        );
+    }
 
     #[test]
     fn app_audit_command_is_write_gated_and_rejects_unbounded_payloads() -> anyhow::Result<()> {

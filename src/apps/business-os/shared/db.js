@@ -1,3 +1,5 @@
+import { loadRxdbRuntime } from './rxdb-runtime.js';
+
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',
   publicName: 'CTOX Sync Engine',
@@ -14,9 +16,7 @@ const RXDB_OPEN_TIMEOUT_MS = 45000;
 const RXDB_OPEN_RETRY_TIMEOUT_MS = 12000;
 const RXDB_RESET_TIMEOUT_MS = 5000;
 const INDEXEDDB_PREFLIGHT_TIMEOUT_MS = 8000;
-const RXDB_MODULE_IMPORT_TIMEOUT_MS = 8000;
 const RXDB_CREATE_DATABASE_TIMEOUT_MS = 8000;
-const RXDB_BUNDLE_URL = '../rxdb/dist/ctox-rxdb-js.mjs?v=20260831-ctox-desktopapp-ports-v328';
 const DEMAND_CACHE_MIGRATION = 'sellify-demand-cache-v1';
 const SELLIFY_DEMAND_CACHE_COLLECTIONS = Object.freeze([
   'sellify_activities',
@@ -363,22 +363,8 @@ function normalizeCollectionDefinition(definition) {
 }
 
 async function loadRxdb() {
-  let mod = null;
-  try {
-    mod = await importRxdbBundle(RXDB_BUNDLE_URL);
-  } catch (error) {
-    if (!isIndexedDbOpenStall(error)) throw error;
-    console.info('[business-os] RxDB bundle import stalled; retrying with cache-busted module graph', error);
-    mod = await importRxdbBundle(`${RXDB_BUNDLE_URL}&retry=${Date.now().toString(36)}`);
-  }
+  const mod = await loadRxdbRuntime();
   return materializeRxdbRuntime(mod);
-}
-
-async function importRxdbBundle(url) {
-  return Promise.race([
-    import(url),
-    timeoutAfter(RXDB_MODULE_IMPORT_TIMEOUT_MS, `RxDB bundle import timed out after ${RXDB_MODULE_IMPORT_TIMEOUT_MS}ms`),
-  ]);
 }
 
 function materializeRxdbRuntime(mod) {

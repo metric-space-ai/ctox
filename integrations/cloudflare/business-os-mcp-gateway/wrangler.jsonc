@@ -27,7 +27,7 @@
     "UPSTREAM_MCP_URL": "",
     "CTOX_MANAGED_MCP_AUTH_URL": "https://ctox.dev/api/managed-mcp/client-auth",
     "CTOX_MANAGED_MCP_CONNECT_AUTH_URL": "https://ctox.dev/api/managed-mcp/connect-auth",
-    "ALLOWED_INSTANCE_IDS": "desk_123,cto1.example.com,ninja.ctox.dev,miltonticket.ctox.dev",
+    "ALLOWED_INSTANCE_IDS": "desk_123,cto1.example.com,ninja.ctox.dev,miltonticket.ctox.dev,welsch.ctox.dev",
     "MAX_MCP_BODY_BYTES": "1000000",
     "MAX_MCP_RESPONSE_BYTES": "1000000",
     "MCP_SESSION_TIMEOUT_MS": "30000",

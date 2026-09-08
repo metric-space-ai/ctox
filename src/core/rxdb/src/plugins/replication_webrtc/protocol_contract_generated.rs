@@ -2,6 +2,34 @@
 // Run: node src/core/rxdb/tools/build_webrtc_rxdb_protocol_contract.mjs
 
 pub(super) const CTOX_RXDB_PROTOCOL: &str = "ctox-rxdb-protocol-v1";
+
+/// Native host identity in the protocol handshake; never a permission grant.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum NativePeerRole {
+    #[default]
+    #[serde(rename = "ctox_instance")]
+    CtoxInstance,
+    #[serde(rename = "workjet_executor")]
+    WorkjetExecutor,
+}
+
+impl NativePeerRole {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CtoxInstance => "ctox_instance",
+            Self::WorkjetExecutor => "workjet_executor",
+        }
+    }
+
+    pub fn from_wire(value: &str) -> Option<Self> {
+        match value {
+            "ctox_instance" => Some(Self::CtoxInstance),
+            "workjet_executor" => Some(Self::WorkjetExecutor),
+            _ => None,
+        }
+    }
+}
+
 pub(super) const CTOX_REQUIRED_PROTOCOL_CAPABILITIES: &[&str] = &[
     "ctox-schema-hash-v1",
     "ctox-peer-session-v1",

@@ -21,6 +21,46 @@ async function importBrowserBundle(relativePath) {
 
 const { __documentsTestHooks: hooks } = await importBrowserBundle('./index.js');
 
+test('document chunk refresh does not re-query the file library, runbooks or Knowledge', async () => {
+  const queried = [];
+  const state = { documents: [], selectedId: '', ctx: {
+    host: { querySelector: () => null },
+    db: { collection(name) { queried.push(name); return { find: () => ({ exec: async () => [] }) }; } },
+  } };
+  await hooks.refreshDocumentsFromLocal(state, new Set(['document_blob_chunks']));
+  assert.deepEqual(queried, []);
+  await hooks.refreshDocumentsFromLocal(state, new Set(['documents']));
+  assert.deepEqual(queried, ['documents']);
+});
+
+test('Knowledge refresh reads only changed collections and preserves other cached context', async () => {
+  const queried = [];
+  const items = [{ id: 'cached-item' }];
+  const runbooks = [{ id: 'cached-runbook' }];
+  const state = { knowledgeItems: items, knowledgeRunbooks: runbooks, knowledgeTables: [{ id: 'old' }], ctx: {
+    db: { collection(name) { queried.push(name); return { find: () => ({ exec: async () => [] }) }; } },
+  } };
+  await hooks.refreshKnowledge(state, new Set(['knowledge_tables']));
+  assert.deepEqual(queried, ['knowledge_tables']);
+  assert.equal(state.knowledgeItems, items);
+  assert.equal(state.knowledgeRunbooks, runbooks);
+  assert.deepEqual(state.knowledgeTables, []);
+});
+
+test('document background refresh does not render after disposal during its read', async () => {
+  let active = true;
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  const state = { documents: [], selectedId: '', ctx: {
+    host: { querySelector: () => assert.fail('disposed app must not render') },
+    db: { collection() { return { find: () => ({ exec: () => held }) }; } },
+  } };
+  const pending = hooks.refreshDocumentsFromLocal(state, new Set(['documents']), () => active);
+  active = false;
+  release([]);
+  await pending;
+});
+
 test('document records without is_deleted are active', () => {
   assert.equal(hooks.isActiveDocumentRecord({ id: 'doc_1' }), true);
   assert.equal(hooks.isActiveDocumentRecord({ id: 'doc_1', is_deleted: false }), true);
@@ -108,6 +148,18 @@ test('only transient Office startup and load-version failures are retryable', ()
   assert.equal(hooks.isTransientOfficeStartupError(new Error('Unsupported editor protocol')), false);
 });
 
+test('Office startup recovery works with the real default delay, not only an injected test clock', async () => {
+  let attempts = 0;
+  const result = await hooks.initializeOfficeEditorWithRecovery({
+    initialize: async () => { if (++attempts === 1) throw new Error('temporary startup failure'); },
+    shouldRetry: () => true,
+    retryDelayMs: 1,
+    maxRecoveryAttempts: 1,
+  });
+  assert.equal(attempts, 2);
+  assert.deepEqual(result, { recovered: true, recoveryAttempts: 1 });
+});
+
 test('transient loadVersion timeout reinitializes the Office editor once and continues', async () => {
   const instances = [];
   const destroyedInstances = [];
@@ -179,6 +231,66 @@ test('missing or transient local document versions wait for replication once', a
 
   assert.deepEqual(result, { id: 'merge_1_recipient_2' });
   assert.deepEqual(events, ['local-1', 'sync', 'local-2']);
+});
+
+test('document metadata deadlines recover once with a bounded network read', async () => {
+  const budgets = [];
+  let recoveries = 0;
+  const version = { id: 'reconnected_version' };
+  const result = await hooks.resolveLocalFirst(async (timeoutMs) => {
+    budgets.push(timeoutMs);
+    if (budgets.length === 1) {
+      return hooks.withDocumentVersionTimeout(new Promise(() => {}), 1, 'metadata deadline');
+    }
+    return version;
+  }, async () => { recoveries += 1; });
+  assert.equal(result, version);
+  assert.deepEqual(budgets, [4500, 60000]);
+  assert.equal(recoveries, 1);
+});
+
+test('document metadata timeout does not relabel permission or integrity errors', async () => {
+  const error = Object.assign(new Error('permission denied'), { code: 'permission_denied' });
+  let recoveries = 0;
+  await assert.rejects(hooks.resolveLocalFirst(
+    () => hooks.withDocumentVersionTimeout(Promise.reject(error), 100, 'deadline'),
+    async () => { recoveries += 1; },
+  ), actual => actual === error);
+  assert.equal(recoveries, 0);
+});
+
+test('document recovery upgrades a follower and waits for its native peer, not full replication', async () => {
+  const events = [];
+  const direct = { state: {
+    async waitForOpenPeerId(timeoutMs) {
+      assert.equal(timeoutMs, 60000);
+      events.push('native-peer');
+      return 'native';
+    },
+    async awaitInitialReplication() { assert.fail('no full collection download'); },
+    async awaitInSync() { assert.fail('no full collection synchronization'); },
+  } };
+  await hooks.awaitDocumentVersionReplication({ mode: 'follower' }, { sync: {
+    async startCollection(name, options) {
+      assert.equal(name, 'document_versions');
+      assert.deepEqual(options, { forceDirect: true });
+      events.push('direct');
+      return { ready: Promise.resolve(direct) };
+    },
+  } });
+  assert.deepEqual(events, ['direct', 'native-peer']);
+});
+
+test('document recovery propagates a refused channel without another metadata read', async () => {
+  let reads = 0;
+  let starts = 0;
+  const refused = Object.assign(new Error('forbidden'), { code: 'permission_denied' });
+  await assert.rejects(hooks.resolveLocalFirst(async () => { reads += 1; return null; },
+    () => hooks.awaitDocumentVersionReplication(null, { sync: {
+      async startCollection() { starts += 1; throw refused; },
+    } })), actual => actual === refused);
+  assert.equal(reads, 1);
+  assert.equal(starts, 1);
 });
 
 test('non-retryable Office load failures fail closed without reinitialization', async () => {
@@ -871,7 +983,7 @@ test('mail merge and series letter records use the DOCX render, save, and export
   assert.equal(hooks.isDocxDocumentRecord({ document_type: 'markdown_document', filename: 'notes.md' }), false);
 });
 
-test('Documents UI exposes resizable library and actions columns with a collapsed actions default', async () => {
+test('Documents UI is a two-pane file manager and Word editor without a right actions column', async () => {
   const [html, css, source, moduleJson, deMessages] = await Promise.all([
     readFile(new URL('./index.html', import.meta.url), 'utf8'),
     readFile(new URL('./index.css', import.meta.url), 'utf8'),
@@ -882,28 +994,25 @@ test('Documents UI exposes resizable library and actions columns with a collapse
 
   assert.match(html, /data-resize-frame/);
   assert.match(html, /class="ctox-column-resizer documents-library-resizer"/);
-  assert.match(html, /data-resizer-var="--documents-library-width"/);
-  assert.match(html, /class="ctox-column-resizer documents-actions-resizer"/);
-  assert.match(html, /data-resizer="right"/);
-  assert.match(html, /data-resizer-var="--documents-actions-width"/);
+  assert.match(html, /data-resizer-var="--shell-col-left"/);
+  assert.doesNotMatch(html, /documents-actions-resizer/);
+  assert.doesNotMatch(html, /data-documents-actions-drawer/);
   assert.match(css, /\.documents-library-resizer[\s\S]*cursor:\s*col-resize/);
-  assert.match(css, /\.documents-module\.is-actions-open\s*\{[\s\S]*grid-template-columns:[^;]*var\(--documents-actions-width\)/);
-  assert.match(css, /\.documents-actions-resizer[\s\S]*cursor:\s*col-resize/);
   assert.match(css, /\.documents-workbench\s*\{[\s\S]*container-type:\s*inline-size/);
-  assert.match(css, /@container documents-workbench \(max-width: 560px\)[\s\S]*\.documents-actions-toggle span[\s\S]*display:\s*none/);
   assert.match(css, /@container documents-workbench \(max-width: 560px\)[\s\S]*\.documents-recipient-navigator[\s\S]*minmax\(0, 1fr\)/);
   assert.match(css, /\.documents-strip-leading\s*\{[\s\S]*overflow:\s*hidden/);
   assert.match(source, /new ResizeObserver/);
-  assert.match(source, /root\.classList\.toggle\('is-compact', width <= 1048\)/);
-  assert.match(source, /root\.classList\.toggle\('is-actions-overlay', width < 1616\)/);
+  assert.match(source, /root\.classList\.toggle\('is-compact', width <= 768\)/);
+  assert.match(html, /data-pg-search/);
+  assert.match(html, /data-pg-view-cycle="list,cards"/);
+  assert.match(html, /data-pg-footer/);
+  assert.match(source, /autoWirePaneGrammar/);
+  assert.match(source, /shellRightPane\.hidden = true/);
   assert.match(css, /\.documents-module\.is-compact \.documents-library-resizer[\s\S]*display:\s*none/);
-  assert.match(css, /\.documents-module\.is-compact \.documents-actions-drawer[\s\S]*position:\s*absolute/);
   assert.match(css, /SuperDoc 1\.32\.0 ships 32px toolbar controls/);
   assert.match(css, /@media \(pointer: coarse\)[\s\S]*\.documents-superdoc-toolbar \.superdoc-toolbar[\s\S]*--sd-ui-toolbar-height:\s*44px/);
   assert.match(css, /@media \(pointer: coarse\)[\s\S]*\.documents-superdoc-toolbar \.toolbar-item[\s\S]*min-width:\s*44px/);
-  assert.match(html, /data-documents-actions-drawer[\s\S]*aria-hidden="true"[\s\S]*hidden/);
-  assert.match(html, /data-documents-actions-resizer[\s\S]*hidden/);
-  assert.match(source, /actionsResizer\.hidden = !state\.actionsOpen/);
+  assert.doesNotMatch(source, /data-documents-actions-toggle/);
   assert.match(source, /revisionedModuleAssetUrl\('\.\/index\.html'\)/);
   assert.match(source, /revisionedModuleAssetUrl\('\.\/index\.css'\)/);
   assert.equal(moduleJson.title, 'Dokumente');
@@ -926,6 +1035,17 @@ test('new document validation requires title, runbook, and prompt', () => {
   assert.equal(hooks.validateNewDocumentInput({ title: 'Report', runbookId: 'research.report.auto', prompt: '' }).valid, false);
   assert.equal(hooks.validateNewDocumentInput({ title: 'Report', runbookId: '', prompt: 'Analyse' }).valid, false);
   assert.equal(hooks.validateNewDocumentInput({ title: 'Report', runbookId: 'research.report.auto', prompt: 'Analyse' }).valid, true);
+});
+
+test('visible new-document controls create a blank Word document directly', async () => {
+  const [source, html] = await Promise.all([
+    readFile(new URL('./index.js', import.meta.url), 'utf8'),
+    readFile(new URL('./index.html', import.meta.url), 'utf8'),
+  ]);
+  assert.match(source, /data-documents-empty-new[^\n]+createBlankWordDocument/);
+  assert.match(source, /data-documents-new-markdown[^\n]+[\s\S]{0,160}createBlankWordDocument/);
+  assert.match(source, /sourceKind:\s*'created_blank'/);
+  assert.match(html, /data-documents-new-markdown[^>]+Leeres Word-Dokument erstellen/);
 });
 
 test('knowledge selection supports explicit skills and automatic topic matching', () => {
@@ -976,11 +1096,19 @@ test('file-open deduplication reuses the imported document with the same source 
 
 test('document blob chunks are persisted with one bulk write', async () => {
   const bulkWrites = [];
+  let acknowledged = false;
   const blobChunks = {
-    bulkUpsert: async (docs) => { bulkWrites.push(docs); },
+    bulkUpsert: async (docs) => {
+      bulkWrites.push(docs);
+      return docs.map(row => ({ toJSON: () => ({ ...row, _meta: { lwt: Date.now() } }) }));
+    },
     insert: async () => { throw new Error('document_blob_chunks insert must not run per chunk'); },
   };
   const ctx = {
+    sync: { async leaseCollection() { return { bridge: { state: {
+      async waitForOpenPeerId() { return 'native'; },
+      async pushDocumentsToPeer(_peer, rows) { assert.equal(rows.length, bulkWrites[0].length); acknowledged = true; },
+    } }, async release() {} }; } },
     db: {
       collection(name) {
         if (name === 'document_blob_chunks') return blobChunks;
@@ -1002,4 +1130,5 @@ test('document blob chunks are persisted with one bulk write', async () => {
 
   assert.equal(bulkWrites.length, 1, 'blob chunks are written through one bulkUpsert call');
   assert.ok(bulkWrites[0].length > 1, 'test payload spans multiple chunk documents');
+  assert.equal(acknowledged, true, 'source bytes are acknowledged before exposing references');
 });

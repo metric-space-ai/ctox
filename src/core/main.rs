@@ -199,6 +199,7 @@ CAPABILITIES / WEB STACK
   ctox appsec <subcmd>           deployment audit and go-live readiness workflow
   ctox scrape <subcmd>           scraping and extraction helpers
   ctox doc <subcmd>              document stack helpers
+  ctox office <subcmd>           native Word/Excel file tools; `ctox office capabilities` lists operations
   ctox verification <subcmd>     verification records and evidence checks
   ctox skills <subcmd>           system/user skill catalog and pack management
 
@@ -338,6 +339,11 @@ fn skips_cli_startup_db(args: &[String]) -> bool {
 }
 
 fn skips_cli_turn_ledger(args: &[String]) -> bool {
+    // Office file tools run within the caller's filesystem sandbox and do not
+    // read or mutate daemon state. They must not wait on its SQLite ledger.
+    if args.first().map(String::as_str) == Some("office") {
+        return true;
+    }
     // Diagnostic and administrative commands MUST NOT block on the CLI
     // turn ledger. Opening the ledger requires an fcntl write lock on
     // runtime/ctox.sqlite3, and on macOS a previous CTOX CLI process
@@ -711,6 +717,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         Some("business-os") | Some("business") => {
             service::business_os::handle_business_os_command(root, &args[1..])
         }
+        Some("office") => business_os::office_cli::handle_command(&args[1..]),
         Some("coding-agent") | Some("coding-agents") => coding_agents::handle_cli(root, &args[1..]),
         Some("turn") => service::turn_ledger::handle_turn_command(root, &args[1..]),
         Some("harness-flow") => {

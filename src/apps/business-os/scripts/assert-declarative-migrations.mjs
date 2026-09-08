@@ -31,6 +31,19 @@ for (const id of readdirSync(modulesRoot).sort()) {
   }
 }
 
+// Native startup migrates these packaged collections transactionally. Every
+// intervening version must exist, even when an additive change needs no edits.
+const cockpit = documentsByModule.get('ctox');
+for (const name of ['business_commands', 'ctox_queue_tasks', 'ctox_runs']) {
+  const version = cockpit?.collections?.[name]?.version ?? 0;
+  const strategies = executableDeclarativeMigrationStrategies(cockpit?.migration_strategies?.[name]);
+  for (let step = 1; step <= version; step += 1) {
+    if (typeof strategies?.[step] !== 'function') {
+      failures.push(`ctox/${name}: missing migration ${step} in chain to version ${version}`);
+    }
+  }
+}
+
 expectMigration('ctox', 'business_commands', '1', {
   id: 'cmd_1',
   module: 'tickets',
@@ -43,6 +56,16 @@ expectMigration('ctox', 'business_commands', '1', {
   inbound_channel: 'email',
   status: 'pending',
 }, (doc) => doc.inbound_channel === 'email');
+
+expectMigration('ctox', 'ctox_queue_tasks', '3', {
+  id: 'queue_retained', title: 'Retained task', status: 'pending', module: 'documents',
+  command_id: 'cmd_retained', updated_at_ms: 123, payload: { nested: ['retained'] },
+}, (doc) => (
+  doc.id === 'queue_retained' && doc.title === 'Retained task'
+  && doc.status === 'pending' && doc.module === 'documents'
+  && doc.command_id === 'cmd_retained' && doc.updated_at_ms === 123
+  && doc.payload?.nested?.[0] === 'retained'
+));
 
 expectMigration('notes', 'notes', '1', {
   id: 'note_1',

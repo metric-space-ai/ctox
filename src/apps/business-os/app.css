@@ -1236,6 +1236,22 @@ body[data-maintenance-status="stale"] .ctox-maintenance-banner {
   position: relative;
 }
 
+.workspace-pane[hidden] {
+  display: none !important;
+}
+
+.workspace-frame:has(> .workspace-pane-right[hidden]) {
+  grid-template-columns: minmax(210px, 0.72fr) minmax(420px, 2.8fr) !important;
+}
+
+.workspace-frame:has(> .workspace-pane-right[hidden]) .workspace-col-resizer-right {
+  display: none !important;
+}
+
+.workspace-frame:has(> .workspace-pane-left[hidden]):has(> .workspace-pane-right[hidden]) {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
 .workspace-col-resizer {
   position: absolute;
   top: 0;
@@ -7674,7 +7690,7 @@ button.shell-window-header-meta:focus-visible,
 
   .shell-window.is-mobile-sheet .shell-window-content > .shell-window-module-root {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(200px, auto) auto;
+    grid-template-rows: auto minmax(auto, 1fr) auto;
     align-content: start;
     height: 100%;
     padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));
@@ -9251,7 +9267,7 @@ button.shell-window-header-meta:focus-visible,
 
   .shell-window-layer > .shell-window .shell-window-content > .shell-window-module-root {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(200px, auto) auto;
+    grid-template-rows: auto minmax(auto, 1fr) auto;
     align-content: start;
     height: 100%;
     padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));

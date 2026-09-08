@@ -29,9 +29,16 @@ Use this before claiming a Business OS app is done.
 - The target directory is correct for runtime or source mode.
 - Three relevant shipped Business OS apps were chosen and inspected.
 - The app is vanilla HTML/CSS/browser ESM with no build step.
+- Every executable dependency is a static local relative ESM import or a
+  shipped browser ESM file. No remote scripts, stylesheets, import maps,
+  dynamic HTTP(S) imports, workers, package loaders, or CDN code remain.
 - Runtime `module.json` sets `"icon"` to `icon.svg` or `icon.png` and the
   module directory contains that local file. PNG icons are square, 60–1024
   px, and no larger than 512 KiB.
+- A new app does not ship with a letter/monogram placeholder. When the operator
+  requests the icon workflow, complete its 16-candidate generation and review
+  gate, present the selector, and adopt only the user's selected candidate as
+  the reduced local PNG before marking the app live.
 - Runtime `module.json` sets root `launch_kind` to `desktop-app`, writes the
   canonical `presentation` object (minimum 640×480), and keeps
   `layout.shell: windowed` only as a compatibility hint.
@@ -109,6 +116,12 @@ Use this before claiming a Business OS app is done.
   reveal a usable dialog, form, or save flow.
 - Hidden modals, drawers, and overlays really stop intercepting clicks when hidden.
 - Core workflows implemented in the UI actually work.
+- A passing iframe `load` event is not acceptance evidence. The real Shell V2
+  host shows the complete surface with no blank lower region, clipped controls,
+  or off-canvas toolbar at default size, 640×480, and 360px.
+- Canvas/WebGL apps prove representative non-empty pixels and the primary
+  pointer/keyboard workflow in the mounted host; reopen/reload proves persisted
+  state rather than only a first render.
 - For booking, parking, scheduling, shift, availability, or date/slot domains,
   the common claim/release/book path works in one click from the visible
   calendar/date/slot view.

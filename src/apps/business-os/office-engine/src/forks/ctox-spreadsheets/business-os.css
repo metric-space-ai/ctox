@@ -8,3 +8,17 @@ body[data-ctox-product="ctox-spreadsheets"] #ws-v-scrollbar,
 body[data-ctox-product="ctox-spreadsheets"] #ws-h-scrollbar {
   background: var(--ctox-fork-surface-2) !important;
 }
+
+/* The fork emits an SVG even for sheets without a custom view. The upstream
+   rules size only icon-visible tabs, leaving the inactive SVG at 300x150 and
+   pushing the sheet name below the status bar. Preserve the native visibility
+   state and constrain the SVG only when that view indicator is active. */
+body[data-ctox-product="ctox-spreadsheets"] #status-sheets-bar .nav-tabs > li:not(.icon-visible) > span > .toolbar__icon {
+  display: none;
+}
+
+body[data-ctox-product="ctox-spreadsheets"] #status-sheets-bar .nav-tabs > li.icon-visible > span > .toolbar__icon > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}

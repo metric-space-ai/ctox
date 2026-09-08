@@ -119,21 +119,21 @@ mod tests {
         properties.insert(
             "id".to_string(),
             JsonSchema {
-                schema_type: Some("string".to_string()),
+                schema_type: Some("string".into()),
                 ..Default::default()
             },
         );
         properties.insert(
             "first".to_string(),
             JsonSchema {
-                schema_type: Some("string".to_string()),
+                schema_type: Some("string".into()),
                 ..Default::default()
             },
         );
         properties.insert(
             "last".to_string(),
             JsonSchema {
-                schema_type: Some("string".to_string()),
+                schema_type: Some("string".into()),
                 ..Default::default()
             },
         );

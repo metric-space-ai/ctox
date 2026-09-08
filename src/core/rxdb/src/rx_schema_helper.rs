@@ -28,7 +28,7 @@ pub fn get_pseudo_schema_for_version(version: i32, primary_key: &str) -> RxJsonS
     properties.insert(
         primary_key.to_string(),
         JsonSchema {
-            schema_type: Some("string".to_string()),
+            schema_type: Some("string".into()),
             max_length: Some(100),
             ..Default::default()
         },
@@ -36,7 +36,7 @@ pub fn get_pseudo_schema_for_version(version: i32, primary_key: &str) -> RxJsonS
     properties.insert(
         "value".to_string(),
         JsonSchema {
-            schema_type: Some("string".to_string()),
+            schema_type: Some("string".into()),
             ..Default::default()
         },
     );
@@ -201,7 +201,7 @@ pub fn fill_with_default_settings(mut schema_obj: RxJsonSchema) -> RxJsonSchema 
     schema_obj.properties.insert(
         "_rev".to_string(),
         JsonSchema {
-            schema_type: Some("string".to_string()),
+            schema_type: Some("string".into()),
             min_length: Some(1),
             ..Default::default()
         },
@@ -209,14 +209,14 @@ pub fn fill_with_default_settings(mut schema_obj: RxJsonSchema) -> RxJsonSchema 
     schema_obj.properties.insert(
         "_attachments".to_string(),
         JsonSchema {
-            schema_type: Some("object".to_string()),
+            schema_type: Some("object".into()),
             ..Default::default()
         },
     );
     schema_obj.properties.insert(
         "_deleted".to_string(),
         JsonSchema {
-            schema_type: Some("boolean".to_string()),
+            schema_type: Some("boolean".into()),
             ..Default::default()
         },
     );
@@ -302,13 +302,13 @@ pub fn rx_meta_schema() -> JsonSchema {
     properties.insert(
         "lwt".to_string(),
         JsonSchema {
-            schema_type: Some("number".to_string()),
+            schema_type: Some("number".into()),
             extra: lwt_extra,
             ..Default::default()
         },
     );
     JsonSchema {
-        schema_type: Some("object".to_string()),
+        schema_type: Some("object".into()),
         properties,
         required: vec!["lwt".to_string()],
         // Additional properties allowed (upstream `additionalProperties: true`).
@@ -351,19 +351,19 @@ pub fn default_checkpoint_schema() -> JsonSchema {
     properties.insert(
         "id".to_string(),
         JsonSchema {
-            schema_type: Some("string".to_string()),
+            schema_type: Some("string".into()),
             ..Default::default()
         },
     );
     properties.insert(
         "lwt".to_string(),
         JsonSchema {
-            schema_type: Some("number".to_string()),
+            schema_type: Some("number".into()),
             ..Default::default()
         },
     );
     JsonSchema {
-        schema_type: Some("object".to_string()),
+        schema_type: Some("object".into()),
         properties,
         required: vec!["id".to_string(), "lwt".to_string()],
         additional_properties: Some(false),

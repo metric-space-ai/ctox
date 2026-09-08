@@ -1,6 +1,7 @@
 // Canonical entry point for the ctox-rxdb smoke + guard suite.
 //
 //   node src/apps/business-os/rxdb/tests/run-all.mjs [--fail-fast]
+//     [--require-wire-daemon] [--wire-daemon /absolute/path/to/v15_wire_daemon]
 //
 // Runs every *-smoke.mjs in this directory in its own node process (tests
 // mutate globals like WebSocket/RTCPeerConnection, so isolation matters),
@@ -18,25 +19,22 @@
 //   turns a missing binary into a hard failure instead of a skip — the
 //   cross-process smokes are the only proof that the JS and Rust sides agree
 //   on real wire bytes, so a silent skip there is missing coverage.
+//   --wire-daemon selects one exact build for the runner and both child tests;
+//   a missing explicit path fails instead of falling back to another build.
 // - A red test is a finding, not noise. Never delete or weaken a test to make
 //   this suite pass; fix the code or update the pinned contract on purpose.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveWireDaemon } from './wire-daemon-fixture.mjs';
 
 const testDir = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(testDir, '../../../../..');
 const failFast = process.argv.includes('--fail-fast');
 
-const daemonCandidates = [
-  join(repoRoot, 'runtime/build/cargo-target/release/examples/v15_wire_daemon'),
-  join(repoRoot, 'runtime/build/cargo-target/debug/examples/v15_wire_daemon'),
-  join(repoRoot, 'src/core/rxdb/runtime/build/cargo-target/release/examples/v15_wire_daemon'),
-  join(repoRoot, 'src/core/rxdb/runtime/build/cargo-target/debug/examples/v15_wire_daemon'),
-];
-const daemonAvailable = daemonCandidates.some((path) => existsSync(path));
+const daemonBin = resolveWireDaemon();
+const daemonAvailable = Boolean(daemonBin);
 const requireWireDaemon = process.argv.includes('--require-wire-daemon');
 
 if (requireWireDaemon && !daemonAvailable) {
@@ -51,6 +49,8 @@ const tests = readdirSync(testDir)
   .filter((name) => name.endsWith('-smoke.mjs'))
   .sort();
 
+if (daemonBin) console.log(`Wire daemon: ${daemonBin}`);
+
 const results = [];
 let failed = 0;
 let skipped = 0;
@@ -63,7 +63,9 @@ for (const name of tests) {
   }
   const startedAt = Date.now();
   try {
-    execFileSync(process.execPath, [join(testDir, name)], {
+    const args = [join(testDir, name)];
+    if (name.startsWith('cross-process-')) args.push('--wire-daemon', daemonBin);
+    execFileSync(process.execPath, args, {
       stdio: 'pipe',
       timeout: 180_000,
     });

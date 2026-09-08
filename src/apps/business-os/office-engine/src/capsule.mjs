@@ -1,4 +1,5 @@
 import { OfficeRpcPeer } from './rpc.mjs';
+import { readShellAppearance, observeShellAppearance } from './shell-appearance.mjs';
 
 const VALID_KINDS = new Set(['document', 'spreadsheet']);
 const OFFICE_OPERATION_TIMEOUT_MS = 120000;
@@ -20,7 +21,7 @@ export async function createCtoxOfficeEditor(options = {}) {
   frameUrl.searchParams.set('kind', kind);
   const assetRevision = new URL(import.meta.url).searchParams.get('v');
   if (assetRevision) frameUrl.searchParams.set('v', assetRevision);
-  frame.src = frameUrl.href;
+  frame.srcdoc = capsuleFrameDocument(frameUrl, assetRevision);
   options.host.replaceChildren(frame);
 
   await waitForFrameLoad(frame, options.loadTimeoutMs);
@@ -42,7 +43,8 @@ export async function createCtoxOfficeEditor(options = {}) {
     kind,
     productName,
     locale: options.locale === 'en' ? 'en' : 'de',
-    theme: options.theme || 'system',
+    theme: currentShellTheme(options.theme),
+    appearance: readShellAppearance(options.host, options.theme),
     permissions: normalizePermissions(options.permissions),
     launchArgs: sanitizeLaunchArgs(options.launchArgs, readyTimeoutMs),
   }, location.origin, [channel.port2]);
@@ -57,10 +59,9 @@ export async function createCtoxOfficeEditor(options = {}) {
   }
 
   let destroyed = false;
-  const themeObserver = new MutationObserver(() => {
-    if (!destroyed) rpc.call('editor.setTheme', currentShellTheme(options.theme)).catch(() => {});
+  const stopAppearanceObserver = observeShellAppearance(options.host, options.theme, (appearance) => {
+    if (!destroyed) rpc.call('editor.setAppearance', appearance).catch(() => {});
   });
-  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   return Object.freeze({
     kind,
     open: (request) => rpc.call('editor.open', request, { timeoutMs: OFFICE_OPERATION_TIMEOUT_MS }),
@@ -79,7 +80,7 @@ export async function createCtoxOfficeEditor(options = {}) {
     async destroy() {
       if (destroyed) return;
       destroyed = true;
-      themeObserver.disconnect();
+      stopAppearanceObserver();
       try { await rpc.call('editor.destroy', null, { timeoutMs: 3000 }); } catch {}
       offEvent();
       rpc.close();
@@ -87,6 +88,26 @@ export async function createCtoxOfficeEditor(options = {}) {
       frame.remove();
     },
   });
+}
+
+function capsuleFrameDocument(frameUrl, assetRevision) {
+  const assetRoot = new URL('.', frameUrl);
+  const revision = assetRevision ? `?v=${encodeURIComponent(assetRevision)}` : '';
+  return `<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>CTOX Editor</title>
+    <link rel="stylesheet" href="${assetRoot.href}frame.css${revision}">
+  </head>
+  <body>
+    <main id="ctox-office-frame-root" aria-live="polite">
+      <div class="ctox-office-frame-loading">CTOX Editor wird initialisiert …</div>
+    </main>
+    <script type="module" src="${assetRoot.href}frame-runtime.mjs${revision}"></script>
+  </body>
+</html>`;
 }
 
 function currentShellTheme(fallback = 'system') {

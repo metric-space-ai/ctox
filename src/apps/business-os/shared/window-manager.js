@@ -1,4 +1,5 @@
 import { resolveWindowLayout } from './window-layout-resolver.js';
+import { createWindowCloseGate } from './window-close-gate.js';
 
 const CONST = {
   CASCADE_STEP: 22,
@@ -1075,6 +1076,22 @@ export function createWindowManager({
   function destroy(id) {
     const win = windows.find((w) => w.id === id);
     if (!win || win._destroying) return;
+    if (win._closeGate) return win._closeGate.request(() => finishWindowDestroy(win));
+    return finishWindowDestroy(win);
+  }
+
+  function registerCloseGuard(host, guard) {
+    const win = windows.find((entry) => host && entry.element.contains(host));
+    if (!win || win._destroying) return () => {};
+    win._closeGate ||= createWindowCloseGate(() => {
+      bus.emit('window:close_blocked', { id: win.id, ownerId: win.ownerId });
+    });
+    return win._closeGate.add(guard);
+  }
+
+  function finishWindowDestroy(win) {
+    if (win._destroying) return;
+    const id = win.id;
     win._destroying = true;
     bus.emit('window:closing', { id, ownerId: win.ownerId });
     for (const dependent of windows) {
@@ -2090,6 +2107,7 @@ export function createWindowManager({
       else if (win.state === 'maximized') toggleMaximize(id);
     },
     destroy,
+    registerCloseGuard,
     destroyAll,
     closeOthersOfOwner,
     listWindows,

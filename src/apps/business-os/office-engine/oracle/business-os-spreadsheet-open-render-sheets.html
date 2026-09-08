@@ -4,10 +4,10 @@
     <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,">
     <link rel="stylesheet" href="../../app.css"><link rel="stylesheet" href="../../shared/base.css">
     <title>Business OS · spreadsheet.open-render-sheets</title>
-    <style>html,body,#shell,#app{height:100%;margin:0;overflow:hidden}#shell{display:grid;grid-template-columns:240px minmax(0,1fr) 260px;background:var(--bg)}#left,#right{min-width:0;overflow:auto;background:var(--surface);color:var(--text)}#status{position:fixed;z-index:9999;right:12px;top:8px;padding:5px 9px;border-radius:4px;background:color-mix(in srgb,var(--text) 92%,transparent);color:var(--surface);font:12px ui-monospace,monospace;pointer-events:none}@media(max-width:720px){#shell{grid-template-columns:minmax(0,1fr)}#left,#right{display:none}#status{right:6px;top:4px}}</style>
+    <style>html,body,#shell,#app{height:100%;margin:0;overflow:hidden}#shell{display:grid;grid-template-columns:240px minmax(0,1fr) 260px;background:var(--bg)}#shell:has(#right[hidden]){grid-template-columns:240px minmax(0,1fr)}#left,#right{min-width:0;overflow:auto;background:var(--surface);color:var(--text)}#right[hidden]{display:none!important}#status{position:fixed;z-index:9999;right:12px;top:8px;padding:5px 9px;border-radius:4px;background:color-mix(in srgb,var(--text) 92%,transparent);color:var(--surface);font:12px ui-monospace,monospace;pointer-events:none}@media(max-width:720px){#shell{grid-template-columns:minmax(0,1fr)}#left,#right{display:none}#status{right:6px;top:4px}}</style>
   </head>
   <body>
-    <div id="status" role="status">booting</div><div id="shell"><aside id="left"></aside><main id="app"></main><aside id="right"></aside></div>
+    <div id="status" role="status">booting</div><div id="shell"><aside id="left"></aside><main id="app"></main><aside id="right" data-right-pane></aside></div>
     <script type="module">
       import { mount } from '../../modules/spreadsheets/index.js';
       const params = new URLSearchParams(location.search);
@@ -109,7 +109,19 @@
       };
       window.addEventListener('offline', () => setReplicationUp(false));
       window.addEventListener('online', () => setReplicationUp(true));
-      const sync = { async startCollection(name) { syncEvents.push({ event: 'start', collection: name, replicationUp, at: Date.now() }); return { state: { awaitInSync: () => replicationUp ? Promise.resolve() : new Promise((resolve) => syncWaiters.add(resolve)) } }; } };
+      const sync = {
+        async startCollection(name) {
+          syncEvents.push({ event: 'start', collection: name, replicationUp, at: Date.now() });
+          return { state: { awaitInSync: () => replicationUp ? Promise.resolve() : new Promise((resolve) => syncWaiters.add(resolve)) } };
+        },
+        async leaseCollection(name, reason) {
+          syncEvents.push({ event: 'lease', collection: name, reason, replicationUp, at: Date.now() });
+          return {
+            bridge: { state: { awaitInSync: () => replicationUp ? Promise.resolve() : new Promise((resolve) => syncWaiters.add(resolve)) } },
+            async release() { syncEvents.push({ event: 'release', collection: name, reason, at: Date.now() }); },
+          };
+        },
+      };
       const doc = (value) => value ? { ...value, toJSON() { return { ...value }; }, async incrementalPatch(patch) { Object.assign(value, patch); } } : null;
       const collection = (name) => ({
         $: { subscribe() { return { unsubscribe() {} }; } },

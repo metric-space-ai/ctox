@@ -35,6 +35,7 @@ ctox-web-stack = { git = "https://github.com/metric-space-ai/workjet", rev = "48
 ctox-sqlserver-adapter = { path = "src/tools/sqlserver-mcp" }
 ctox-postgres-adapter = { path = "src/tools/postgres-adapter" }
 rxdb = { package = "ctox-rxdb", path = "src/core/rxdb" }
+ctox-sync = { path = "src/core/sync", features = ["webrtc"] }
 ctox-mailserver = { path = "src/core/mailserver" }
 crossterm = "0.28"
 # Ohne Vorgabemerkmale: `https` bindet libgit2 gegen OpenSSL, und OpenSSL
@@ -128,6 +129,7 @@ exclude = [
     "src/core/inference/models/voxtral_mini_4b_realtime_2602",
     "src/core/mailserver",
     "src/core/rxdb",
+    "src/core/sync",
     "src/tools/appsec-pentest",
     "src/tools/doc-stack",
     "src/tools/pdf-parse",

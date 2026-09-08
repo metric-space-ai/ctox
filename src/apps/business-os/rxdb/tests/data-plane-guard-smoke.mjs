@@ -101,28 +101,28 @@ for (const file of readdirSync(rustPluginDir).filter((name) => name.endsWith('.r
 }
 
 // ---------------------------------------------------------------------------
-// Cache-buster parity: both direct bundle importers must carry an IDENTICAL
-// `?v=` string. The browser module cache keys on the full URL — a mismatch
-// loads a SECOND copy of the bundle with its own SHARED_ROOM_PEERS map, i.e.
-// a duplicate signaling socket + RTCPeerConnection per room (peer storm).
-// App modules (matching included) now receive the database handle from the
-// shell facade (setBusinessOsDatabaseContext) and no longer import the bundle,
-// so they carry no buster of their own. See docs/ctox-rxdb.md §9.
-// ---------------------------------------------------------------------------
+// One canonical bundle importer owns module identity. DB and sync consumers
+// must use it, including timeout/recovery paths; URL parity is no longer a
+// manually maintained promise across several independent imports.
 {
-  const importers = [
-    resolve(repoRoot, 'src/apps/business-os/shared/db.js'),
-    resolve(repoRoot, 'src/apps/business-os/shared/sync.js'),
-  ];
-  const busters = importers.map((path) => {
-    const match = readFileSync(path, 'utf8').match(/ctox-rxdb-js\.mjs\?v=([^'"`]+)/);
-    return { path: relative(repoRoot, path), buster: match?.[1] || null };
-  });
-  const distinct = new Set(busters.map((entry) => entry.buster));
-  if (distinct.size !== 1 || distinct.has(null)) {
-    offenders.push(
-      `cache-buster mismatch across bundle importers: ${busters.map((e) => `${e.path}=?v=${e.buster}`).join(', ')}`,
-    );
+  const sharedDir = resolve(repoRoot, 'src/apps/business-os/shared');
+  const runtimePath = resolve(sharedDir, 'rxdb-runtime.js');
+  const runtime = readFileSync(runtimePath, 'utf8');
+  const urls = runtime.match(/ctox-rxdb-js\.mjs\?v=([^'"`]+)/g) || [];
+  if (urls.length !== 1 || /[&?]retry=/.test(runtime)) {
+    offenders.push('rxdb-runtime.js must define exactly one versioned bundle URL without retry variants');
+  }
+  for (const name of readdirSync(sharedDir).filter((name) => name.endsWith('.js') && name !== 'rxdb-runtime.js')) {
+    const source = readFileSync(resolve(sharedDir, name), 'utf8');
+    if (/ctox-rxdb-js\.mjs\?/.test(source)) {
+      offenders.push(`${name}: direct versioned RxDB bundle reference bypasses the canonical loader`);
+    }
+  }
+  for (const name of ['db.js', 'sync.js']) {
+    const source = readFileSync(resolve(sharedDir, name), 'utf8');
+    if (!/import\s*\{\s*loadRxdbRuntime\s*\}\s*from\s*['"]\.\/rxdb-runtime\.js['"]/.test(source)) {
+      offenders.push(`${name}: must import the canonical RxDB runtime loader`);
+    }
   }
 }
 

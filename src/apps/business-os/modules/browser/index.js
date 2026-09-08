@@ -3437,7 +3437,7 @@ function renderControls(ctx, refs, state) {
     // NICHT am Fokus aufhaengen. Ein Klick AUF diesen Knopf ist die
     // Interaktion, die die Uebernahme rechtfertigt - ein deaktivierter Knopf
     // kann diesen Klick nie empfangen. Meldet die Huelle kein `is-focused`
-    // (gemessen am 03.09.2026 auf THESEN: visibilityState=hidden,
+    // (gemessen am 03.09.2026 auf einer betroffenen Instanz: visibilityState=hidden,
     // hasFocus()=false bei offenem Fenster), war die Sitzung dauerhaft
     // unbedienbar UND der einzige Ausweg gesperrt.
     refs.controllerAcquire.disabled = !hasSession || isStopped || canControl;
@@ -3508,7 +3508,7 @@ function frameEmptyText(state) {
   // Eine abgelaufene Steuerpacht sieht aus wie ein haengendes Bild: der
   // Bildtakt fragt ohne Pacht gar nicht erst, und die Buehne meldete
   // "Browser-Inhalt wird geladen", waehrend die Sitzung "Bereit" zeigte.
-  // Am 03.09.2026 auf THESEN gemessen: Pacht seit 4,7 Stunden abgelaufen.
+  // Am 03.09.2026 auf einer betroffenen Instanz: Pacht seit 4,7 Stunden abgelaufen.
   const pachtEndeMs = Number(session.controller_lease_expires_at_ms || 0);
   const pachtTot = !Number.isFinite(pachtEndeMs) || pachtEndeMs <= Date.now();
   if (['active', 'running', 'capturing'].includes(status) && pachtTot) {

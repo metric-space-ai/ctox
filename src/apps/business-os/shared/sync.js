@@ -25,6 +25,7 @@ import {
 } from './sync-contract.js?v=20260831-shell-v2-unified-v325';
 import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260831-shell-v2-unified-v325';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
+import { loadRxdbRuntime } from './rxdb-runtime.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 // Multi-tab leadership may span a rolling Business OS release: an already
@@ -112,7 +113,7 @@ const UNREGISTERED_SWEEP_RETRY_MS = 15000;
 const STALLED_RECONNECT_MIN_AGE_MS = 30000;
 const COLLECTION_START_QUEUE_STEP_TIMEOUT_MS = 3_000;
 const COLLECTION_RESTART_GAP_MS = 500;
-// Feldmessung 04.09.2026 (THESEN): sieben Kollektionen standen dauerhaft auf
+// Feldmessung 04.09.2026 (betroffene Instanz): sieben Kollektionen standen dauerhaft auf
 // initialReplicationState 'pending' und durchliefen wiederholt 'restarting'.
 // Ohne Herkunftsvermerk am Datensatz laesst sich nicht belegen, WELCHER Pfad
 // den raumweiten Neustart ausloest. Der Zaehler ist reine Diagnose.
@@ -271,6 +272,7 @@ export function createSyncRuntime({
   };
   const recordCollection = (collection, update) => {
     const current = diagnostics.collections[collection] || {};
+    update = preserveSchemaFailure(current, update);
     const updatedAt = new Date().toISOString();
     const declaredSyncProfile = declaredCollectionSyncProfile(collection);
     const demandOnly = isDemandOnlyPullCollection(collection);
@@ -511,7 +513,7 @@ export function createSyncRuntime({
   emitDiagnostic({ phase: 'ready' });
   const ensureMultiTabCoordinator = async () => {
     if (multiTabCoordinator) return multiTabCoordinator;
-    const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260831-shell-v2-unified-v325');
+    const rxdb = db?.rxdb || await loadRxdbRuntime();
     if (typeof rxdb?.getMultiTabSyncCoordinator !== 'function') return null;
     multiTabCoordinator = rxdb.getMultiTabSyncCoordinator({
       databaseName: db?.name || db?.raw?.name || 'ctox_business_os_js_v1',
@@ -1535,7 +1537,7 @@ async function startWebRtcReplication({
     await repairDesktopIconsBeforeReplication(rxCollection);
   }
   const replicationCollection = collectionForReplication(collection, rxCollection);
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260831-shell-v2-unified-v325');
+  const rxdb = db?.rxdb || await loadRxdbRuntime();
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }
@@ -3099,7 +3101,30 @@ export function classifyReplicationErrorKind(collection, error) {
   return { kind: 'generic', classified: null };
 }
 
+// A room-level transport can be open while this collection is rejected.
+// Startup/watchdog updates must not erase its protocol failure. Only the
+// collection's validated protocol callback can establish compatibility again.
+function preserveSchemaFailure(current, update) {
+  if (current.lastError?.phase !== 'schema-handshake' || current.lastError?.retryable !== false) return update;
+  if (update.lastError?.phase === 'schema-handshake') return update;
+  const protocolAccepted = update.connectionStatus === 'connected'
+    && update.lastError === null
+    && update.remotePeerSession
+    && update.remoteCapabilities?.includes('ctox-schema-hash-v1')
+    && update.remoteCheckpoint?.state === 'advertised'
+    && update.remoteCheckpoint?.epoch;
+  if (protocolAccepted) return update;
+  return {
+    ...update,
+    status: 'error',
+    connectionStatus: 'error',
+    queryReady: false,
+    lastError: current.lastError,
+  };
+}
+
 export const __ctoxSyncTestHooks = {
+  preserveSchemaFailure,
   classifySignalingControlPlaneError,
   classifyPeerLifecycleEvent,
   classifySchemaProtocolError,

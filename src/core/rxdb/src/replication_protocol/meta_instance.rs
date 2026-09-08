@@ -33,7 +33,7 @@ pub fn get_rx_replication_meta_instance_schema(
     properties.insert(
         "id".to_string(),
         JsonSchema {
-            schema_type: Some("string".to_string()),
+            schema_type: Some("string".into()),
             min_length: Some(1),
             // +1 for '|' and +1 for the 'isCheckpoint' flag
             max_length: Some(parent_primary_key_length + 2),
@@ -43,7 +43,7 @@ pub fn get_rx_replication_meta_instance_schema(
     properties.insert(
         "isCheckpoint".to_string(),
         JsonSchema {
-            schema_type: Some("string".to_string()),
+            schema_type: Some("string".into()),
             min_length: Some(1),
             max_length: Some(1),
             ..Default::default()
@@ -52,7 +52,7 @@ pub fn get_rx_replication_meta_instance_schema(
     properties.insert(
         "itemId".to_string(),
         JsonSchema {
-            schema_type: Some("string".to_string()),
+            schema_type: Some("string".into()),
             // Ensure all values of RxStorageReplicationDirection ('DOWN' has 4 chars) fit.
             max_length: Some(if parent_primary_key_length > 4 {
                 parent_primary_key_length
@@ -65,7 +65,7 @@ pub fn get_rx_replication_meta_instance_schema(
     properties.insert(
         "checkpointData".to_string(),
         JsonSchema {
-            schema_type: Some("object".to_string()),
+            schema_type: Some("object".into()),
             additional_properties: Some(true),
             ..Default::default()
         },
@@ -73,7 +73,7 @@ pub fn get_rx_replication_meta_instance_schema(
     properties.insert(
         "docData".to_string(),
         JsonSchema {
-            schema_type: Some("object".to_string()),
+            schema_type: Some("object".into()),
             properties: replicated_documents_schema.properties.clone(),
             ..Default::default()
         },
@@ -81,7 +81,7 @@ pub fn get_rx_replication_meta_instance_schema(
     properties.insert(
         "isResolvedConflict".to_string(),
         JsonSchema {
-            schema_type: Some("string".to_string()),
+            schema_type: Some("string".into()),
             ..Default::default()
         },
     );

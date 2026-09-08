@@ -49,9 +49,14 @@ test('create dialog validation requires title, local domain, and task prompt', (
   assert.equal(hooks.validateResearchTaskInput({ title: 'Vendor Research', domain: bases[0].domain, prompt: 'Analyse vendors' }, bases).valid, true);
 });
 
-test('measurement semantics never fall back to legacy radial load and retain zeroes', () => {
+test('measurement semantics derive honest axial and equivalent radial loads without legacy zero fallbacks', () => {
   assert.equal(hooks.tangentialEquivalentForce({ radial_load_N: 4 }), '');
   assert.equal(hooks.tangentialEquivalentForce({ radial_load_N: 4, tangential_equivalent_force_N: 0 }), 0);
+  assert.equal(hooks.tangentialEquivalentForce({ torque_Nm_derived: 0.2, diameter_m_input: 0.4 }), 1);
+  assert.equal(hooks.tangentialEquivalentForce({ torque_Nm_derived: 0.2 }), '');
+  assert.equal(hooks.axialForceApprox({ thrust_N_derived: -5.5 }), 5.5);
+  assert.equal(hooks.motorKvValue({ rpm: 12000, voltage_V: 12 }), 1000);
+  assert.equal(hooks.motorKvValue({ rpm: 12000 }), '');
   assert.equal(hooks.metricPropellerLength({ prop_diameter_mm: 0, prop_diameter_in: 9 }, 'prop_diameter'), 0);
 
   const measurements = hooks.aggregateMeasurements([
@@ -222,6 +227,65 @@ test('research task history collapses into one visible domain lineage', () => {
   assert.equal(tasks.length, 2);
   assert.equal(tasks[0].id, 'task-current');
   assert.deepEqual(tasks[0].lineage_task_ids, ['task-current', 'task-old']);
+});
+
+test('deleted tasks never lead or join a domain lineage', () => {
+  assert.equal(hooks.isDeletedResearchTask({ id: 'a', status: 'deleted' }), true);
+  assert.equal(hooks.isDeletedResearchTask({ id: 'a', status: 'ready', is_deleted: true }), true);
+  assert.equal(hooks.isDeletedResearchTask({ id: 'a', status: 'ready', _deleted: true }), true);
+  assert.equal(hooks.isDeletedResearchTask({ id: 'a', status: 'ready' }), false);
+
+  const tasks = hooks.collapseResearchTaskLineages([
+    { id: 'task-live', title: 'Drone Bearing Design Verified', knowledge_domain: 'drone_bearing_design', status: 'ready', updated_at_ms: 10 },
+    { id: 'task-deleted', title: 'Integrated Rolling Bearing', knowledge_domain: 'drone_bearing_design', status: 'deleted', is_deleted: true, updated_at_ms: 20 },
+    { id: 'task-gone', knowledge_domain: 'only_deleted', status: 'deleted', updated_at_ms: 30 },
+  ]);
+
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].id, 'task-live');
+  assert.deepEqual(tasks[0].lineage_task_ids, ['task-live']);
+});
+
+test('counts stay hidden until the first reload finished and retries back off after failures', () => {
+  assert.equal(hooks.researchDataState(), 'syncing');
+  assert.equal(hooks.countText(138), '…');
+  assert.equal(hooks.countText(0), '…');
+  assert.equal(
+    hooks.taskSourceSummary({ id: 'task-x', knowledge_domain: 'drone_bearing_design' }),
+    'Quellen werden synchronisiert …',
+  );
+
+  assert.equal(hooks.failureRetryDelay(0), 5000);
+  assert.equal(hooks.failureRetryDelay(1), 10000);
+  assert.equal(hooks.failureRetryDelay(2), 20000);
+  assert.equal(hooks.failureRetryDelay(3), 40000);
+  assert.equal(hooks.failureRetryDelay(4), 60000);
+  assert.equal(hooks.failureRetryDelay(9), 60000);
+});
+
+test('a terminal command status overrides a stale open queue projection', () => {
+  assert.equal(hooks.resolveRunStatus({ status: 'queued' }, { status: 'cancelled' }, { status: 'chat' }), 'cancelled');
+  assert.equal(hooks.resolveRunStatus({ status: 'pending' }, { status: 'failed' }, null), 'failed');
+  assert.equal(hooks.resolveRunStatus({ status: 'running' }, { status: 'accepted' }, null), 'running');
+  assert.equal(hooks.resolveRunStatus(null, { status: 'accepted' }, { status: 'chat' }), 'accepted');
+  assert.equal(hooks.resolveRunStatus(null, null, { status: 'chat' }), 'chat');
+});
+
+test('sub-theme chips only offer clusters that match a source in the current list', () => {
+  const all = hooks.availableSubthemes([], 'all');
+  assert.deepEqual(all.map((theme) => theme.id), ['all']);
+
+  const sources = [
+    { id: 'src-1', title: 'Propeller thrust and rotor load measurements', sourceClass: 'dataset', row: {} },
+    { id: 'src-2', title: 'Wind tunnel aerodynamic study', sourceClass: 'article', row: {} },
+  ];
+  const offered = hooks.availableSubthemes(sources, 'all').map((theme) => theme.id);
+  assert.equal(offered[0], 'all');
+  assert.ok(offered.length >= 2, 'a matching cluster is offered');
+  assert.ok(offered.length < 6, 'clusters without a matching source are not offered');
+
+  const sticky = hooks.availableSubthemes([], offered[1]).map((theme) => theme.id);
+  assert.deepEqual(sticky, ['all', offered[1]]);
 });
 
 test('create task preserves selected local knowledge domain ids', () => {
@@ -861,7 +925,7 @@ test('empty dashboard keeps standard header and disabled workbench controls', ()
 
   assert.match(markup, /ctox-pane-header ctox-pane-band research-center-header/);
   assert.match(markup, /data-action="refresh"/);
-  assert.match(markup, /data-action="new-task"/);
+  assert.match(markup, /data-action="new-task-center"/);
   assert.match(markup, /research-empty-workbench/);
   assert.match(markup, /disabled/);
   assert.match(markup, /Quellensuche|Source search/);
@@ -870,11 +934,19 @@ test('empty dashboard keeps standard header and disabled workbench controls', ()
 
 test('initial research loading cannot masquerade as an empty knowledge base', () => {
   assert.match(researchSource, /initialDataReady: false/);
+  assert.match(researchSource, /state\.initialDataReady = true;\s*render\(\);/);
   assert.match(researchSource, /await waitForReplicationBridge\(bridge, collection\)/);
   assert.match(researchSource, /subscribeCollectionReadiness/);
   assert.match(researchSource, /dataEmptyShowsSyncing\(true, tasksReadiness\)/);
   assert.match(researchSource, /Research-Daten werden mit dieser Instanz synchronisiert/);
   assert.match(researchSource, /await refreshAll\(\{ seed: true, mountToken \}\)[\s\S]*?state\.initialDataReady = true/);
+});
+
+test('research start button dispatches the typed automation command directly', () => {
+  assert.match(researchSource, /state\.ctx\.commandBus\.dispatch\(\{/);
+  assert.match(researchSource, /command_type: 'research\.systematic\.run'/);
+  assert.match(researchSource, /transport: 'command-bus'/);
+  assert.doesNotMatch(researchSource, /openBusinessChat\(\{/);
 });
 
 test('research and knowledge events use independent refresh timers', () => {

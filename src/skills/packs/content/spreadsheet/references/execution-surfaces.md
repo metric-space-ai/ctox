@@ -25,7 +25,7 @@ change; the skill must not promise operations the build cannot perform.
 
 Verify with `node src/scripts/check-office-skill-gating.mjs` after edits.
 
-## Package operations (ctox-office-engine)
+## Package operations (ctox office / ctox-office-engine)
 
 | Operation | Op | Status |
 |---|---|---|
@@ -33,7 +33,19 @@ Verify with `node src/scripts/check-office-skill-gating.mjs` after edits.
 | Prepare source package as editor payload | `prepare-editor` | available |
 | Inspect a prepared editor payload | `inspect-editor` | available |
 | Export (byte-preserving round-trip/merge) | `export` | available |
-| Workbook data extraction (values/formulas as data) | planned read API analog to inspect | planned |
+| Workbook data extraction (values/formulas as data) | `read` | available; formula results are cached values |
+| Typed cell batch with exact base SHA-256 and new output file | `spreadsheet-patch` | available; recalculation required |
+
+The embedded `ctox office` command and standalone `ctox-office-engine` use the
+same native implementation. `spreadsheet-patch` supports text, numbers,
+booleans, formula text and clearing cells; it refuses protected worksheets,
+array/shared/data-table formulas and duplicate targets. It is not a formula
+evaluator. Recalculate dependent values in the editor before relying on them.
+See `docs/native-office-cli.md` for the typed batch schema and limits.
+
+These are local-file tools, not managed-record writeback commands. Persisting
+Business OS versions still requires the server-authoritative command policy
+and WebRTC/RxDB data path; do not report a local output as saved in the app.
 
 ## Practical consequence
 

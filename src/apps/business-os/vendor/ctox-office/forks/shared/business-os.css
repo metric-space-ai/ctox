@@ -1,32 +1,54 @@
 /* CTOX downstream fork chrome. Editor canvas/layout rules remain owned by sdkjs. */
 :root[data-ctox-product] {
-  --ctox-fork-workspace: oklch(0.955 0.006 235);
-  --ctox-fork-surface: oklch(0.987 0.005 235);
-  --ctox-fork-surface-2: oklch(0.944 0.008 235);
-  --ctox-fork-line: oklch(0.82 0.012 235);
-  --ctox-fork-text: oklch(0.29 0.015 235);
-  --ctox-fork-muted: oklch(0.52 0.02 235);
-  --ctox-fork-accent: oklch(0.53 0.09 185);
-  --ctox-fork-accent-soft: oklch(0.91 0.035 185);
+  --ctox-fork-workspace: var(--ctox-shell-bg, oklch(0.955 0.006 235));
+  --ctox-fork-surface: var(--ctox-shell-surface, oklch(0.987 0.005 235));
+  --ctox-fork-surface-2: var(--ctox-shell-surface-2, oklch(0.944 0.008 235));
+  --ctox-fork-line: var(--ctox-shell-line, oklch(0.82 0.012 235));
+  --ctox-fork-text: var(--ctox-shell-text, oklch(0.29 0.015 235));
+  --ctox-fork-muted: var(--ctox-shell-muted, oklch(0.52 0.02 235));
+  --ctox-fork-accent: var(--ctox-shell-accent, oklch(0.53 0.09 185));
+  --ctox-fork-accent-soft: var(--ctox-shell-accent-soft, oklch(0.91 0.035 185));
   color-scheme: light;
 }
 
 :root[data-ctox-product][data-ctox-theme="dark"] {
-  --ctox-fork-workspace: oklch(0.2 0.008 235);
-  --ctox-fork-surface: oklch(0.24 0.009 235);
-  --ctox-fork-surface-2: oklch(0.28 0.011 235);
-  --ctox-fork-line: oklch(0.39 0.015 235);
-  --ctox-fork-text: oklch(0.9 0.01 235);
-  --ctox-fork-muted: oklch(0.69 0.018 235);
-  --ctox-fork-accent: oklch(0.72 0.09 185);
-  --ctox-fork-accent-soft: oklch(0.34 0.045 185);
+  --ctox-fork-workspace: var(--ctox-shell-bg, oklch(0.2 0.008 235));
+  --ctox-fork-surface: var(--ctox-shell-surface, oklch(0.24 0.009 235));
+  --ctox-fork-surface-2: var(--ctox-shell-surface-2, oklch(0.28 0.011 235));
+  --ctox-fork-line: var(--ctox-shell-line, oklch(0.39 0.015 235));
+  --ctox-fork-text: var(--ctox-shell-text, oklch(0.9 0.01 235));
+  --ctox-fork-muted: var(--ctox-shell-muted, oklch(0.69 0.018 235));
+  --ctox-fork-accent: var(--ctox-shell-accent, oklch(0.72 0.09 185));
+  --ctox-fork-accent-soft: var(--ctox-shell-accent-soft, oklch(0.34 0.045 185));
   color-scheme: dark;
 }
 
-body[data-ctox-product] {
+:root body[data-ctox-product] {
+  /* Outrank upstream :root .theme-light/.theme-dark variable declarations. */
+  --toolbar-header-document: var(--ctox-fork-surface-2);
+  --toolbar-header-spreadsheet: var(--ctox-fork-surface-2);
+  --text-toolbar-header-on-background-document: var(--ctox-fork-text);
+  --text-toolbar-header-on-background-spreadsheet: var(--ctox-fork-text);
+  --background-normal: var(--ctox-fork-surface);
+  --background-toolbar: var(--ctox-fork-surface-2);
+  --background-pane: var(--ctox-fork-surface);
+  --background-statusbar: var(--ctox-fork-surface);
+  --background-fill-input: var(--ctox-fork-surface);
+  --text-normal: var(--ctox-fork-text);
+  --text-normal-pressed: var(--ctox-fork-text);
+  --text-secondary: var(--ctox-fork-muted);
+  --text-fill-input: var(--ctox-fork-text);
+  --text-fill-input-readonly: var(--ctox-fork-muted);
+  --icon-gray-primary: var(--ctox-fork-text);
+  --icon-gray-secondary: var(--ctox-fork-muted);
+  --icon-blue-primary: var(--ctox-fork-accent);
+  --icon-blue-secondary: var(--ctox-fork-accent-soft);
+  --border-toolbar: var(--ctox-fork-line);
+  --border-toolbar-active-panel-top: var(--ctox-fork-line);
+  --border-control-focus: var(--ctox-fork-accent);
   background: var(--ctox-fork-workspace) !important;
   color: var(--ctox-fork-text) !important;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif !important;
+  font-family: var(--ctox-shell-font, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif) !important;
 }
 
 body[data-ctox-product] #toolbar,
@@ -45,6 +67,8 @@ body[data-ctox-product] #toolbar {
 }
 
 body[data-ctox-product] #toolbar .extra.left,
+body[data-ctox-product] #toolbar .slot-btn-user-name,
+body[data-ctox-product] #toolbar .btn-current-user,
 body[data-ctox-product] #left-btn-about,
 body[data-ctox-product] .synch-tip-root {
   display: none !important;
@@ -52,6 +76,15 @@ body[data-ctox-product] .synch-tip-root {
 
 body[data-ctox-product] #toolbar .box-tabs {
   padding-inline: 6px !important;
+}
+
+/* The editor contributes editing tools, never a second branded application
+   frame. Keep ribbon commands, formula bar, sheets and zoom fully functional. */
+body[data-ctox-product] #toolbar .panel,
+body[data-ctox-product] #toolbar .box-controls,
+body[data-ctox-product] .toolbar-fullview-panel {
+  border-radius: 0 !important;
+  box-shadow: none !important;
 }
 
 body[data-ctox-product] #toolbar .tabs .ribtab > a {
@@ -68,7 +101,8 @@ body[data-ctox-product] #toolbar .tabs .ribtab > a:focus-visible {
 }
 
 body[data-ctox-product] #toolbar .tabs .ribtab.active > a {
-  box-shadow: inset 0 -2px 0 var(--ctox-fork-accent) !important;
+  box-shadow: none !important;
+  border-bottom: 2px solid var(--ctox-fork-accent) !important;
 }
 
 body[data-ctox-product] button,

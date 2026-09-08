@@ -3,7 +3,8 @@
   "phase": "rxdb-protocol-handshake",
   "roles": {
     "browser": "browser",
-    "native": "ctox_instance"
+    "native": "ctox_instance",
+    "worker": "workjet_executor"
   },
   "requiredCapabilities": [
     "ctox-schema-hash-v1",

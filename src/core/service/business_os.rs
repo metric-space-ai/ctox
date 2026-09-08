@@ -363,14 +363,22 @@ pub fn handle_business_os_command(root: &Path, args: &[String]) -> anyhow::Resul
 
 fn handle_business_os_shell_update(root: &Path, args: &[String]) -> anyhow::Result<()> {
     let action = args.first().map(String::as_str).unwrap_or("status");
+    let version = match args.get(1..).unwrap_or_default() {
+        [] => None,
+        [flag, version] if action == "stage" && flag == "--version" => Some(version.as_str()),
+        _ => anyhow::bail!("shell-update accepts only stage --version <signed-release-version> as additional arguments"),
+    };
     let result = match action {
         "status" => crate::business_os::shell_update::status(root, true),
         "check" => crate::business_os::shell_update::check(root),
-        "stage" => crate::business_os::shell_update::stage(root),
+        "stage" => match version {
+            Some(version) => crate::business_os::shell_update::stage_version(root, version),
+            None => crate::business_os::shell_update::stage(root),
+        },
         "activate" => crate::business_os::shell_update::activate(root),
         "rollback" => crate::business_os::shell_update::rollback(root),
         "--help" | "-h" => {
-            println!("usage: ctox business-os shell-update [status|check|stage|activate|rollback]");
+            println!("usage: ctox business-os shell-update [status|check|stage [--version <signed-release-version>]|activate|rollback]");
             return Ok(());
         }
         other => anyhow::bail!("unknown business-os shell-update command `{other}`"),
@@ -1505,6 +1513,7 @@ fn handle_business_os_auth(root: &Path, args: &[String]) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         Some("issue-capability") => {
             let mut user_id: Option<String> = None;
+            let mut email: Option<String> = None;
             let mut display_name: Option<String> = None;
             let mut role: Option<String> = None;
             let mut ensure_user = false;
@@ -1517,6 +1526,10 @@ fn handle_business_os_auth(root: &Path, args: &[String]) -> anyhow::Result<()> {
                     }
                     "--display-name" => {
                         display_name = args.get(idx + 1).cloned();
+                        idx += 2;
+                    }
+                    "--email" => {
+                        email = args.get(idx + 1).cloned();
                         idx += 2;
                     }
                     "--role" => {
@@ -1542,9 +1555,10 @@ fn handle_business_os_auth(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0);
             let (token, expires_at_ms) = if ensure_user {
-                crate::business_os::store::issue_business_os_capability_token_for_managed_user(
+                crate::business_os::store::issue_business_os_capability_token_for_managed_user_with_email(
                     root,
                     &user_id,
+                    email.as_deref(),
                     display_name.as_deref().unwrap_or(&user_id),
                     role.as_deref().unwrap_or("user"),
                     now,
@@ -1613,6 +1627,14 @@ fn handle_business_os_commands(root: &Path, args: &[String]) -> anyhow::Result<(
             let accepted =
                 crate::business_os::store::process_source_parse_command(root, command_id)?;
             print_json(&serde_json::to_value(accepted)?)
+        }
+        Some("retry") => {
+            let command_id = args
+                .get(1)
+                .context("usage: ctox business-os commands retry <command-id>")?;
+            print_json(&crate::business_os::store::retry_failed_app_create_command(
+                root, command_id,
+            )?)
         }
         Some("dispatch") => {
             // Agent-facing entry point for writeback commands (e.g. the
@@ -1885,7 +1907,8 @@ pub(crate) fn run_business_os_web_stack_auth_assist_request(
     let credential_ref = optional_web_stack_credential_ref(flag_value(args, "--credential-ref"))?;
     let login_hint = optional_web_stack_login_hint(flag_value(args, "--login-hint"));
     let requesting_task_id = flag_value(args, "--task-id").unwrap_or_default();
-    let owner_user_id = resolve_web_stack_auth_owner_user_id(root, args, requesting_task_id)?;
+    let owner_user_id =
+        resolve_web_stack_auth_owner_user_id(root, args, requesting_task_id, false)?;
     enqueue_web_stack_auth_assist_request(
         root,
         source_id,
@@ -1894,7 +1917,7 @@ pub(crate) fn run_business_os_web_stack_auth_assist_request(
         login_hint.as_deref(),
         None,
         requesting_task_id,
-        "ctox_harness",
+        "ctox_web_auth_assist_request",
         "ctox_web_auth_assist_request",
         owner_user_id.as_deref(),
         false,
@@ -1906,7 +1929,7 @@ fn run_business_os_web_stack_auth_assist_login(
     root: &Path,
     args: &[String],
 ) -> anyhow::Result<serde_json::Value> {
-    run_business_os_web_stack_auth_assist_login_with_continuation(root, args, None)
+    run_business_os_web_stack_auth_assist_login_with_continuation(root, args, None, false)
 }
 
 pub(crate) fn run_business_os_web_stack_authenticated_automation(
@@ -1922,6 +1945,7 @@ pub(crate) fn run_business_os_web_stack_authenticated_automation(
         root,
         args,
         Some(continuation_source),
+        false,
     )?;
     anyhow::ensure!(
         combined.get("ok").and_then(serde_json::Value::as_bool) == Some(true),
@@ -1967,6 +1991,7 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
     root: &Path,
     args: &[String],
     continuation_source: Option<&str>,
+    accept_owner_as_trusted_local: bool,
 ) -> anyhow::Result<serde_json::Value> {
     let source_id = flag_value(args, "--source-id")
         .context("usage: ctox business-os web-stack auth-assist-login --source-id <id> --credential-ref <ctox-secret://scope/name> [--target-url <url>] [--login-hint <hint>] [--task-id <id>] [--timeout-ms <n>] [--dir <path>] [--credential-selector <selector>] [--verify-selector <selector>]")?;
@@ -1977,7 +2002,12 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
     let local_secret_ref = parse_local_ctox_secret_ref(&credential_ref)?;
     let explicit_login_hint = optional_web_stack_login_hint(flag_value(args, "--login-hint"));
     let requesting_task_id = flag_value(args, "--task-id").unwrap_or_default();
-    let owner_user_id = resolve_web_stack_auth_owner_user_id(root, args, requesting_task_id)?;
+    let owner_user_id = resolve_web_stack_auth_owner_user_id(
+        root,
+        args,
+        requesting_task_id,
+        accept_owner_as_trusted_local,
+    )?;
     let timeout_ms = flag_value(args, "--timeout-ms")
         .map(|value| {
             value
@@ -2151,6 +2181,21 @@ pub(crate) fn run_business_os_web_stack_source_capture(
     root: &Path,
     args: &[String],
 ) -> anyhow::Result<serde_json::Value> {
+    run_business_os_web_stack_source_capture_with_trust(root, args, false)
+}
+
+pub(crate) fn run_business_os_web_stack_source_capture_trusted(
+    root: &Path,
+    args: &[String],
+) -> anyhow::Result<serde_json::Value> {
+    run_business_os_web_stack_source_capture_with_trust(root, args, true)
+}
+
+fn run_business_os_web_stack_source_capture_with_trust(
+    root: &Path,
+    args: &[String],
+    accept_as_trusted_local: bool,
+) -> anyhow::Result<serde_json::Value> {
     let source_id = flag_value(args, "--source-id")
         .context("source-capture requires --source-id <id>")?
         .trim()
@@ -2195,6 +2240,7 @@ pub(crate) fn run_business_os_web_stack_source_capture(
             country,
             credential_ref.as_deref(),
             &source,
+            accept_as_trusted_local,
         );
     }
     let credential_ref =
@@ -2214,6 +2260,7 @@ pub(crate) fn run_business_os_web_stack_source_capture(
         root,
         &login_args,
         Some(&source),
+        accept_as_trusted_local,
     )?;
     let result = combined
         .pointer("/login_result/post_auth_result")
@@ -2242,6 +2289,36 @@ pub(crate) fn run_business_os_web_stack_source_capture(
     }))
 }
 
+fn enqueue_web_stack_source_capture_auth_assist(
+    root: &Path,
+    args: &[String],
+    source_id: &str,
+    credential_ref: Option<&str>,
+    accept_owner_as_trusted_local: bool,
+) -> anyhow::Result<serde_json::Value> {
+    let requesting_task_id = flag_value(args, "--task-id").unwrap_or_default();
+    let owner_user_id = resolve_web_stack_auth_owner_user_id(
+        root,
+        args,
+        requesting_task_id,
+        accept_owner_as_trusted_local,
+    )?;
+    enqueue_web_stack_auth_assist_request(
+        root,
+        source_id,
+        flag_value(args, "--target-url"),
+        credential_ref,
+        optional_web_stack_login_hint(flag_value(args, "--login-hint")).as_deref(),
+        None,
+        requesting_task_id,
+        "ctox_web_source_capture",
+        "ctox_web_source_capture",
+        owner_user_id.as_deref(),
+        true,
+        true,
+    )
+}
+
 fn run_business_os_web_stack_source_capture_with_browser_authorization(
     root: &Path,
     args: &[String],
@@ -2250,8 +2327,8 @@ fn run_business_os_web_stack_source_capture_with_browser_authorization(
     country: &str,
     credential_ref: Option<&str>,
     continuation_source: &str,
+    accept_owner_as_trusted_local: bool,
 ) -> anyhow::Result<serde_json::Value> {
-    let requesting_task_id = flag_value(args, "--task-id").unwrap_or_default();
     let timeout_ms = flag_value(args, "--timeout-ms")
         .map(|value| {
             value
@@ -2262,19 +2339,12 @@ fn run_business_os_web_stack_source_capture_with_browser_authorization(
         .unwrap_or(45_000)
         .clamp(1_000, 300_000);
     let browser_dir = flag_value(args, "--dir").map(PathBuf::from);
-    let browser_assist = enqueue_web_stack_auth_assist_request(
+    let browser_assist = enqueue_web_stack_source_capture_auth_assist(
         root,
+        args,
         source_id,
-        flag_value(args, "--target-url"),
         credential_ref,
-        optional_web_stack_login_hint(flag_value(args, "--login-hint")).as_deref(),
-        None,
-        requesting_task_id,
-        "ctox_harness",
-        "ctox_web_source_capture",
-        None,
-        true,
-        true,
+        accept_owner_as_trusted_local,
     )?;
     let session_id = browser_assist
         .get("session_id")
@@ -2833,6 +2903,8 @@ fn run_business_os_web_stack_auth_assist_signup(
     let login_hint = optional_web_stack_login_hint(flag_value(args, "--login-hint"))
         .context("auth-assist-signup requires --login-hint <account-email-or-username>")?;
     let requesting_task_id = flag_value(args, "--task-id").unwrap_or_default();
+    let owner_user_id =
+        resolve_web_stack_auth_owner_user_id(root, args, requesting_task_id, false)?;
     let timeout_ms = flag_value(args, "--timeout-ms")
         .map(|value| {
             value
@@ -2851,9 +2923,9 @@ fn run_business_os_web_stack_auth_assist_signup(
         Some(login_hint.as_str()),
         None,
         requesting_task_id,
-        "ctox_harness",
         "ctox_web_auth_assist_signup",
-        None,
+        "ctox_web_auth_assist_signup",
+        owner_user_id.as_deref(),
         false,
         // Trusted-local for the same reason as auth-assist-login: the daemon
         // itself files this request and owns the intake decision.
@@ -3217,21 +3289,23 @@ fn run_business_os_web_stack_person_research(
         mode,
         fields,
         include_private,
+        person_priorities: Vec::new(),
+        known_person_records: Vec::new(),
         workspace,
         persist_workspace,
     };
     let mut payload = ctox_web_stack::run_ctox_person_research_tool(root, &request)?;
     if args.iter().any(|arg| arg == "--auto-auth-assist") {
-        let generated_task_id = format!(
-            "person_research_{}_{}_{}",
-            rxdb_id_slug(&company),
-            country.as_iso().to_ascii_lowercase(),
-            mode.as_str()
-        );
         let requesting_task_id = flag_value(args, "--task-id")
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .unwrap_or(generated_task_id.as_str());
+            .context(
+                "person-research --auto-auth-assist requires --task-id <research-command-id>",
+            )?;
+        let owner_user_id =
+            resolve_web_stack_auth_owner_user_id(root, args, requesting_task_id, false)?.context(
+                "person-research --auto-auth-assist requires a verified owner matching --task-id",
+            )?;
         let mut capture_summaries = Vec::new();
         let mut capture_outcomes = BTreeMap::new();
         let mut remaining_tasks = Vec::new();
@@ -3262,6 +3336,8 @@ fn run_business_os_web_stack_person_research(
                 country.as_iso().to_string(),
                 "--task-id".to_string(),
                 requesting_task_id.to_string(),
+                "--owner-user-id".to_string(),
+                owner_user_id.clone(),
                 "--timeout-ms".to_string(),
                 "180000".to_string(),
             ];
@@ -3316,7 +3392,7 @@ fn run_business_os_web_stack_person_research(
                 requesting_task_id,
                 "ctox_web_stack",
                 "ctox_business_os_web_stack_person_research",
-                None,
+                Some(owner_user_id.as_str()),
                 true,
                 true,
             )?;
@@ -3548,27 +3624,7 @@ fn handle_business_os_web_stack(root: &Path, args: &[String]) -> anyhow::Result<
             print_json(&payload)
         }
         Some("auth-assist-request") => {
-            let source_id = flag_value(args, "--source-id")
-                .context("usage: ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--credential-ref <ctox-secret://scope/name>] [--login-hint <hint>] [--task-id <id>]")?;
-            let target_url_override = flag_value(args, "--target-url");
-            let credential_ref =
-                optional_web_stack_credential_ref(flag_value(args, "--credential-ref"))?;
-            let login_hint = optional_web_stack_login_hint(flag_value(args, "--login-hint"));
-            let requesting_task_id = flag_value(args, "--task-id").unwrap_or_default();
-            let summary = enqueue_web_stack_auth_assist_request(
-                root,
-                source_id,
-                target_url_override,
-                credential_ref.as_deref(),
-                login_hint.as_deref(),
-                None,
-                requesting_task_id,
-                "ctox_harness",
-                "ctox_web_auth_assist_request",
-                None,
-                false,
-                true,
-            )?;
+            let summary = run_business_os_web_stack_auth_assist_request(root, args)?;
             print_json(&summary)
         }
         Some("auth-assist-signup") => {
@@ -3981,6 +4037,10 @@ fn business_os_usage() -> String {
         .replace(
             "  ctox business-os backup prune-drills [--dry-run]",
             "  ctox business-os backup inspect-manifest --manifest <path>\n  ctox business-os backup key-escrow-status\n  ctox business-os backup prune-drills [--dry-run]",
+        )
+        .replace(
+            "  ctox business-os commands process <command-id>",
+            "  ctox business-os commands process <command-id>\n  ctox business-os commands retry <command-id>",
         )
         .replace(
             "  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)",
@@ -4577,16 +4637,21 @@ pub(crate) fn enqueue_web_stack_auth_assist_request(
     // user's Browser app, so the unlock view had nothing to render and the
     // login the research was waiting for could never happen. Callers that do
     // not know the owner fall back to the requesting task's actor here.
-    let resolved_owner_user_id = owner_user_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            web_stack_auth_owner_from_task(root, requesting_task_id)
-                .ok()
-                .flatten()
-        })
-        .unwrap_or_else(|| source_module.to_string());
+    let resolved_owner_user_id = resolve_web_stack_auth_owner_user_id_with_env(
+        root,
+        &[],
+        requesting_task_id,
+        owner_user_id,
+        accept_as_trusted_local,
+    )?;
+    let resolved_owner_user_id = match resolved_owner_user_id {
+        Some(owner_user_id) => owner_user_id,
+        None => anyhow::bail!(
+            "auth assist owner unresolved (task={}, source_module={})",
+            requesting_task_id,
+            source_module
+        ),
+    };
     let owner_user_id = resolved_owner_user_id.as_str();
     let source_slug = rxdb_id_slug(source_id);
     // Authentication state belongs to a user/source pair, not to one research
@@ -4687,6 +4752,7 @@ pub(crate) fn enqueue_web_stack_auth_assist_request(
         "client_context": {
             "source_module": source_module,
             "command_path": command_path,
+            "owner_user_id": owner_user_id,
             "actor": {
                 "id": owner_user_id,
                 "display_name": owner_user_id,
@@ -4819,40 +4885,269 @@ fn resolve_web_stack_auth_owner_user_id(
     root: &Path,
     args: &[String],
     requesting_task_id: &str,
+    accept_as_trusted_local: bool,
 ) -> anyhow::Result<Option<String>> {
-    if let Some(owner) = flag_value(args, "--owner-user-id")
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return Ok(Some(owner.to_string()));
-    }
-    web_stack_auth_owner_from_task(root, requesting_task_id)
+    let env_owner = env::var("CTOX_OWNER_USER_ID").ok();
+    resolve_web_stack_auth_owner_user_id_with_env(
+        root,
+        args,
+        requesting_task_id,
+        env_owner.as_deref(),
+        accept_as_trusted_local,
+    )
 }
 
-/// Resolves the human owner behind a research task so browser auth sessions
-/// are attributed to the user who asked for the research, not to the harness
-/// worker executing it.
-fn web_stack_auth_owner_from_task(
+#[derive(Debug, Deserialize)]
+struct WebStackCommandSessionClaims {
+    schema: String,
+    actor: String,
+    command_id: String,
+    payload_hash: String,
+    issued_at_ms: i64,
+    expires_at_ms: i64,
+}
+
+fn resolve_web_stack_auth_owner_user_id_with_env(
+    root: &Path,
+    args: &[String],
+    requesting_task_id: &str,
+    env_owner_user_id: Option<&str>,
+    accept_as_trusted_local: bool,
+) -> anyhow::Result<Option<String>> {
+    let claimed_owner = flag_value(args, "--owner-user-id")
+        .or(env_owner_user_id)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let command_session_owner = flag_value(args, "--command-session")
+        .map(|token| web_stack_auth_owner_from_command_session(root, token))
+        .transpose()?
+        .flatten();
+    let task_owner = web_stack_auth_owner_from_task_link(root, requesting_task_id)?;
+    let task_metadata_owner = web_stack_auth_owner_from_task_metadata(root, requesting_task_id)?;
+    let command_owner = web_stack_auth_owner_from_command_authorization(root, requesting_task_id)?;
+    let chat_owner = web_stack_auth_owner_from_chat(root, requesting_task_id)?;
+    let verified_owner = command_session_owner
+        .or(task_owner)
+        .or(task_metadata_owner)
+        .or(command_owner)
+        .or(chat_owner);
+
+    if let Some(verified) = verified_owner {
+        if claimed_owner.is_some_and(|claimed| claimed != verified) {
+            eprintln!(
+                "[business-os] web-stack auth owner override task={} claimed_id={} verified_id={}",
+                requesting_task_id,
+                claimed_owner.unwrap_or_default(),
+                verified
+            );
+        }
+        return Ok(Some(verified));
+    }
+    if accept_as_trusted_local {
+        return Ok(claimed_owner.map(str::to_string));
+    }
+    if let Some(claimed) = claimed_owner {
+        eprintln!(
+            "[business-os] web-stack auth owner rejected without verified context task={} claimed_id={}",
+            requesting_task_id, claimed
+        );
+    }
+    Ok(None)
+}
+
+fn web_stack_auth_owner_from_command_session(
+    root: &Path,
+    token: &str,
+) -> anyhow::Result<Option<String>> {
+    let (payload, signature) = token
+        .trim()
+        .split_once('.')
+        .context("malformed Business OS internal command-session token")?;
+    let signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(signature)
+        .context("invalid Business OS internal command-session signature")?;
+    let secret = crate::secrets::read_secret_value(
+        root,
+        "business_os",
+        "mcp_internal_command_session_signing_secret",
+    )?;
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_bytes());
+    ring::hmac::verify(&key, payload.as_bytes(), &signature)
+        .map_err(|_| anyhow::anyhow!("invalid Business OS internal command-session signature"))?;
+    let claims: WebStackCommandSessionClaims =
+        serde_json::from_slice(&base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload)?)?;
+    anyhow::ensure!(
+        claims.schema == "ctox.business_os.mcp_command_session.v1",
+        "unsupported Business OS internal command-session schema"
+    );
+    let current_time = now_ms() as i64;
+    anyhow::ensure!(
+        claims.issued_at_ms <= current_time && current_time < claims.expires_at_ms,
+        "Business OS internal command session expired"
+    );
+    let command = channels::inspect_business_command(root, &claims.command_id)?
+        .context("Business OS internal command session references an unknown command")?;
+    anyhow::ensure!(
+        command
+            .pointer("/command/payload_hash")
+            .and_then(serde_json::Value::as_str)
+            == Some(claims.payload_hash.as_str()),
+        "Business OS internal command payload changed"
+    );
+    anyhow::ensure!(
+        command
+            .pointer("/command/execution_phase")
+            .and_then(serde_json::Value::as_str)
+            != Some("terminal"),
+        "Business OS internal command is already terminal"
+    );
+    let authorization =
+        crate::business_os::store::revalidate_business_command_execution_authorization(
+            root,
+            &claims.command_id,
+        )?;
+    let session_user_id = authorization
+        .pointer("/actor/id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("Business OS internal command session has no verified user")?;
+    anyhow::ensure!(
+        session_user_id == claims.actor,
+        "Business OS internal command authorization changed"
+    );
+    Ok(Some(session_user_id.to_string()))
+}
+
+fn web_stack_auth_owner_from_command_context(context: &serde_json::Value) -> Option<String> {
+    let parsed_client_context = match context.pointer("/command/client_context") {
+        Some(serde_json::Value::String(value)) => {
+            serde_json::from_str(value).unwrap_or(serde_json::Value::Null)
+        }
+        Some(client_context) => client_context.clone(),
+        None => serde_json::Value::Null,
+    };
+    let from_client_context = ["/owner_user_id", "/actor/id", "/user_id"]
+        .into_iter()
+        .find_map(|pointer| {
+            parsed_client_context
+                .pointer(pointer)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        });
+    from_client_context
+        .or_else(|| web_stack_auth_owner_from_native_authorization(context))
+        .or_else(|| {
+            context
+                .pointer("/command/payload/owner_user_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+}
+
+fn web_stack_auth_owner_from_native_authorization(context: &serde_json::Value) -> Option<String> {
+    let authorization = context.pointer("/command/native_authorization")?;
+    (authorization
+        .get("contract")
+        .and_then(serde_json::Value::as_str)
+        == Some("ctox-business-command-authorization-v1")
+        && authorization
+            .get("allowed")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+        && authorization
+            .pointer("/actor/trusted")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true))
+    .then(|| {
+        authorization
+            .pointer("/actor/id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
+    .flatten()
+}
+
+fn web_stack_auth_owner_from_task_link(
     root: &Path,
     requesting_task_id: &str,
 ) -> anyhow::Result<Option<String>> {
-    if requesting_task_id.trim().is_empty() {
+    let requesting_task_id = requesting_task_id.trim();
+    if requesting_task_id.is_empty() {
         return Ok(None);
     }
-    let Some(context) =
-        channels::inspect_business_command_for_task(root, requesting_task_id.trim())?
+    Ok(
+        channels::inspect_business_command_for_task(root, requesting_task_id)?
+            .as_ref()
+            .and_then(web_stack_auth_owner_from_command_context),
+    )
+}
+
+/// Queue tasks spawned by a Business OS command (person-research gap closure)
+/// carry `business_os_command_id` in their metadata instead of a
+/// `business_command_task_links` row, because the spawning command is already
+/// terminal. The human owner is the command's verified actor.
+fn web_stack_auth_owner_from_task_metadata(
+    root: &Path,
+    requesting_task_id: &str,
+) -> anyhow::Result<Option<String>> {
+    let requesting_task_id = requesting_task_id.trim();
+    if requesting_task_id.is_empty() {
+        return Ok(None);
+    }
+    let Some(task) = channels::load_queue_task(root, requesting_task_id)? else {
+        return Ok(None);
+    };
+    let Some(command_id) = task
+        .metadata
+        .get("business_os_command_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
     else {
         return Ok(None);
     };
-    Ok([
-        "/command/client_context/actor/id",
-        "/command/client_context/actor/user_id",
-        "/command/payload/owner_user_id",
-    ]
-    .into_iter()
-    .find_map(|pointer| {
-        context
-            .pointer(pointer)
+    Ok(channels::inspect_business_command(root, command_id)?
+        .as_ref()
+        .and_then(web_stack_auth_owner_from_command_context))
+}
+
+fn web_stack_auth_owner_from_command_authorization(
+    root: &Path,
+    requesting_task_id: &str,
+) -> anyhow::Result<Option<String>> {
+    let requesting_task_id = requesting_task_id.trim();
+    if requesting_task_id.is_empty() {
+        return Ok(None);
+    }
+    Ok(
+        channels::inspect_business_command(root, requesting_task_id)?
+            .as_ref()
+            .and_then(web_stack_auth_owner_from_native_authorization),
+    )
+}
+
+fn web_stack_auth_owner_from_chat(
+    root: &Path,
+    requesting_task_id: &str,
+) -> anyhow::Result<Option<String>> {
+    let requesting_task_id = requesting_task_id.trim();
+    if requesting_task_id.is_empty() {
+        return Ok(None);
+    }
+    Ok(crate::business_os::store::pull_collection_record(
+        root,
+        "business_chats",
+        requesting_task_id,
+    )?
+    .and_then(|chat| {
+        chat.get("owner_user_id")
             .and_then(serde_json::Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -6296,6 +6591,11 @@ mod tests {
     }
 
     #[test]
+    fn business_os_usage_documents_terminal_app_create_retry() {
+        assert!(business_os_usage().contains("ctox business-os commands retry <command-id>"));
+    }
+
+    #[test]
     fn rxdb_status_includes_production_readiness_contract() {
         let status = enrich_rxdb_peer_status_with_production_readiness(serde_json::json!({
             "running": true,
@@ -6420,6 +6720,252 @@ mod tests {
     }
 
     #[test]
+    fn web_stack_auth_owner_resolution_prefers_verified_task_over_flag_and_env(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let auth_assist = enqueue_web_stack_auth_assist_request(
+            root.path(),
+            "leadfeeder.com",
+            Some("https://app.leadfeeder.com/"),
+            Some("ctox-secret://credentials/LEADFEEDER_BROWSER_LOGIN"),
+            None,
+            None,
+            "owner-resolution-request",
+            "ctox_harness",
+            "ctox_web_auth_assist_request",
+            Some("task-owner"),
+            false,
+            true,
+        )?;
+        crate::business_os::store::deliver_business_command_outbox(root.path(), 16)?;
+        let task_id = auth_assist
+            .get("task_id")
+            .and_then(serde_json::Value::as_str)
+            .context("auth-assist task id")?;
+        let command_id = auth_assist
+            .get("command_id")
+            .and_then(serde_json::Value::as_str)
+            .context("auth-assist command id")?;
+        let flag_args = vec!["--owner-user-id".to_string(), "flag-owner".to_string()];
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &flag_args,
+                task_id,
+                Some("env-owner"),
+                true,
+            )?
+            .as_deref(),
+            Some("task-owner")
+        );
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &[],
+                task_id,
+                Some("env-owner"),
+                true,
+            )?
+            .as_deref(),
+            Some("task-owner")
+        );
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &flag_args,
+                task_id,
+                Some("env-owner"),
+                false,
+            )?
+            .as_deref(),
+            Some("task-owner")
+        );
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(root.path(), &[], task_id, None, true)?
+                .as_deref(),
+            Some("task-owner")
+        );
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &[],
+                command_id,
+                None,
+                true,
+            )?,
+            None
+        );
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &[],
+                "missing-task-or-command",
+                None,
+                true,
+            )?,
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn web_stack_auth_owner_resolution_uses_command_authorization_chat_and_session(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let command_id = "leadgen-lead-research-fd2769a3";
+        let (capability_token, _) =
+            crate::business_os::store::issue_business_os_capability_token_for_managed_user(
+                root.path(),
+                "michael.welsch@metric-space.ai",
+                "Michael Welsch",
+                "admin",
+                chrono::Utc::now().timestamp_millis(),
+            )?;
+        let accepted = crate::business_os::store::accept_rxdb_business_command_with_origin(
+            root.path(),
+            serde_json::json!({
+                "id": command_id,
+                "command_id": command_id,
+                "module": "research",
+                "command_type": "business_os.chat.task",
+                "record_id": "company-kuka",
+                "payload": {
+                    "title": "KUKA research",
+                    "instruction": "Research KUKA",
+                    "writeback_contract": { "allowed_collections": [] }
+                },
+                "client_context": {
+                    "actor": { "id": "forged" },
+                    "capability_token": capability_token
+                }
+            }),
+            crate::business_os::store::CommandOrigin::ReplicatedPeer,
+        )?;
+        assert_eq!(accepted["status"], "accepted");
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &[],
+                command_id,
+                None,
+                false,
+            )?
+            .as_deref(),
+            Some("michael.welsch@metric-space.ai")
+        );
+
+        crate::business_os::store::upsert_projection_record(
+            root.path(),
+            "business_chats",
+            "chat-kuka",
+            now_ms() as i64,
+            serde_json::json!({
+                "id": "chat-kuka",
+                "owner_user_id": "chat-owner@metric-space.ai"
+            }),
+        )?;
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &[],
+                "chat-kuka",
+                None,
+                false,
+            )?
+            .as_deref(),
+            Some("chat-owner@metric-space.ai")
+        );
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &[],
+                "KUKA Deutschland GmbH",
+                None,
+                false,
+            )?,
+            None
+        );
+
+        let canonical = channels::business_command_projection(root.path(), command_id)?;
+        let command_session =
+            crate::business_os::mcp_channel::issue_internal_command_session_token(
+                root.path(),
+                command_id,
+                canonical
+                    .get("payload_hash")
+                    .and_then(serde_json::Value::as_str)
+                    .context("payload hash")?,
+                "michael.welsch@metric-space.ai",
+                "admin",
+                "research",
+                &serde_json::json!({ "allowed_collections": [] }),
+            )?;
+        let session_args = vec!["--command-session".to_string(), command_session];
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &session_args,
+                "unrelated model text",
+                None,
+                false,
+            )?
+            .as_deref(),
+            Some("michael.welsch@metric-space.ai")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_capture_auth_assist_requires_owner_and_uses_explicit_trusted_owner(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let unbound = vec![
+            "source-capture".to_string(),
+            "--source-id".to_string(),
+            "leadfeeder.com".to_string(),
+            "--task-id".to_string(),
+            "KUKA Deutschland GmbH".to_string(),
+        ];
+        let error = enqueue_web_stack_source_capture_auth_assist(
+            root.path(),
+            &unbound,
+            "leadfeeder.com",
+            None,
+            false,
+        )
+        .expect_err("unverified source capture must fail")
+        .to_string();
+        assert_eq!(
+            error,
+            "auth assist owner unresolved (task=KUKA Deutschland GmbH, source_module=ctox_web_source_capture)"
+        );
+
+        let trusted = vec![
+            "source-capture".to_string(),
+            "--source-id".to_string(),
+            "leadfeeder.com".to_string(),
+            "--task-id".to_string(),
+            "leadgen-lead-research-fd2769a3".to_string(),
+            "--owner-user-id".to_string(),
+            "michael.welsch@metric-space.ai".to_string(),
+        ];
+        let auth_assist = enqueue_web_stack_source_capture_auth_assist(
+            root.path(),
+            &trusted,
+            "leadfeeder.com",
+            None,
+            true,
+        )?;
+        assert_eq!(
+            auth_assist
+                .get("owner_user_id")
+                .and_then(serde_json::Value::as_str),
+            Some("michael.welsch@metric-space.ai")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn web_stack_auth_assist_reuses_active_task_across_request_ids() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
         let first = enqueue_web_stack_auth_assist_request(
@@ -6443,8 +6989,14 @@ mod tests {
             .context("first auth-assist task id")?;
         let owner_args = vec!["--task-id".to_string(), first_task_id.to_string()];
         assert_eq!(
-            resolve_web_stack_auth_owner_user_id(root.path(), &owner_args, first_task_id)?
-                .as_deref(),
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &owner_args,
+                first_task_id,
+                None,
+                true,
+            )?
+            .as_deref(),
             Some("user-a")
         );
         let second = enqueue_web_stack_auth_assist_request(
@@ -6528,7 +7080,7 @@ mod tests {
             "expired-request",
             "ctox_harness",
             "ctox_web_auth_assist_request",
-            None,
+            Some("user-a"),
             false,
             true,
         )?;
@@ -6564,7 +7116,7 @@ mod tests {
             "fresh-request",
             "ctox_harness",
             "ctox_web_auth_assist_request",
-            None,
+            Some("user-a"),
             false,
             true,
         )?;

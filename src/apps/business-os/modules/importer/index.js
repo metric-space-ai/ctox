@@ -88,6 +88,16 @@ function titleFromModuleId(moduleId) {
     .join(' ');
 }
 
+export function fileHandleAsDirectory(fileHandle) {
+  if (!fileHandle || fileHandle.kind !== 'file' || !String(fileHandle.name || '').trim()) {
+    throw new Error('invalid_file_handle');
+  }
+  return {
+    name: fileHandle.name,
+    async *entries() { yield [fileHandle.name, fileHandle]; },
+  };
+}
+
 export function buildAppImportCommand({
   moduleId,
   appTitle,
@@ -108,6 +118,15 @@ export function buildAppImportCommand({
     content_hash: file.sha256,
     required: true,
   }));
+  const instruction = [
+    `Port the complete supplied application into a functional Shell-V2 Business OS app named ${title}.`,
+    'First run and inspect the immutable source snapshot. Record a behavior inventory covering every visible surface, control, interaction, dataset size, persistence path, animation, canvas/WebGL behavior, and responsive breakpoint.',
+    'Preserve the original product behavior and visual hierarchy; do not replace real data with a short fixture, simplify an interactive visualization into decoration, or silently omit workflows.',
+    'Treat one-file HTML inputs as source material. Package the complete implementation behind static local relative browser-ESM imports; never read the original desktop path after snapshot materialization.',
+    'Vendor all executable dependencies locally. Remote scripts, stylesheets, import maps, dynamic HTTP(S) imports, workers, package loaders, and CDN code are forbidden. Explicit domain APIs or media streams may remain remote only as data and must never be evaluated as code.',
+    'Use the Shell-V2 mount, persistence, header, icon, responsive presentation, and cleanup contracts from business-os-app-module-development.',
+    'Do not report success until static checks, validate, smoke, declared end-to-end scenarios, and real Shell-V2 visual/interaction proof pass at the default size, 640x480, and 360px. A load event or non-empty DOM alone is not proof for canvas/WebGL apps.',
+  ].join(' ');
   return {
     command_id: `app-import-${moduleId}-${now}`,
     module: 'importer',
@@ -117,7 +136,7 @@ export function buildAppImportCommand({
     sync_collections: files.length ? ['desktop_files', 'desktop_file_chunks'] : [],
     payload: {
       title: `Import ${title}`,
-      instruction: `Port the complete supplied application into a functional Shell-V2 Business OS app named ${title}. Preserve its user workflows rather than translating framework syntax.`,
+      instruction,
       module_id: moduleId,
       app_id: moduleId,
       app_title: title,
@@ -325,6 +344,7 @@ export async function mount(ctx) {
     doneSection: q('[data-imp-done-section]'), githubForm: q('[data-imp-github-form]'),
     githubUrl: q('[data-imp-github-url]'), githubBtn: q('[data-imp-github-btn]'),
     pickFolder: q('[data-imp-pick-folder]'), sourceHint: q('[data-imp-source-hint]'),
+    pickFile: q('[data-imp-pick-file]'), fileHint: q('[data-imp-file-hint]'),
     commandId: q('[data-imp-command-id]'), moduleId: q('[data-imp-module-id]'),
     progressTitle: q('[data-imp-progress-title]'), progressNote: q('[data-imp-progress-note]'),
     phases: [...root.querySelectorAll('[data-imp-phase]')], doneHeading: q('[data-imp-done-heading]'),
@@ -479,6 +499,34 @@ export async function mount(ctx) {
       }
     } finally {
       refs.pickFolder.disabled = false;
+    }
+  });
+
+  refs.pickFile.addEventListener('click', async () => {
+    if (typeof globalThis.showOpenFilePicker !== 'function') {
+      notify(t('noFilePicker', 'File dialog unsupported.'), true);
+      return;
+    }
+    refs.pickFile.disabled = true;
+    try {
+      const [fileHandle] = await globalThis.showOpenFilePicker({ multiple: false });
+      if (!fileHandle) return;
+      notify(t('snapshotting', 'Securing the source snapshot…'));
+      const pseudoDirectory = fileHandleAsDirectory(fileHandle);
+      const importSource = await stageDesktopFolderSnapshot(ctx, pseudoDirectory, (current, total, path) => {
+        refs.fileHint.textContent = `${current}/${total} · ${path}`;
+      });
+      importSource.source_shape = 'single-file';
+      const stem = fileHandle.name.replace(/\.[^.]+$/, '') || fileHandle.name;
+      const moduleId = moduleIdFromSource(stem);
+      notify('');
+      await dispatchImport(moduleId, titleFromModuleId(moduleId), importSource);
+    } catch (error) {
+      if (error?.name !== 'AbortError') {
+        notify(t('fileFailed', 'The file import could not be started: {error}', { error: error?.message || error }), true);
+      }
+    } finally {
+      refs.pickFile.disabled = false;
     }
   });
 

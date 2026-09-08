@@ -113,6 +113,28 @@ export async function handleTurnRequest(
       maxAssistantTurns: request.maxAssistantTurns,
       model: request.model,
     });
+    // pi-ai reports provider failures as terminal assistant messages, not
+    // necessarily rejected promises. Never apply a snapshot from a failed turn.
+    const failed = result.messages.find((message) => message.role === "assistant"
+      && (message.stopReason === "error" || message.stopReason === "aborted"));
+    if (failed?.role === "assistant") {
+      // Provider error text can contain URLs, headers or credentials. Return a
+      // bounded category rather than copying it into app history or CLI logs.
+      const detail = failed.errorMessage ?? "";
+      const category = failed.stopReason === "aborted" ? "aborted"
+        : /ECONNREFUSED|ENOTFOUND|fetch failed|connection error/i.test(detail) ? "connection_error"
+        : /\b401\b|\b403\b|unauthorized|forbidden|no api key/i.test(detail) ? "authentication_error"
+        : /\b429\b|rate.limit/i.test(detail) ? "rate_limited"
+        : /timeout|timed out/i.test(detail) ? "timeout"
+        : "provider_error";
+      return { id: request.id, ok: false, error: `pi coding turn failed: ${category}` };
+    }
+    const terminalAssistant = [...result.messages].reverse().find((message) => message.role === "assistant");
+    if (terminalAssistant?.role !== "assistant" || terminalAssistant.stopReason !== "stop") {
+      // A bounded turn can stop immediately after a tool edit. That is an
+      // unfinished in-memory workspace, not an atomic app-source release.
+      return { id: request.id, ok: false, error: "pi coding turn failed: incomplete_turn" };
+    }
     return {
       id: request.id,
       ok: true,

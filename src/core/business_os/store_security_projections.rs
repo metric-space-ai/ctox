@@ -154,6 +154,7 @@ pub(crate) fn appsec_business_command_requires_data_write(command_type: &str) ->
             | "ctox.appsec.lab.create"
             | "ctox.appsec.lab.run"
             | "ctox.appsec.report.export"
+            | "ctox.appsec.release.review"
             | "ctox.appsec.authz.plan"
             | "ctox.appsec.authz.credential_proof_template"
             | "ctox.appsec.authz.credential_proof_from_evidence"

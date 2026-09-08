@@ -1,5 +1,6 @@
 const MAX_GRAPH_NODES = 240;
 const MAX_GRAPH_LINKS = 1800;
+const MAX_DERIVED_GRAPH_DOCUMENTS = 120;
 export const GRAPH_DETAIL_LEVELS = Object.freeze({
   overview: 36,
   standard: 64,
@@ -64,7 +65,7 @@ export function buildResearchGraphProjection(input = {}) {
   if (persisted?.status === 'invalid_graph_contract') {
     return emptyProjection(detailLevel, persisted.status, persisted.errors);
   }
-  const documents = buildDocuments(input);
+  const documents = buildDocuments(input, persisted ? Infinity : MAX_DERIVED_GRAPH_DOCUMENTS);
   const base = persisted || projectionFromResearchRows(input, documents);
   const layered = addRequestedLayers(base.nodes, base.links, documents, input.graphLayer, visibleLimit);
   const enriched = enrichGraph(layered.nodes, layered.links);
@@ -267,8 +268,14 @@ function projectionFromResearchRows(input, documents = buildDocuments(input)) {
   return { nodes, links };
 }
 
-function buildDocuments(input) {
+function buildDocuments(input, limit = Infinity) {
   const sourceModels = Array.isArray(input.sourceModels) ? input.sourceModels : [];
+  const selectedSourceModels = Number.isFinite(limit) && sourceModels.length > limit
+    ? [...sourceModels]
+      .sort((left, right) => Number(right?.score || 0) - Number(left?.score || 0)
+        || String(left?.id || '').localeCompare(String(right?.id || '')))
+      .slice(0, limit)
+    : sourceModels;
   const evidenceBySource = new Map();
   for (const row of input.measurementRows || []) {
     const sourceId = firstString(row, ['source_id', 'sourceId', 'source', 'dataset_id']);
@@ -276,7 +283,7 @@ function buildDocuments(input) {
     if (!evidenceBySource.has(sourceId)) evidenceBySource.set(sourceId, []);
     evidenceBySource.get(sourceId).push(row);
   }
-  const documents = sourceModels
+  const documents = selectedSourceModels
     .filter((source) => String(source?.id || '').trim())
     .map((source, index) => ({
     id: `document:${source.id || index}`,
@@ -572,7 +579,10 @@ function compactCommunities(community, degree) {
 function approximateBetweenness(nodes, adjacency) {
   const centrality = new Map(nodes.map((node) => [node.id, 0]));
   const ordered = [...nodes].sort((left, right) => adjacency.get(right.id).size - adjacency.get(left.id).size || left.id.localeCompare(right.id));
-  const sampleCount = Math.min(nodes.length > 140 ? 12 : 20, ordered.length);
+  // Centrality is a visual ranking hint. Sampling fewer pivots keeps the
+  // fallback projection comfortably interactive for large research sets;
+  // persisted/standalone graph topology remains untouched.
+  const sampleCount = Math.min(nodes.length > 80 ? 10 : 16, ordered.length);
   const sources = sampleCount === ordered.length
     ? ordered
     : Array.from({ length: sampleCount }, (_, index) => ordered[Math.floor(index * ordered.length / sampleCount)]);

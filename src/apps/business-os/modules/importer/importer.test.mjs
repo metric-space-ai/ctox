@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
   buildAppImportCommand,
+  fileHandleAsDirectory,
   isImportableFile,
   isRecoverableDispatchError,
   isTextFile,
@@ -76,6 +77,10 @@ test('GitHub import creates one durable harness command with the porting skill',
   assert.equal(command.command_type, 'ctox.business_os.app.create');
   assert.equal(command.payload.install_target, 'runtime-installed-module');
   assert.deepEqual(command.payload.required_skills, ['business-os-app-module-development']);
+  assert.match(command.payload.instruction, /behavior inventory/);
+  assert.match(command.payload.instruction, /static local relative browser-ESM imports/);
+  assert.match(command.payload.instruction, /Remote scripts, stylesheets, import maps/);
+  assert.match(command.payload.instruction, /real Shell-V2 visual\/interaction proof/);
   assert.deepEqual(command.payload.import_source, {
     kind: 'github',
     repository_url: 'https://github.com/AksharP5/omarchy-radio-atlas',
@@ -102,6 +107,14 @@ test('folder imports declare exact RxDB dependencies', () => {
   }]);
 });
 
+test('single-file imports become one-entry immutable desktop snapshots', async () => {
+  const fileHandle = { kind: 'file', name: 'black-hole-standalone-v6.html' };
+  const directory = fileHandleAsDirectory(fileHandle);
+  assert.equal(directory.name, fileHandle.name);
+  assert.deepEqual(await Array.fromAsync(directory.entries()), [[fileHandle.name, fileHandle]]);
+  assert.throws(() => fileHandleAsDirectory({ kind: 'directory', name: 'not-a-file' }), /invalid_file_handle/);
+});
+
 test('presentation is a one-click source, porting, live flow', async () => {
   const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
   const css = await readFile(new URL('./index.css', import.meta.url), 'utf8');
@@ -111,6 +124,7 @@ test('presentation is a one-click source, porting, live flow', async () => {
   assert.match(html, /data-imp-step="source"/);
   assert.match(html, /data-imp-step="progress"/);
   assert.match(html, /data-imp-step="done"/);
+  assert.match(html, /data-imp-pick-file/);
   assert.equal((html.match(/data-imp-phase/g) || []).length, 5);
   assert.doesNotMatch(html, /data-imp-install/);
   assert.doesNotMatch(html, /data-imp-back/);
@@ -121,6 +135,8 @@ test('presentation is a one-click source, porting, live flow', async () => {
   assert.match(js, /commandBus\.dispatch\(command, \{ until: 'accepted'/);
   assert.match(js, /Job secured locally; waiting for CTOX sync/);
   assert.match(js, /showDirectoryPicker\(\{ mode: 'read' \}\)/);
+  assert.match(js, /showOpenFilePicker\(\{ multiple: false \}\)/);
+  assert.match(js, /source_shape = 'single-file'/);
   assert.doesNotMatch(js, /transcodeApp|scaffoldModule|createWritable|mode: 'readwrite'/);
   assert.match(js, /result\.live === true/);
   assert.match(js, /result\.smoke_status/);

@@ -133,6 +133,62 @@ function deserializeError(value = {}) {
   return error;
 }
 
+// src/apps/business-os/office-engine/src/shell-appearance.mjs
+var SHELL_COLOR_TOKENS = Object.freeze([
+  "bg",
+  "surface",
+  "surface-2",
+  "line",
+  "text",
+  "text-strong",
+  "muted",
+  "accent",
+  "accent-soft",
+  "accent-foreground",
+  "danger",
+  "warning",
+  "success",
+  "focus-ring"
+]);
+function readShellAppearance(host, fallback = "system") {
+  const view = host.ownerDocument.defaultView;
+  const style = view.getComputedStyle(host);
+  const shellTheme = host.ownerDocument.documentElement.dataset.theme;
+  const theme = ["dark", "light"].includes(shellTheme) ? shellTheme : ["dark", "light"].includes(fallback) ? fallback : view.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  const tokens = Object.fromEntries(SHELL_COLOR_TOKENS.map((name) => [name, style.getPropertyValue(`--${name}`).trim()]));
+  return { theme, tokens, fontFamily: style.fontFamily };
+}
+function observeShellAppearance(host, fallback, publish) {
+  const view = host.ownerDocument.defaultView;
+  let frame = 0;
+  let previous = "";
+  const update = () => {
+    frame = 0;
+    const appearance = readShellAppearance(host, fallback);
+    const signature = JSON.stringify(appearance);
+    if (signature !== previous) {
+      previous = signature;
+      publish(appearance);
+    }
+  };
+  const schedule = () => {
+    if (!frame) frame = view.requestAnimationFrame(update);
+  };
+  const observer = new view.MutationObserver(schedule);
+  for (let node = host; node; node = node.parentElement) {
+    observer.observe(node, { attributes: true, attributeFilter: ["style", "class", "data-theme"] });
+  }
+  observer.observe(host.ownerDocument.head, { childList: true, subtree: true, characterData: true });
+  const colorScheme = view.matchMedia("(prefers-color-scheme: dark)");
+  colorScheme.addEventListener("change", schedule);
+  update();
+  return () => {
+    observer.disconnect();
+    colorScheme.removeEventListener("change", schedule);
+    if (frame) view.cancelAnimationFrame(frame);
+  };
+}
+
 // src/apps/business-os/office-engine/src/capsule.mjs
 var VALID_KINDS = /* @__PURE__ */ new Set(["document", "spreadsheet"]);
 var OFFICE_OPERATION_TIMEOUT_MS = 12e4;
@@ -153,7 +209,7 @@ async function createCtoxOfficeEditor(options = {}) {
   frameUrl.searchParams.set("kind", kind);
   const assetRevision = new URL(import.meta.url).searchParams.get("v");
   if (assetRevision) frameUrl.searchParams.set("v", assetRevision);
-  frame.src = frameUrl.href;
+  frame.srcdoc = capsuleFrameDocument(frameUrl, assetRevision);
   options.host.replaceChildren(frame);
   await waitForFrameLoad(frame, options.loadTimeoutMs);
   const channel = new MessageChannel();
@@ -174,7 +230,8 @@ async function createCtoxOfficeEditor(options = {}) {
     kind,
     productName,
     locale: options.locale === "en" ? "en" : "de",
-    theme: options.theme || "system",
+    theme: currentShellTheme(options.theme),
+    appearance: readShellAppearance(options.host, options.theme),
     permissions: normalizePermissions(options.permissions),
     launchArgs: sanitizeLaunchArgs(options.launchArgs, readyTimeoutMs)
   }, location.origin, [channel.port2]);
@@ -187,11 +244,10 @@ async function createCtoxOfficeEditor(options = {}) {
     throw error;
   }
   let destroyed = false;
-  const themeObserver = new MutationObserver(() => {
-    if (!destroyed) rpc.call("editor.setTheme", currentShellTheme(options.theme)).catch(() => {
+  const stopAppearanceObserver = observeShellAppearance(options.host, options.theme, (appearance) => {
+    if (!destroyed) rpc.call("editor.setAppearance", appearance).catch(() => {
     });
   });
-  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
   return Object.freeze({
     kind,
     open: (request) => rpc.call("editor.open", request, { timeoutMs: OFFICE_OPERATION_TIMEOUT_MS }),
@@ -210,7 +266,7 @@ async function createCtoxOfficeEditor(options = {}) {
     async destroy() {
       if (destroyed) return;
       destroyed = true;
-      themeObserver.disconnect();
+      stopAppearanceObserver();
       try {
         await rpc.call("editor.destroy", null, { timeoutMs: 3e3 });
       } catch {
@@ -221,6 +277,25 @@ async function createCtoxOfficeEditor(options = {}) {
       frame.remove();
     }
   });
+}
+function capsuleFrameDocument(frameUrl, assetRevision) {
+  const assetRoot = new URL(".", frameUrl);
+  const revision = assetRevision ? `?v=${encodeURIComponent(assetRevision)}` : "";
+  return `<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>CTOX Editor</title>
+    <link rel="stylesheet" href="${assetRoot.href}frame.css${revision}">
+  </head>
+  <body>
+    <main id="ctox-office-frame-root" aria-live="polite">
+      <div class="ctox-office-frame-loading">CTOX Editor wird initialisiert \u2026</div>
+    </main>
+    <script type="module" src="${assetRoot.href}frame-runtime.mjs${revision}"><\/script>
+  </body>
+</html>`;
 }
 function currentShellTheme(fallback = "system") {
   const shellTheme = document.documentElement.dataset.theme;

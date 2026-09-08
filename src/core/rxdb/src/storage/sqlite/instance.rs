@@ -1752,28 +1752,28 @@ mod tests {
         properties.insert(
             "id".to_string(),
             JsonSchema {
-                schema_type: Some("string".to_string()),
+                schema_type: Some("string".into()),
                 ..Default::default()
             },
         );
         properties.insert(
             "age".to_string(),
             JsonSchema {
-                schema_type: Some("number".to_string()),
+                schema_type: Some("number".into()),
                 ..Default::default()
             },
         );
         properties.insert(
             "_deleted".to_string(),
             JsonSchema {
-                schema_type: Some("boolean".to_string()),
+                schema_type: Some("boolean".into()),
                 ..Default::default()
             },
         );
         properties.insert(
             "_rev".to_string(),
             JsonSchema {
-                schema_type: Some("string".to_string()),
+                schema_type: Some("string".into()),
                 ..Default::default()
             },
         );
@@ -1781,14 +1781,14 @@ mod tests {
         meta_properties.insert(
             "lwt".to_string(),
             JsonSchema {
-                schema_type: Some("number".to_string()),
+                schema_type: Some("number".into()),
                 ..Default::default()
             },
         );
         properties.insert(
             "_meta".to_string(),
             JsonSchema {
-                schema_type: Some("object".to_string()),
+                schema_type: Some("object".into()),
                 properties: meta_properties,
                 ..Default::default()
             },
@@ -1796,7 +1796,7 @@ mod tests {
         properties.insert(
             "_attachments".to_string(),
             JsonSchema {
-                schema_type: Some("object".to_string()),
+                schema_type: Some("object".into()),
                 additional_properties: Some(true),
                 ..Default::default()
             },

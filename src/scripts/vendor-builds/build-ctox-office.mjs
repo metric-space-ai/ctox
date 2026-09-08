@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { execFile as execFileCallback } from 'node:child_process';
-import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -49,9 +50,7 @@ if (reuseVerifiedUpstream) {
       throw new Error(`Existing Euro-Office closure failed provenance verification: ${input.staged_path || input.path}`);
     }
   }
-  reusedUpstreamRoot = path.join(repoRoot, 'runtime', 'build', `ctox-office-upstream-reuse-${process.pid}`);
-  await rm(reusedUpstreamRoot, { recursive: true, force: true });
-  await mkdir(reusedUpstreamRoot, { recursive: true });
+  reusedUpstreamRoot = await mkdtemp(path.join(tmpdir(), 'ctox-office-upstream-reuse-'));
   await cp(path.join(outputRoot, 'upstream'), reusedUpstreamRoot, { recursive: true });
 }
 if (upstreamSourceRoot) {
@@ -107,7 +106,7 @@ for (const [kind, entry, filename] of entries) {
   outputs.push(await outputDescriptor(path.join(outputRoot, filename), kind));
 }
 
-for (const relative of ['frame.html', 'frame.css', 'frame-runtime.mjs', 'rpc.mjs']) {
+for (const relative of ['frame.html', 'frame.css', 'frame-runtime.mjs', 'rpc.mjs', 'shell-appearance.mjs']) {
   await cp(path.join(sourceRoot, relative), path.join(outputRoot, relative));
 }
 for (const relative of ['ctox-documents.mjs', 'ctox-spreadsheets.mjs', 'ctox-fork-core.mjs']) {
@@ -128,11 +127,62 @@ else if (reusedUpstreamRoot) {
   )));
 }
 if (upstreamBuildRoot || reusedUpstreamRoot) {
+  upstreamStaticInputs = await stageWhiteHeaderIcons(upstreamStaticInputs);
   await extendUpstreamStartupBudget();
+  await embedOfficeEntryDocuments();
   upstreamStaticInputs = await Promise.all(upstreamStaticInputs.map(async (input) => ({
     ...input,
     sha256: await fileSha256(path.join(outputRoot, input.staged_path)),
   })));
+}
+
+async function stageWhiteHeaderIcons(inputs) {
+  const stagedInputs = [...inputs];
+  for (const kind of ['document', 'spreadsheet']) {
+    const relative = `web-apps/apps/common/main/resources/img/header/icon-${kind}`;
+    const sourcePath = `upstream/${relative}.svg`;
+    const stagedPath = `upstream/${relative}-white.svg`;
+    const source = await readFile(path.join(outputRoot, sourcePath), 'utf8');
+    // These theme variants are referenced by upstream CSS but omitted from its
+    // generic deploy. Preserve the pinned icon geometry and transparent paths.
+    if (!/fill="#[0-9a-f]{6}"/i.test(source)) {
+      throw new Error(`Pinned Office header icon has no recognized solid fill: ${sourcePath}`);
+    }
+    await writeFile(path.join(outputRoot, stagedPath), source.replaceAll(/fill="#[0-9a-f]{6}"/gi, 'fill="#ffffff"'));
+    const input = {
+      path: `${relative}-white.svg`,
+      staged_path: stagedPath,
+      derived_from: sourcePath,
+      transformation: 'solid-svg-fills-to-white-v1',
+      sha256: await fileSha256(path.join(outputRoot, stagedPath)),
+    };
+    const existing = stagedInputs.findIndex((entry) => entry.staged_path === stagedPath);
+    if (existing < 0) stagedInputs.push(input);
+    else stagedInputs[existing] = input;
+  }
+  return stagedInputs;
+}
+
+async function embedOfficeEntryDocuments() {
+  const runtimePath = path.join(outputRoot, 'runtime', 'ctox-fork-core.mjs');
+  let runtime = await readFile(runtimePath, 'utf8');
+  for (const [kind, editor] of [['document', 'documenteditor'], ['spreadsheet', 'spreadsheeteditor']]) {
+    const appPath = path.join(outputRoot, 'upstream', 'web-apps', 'apps', editor, 'main', 'app.js');
+    const languageLookup = 't||_getUrlParameterByName("lang")||defLang';
+    const embeddedLanguageLookup = 't||_getUrlParameterByName("lang")||window.lang||defLang';
+    let app = await readFile(appPath, 'utf8');
+    if (app.includes(languageLookup)) {
+      app = app.replaceAll(languageLookup, embeddedLanguageLookup);
+      await writeFile(appPath, app);
+    } else if (!app.includes(embeddedLanguageLookup)) {
+      throw new Error(`Euro-Office ${editor} locale bootstrap no longer matches the CTOX embedded-frame adapter`);
+    }
+    const token = `__CTOX_EMBEDDED_${kind.toUpperCase()}_HTML_BASE64__`;
+    if (!runtime.includes(token)) throw new Error(`CTOX Office runtime is missing ${token}`);
+    const html = await readFile(path.join(outputRoot, 'upstream', 'web-apps', 'apps', editor, 'main', 'index.html'));
+    runtime = runtime.replace(token, html.toString('base64'));
+  }
+  await writeFile(runtimePath, runtime);
 }
 
 for (const input of bundledInputs) {

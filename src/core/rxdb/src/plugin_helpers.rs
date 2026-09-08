@@ -506,7 +506,7 @@ mod tests {
                 m.insert(
                     "id".to_string(),
                     crate::types::JsonSchema {
-                        schema_type: Some("string".to_string()),
+                        schema_type: Some("string".into()),
                         max_length: Some(50),
                         ..Default::default()
                     },

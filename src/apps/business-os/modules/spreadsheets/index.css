@@ -1,3 +1,4 @@
+@import url('../../shared/office-workspace.css?v=20260904-office-shell-v2');
 /* Spreadsheets Module Styling for CTOX Business OS.
    Normal UI (pane headers, search/filters, lists, badges, buttons, fields,
    empty states, context menu) uses the shared kit classes from
@@ -6,23 +7,46 @@
    spreadsheet grid theme and the save-state indicator. Everything derives
    from shell tokens, so light/dark follow the shell theme switch. */
 
-/* Module frame: the shell provides the 3-pane workspace (left/right panes
-   and column resizers); the module host is the center pane. */
+/* The app contributes file and editor panes to the shared Shell V2 grid. */
 .spreadsheets-module {
+  --shell-col-left: 320px;
+  position: relative;
   height: 100%;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: var(--shell-col-left) 12px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   color: var(--text);
   overflow: hidden;
 }
 
 .spreadsheets-editor {
+  grid-column: 3;
+  min-width: 0;
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.spreadsheets-explorer { grid-column: 1; }
+.spreadsheets-library-resizer { grid-column: 2; grid-row: 1; }
+.spreadsheets-library-toggle, .spreadsheets-library-backdrop { display: none; }
+.spreadsheets-editor > .spreadsheets-editor-header { flex:0 0 74px; height:74px; min-height:74px; }
+.shell-window[data-shell-contract="v2"] .spreadsheets-editor > .spreadsheets-editor-header {
+  height: calc(var(--shell-v2-header-row-size, 37px) * 2);
+  min-height: calc(var(--shell-v2-header-row-size, 37px) * 2);
+}
+@container business-app-window (max-width: 768px) {
+  .spreadsheets-module { grid-template-columns: minmax(0, 1fr); }
+  .spreadsheets-editor { grid-column: 1; grid-row: 1; }
+  .spreadsheets-library-resizer { display:none; }
+  .spreadsheets-library-toggle { display:grid; }
+  .spreadsheets-module .spreadsheets-explorer { display:none; position:absolute; z-index:12; inset:0 auto 0 0; width:min(340px, calc(100% - 32px)); border-right:1px solid var(--line); }
+  .spreadsheets-module.is-library-open .spreadsheets-explorer { display:flex; }
+  .spreadsheets-module.is-library-open .spreadsheets-library-backdrop:not([hidden]) { display:block; position:absolute; inset:0; z-index:11; border:0; background:color-mix(in srgb, var(--bg) 65%, transparent); }
+  .shell-window[data-shell-contract="v2"] .spreadsheets-editor > .spreadsheets-editor-header { padding-left:calc(var(--shell-v2-icon-size,80px) + 14px); }
 }
 
 /* Loading skeleton: shell-provided .module-loading-* parts, centered. */
@@ -47,14 +71,7 @@
   pointer-events: none;
 }
 
-/* Right-pane toggle (in the center editor header). Pressed = panel visible;
-   matches the kit's accent-soft pressed state used by other pane toggles. */
-[data-spreadsheets-toggle-actions][aria-pressed="true"] {
-  background: var(--accent-soft);
-  color: color-mix(in srgb, var(--accent) 78%, var(--text));
-}
-
-/* Left/right pane content wrappers (rendered into the shell panes). */
+/* File-pane content wrapper rendered into the shell's left slot. */
 .spreadsheets-explorer,
 .spreadsheets-runbooks {
   display: flex;
@@ -92,6 +109,25 @@
 
 .shell-window[data-shell-contract="v2"] .spreadsheets-explorer > .ctox-pane-header {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
+  height: calc(var(--shell-v2-header-row-size, 37px) * 2);
+  min-height: calc(var(--shell-v2-header-row-size, 37px) * 2);
+  border-bottom: 0;
+}
+
+.spreadsheets-explorer > .ctox-pane-header > .spreadsheets-search-bar {
+  box-sizing: border-box;
+  height: var(--shell-v2-header-row-size, 37px);
+  min-height: var(--shell-v2-header-row-size, 37px);
+  margin: 0;
+  padding: 0;
+}
+
+/* Unlike the library's title + search rows, the editor owns one continuous
+   two-row band, leaving the complete window-control corner unobstructed. */
+.shell-window[data-shell-contract="v2"] .spreadsheets-editor > .ctox-pane-header {
+  flex: 0 0 calc(var(--shell-v2-header-row-size, 37px) * 2);
+  height: calc(var(--shell-v2-header-row-size, 37px) * 2);
+  min-height: calc(var(--shell-v2-header-row-size, 37px) * 2);
 }
 
 /* Reservierte Zone 3 (Vertrag §3): die Fenstersteuerung oben rechts ist exakt
@@ -111,6 +147,11 @@
   > .ctox-pane-header .ctox-pane-title-row {
   height: 100%;
   min-width: 0;
+}
+
+.shell-window[data-shell-contract="v2"] .spreadsheets-explorer > .ctox-pane-header .ctox-pane-title-row {
+  height: var(--shell-v2-header-row-size, 37px);
+  min-height: var(--shell-v2-header-row-size, 37px);
 }
 
 .shell-window[data-shell-contract="v2"]
@@ -186,6 +227,19 @@
   border-bottom: 1px solid var(--hairline, var(--line));
 }
 
+.spreadsheets-filter-bar[hidden] {
+  display: none;
+}
+
+.spreadsheets-search-bar .ctox-pane-search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.spreadsheets-filter-toggle {
+  flex: 0 0 auto;
+}
+
 /* The empty/error state is the editor's only flex sibling below the head, so
    it takes the remaining height instead of adding the head's height on top. */
 .spreadsheets-editor > .ctox-empty {
@@ -207,6 +261,13 @@
 .spreadsheets-list > .ctox-empty,
 .spreadsheets-runbook-list > .ctox-empty {
   flex: 1 1 auto;
+}
+
+.spreadsheets-empty-actions {
+  display: grid;
+  gap: 8px;
+  width: min(100%, 220px);
+  margin-top: 8px;
 }
 
 /* The kit lists own scrolling; the pane wrappers are flex columns, so the
@@ -322,11 +383,12 @@
    grid onto the shell tokens. This is the app's genuinely unique surface.
    -------------------------------------------------------------------------- */
 .spreadsheets-editor-canvas {
-  flex-grow: 1;
-  overflow: auto;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
   position: relative;
   background: var(--surface);
-  padding: 8px;
+  padding: 0;
   box-sizing: border-box;
 }
 
@@ -607,7 +669,7 @@
    breakpoint of its own. */
 @container business-app-window (max-width: 768px) {
   .spreadsheets-editor-canvas {
-    padding: 6px;
+    padding: 0;
   }
 }
 

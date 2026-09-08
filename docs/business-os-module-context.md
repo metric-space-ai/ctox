@@ -47,6 +47,16 @@ Grundregeln (aus `docs/ctox-rxdb.md` und den AGENTS-Guardrails):
 | `openLeftDrawer(content)` / `openRightDrawer(content)` / `openBottomDrawer(content)` | fn | Shell-Drawer öffnen. |
 | `closeDrawers()` | fn | Alle Drawer schließen. |
 
+`windowManager.registerCloseGuard(ctx.host, asyncGuard)` registriert einen
+Schließschutz für das Fenster des Moduls und liefert eine Unregister-Funktion.
+Die Shell wartet vor dem Entfernen des DOM und dem Freigeben der Sync-Lease auf
+alle Guards. `false` oder eine Exception hält das Fenster offen; parallele
+Schließversuche teilen denselben laufenden Auftrag. Apps müssen Speicherfehler
+sichtbar melden und auch nach der Speicherbestätigung prüfen, ob neue Änderungen
+hinzugekommen sind. Cleanup entfernt den Guard und zerstört erst dann den Editor.
+Browser-Tab-Schließen ist davon getrennt: `beforeunload` kann bei ungespeicherten
+Änderungen warnen, aber keinen asynchronen Speichervorgang garantieren.
+
 ### Daten & Sync (der einzige Datenweg)
 
 | Feld | Typ | Bedeutung |

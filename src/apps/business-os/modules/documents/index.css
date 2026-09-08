@@ -1,3 +1,4 @@
+@import url('../../shared/office-workspace.css?v=20260904-office-shell-v2');
 /* Documents module — themed entirely from the shell design tokens
    (app.css :root / :root[data-theme="dark"] + shared/base.css derived tokens).
    No module palette, no shell-token redefinition (module conformance guard);
@@ -5,13 +6,14 @@
    rules left are genuinely dark-only specials (shadow strength and accent
    lighten/darken mixes). */
 .documents-module {
-  --documents-library-width: 300px;
+  --shell-col-left: 320px;
+  --documents-library-width: var(--shell-col-left);
   --documents-actions-width: 340px;
   position: relative;
   height: 100%;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(220px, var(--documents-library-width)) 8px minmax(0, 1fr);
+  grid-template-columns: minmax(260px, var(--documents-library-width)) 12px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   background: var(--bg);
   color: var(--text);
@@ -41,8 +43,8 @@
   grid-row: 1;
   position: relative;
   z-index: 4;
-  width: 8px;
-  min-width: 8px;
+  width: 12px;
+  min-width: 12px;
   height: 100%;
   border: 0;
   border-inline: 1px solid var(--line);
@@ -95,7 +97,7 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  min-width: 480px;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
   padding: 0;
@@ -1367,26 +1369,26 @@
    The library explorer is a real grammar pane so search/filter state remains
    shell-wired even though it is rendered after the static host markup. */
 .shell-window[data-shell-contract="v2"] .documents-module {
-  background: var(--shell-v2-surface, var(--bg));
+  background: var(--bg);
 }
 .shell-window[data-shell-contract="v2"] .documents-library-pane,
 .shell-window[data-shell-contract="v2"] .documents-workbench {
-  background: var(--shell-v2-surface-alt, var(--surface));
+  background: var(--surface);
 }
 .shell-window[data-shell-contract="v2"] .documents-explorer {
   height: 100%;
   min-height: 0;
   border: 0;
   border-radius: 0;
-  background: var(--shell-v2-surface-alt, var(--surface));
+  background: var(--surface);
   box-shadow: none;
 }
 /* The v2 head geometry (2 x 37px, icon-zone inset on the head itself) is
-   already the module default further up — the v2 frame only swaps the surface
-   tokens and hides the kicker, which the one-row title row has no space for. */
+   already the module default further up. Use the live Shell theme surfaces,
+   not the legacy dark-only shell-v2 palette. */
 .shell-window[data-shell-contract="v2"] .documents-explorer > .ctox-pane-header,
 .shell-window[data-shell-contract="v2"] .documents-runbooks > .ctox-pane-header {
-  background: var(--shell-v2-surface-alt, var(--surface));
+  background: var(--surface);
 }
 .shell-window[data-shell-contract="v2"] .documents-explorer .ctox-pane-kicker { display: none; }
 .shell-window[data-shell-contract="v2"] .documents-explorer .ctox-pane-title { margin-top: 0; line-height: 1.1; }
@@ -1767,6 +1769,19 @@
    Placed after the .is-narrow rule above, which has the same specificity. */
 .documents-module.is-compact .documents-document-strip {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
+}
+
+/* The shell's compact layout must already be correct before JS mounts. */
+@container business-app-window (max-width: 768px) {
+  .documents-module .documents-library-pane { display:none; }
+  .documents-module.is-library-open .documents-library-pane { display:block; }
+  .documents-module .documents-workbench { grid-column:1; grid-row:1; }
+  .documents-module .documents-library-resizer { display:none; }
+  .documents-module .documents-library-toggle { display:grid; }
+  .documents-module .documents-document-strip {
+    padding-left:calc(var(--shell-v2-icon-size,80px) + 14px);
+    padding-right:calc(var(--shell-v2-header-row-size,37px) * 2);
+  }
 }
 
 .documents-module.is-narrow .documents-series-label strong,

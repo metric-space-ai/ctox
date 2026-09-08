@@ -27,6 +27,7 @@ const js = `// Generated from src/core/rxdb/tests/fixtures/webrtc-rxdb-protocol.
 // Run: node src/core/rxdb/tools/build_webrtc_rxdb_protocol_contract.mjs
 
 export const CTOX_RXDB_PROTOCOL = ${json(fixture.protocol)};
+export const CTOX_PEER_ROLES = Object.freeze(${json(fixture.roles)});
 export const CTOX_PROTOCOL_PHASE = ${json(fixture.phase)};
 export const CTOX_REQUIRED_PROTOCOL_CAPABILITIES = Object.freeze(${json(fixture.requiredCapabilities)});
 export const CTOX_PROTOCOL_ERROR_CODES = Object.freeze(${json(fixture.errorCodes)});
@@ -45,6 +46,34 @@ const rust = `// Generated from src/core/rxdb/tests/fixtures/webrtc-rxdb-protoco
 // Run: node src/core/rxdb/tools/build_webrtc_rxdb_protocol_contract.mjs
 
 pub(super) const CTOX_RXDB_PROTOCOL: &str = ${rustString(fixture.protocol)};
+
+/// Native host identity in the protocol handshake; never a permission grant.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum NativePeerRole {
+    #[default]
+    #[serde(rename = ${rustString(fixture.roles.native)})]
+    CtoxInstance,
+    #[serde(rename = ${rustString(fixture.roles.worker)})]
+    WorkjetExecutor,
+}
+
+impl NativePeerRole {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CtoxInstance => ${rustString(fixture.roles.native)},
+            Self::WorkjetExecutor => ${rustString(fixture.roles.worker)},
+        }
+    }
+
+    pub fn from_wire(value: &str) -> Option<Self> {
+        match value {
+            ${rustString(fixture.roles.native)} => Some(Self::CtoxInstance),
+            ${rustString(fixture.roles.worker)} => Some(Self::WorkjetExecutor),
+            _ => None,
+        }
+    }
+}
+
 pub(super) const CTOX_REQUIRED_PROTOCOL_CAPABILITIES: &[&str] = &[
 ${fixture.requiredCapabilities.map((value) => `    ${rustString(value)},`).join('\n')}
 ];

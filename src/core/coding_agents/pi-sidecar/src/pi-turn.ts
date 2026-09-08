@@ -288,7 +288,11 @@ export async function runVercelPiCodingAgentTurn(
       }
     },
     (event) => {
-      events.push(event);
+      // Streaming updates contain the growing assistant message. Retaining
+      // every partial duplicates generated source quadratically and can exceed
+      // the bounded native transport before a coherent edit is returned.
+      // Final messages and lifecycle/tool events preserve the complete turn.
+      if (event.type !== "message_update") events.push(event);
     },
     undefined,
     input.streamFn

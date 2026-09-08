@@ -66,10 +66,12 @@ tmp_intersolar_*.js
 !/docs/dev/
 /docs/dev/*
 !/docs/dev/REFACTORING-SYNC-PERFORMANCE-PLAN.md
+!/docs/dev/ctox-sync-core-offensive.md
+!/docs/dev/ctox-sync-worker-host-contract.md
+
+
 !/docs/dev/appstore-v2-board.md
 !/docs/dev/skf-nachrecherche-board.md
-!/docs/dev/beweise/
-/docs/dev/beweise/*
 !/docs/dev/crew-cockpit-board-20260905.md
 !/docs/dev/crew-cockpit-brief-*.md
 !/docs/dev/crew-cockpit-vision.md

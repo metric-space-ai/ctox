@@ -161,11 +161,21 @@ already exist always render regardless of readiness.
 Explicit non-goal: readiness is a **render hint, never a mount blocker**. The OS
 stays snappy; a module must not wait for sync to appear.
 
+### 3.1b Collection protocol failures remain visible
+
+A shared WebRTC room can be connected while one collection is rejected because
+its schema differs. `shared/sync.js::preserveSchemaFailure` retains that
+collection's non-retryable schema diagnostic, including expected and actual
+fingerprints, across startup, transport and watchdog status updates. A fresh,
+validated collection protocol with peer-session and checkpoint evidence can
+clear it. An open room alone cannot. This changes diagnostic reporting only;
+collection schema admission remains enforced by the replication runtime.
+
 ### 3.2 Shell integration
 
-**`shared/db.js` — `createBusinessDb({ name })`.** Imports the bundle from
-`../rxdb/dist/ctox-rxdb-js.mjs?v=<buster>` (timeout-guarded, with one
-cache-busted retry), runs an IndexedDB preflight probe, then
+
+**`shared/db.js` — `createBusinessDb({ name })`.** Loads the bundle through
+the canonical `shared/rxdb-runtime.js` loader, runs an IndexedDB preflight probe, then
 `createRxDatabase` with `getCtoxIndexedDbStorage()`. If the primary IndexedDB
 stays blocked, writes fail with typed `indexeddb_blocked`; the shell does not
 acknowledge writes into an alternate database that has no deterministic merge
@@ -269,6 +279,24 @@ cross-process JS↔Rust tests) and `examples/v15_scale_wire_loop.rs`, `tools/`
 (contract generators, smoke/soak drivers), `tests/` (conformance + fixtures),
 `vendor/` (upstream snapshot), `PORTING.md` + `revisions/` (port ledger).
 
+### 4.1a Native connection lifetimes
+
+The native `WebRTCConnectionHandler::Peer` is a `WebRTCRsConnection`: an
+opaque local handle containing a signaling route and a connection generation.
+The route alone is not a connection identity. Open, disconnect, request and
+response events carry the captured handle; pool admission and handshake tasks
+are keyed by that handle. Native send, close and capability-token access reject
+retired handles. A queued disconnect must therefore affect only the connection
+that emitted it, even if a replacement has already completed its handshake.
+
+`peer_identity` remains the policy/rate-limit identity. `connection_identity`
+owns query/file transfers and their cancellation, including reuse of a request
+ID after reconnect. Neither identity is a substitute for confirmed execution
+membership. These handles do not change the JSON wire protocol or the separate
+execution-ownership generations. The rollout and verification status of this
+source change is tracked in [the core offensive](dev/ctox-sync-core-offensive.md);
+its presence in source is not a released-runtime claim.
+
 ### 4.2 The native peer (`src/core/business_os/rxdb_peer.rs`)
 
 `spawn_native_peer` starts one supervised OS thread (`business-os-rxdb-peer`):
@@ -300,9 +328,14 @@ cross-process JS↔Rust tests) and `examples/v15_scale_wire_loop.rs`, `tools/`
   ignores the field); the browser copy is treated as a replica — the
   invalidation path is tracked in `docs/ctox-migrations-plan-2026-08-05.md`.
 - **Bring-up failure is fatal, not a zombie.** A 20 s bring-up timeout aborts
-  the attempt (the in-flight task is `abort()`ed so it cannot leak a live
-  orphan session) and returns an error to the supervisor for a backed-off
-  respawn. The previous log-and-continue behaviour produced the canonical
+  the attempt through `ctox_sync::native::NativeSyncSession`. The shared
+  lifecycle owns signaling before room admission and closes it on failure,
+  timeout or cancellation; a completed session owns the multiplexed pool.
+  It prepares signaling receivers and installs the complete pool before joining
+  the room; otherwise the first native offer or connection event can arrive
+  before its consumer exists.
+  Business OS keeps database, policy and projection ownership and returns the
+  startup error to its supervisor for a backed-off respawn. The previous log-and-continue behaviour produced the canonical
   zombie: heartbeat "running", zero replication, no retry.
 - **Heartbeat watchdog.** A 15 s watchdog inside the run checks the peer's
   own heartbeat file; staleness above 90 s forces a clean shutdown
@@ -316,6 +349,42 @@ The same file hosts the background projection loops (commands, notes, desktop
 file index, channel state, users, runtime settings, workspace branding, module
 catalog, ticket state, knowledge tables, business-record projections) that
 write core daemon state into the RxDB store for replication.
+
+The shared native session can attach one configured `NativeExecutionGroup` for
+execution authority. This group owns its Raft node, configured peer discovery
+and a private local IPC listener as one lifecycle. Discovery connects configured
+routes with either `ctox_instance` or `workjet_executor` signaling roles; these
+routing hints do not grant membership or collection access. Hosts obtain the
+actual endpoint from the group and observe its termination; they do not start a second
+independent authority listener. Listener/discovery failure shuts down authority
+and closes the endpoint. Failed attachment closes the new replication session
+without replacing an existing IPC owner. The Business OS daemon currently uses
+the shared transport lifecycle; its production execution-group provisioning and
+Workjet's ProviderService enforcement are still pending. Replication readiness
+alone does not certify execution authority.
+
+Native hosts choose `NativeSyncOptions.peer_role` before startup. The generated
+`NativePeerRole` contract distinguishes `ctox_instance` from `workjet_executor`;
+neither browser nor unknown strings are accepted as native configuration.
+The handler supplies this immutable role to both protocol requests and answers.
+Business OS explicitly selects `CtoxInstance`, and its browser client continues
+to require that production role. Worker role declaration does not enroll a key,
+authorize execution, or bypass the host's session and collection validators.
+
+Each native sender waits for its own send receipt, not for the whole peer queue
+to empty. Waiting senders share one drain turn. Its cancellation guard is
+installed before the first cooperative yield and wakes existing waiters when
+the turn is released; a new request is not required to restart progress.
+After delivering a receipt, the drainer yields before starting another transfer.
+This lets its caller return without cancelling somebody else’s transfer.
+
+A drain turn belongs to one concrete queue, not just a peer ID. Reconnecting a
+peer creates a replacement queue. Old waiters, active drainers and cancellation
+guards may neither claim nor release that replacement, nor take its frames.
+The same identity check applies to priority-frame interleaving during chunked
+transfers. Removing a queue drops its pending receipts so senders fail closed.
+Tests cover first-poll and mid-send cancellation, waking existing waiters,
+returning individual receipts, and replacement-queue isolation.
 
 Workspace corporate design lives in the singleton
 `business_workspace_branding/workspace-branding` document. Admin updates go
@@ -384,6 +453,21 @@ documents is `runtime/business-os-rxdb.sqlite3` as above.
 
 ### 5.2 Who initiates
 
+- Configured native execution groups explicitly call
+  `connect_native_execution_peer`. Only the lower current signaling ID sends an
+  offer, and browser/unknown roles are rejected. This entry point never runs from
+  the general peer-list loop. The configured Ed25519 key is verified by the
+  signed `ctox.sync.authority.v4` exchange; the signaling role is not authority.
+  This transport decision is separate from both replication master selection and
+  quorum-confirmed execution ownership.
+- Nonvoting Workjet workers use `connect_worker_to_authority_peer` toward their
+  configured voters. The worker always initiates that edge, including when its
+  signaling ID sorts after the voter. Voters do not discover these workers, so
+  this does not introduce symmetric offers. The entry point requires a native
+  Workjet role and rejects browser/unknown targets. `attach_worker` selects this
+  mode in the same lifecycle supervisor used by voting groups; it neither opens
+  a Raft store nor grants business collection access. Product enrollment and
+  authenticated replacement of changed signaling routes are still pending.
 - **The browser initiates; the native peer is a passive responder.**
   - Browser: `webrtc-native.mjs::shouldInitiate` — `browser` toward
     `ctox_instance` ⇒ initiate; `ctox_instance` toward `browser` ⇒ never;
@@ -433,6 +517,14 @@ the deterministic hash election apply
 observe a disconnect and rebuild cleanly, instead of parking half-dead.
 
 ### 5.4 Per-collection replication
+
+The native execution-control adapter uses the same pool admission boundary.
+`is_peer_ready_for_control` requires both accepted inbound/session admission and
+completion of the local protocol/token handshake. An inbound probe alone does
+not establish reciprocal readiness. The state is invalidated on peer removal
+and pool cancellation. Signed authority messages are registered as an auxiliary
+method; this does not grant collection read/write permissions or change the
+replication master/fork election.
 
 - **Master path (native, normally):** one master-change relay task per
   collection per peer, emitting `masterChangeStream$:{collection}` responses
@@ -981,22 +1073,17 @@ npx -y esbuild@0.28.0 src/apps/business-os/rxdb/src/index.mjs \
   "--banner:js=// CTOX Sync Engine app-local bundle. Generated from src/apps/business-os/rxdb/src/index.mjs."
 ```
 
-**Cache-buster discipline.** The bundle is imported with a `?v=` query in
-exactly three places, which must always carry the **identical** value:
+**Single runtime identity.** Only `shared/rxdb-runtime.js` declares the
+versioned `RXDB_BUNDLE_URL`. Both `shared/db.js` and `shared/sync.js` use
+`loadRxdbRuntime`; app modules receive database handles from the shell facade.
+After a browser runtime `src/` change, rebuild dist and bump this one URL.
+The data-plane guard rejects independent versioned imports in shared code.
 
-- `src/apps/business-os/shared/db.js` (`RXDB_BUNDLE_URL`)
-- `src/apps/business-os/shared/sync.js` (two fallback dynamic imports)
-
-App modules do **not** import the bundle directly — they receive the database
-handle from the shell facade (`setBusinessOsDatabaseContext`). The matching
-module's `businessOsDataSource.js` used to be a third importer; it moved to the
-facade, so it carries no buster and is no longer checked by the guard.
-
-A mismatch makes the browser load a **second copy of the bundle** — two
-module graphs, two shared-room-peer registries, duplicate peers in the room.
-After any `src/` change: rebuild dist with the command above **and** bump all
-three occurrences (current value at the time of writing:
-`20260827-device-proof-v185`).
+The loader retains a single import promise. A caller timeout does not cancel
+or replace the module graph: later calls observe the same import. An invalid
+release is an error, never a reason to append a timestamp to the URL. This
+removes the old cache-busted retry that could create a second peer registry.
+`runtime-singleton-smoke.mjs` verifies concurrency, late completion and errors.
 
 `src/scripts/vendor-builds/build-ctox-rxdb-js.mjs` does **not** build
 anything: it verifies the manifest identity (name/public name,
@@ -1095,6 +1182,12 @@ need the release wire daemon:
 failure — the cross-process smokes are the only proof that both sides agree on
 real wire bytes.)
 
+For an isolated Cargo target, pass `--wire-daemon /absolute/path/to/v15_wire_daemon`
+to the runner or either cross-process test. One shared resolver selects the
+binary; the runner forwards that exact path to both tests and prints it.
+An invalid explicit path fails immediately and never selects a cached build.
+`wire-daemon-resolution-smoke.mjs` guards this behavior.
+
 ### 10.3 Soak
 
 `.github/workflows/rxdb-soak.yml` — manual (`workflow_dispatch`) only.
@@ -1152,8 +1245,8 @@ place; adding one without a written reason is a review finding.
 load and pass in isolation. Check the load average before diagnosing them as a
 regression.
 
-If `src/` of the browser runtime changed: rebuild dist + bump the three
-cache-busters first (§9), since most smokes import from `dist/`.
+If `src/` of the browser runtime changed: rebuild dist + bump the canonical
+runtime URL first (§9), since most smokes import from `dist/`.
 
 ---
 
@@ -1189,11 +1282,13 @@ Each has shipped (or would ship) real production breakage.
    the regression smokes exist precisely because their semantics were once
    "cleaned up" out of the code; a red test is a finding
    (`run-all.mjs` header).
-7. **Never re-enable initiator behaviour on the native peer.** The passive
+7. **Never enable native initiation toward browsers or from the generic peer list.** The passive
    responder (peer-list task registers nothing; responder built on offer in
    `handle_signal`) is load-bearing: a pre-registered passive
    PeerConnection lets the browser offer hit the fast path and never get an
-   answer — silent never-connecting peers.
+   answer — silent never-connecting peers. Configured native execution groups
+   use only the explicit `connect_native_execution_peer` entry point described
+   in section 5.2; it must continue to reject browser and unknown roles.
 8. **Don't "simplify"** (a) the role-based master election — native must be
    master toward browsers, the hash election alone reshuffles roles across
    reconnects; (b) the error-classification order in `sync.js` — moving the

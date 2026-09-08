@@ -13,6 +13,16 @@ exists because an agent broke it in good faith and shipped a regression.
    RTCPeerConnections from the signaling peer list; browsers initiate and the
    responder is built when their offer arrives (`connection_handler_rs.rs`).
    "Completing" the seemingly empty peer-list loop reintroduces offer glare.
+   A configured native execution group may explicitly call
+   `connect_native_execution_peer`; it rejects browser/unknown roles and only
+   the lower signaling ID initiates. A nonvoting Workjet worker instead calls
+   `connect_worker_to_authority_peer` for its configured voters: only the worker
+   initiates that edge, since voters do not discover nonvoting workers. This
+   requires a native Workjet role and still rejects browser/unknown targets.
+   Never apply worker initiation to voter-to-voter discovery. This is transport setup, not the RxDB
+   master election or execution ownership. The signed Sync control contract
+   authenticates the configured key after connection.
+
 3. **Native is always master toward `role=browser` peers.** The hash election
    applies only between non-browser peers; an empty token answer is a
    handshake failure. Do not "simplify" the election.

@@ -1,7 +1,7 @@
 {
   "id": "documents",
   "title": "Dokumente",
-  "description": "DOCX- und Markdown-Arbeitsbereich mit Dokumentverwaltung, Serienbriefen, Versionen und Runbooks.",
+  "description": "Word- und Markdown-Arbeitsbereich mit einer kompakten Dokumentverwaltung und direktem Editor.",
   "entry": "modules/documents/index.html",
   "collections": [
     "business_commands",
@@ -22,7 +22,6 @@
     "center": "DOCX viewer/editor workbench",
     "drawers": {
       "left": "document metadata and import settings",
-      "right": "runbook details and generated commands",
       "bottom": "diagnostics, export evidence, and selected document context"
     }
   },

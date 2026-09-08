@@ -1528,7 +1528,10 @@ async function registerCoreCollections() {
   setStartupProgress(61, shellText('bootSchemasDone'));
   const t1 = performance.now();
   console.log(`[business-os] registerCoreCollections took ${(t1 - t0).toFixed(2)}ms`);
-  await primeWindowGeometryCache();
+  // Window placement is optional cached UI state. An IndexedDB read blocked
+  // by another tab must not prevent WebRTC and the app catalog from starting.
+  // The read may finish later; do not close/reopen the registered database.
+  await withStartupTimeout(primeWindowGeometryCache(), 1500, null, 'window geometry cache');
 }
 
 async function primeWindowGeometryCache() {
@@ -12565,7 +12568,7 @@ async function waitForProjectedWorkjetComputer(
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      await bridge?.awaitInSync?.();
+      await waitForSyncBridgeReady(bridge, Math.max(1, deadline - Date.now()));
       const doc = await collection.findOne(computerId).exec();
       const rawComputer = doc?.toJSON?.() || doc;
       if (rawComputer?.owner_user_id === ownerUserId && rawComputer?.status === status) {
@@ -12814,7 +12817,7 @@ async function waitForProjectedWorkjetProject(
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      await bridge?.awaitInSync?.();
+      await waitForSyncBridgeReady(bridge, Math.max(1, deadline - Date.now()));
       const doc = await collection.findOne(projectId).exec();
       const rawProject = doc?.toJSON?.() || doc;
       if (rawProject?.owner_user_id === ownerUserId
@@ -12861,7 +12864,7 @@ async function waitForProjectedWorkjetWorkingCopy(
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      await bridge?.awaitInSync?.();
+      await waitForSyncBridgeReady(bridge, Math.max(1, deadline - Date.now()));
       const docs = await collection.find({
         selector: {
           project_id: { $eq: projectId },

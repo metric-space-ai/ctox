@@ -485,7 +485,8 @@ impl QueryFetchRegistry {
     }
 
     pub fn cancel_peer(&self, peer_identity: &str) -> usize {
-        self.peer_rate_buckets.lock().remove(peer_identity);
+        // This key owns one connection's transfers. Policy/rate identity spans
+        // reconnects; its existing TTL sweep owns rate-bucket expiry.
         self.inflight.cancel_peer(peer_identity)
     }
 
@@ -631,7 +632,8 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler + 'static>(
         return Ok(());
     }
 
-    let cancel_flag = match registry.try_acquire(&peer_identity, &request.request_id) {
+    let connection_identity = handler.connection_identity(&peer);
+    let cancel_flag = match registry.try_acquire(&connection_identity, &request.request_id) {
         Some(flag) => flag,
         None => {
             send_error(
@@ -662,7 +664,7 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler + 'static>(
         document_filter,
     )
     .await;
-    registry.release(&peer_identity, &request.request_id);
+    registry.release(&connection_identity, &request.request_id);
     if let Err(err) = &outcome {
         let (code, retryable) = query_fetch_error_code_for_rx_error(err);
         let message = err.to_string();
@@ -1061,7 +1063,9 @@ async fn send_query_fetch_frame<H: WebRTCConnectionHandler>(
     runtime_deadline: Instant,
     frame: QueryFetchFrame,
 ) -> bool {
-    if cancel_flag.load(Ordering::SeqCst) && !frame.cancelled {
+    // A producer may observe cancellation before emitting its first frame.
+    // Its terminal cancellation must not wait for the data buffer to drain.
+    if frame.cancelled || cancel_flag.load(Ordering::SeqCst) {
         send_chunk(
             handler,
             peer,
@@ -1385,7 +1389,7 @@ mod tests {
         properties.insert(
             "id".to_string(),
             JsonSchema {
-                schema_type: Some("string".to_string()),
+                schema_type: Some("string".into()),
                 max_length: Some(100),
                 ..Default::default()
             },
@@ -1393,7 +1397,7 @@ mod tests {
         properties.insert(
             "age".to_string(),
             JsonSchema {
-                schema_type: Some("number".to_string()),
+                schema_type: Some("number".into()),
                 ..Default::default()
             },
         );
@@ -1615,6 +1619,7 @@ mod tests {
     }
 
     struct MockHandler {
+        generation: Option<u64>,
         sent: Arc<TokioMutex<Vec<WebRTCWireFrame>>>,
         buffered: Arc<std::sync::atomic::AtomicUsize>,
         document_filter: Arc<TokioMutex<Option<Arc<DocumentFilterFn>>>>,
@@ -1624,6 +1629,7 @@ mod tests {
     impl MockHandler {
         fn new() -> Self {
             Self {
+                generation: None,
                 sent: Arc::new(TokioMutex::new(Vec::new())),
                 buffered: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 document_filter: Arc::new(TokioMutex::new(None)),
@@ -1672,6 +1678,12 @@ mod tests {
         fn peer_identity(&self, peer: &Self::Peer) -> String {
             peer.0.to_string()
         }
+        fn connection_identity(&self, peer: &Self::Peer) -> String {
+            match self.generation {
+                Some(generation) => format!("{}@{generation}", peer.0),
+                None => self.peer_identity(peer),
+            }
+        }
         fn is_collection_authorized_for_peer(&self, _peer: &Self::Peer, _collection: &str) -> bool {
             self.collection_authorized.load(Ordering::SeqCst)
         }
@@ -1682,6 +1694,101 @@ mod tests {
         ) -> Option<Arc<DocumentFilterFn>> {
             self.document_filter.lock().clone()
         }
+    }
+
+    #[tokio::test]
+    async fn terminal_cancellation_does_not_wait_on_data_backpressure() {
+        let handler = MockHandler::new();
+        handler
+            .buffered
+            .store(WEBRTC_BUFFERED_HIGH_WATER + 1, Ordering::SeqCst);
+        let peer = MockPeer("cancelled-route");
+        let request =
+            parse_query_fetch_request(&make_request("cancelled", "business_records", 0)).unwrap();
+        let cancelled = Arc::new(AtomicBool::new(true));
+        let send = send_query_fetch_frame(
+            &handler,
+            &peer,
+            &request,
+            &cancelled,
+            "revision",
+            Instant::now() + Duration::from_secs(30),
+            QueryFetchFrame {
+                sequence: 7,
+                documents: vec![],
+                complete: true,
+                cancelled: true,
+            },
+        );
+        tokio::pin!(send);
+        assert!(
+            matches!(futures::poll!(&mut send), std::task::Poll::Ready(true)),
+            "a terminal cancellation must not sleep behind the stalled data buffer"
+        );
+        let frames = handler.sent.lock();
+        assert_eq!(frames.len(), 1);
+        let WebRTCWireFrame::Message(message) = &frames[0] else {
+            panic!("expected cancellation chunk")
+        };
+        assert_eq!(message.method, CTOX_QUERY_RPC_CHUNK);
+        assert_eq!(message.params[0]["cancelled"], true);
+        assert_eq!(message.params[0]["complete"], true);
+    }
+
+    #[tokio::test]
+    async fn old_connection_cleanup_preserves_replacement_transfer() {
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            let registry = authorized_query_registry(4);
+            registry.register(seeded_collection(2).await);
+            let mut handlers = Vec::new();
+            let mut tasks = Vec::new();
+            for generation in [1, 2] {
+                let handler = Arc::new(MockHandler {
+                    generation: Some(generation),
+                    ..MockHandler::new()
+                });
+                handler
+                    .buffered
+                    .store(WEBRTC_BUFFERED_HIGH_WATER + 1, Ordering::SeqCst);
+                let transfer_handler = handler.clone();
+                let transfer_registry = registry.clone();
+                tasks.push(tokio::spawn(async move {
+                    run_query_fetch(
+                        transfer_registry,
+                        transfer_handler,
+                        MockPeer("same-route"),
+                        "same-route".into(),
+                        make_request("same-request", "business_records", 0),
+                    )
+                    .await
+                }));
+                handlers.push(handler);
+            }
+            while registry.count_inflight() != 2 {
+                assert!(
+                    tasks.iter().all(|task| !task.is_finished()),
+                    "both generations must acquire independent transfers"
+                );
+                tokio::task::yield_now().await;
+            }
+            let old_key = handlers[0].connection_identity(&MockPeer("same-route"));
+            assert_eq!(registry.cancel_peer(&old_key), 1);
+            tasks.remove(0).await.unwrap().unwrap();
+            assert_eq!(
+                registry.count_inflight(),
+                1,
+                "late release must not remove the replacement request"
+            );
+            assert!(
+                !tasks[0].is_finished(),
+                "replacement must still be waiting on its own buffer"
+            );
+            handlers[1].buffered.store(0, Ordering::SeqCst);
+            tasks.remove(0).await.unwrap().unwrap();
+            assert_eq!(registry.count_inflight(), 0);
+        })
+        .await
+        .expect("connection-scoped cancellation must complete within existing deadlines");
     }
 
     fn make_request(request_id: &str, collection: &str, schema_version: u32) -> WebRTCMessage {

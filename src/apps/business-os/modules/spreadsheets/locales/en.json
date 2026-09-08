@@ -1,6 +1,10 @@
 {
   "workspaceLoading": "Loading spreadsheets workspace.",
   "spreadsheetsTitle": "CTOX Spreadsheets",
+  "officeLibraryTitle": "Spreadsheets",
+  "createBlankSpreadsheet": "Create blank spreadsheet",
+  "blankSpreadsheetCreated": "Blank spreadsheet created.",
+  "showFiles": "Open file list",
   "explorerKicker": "Files",
   "runbookKicker": "Automation",
   "searchPlaceholder": "Search spreadsheet...",

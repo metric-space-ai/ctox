@@ -20,7 +20,7 @@ const FEATURES_PATH = join(
   repoRoot,
   "src/apps/business-os/office-engine/features.json",
 );
-const CLI_PATH = join(repoRoot, "src/core/office-engine/src/main.rs");
+const CLI_PATH = join(repoRoot, "src/core/business_os/office_cli.rs");
 const DOCUMENT_SURFACE_PATH =
   "src/skills/packs/content/doc/references/execution-surfaces.md";
 const SURFACE_DOCS = [
@@ -38,6 +38,22 @@ for (const editor of Object.values(features.editors)) {
 
 let drift = 0;
 const seen = new Set();
+
+// Both binaries must dispatch into the inspected implementation; a matching
+// operation catalog in an unreferenced source file is not an available tool.
+for (const [entry, required] of [
+  ["src/core/office-engine/src/main.rs", ["business_os/office_cli.rs", "office_cli::handle_command"]],
+  ["src/core/main.rs", ['Some("office") => business_os::office_cli::handle_command']],
+  ["src/core/business_os/mod.rs", ["pub mod office_cli;"]],
+]) {
+  const source = readFileSync(join(repoRoot, entry), "utf8");
+  for (const binding of required) {
+    if (!source.includes(binding)) {
+      console.error(`${entry}: native Office entry point is missing ${binding}`);
+      drift += 1;
+    }
+  }
+}
 
 for (const relPath of SURFACE_DOCS) {
   const text = readFileSync(join(repoRoot, relPath), "utf8");
@@ -77,8 +93,8 @@ for (const id of statusById.keys()) {
 
 // Keep the Documents skill's native operation catalog in exact lock-step with
 // the ctox-office-engine CLI. The document table is the complete native-op
-// reference; the spreadsheet table intentionally lists only kind-agnostic
-// package operations because the OOXML batch transforms are DOCX-specific.
+// reference; the spreadsheet table lists its supported subset, including the
+// typed cell batch. The document review transforms remain DOCX-specific.
 const cliSource = readFileSync(CLI_PATH, "utf8");
 const cliOperations = new Set(
   [...cliSource.matchAll(/^\s*"([a-z][a-z0-9-]+)"\s*=>\s*\{/gm)].map(

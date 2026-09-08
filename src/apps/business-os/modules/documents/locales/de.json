@@ -1,6 +1,8 @@
 {
   "workspaceLoading": "Workspace wird geladen.",
   "documentsTitle": "Dokumente",
+  "createBlankDocument": "Leeres Word-Dokument erstellen",
+  "blankDocumentCreated": "Leeres Dokument erstellt.",
   "searchPlaceholder": "Dokument suchen...",
   "searchLabel": "Dokumente suchen",
   "sortLabel": "Dokumente sortieren",

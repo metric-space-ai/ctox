@@ -117,7 +117,10 @@ if (process.argv.includes('--check')) {
 
 function excluded(relative) {
   const file = relative.split(path.sep).join('/');
-  return file.startsWith('rxdb/dist/')
+  // Local tenant deployments are runtime state, not repository command types.
+  // Keep this boundary aligned with assert-command-consumer-inventory.mjs.
+  return file.startsWith('installed-modules/')
+    || file.startsWith('rxdb/dist/')
     || file.startsWith('rxdb/src/')
     || file.startsWith('rxdb/tests/')
     || file.startsWith('scripts/')

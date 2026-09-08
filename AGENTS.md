@@ -95,7 +95,8 @@ For CTOX DB:
   generated side by hand.
 - Do not patch `src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs` directly. Edit
   `src/`, rebuild with the pinned esbuild command in `docs/ctox-rxdb.md`, and
-  bump all three identical `?v=` cache-busters.
+  bump the sole `?v=` cache-buster in `shared/rxdb-runtime.js`. Both DB and
+  sync consumers must use its canonical loader; never create retry URLs.
 
 For Business OS policy and modules:
 
@@ -201,8 +202,8 @@ Choose the narrowest useful checks for the files changed:
   `node src/apps/business-os/rxdb/tests/run-all.mjs`,
   `cargo test --manifest-path src/core/rxdb/Cargo.toml`,
   `cargo fmt --check --manifest-path src/core/rxdb/Cargo.toml`.
-- Browser RxDB runtime `src/` changes: rebuild `dist/` and bump the three
-  cache-busters before running the JS suite.
+- Browser RxDB runtime `src/` changes: rebuild `dist/` and bump the canonical
+  runtime URL in `shared/rxdb-runtime.js` before running the JS suite.
 - Business OS native/server changes that affect projections, policy, commands,
   or status should also run a relevant `cargo check` or targeted Rust test.
 

@@ -4,26 +4,17 @@
 // sequences resume.
 
 import { spawn } from 'node:child_process';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
-import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { resolveWireDaemon } from './wire-daemon-fixture.mjs';
 
 import {
   createFileDemandLoader,
   createMemoryMetaBackend,
 } from '../dist/ctox-rxdb-js.mjs';
 
-const here = dirname(fileURLToPath(import.meta.url));
-const candidates = [
-  resolve(here, '..', '..', '..', '..', '..', 'runtime', 'build', 'cargo-target', 'release', 'examples', 'v15_wire_daemon'),
-  resolve(here, '..', '..', '..', '..', '..', 'runtime', 'build', 'cargo-target', 'debug', 'examples', 'v15_wire_daemon'),
-  resolve(here, '..', '..', '..', '..', 'core', 'rxdb', 'runtime', 'build', 'cargo-target', 'release', 'examples', 'v15_wire_daemon'),
-  resolve(here, '..', '..', '..', '..', 'core', 'rxdb', 'runtime', 'build', 'cargo-target', 'debug', 'examples', 'v15_wire_daemon'),
-];
-const bin = candidates.find((c) => existsSync(c));
-if (!bin) { console.error('daemon not built'); process.exit(2); }
+const bin = resolveWireDaemon();
+if (!bin) { console.error('wire daemon not found; build it or pass --wire-daemon PATH'); process.exit(2); }
 
 const child = spawn(bin, [], { stdio: ['pipe', 'pipe', 'inherit'] });
 const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });

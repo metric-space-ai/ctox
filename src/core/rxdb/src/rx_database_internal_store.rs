@@ -51,7 +51,7 @@ pub fn build_internal_store_schema() -> RxJsonSchema {
     properties.insert(
         "id".to_string(),
         JsonSchema {
-            schema_type: Some("string".to_string()),
+            schema_type: Some("string".into()),
             max_length: Some(200),
             ..Default::default()
         },
@@ -59,7 +59,7 @@ pub fn build_internal_store_schema() -> RxJsonSchema {
     properties.insert(
         "key".to_string(),
         JsonSchema {
-            schema_type: Some("string".to_string()),
+            schema_type: Some("string".into()),
             ..Default::default()
         },
     );
@@ -81,7 +81,7 @@ pub fn build_internal_store_schema() -> RxJsonSchema {
     properties.insert(
         "context".to_string(),
         JsonSchema {
-            schema_type: Some("string".to_string()),
+            schema_type: Some("string".into()),
             extra: context_extra,
             ..Default::default()
         },
@@ -89,7 +89,7 @@ pub fn build_internal_store_schema() -> RxJsonSchema {
     properties.insert(
         "data".to_string(),
         JsonSchema {
-            schema_type: Some("object".to_string()),
+            schema_type: Some("object".into()),
             additional_properties: Some(true),
             ..Default::default()
         },

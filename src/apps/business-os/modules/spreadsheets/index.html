@@ -1,103 +1,71 @@
-<section class="spreadsheets-module" data-spreadsheets-module>
-  <div class="spreadsheets-editor" data-spreadsheets-editor>
-    <header class="ctox-pane-header ctox-pane-band spreadsheets-loading-header" data-shell-v2-header-row="1">
-      <div class="ctox-pane-title-row">
-        <div class="ctox-pane-titles"><h2 class="ctox-pane-title">Spreadsheets</h2></div>
-        <div class="ctox-pane-actions"></div>
-      </div>
-    </header>
-    <div class="spreadsheets-loading-reserved-row" data-shell-v2-header-row="2" aria-hidden="true"></div>
-    <div class="module-loading-shell spreadsheets-loading-shell" aria-busy="true">
-      <section class="module-loading-panel" aria-hidden="true">
-        <div class="module-loading-panel-head"><span></span><i></i></div>
-        <div class="module-loading-tools"><b></b><b></b></div>
-        <div class="module-loading-list"><b></b><b></b><b></b></div>
-      </section>
-      <section class="module-loading-panel module-loading-panel-main">
-        <div class="module-loading-panel-head"><span></span><i></i></div>
-        <div class="module-loading-copy">
-          <strong>Spreadsheets</strong>
-          <span>Workspace wird geladen.</span>
-        </div>
-        <div class="module-loading-document" aria-hidden="true"><b></b><b></b><b></b><b></b></div>
-      </section>
-      <section class="module-loading-panel" aria-hidden="true">
-        <div class="module-loading-panel-head"><span></span><i></i></div>
-        <div class="module-loading-list is-compact"><b></b><b></b><b></b></div>
-      </section>
-    </div>
-  </div>
-
-  <!-- ===================================================================
-       Shell-V2-Rahmen (Vorbild: modules/knowledge, modules/tickets).
-
-       Die Koepfe der drei Panes sind STATISCHES Markup und leben hier, nicht
-       in index.js. Der Renderer klont die Vorlage und fuellt nur noch Texte,
-       Icons und Zustaende (`data-sheet-text|label|placeholder|icon`). Damit
-       ist die Rahmen-Geometrie im Markup lesbar und der statische Pruefstand
-       sieht dieselbe Struktur wie der Browser.
-
-       Reservierte Zonen (Vertrag §3/§7): die 80x74-Ecke oben links gehoert
-       dem Shell-Icon, die 74x74-Ecke oben rechts der Fenstersteuerung. Die
-       Kopfzeile 1 JEDES Panes ist genau eine --shell-v2-header-row-size hoch;
-       die Suchleiste des Explorers ist Kopfzeile 2 und liegt damit weiterhin
-       neben dem Icon — beide Zeilen ruecken in index.css ein.
-       =================================================================== -->
-  <template data-spreadsheets-head="explorer">
+<section class="spreadsheets-module" data-spreadsheets-module data-resize-frame data-shell-columns="2">
+  <!-- The live two-pane structure is also the shell's loading structure. -->
+  <aside class="ctox-pane spreadsheets-explorer ctox-office-library" data-spreadsheets-explorer data-shell-column="left" data-pg-default-view="list" aria-label="Tabellen">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-sheet-text="explorerKicker|Dateien">Dateien</span>
-          <h2 class="ctox-pane-title" data-sheet-text="spreadsheetsTitle|CTOX Spreadsheets">CTOX Spreadsheets</h2>
+          <h2 class="ctox-pane-title" data-sheet-text="officeLibraryTitle|Tabellen">Tabellen</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button class="ctox-pane-icon" type="button" data-spreadsheets-new
-                  data-sheet-label="createWordDocument|Neue Tabelle erstellen" data-sheet-icon="add"></button>
+          <button class="ctox-pane-icon" type="button" data-spreadsheets-new data-action="office-create-blank"
+                  data-sheet-label="createBlankSpreadsheet|Leere Tabelle erstellen" data-sheet-icon="add"></button>
           <button class="ctox-pane-icon" type="button" data-spreadsheets-import-open
                   data-sheet-label="importDocument|Tabelle importieren" data-sheet-icon="upload"></button>
           <button class="ctox-pane-icon" type="button" data-spreadsheets-export
                   data-sheet-label="exportSelected|Ausgewählte Tabelle exportieren" data-sheet-icon="export"></button>
         </div>
       </div>
-    </header>
     <!-- Kopfzeile 2 des Explorers: genau eine Shell-Kopfzeile hoch, damit
          Titelzeile + Suchleiste zusammen exakt die 74px des Icons abdecken. -->
-    <div class="ctox-pane-tools spreadsheets-search-bar">
-      <input class="ctox-pane-search" type="search" data-spreadsheets-search
+    <div class="ctox-pane-tools ctox-filterbar spreadsheets-search-bar" data-shell-v2-header-row="2">
+      <input class="ctox-pane-search" type="search" data-spreadsheets-search data-pg-search
              data-sheet-placeholder="searchPlaceholder|Tabelle suchen..."
              data-sheet-label="searchLabel|Tabellen suchen">
+      <button class="ctox-pane-icon" type="button" data-pg-view="list" data-pg-view-cycle="list,cards" aria-pressed="true" aria-label="Als Karten anzeigen" title="Als Karten anzeigen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+      <button class="ctox-pane-icon spreadsheets-filter-toggle" type="button" data-spreadsheets-filter-toggle data-pg-tray-toggle
+              aria-expanded="false" data-sheet-label="filters|Filter" data-sheet-icon="filter"></button>
     </div>
-    <div class="ctox-pane-tools spreadsheets-filter-bar">
-      <select class="ctox-pane-filter" data-spreadsheets-sort data-sheet-label="sortLabel|Tabellen sortieren">
+    </header>
+    <div class="ctox-filter-tray spreadsheets-filter-bar" data-spreadsheets-filter-panel data-pg-tray hidden>
+      <select class="ctox-pane-filter" data-spreadsheets-sort data-pg-filter data-pg-name="sort" data-pg-default="updated_desc" data-sheet-label="sortLabel|Tabellen sortieren">
         <option value="updated_desc" data-sheet-text="sortByNewest|Neueste zuerst">Neueste zuerst</option>
         <option value="updated_asc" data-sheet-text="sortByOldest|Älteste zuerst">Älteste zuerst</option>
         <option value="title_asc" data-sheet-text="sortByTitle|Titel A-Z">Titel A-Z</option>
         <option value="status" data-sheet-text="sortByStatus|Status">Status</option>
       </select>
-      <select class="ctox-pane-filter" data-spreadsheets-status data-sheet-label="statusFilterLabel|Tabellenstatus filtern">
+      <select class="ctox-pane-filter" data-spreadsheets-status data-pg-filter data-pg-name="status" data-sheet-label="statusFilterLabel|Tabellenstatus filtern">
         <option value="all" data-sheet-text="filterAll|Alle">Alle</option>
         <option value="Imported">Imported</option>
         <option value="Draft">Draft</option>
         <option value="Review">Review</option>
         <option value="Final">Final</option>
       </select>
-      <select class="ctox-pane-filter" data-spreadsheets-tag data-sheet-label="tagFilterLabel|Tabellen-Tags filtern"></select>
+      <select class="ctox-pane-filter" data-spreadsheets-tag data-pg-filter data-pg-name="tag" data-sheet-label="tagFilterLabel|Tabellen-Tags filtern"></select>
+      <button class="ctox-pane-icon" type="button" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7M4 5v5h5"/></svg></button>
     </div>
-  </template>
+    <div class="ctox-well ctox-list spreadsheets-list" data-spreadsheets-list data-testid="office-file-list"><div class="ctox-empty">Tabellen werden geladen.</div></div>
+    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
+  </aside>
+  <button class="ctox-column-resizer spreadsheets-library-resizer" type="button" data-resizer="left" data-shell-resizer="left" data-resizer-var="--shell-col-left" data-resizer-min="300" data-resizer-max="560" aria-label="Breite der Dateiliste ändern" title="Breite der Dateiliste ändern"></button>
+  <main class="spreadsheets-editor" data-spreadsheets-editor data-shell-column="center">
+    <header class="ctox-pane-header ctox-pane-band spreadsheets-editor-header"><div class="ctox-pane-title-row"><div class="ctox-pane-titles"><h2 class="ctox-pane-title">Keine Tabelle ausgewählt</h2></div></div></header>
+    <div class="ctox-empty">Tabelle auswählen oder erstellen.</div>
+  </main>
+  <button type="button" class="spreadsheets-library-backdrop" data-spreadsheets-library-backdrop aria-label="Dateiliste schließen" hidden></button>
 
   <!-- Der Editor-Kopf bleibt auch OHNE Auswahl stehen: Shell V2 haengt das
        Versionsmenue an `.ctox-pane-header .ctox-pane-title` des Modul-Hosts.
        Ohne Auswahl entfernt der Renderer nur die Aktionen und den Kicker. -->
   <template data-spreadsheets-head="editor">
     <header class="ctox-pane-header ctox-pane-band spreadsheets-editor-header">
-      <div class="ctox-pane-title-row">
+      <div class="ctox-pane-title-row" data-shell-v2-header-row="1">
+        <button class="ctox-pane-icon spreadsheets-library-toggle" type="button" data-spreadsheets-library-toggle data-sheet-label="showFiles|Dateiliste öffnen" data-sheet-icon="folder"></button>
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-spreadsheets-editor-kicker></span>
           <h2 class="ctox-pane-title" data-spreadsheets-editor-title
               data-sheet-text="spreadsheetsTitle|CTOX Spreadsheets">CTOX Spreadsheets</h2>
         </div>
         <div class="ctox-pane-actions" data-spreadsheets-editor-actions>
-          <span class="ctox-badge spreadsheets-dirty-badge" data-spreadsheets-dirty-indicator>
+          <span class="spreadsheets-dirty-badge" role="status" data-spreadsheets-dirty-indicator>
             <i class="indicator-dot"></i>
             <span data-spreadsheets-dirty-label></span>
           </span>
@@ -105,21 +73,6 @@
                   data-sheet-label="addRowLabel|Zeile hinzufügen" data-sheet-icon="addRow"></button>
           <button class="ctox-pane-icon" type="button" data-spreadsheets-add-col
                   data-sheet-label="addColumnLabel|Spalte hinzufügen" data-sheet-icon="addColumn"></button>
-          <button class="ctox-pane-icon" type="button" data-spreadsheets-toggle-actions aria-pressed="false"
-                  data-sheet-label="toggleRunbooks|Runbooks &amp; Prompt einblenden">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M15 4v16"></path></svg>
-          </button>
-        </div>
-      </div>
-    </header>
-  </template>
-
-  <template data-spreadsheets-head="runbooks">
-    <header class="ctox-pane-header ctox-pane-band">
-      <div class="ctox-pane-title-row">
-        <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-sheet-text="runbookKicker|Automatisierung">Automatisierung</span>
-          <h2 class="ctox-pane-title" data-sheet-text="runbook|Runbook">Runbook</h2>
         </div>
       </div>
     </header>

@@ -44,7 +44,7 @@
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker">Web Research</span>
-          <h2 class="ctox-pane-title">Semantic Graph &amp; Evidence Workbench</h2>
+          <h2 class="ctox-pane-title">Research Board</h2>
         </div>
         <!-- Ohne ausgewaehlte Aufgabe ist der Mittelkopf ein Warte-/Leerkopf:
              seine dominante Aktion ist das Nachladen der Daten, nicht das
@@ -56,9 +56,15 @@
         </div>
       </div>
     </header>
-    <div class="ctox-empty">
-      <strong>Keine Research-Aufgabe ausgewählt</strong>
-      <span>Hier erscheint der interaktive 3D/2D Knowledge-Graph mit Quellen, Begriffen und Belegen sowie die Evidence-Workbench, sobald eine Research-Aufgabe ausgewählt oder über CTOX angelegt wurde.</span>
+    <div class="research-board-nav ctox-pane-tabs" role="tablist" aria-label="Research views">
+      <button type="button" class="ctox-pane-tab" disabled>Graph</button>
+      <button type="button" class="ctox-pane-tab" disabled>Sources</button>
+      <button type="button" class="ctox-pane-tab" disabled>Measurements</button>
+      <button type="button" class="ctox-pane-tab" disabled>Knowledge</button>
+    </div>
+    <div class="ctox-empty research-empty-state-panel">
+      <strong>Research-Daten werden geladen</strong>
+      <span>Aufgaben, Quellen und Knowledge-Tabellen werden lokal aus der synchronisierten CTOX-Datenbank aufgebaut.</span>
     </div>
   </section>
   <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--research-right-width" data-resizer-min="240" data-resizer-max="460" aria-label="Rechte Spaltenbreite anpassen"></button>

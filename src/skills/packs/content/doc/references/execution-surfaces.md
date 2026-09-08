@@ -6,7 +6,8 @@ oracle_captured → frontend_ported → rust_ported → differential_passed →
 shipped). A task class is usable when its feature group is `shipped`;
 `differential_passed` allows use behind the same rollout flag as the editor
 itself. Planned engine ops are usable when the op exists in
-`ctox-office-engine` (CLI). The browser editor uses the separate typed
+`ctox office` (embedded native CLI; standalone `ctox-office-engine` uses the
+same implementation). The browser editor uses the separate typed
 `office.document.prepare|commit|export` lifecycle commands. Native batch ops
 must not be described as Business OS commands until they are registered in
 the server-authoritative command inventory and policy.
@@ -38,6 +39,8 @@ Verify with `node src/scripts/check-office-skill-gating.mjs` after edits.
 | Operation | Op | Status |
 |---|---|---|
 | Inspect package (manifest, parts, structure) | `inspect` | available |
+| Read document text or worksheet cells and cached formulas | `read` | available |
+| XLSX-only typed cell batch (base SHA-256 required; new output; no managed-record writeback) | `spreadsheet-patch` | available; recalculation required |
 | Prepare source package as editor payload | `prepare-editor` | available |
 | Inspect a prepared editor payload | `inspect-editor` | available |
 | Export (byte-preserving round-trip/merge) | `export` | available |

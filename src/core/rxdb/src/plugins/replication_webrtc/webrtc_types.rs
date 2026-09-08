@@ -114,6 +114,7 @@ pub struct PeerWithResponse<P: Clone> {
 /// connect/disconnect/message/response streams and a send method.
 #[async_trait]
 pub trait WebRTCConnectionHandler: Send + Sync {
+    /// Equality identifies one connection lifetime, not a reusable signaling route.
     type Peer: Clone + Eq + std::hash::Hash + std::fmt::Debug + Send + Sync + 'static;
 
     fn connect_stream(&self) -> RxStream<Self::Peer>;
@@ -121,6 +122,12 @@ pub trait WebRTCConnectionHandler: Send + Sync {
     fn message_stream(&self) -> RxStream<PeerWithMessage<Self::Peer>>;
     fn response_stream(&self) -> RxStream<PeerWithResponse<Self::Peer>>;
     fn error_stream(&self) -> RxStream<RxError>;
+
+    /// Fixed by the local host before advertising the peer. Authentication and
+    /// collection authorization are independent of this declared runtime role.
+    fn local_peer_role(&self) -> super::NativePeerRole {
+        super::NativePeerRole::CtoxInstance
+    }
 
     async fn send(&self, peer: &Self::Peer, frame: WebRTCWireFrame) -> Result<(), RxError>;
 
@@ -158,6 +165,17 @@ pub trait WebRTCConnectionHandler: Send + Sync {
     /// Production handlers should override with the actual peer-id string.
     fn peer_identity(&self, peer: &Self::Peer) -> String {
         format!("{:?}", peer)
+    }
+
+    /// Cancellation/transfer key for this connection, separate from policy identity.
+    fn connection_identity(&self, peer: &Self::Peer) -> String {
+        self.peer_identity(peer)
+    }
+
+    /// Whether a captured handle still denotes a live connection. Transport
+    /// adapters with reusable routes must reject retired generations here.
+    fn is_peer_current(&self, _peer: &Self::Peer) -> bool {
+        true
     }
 
     /// Whether a collection is currently foreground/active for this peer.

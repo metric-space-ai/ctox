@@ -2,6 +2,7 @@
   class="documents-module"
   data-documents-module
   data-resize-frame
+  data-shell-columns="2"
 >
   <!-- Shell V2 (docs/business-os-shell-v2-contract.md §3/§7): the pane heads are
        STATIC markup here — the same rule modules/tickets and modules/knowledge
@@ -10,18 +11,17 @@
        zone, header rows, window-control clearance) decidable from this file,
        puts the frame on screen before the first query returns, and stops the
        search input from losing focus on every data tick. -->
-  <aside class="documents-library-pane" data-documents-library-pane>
+  <aside class="documents-library-pane" data-documents-library-pane data-shell-column="left">
     <div data-documents-explorer-slot>
-      <section class="documents-explorer" data-documents-explorer aria-label="Dokumente">
+      <section class="ctox-pane documents-explorer ctox-office-library" data-documents-explorer data-pg-default-view="list" aria-label="Dokumente">
         <header class="ctox-pane-header ctox-pane-band">
-          <!-- Row 1 of the shell band: title + standing icon actions. Exactly
-               ONE filled primary action per head — creating a document. -->
+          <!-- Row 1 of the shell band: title + standing icon actions. -->
           <div class="ctox-pane-title-row" data-shell-v2-header-row="1">
             <div class="ctox-pane-titles">
               <h2 class="ctox-pane-title" data-documents-title>Dokumente</h2>
             </div>
             <div class="ctox-pane-actions">
-              <button class="ctox-pane-icon is-primary" type="button" data-documents-new-markdown aria-label="Word-Dokument erstellen" title="Word-Dokument erstellen"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
+              <button class="ctox-pane-icon" type="button" data-documents-new-markdown data-action="office-create-blank" aria-label="Leeres Word-Dokument erstellen" title="Leeres Word-Dokument erstellen"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
               <button class="ctox-pane-icon" type="button" data-documents-import-open aria-label="Dokument importieren" title="Dokument importieren"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M12 4 8 8M12 4l4 4M5 19h14"></path></svg></button>
               <button class="ctox-pane-icon" type="button" data-documents-export disabled aria-disabled="true" aria-label="Ausgewähltes Dokument exportieren" title="Ausgewähltes Dokument exportieren"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7"></path></svg></button>
             </div>
@@ -29,35 +29,36 @@
           <!-- Row 2 of the shell band: search + filter tray toggle. Sorting and
                the five filters live in the collapsed tray below, so this row
                stays exactly one header row high even in a narrow column. -->
-          <div class="ctox-pane-tools documents-filter-bar" data-shell-v2-header-row="2">
-            <input class="ctox-pane-search" type="search" data-documents-search placeholder="Dokument suchen..." aria-label="Dokumente suchen" value="">
-            <button class="ctox-pane-icon documents-filter-toggle" type="button" data-documents-filter-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"></path></svg><strong class="documents-filter-count" data-documents-filter-count hidden></strong></button>
+          <div class="ctox-pane-tools ctox-filterbar documents-filter-bar" data-shell-v2-header-row="2">
+            <input class="ctox-pane-search" type="search" data-documents-search data-pg-search placeholder="Dokument suchen..." aria-label="Dokumente suchen" value="">
+            <button class="ctox-pane-icon" type="button" data-pg-view="list" data-pg-view-cycle="list,cards" aria-pressed="true" aria-label="Als Karten anzeigen" title="Als Karten anzeigen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+            <button class="ctox-pane-icon documents-filter-toggle" type="button" data-documents-filter-toggle data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"></path></svg></button>
           </div>
           <!-- Row 3: the collapsed filter tray. Option lists are data-derived,
                so index.js fills them; the controls themselves stay static. -->
-          <div class="documents-filter-panel" data-shell-v2-header-row="3" data-documents-filter-panel hidden>
-            <select class="ctox-pane-filter documents-filter-control" data-documents-sort aria-label="Dokumente sortieren">
+          <div class="ctox-filter-tray documents-filter-panel" data-shell-v2-header-row="3" data-documents-filter-panel data-pg-tray hidden>
+            <select class="ctox-pane-filter documents-filter-control" data-documents-sort data-pg-filter data-pg-name="sort" data-pg-default="updated_desc" aria-label="Dokumente sortieren">
               <option value="updated_desc">Zuletzt geändert</option>
               <option value="updated_asc">Älteste zuerst</option>
               <option value="title_asc">Titel A-Z</option>
               <option value="creator_app">Ersteller-App</option>
               <option value="status">Status</option>
             </select>
-            <select class="ctox-pane-filter documents-filter-control" data-documents-type aria-label="Dokumenttyp filtern"></select>
-            <select class="ctox-pane-filter documents-filter-control" data-documents-status aria-label="Dokumentstatus filtern"></select>
-            <select class="ctox-pane-filter documents-filter-control" data-documents-app aria-label="Ersteller-App filtern"></select>
-            <select class="ctox-pane-filter documents-filter-control" data-documents-source aria-label="Quelle filtern"></select>
-            <select class="ctox-pane-filter documents-filter-control" data-documents-tag aria-label="Dokument-Tags filtern"></select>
-            <button class="ctox-button documents-filter-reset" type="button" data-documents-clear-filters disabled aria-disabled="true">Filter zurücksetzen</button>
+            <select class="ctox-pane-filter documents-filter-control" data-documents-type data-pg-filter data-pg-name="type" aria-label="Dokumenttyp filtern"></select>
+            <select class="ctox-pane-filter documents-filter-control" data-documents-status data-pg-filter data-pg-name="status" aria-label="Dokumentstatus filtern"></select>
+            <select class="ctox-pane-filter documents-filter-control" data-documents-app data-pg-filter data-pg-name="app" aria-label="Ersteller-App filtern"></select>
+            <select class="ctox-pane-filter documents-filter-control" data-documents-source data-pg-filter data-pg-name="source" aria-label="Quelle filtern"></select>
+            <select class="ctox-pane-filter documents-filter-control" data-documents-tag data-pg-filter data-pg-name="tag" aria-label="Dokument-Tags filtern"></select>
+            <button class="ctox-pane-icon" type="button" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7M4 5v5h5"/></svg></button>
           </div>
-          <div class="documents-active-filters" data-documents-active-filters aria-label="Aktive Filter" hidden></div>
         </header>
-        <div class="documents-list" data-documents-list>
+        <div class="ctox-well documents-list" data-documents-list data-testid="office-file-list">
           <div class="ctox-empty documents-empty" data-documents-list-placeholder>
             <strong>Dokumente</strong>
             <span>Dokumente werden geladen.</span>
           </div>
         </div>
+        <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
       </section>
     </div>
   </aside>
@@ -66,18 +67,18 @@
     class="ctox-column-resizer documents-library-resizer"
     type="button"
     data-resizer="left"
-    data-resizer-var="--documents-library-width"
-    data-resizer-min="220"
+    data-shell-resizer="left"
+    data-resizer-var="--shell-col-left"
+    data-resizer-min="300"
     data-resizer-max="560"
     aria-label="Breite der Dokumentliste ändern"
     title="Breite der Dokumentliste ändern"
   ></button>
 
-  <main class="documents-workbench">
-    <!-- The centre head is the last head of the top row while the actions
-         drawer is closed, so it carries the 74x74 window-control clearance.
-         index.js fills its content (current document / mail-merge navigator +
-         the single Aktionen action); the head element itself is static. -->
+  <main class="documents-workbench" data-shell-column="center">
+    <!-- The centre head is the last head of the top row, so it carries the
+         74x74 window-control clearance. index.js fills only the current
+         document or mail-merge navigator; the head element itself is static. -->
     <header class="ctox-pane-header ctox-pane-band documents-document-strip" data-documents-document-strip></header>
     <div class="documents-editor-shell" data-documents-editor>
       <div class="ctox-empty documents-empty">
@@ -88,33 +89,10 @@
   </main>
 
   <button
-    class="ctox-column-resizer documents-actions-resizer"
-    type="button"
-    data-documents-actions-resizer
-    data-resizer="right"
-    data-resizer-var="--documents-actions-width"
-    data-resizer-min="280"
-    data-resizer-max="560"
-    aria-label="Breite der Aktionsspalte ändern"
-    title="Breite der Aktionsspalte ändern"
-    hidden
-  ></button>
-
-  <button
     class="documents-drawer-backdrop"
     type="button"
     data-documents-drawer-backdrop
     aria-label="Seitenleiste schließen"
     hidden
   ></button>
-  <aside
-    id="documents-actions-drawer"
-    class="documents-actions-drawer"
-    data-documents-actions-drawer
-    aria-label="Dokumentaktionen"
-    aria-hidden="true"
-    hidden
-  >
-    <div data-documents-actions-content></div>
-  </aside>
 </section>

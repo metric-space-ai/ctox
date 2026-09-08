@@ -68,7 +68,11 @@ pub fn get_query_plan(
     if let Some(sel_obj) = selector.as_object() {
         for (field_name, value) in sel_obj.iter() {
             let schema_part = get_schema_by_object_path(schema, field_name);
-            let is_boolean = schema_part.schema_type.as_deref() == Some("boolean");
+            let is_boolean = schema_part
+                .schema_type
+                .as_ref()
+                .and_then(|declared| declared.single_type())
+                == Some("boolean");
             let has_eq = value.get("$eq").is_some();
             if is_boolean && has_eq {
                 sort_irrelevant_fields.insert(field_name.clone());

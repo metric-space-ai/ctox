@@ -260,7 +260,12 @@ impl RxDocument {
             )
         })?;
 
-        if schema_obj.schema_type.as_deref() == Some("array") {
+        if value.is_array()
+            && schema_obj
+                .schema_type
+                .as_ref()
+                .is_some_and(|declared| declared.includes("array"))
+        {
             let ids: Vec<String> = value
                 .as_array()
                 .map(|values| {
@@ -700,7 +705,7 @@ mod tests {
         name_properties.insert(
             "first".to_string(),
             JsonSchema {
-                schema_type: Some("string".to_string()),
+                schema_type: Some("string".into()),
                 ..Default::default()
             },
         );
@@ -708,7 +713,7 @@ mod tests {
         properties.insert(
             "id".to_string(),
             JsonSchema {
-                schema_type: Some("string".to_string()),
+                schema_type: Some("string".into()),
                 max_length: Some(100),
                 ..Default::default()
             },
@@ -716,7 +721,7 @@ mod tests {
         properties.insert(
             "name".to_string(),
             JsonSchema {
-                schema_type: Some("object".to_string()),
+                schema_type: Some("object".into()),
                 properties: name_properties,
                 ..Default::default()
             },

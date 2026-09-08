@@ -8,6 +8,9 @@
 //!   2. The native peer is a PASSIVE RESPONDER: it never initiates
 //!      RTCPeerConnections from the signaling peer list. Browsers initiate;
 //!      the responder is built when their offer arrives (glare protection).
+//!      Configured native execution groups use the separate explicit
+//!      connect_native_execution_peer entry point, which rejects browser roles.
+
 //!   3. Native is ALWAYS master toward role=browser peers; the hash election
 //!      only applies between non-browser peers. Do not "simplify" this.
 //!   4. Wire-contract constants are GENERATED from the fixtures under
@@ -41,8 +44,8 @@ pub mod webrtc_types;
 
 pub use connection_handler_rs::{
     CollectionAuthzHook, CollectionEagerPullHook, CollectionLiveChangeHook, DocumentReadAuthzHook,
-    DocumentReadFilter, DocumentWriteAuthzHook, WebRTCRsConfig, WebRTCRsConnectionHandler,
-    WebRTCRsPeer,
+    DocumentReadFilter, DocumentWriteAuthzHook, WebRTCRsConfig, WebRTCRsConnection,
+    WebRTCRsConnectionHandler, WebRTCRsPeer,
 };
 pub use index_mod::{
     master_change_stream_id, replicate_web_rtc, replicate_web_rtc_multi,
@@ -52,6 +55,7 @@ pub use index_mod::{
     replicate_web_rtc_rs_multi_with_url_provider, replicate_web_rtc_with_options,
     RxWebRTCReplicationPool, RxWebRTCReplicationState, SyncOptionsWebRTC, SyncOptionsWebRTCRs,
 };
+pub use protocol_contract_generated::NativePeerRole;
 pub use signaling_client::SignalingClient;
 pub use signaling_protocol::{
     ClientToServer, PeerId, RoomId, ServerToClient, SignalingPeerDescriptor, PEER_ID_LENGTH,

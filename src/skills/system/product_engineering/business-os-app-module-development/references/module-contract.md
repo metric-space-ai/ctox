@@ -51,9 +51,18 @@ new `index.js`.
   elements. If dialogs or forms are siblings of the module root section, query
   them from `ctx.host`, not from the inner root section.
 - Use only local relative ESM imports or shipped browser ESM files. Do not add package-manager dependencies.
+- Executable runtime code is local-only: no HTTP(S) `script`/stylesheet source,
+  remote `import`/`import()`, CDN import map, remote worker, or package/CDN
+  loader. Remote domain data and media are allowed only when the app explicitly
+  requires them, and must not be evaluated as code.
 - Keep local ESM helper imports cache-safe. If `index.js` starts importing a
   new export from a helper, bump the helper filename/import path or otherwise
   force a fresh module URL, then validate in a real browser reload.
+- A compatibility `srcdoc` wrapper for a complex one-file canvas/WebGL import
+  must obtain the complete source through static local ESM imports. It may not
+  fetch the original desktop path, Git repository, gist, CDN, or another origin
+  at runtime. The wrapper still owns responsive sizing, persistence bridging,
+  load/error reporting, cleanup, and real-host render proof.
 
 ## Shell Layout And Theme
 

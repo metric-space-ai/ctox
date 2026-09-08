@@ -1,15 +1,23 @@
 import { OfficeRpcPeer } from './rpc.mjs';
 
+const appearanceUrl = new URL('./shell-appearance.mjs', import.meta.url);
+const appearanceRevision = new URL(import.meta.url).searchParams.get('v');
+if (appearanceRevision) appearanceUrl.searchParams.set('v', appearanceRevision);
+const appearanceModule = import(appearanceUrl.href);
+
 const root = document.querySelector('#ctox-office-frame-root');
 const OFFICE_OPERATION_TIMEOUT_MS = 120000;
+const frameOrigin = new URL(document.baseURI).origin;
 let connected = false;
 
 window.addEventListener('message', async (event) => {
-  if (connected || event.origin !== location.origin || event.data?.type !== 'ctox-office-connect') return;
+  if (connected || event.origin !== frameOrigin || event.data?.type !== 'ctox-office-connect') return;
   const [port] = event.ports || [];
   if (!port) return;
   connected = true;
   const config = event.data;
+  const { applyShellAppearance } = await appearanceModule;
+  applyShellAppearance(document, config.appearance);
   const productName = config.productName || (config.kind === 'spreadsheet' ? 'CTOX Spreadsheets' : 'CTOX Documents');
   document.title = productName;
   const loading = root.querySelector('.ctox-office-frame-loading');
@@ -30,6 +38,11 @@ window.addEventListener('message', async (event) => {
     'editor.focus': () => requireRuntime(runtime).focus(),
     'editor.setPermissions': (permissions) => requireRuntime(runtime).setPermissions(permissions),
     'editor.setTheme': (theme) => requireRuntime(runtime).setTheme(theme),
+    'editor.setAppearance': (appearance) => {
+      applyShellAppearance(document, appearance);
+      const editor = requireRuntime(runtime);
+      return editor.setAppearance ? editor.setAppearance(appearance) : editor.setTheme(appearance.theme);
+    },
     'editor.inspect': () => requireRuntime(runtime).inspect(),
     'editor.destroy': async () => {
       await runtime?.destroy?.();
@@ -60,6 +73,7 @@ async function loadRuntime(config, peer) {
       kind: config.kind,
       locale: config.locale,
       theme: config.theme,
+      appearance: config.appearance,
       permissions: config.permissions,
       launchArgs: config.launchArgs,
       bridge: {

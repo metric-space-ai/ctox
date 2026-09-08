@@ -1808,6 +1808,81 @@
   }
 }
 
+/* Standalone Research Board port. The shell contributes only task management
+   and executable CTOX actions; the board itself keeps the standalone layout. */
+.research-module {
+  --research-left-width: clamp(238px, 18vw, 292px);
+  --research-right-width: 0px;
+  grid-template-columns: var(--research-left-width) 6px minmax(0, 1fr) !important;
+}
+
+.research-module > .ctox-column-resizer[data-resizer="right"],
+.research-module > .research-right {
+  display: none !important;
+}
+
+.research-center {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: #0c0e0f;
+}
+
+.research-standalone-actions {
+  flex: 0 0 auto;
+  min-height: 46px;
+  background: #141719;
+  border-bottom-color: #262c31;
+}
+
+.research-standalone-actions .ctox-pane-actions {
+  gap: 6px;
+}
+
+.research-standalone-actions .ctox-button {
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 7px;
+}
+
+.research-standalone-frame {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  background: #0c0e0f;
+}
+
+.research-standalone-board {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #0c0e0f;
+}
+
+.research-standalone-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #8b949c;
+  background: #0c0e0f;
+  font-size: 13px;
+}
+
+@container business-app-window (max-width: 820px) {
+  .research-module {
+    --research-left-width: 220px;
+  }
+
+  .research-standalone-actions .ctox-button span {
+    display: none;
+  }
+}
+
 @media (pointer: coarse) {
   .research-graph-tool {
     width: 42px;
@@ -2664,4 +2739,334 @@ a.research-source-row-meta:hover {
   margin: 8px 0 0;
   color: var(--research-muted);
   font-size: 12px;
+}
+
+/* -------------------------------------------------------------------------
+   Research Board v99 — the standalone board's calm, full-canvas hierarchy
+   brought back into the live shell. Task management and automation remain in
+   the shell side panes; the center switches between complete working views.
+   ---------------------------------------------------------------------- */
+.research-center {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--research-bg);
+}
+
+.research-board-header .ctox-pane-title {
+  font-weight: 720;
+  letter-spacing: -0.01em;
+}
+
+.research-create-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.research-create-action svg {
+  width: 14px;
+  height: 14px;
+}
+
+.research-board-nav {
+  flex: 0 0 39px;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 0 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--research-line);
+  background: color-mix(in srgb, var(--research-surface) 92%, var(--research-bg));
+  scrollbar-width: none;
+}
+
+.research-board-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.research-board-nav .ctox-pane-tab {
+  flex: 0 0 auto;
+  height: 39px;
+  padding: 0 11px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--research-muted);
+}
+
+.research-board-nav .ctox-pane-tab:hover:not(:disabled) {
+  color: var(--research-text);
+  background: color-mix(in srgb, var(--research-text) 3%, transparent);
+}
+
+.research-board-nav .ctox-pane-tab.is-active {
+  color: var(--research-text);
+  border-bottom-color: var(--research-accent);
+  background: transparent;
+}
+
+.research-board-nav .research-tab-count {
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--research-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.research-board-body {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.research-board-graph-view {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(280px, 29%, 410px);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.research-board-graph-view > .research-graph-shell {
+  width: auto;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.research-board-graph-view .research-graph-stage {
+  height: 100%;
+  min-height: 0;
+  border-radius: 0;
+}
+
+.research-graph-source-rail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--research-line);
+  background: var(--research-surface);
+}
+
+.research-graph-source-filter {
+  flex: 0 0 48px;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  color: var(--research-muted);
+  border-bottom: 1px solid var(--research-line);
+}
+
+.research-graph-source-filter svg {
+  width: 15px;
+  height: 15px;
+}
+
+.research-graph-source-filter input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--research-text);
+  font: inherit;
+}
+
+.research-graph-source-filter span {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.research-graph-source-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.research-graph-source-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--research-line) 72%, transparent);
+  background: transparent;
+  color: var(--research-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.research-graph-source-row:hover {
+  background: color-mix(in srgb, var(--research-text) 3%, transparent);
+}
+
+.research-graph-source-row.is-selected {
+  background: color-mix(in srgb, var(--research-accent) 12%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--research-accent) 55%, transparent);
+  outline-offset: -1px;
+}
+
+.research-graph-source-rank {
+  padding-top: 2px;
+  color: var(--research-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.research-graph-source-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.research-graph-source-main strong {
+  overflow: hidden;
+  color: var(--research-text);
+  font-size: 12.5px;
+  font-weight: 660;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-graph-source-main small {
+  overflow: hidden;
+  color: var(--research-muted);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-board-workbench {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: var(--research-bg);
+}
+
+.research-board-workbench > .research-view-toggle {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 4;
+}
+
+.research-board-workbench > .research-table-host {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.research-board-workbench .ctox-table {
+  min-width: 980px;
+}
+
+.research-kv-evidence {
+  min-width: 920px !important;
+}
+
+.research-board-empty {
+  display: grid;
+  grid-template-rows: minmax(190px, 44%) minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.research-board-empty .research-empty-state-panel {
+  align-self: stretch;
+  justify-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 0;
+  border-bottom: 1px solid var(--research-line);
+  border-radius: 0;
+}
+
+.research-board-empty .research-empty-state-panel strong {
+  color: var(--research-text);
+  font-size: 15px;
+}
+
+@container business-app-window (max-width: 1024px) {
+  .research-module {
+    --research-left-width: 250px;
+    --research-right-width: 260px;
+  }
+
+  .research-board-graph-view {
+    grid-template-columns: minmax(0, 1fr) 300px;
+  }
+
+  .research-board-nav .ctox-pane-tab {
+    padding-inline: 8px;
+  }
+}
+
+@container business-app-window (max-width: 768px) {
+  .research-board-graph-view {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(300px, 1fr) minmax(180px, 36%);
+  }
+
+  .research-graph-source-rail {
+    border-left: 0;
+    border-top: 1px solid var(--research-line);
+  }
+}
+.research-left-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.research-left-metrics > div {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--ctox-border-subtle, rgba(255, 255, 255, 0.1));
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.research-left-metrics strong,
+.research-left-metrics span {
+  display: block;
+}
+
+.research-left-metrics strong {
+  color: var(--ctox-text-primary, #f4f6f8);
+  font-size: 19px;
+  line-height: 1.1;
+}
+
+.research-left-metrics span {
+  margin-top: 5px;
+  color: var(--ctox-text-muted, #8d97a1);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }

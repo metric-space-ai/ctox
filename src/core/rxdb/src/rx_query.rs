@@ -1094,7 +1094,7 @@ mod tests {
         properties.insert(
             "id".to_string(),
             JsonSchema {
-                schema_type: Some("string".to_string()),
+                schema_type: Some("string".into()),
                 max_length: Some(100),
                 ..Default::default()
             },
@@ -1102,7 +1102,7 @@ mod tests {
         properties.insert(
             "age".to_string(),
             JsonSchema {
-                schema_type: Some("number".to_string()),
+                schema_type: Some("number".into()),
                 ..Default::default()
             },
         );

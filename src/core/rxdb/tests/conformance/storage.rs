@@ -80,7 +80,7 @@ fn person_schema() -> RxJsonSchema {
     properties.insert(
         "id".to_string(),
         JsonSchema {
-            schema_type: Some("string".to_string()),
+            schema_type: Some("string".into()),
             max_length: Some(100),
             ..Default::default()
         },
@@ -88,14 +88,14 @@ fn person_schema() -> RxJsonSchema {
     properties.insert(
         "name".to_string(),
         JsonSchema {
-            schema_type: Some("string".to_string()),
+            schema_type: Some("string".into()),
             ..Default::default()
         },
     );
     properties.insert(
         "age".to_string(),
         JsonSchema {
-            schema_type: Some("number".to_string()),
+            schema_type: Some("number".into()),
             ..Default::default()
         },
     );

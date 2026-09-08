@@ -35,6 +35,29 @@ die beiden zugehörigen öffentlichen SPKI-Keys. Ein unbekannter Key, eine
 ungültige Signatur, ein abweichender Manifest-Hash oder eine inkompatible
 Version muss geschlossen fehlschlagen.
 
+## Instanzgebundene Kandidatenprüfung
+
+Vor einer Stable-Promotion kann ein Operator eine unveränderliche, signierte
+Vorabversion gezielt auf genau einer Instanz bereitstellen:
+
+```sh
+ctox business-os shell-update stage --version 0.1.46-beta.1
+ctox business-os shell-update activate
+```
+
+Danach den regulären CTOX-Service neu starten und die relevanten Abläufe im
+echten Browser prüfen. `stage --version` akzeptiert ausschließlich Versionsnamen
+des CTOX-Release-Repositories, keine URLs oder lokalen Verzeichnisse. Die
+Release-Signatur, Kompatibilität, Archiv-Hashes und vollständige Slot-Inventur
+bleiben verpflichtend. Staging aktiviert nichts und ändert weder den
+abonnierten Stable-Kanal noch dessen zuletzt ermittelte Version. Ohne
+`--version` wird weiterhin der signierte Stable-Pointer verwendet. Rollback
+bleibt `ctox business-os shell-update rollback` mit anschließendem Service-Neustart.
+
+Eine Vorabversion darf erst nach bestandenen Live-Abnahmetests als Stable
+veröffentlicht werden. Ein erfolgreicher Build oder eine gesunde Statusantwort
+allein ist keine Office-Abnahme.
+
 ## Stable v0.1.0
 
 Der unveränderliche Tag `business-os-shell-v0.1.0` zeigt auf CTOX-Commit

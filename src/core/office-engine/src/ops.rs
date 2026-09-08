@@ -18,7 +18,7 @@
 // requires updating the execution-surfaces.md tables (CI guard:
 // src/scripts/check-office-skill-gating.mjs).
 
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
 use serde::Serialize;
@@ -290,7 +290,7 @@ fn scrub_core_props(xml: &[u8]) -> anyhow::Result<(Vec<u8>, Vec<String>)> {
             }
             Event::Text(text) => {
                 if let Some(field) = &inside {
-                    if !text.as_ref().is_empty() && !scrubbed.contains(field) {
+                    if !text.is_empty() && !scrubbed.contains(field) {
                         scrubbed.push(field.clone());
                     }
                     continue;
@@ -995,11 +995,13 @@ fn redact_xml(
                         let mut last = 0usize;
                         for found in pattern.find_iter(&masked.clone()) {
                             result.push_str(&masked[last..found.start()]);
-                            result.extend(
-                                masked[found.range()]
-                                    .chars()
-                                    .map(|c| if c.is_whitespace() { c } else { '\u{2588}' }),
-                            );
+                            result.extend(masked[found.range()].chars().map(|c| {
+                                if c.is_whitespace() {
+                                    c
+                                } else {
+                                    '\u{2588}'
+                                }
+                            }));
                             last = found.end();
                             replacements += 1;
                             if index < term_count {
@@ -2422,7 +2424,7 @@ fn analyze_simple_run(events: &[Event<'static>]) -> Option<SimpleRun> {
     let mut text: Option<String> = None;
     let mut space_preserve = false;
     let mut index = 1; // skip Start(w:r)
-    // Optional rPr subtree.
+                       // Optional rPr subtree.
     if let Some(Event::Start(start)) = events.get(index) {
         if qname_string(start) == "w:rPr" {
             let mut depth = 0usize;
@@ -3098,12 +3100,10 @@ mod tests {
         assert!(!document.contains("w:rsid"));
         let settings = part_text(&scrubbed, "word/settings.xml");
         assert!(!settings.contains("w:rsids"));
-        assert!(
-            read_parts(&scrubbed)
-                .unwrap()
-                .get("docProps/custom.xml")
-                .is_none()
-        );
+        assert!(read_parts(&scrubbed)
+            .unwrap()
+            .get("docProps/custom.xml")
+            .is_none());
         let content_types = part_text(&scrubbed, "[Content_Types].xml");
         assert!(!content_types.contains("custom.xml"));
         let rels = part_text(&scrubbed, "_rels/.rels");
@@ -3566,11 +3566,8 @@ mod tests {
         let csv = "Name,Value\n\"quoted, comma\",\"line\nbreak\"\nplain,42";
         let imported = table_import(&package, csv, true).unwrap();
         let document = part_text(&imported, "word/document.xml");
-        assert!(
-            document.contains(
-                "<w:tblGrid><w:gridCol w:w=\"4680\"/><w:gridCol w:w=\"4680\"/></w:tblGrid>"
-            )
-        );
+        assert!(document
+            .contains("<w:tblGrid><w:gridCol w:w=\"4680\"/><w:gridCol w:w=\"4680\"/></w:tblGrid>"));
         assert!(document.contains("quoted, comma"));
         assert!(document.contains(">42</w:t>"));
         // Round trip: the imported table is extractable again (it is the

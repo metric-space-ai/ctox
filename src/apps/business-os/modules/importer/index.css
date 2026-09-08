@@ -435,6 +435,8 @@
   transform: translateY(-1px);
 }
 
+.imp-folder + .imp-folder { margin-top: 10px; }
+
 .imp-folder-icon {
   display: grid;
   width: 38px;

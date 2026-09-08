@@ -107,6 +107,75 @@ pub const ACTIVE_COLLECTIONS_METHOD: &str = "rxdb.activeCollections";
 /// Peer identifier assigned by the shared signaling server.
 pub type WebRTCRsPeer = PeerId;
 
+struct EnqueuedSend {
+    available: Arc<tokio::sync::Notify>,
+    result: tokio::sync::oneshot::Receiver<Result<(), RxError>>,
+}
+
+fn stale_connection_error(peer: &WebRTCRsConnection) -> RxError {
+    new_rx_error(
+        "RC_WEBRTC_PEER",
+        Some(serde_json::json!({
+            "message": "unknown, closed or superseded peer connection",
+            "peer": peer.peer_id(), "generation": peer.generation(),
+            EXPECTED_PEER_TEARDOWN_PARAM: true,
+        })),
+    )
+}
+
+/// A local transport handle. Signaling routes may be reused; a connection may not.
+/// This is not a wire identity or a proof of membership.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct WebRTCRsConnection {
+    peer_id: PeerId,
+    generation: u64,
+}
+impl WebRTCRsConnection {
+    pub(crate) fn new(peer_id: PeerId, generation: u64) -> Self {
+        Self {
+            peer_id,
+            generation,
+        }
+    }
+    pub fn peer_id(&self) -> &str {
+        &self.peer_id
+    }
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+impl std::fmt::Display for WebRTCRsConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}@{}", self.peer_id, self.generation)
+    }
+}
+
+impl WebRTCRsConnectionHandler {
+    /// Resolve a routing hint to the currently open local connection.
+    pub fn connection_for_peer(&self, peer_id: &str) -> Option<WebRTCRsConnection> {
+        if self.closed.load(Ordering::SeqCst) {
+            return None;
+        }
+        self.peers
+            .lock()
+            .get(peer_id)
+            .filter(|entry| entry.data_channel_open)
+            .map(|entry| WebRTCRsConnection::new(peer_id.to_owned(), entry.generation))
+    }
+
+    fn is_current_connection(&self, connection: &WebRTCRsConnection) -> bool {
+        if self.closed.load(Ordering::SeqCst) {
+            return false;
+        }
+        self.peers
+            .lock()
+            .get(&connection.peer_id)
+            .is_some_and(|entry| {
+                entry.generation == connection.generation && entry.data_channel_open
+            })
+    }
+}
+
 pub type CollectionAuthzHook = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
 pub type CollectionEagerPullHook = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
 pub type CollectionLiveChangeHook = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
@@ -128,6 +197,7 @@ struct PeerPresenceReport {
 #[derive(Clone)]
 pub struct WebRTCRsConfig {
     pub signaling: Arc<SignalingClient>,
+    pub peer_role: super::NativePeerRole,
     pub room: RoomId,
     pub ice_servers: Vec<RTCIceServer>,
     pub data_channel_label: String,
@@ -139,6 +209,7 @@ impl WebRTCRsConfig {
         Self {
             signaling,
             room: room.into(),
+            peer_role: super::NativePeerRole::CtoxInstance,
             ice_servers: vec![RTCIceServer {
                 urls: vec!["stun:stun.l.google.com:19302".to_string()],
                 ..Default::default()
@@ -313,6 +384,7 @@ struct PeerSendQueue {
     normal: VecDeque<QueuedSend>,
     low: VecDeque<QueuedSend>,
     draining: bool,
+    drain_available: Arc<tokio::sync::Notify>,
     queued_bytes: usize,
     schedule_cursor: usize,
     consecutive_browser_live: usize,
@@ -445,6 +517,7 @@ impl PeerSendQueue {
 struct DrainResetGuard {
     queues: Arc<Mutex<HashMap<WebRTCRsPeer, PeerSendQueue>>>,
     peer: WebRTCRsPeer,
+    available: Arc<tokio::sync::Notify>,
     armed: bool,
 }
 
@@ -454,7 +527,61 @@ impl Drop for DrainResetGuard {
             return;
         }
         if let Some(queue) = self.queues.lock().get_mut(&self.peer) {
-            queue.draining = false;
+            // The same peer ID may already own a replacement connection.
+            if Arc::ptr_eq(&queue.drain_available, &self.available) {
+                queue.draining = false;
+            }
+        }
+        self.available.notify_waiters();
+    }
+}
+
+/// Every sender waits for its own receipt and can take over an abandoned drain.
+/// There is no detached sender task: dropping a request releases the turn and
+/// wakes the other requests already queued on this connection.
+async fn await_queued_send<F, D>(
+    queues: &Arc<Mutex<HashMap<WebRTCRsPeer, PeerSendQueue>>>,
+    peer: &WebRTCRsPeer,
+    available: Arc<tokio::sync::Notify>,
+    mut receipt: tokio::sync::oneshot::Receiver<Result<(), RxError>>,
+    mut drain: F,
+) -> Result<Result<(), RxError>, tokio::sync::oneshot::error::RecvError>
+where
+    F: FnMut(DrainResetGuard) -> D,
+    D: std::future::Future<Output = ()>,
+{
+    loop {
+        let notified = available.notified();
+        tokio::pin!(notified);
+        // Register before checking the slot so cancellation cannot lose a wakeup.
+        notified.as_mut().enable();
+        let guard = {
+            let mut queues_lock = queues.lock();
+            queues_lock.get_mut(peer).and_then(|queue| {
+                if queue.draining || !Arc::ptr_eq(&queue.drain_available, &available) {
+                    None
+                } else {
+                    queue.draining = true;
+                    Some(DrainResetGuard {
+                        queues: Arc::clone(queues),
+                        peer: peer.clone(),
+                        available: Arc::clone(&available),
+                        armed: true,
+                    })
+                }
+            })
+        };
+        if let Some(guard) = guard {
+            tokio::select! {
+                biased;
+                result = &mut receipt => return result,
+                () = drain(guard) => {}
+            }
+        } else {
+            tokio::select! {
+                result = &mut receipt => return result,
+                () = &mut notified => {}
+            }
         }
     }
 }
@@ -606,10 +733,11 @@ pub(crate) fn publish_best_effort_send_error(error_subject: &RxSubject<RxError>,
 
 /// WebRTC connection-handler implementation backed by `webrtc-rs`.
 pub struct WebRTCRsConnectionHandler {
-    connect_subject: RxSubject<WebRTCRsPeer>,
-    disconnect_subject: RxSubject<WebRTCRsPeer>,
-    message_subject: RxSubject<PeerWithMessage<WebRTCRsPeer>>,
-    response_subject: RxSubject<PeerWithResponse<WebRTCRsPeer>>,
+    peer_role: super::NativePeerRole,
+    connect_subject: RxSubject<WebRTCRsConnection>,
+    disconnect_subject: RxSubject<WebRTCRsConnection>,
+    message_subject: RxSubject<PeerWithMessage<WebRTCRsConnection>>,
+    response_subject: RxSubject<PeerWithResponse<WebRTCRsConnection>>,
     error_subject: RxSubject<RxError>,
     peers: Arc<Mutex<HashMap<WebRTCRsPeer, PeerEntry>>>,
     peer_lifecycle: Arc<Mutex<()>>,
@@ -682,16 +810,118 @@ impl WebRTCRsConnectionHandler {
     }
 
     pub async fn new_with_signaling(config: WebRTCRsConfig) -> RxResult<Arc<Self>> {
-        let handler = Arc::new(Self::empty(
+        let signaling = config.signaling.clone();
+        let room = config.room.clone();
+        let handler = Self::prepare_with_signaling(config).await?;
+        if let Err(error) = signaling.join(room).await {
+            let _ = handler.close().await;
+            return Err(error);
+        }
+        Ok(handler)
+    }
+
+    /// Install signaling receivers without advertising room membership yet.
+    /// Replication hosts install their pool/admission streams before calling
+    /// `SignalingClient::join`, so an immediate offer cannot overtake setup.
+    pub async fn prepare_with_signaling(config: WebRTCRsConfig) -> RxResult<Arc<Self>> {
+        let mut handler = Self::empty(
             Some(Arc::clone(&config.signaling)),
             config.ice_servers,
             &config.data_channel_label,
             &config.udp_bind_addr,
-        ));
+        );
+        handler.peer_role = config.peer_role;
+        let handler = Arc::new(handler);
         wait_for_own_peer_id(&config.signaling).await?;
-        config.signaling.join(config.room).await?;
         handler.start_signaling_tasks();
         Ok(handler)
+    }
+
+    /// Explicit connection request from a configured native execution group.
+    /// The general signaling peer-list loop remains passive toward browsers.
+    /// Both ends may call this; the lower server-issued ID alone makes the offer.
+    /// This chooses a transport initiator, never an execution owner. The caller
+    /// must authenticate its configured peer key over the resulting channel.
+    pub async fn connect_native_execution_peer(
+        self: &Arc<Self>,
+        remote_peer_id: PeerId,
+    ) -> RxResult<()> {
+        self.connect_execution_peer(remote_peer_id, false).await
+    }
+
+    /// A nonvoting worker initiates toward a configured authority voter. Voters
+    /// do not discover these workers, so this edge has exactly one initiator.
+    /// The host supplies the confirmed route; signatures still authenticate it.
+    pub async fn connect_worker_to_authority_peer(
+        self: &Arc<Self>,
+        remote_peer_id: PeerId,
+    ) -> RxResult<()> {
+        if self.peer_role != super::NativePeerRole::WorkjetExecutor {
+            return Err(new_rx_error(
+                "RC_WEBRTC_PEER",
+                Some(serde_json::json!({
+                    "message": "only a native Workjet worker may initiate a worker-to-authority connection"
+                })),
+            ));
+        }
+        self.connect_execution_peer(remote_peer_id, true).await
+    }
+
+    async fn connect_execution_peer(
+        self: &Arc<Self>,
+        remote_peer_id: PeerId,
+        worker_to_voter: bool,
+    ) -> RxResult<()> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(new_rx_error(
+                "RC_WEBRTC_PEER",
+                Some(serde_json::json!({
+                    "message": "closed native handler cannot start execution connections"
+                })),
+            ));
+        }
+
+        let signaling = self.signaling.as_ref().ok_or_else(|| {
+            new_rx_error(
+                "RC_WEBRTC_SIGNAL",
+                Some(serde_json::json!({
+                    "message": "native execution connection requires signaling"
+                })),
+            )
+        })?;
+        let own_peer_id = signaling.own_peer_id().ok_or_else(|| {
+            new_rx_error(
+                "RC_WEBRTC_SIGNAL",
+                Some(serde_json::json!({
+                    "message": "native execution connection has no current signaling identity"
+                })),
+            )
+        })?;
+        if signaling
+            .peer_role(&remote_peer_id)
+            .as_deref()
+            .and_then(super::NativePeerRole::from_wire)
+            .is_none()
+        {
+            return Err(new_rx_error(
+                "RC_WEBRTC_PEER",
+                Some(serde_json::json!({
+                    "message": "explicit native execution connection rejects browser or unknown peer roles"
+                })),
+            ));
+        }
+        if own_peer_id == remote_peer_id {
+            return Err(new_rx_error(
+                "RC_WEBRTC_PEER",
+                Some(serde_json::json!({
+                    "message": "native execution connection cannot target itself"
+                })),
+            ));
+        }
+        if worker_to_voter || own_peer_id < remote_peer_id {
+            self.ensure_peer_connection(remote_peer_id, true).await?;
+        }
+        Ok(())
     }
 
     fn empty(
@@ -702,6 +932,7 @@ impl WebRTCRsConnectionHandler {
     ) -> Self {
         Self {
             connect_subject: RxSubject::new(),
+            peer_role: super::NativePeerRole::CtoxInstance,
             disconnect_subject: RxSubject::new(),
             message_subject: RxSubject::new(),
             response_subject: RxSubject::new(),
@@ -786,13 +1017,27 @@ impl WebRTCRsConnectionHandler {
         )
     }
 
-    /// Phase 1: pause the sender while the peer's SCTP send buffer is above the
-    /// high watermark, so we never burst past what the channel can deliver in
-    /// real time. Returns when the buffer has drained below the low watermark
-    /// (OnBufferedAmountLow) or after `SEND_CAPACITY_WAIT_TIMEOUT` (so a wedged
-    /// peer surfaces a timeout instead of hanging forever).
-    async fn wait_for_send_capacity(&self, peer: &WebRTCRsPeer) -> RxResult<()> {
-        let bp = self.peer_backpressure(peer);
+    fn is_current_send_queue(&self, peer: &str, available: &Arc<tokio::sync::Notify>) -> bool {
+        self.send_queues
+            .lock()
+            .get(peer)
+            .is_some_and(|queue| Arc::ptr_eq(&queue.drain_available, available))
+    }
+
+    /// Pause this queue's sender until its buffer drains or its deadline expires.
+    /// A replaced queue cannot wait on or tear down its successor's connection.
+    async fn wait_for_send_capacity(
+        &self,
+        peer: &WebRTCRsPeer,
+        available: &Arc<tokio::sync::Notify>,
+    ) -> RxResult<()> {
+        let bp = {
+            let _lifecycle = self.peer_lifecycle.lock();
+            if !self.is_current_send_queue(peer, available) {
+                return Err(superseded_send_queue_error(peer));
+            }
+            self.peer_backpressure(peer)
+        };
         while bp.is_high() {
             let notified = bp.low_notify.notified();
             // Re-check after arming the waiter to avoid missing a clear that
@@ -804,11 +1049,6 @@ impl WebRTCRsConnectionHandler {
                 .await
                 .is_err()
             {
-                self.record_status(|status| {
-                    status.backpressure_stall_count =
-                        status.backpressure_stall_count.saturating_add(1);
-                    status.rejected_frames = status.rejected_frames.saturating_add(1);
-                });
                 let error = new_rx_error(
                     SEND_BUFFER_STALLED_ERROR_CODE,
                     Some(serde_json::json!({
@@ -818,16 +1058,27 @@ impl WebRTCRsConnectionHandler {
                         "retryable": true,
                     })),
                 );
-                self.error_subject.next(error.clone());
                 // A timed-out capacity wait is a transport failure, not
                 // permission to keep filling SCTP. Removing the peer closes
                 // the channel, drops every queued sender and clears all
                 // per-peer backpressure state before the error is returned.
-                remove_peer_with_error(self, peer, error.clone());
+                if !remove_peer_with_error(self, peer, available, error.clone()) {
+                    return Err(superseded_send_queue_error(peer));
+                }
+                self.record_status(|status| {
+                    status.backpressure_stall_count =
+                        status.backpressure_stall_count.saturating_add(1);
+                    status.rejected_frames = status.rejected_frames.saturating_add(1);
+                });
+                self.error_subject.next(error.clone());
                 return Err(error);
             }
         }
-        Ok(())
+        if self.is_current_send_queue(peer, available) {
+            Ok(())
+        } else {
+            Err(superseded_send_queue_error(peer))
+        }
     }
 
     fn clear_peer_transfer_state(&self, peer: &WebRTCRsPeer) {
@@ -1374,20 +1625,26 @@ impl WebRTCRsConnectionHandler {
     }
 
     fn remove_unopened_peer_before_offer(self: &Arc<Self>, remote_peer_id: &str) {
-        let should_rebuild = {
+        let generation = {
             let peers = self.peers.lock();
             let Some(entry) = peers.get(remote_peer_id) else {
                 return;
             };
             should_rebuild_peer_for_inbound_offer(true, entry.data_channel_open)
+                .then_some(entry.generation)
         };
-        if should_rebuild {
+        if let Some(generation) = generation {
             tracing::warn!(
                 target: "ctox_rxdb::webrtc_rs",
                 peer = %remote_peer_id,
                 "dropping unopened WebRTC responder before answering renewed browser offer"
             );
-            remove_peer(self, remote_peer_id);
+            remove_peer_inner(
+                self,
+                remote_peer_id,
+                PeerRemoval::Unopened(generation),
+                None,
+            );
         }
     }
 }
@@ -1398,7 +1655,11 @@ fn should_rebuild_peer_for_inbound_offer(peer_exists: bool, data_channel_open: b
 
 #[async_trait]
 impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
-    type Peer = WebRTCRsPeer;
+    type Peer = WebRTCRsConnection;
+
+    fn local_peer_role(&self) -> super::NativePeerRole {
+        self.peer_role
+    }
 
     fn connect_stream(&self) -> RxStream<Self::Peer> {
         self.connect_subject.subscribe()
@@ -1417,27 +1678,13 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
     }
 
     async fn send(&self, peer: &Self::Peer, frame: WebRTCWireFrame) -> Result<(), RxError> {
-        let data_channel = self
-            .peers
-            .lock()
-            .get(peer)
-            .and_then(|entry| entry.data_channel.clone())
-            .ok_or_else(|| {
-                new_rx_error(
-                    "RC_WEBRTC_PEER",
-                    Some(serde_json::json!({
-                        "message": "unknown or unopened peer",
-                        "peer": peer,
-                        EXPECTED_PEER_TEARDOWN_PARAM: true,
-                    })),
-                )
-            })?;
         let text = serde_json::to_string(&frame).map_err(|e| {
             new_rx_error(
                 "RC_WEBRTC_PEER",
                 Some(serde_json::json!({
                     "message": format!("serialize WebRTC frame failed: {e}"),
-                    "peer": peer,
+                    "peer": peer.peer_id(),
+                    "connectionGeneration": peer.generation(),
                 })),
             )
         })?;
@@ -1445,7 +1692,21 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         // are intrinsically High; oversized writes are Low; everything else is
         // High when its collection is in the peer's active set, else Normal.
         let class = classify_send_frame(&frame, &text);
-        self.send_queued_text(peer, data_channel, class).await
+        let (data_channel, queued) = {
+            // Resolve and enqueue under the same lifetime lock. A sender holding
+            // an old handle must never enqueue onto its successor's queue.
+            let _lifecycle = self.peer_lifecycle.lock();
+            let data_channel = self
+                .peers
+                .lock()
+                .get(&peer.peer_id)
+                .filter(|entry| entry.generation == peer.generation && entry.data_channel_open)
+                .and_then(|entry| entry.data_channel.clone())
+                .ok_or_else(|| stale_connection_error(peer))?;
+            let queued = self.enqueue_text(&peer.peer_id, class)?;
+            (data_channel, queued)
+        };
+        self.finish_send(&peer.peer_id, data_channel, queued).await
     }
 
     async fn send_auxiliary(
@@ -1454,22 +1715,26 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         label: &str,
         frame: WebRTCWireFrame,
     ) -> Result<(), RxError> {
-        let data_channel = self
-            .peers
-            .lock()
-            .get(peer)
-            .and_then(|entry| entry.auxiliary_data_channels.get(label).cloned())
-            .ok_or_else(|| {
-                new_rx_error(
-                    "RC_WEBRTC_PEER",
-                    Some(serde_json::json!({
-                        "message": "unknown or unopened auxiliary data channel",
-                        "peer": peer,
-                        "label": label,
-                        EXPECTED_PEER_TEARDOWN_PARAM: true,
-                    })),
-                )
-            })?;
+        let data_channel = {
+            let _lifecycle = self.peer_lifecycle.lock();
+            self.peers
+                .lock()
+                .get(&peer.peer_id)
+                .filter(|entry| entry.generation == peer.generation && entry.data_channel_open)
+                .and_then(|entry| entry.auxiliary_data_channels.get(label).cloned())
+                .ok_or_else(|| {
+                    new_rx_error(
+                        "RC_WEBRTC_PEER",
+                        Some(serde_json::json!({
+                            "message": "unknown or unopened auxiliary data channel",
+                            "peer": peer.peer_id(),
+                            "connectionGeneration": peer.generation(),
+                            "label": label,
+                            EXPECTED_PEER_TEARDOWN_PARAM: true,
+                        })),
+                    )
+                })?
+        };
         send_auxiliary_wire_frame(&data_channel, frame).await
     }
 
@@ -1496,7 +1761,8 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
                 let _ = data_channel.close().await;
             }
             let _ = entry.peer_connection.close().await;
-            self.disconnect_subject.next(peer);
+            self.disconnect_subject
+                .next(WebRTCRsConnection::new(peer, entry.generation));
         }
         if let Some(signaling) = &self.signaling {
             signaling.close().await;
@@ -1517,6 +1783,11 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
     /// the high water when buffered (and 0 otherwise) — enough for the
     /// `buffered_bytes > WEBRTC_BUFFERED_HIGH_WATER` guards to fire.
     fn buffered_bytes(&self, peer: &Self::Peer) -> usize {
+        let _connection_lifecycle = self.peer_lifecycle.lock();
+        if !self.is_current_connection(peer) {
+            return 0;
+        }
+        let peer = &peer.peer_id;
         match self.backpressure.lock().get(peer) {
             Some(bp) if bp.is_high() => DATA_CHANNEL_BUFFERED_HIGH_WATER as usize + 1,
             _ => 0,
@@ -1526,10 +1797,23 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
     /// Phase 1: the signaling peer id is already a stable string; use it
     /// directly for authz / rate-limit keying instead of the opaque Debug form.
     fn peer_identity(&self, peer: &Self::Peer) -> String {
+        peer.peer_id.clone()
+    }
+
+    fn connection_identity(&self, peer: &Self::Peer) -> String {
         peer.to_string()
     }
 
+    fn is_peer_current(&self, peer: &Self::Peer) -> bool {
+        self.is_current_connection(peer)
+    }
+
     fn is_collection_active_for_peer(&self, peer: &Self::Peer, collection: &str) -> bool {
+        let _connection_lifecycle = self.peer_lifecycle.lock();
+        if !self.is_current_connection(peer) {
+            return false;
+        }
+        let peer = &peer.peer_id;
         // Fail-open contract: a peer that has NEVER reported an active set is
         // treated as all-active. Master-change relays are DROPPED for
         // inactive collections, so a fail-closed default silently lost every
@@ -1549,6 +1833,11 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         peer: &Self::Peer,
         collection: &str,
     ) -> bool {
+        let _connection_lifecycle = self.peer_lifecycle.lock();
+        if !self.is_current_connection(peer) {
+            return false;
+        }
+        let peer = &peer.peer_id;
         let hook = self.collection_live_change.lock().clone();
         match hook {
             None => false,
@@ -1565,12 +1854,22 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
     }
 
     fn set_peer_capability_token(&self, peer: &Self::Peer, token: String) {
+        let _connection_lifecycle = self.peer_lifecycle.lock();
+        if !self.is_current_connection(peer) {
+            return;
+        }
+        let peer = &peer.peer_id;
         self.peer_capability_tokens
             .lock()
             .insert(peer.clone(), token);
     }
 
     fn peer_capability_token(&self, peer: &Self::Peer) -> Option<String> {
+        let _connection_lifecycle = self.peer_lifecycle.lock();
+        if !self.is_current_connection(peer) {
+            return None;
+        }
+        let peer = &peer.peer_id;
         self.peer_capability_tokens.lock().get(peer).cloned()
     }
 
@@ -1578,6 +1877,11 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
     /// unchanged). When installed, an unknown peer maps to an empty token so the
     /// hook still decides (it treats an empty/invalid token as least privilege).
     fn is_collection_authorized_for_peer(&self, peer: &Self::Peer, collection: &str) -> bool {
+        let _connection_lifecycle = self.peer_lifecycle.lock();
+        if !self.is_current_connection(peer) {
+            return false;
+        }
+        let peer = &peer.peer_id;
         let hook = self.collection_authz.lock().clone();
         match hook {
             None => true,
@@ -1598,6 +1902,11 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         peer: &Self::Peer,
         collection: &str,
     ) -> bool {
+        let _connection_lifecycle = self.peer_lifecycle.lock();
+        if !self.is_current_connection(peer) {
+            return false;
+        }
+        let peer = &peer.peer_id;
         let hook = self.collection_eager_pull.lock().clone();
         match hook {
             None => true,
@@ -1615,6 +1924,11 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
 
     /// Fail-open write authorization unless a caller installs a write hook.
     fn is_collection_write_authorized_for_peer(&self, peer: &Self::Peer, collection: &str) -> bool {
+        let _connection_lifecycle = self.peer_lifecycle.lock();
+        if !self.is_current_connection(peer) {
+            return false;
+        }
+        let peer = &peer.peer_id;
         let hook = self.collection_write_authz.lock().clone();
         match hook {
             None => true,
@@ -1635,6 +1949,11 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         peer: &Self::Peer,
         collection: &str,
     ) -> Option<Arc<dyn Fn(&Value) -> bool + Send + Sync>> {
+        let _connection_lifecycle = self.peer_lifecycle.lock();
+        if !self.is_current_connection(peer) {
+            return Some(Arc::new(|_| false));
+        }
+        let peer = &peer.peer_id;
         let hook = self.document_read_authz.lock().clone()?;
         let token = self
             .peer_capability_tokens
@@ -1651,6 +1970,11 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         collection: &str,
         params: &[Value],
     ) -> bool {
+        let _connection_lifecycle = self.peer_lifecycle.lock();
+        if !self.is_current_connection(peer) {
+            return false;
+        }
+        let peer = &peer.peer_id;
         let hook = self.document_write_authz.lock().clone();
         let Some(check) = hook else { return true };
         let token = self
@@ -1707,7 +2031,7 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
     /// channel close and reconnects — used by the pool to convert a failed
     /// handshake into a clean reconnect cycle instead of a half-dead peer.
     async fn close_peer(&self, peer: &Self::Peer) {
-        remove_peer(self, peer);
+        remove_peer_generation(self, &peer.peer_id, peer.generation);
     }
 }
 
@@ -1855,8 +2179,8 @@ impl WebRTCRsConnectionHandler {
 
     /// Push the current aggregate to ONE peer (join snapshot on data-channel
     /// open). Best-effort like the broadcast.
-    async fn push_presence_snapshot_to(self: &Arc<Self>, recipient: &WebRTCRsPeer) {
-        let entries = self.presence_entries_excluding(recipient, now_ms());
+    async fn push_presence_snapshot_to(self: &Arc<Self>, recipient: &WebRTCRsConnection) {
+        let entries = self.presence_entries_excluding(&recipient.peer_id, now_ms());
         if entries.is_empty() {
             return;
         }
@@ -1880,15 +2204,15 @@ impl WebRTCRsConnectionHandler {
     /// transport error path and must not stall the loop.
     async fn broadcast_presence(self: &Arc<Self>) {
         let now = now_ms();
-        let recipients: Vec<WebRTCRsPeer> = self
+        let recipients: Vec<WebRTCRsConnection> = self
             .peers
             .lock()
             .iter()
             .filter(|(_, entry)| entry.data_channel_open)
-            .map(|(peer, _)| peer.clone())
+            .map(|(peer, entry)| WebRTCRsConnection::new(peer.clone(), entry.generation))
             .collect();
         for recipient in recipients {
-            let entries = self.presence_entries_excluding(&recipient, now);
+            let entries = self.presence_entries_excluding(&recipient.peer_id, now);
             let response = WebRTCResponse {
                 id: CTOX_PRESENCE_STREAM_ID.to_string(),
                 result: serde_json::json!({ "entries": entries }),
@@ -1940,12 +2264,11 @@ impl WebRTCRsConnectionHandler {
         }));
     }
 
-    async fn send_queued_text(
+    fn enqueue_text(
         &self,
         peer: &WebRTCRsPeer,
-        data_channel: Arc<dyn DataChannel>,
         class: SendFrameClass,
-    ) -> Result<(), RxError> {
+    ) -> Result<EnqueuedSend, RxError> {
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         // Phase 2: resolve the priority against THIS peer's active-collection
         // set at enqueue time. A later `rxdb.activeCollections` update will
@@ -1957,7 +2280,7 @@ impl WebRTCRsConnectionHandler {
             class.classify(active)
         };
         let queued_bytes = class.text.len();
-        let should_drain = {
+        let drain_available = {
             let mut queues = self.send_queues.lock();
             let queue = queues.entry(peer.clone()).or_default();
             let queued_frames = queue.high.len() + queue.normal.len() + queue.low.len();
@@ -1979,7 +2302,6 @@ impl WebRTCRsConnectionHandler {
                     })),
                 ));
             }
-            let should_drain = !queue.draining;
             queue.push(QueuedSend {
                 text: class.text,
                 priority,
@@ -1989,21 +2311,34 @@ impl WebRTCRsConnectionHandler {
                 queued_at_ms: now_ms(),
                 result: result_tx,
             });
-            if should_drain {
-                queue.draining = true;
-            }
-            should_drain
+            Arc::clone(&queue.drain_available)
         };
         self.record_status(|status| {
             status.queued_frames = status.queued_frames.saturating_add(1);
             status.last_send_priority = priority.as_str();
         });
         self.refresh_send_queue_status();
-        if should_drain {
-            tokio::task::yield_now().await;
-            self.drain_send_queue(peer, data_channel).await;
-        }
-        result_rx.await.map_err(|_| {
+        Ok(EnqueuedSend {
+            available: drain_available,
+            result: result_rx,
+        })
+    }
+
+    async fn finish_send(
+        &self,
+        peer: &WebRTCRsPeer,
+        data_channel: Arc<dyn DataChannel>,
+        queued: EnqueuedSend,
+    ) -> Result<(), RxError> {
+        await_queued_send(
+            &self.send_queues,
+            peer,
+            queued.available,
+            queued.result,
+            |guard| self.drain_send_queue(peer, Arc::clone(&data_channel), guard),
+        )
+        .await
+        .map_err(|_| {
             new_rx_error(
                 "RC_WEBRTC_PEER",
                 Some(serde_json::json!({
@@ -2015,20 +2350,26 @@ impl WebRTCRsConnectionHandler {
         })?
     }
 
-    async fn drain_send_queue(&self, peer: &WebRTCRsPeer, data_channel: Arc<dyn DataChannel>) {
-        // The drainer runs inside whatever task called `send_queued_text`
-        // first. That task can be aborted mid-send (peer relays are aborted on
-        // disconnect), which used to leave `draining == true` forever: later
-        // senders for the same peer id queued behind a drainer that no longer
-        // existed and parked on their result channel until process restart.
-        // The guard re-opens the drain slot on cancellation; the clean-exit
-        // path disarms it while holding the lock so no item can slip between
-        // "queue observed empty" and "flag cleared".
-        let mut reset_guard = DrainResetGuard {
-            queues: Arc::clone(&self.send_queues),
-            peer: peer.clone(),
-            armed: true,
-        };
+    #[cfg(test)]
+    async fn send_queued_text(
+        &self,
+        peer: &WebRTCRsPeer,
+        data_channel: Arc<dyn DataChannel>,
+        class: SendFrameClass,
+    ) -> Result<(), RxError> {
+        self.finish_send(peer, data_channel, self.enqueue_text(peer, class)?)
+            .await
+    }
+
+    async fn drain_send_queue(
+        &self,
+        peer: &WebRTCRsPeer,
+        data_channel: Arc<dyn DataChannel>,
+        mut reset_guard: DrainResetGuard,
+    ) {
+        // The drain slot is already claimed. Install its cancellation guard
+        // BEFORE yielding; a quorum/RPC deadline can cancel this very first poll.
+        tokio::task::yield_now().await;
         loop {
             let item = {
                 let mut queues = self.send_queues.lock();
@@ -2037,6 +2378,9 @@ impl WebRTCRsConnectionHandler {
                     reset_guard.armed = false;
                     return;
                 };
+                if !Arc::ptr_eq(&queue.drain_available, &reset_guard.available) {
+                    return;
+                }
                 match queue.pop_next() {
                     Some(item) => item,
                     None => {
@@ -2052,10 +2396,18 @@ impl WebRTCRsConnectionHandler {
                 status.last_send_priority = item.priority.as_str();
             });
             let result = if item.text.len() > MAX_INLINE_FRAME_BYTES {
-                self.send_framed_text(peer, Arc::clone(&data_channel), item.text)
-                    .await
+                self.send_framed_text(
+                    peer,
+                    Arc::clone(&data_channel),
+                    item.text,
+                    &reset_guard.available,
+                )
+                .await
             } else {
-                match self.wait_for_send_capacity(peer).await {
+                match self
+                    .wait_for_send_capacity(peer, &reset_guard.available)
+                    .await
+                {
                     Ok(()) => data_channel
                         .send_text(&item.text)
                         .await
@@ -2064,8 +2416,10 @@ impl WebRTCRsConnectionHandler {
                 }
             };
             let _ = item.result.send(result);
+            // Let a sender consume its receipt before starting somebody else's
+            // transfer. Returning its result must not cancel that later transfer.
+            tokio::task::yield_now().await;
             if !self.peers.lock().contains_key(peer) {
-                reset_guard.armed = false;
                 break;
             }
         }
@@ -2077,6 +2431,7 @@ impl WebRTCRsConnectionHandler {
         peer: &WebRTCRsPeer,
         data_channel: Arc<dyn DataChannel>,
         text: String,
+        available: &Arc<tokio::sync::Notify>,
     ) -> Result<(), RxError> {
         let transfer_id = format!(
             "{}|frame|{}",
@@ -2104,7 +2459,7 @@ impl WebRTCRsConnectionHandler {
         self.record_sent_transport_frame(&start);
 
         for window_start in (0..chunks.len()).step_by(FRAME_ACK_WINDOW) {
-            self.drain_high_priority_inline_frames(peer, &data_channel)
+            self.drain_high_priority_inline_frames(peer, &data_channel, available)
                 .await?;
             let window_end = usize::min(window_start + FRAME_ACK_WINDOW, chunks.len()) - 1;
             let ack_key = PendingFrameAckKey::new(peer, &transfer_id, window_end);
@@ -2137,7 +2492,7 @@ impl WebRTCRsConnectionHandler {
                     // never bursts past what the channel can deliver in real
                     // time (which would overrun the buffer and get the channel
                     // killed by the browser).
-                    if let Err(error) = self.wait_for_send_capacity(peer).await {
+                    if let Err(error) = self.wait_for_send_capacity(peer, available).await {
                         self.pending_frame_acks.lock().remove(&ack_key);
                         self.refresh_dynamic_transport_status();
                         return Err(error);
@@ -2160,7 +2515,7 @@ impl WebRTCRsConnectionHandler {
                 let deadline = tokio::time::Instant::now() + FRAME_ACK_TIMEOUT;
                 tokio::pin!(ack_rx);
                 let ack_result = loop {
-                    self.drain_high_priority_inline_frames(peer, &data_channel)
+                    self.drain_high_priority_inline_frames(peer, &data_channel, available)
                         .await?;
                     let now = tokio::time::Instant::now();
                     if now >= deadline {
@@ -2236,12 +2591,14 @@ impl WebRTCRsConnectionHandler {
         &self,
         peer: &WebRTCRsPeer,
         data_channel: &Arc<dyn DataChannel>,
+        available: &Arc<tokio::sync::Notify>,
     ) -> Result<(), RxError> {
         loop {
             let item = {
                 let mut queues = self.send_queues.lock();
                 queues
                     .get_mut(peer)
+                    .filter(|queue| Arc::ptr_eq(&queue.drain_available, available))
                     .and_then(PeerSendQueue::pop_high_priority_inline)
             };
             let Some(item) = item else {
@@ -2252,7 +2609,7 @@ impl WebRTCRsConnectionHandler {
                 status.sent_scheduled_frames = status.sent_scheduled_frames.saturating_add(1);
                 status.last_send_priority = SendPriority::High.as_str();
             });
-            let send_result = match self.wait_for_send_capacity(peer).await {
+            let send_result = match self.wait_for_send_capacity(peer, available).await {
                 Ok(()) => data_channel
                     .send_text(&item.text)
                     .await
@@ -2882,7 +3239,7 @@ fn install_auxiliary_data_channel(
                     let text = String::from_utf8_lossy(&message.data).to_string();
                     match serde_json::from_str::<WebRTCMessage>(&text) {
                         Ok(message) => message_subject.next(PeerWithMessage {
-                            peer: peer_task.clone(),
+                            peer: WebRTCRsConnection::new(peer_task.clone(), generation),
                             message,
                         }),
                         Err(error) => {
@@ -2970,7 +3327,8 @@ fn install_data_channel(
     generation: u64,
     data_channel: Arc<dyn DataChannel>,
 ) {
-    {
+    let backpressure_for_task = {
+        let _lifecycle = handler.peer_lifecycle.lock();
         let mut peers = handler.peers.lock();
         if let Some(entry) = peers.get_mut(&remote_peer_id) {
             if entry.generation == generation {
@@ -2981,7 +3339,8 @@ fn install_data_channel(
         } else {
             return;
         }
-    }
+        handler.peer_backpressure(&remote_peer_id)
+    };
 
     let message_subject = handler.message_subject.clone();
     let response_subject = handler.response_subject.clone();
@@ -2994,7 +3353,6 @@ fn install_data_channel(
     // Phase 1: register the per-peer backpressure signal and arm the SCTP
     // buffered-amount thresholds so the channel emits OnBufferedAmountHigh/Low
     // and senders can pace instead of overrunning the buffer.
-    let backpressure_for_task = handler.peer_backpressure(&remote_peer_id);
     let task = tokio::spawn(async move {
         let _ = data_channel
             .set_buffered_amount_low_threshold(DATA_CHANNEL_BUFFERED_LOW_WATER)
@@ -3021,14 +3379,16 @@ fn install_data_channel(
                     // opened peer; a no-presence room sends nothing.
                     if !handler_for_task.presence.lock().is_empty() {
                         let handler_presence = Arc::clone(&handler_for_task);
-                        let peer_presence = peer_for_task.clone();
+                        let peer_presence =
+                            WebRTCRsConnection::new(peer_for_task.clone(), generation);
                         tokio::spawn(async move {
                             handler_presence
                                 .push_presence_snapshot_to(&peer_presence)
                                 .await;
                         });
                     }
-                    connect_subject.next(peer_for_task.clone());
+                    connect_subject
+                        .next(WebRTCRsConnection::new(peer_for_task.clone(), generation));
                 }
                 DataChannelEvent::OnMessage(msg) => {
                     let text = String::from_utf8_lossy(&msg.data).to_string();
@@ -3070,10 +3430,16 @@ fn install_data_channel(
                     } else {
                         value
                     };
+                    // Frame reassembly can await. Bind subsequent local control
+                    // state writes to the same connection generation.
+                    let _lifecycle = handler_for_task.peer_lifecycle.lock();
+                    if !is_current_peer_generation(&handler_for_task, &peer_for_task, generation) {
+                        break;
+                    }
                     if value.get("result").is_some() || value.get("error").is_some() {
                         match serde_json::from_value::<WebRTCResponse>(value) {
                             Ok(response) => response_subject.next(PeerWithResponse {
-                                peer: peer_for_task.clone(),
+                                peer: WebRTCRsConnection::new(peer_for_task.clone(), generation),
                                 response,
                             }),
                             Err(err) => error_subject.next(decode_error("response", err, &text)),
@@ -3099,7 +3465,10 @@ fn install_data_channel(
                                     // browser runs a checkpoint catch-up pull.
                                     if !newly_activated.is_empty() {
                                         let handler_resync = Arc::clone(&handler_for_task);
-                                        let peer_resync = peer_for_task.clone();
+                                        let peer_resync = WebRTCRsConnection::new(
+                                            peer_for_task.clone(),
+                                            generation,
+                                        );
                                         tokio::spawn(async move {
                                             for collection in newly_activated {
                                                 let resp = WebRTCResponse {
@@ -3141,7 +3510,10 @@ fn install_data_channel(
                                     handler_for_task.schedule_presence_sweep();
                                 } else {
                                     message_subject.next(PeerWithMessage {
-                                        peer: peer_for_task.clone(),
+                                        peer: WebRTCRsConnection::new(
+                                            peer_for_task.clone(),
+                                            generation,
+                                        ),
                                         message,
                                     });
                                 }
@@ -3160,27 +3532,6 @@ fn install_data_channel(
                     backpressure_for_task.clear_high();
                 }
                 DataChannelEvent::OnClose => {
-                    backpressure_for_task.clear_high();
-                    // Mark the entry's channel as no longer open so a renewed
-                    // browser offer rebuilds the responder
-                    // (`remove_unopened_peer_before_offer` keys on this) —
-                    // otherwise a re-offer after a channel close hit the
-                    // stale pc and could never converge.
-                    if let Some(entry) = handler_for_task.peers.lock().get_mut(&peer_for_task) {
-                        if entry.generation == generation {
-                            entry.data_channel_open = false;
-                        }
-                    }
-                    // A closed tab's presence hints must not linger on the
-                    // other peers until the TTL sweep — drop them now and
-                    // push the reduced aggregate.
-                    if handler_for_task.remove_peer_presence(&peer_for_task) {
-                        let handler_presence = Arc::clone(&handler_for_task);
-                        tokio::spawn(async move {
-                            handler_presence.broadcast_presence().await;
-                        });
-                    }
-                    disconnect_subject.next(peer_for_task.clone());
                     break;
                 }
                 DataChannelEvent::OnError => {
@@ -3198,8 +3549,19 @@ fn install_data_channel(
         // Channel ended: release any sender parked on backpressure and drop the
         // per-peer signal so it cannot leak across reconnects.
         backpressure_for_task.clear_high();
-        if is_current_peer_generation(&handler_for_task, &peer_for_task, generation) {
-            handler_for_task.backpressure.lock().remove(&peer_for_task);
+        if let Some(presence_changed) = finish_data_channel_generation(
+            &handler_for_task,
+            &peer_for_task,
+            generation,
+            &backpressure_for_task,
+        ) {
+            if presence_changed {
+                let handler_presence = Arc::clone(&handler_for_task);
+                tokio::spawn(async move {
+                    handler_presence.broadcast_presence().await;
+                });
+            }
+            disconnect_subject.next(WebRTCRsConnection::new(peer_for_task.clone(), generation));
         }
     });
 
@@ -3214,16 +3576,65 @@ fn install_data_channel(
     }
 }
 
-fn remove_peer(handler: &WebRTCRsConnectionHandler, peer: &str) {
-    remove_peer_inner(handler, peer, None, None);
+/// Retire local channel state atomically with connection replacement.
+/// Both OnClose and stream EOF use this path; retired tasks cannot clear successors.
+fn finish_data_channel_generation(
+    handler: &WebRTCRsConnectionHandler,
+    peer: &WebRTCRsPeer,
+    generation: u64,
+    backpressure: &Arc<PeerBackpressure>,
+) -> Option<bool> {
+    let _lifecycle = handler.peer_lifecycle.lock();
+    let mut peers = handler.peers.lock();
+    let entry = peers.get_mut(peer)?;
+    if entry.generation != generation {
+        return None;
+    }
+    entry.data_channel_open = false;
+    let presence_changed = handler.remove_peer_presence(peer);
+    let mut signals = handler.backpressure.lock();
+    if signals
+        .get(peer)
+        .is_some_and(|current| Arc::ptr_eq(current, backpressure))
+    {
+        signals.remove(peer);
+    }
+    Some(presence_changed)
 }
 
-fn remove_peer_with_error(handler: &WebRTCRsConnectionHandler, peer: &str, error: RxError) {
-    remove_peer_inner(handler, peer, None, Some(error));
+fn superseded_send_queue_error(peer: &str) -> RxError {
+    new_rx_error(
+        "RC_WEBRTC_PEER",
+        Some(serde_json::json!({
+            "message": "WebRTC send queue was closed or superseded",
+            "peer": peer,
+            EXPECTED_PEER_TEARDOWN_PARAM: true,
+        })),
+    )
+}
+
+enum PeerRemoval<'a> {
+    Generation(u64),
+    Unopened(u64),
+    SendQueue(&'a Arc<tokio::sync::Notify>),
+}
+
+fn remove_peer_with_error(
+    handler: &WebRTCRsConnectionHandler,
+    peer: &str,
+    available: &Arc<tokio::sync::Notify>,
+    error: RxError,
+) -> bool {
+    remove_peer_inner(
+        handler,
+        peer,
+        PeerRemoval::SendQueue(available),
+        Some(error),
+    )
 }
 
 fn remove_peer_generation(handler: &WebRTCRsConnectionHandler, peer: &str, generation: u64) {
-    remove_peer_inner(handler, peer, Some(generation), None);
+    remove_peer_inner(handler, peer, PeerRemoval::Generation(generation), None);
 }
 
 fn is_current_peer_generation(
@@ -3247,16 +3658,24 @@ fn peer_generation_matches(current: Option<u64>, expected: Option<u64>) -> bool 
 fn remove_peer_inner(
     handler: &WebRTCRsConnectionHandler,
     peer: &str,
-    expected_generation: Option<u64>,
+    condition: PeerRemoval<'_>,
     error: Option<RxError>,
-) {
+) -> bool {
     let removed_entry = {
         let _lifecycle = handler.peer_lifecycle.lock();
         let removed_entry = {
             let mut peers = handler.peers.lock();
-            let current_generation = peers.get(peer).map(|entry| entry.generation);
-            if !peer_generation_matches(current_generation, expected_generation) {
-                return;
+            let matches = match condition {
+                PeerRemoval::Generation(generation) => peers
+                    .get(peer)
+                    .is_some_and(|entry| entry.generation == generation),
+                PeerRemoval::Unopened(generation) => peers.get(peer).is_some_and(|entry| {
+                    entry.generation == generation && !entry.data_channel_open
+                }),
+                PeerRemoval::SendQueue(available) => handler.is_current_send_queue(peer, available),
+            };
+            if !matches {
+                return false;
             }
             peers.remove(peer)
         };
@@ -3306,8 +3725,11 @@ fn remove_peer_inner(
             }
             let _ = entry.peer_connection.close().await;
         });
-        handler.disconnect_subject.next(peer_id);
+        handler
+            .disconnect_subject
+            .next(WebRTCRsConnection::new(peer_id, entry.generation));
     }
+    true
 }
 
 async fn wait_for_own_peer_id(signaling: &Arc<SignalingClient>) -> RxResult<PeerId> {
@@ -3674,12 +4096,57 @@ mod tests {
         );
     }
 
+    fn test_send_queue(
+        handler: &WebRTCRsConnectionHandler,
+        route: &str,
+    ) -> Arc<tokio::sync::Notify> {
+        handler
+            .send_queues
+            .lock()
+            .entry(route.to_owned())
+            .or_default()
+            .drain_available
+            .clone()
+    }
+
+    async fn install_test_connection(
+        handler: &WebRTCRsConnectionHandler,
+        route: &str,
+        generation: u64,
+    ) -> WebRTCRsConnection {
+        struct Events;
+        #[async_trait]
+        impl PeerConnectionEventHandler for Events {}
+        let pc = PeerConnectionBuilder::new()
+            .with_handler(Arc::new(Events))
+            .with_udp_addrs(advertisable_udp_bind_addrs("127.0.0.1:0"))
+            .build()
+            .await
+            .unwrap();
+        let entry = PeerEntry {
+            generation,
+            peer_connection: Arc::new(pc),
+            data_channel: None,
+            data_channel_open: true,
+            auxiliary_data_channels: HashMap::new(),
+            tasks: vec![],
+        };
+        assert!(handler
+            .peers
+            .lock()
+            .insert(route.to_owned(), entry)
+            .is_none());
+        handler
+            .connection_for_peer(route)
+            .expect("fixture connection is current")
+    }
+
     /// #12c: per-collection authz is fail-open until a hook is installed, then
     /// enforces using the peer's captured capability token.
-    #[test]
-    fn collection_authz_is_fail_open_then_enforces_with_token() {
+    #[tokio::test]
+    async fn collection_authz_is_fail_open_then_enforces_with_token() {
         let handler = WebRTCRsConnectionHandler::new();
-        let peer = "peer-1".to_string();
+        let peer = install_test_connection(&handler, "peer-1", 1).await;
         // Default (no hook): authorized for anything.
         assert!(handler.is_collection_authorized_for_peer(&peer, "business_credentials"));
         // Hook that only allows a peer presenting token "tok-abc".
@@ -3692,17 +4159,18 @@ mod tests {
         handler.set_peer_capability_token(&peer, "tok-abc".to_string());
         assert!(handler.is_collection_authorized_for_peer(&peer, "anything"));
         // A different peer without the token stays denied.
-        let other = "peer-2".to_string();
+        let other = install_test_connection(&handler, "peer-2", 1).await;
         assert!(!handler.is_collection_authorized_for_peer(&other, "anything"));
         // Removing enforcement returns to fail-open.
         handler.set_collection_authz(None);
         assert!(handler.is_collection_authorized_for_peer(&other, "anything"));
+        handler.close().await.unwrap();
     }
 
-    #[test]
-    fn eager_pull_gate_is_fail_open_and_drops_live_master_changes() {
+    #[tokio::test]
+    async fn eager_pull_gate_is_fail_open_and_drops_live_master_changes() {
         let handler = WebRTCRsConnectionHandler::new();
-        let peer = "peer-1".to_string();
+        let peer = install_test_connection(&handler, "peer-1", 1).await;
         assert!(handler.is_eager_collection_pull_authorized_for_peer(&peer, "sellify_activities"));
         handler.set_collection_eager_pull(Some(Arc::new(|_token: &str, collection: &str| {
             collection != "sellify_activities"
@@ -3743,12 +4211,13 @@ mod tests {
                 crate::types::RxReplicationMasterChange::Resync,
             )
             .is_none());
+        handler.close().await.unwrap();
     }
 
-    #[test]
-    fn write_and_document_authz_hooks_are_fail_open_then_enforced() {
+    #[tokio::test]
+    async fn write_and_document_authz_hooks_are_fail_open_then_enforced() {
         let handler = WebRTCRsConnectionHandler::new();
-        let peer = "peer-1".to_string();
+        let peer = install_test_connection(&handler, "peer-1", 1).await;
         assert!(handler.is_collection_write_authorized_for_peer(&peer, "user_threads"));
         assert!(handler
             .document_filter_for_peer(&peer, "user_threads")
@@ -3802,6 +4271,64 @@ mod tests {
             "browser_input_events",
             &[serde_json::json!([{ "newDocumentState": { "owner_user_id": "bob" } }])],
         ));
+        handler.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn retired_connection_cannot_mutate_or_close_its_replacement() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let old = install_test_connection(&handler, "reused-route", 1).await;
+        handler.set_peer_capability_token(&old, "old-token".into());
+        handler.close_peer(&old).await;
+        let replacement = install_test_connection(&handler, "reused-route", 2).await;
+        handler.set_peer_capability_token(&replacement, "new-token".into());
+        assert_eq!(
+            handler.peer_identity(&old),
+            handler.peer_identity(&replacement)
+        );
+        assert_ne!(
+            handler.connection_identity(&old),
+            handler.connection_identity(&replacement)
+        );
+        assert!(!handler.is_peer_current(&old));
+        assert!(handler.is_peer_current(&replacement));
+        handler.set_peer_capability_token(&old, "late-old-token".into());
+        assert_eq!(
+            handler.peer_capability_token(&replacement).as_deref(),
+            Some("new-token")
+        );
+        assert!(handler.peer_capability_token(&old).is_none());
+        assert!(!handler.is_collection_authorized_for_peer(&old, "records"));
+        assert!(!handler.is_collection_write_authorized_for_peer(&old, "records"));
+        assert!(!handler.document_filter_for_peer(&old, "records").unwrap()(
+            &serde_json::json!({})
+        ));
+        let result = handler
+            .send(
+                &old,
+                WebRTCWireFrame::Message(WebRTCMessage {
+                    id: "late-send".into(),
+                    method: "token".into(),
+                    params: vec![],
+                    collection: None,
+                }),
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "old handle must fail before enqueueing a frame"
+        );
+        assert!(handler.send_queues.lock().is_empty());
+        handler.close_peer(&old).await;
+        assert_eq!(
+            handler.connection_for_peer("reused-route"),
+            Some(replacement.clone())
+        );
+        assert_eq!(
+            handler.peer_capability_token(&replacement).as_deref(),
+            Some("new-token")
+        );
+        handler.close().await.unwrap();
     }
 
     /// REGRESSION (52a1bf45): when the task draining a peer's send queue is
@@ -3811,9 +4338,11 @@ mod tests {
         let queues: Arc<Mutex<HashMap<WebRTCRsPeer, PeerSendQueue>>> =
             Arc::new(Mutex::new(HashMap::new()));
         queues.lock().entry("p1".to_string()).or_default().draining = true;
+        let available = queues.lock()["p1"].drain_available.clone();
         drop(DrainResetGuard {
             queues: Arc::clone(&queues),
             peer: "p1".to_string(),
+            available: available.clone(),
             armed: true,
         });
         assert!(
@@ -3824,12 +4353,264 @@ mod tests {
         drop(DrainResetGuard {
             queues: Arc::clone(&queues),
             peer: "p1".to_string(),
+            available,
             armed: false,
         });
         assert!(
             queues.lock().get("p1").unwrap().draining,
             "disarmed guard must leave the flag alone"
         );
+    }
+
+    #[tokio::test]
+    async fn cancelling_first_send_poll_releases_the_claimed_drain_slot() {
+        use std::future::Future;
+        use std::task::{Context, Waker};
+        struct Events;
+        #[async_trait]
+        impl PeerConnectionEventHandler for Events {}
+        let pc = PeerConnectionBuilder::new()
+            .with_handler(Arc::new(Events))
+            .with_udp_addrs(advertisable_udp_bind_addrs("127.0.0.1:0"))
+            .build()
+            .await
+            .unwrap();
+        let channel = pc
+            .create_data_channel("cancel-fixture", None)
+            .await
+            .unwrap();
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = "cancelled-first-sender".to_owned();
+        let frame = SendFrameClass {
+            text: "{}".into(),
+            collection: None,
+            intrinsic_high: true,
+            oversized_write: false,
+        };
+        let mut send = Box::pin(handler.send_queued_text(&peer, channel, frame));
+        let pending = send
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending();
+        // Drop exactly at the deliberate scheduler yield, before sending bytes.
+        drop(send);
+        let reopened = !handler.send_queues.lock().get(&peer).unwrap().draining;
+        pc.close().await.unwrap();
+        assert!(pending, "first poll must reach the cooperative yield");
+        assert!(
+            reopened,
+            "cancelled first sender must not strand later sends behind a claimed drain slot"
+        );
+    }
+
+    #[test]
+    fn old_drain_guard_cannot_release_a_reconnected_peers_queue() {
+        let queues = Arc::new(Mutex::new(HashMap::new()));
+        let peer = "reconnected".to_owned();
+        let old = PeerSendQueue::default();
+        let guard = DrainResetGuard {
+            queues: queues.clone(),
+            peer: peer.clone(),
+            available: old.drain_available.clone(),
+            armed: true,
+        };
+        queues.lock().insert(peer.clone(), old);
+        let replacement = PeerSendQueue {
+            draining: true,
+            ..Default::default()
+        };
+        queues.lock().insert(peer.clone(), replacement);
+        drop(guard);
+        assert!(
+            queues.lock()[&peer].draining,
+            "old cleanup must not release the new drainer"
+        );
+    }
+
+    #[test]
+    fn old_sender_cannot_claim_a_reconnected_peers_queue() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+        let queues = Arc::new(Mutex::new(HashMap::new()));
+        let peer = "reconnected".to_owned();
+        let old_available = PeerSendQueue::default().drain_available;
+        queues.lock().insert(peer.clone(), PeerSendQueue::default());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut sender = Box::pin(await_queued_send(
+            &queues,
+            &peer,
+            old_available,
+            rx,
+            |_guard| async { panic!("old sender must not send on the replacement queue") },
+        ));
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(sender.as_mut().poll(&mut context).is_pending());
+        assert!(!queues.lock()[&peer].draining);
+        drop(tx);
+        assert!(matches!(
+            sender.as_mut().poll(&mut context),
+            Poll::Ready(Err(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn old_drain_cannot_take_replacement_frames() {
+        struct Events;
+        #[async_trait]
+        impl PeerConnectionEventHandler for Events {}
+        let pc = PeerConnectionBuilder::new()
+            .with_handler(Arc::new(Events))
+            .with_udp_addrs(advertisable_udp_bind_addrs("127.0.0.1:0"))
+            .build()
+            .await
+            .unwrap();
+        let channel = pc
+            .create_data_channel("reconnect-fixture", None)
+            .await
+            .unwrap();
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = "reconnected".to_owned();
+        let old_available = PeerSendQueue::default().drain_available;
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        let mut replacement = PeerSendQueue {
+            draining: true,
+            ..Default::default()
+        };
+        replacement.push(QueuedSend {
+            text: "{}".into(),
+            priority: SendPriority::High,
+            collection: None,
+            intrinsic_high: true,
+            oversized_write: false,
+            queued_at_ms: now_ms(),
+            result: tx,
+        });
+        handler.send_queues.lock().insert(peer.clone(), replacement);
+        let guard = DrainResetGuard {
+            queues: handler.send_queues.clone(),
+            peer: peer.clone(),
+            available: old_available.clone(),
+            armed: true,
+        };
+        let finished = tokio::time::timeout(
+            Duration::from_secs(1),
+            handler.drain_send_queue(&peer, channel.clone(), guard),
+        )
+        .await;
+        let priority_result = handler
+            .drain_high_priority_inline_frames(&peer, &channel, &old_available)
+            .await;
+        pc.close().await.unwrap();
+        finished.expect("a replaced drainer must finish without sending");
+        priority_result.unwrap();
+        let queues = handler.send_queues.lock();
+        assert_eq!(
+            queues[&peer].high.len(),
+            1,
+            "the replacement frame must remain queued"
+        );
+        assert!(
+            queues[&peer].draining,
+            "the replacement keeps its drain turn"
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn queued_send_returns_its_receipt_before_starting_the_next_transfer() {
+        let queues = Arc::new(Mutex::new(HashMap::new()));
+        let peer = "own-receipt".to_owned();
+        let queue = PeerSendQueue::default();
+        let available = queue.drain_available.clone();
+        queues.lock().insert(peer.clone(), queue);
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut tx = Some(tx);
+        let next_started = AtomicU64::new(0);
+        let result = await_queued_send(&queues, &peer, available, rx, |guard| {
+            let tx = tx.take().expect("only one drain turn is needed");
+            let next_started = &next_started;
+            async move {
+                let _guard = guard;
+                tx.send(Ok(())).unwrap();
+                tokio::task::yield_now().await;
+                next_started.fetch_add(1, Ordering::SeqCst);
+                std::future::pending::<()>().await;
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(1), result)
+            .await
+            .expect("a sent frame must not wait for the rest of the queue")
+            .unwrap()
+            .unwrap();
+        assert_eq!(next_started.load(Ordering::SeqCst), 0);
+        assert!(!queues.lock()[&peer].draining);
+    }
+
+    #[test]
+    fn cancelling_drain_wakes_an_already_queued_sender_without_a_new_request() {
+        use std::future::Future;
+        use std::task::{Context, Wake, Waker};
+        struct CountWake(AtomicU64);
+        impl Wake for CountWake {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let queues = Arc::new(Mutex::new(HashMap::new()));
+        let peer = "handover".to_owned();
+        let queue = PeerSendQueue::default();
+        let available = queue.drain_available.clone();
+        queues.lock().insert(peer.clone(), queue);
+        let (_first_tx, first_rx) = tokio::sync::oneshot::channel();
+        let mut first = Box::pin(await_queued_send(
+            &queues,
+            &peer,
+            available.clone(),
+            first_rx,
+            |guard| async move {
+                let _guard = guard;
+                std::future::pending::<()>().await;
+            },
+        ));
+        assert!(first
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending());
+        let (second_tx, second_rx) = tokio::sync::oneshot::channel();
+        let mut second_tx = Some(second_tx);
+        let mut second = Box::pin(await_queued_send(
+            &queues,
+            &peer,
+            available,
+            second_rx,
+            |guard| {
+                let tx = second_tx.take().unwrap();
+                async move {
+                    let _guard = guard;
+                    tx.send(Ok(())).unwrap();
+                    std::future::pending::<()>().await;
+                }
+            },
+        ));
+        let wake = Arc::new(CountWake(AtomicU64::new(0)));
+        let waker = Waker::from(wake.clone());
+        let mut context = Context::from_waker(&waker);
+        assert!(second.as_mut().poll(&mut context).is_pending());
+        assert_eq!(wake.0.load(Ordering::SeqCst), 0);
+        drop(first);
+        assert!(
+            wake.0.load(Ordering::SeqCst) > 0,
+            "the existing waiter must be scheduled"
+        );
+        assert!(second.as_mut().poll(&mut context).is_pending());
+        assert!(matches!(
+            second.as_mut().poll(&mut context),
+            std::task::Poll::Ready(Ok(Ok(())))
+        ));
+        assert!(!queues.lock()[&peer].draining);
     }
 
     #[test]
@@ -4167,10 +4948,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn active_collection_predicate_tracks_control_plane_state() {
+    #[tokio::test]
+    async fn active_collection_predicate_tracks_control_plane_state() {
         let handler = WebRTCRsConnectionHandler::new();
-        let peer = "peer-1".to_string();
+        let peer = install_test_connection(&handler, "peer-1", 1).await;
 
         // Fail-open before the first report: relays for inactive collections
         // are DROPPED, so an unreported peer must count as all-active or the
@@ -4185,12 +4966,13 @@ mod tests {
         };
         // The first report transitions from fail-open: nothing was dropped
         // before it, so nothing needs a resync.
-        let newly_activated = handler.apply_active_collections(&peer, &msg);
+        let newly_activated = handler.apply_active_collections(&peer.peer_id, &msg);
         assert!(newly_activated.is_empty());
 
         assert!(handler.is_collection_active_for_peer(&peer, "documents"));
         assert!(handler.is_collection_active_for_peer(&peer, "business_commands"));
         assert!(!handler.is_collection_active_for_peer(&peer, "ctox_ticket_self_work_notes"));
+        handler.close().await.unwrap();
     }
 
     /// REGRESSION (gating catch-up): relays for inactive collections are
@@ -4598,48 +5380,45 @@ mod tests {
     // the channel is over the high watermark and release promptly on the low
     // event — never deadlock. Drives the event-driven flow control directly
     // (no real data channel needed).
-    #[test]
-    fn backpressure_gates_send_capacity_and_releases_on_low() {
+    #[tokio::test]
+    async fn backpressure_gates_send_capacity_and_releases_on_low() {
         let handler = WebRTCRsConnectionHandler::new();
-        let peer = "peer-1".to_string();
+        let peer = install_test_connection(&handler, "peer-1", 1).await;
+        let available = test_send_queue(&handler, peer.peer_id());
 
         // No backpressure registered yet → nothing buffered, capacity free.
         assert_eq!(handler.buffered_bytes(&peer), 0);
 
-        let bp = handler.peer_backpressure(&peer);
+        let bp = handler.peer_backpressure(&peer.peer_id);
         bp.set_high();
         // While buffered we report above the high watermark so the demand
         // dispatchers' `buffered_bytes > high_water` guards engage.
         assert!(handler.buffered_bytes(&peer) > DATA_CHANNEL_BUFFERED_HIGH_WATER as usize);
 
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .unwrap();
-        rt.block_on(async {
-            let bp_for_clear = Arc::clone(&bp);
-            tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(20)).await;
-                bp_for_clear.clear_high();
-            });
-            // Must block while high, then return well under the 30s wait cap
-            // once the low event clears it.
-            tokio::time::timeout(
-                Duration::from_secs(2),
-                handler.wait_for_send_capacity(&peer),
-            )
-            .await
-            .expect("wait_for_send_capacity did not release after OnBufferedAmountLow")
-            .expect("capacity wait should succeed after OnBufferedAmountLow");
+        let bp_for_clear = Arc::clone(&bp);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            bp_for_clear.clear_high();
         });
+        // Must block while high, then return well under the 30s wait cap
+        // once the low event clears it.
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            handler.wait_for_send_capacity(&peer.peer_id, &available),
+        )
+        .await
+        .expect("wait_for_send_capacity did not release after OnBufferedAmountLow")
+        .expect("capacity wait should succeed after OnBufferedAmountLow");
 
         assert_eq!(handler.buffered_bytes(&peer), 0);
+        handler.close().await.unwrap();
     }
 
     #[test]
     fn wait_for_send_capacity_returns_immediately_without_backpressure() {
         let handler = WebRTCRsConnectionHandler::new();
         let peer = "peer-2".to_string();
+        let available = test_send_queue(&handler, &peer);
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
@@ -4647,7 +5426,7 @@ mod tests {
         rt.block_on(async {
             tokio::time::timeout(
                 Duration::from_millis(100),
-                handler.wait_for_send_capacity(&peer),
+                handler.wait_for_send_capacity(&peer, &available),
             )
             .await
             .expect("wait_for_send_capacity blocked despite no backpressure")
@@ -4705,7 +5484,8 @@ mod tests {
                 result: queued_tx,
             });
 
-        let wait = handler.wait_for_send_capacity(&peer);
+        let available = test_send_queue(&handler, &peer);
+        let wait = handler.wait_for_send_capacity(&peer, &available);
         tokio::pin!(wait);
         assert!(matches!(
             futures::poll!(&mut wait),
@@ -4726,6 +5506,132 @@ mod tests {
             .expect("queued result sender must be resolved")
             .expect_err("queued send must be rejected");
         assert_eq!(queued_error.code(), SEND_BUFFER_STALLED_ERROR_CODE);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stale_capacity_wait_preserves_replacement_queue_and_token() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = "reused-route".to_owned();
+        let old_available = test_send_queue(&handler, &peer);
+        handler.peer_backpressure(&peer).set_high();
+        let wait = handler.wait_for_send_capacity(&peer, &old_available);
+        tokio::pin!(wait);
+        assert!(matches!(
+            futures::poll!(&mut wait),
+            std::task::Poll::Pending
+        ));
+
+        let replacement = PeerSendQueue {
+            draining: true,
+            ..Default::default()
+        };
+        let new_available = replacement.drain_available.clone();
+        handler.send_queues.lock().insert(peer.clone(), replacement);
+        let new_bp = Arc::new(PeerBackpressure::new());
+        new_bp.set_high();
+        handler
+            .backpressure
+            .lock()
+            .insert(peer.clone(), new_bp.clone());
+        handler
+            .peer_capability_tokens
+            .lock()
+            .insert(peer.clone(), "replacement-token".into());
+
+        // A sender entering after replacement must not begin waiting on the
+        // new connection's buffer with its old queue ownership.
+        assert!(handler
+            .wait_for_send_capacity(&peer, &old_available)
+            .await
+            .is_err());
+        // Also cover a capacity wait that was already parked on the old signal.
+        tokio::time::advance(SEND_CAPACITY_WAIT_TIMEOUT + Duration::from_millis(1)).await;
+        let error = wait.await.expect_err("retired sender must fail");
+        assert_eq!(error.parameters()[EXPECTED_PEER_TEARDOWN_PARAM], true);
+        assert!(handler.is_current_send_queue(&peer, &new_available));
+        assert!(handler.send_queues.lock()[&peer].draining);
+        assert!(new_bp.is_high());
+        assert_eq!(
+            handler.peer_capability_tokens.lock()[&peer],
+            "replacement-token"
+        );
+        assert_eq!(handler.frame_transport_status().backpressure_stall_count, 0);
+    }
+
+    #[tokio::test]
+    async fn stale_offer_cleanup_cannot_remove_an_open_or_replaced_connection() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = install_test_connection(&handler, "offer-route", 2).await;
+        assert!(!remove_peer_inner(
+            &handler,
+            peer.peer_id(),
+            PeerRemoval::Unopened(2),
+            None
+        ));
+        assert_eq!(
+            handler.connection_for_peer(peer.peer_id()),
+            Some(peer.clone())
+        );
+        handler
+            .peers
+            .lock()
+            .get_mut(peer.peer_id())
+            .unwrap()
+            .data_channel_open = false;
+        assert!(!remove_peer_inner(
+            &handler,
+            peer.peer_id(),
+            PeerRemoval::Unopened(1),
+            None
+        ));
+        assert!(handler.peers.lock().contains_key(peer.peer_id()));
+        assert!(remove_peer_inner(
+            &handler,
+            peer.peer_id(),
+            PeerRemoval::Unopened(2),
+            None
+        ));
+        assert!(!handler.peers.lock().contains_key(peer.peer_id()));
+        handler.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn retired_channel_exit_preserves_replacement_presence_and_backpressure() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let connection = install_test_connection(&handler, "channel-route", 2).await;
+        let route = connection.peer_id().to_owned();
+        let old_signal = Arc::new(PeerBackpressure::new());
+        let current_signal = handler.peer_backpressure(&route);
+        current_signal.set_high();
+        let report = presence_report(serde_json::json!([{ "recordId": "replacement-record" }]));
+        assert!(handler.apply_presence(&route, &report));
+
+        // Model the old task resuming after the replacement registered, after
+        // an earlier generation check has already succeeded on the old task.
+        assert_eq!(
+            finish_data_channel_generation(&handler, &route, 1, &old_signal),
+            None
+        );
+        assert_eq!(handler.connection_for_peer(&route), Some(connection));
+        assert!(Arc::ptr_eq(
+            &handler.backpressure.lock()[&route],
+            &current_signal
+        ));
+        assert!(current_signal.is_high());
+        assert_eq!(
+            handler.presence.lock()[&route].entries[0]["recordId"],
+            "replacement-record"
+        );
+
+        // Current termination still retires its own state and permits a fresh offer.
+        assert_eq!(
+            finish_data_channel_generation(&handler, &route, 2, &current_signal),
+            Some(true)
+        );
+        assert!(handler.connection_for_peer(&route).is_none());
+        assert!(!handler.backpressure.lock().contains_key(&route));
+        assert!(!handler.presence.lock().contains_key(&route));
+        handler.close().await.unwrap();
     }
 
     #[test]

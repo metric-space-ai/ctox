@@ -1,10 +1,41 @@
 const EDITOR_PROTOCOL = 'euro-office-cell-binary-v10';
 const EDITOR_PROTOCOL_VERSION = 10;
+const EMBEDDED_EDITOR_HTML_BASE64 = Object.freeze({
+  document: '__CTOX_EMBEDDED_DOCUMENT_HTML_BASE64__',
+  spreadsheet: '__CTOX_EMBEDDED_SPREADSHEET_HTML_BASE64__',
+});
 
-export async function createCtoxForkRuntime({ root, bridge, permissions, emit, locale = 'de', theme = 'system', kind = 'spreadsheet', launchArgs = {} }) {
+// A save acknowledges the revision serialized at its start, never edits that
+// happened while the native commit was in flight. Independent of SDK history.
+export function createOfficeSaveTracker() {
+  let generation = 0;
+  let revision = 0;
+  let savedRevision = 0;
+  let failed = false;
+  return {
+    edit() { revision += 1; },
+    reset() { generation += 1; savedRevision = revision; failed = false; },
+    snapshot() { return { generation, revision }; },
+    acknowledge(snapshot) {
+      if (snapshot.generation !== generation) return false;
+      savedRevision = Math.max(savedRevision, snapshot.revision);
+      failed = false;
+      return savedRevision === revision;
+    },
+    fail() { failed = true; },
+    get dirty() { return failed || revision !== savedRevision; },
+  };
+}
+
+export async function createCtoxForkRuntime({ root, bridge, permissions, emit, locale = 'de', theme = 'system', appearance = {}, kind = 'spreadsheet', launchArgs = {} }) {
+  const appearanceUrl = new URL('../shell-appearance.mjs', import.meta.url);
+  const appearanceRevision = new URL(import.meta.url).searchParams.get('v');
+  if (appearanceRevision) appearanceUrl.searchParams.set('v', appearanceRevision);
+  const { applyShellAppearance } = await import(appearanceUrl.href);
   const isDocument = kind === 'document';
   const productId = isDocument ? 'ctox-documents' : 'ctox-spreadsheets';
   const productName = isDocument ? 'CTOX Documents' : 'CTOX Spreadsheets';
+  const runtimeOrigin = new URL(document.baseURI).origin;
   const editorProtocol = isDocument ? 'euro-office-word-binary-v10' : EDITOR_PROTOCOL;
   const editorProtocolVersion = EDITOR_PROTOCOL_VERSION;
   let access = { ...permissions };
@@ -12,12 +43,29 @@ export async function createCtoxForkRuntime({ root, bridge, permissions, emit, l
   let versionId = null;
   let recordTitle = '';
   let editorBytes = null;
-  let dirty = false;
+  const saveTracker = createOfficeSaveTracker();
   let documentReady = false;
   let destroyed = false;
   let pendingSave = null;
   let documentMediaResolver = null;
   let forkUi = null;
+  let mutationApi = null;
+  const onEditorSaveShortcut = (event) => {
+    if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== 's') return;
+    // The compiled SDK's internal shortcut calls its private server-save
+    // method, bypassing the public asc_Save adapter. Route the real keyboard
+    // command through the same native commit path as the toolbar.
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (!destroyed && documentReady && access.write !== false) {
+      frame.contentWindow.Asc.editor.asc_Save();
+    }
+  };
+  const onUserActionEnd = () => {
+    if (destroyed || !documentReady || access.write === false) return;
+    saveTracker.edit();
+    emit?.('dirty', { recordId, versionId, dirty: true });
+  };
   let requestedTheme = normalizeTheme(theme);
   const colorScheme = matchMedia('(prefers-color-scheme: dark)');
   const frameEditorId = `ctox-office-${crypto.randomUUID()}`;
@@ -28,10 +76,15 @@ export async function createCtoxForkRuntime({ root, bridge, permissions, emit, l
   const entry = new URL(`../upstream/web-apps/apps/${isDocument ? 'documenteditor' : 'spreadsheeteditor'}/main/index.html`, import.meta.url);
   entry.searchParams.set('lang', locale === 'en' ? 'en' : 'de');
   entry.searchParams.set('frameEditorId', frameEditorId);
-  entry.searchParams.set('parentOrigin', location.origin);
+  entry.searchParams.set('parentOrigin', runtimeOrigin);
   const assetRevision = new URL(import.meta.url).searchParams.get('v');
   if (assetRevision) entry.searchParams.set('v', assetRevision);
-  frame.src = entry.href;
+  const embeddedHtml = embeddedEditorDocument(kind, entry);
+  // Keep the same-origin document in the frame. Some embedded browser hosts
+  // reject blob navigations, leaving about:blank without a load error.
+  // The embedded document already supplies its asset base and launch query.
+  if (embeddedHtml) frame.srcdoc = embeddedHtml;
+  else frame.src = entry.href;
   root.replaceChildren(frame);
 
   let resolveAppReady;
@@ -40,7 +93,7 @@ export async function createCtoxForkRuntime({ root, bridge, permissions, emit, l
   const appReadyTimeoutMs = normalizeAppReadyTimeout(launchArgs.appReadyTimeoutMs);
   const readyTimeout = setTimeout(() => rejectAppReady(new Error(`${productName} app-ready timed out`)), appReadyTimeoutMs);
   const onMessage = async (event) => {
-    if (destroyed || event.origin !== location.origin || event.source !== frame.contentWindow) return;
+    if (destroyed || event.origin !== runtimeOrigin || event.source !== frame.contentWindow) return;
     let message = event.data;
     if (typeof message === 'string') {
       try { message = JSON.parse(message); } catch { return; }
@@ -49,32 +102,47 @@ export async function createCtoxForkRuntime({ root, bridge, permissions, emit, l
     switch (message.event) {
       case 'onAppReady':
         clearTimeout(readyTimeout);
-        installCtoxSdkAdapter(frame.contentWindow, kind);
+        installCtoxSdkAdapter(frame.contentWindow, kind, beginSdkSave, failPendingSave);
+        frame.contentWindow.addEventListener('keydown', onEditorSaveShortcut, true);
         forkUi = installCtoxForkUi(frame.contentWindow, { productId, productName, kind, theme: requestedTheme });
+        applyShellAppearance(frame.contentDocument, appearance);
         resolveAppReady();
         break;
       case 'onDocumentReady':
         documentReady = true;
+        mutationApi = frame.contentWindow.Asc?.editor;
+        // CTOX's shell schedules native commits; the inherited server timer
+        // must stay disabled even when an older browser saved SDK preferences.
+        mutationApi?.asc_setAutoSaveGap?.(0);
+        mutationApi?.asc_unregisterCallback?.('asc_onUserActionEnd', onUserActionEnd);
+        mutationApi?.asc_registerCallback?.('asc_onUserActionEnd', onUserActionEnd);
+        applyCtoxForkTheme(frame.contentWindow, requestedTheme, productId, true);
         forkUi?.setTitle(`${recordTitle || productName} · ${productName}`);
         emit?.('opened', inspection());
         break;
       case 'onDocumentStateChange':
-        dirty = message.data === true;
-        emit?.(dirty ? 'dirty' : 'clean', { recordId, versionId, dirty });
+        // SDK "clean" notifications describe its local serialization, not a
+        // durable native commit. Only that commit may acknowledge our edits.
+        if (message.data === true) onUserActionEnd();
         break;
       case 'onSaveDocument':
         await acceptSavedBinary(message.data);
         break;
       case 'onError':
-        emit?.('error', { code: message.data?.errorCode, message: message.data?.errorDescription || `${productName} error` });
-        pendingSave?.reject?.(Object.assign(new Error(message.data?.errorDescription || `${productName} save failed`), { code: message.data?.errorCode }));
-        pendingSave = null;
+        if (pendingSave) {
+          failPendingSave(pendingSave, Object.assign(
+            new Error(message.data?.errorDescription || `${productName} save failed`),
+            { code: message.data?.errorCode },
+          ));
+        } else {
+          emit?.('error', { code: message.data?.errorCode, message: message.data?.errorDescription || `${productName} error` });
+        }
         break;
     }
   };
   const onColorSchemeChange = () => {
     if (requestedTheme === 'system' && frame.contentWindow) {
-      applyCtoxForkTheme(frame.contentWindow, requestedTheme, productId);
+      applyCtoxForkTheme(frame.contentWindow, requestedTheme, productId, documentReady);
     }
   };
   colorScheme.addEventListener?.('change', onColorSchemeChange);
@@ -84,39 +152,70 @@ export async function createCtoxForkRuntime({ root, bridge, permissions, emit, l
 
   const send = (command, data, transfer = []) => {
     const payload = command === 'openDocumentFromBinary' ? { command, data } : JSON.stringify({ command, data });
-    frame.contentWindow.postMessage(payload, location.origin, transfer);
+    frame.contentWindow.postMessage(payload, runtimeOrigin, transfer);
   };
 
+  function createPendingSave(reason) {
+    let resolve;
+    let reject;
+    const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+    // Toolbar saves have no RPC caller, but are still observable through events.
+    promise.catch(() => {});
+    return { promise, resolve, reject, reason, serialized: false };
+  }
+
+  function beginSdkSave() {
+    if (destroyed || !documentReady || access.write === false || pendingSave?.serialized) return false;
+    pendingSave ||= createPendingSave('toolbar');
+    const activeSave = pendingSave;
+    activeSave.serialized = true;
+    activeSave.snapshot = saveTracker.snapshot();
+    activeSave.recordId = recordId;
+    activeSave.versionId = versionId;
+    emit?.('saving', { recordId, versionId });
+    return activeSave;
+  }
+
+  function failPendingSave(activeSave, error) {
+    // Toolbar and keyboard callers have no RPC catch. Release only the save
+    // that failed so they can retry, without clearing the draft or a newer save.
+    if (!activeSave || pendingSave !== activeSave) return;
+    saveTracker.fail();
+    pendingSave = null;
+    activeSave.reject(error);
+    emit?.('error', { code: error?.code || 'save_failed', message: error?.message || String(error) });
+  }
+
   async function acceptSavedBinary(value) {
-    if (!pendingSave) {
-      pendingSave = {
-        promise: null,
-        resolve: () => {},
-        reject: (error) => emit?.('error', { code: error?.code || 'save_failed', message: error?.message || String(error) }),
-        reason: 'toolbar',
-      };
+    if (!pendingSave?.serialized) {
+      if (!beginSdkSave()) return;
     }
+    const activeSave = pendingSave;
+    if (activeSave.committing) return;
+    activeSave.committing = true;
     try {
       const bytes = normalizeBytes(value);
       const result = await bridge.commit({
-        recordId,
-        baseVersionId: versionId,
+        recordId: activeSave.recordId,
+        baseVersionId: activeSave.versionId,
         editorProtocol,
         editorProtocolVersion,
         implementedFeatures: [],
-        reason: pendingSave.reason,
+        reason: activeSave.reason,
         bytes,
       }, [bytes.buffer]);
+      if (destroyed || pendingSave !== activeSave) return;
       versionId = result.version_id || result.versionId || versionId;
       editorBytes = bytes;
-      dirty = false;
-      markUpstreamDocumentSaved();
-      emit?.('saved', { recordId, versionId });
-      pendingSave.resolve(result);
+      const clean = saveTracker.acknowledge(activeSave.snapshot);
+      if (clean) markUpstreamDocumentSaved();
+      const saved = { ...result, dirty: saveTracker.dirty };
+      emit?.('saved', { recordId, versionId, dirty: saveTracker.dirty });
+      activeSave.resolve(saved);
     } catch (error) {
-      pendingSave.reject(error);
+      failPendingSave(activeSave, error);
     } finally {
-      pendingSave = null;
+      if (pendingSave === activeSave) pendingSave = null;
     }
   }
 
@@ -125,17 +224,7 @@ export async function createCtoxForkRuntime({ root, bridge, permissions, emit, l
     upstream.AscCommon?.History?.Reset_SavedIndex?.(true);
     upstream.Asc?.editor?.SetUnchangedDocument?.();
     if (!isDocument) upstream.Asc?.editor?.SetDocumentModified?.(false);
-    // asc_nativeGetFile2 completes before sdkjs' deferred history update. Reconcile
-    // once that update has run, just as the native local-save callback does.
-    setTimeout(() => {
-      upstream.AscCommon?.History?.Reset_SavedIndex?.(true);
-      upstream.Asc?.editor?.SetUnchangedDocument?.();
-      if (!isDocument) upstream.Asc?.editor?.SetDocumentModified?.(false);
-      if (dirty) {
-        dirty = false;
-        emit?.('clean', { recordId, versionId, dirty: false });
-      }
-    }, 1800);
+    emit?.('clean', { recordId, versionId, dirty: false });
   }
 
   function inspection() {
@@ -149,7 +238,7 @@ export async function createCtoxForkRuntime({ root, bridge, permissions, emit, l
       record_id: recordId,
       version_id: versionId,
       document_ready: documentReady,
-      dirty,
+      dirty: saveTracker.dirty,
       read_only: access.write === false,
       source: { fork: productId, upstream_ancestry: 'euro-office-v9.3.1', web_apps: true, sdkjs: true },
     };
@@ -157,6 +246,9 @@ export async function createCtoxForkRuntime({ root, bridge, permissions, emit, l
 
   return {
     async open(request = {}) {
+      if (pendingSave || saveTracker.dirty) {
+        throw Object.assign(new Error('Save pending changes before opening another version'), { code: 'unsaved_changes' });
+      }
       let loaded = await bridge.loadVersion(request);
       if (!hasEditorBinarySignature(loaded.editorBytes, kind)) {
         await bridge.prepare({ recordId: request.recordId, versionId: loaded.version?.id || request.versionId });
@@ -172,7 +264,7 @@ export async function createCtoxForkRuntime({ root, bridge, permissions, emit, l
       versionId = request.versionId || loaded.version?.id || null;
       recordTitle = loaded.record?.filename || loaded.record?.title || '';
       documentReady = false;
-      dirty = false;
+      saveTracker.reset();
       const upstream = frame.contentWindow;
       upstream.__ctoxEditorBinary = editorBytes;
       documentMediaResolver?.destroy?.();
@@ -187,32 +279,48 @@ export async function createCtoxForkRuntime({ root, bridge, permissions, emit, l
       if (!documentReady) throw new Error(`${productName} is not ready`);
       if (access.write === false) throw permissionError(`${isDocument ? 'Document' : 'Spreadsheet'} is read-only`);
       if (pendingSave) return pendingSave.promise;
-      let resolve;
-      let reject;
-      const promise = new Promise((onResolve, onReject) => { resolve = onResolve; reject = onReject; });
-      pendingSave = { promise, resolve, reject, reason: String(reason || 'manual') };
-      frame.contentWindow.Asc.editor.asc_Save();
-      return promise;
+      pendingSave = createPendingSave(String(reason || 'manual'));
+      const activeSave = pendingSave;
+      try { frame.contentWindow.Asc.editor.asc_Save(); }
+      catch (error) {
+        failPendingSave(activeSave, error);
+      }
+      return activeSave.promise;
     },
-    export({ format = 'xlsx' } = {}) {
+    async export({ format = 'xlsx' } = {}) {
       const expectedFormat = isDocument ? 'docx' : 'xlsx';
       if (format !== expectedFormat) throw Object.assign(new Error(`Unsupported ${kind} export format: ${format}`), { code: 'unsupported_format' });
       if (access.export === false) throw permissionError(`${isDocument ? 'Document' : 'Spreadsheet'} export is not permitted`);
+      // Export the acknowledged snapshot containing the edits present when the
+      // user requested the download. A running save may serialize an older
+      // revision, so wait for it and save any remaining draft before exporting.
+      // A failed save must reject the download, never silently return old data.
+      if (pendingSave) await pendingSave.promise;
+      if (saveTracker.dirty) await this.save({ reason: 'export' });
       return bridge.export({ recordId, versionId, format });
     },
     focus() { frame.contentWindow.focus(); return { focused: true }; },
     setPermissions(next = {}) { access = { ...access, ...next }; return inspection(); },
     setTheme(nextTheme = 'system') {
       requestedTheme = normalizeTheme(nextTheme);
-      applyCtoxForkTheme(frame.contentWindow, requestedTheme, productId);
+      applyCtoxForkTheme(frame.contentWindow, requestedTheme, productId, documentReady);
       return { theme: requestedTheme, resolved_theme: resolveTheme(requestedTheme) };
+    },
+    setAppearance(next = {}) {
+      appearance = next;
+      requestedTheme = normalizeTheme(next.theme);
+      applyCtoxForkTheme(frame.contentWindow, requestedTheme, productId, documentReady);
+      applyShellAppearance(frame.contentDocument, appearance);
+      return { theme: requestedTheme };
     },
     inspect: inspection,
     async destroy() {
       destroyed = true;
       clearTimeout(readyTimeout);
       window.removeEventListener('message', onMessage);
+      frame.contentWindow?.removeEventListener('keydown', onEditorSaveShortcut, true);
       colorScheme.removeEventListener?.('change', onColorSchemeChange);
+      mutationApi?.asc_unregisterCallback?.('asc_onUserActionEnd', onUserActionEnd);
       pendingSave?.reject?.(new Error(`${productName} runtime destroyed`));
       pendingSave = null;
       documentMediaResolver?.destroy?.();
@@ -222,6 +330,23 @@ export async function createCtoxForkRuntime({ root, bridge, permissions, emit, l
       frame.remove();
     },
   };
+}
+
+function embeddedEditorDocument(kind, entry) {
+  const encoded = EMBEDDED_EDITOR_HTML_BASE64[kind];
+  if (!encoded || encoded.startsWith('__CTOX_EMBEDDED_')) return '';
+  const query = JSON.stringify(entry.search.slice(1));
+  const html = atob(encoded)
+    .replaceAll('window.location.search.substring(1)', query)
+    .replace('+function registerServiceWorker(){', '+function registerServiceWorker(){return;');
+  const base = `<base href="${escapeHtmlAttribute(entry.href)}">`;
+  return /<head(?:\s[^>]*)?>/i.test(html)
+    ? html.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}\n    ${base}`)
+    : `<!doctype html><html><head>${base}</head><body>${html}</body></html>`;
+}
+
+function escapeHtmlAttribute(value) {
+  return String(value).replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
 }
 
 async function installDocumentMediaResolver(upstream, canonicalBytes) {
@@ -347,7 +472,7 @@ function readU32(bytes, offset) {
   return (bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) >>> 0;
 }
 
-function installCtoxSdkAdapter(upstream, kind) {
+function installCtoxSdkAdapter(upstream, kind, beginSave = () => true, failSave = (_save, error) => { throw error; }) {
   const prototype = kind === 'document'
     ? upstream.Asc?.asc_docs_api?.prototype
     : upstream.Asc?.spreadsheet_api?.prototype;
@@ -361,31 +486,54 @@ function installCtoxSdkAdapter(upstream, kind) {
     this.ctox_completeInitialServerPhase();
   };
   if (kind === 'document') {
-    const upstreamSave = prototype.asc_Save;
     prototype.asc_Save = function (isAutoSave, isIdle) {
-      if (isAutoSave || typeof this.asc_nativeGetFile2 !== 'function') {
-        return upstreamSave.call(this, isAutoSave, isIdle);
+      // The shell owns debounced, durable saves through bridge.commit. The
+      // inherited timer targets the excluded coauthoring server and otherwise
+      // leaves its save action pending forever.
+      if (isAutoSave) return false;
+      const activeSave = beginSave();
+      if (!activeSave) return false;
+      try {
+        if (typeof this.asc_nativeGetFile2 !== 'function') {
+          throw Object.assign(new Error('CTOX document native serializer is unavailable'), { code: 'native_serializer_unavailable' });
+        }
+        const encoded = this.asc_nativeGetFile2();
+        if (typeof encoded !== 'string') {
+          throw Object.assign(new Error('CTOX document native serializer returned invalid editor bytes'), { code: 'invalid_native_save' });
+        }
+        const binary = upstream.atob(encoded);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+        if (!hasEditorBinarySignature(bytes, kind)) {
+          throw Object.assign(new Error('CTOX document native serializer returned invalid editor bytes'), { code: 'invalid_native_save' });
+        }
+        this.sendEvent('asc_onSaveDocument', bytes);
+        return true;
+      } catch (error) {
+        failSave(activeSave, error);
+        return false;
       }
-      const encoded = this.asc_nativeGetFile2();
-      if (typeof encoded !== 'string') return upstreamSave.call(this, isAutoSave, isIdle);
-      const binary = upstream.atob(encoded);
-      const bytes = new Uint8Array(binary.length);
-      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-      this.sendEvent('asc_onSaveDocument', bytes);
-      return true;
     };
   } else {
-    const upstreamSave = prototype.asc_Save;
     prototype.asc_Save = function (isAutoSave, isIdle) {
-      if (isAutoSave || typeof this.asc_nativeGetFile !== 'function') {
-        return upstreamSave.call(this, isAutoSave, isIdle);
+      if (isAutoSave) return false;
+      const activeSave = beginSave();
+      if (!activeSave) return false;
+      try {
+        if (typeof this.asc_nativeGetFile !== 'function') {
+          throw Object.assign(new Error('CTOX spreadsheet native serializer is unavailable'), { code: 'native_serializer_unavailable' });
+        }
+        const encoded = this.asc_nativeGetFile();
+        const bytes = decodeSpreadsheetNativeFile(upstream, encoded);
+        if (!bytes || !hasEditorBinarySignature(bytes, kind)) {
+          throw Object.assign(new Error('CTOX spreadsheet native serializer returned invalid editor bytes'), { code: 'invalid_native_save' });
+        }
+        this.sendEvent('asc_onSaveDocument', bytes);
+        return true;
+      } catch (error) {
+        failSave(activeSave, error);
+        return false;
       }
-      const encoded = this.asc_nativeGetFile();
-      const bytes = decodeSpreadsheetNativeFile(upstream, encoded);
-      if (!bytes) return upstreamSave.call(this, isAutoSave, isIdle);
-      this.sendEvent('asc_onSaveDocument', bytes);
-      this.SetDocumentModified?.(false);
-      return true;
     };
   }
   const sdkReady = waitForFullSdk(upstream, kind);
@@ -428,7 +576,10 @@ function installCtoxForkUi(editorWindow, { productId, productName, kind, theme }
     const link = editorDocument.createElement('link');
     link.id = id;
     link.rel = 'stylesheet';
-    link.href = href;
+    const stylesheet = new URL(href);
+    const revision = new URL(import.meta.url).searchParams.get('v');
+    if (revision) stylesheet.searchParams.set('v', revision);
+    link.href = stylesheet.href;
     editorDocument.head.append(link);
   }
   applyCtoxForkTheme(editorWindow, theme, productId);
@@ -440,14 +591,20 @@ function installCtoxForkUi(editorWindow, { productId, productName, kind, theme }
   };
 }
 
-function applyCtoxForkTheme(editorWindow, theme, productId) {
+function applyCtoxForkTheme(editorWindow, theme, productId, updateSdk = false) {
   const resolved = resolveTheme(theme);
+  // The fork's theme service owns icon sprites and SDK palette updates.
+  // Body classes alone leave the light icons on a dark shell surface.
+  if (updateSdk) editorWindow.Common?.UI?.Themes?.setTheme?.(`theme-${resolved}`);
   const body = editorWindow.document.body;
   editorWindow.document.documentElement.dataset.ctoxProduct = productId;
   editorWindow.document.documentElement.dataset.ctoxTheme = resolved;
   body.dataset.ctoxProduct = productId;
   body.dataset.ctoxTheme = resolved;
-  body.classList.toggle('theme-white', resolved === 'light');
+  // theme-white has different ribbon metrics (84px controls rather than 66px).
+  // Mixing it with the theme-light service makes the ribbon cover the formula
+  // input because the editor layout still reserves the theme-light height.
+  body.classList.remove('theme-white');
   body.classList.toggle('theme-light', resolved === 'light');
   body.classList.toggle('theme-type-light', resolved === 'light');
   body.classList.toggle('theme-dark', resolved === 'dark');
@@ -564,7 +721,9 @@ function editorConfig(locale, permissions, theme = 'system') {
       help: false,
       plugins: false,
       macros: false,
+      autosave: false,
       compactHeader: true,
+      toolbarHideFileName: true,
       compactToolbar: false,
       hideRightMenu: true,
       uiTheme: resolveTheme(normalizeTheme(theme)) === 'dark' ? 'theme-dark' : 'theme-light',

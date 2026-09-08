@@ -1364,7 +1364,7 @@ pub(super) struct NativePeer {
     peer_session_id: String,
     shutdown_tx: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     _process_lock: File,
-    _pools: Vec<WebRtcPool>,
+    _pools: Vec<ctox_sync::native::NativeSyncSession>,
     _command_consumer: tokio::task::JoinHandle<()>,
     _command_outbox: tokio::task::JoinHandle<()>,
     _notes_sync: tokio::task::JoinHandle<()>,
@@ -1470,7 +1470,7 @@ impl NativePeer {
         let transport = self
             ._pools
             .first()
-            .map(|pool| pool.connection_handler.frame_transport_status_json())
+            .map(|pool| pool.pool().connection_handler.frame_transport_status_json())
             .unwrap_or(Value::Null);
         let join_accepted = transport
             .get("signalingJoinAccepted")
@@ -1528,7 +1528,7 @@ impl NativePeer {
         }
         let cleanup = async {
             for pool in &self._pools {
-                pool.cancel().await;
+                pool.shutdown().await;
             }
             // Tear down any live browser processes so stop leaves no zombies.
             for session_id in browser_runtime_manager().active_session_ids() {
@@ -1639,7 +1639,7 @@ pub fn native_peer_status(root: &Path) -> Value {
     let transport = active_peer
         .as_ref()
         .and_then(|peer| peer._pools.first())
-        .map(|pool| pool.connection_handler.frame_transport_status_json())
+        .map(|pool| pool.pool().connection_handler.frame_transport_status_json())
         .unwrap_or(Value::Null);
     let local_command_consumer_alive = active_peer
         .as_ref()
@@ -2775,7 +2775,7 @@ async fn run_native_peer(
         .map(|(_, collection)| collection)
         .collect();
     let collection_count = collection_list.len();
-    let mut pools: Vec<WebRtcPool> = Vec::with_capacity(1);
+    let mut pools = Vec::with_capacity(1);
     if collection_count == 0 {
         eprintln!(
             "[business-os] no Business OS RxDB collections to replicate; skipping WebRTC bring-up"
@@ -2850,39 +2850,34 @@ async fn run_native_peer(
                 },
             ))
         };
-        let mut bringup = tokio::spawn(async move {
-            rxdb::plugins::replication_webrtc::replicate_web_rtc_rs_multi_with_url_list_provider_and_validators(
-                collection_list,
-                multi_signaling_url_provider,
-                topic,
-                multi_peer_session_id,
-                multi_ice_servers,
-                Some(is_peer_valid),
-                Some(is_peer_session_valid),
-                collection_authz,
-                collection_eager_pull,
-                collection_live_change,
-                collection_write_authz,
-                document_read_authz,
-                document_write_authz,
-                20,
-                20,
-                5_000,
-            )
-            .await
-        });
+        let bringup =
+            ctox_sync::native::NativeSyncSession::start(ctox_sync::native::NativeSyncOptions {
+                peer_role: ctox_sync::native::NativePeerRole::CtoxInstance,
+                collections: collection_list,
+                signaling_urls: multi_signaling_url_provider,
+                room: topic,
+                peer_session_id: multi_peer_session_id,
+                ice_servers: multi_ice_servers,
+                admission: ctox_sync::native::NativeAdmission {
+                    peer: is_peer_valid,
+                    session: is_peer_session_valid,
+                    collection_read: collection_authz,
+                    collection_write: collection_write_authz,
+                    document_read: document_read_authz,
+                    document_write: document_write_authz,
+                    eager_pull: collection_eager_pull,
+                    live_change: collection_live_change,
+                },
+                bringup_timeout: Duration::from_secs(NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS),
+            });
         // Bring-up failure is FATAL for this run: returning the error hands
         // control to the supervision loop, which respawns with backoff. The
         // previous behavior — log and keep running with an empty pool list —
         // produced the canonical zombie: heartbeat "running", zero
         // replication, no retry, until a manual daemon restart.
-        match tokio::time::timeout(
-            Duration::from_secs(NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS),
-            &mut bringup,
-        )
-        .await
-        {
-            Ok(Ok(Ok(pool))) => {
+        match bringup.await {
+            Ok(session) => {
+                let pool = session.pool();
                 if let Ok(mut breaker) = native_peer_circuit_breaker().lock() {
                     breaker.record_success();
                 }
@@ -2896,7 +2891,7 @@ async fn run_native_peer(
                 // dispatcher always returns FILE_NOT_FOUND). The query registry
                 // already auto-registers every multiplexed collection inside
                 // `RxWebRTCReplicationPool::new_multi`.
-                register_demand_file_sources(&pool, &database, &root);
+                register_demand_file_sources(pool, &database, &root);
                 let browser_live_root = root.clone();
                 let browser_live_database = Arc::clone(&database);
                 pool.set_auxiliary_request_handler(
@@ -2949,37 +2944,13 @@ async fn run_native_peer(
                         })
                     }),
                 );
-                pools.push(pool);
+                pools.push(session);
             }
-            Ok(Ok(Err(err))) => {
+            Err(err) => {
                 return Err(release_database_after_failed_bring_up(
                     &database,
                     native_peer_bring_up_failure(format!(
                         "multiplexed WebRTC replication bring-up failed: {err}"
-                    )),
-                )
-                .await);
-            }
-            Ok(Err(join_err)) => {
-                return Err(release_database_after_failed_bring_up(
-                    &database,
-                    native_peer_bring_up_failure(format!(
-                        "multiplexed WebRTC replication bring-up task panicked: {join_err}"
-                    )),
-                )
-                .await);
-            }
-            Err(_) => {
-                // Abort the in-flight attempt: letting it run detached used
-                // to leak a LIVE orphan replication session (joined to the
-                // room under this peer's session id, answering handshakes,
-                // no demand-file sources, uncancelable).
-                bringup.abort();
-                return Err(release_database_after_failed_bring_up(
-                    &database,
-                    native_peer_bring_up_failure(format!(
-                        "multiplexed WebRTC replication bring-up timed out after {}s",
-                        NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS
                     )),
                 )
                 .await);
@@ -3174,7 +3145,7 @@ async fn run_native_peer(
                     .and_then(Value::as_u64)
                     .unwrap_or_default();
                 let transport = peer._pools.first()
-                    .map(|pool| pool.connection_handler.frame_transport_status_json())
+                    .map(|pool| pool.pool().connection_handler.frame_transport_status_json())
                     .unwrap_or(Value::Null);
                 let transport_backlog = transport.get("priorityQueueDepth")
                     .and_then(Value::as_u64)
@@ -3754,7 +3725,7 @@ fn write_native_peer_heartbeat(
     let transport = active_peer
         .as_ref()
         .and_then(|peer| peer._pools.first())
-        .map(|pool| pool.connection_handler.frame_transport_status_json())
+        .map(|pool| pool.pool().connection_handler.frame_transport_status_json())
         .unwrap_or(Value::Null);
     let command_consumer_alive = active_peer
         .as_ref()
@@ -5981,7 +5952,22 @@ fn projection_normalized_value_for_schema_field(
             ProjectionValueNormalization::Remove
         }
     };
-    match property.schema_type.as_deref() {
+    let declared_type = match property.schema_type.as_ref() {
+        Some(declared) if declared.single_type().is_none() => {
+            if !declared.matches_value(value) {
+                return fallback();
+            }
+            // A valid union member must not be coerced to another member.
+            // Strings still pass through the existing maxLength enforcement.
+            if value.is_string() {
+                Some("string")
+            } else {
+                return ProjectionValueNormalization::Keep;
+            }
+        }
+        declared => declared.and_then(|declared| declared.single_type()),
+    };
+    match declared_type {
         Some("number") => {
             if value.is_number() {
                 ProjectionValueNormalization::Keep
@@ -6137,7 +6123,12 @@ fn projection_default_value_for_field(
     if field.ends_with("_at_ms") || field == "createdAt" {
         return Value::from(timestamp_default);
     }
-    match property.schema_type.as_deref() {
+    match property
+        .schema_type
+        .as_ref()
+        .and_then(|declared| declared.default_type())
+    {
+        Some("null") => Value::Null,
         Some("array") => Value::Array(Vec::new()),
         Some("boolean") => Value::Bool(false),
         Some("integer") | Some("number") => Value::from(0),
@@ -6181,7 +6172,7 @@ pub(super) async fn upsert_business_record_projection_tombstone(
 
     let Some(previous) = existing else {
         let mut write_data = document;
-        prepare_projection_tombstone_document(schema, &mut write_data);
+        prepare_projection_tombstone_document(&schema.json_schema, &mut write_data);
         let write_data = fill_object_data_before_insert(schema, write_data)
             .map_err(|err| anyhow::anyhow!("fill projection tombstone envelope: {err}"))?;
         collection
@@ -6205,7 +6196,7 @@ pub(super) async fn upsert_business_record_projection_tombstone(
     } else {
         next = document;
     }
-    prepare_projection_tombstone_document(schema, &mut next);
+    prepare_projection_tombstone_document(&schema.json_schema, &mut next);
 
     let result = collection
         .storage_instance
@@ -6224,23 +6215,34 @@ pub(super) async fn upsert_business_record_projection_tombstone(
     Ok(())
 }
 
-fn prepare_projection_tombstone_document(schema: &rxdb::rx_schema::RxSchema, document: &mut Value) {
+fn prepare_projection_tombstone_document(schema: &RxJsonSchema, document: &mut Value) {
     let Some(object) = document.as_object_mut() else {
         return;
     };
     object.insert("_deleted".to_string(), Value::Bool(true));
-    if schema.json_schema.properties.contains_key("is_deleted") {
+    if schema.properties.contains_key("is_deleted") {
         object.insert("is_deleted".to_string(), Value::Bool(true));
     }
-    for field in &schema.json_schema.required {
+    for field in &schema.required {
         if field.starts_with('_') {
             continue;
         }
         let missing = object.get(field).map(Value::is_null).unwrap_or(true);
-        if missing {
+        // Legacy wire-budget clamping could leave an omission object where
+        // a deleted chunk requires a string. Keeping that invalid value makes
+        // the tombstone fail validation on every projection pass. Repair only
+        // this deletion representation; valid stored values stay unchanged.
+        let invalid_type = object.get(field).is_some_and(|value| {
+            schema
+                .properties
+                .get(field)
+                .and_then(|property| property.schema_type.as_ref())
+                .is_some_and(|declared| !declared.matches_value(value))
+        });
+        if missing || invalid_type {
             object.insert(
                 field.clone(),
-                projection_tombstone_required_default(&schema.json_schema, field),
+                projection_tombstone_required_default(schema, field),
             );
         }
     }
@@ -6253,7 +6255,12 @@ fn projection_tombstone_required_default(schema: &RxJsonSchema, field: &str) -> 
     if let Some(default) = &property.default {
         return default.clone();
     }
-    match property.schema_type.as_deref() {
+    match property
+        .schema_type
+        .as_ref()
+        .and_then(|declared| declared.default_type())
+    {
+        Some("null") => Value::Null,
         Some("boolean") => Value::Bool(false),
         Some("number") | Some("integer") => Value::from(0),
         Some("array") => Value::Array(Vec::new()),
@@ -6261,6 +6268,85 @@ fn projection_tombstone_required_default(schema: &RxJsonSchema, field: &str) -> 
         _ => Value::String(String::new()),
     }
 }
+
+#[cfg(test)]
+mod projection_schema_union_tests {
+    use super::*;
+
+    fn nullable_property() -> JsonSchema {
+        serde_json::from_value(serde_json::json!({"type":["string","null"],"maxLength":4})).unwrap()
+    }
+
+    #[test]
+    fn union_projection_preserves_members_and_string_constraints() {
+        let property = nullable_property();
+        for value in [Value::Null, Value::String("task".into())] {
+            assert!(matches!(
+                projection_normalized_value_for_schema_field(
+                    "active_task_id",
+                    &property,
+                    &value,
+                    true,
+                    123
+                ),
+                ProjectionValueNormalization::Keep
+            ));
+        }
+        assert!(
+            matches!(projection_normalized_value_for_schema_field("active_task_id", &property, &Value::String("task-long".into()), true, 123), ProjectionValueNormalization::Replace(Value::String(value)) if value == "task")
+        );
+    }
+
+    #[test]
+    fn invalid_union_values_use_typed_fallbacks_not_arbitrary_coercion() {
+        let property = nullable_property();
+        assert!(matches!(
+            projection_normalized_value_for_schema_field(
+                "active_task_id",
+                &property,
+                &Value::from(7),
+                true,
+                123
+            ),
+            ProjectionValueNormalization::Replace(Value::Null)
+        ));
+        assert!(matches!(
+            projection_normalized_value_for_schema_field(
+                "active_task_id",
+                &property,
+                &Value::from(7),
+                false,
+                123
+            ),
+            ProjectionValueNormalization::Remove
+        ));
+    }
+
+    #[test]
+    fn projection_and_tombstone_defaults_honor_explicit_nullability() {
+        let schema: RxJsonSchema = serde_json::from_value(serde_json::json!({"version":0,"primaryKey":"id","type":"object","properties":{"id":{"type":"string"},"active_task_id":{"type":["string","null"]}},"required":["id","active_task_id"]})).unwrap();
+        assert_eq!(
+            projection_default_value_for_field(
+                "active_task_id",
+                &schema.properties["active_task_id"],
+                123
+            ),
+            Value::Null
+        );
+        assert_eq!(
+            projection_tombstone_required_default(&schema, "active_task_id"),
+            Value::Null
+        );
+        assert_eq!(
+            projection_tombstone_required_default(&schema, "id"),
+            Value::String(String::new())
+        );
+    }
+}
+
+#[cfg(test)]
+#[path = "rxdb_peer_projection_tombstone_tests.rs"]
+mod projection_tombstone_tests;
 
 #[derive(Debug)]
 struct ChannelStateProjection {
@@ -7978,7 +8064,7 @@ fn repair_legacy_business_command_revisions(database_path: &Path) -> anyhow::Res
 /// `clamp_projected_document_to_wire_budget` in `store.rs` guards every NEW
 /// write, but a store that already carries an oversized document keeps stalling
 /// the browser's initial replication for that whole collection — the write path
-/// never touches those rows again. Measured on the THESEN tenant on
+/// never touches those rows again. Measured on an affected tenant on
 /// 2026-09-04: five completed commands (one with a 2.5 MB `result`) held six
 /// collections at `initialReplicationState: pending` indefinitely.
 ///

@@ -1,6 +1,10 @@
 {
   "workspaceLoading": "Spreadsheets Workspace wird geladen.",
   "spreadsheetsTitle": "CTOX Spreadsheets",
+  "officeLibraryTitle": "Tabellen",
+  "createBlankSpreadsheet": "Leere Tabelle erstellen",
+  "blankSpreadsheetCreated": "Leere Tabelle erstellt.",
+  "showFiles": "Dateiliste öffnen",
   "explorerKicker": "Dateien",
   "runbookKicker": "Automatisierung",
   "searchPlaceholder": "Tabelle suchen...",

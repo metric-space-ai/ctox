@@ -6,21 +6,14 @@
 // actually agree on the wire-bytes — no in-process mocks, no shared memory.
 
 import { spawn } from 'node:child_process';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
+import { resolveWireDaemon } from './wire-daemon-fixture.mjs';
 
 import { decodeChunk } from '../dist/ctox-rxdb-js.mjs';
 
-const here = dirname(fileURLToPath(import.meta.url));
-const daemonBin = resolve(here, '..', '..', '..', '..', 'core', 'rxdb', 'runtime', 'build', 'cargo-target', 'release', 'examples', 'v15_wire_daemon');
-// Cargo target is under repo runtime/; fall back to runtime/build/cargo-target.
-const fallbackBin = resolve(here, '..', '..', '..', '..', '..', 'runtime', 'build', 'cargo-target', 'release', 'examples', 'v15_wire_daemon');
-const debugFallbackBin = resolve(here, '..', '..', '..', '..', '..', 'runtime', 'build', 'cargo-target', 'debug', 'examples', 'v15_wire_daemon');
-import { existsSync } from 'node:fs';
-const bin = [daemonBin, fallbackBin, debugFallbackBin].find((candidate) => existsSync(candidate));
+const bin = resolveWireDaemon();
 if (!bin) {
-  console.error('daemon binary not found at', daemonBin, fallbackBin, 'or', debugFallbackBin);
+  console.error('wire daemon not found; build it or pass --wire-daemon PATH');
   process.exit(2);
 }
 

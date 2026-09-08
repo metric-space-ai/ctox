@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Cursor, Read};
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use uuid::Uuid;
 
 const CHANNEL_URL: &str = "https://github.com/metric-space-ai/ctox/releases/download/business-os-shell-channel-stable/business-os-shell-stable.json";
@@ -24,6 +25,18 @@ const MAX_EXTRACTED_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_EXTRACTED_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const CURRENT_KEY: &str = "MCowBQYDK2VwAyEAZECH2XB0VlZWQ7zUzoChyiRkKtfGNK9HmSMvZQuwGjk=";
 const NEXT_KEY: &str = "MCowBQYDK2VwAyEAdAgcqbHB2Sr86KzrWcdYxKCxb6Ofz4sVxhkEhTgvo7s=";
+const REQUIRED_SHELL_FILES: &[&str] = &[
+    "index.html",
+    "app.js",
+    "app.css",
+    "mobile-host.js",
+    "mobile-host.css",
+    "system-apps.json",
+    "standard-app-bundle.json",
+    "shared/shell-release-status.js",
+];
+static VERIFIED_SHELL_ROOTS: OnceLock<Mutex<BTreeMap<(PathBuf, String), PathBuf>>> =
+    OnceLock::new();
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -313,6 +326,44 @@ fn resolve_release() -> Result<ReleaseManifest> {
     Ok(manifest)
 }
 
+fn pinned_release_url(version: &str) -> Result<String> {
+    // Only an immutable release in our repository can be selected. Never accept
+    // arbitrary URLs, paths or a channel override from the operator.
+    let valid = regex::Regex::new(
+        r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$",
+    )?;
+    anyhow::ensure!(
+        version.len() <= 128 && valid.is_match(version),
+        "invalid pinned shell version"
+    );
+    Ok(format!("https://github.com/metric-space-ai/ctox/releases/download/business-os-shell-v{version}/ctox-business-os-shell-{version}.release.v2.json"))
+}
+
+fn verify_pinned_manifest(bytes: &[u8], version: &str) -> Result<ReleaseManifest> {
+    pinned_release_url(version)?;
+    let manifest: ReleaseManifest = serde_json::from_slice(bytes)?;
+    anyhow::ensure!(manifest.payload.r#type == "ctox.business-os-shell.release.v2");
+    anyhow::ensure!(
+        manifest.payload.version == version,
+        "pinned shell version mismatch"
+    );
+    anyhow::ensure!(matches!(
+        manifest.payload.channel.as_str(),
+        "stable" | "beta" | "nightly"
+    ));
+    verify_signature(
+        &manifest.payload,
+        &manifest.signature,
+        &manifest.payload.signing_key_id,
+    )?;
+    Ok(manifest)
+}
+
+fn resolve_pinned_release(version: &str) -> Result<ReleaseManifest> {
+    let bytes = fetch(&pinned_release_url(version)?, MAX_MANIFEST_BYTES)?;
+    verify_pinned_manifest(&bytes, version)
+}
+
 fn safe_relative(path: &str) -> Result<PathBuf> {
     anyhow::ensure!(!path.is_empty() && !path.contains('\\') && !path.starts_with('/'));
     let candidate = Path::new(path);
@@ -382,6 +433,12 @@ fn verify_release_inventory(manifest: &ReleaseManifest) -> Result<BTreeMap<Strin
         total <= MAX_EXTRACTED_TOTAL_BYTES,
         "shell inventory too large"
     );
+    for required in REQUIRED_SHELL_FILES {
+        anyhow::ensure!(
+            expected.contains_key(*required),
+            "shell inventory missing required runtime file: {required}"
+        );
+    }
     Ok(expected)
 }
 
@@ -539,6 +596,87 @@ fn collect_slot_files(root: &Path, directory: &Path, files: &mut BTreeSet<String
     Ok(())
 }
 
+pub(super) fn shell_build_from_app_js(source: &str) -> Option<String> {
+    ["const APP_BUILD = '", "const APP_BUILD = \""]
+        .into_iter()
+        .find_map(|marker| {
+            let tail = source.split_once(marker)?.1;
+            let quote = marker.chars().last()?;
+            let build = tail.split_once(quote)?.0.trim();
+            (!build.is_empty()).then(|| build.to_owned())
+        })
+}
+
+fn shell_build_matches(requested: &str, build: &str) -> bool {
+    requested
+        .strip_prefix(build)
+        .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with('_'))
+}
+
+fn shell_slot_candidate_for_build(
+    state: &ShellUpdateState,
+    slots: &Path,
+    requested: &str,
+) -> Result<Option<(String, PathBuf)>> {
+    let mut candidates = Vec::new();
+    for slot in [&state.current_slot, &state.previous_slot]
+        .into_iter()
+        .flatten()
+    {
+        if candidates.contains(slot) {
+            continue;
+        }
+        candidates.push(slot.clone());
+        let path = slots.join(slot);
+        let source = match fs::read_to_string(path.join("app.js")) {
+            Ok(source) => source,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        let Some(build) = shell_build_from_app_js(&source) else {
+            continue;
+        };
+        if shell_build_matches(requested, &build) {
+            return Ok(Some((build, path)));
+        }
+    }
+    Ok(None)
+}
+
+/// Resolve a browser's immutable shell-generation token inside this CTOX
+/// instance. Only the atomically tracked current/previous slots participate;
+/// ctox.dev and other delivery surfaces never select or own a shell release.
+pub(super) fn verified_shell_root_for_build(
+    root: &Path,
+    requested: &str,
+) -> Result<Option<(String, PathBuf)>> {
+    let state = read_state(root)?;
+    let Some((build, path)) = shell_slot_candidate_for_build(&state, &slots_root(root), requested)?
+    else {
+        return Ok(None);
+    };
+    let cache = VERIFIED_SHELL_ROOTS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let cache_key = (root.to_path_buf(), build.clone());
+    if let Some(cached) = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&cache_key)
+        .cloned()
+    {
+        return Ok(Some((build, cached)));
+    }
+    let slot = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("shell slot path has no valid version")?;
+    verify_slot(&path, Some(slot))?;
+    cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(cache_key, path.clone());
+    Ok(Some((build, path)))
+}
+
 fn public_status(state: &ShellUpdateState, administrable: bool) -> serde_json::Value {
     let phase = if state.phase == "restart_required" {
         "restart"
@@ -630,11 +768,22 @@ pub fn check(root: &Path) -> Result<serde_json::Value> {
 }
 
 pub fn stage(root: &Path) -> Result<serde_json::Value> {
+    stage_selected(root, None)
+}
+
+/// Stage one signed release for tenant-scoped acceptance, without publishing or
+/// changing the subscribed Stable channel. Activation remains a separate step.
+pub fn stage_version(root: &Path, version: &str) -> Result<serde_json::Value> {
+    pinned_release_url(version)?;
+    stage_selected(root, Some(version))
+}
+
+fn stage_selected(root: &Path, version: Option<&str>) -> Result<serde_json::Value> {
     let mut state = read_state(root)?;
     state.phase = "download".to_owned();
     state.error_code = None;
     write_state(root, &state)?;
-    match stage_inner(root) {
+    match stage_inner(root, version) {
         Ok(state) => Ok(public_status(&state, true)),
         Err(error) => {
             let mut state = read_state(root)?;
@@ -646,8 +795,11 @@ pub fn stage(root: &Path) -> Result<serde_json::Value> {
     }
 }
 
-fn stage_inner(root: &Path) -> Result<ShellUpdateState> {
-    let manifest = resolve_release()?;
+fn stage_inner(root: &Path, version: Option<&str>) -> Result<ShellUpdateState> {
+    let manifest = match version {
+        Some(version) => resolve_pinned_release(version)?,
+        None => resolve_release()?,
+    };
     anyhow::ensure!(compatible(&manifest)?, "shell release is incompatible");
     let bytes = fetch(&manifest.payload.artifact.url, MAX_ARCHIVE_BYTES)?;
     anyhow::ensure!(bytes.len() as u64 == manifest.payload.artifact.size);
@@ -676,13 +828,19 @@ fn stage_inner(root: &Path) -> Result<ShellUpdateState> {
         fs::rename(&staging, &slot)?;
     }
     let mut state = read_state(root)?;
-    state.desired_version = Some(manifest.payload.version.clone());
-    state.latest_compatible_version = Some(manifest.payload.version);
+    apply_staging(&mut state, manifest.payload.version, version.is_some());
+    write_state(root, &state)?;
+    Ok(state)
+}
+
+fn apply_staging(state: &mut ShellUpdateState, version: String, pinned: bool) {
+    state.desired_version = Some(version.clone());
+    if !pinned {
+        state.latest_compatible_version = Some(version);
+    }
     state.last_checked_at = Some(Utc::now().to_rfc3339());
     state.phase = "ready".to_owned();
     state.error_code = None;
-    write_state(root, &state)?;
-    Ok(state)
 }
 
 pub fn activate(root: &Path) -> Result<serde_json::Value> {
@@ -781,11 +939,14 @@ mod tests {
                     ctox_max_version: ctox_max_version.map(str::to_owned),
                     shell_protocol: "ctox-business-os-shell-v2".to_owned(),
                 },
-                files: vec![ReleaseFile {
-                    path: "index.html".to_owned(),
-                    size: 1,
-                    sha256: sha256(b"x"),
-                }],
+                files: REQUIRED_SHELL_FILES
+                    .iter()
+                    .map(|path| ReleaseFile {
+                        path: (*path).to_owned(),
+                        size: 1,
+                        sha256: sha256(b"x"),
+                    })
+                    .collect(),
                 provenance: Provenance {
                     embedded_manifest_sha256: "00".repeat(32),
                     sbom_url: "https://example.invalid/sbom.json".to_owned(),
@@ -861,6 +1022,59 @@ mod tests {
     }
 
     #[test]
+    fn pinned_release_accepts_only_repository_versions() {
+        for version in ["0.1.46", "0.1.46-beta.1", "0.1.46-nightly.20260905"] {
+            assert!(pinned_release_url(version)
+                .unwrap()
+                .ends_with(&format!("ctox-business-os-shell-{version}.release.v2.json")));
+        }
+        for version in [
+            "",
+            "../0.1.46",
+            "https://example.com/0.1.46",
+            "v0.1.46",
+            "01.1.46",
+            "0.1.46/other",
+            "0.1.46?x",
+            "0.1.46-beta..1",
+            "0.1.46\n",
+        ] {
+            assert!(pinned_release_url(version).is_err(), "accepted {version:?}");
+        }
+    }
+
+    #[test]
+    fn pinned_release_keeps_signature_and_identity_gates() -> Result<()> {
+        let manifest = sample_manifest("0.0.0", None, "shell-current-2026-08");
+        let bytes = serde_json::to_vec(&manifest)?;
+        let mismatch = verify_pinned_manifest(&bytes, "1.2.4").unwrap_err();
+        assert!(mismatch.to_string().contains("version mismatch"));
+        let invalid = verify_pinned_manifest(&bytes, "1.2.3").unwrap_err();
+        assert!(invalid.to_string().contains("invalid-signature"));
+        Ok(())
+    }
+
+    #[test]
+    fn pinned_staging_does_not_activate_or_change_the_stable_offer() {
+        let mut state = ShellUpdateState {
+            active_version: Some("0.1.44".to_owned()),
+            current_slot: Some("0.1.44".to_owned()),
+            previous_slot: Some("0.1.43".to_owned()),
+            latest_compatible_version: Some("0.1.44".to_owned()),
+            ..ShellUpdateState::default()
+        };
+        apply_staging(&mut state, "0.1.46-beta.1".to_owned(), true);
+        assert_eq!(state.desired_version.as_deref(), Some("0.1.46-beta.1"));
+        assert_eq!(state.active_version.as_deref(), Some("0.1.44"));
+        assert_eq!(state.current_slot.as_deref(), Some("0.1.44"));
+        assert_eq!(state.previous_slot.as_deref(), Some("0.1.43"));
+        assert_eq!(state.latest_compatible_version.as_deref(), Some("0.1.44"));
+        assert_eq!(state.channel, "stable");
+        apply_staging(&mut state, "0.1.46".to_owned(), false);
+        assert_eq!(state.latest_compatible_version.as_deref(), Some("0.1.46"));
+    }
+
+    #[test]
     fn compatibility_honours_minimum_and_maximum_ctox_versions() -> Result<()> {
         assert!(compatible(&sample_manifest(
             "0.0.0",
@@ -892,6 +1106,52 @@ mod tests {
         let mut unsafe_path = sample_manifest("0.0.0", None, "shell-current-2026-08");
         unsafe_path.payload.files[0].path = "../index.html".to_owned();
         assert!(verify_release_inventory(&unsafe_path).is_err());
+    }
+
+    #[test]
+    fn inventory_rejects_an_incomplete_runtime_bundle() {
+        let mut incomplete = sample_manifest("0.0.0", None, "shell-current-2026-08");
+        incomplete
+            .payload
+            .files
+            .retain(|file| file.path != "app.css");
+        let error = verify_release_inventory(&incomplete).expect_err("missing app.css must fail");
+        assert!(format!("{error:#}").contains("missing required runtime file: app.css"));
+    }
+
+    #[test]
+    fn previous_instance_slot_resolves_its_own_generation() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let slots = slots_root(temp.path());
+        fs::create_dir_all(slots.join("1.1.0"))?;
+        fs::create_dir_all(slots.join("1.0.0"))?;
+        fs::write(
+            slots.join("1.1.0/app.js"),
+            "const APP_BUILD = '20260901-shell-v2-current-v400';\n",
+        )?;
+        fs::write(
+            slots.join("1.0.0/app.js"),
+            "const APP_BUILD = '20260831-shell-v2-previous-v399';\n",
+        )?;
+        let state = ShellUpdateState {
+            current_slot: Some("1.1.0".to_owned()),
+            previous_slot: Some("1.0.0".to_owned()),
+            ..ShellUpdateState::default()
+        };
+
+        let (build, path) = shell_slot_candidate_for_build(
+            &state,
+            &slots,
+            "20260831-shell-v2-previous-v399_knowledge-8",
+        )?
+        .context("previous generation must resolve")?;
+        assert_eq!(build, "20260831-shell-v2-previous-v399");
+        assert_eq!(path, slots.join("1.0.0"));
+        assert!(
+            shell_slot_candidate_for_build(&state, &slots, "20260830-shell-v2-unknown-v398")?
+                .is_none()
+        );
+        Ok(())
     }
 
     #[test]
