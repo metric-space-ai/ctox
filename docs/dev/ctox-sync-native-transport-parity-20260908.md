@@ -208,6 +208,24 @@ is pending browser execution; no production source is changed.
 
 ## Current browser verification correction
 
+Run 34256670851 (source c56ddeffe), Chromium job 102164120277, fails while
+seeding the held-history scenario: no dock mounts before the read completes.
+Inspection of `initBusinessChat` confirms that initial rendering depends on
+the hydration callback. This also limits the previous first-paint figures:
+the fixture was already hydrated when it began the opening measurement.
+The production correction renders local presentation synchronously after
+handler/cleanup installation; asynchronous history retains its existing
+merge and presentation-ownership rules. Shell version is
+`20260908-shell-v2-chat-initial-paint-v358`; main remained
+`365927a3ce666927d3b9173626f567673f6f98cb` at the pre-edit fetch.
+
+New/known-chat fixtures now hold history as well, require zero completed
+reads at initial dock paint and open paint, then release after local edits
+to verify preservation. Both paint gates stay at 150 ms. The original
+superseded-lookup and remote-history checks remain. Local 77 chat tests,
+static shell contract and syntax pass; browser execution is pending.
+No tenant deployment is performed.
+
 The bundle reproducibility guard previously exited successfully when npx,
 the pinned builder download or the build itself failed. The canonical suite
 captures successful output, so this internal SKIPPED was reported as PASS.

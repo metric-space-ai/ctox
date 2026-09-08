@@ -1241,6 +1241,12 @@ assertions. This is separate from the warm end-to-end command p50 below
 300 ms. The new browser measurement has not yet passed; the focused facade
 contract test is not a substitute for it.
 
+The initial chat view renders synchronously from its local presentation state
+after installing its handlers and cleanup. The first history read runs in
+parallel; it does not gate mounting the dock. Remote history still merges
+through the existing hydration path without granting local state authority
+over command acceptance.
+
 The generic open handler presents new drafts and already loaded chats
 without a preceding storage read. Existing crew readiness and change
 subscriptions own crew refresh; opening another chat adds no subscription.
@@ -1278,6 +1284,16 @@ checks the same focus, draft and history invariants. This correction has not
 passed yet. Component results do not establish the native context-command
 path, cold tracked-chat latency, database lifecycle recovery, or
 critical-collection boot p95 below five seconds.
+
+Run 34256670851 exposed an additional production defect: with history held,
+the initial dock never mounts. Previously its first render came from the
+hydration callback. The preceding 29 ms measurements therefore prove only
+opening after initial hydration, not startup during a pending read. The
+explicit initial render fixes that dependency. Both opening fixtures now
+hold history, require zero completed reads at mount and first paint, release
+history after editing, and then verify preservation. Initial dock paint and
+chat opening each retain a 150 ms gate. These strengthened browser checks
+remain pending; the native command and full performance gates are unchanged.
 
 ## 11. Test map
 

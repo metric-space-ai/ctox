@@ -557,8 +557,10 @@ try {
 
   for (const reuseKnown of [false, true]) {
     await scenario(page, reuseKnown ? 'known-chat-opens-before-storage' : 'new-draft-opens-before-storage', {
-      count: 1, groupedResearch: true, messagesPerChat: 2, staticTracking: true, dockCollapsed: true, dbDelay: 1000,
-    }, async () => {
+      count: 1, groupedResearch: true, messagesPerChat: 2, staticTracking: true, dockCollapsed: true, dbDelay: 1000, holdChatReads: true,
+    }, async (initial) => {
+      expect(initial.chatReadStats.started > 0 && initial.chatReadStats.completed === 0, 'the initial dock must render while history is still pending');
+      expect(initial.initialPaintMs < 150, `the initial dock must paint before storage, got ${initial.initialPaintMs} ms`);
       const opened = await page.evaluate(async (reuse) => {
         const start = performance.now();
         window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail: {
@@ -580,10 +582,12 @@ try {
       }, reuseKnown);
       results.push({ scenario: reuseKnown ? 'known-chat-first-paint' : 'new-draft-first-paint', metrics: opened });
       expect(opened.visible, 'the opened chat must be visible');
+      expect(opened.chatReadStats.completed === 0, 'opening must not wait for the held history read');
       expect(opened.firstPaintMs < 150, `chat must paint before 1000 ms storage, got ${opened.firstPaintMs} ms`);
       expect(opened.storedChats === (reuseKnown ? 1 : 2), 'opening must preserve existing chats without duplicating a known task');
       if (reuseKnown) expect(opened.activeId === 'chat_0', 'known task must reuse its original chat ID');
       if (!reuseKnown) await page.locator('.ctox-chat-window.is-active textarea').fill('Edited while storage is pending');
+      await page.evaluate(() => window.chatHarness.releaseChatReads());
       await page.evaluate(() => window.chatHarness.waitFor(() => window.chatHarness.chatReadStats.completed > 0));
       await page.evaluate(() => window.chatHarness.waitForPaint());
       const hydrated = await page.evaluate(() => ({
@@ -958,6 +962,7 @@ function harnessHtml() {
         preCollapseExpandedChatIds: Array.isArray(options.preCollapseExpandedChatIds) ? options.preCollapseExpandedChatIds : [],
         chats: options.remoteOnly ? [] : chats,
       }));
+      const initStarted = performance.now();
       initBusinessChat({
         session: { authenticated: true, user: { id: owner, name: 'Harness User' } },
         commandBus: makeCommandBus(options),
@@ -967,6 +972,7 @@ function harnessHtml() {
       });
       await waitFor(() => document.querySelector('[data-chat-dock]'));
       await waitForPaint();
+      window.chatHarness.initialPaintMs = performance.now() - initStarted;
       return collect();
     }
 
@@ -1327,6 +1333,7 @@ function harnessHtml() {
         activeMessageText: document.querySelector('.ctox-chat-window.is-active .ctox-chat-messages')?.textContent?.trim() || '',
         storedChats: Array.isArray(stored.chats) ? stored.chats.length : 0,
         chatReadStats: { ...window.chatHarness.chatReadStats },
+        initialPaintMs: window.chatHarness.initialPaintMs,
         deletedChatTombstones: Object.keys(deletedChatIds).length,
       };
     }

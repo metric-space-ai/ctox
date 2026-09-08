@@ -862,6 +862,10 @@ export function initBusinessChat({
     }));
     clearSchedulerLoop(root);
   };
+
+  // Mount the local presentation immediately. Hydration may be delayed or
+  // unavailable; it must not gate the dock or its prompt/open event handlers.
+  renderChatRoot({ root, state, commandBus, db, getActiveModule });
 }
 
 function publishChatLayout(root, state) {
