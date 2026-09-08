@@ -1,14 +1,14 @@
-import { CtoxResizer } from './shared/resizer.js?v=20260908-shell-v2-command-receipts-v353';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260908-shell-v2-command-receipts-v353';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260908-shell-v2-command-receipts-v353';
-import { createAppActions } from './shared/app-actions.js?v=20260908-shell-v2-command-receipts-v353';
+import { CtoxResizer } from './shared/resizer.js?v=20260908-shell-v2-crew-language-v354';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260908-shell-v2-crew-language-v354';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260908-shell-v2-crew-language-v354';
+import { createAppActions } from './shared/app-actions.js?v=20260908-shell-v2-crew-language-v354';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260908-shell-v2-command-receipts-v353';
+} from './shared/app-lifecycle.js?v=20260908-shell-v2-crew-language-v354';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -16,20 +16,20 @@ import {
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260908-shell-v2-command-receipts-v353';
+} from './shared/permissions.js?v=20260908-shell-v2-crew-language-v354';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260908-shell-v2-command-receipts-v353';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260908-shell-v2-command-receipts-v353';
+} from './shared/branding.js?v=20260908-shell-v2-crew-language-v354';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260908-shell-v2-crew-language-v354';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260908-shell-v2-command-receipts-v353';
+} from './shared/presentation.js?v=20260908-shell-v2-crew-language-v354';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -40,9 +40,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260908-shell-v2-command-receipts-v353';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260908-shell-v2-command-receipts-v353';
-import { createDocumentsFacade } from './shared/documents.js?v=20260908-shell-v2-command-receipts-v353';
+} from './shared/shell-permissions-ui.js?v=20260908-shell-v2-crew-language-v354';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260908-shell-v2-crew-language-v354';
+import { createDocumentsFacade } from './shared/documents.js?v=20260908-shell-v2-crew-language-v354';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -50,16 +50,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260908-shell-v2-command-receipts-v353';
+} from './shared/maintenance-state.js?v=20260908-shell-v2-crew-language-v354';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260908-shell-v2-command-receipts-v353';
+} from './shared/workspace-session.js?v=20260908-shell-v2-crew-language-v354';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260908-shell-v2-command-receipts-v353';
+} from './shared/taskbar-pins.js?v=20260908-shell-v2-crew-language-v354';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -67,9 +67,9 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260908-shell-v2-command-receipts-v353';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260908-shell-v2-command-receipts-v353';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260908-shell-v2-command-receipts-v353';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260908-shell-v2-crew-language-v354';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260908-shell-v2-crew-language-v354';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260908-shell-v2-crew-language-v354';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -84,7 +84,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260908-shell-v2-command-receipts-v353';
+const APP_BUILD = '20260908-shell-v2-crew-language-v354';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -11683,8 +11683,8 @@ const OFFLINE_FALLBACK_CATALOG = {
     },
     {
       "id": "ctox",
-      "title": "CTOX",
-      "description": "Native control surface for queues, runs, sync state, and agent context.",
+      "title": "Crew",
+      "description": "Deine Crew, ihre Aufgaben, Fortschritte und Ergebnisse.",
       "entry": "modules/ctox/index.html",
       "collections": [
         "business_commands",
@@ -11733,7 +11733,7 @@ const OFFLINE_FALLBACK_CATALOG = {
         "governance"
       ],
       "store": {
-        "summary": "Native CTOX control surface for queue tasks, runs, module reports, releases, and source evidence.",
+        "summary": "Aufgaben an die Crew übergeben, ihre Arbeit verfolgen und Ergebnisse prüfen.",
         "repository": "metric-space-ai/ctox",
         "source_path": "modules/ctox",
         "installable": false,
@@ -14982,7 +14982,7 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
 
   const mod = state.modules.find((item) => item.id === context.module)
     || state.activeModule
-    || { id: 'ctox', title: 'CTOX' };
+    || { id: 'ctox', title: 'Crew' };
   const canModify = canModifyModule(mod);
   // Whether this actor may run a data change here themselves. If not, the menu
   // hides the self-execute modes and steers them to delegate the change to a
@@ -15064,7 +15064,7 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
       <div class="ctox-context-composer" hidden>
         ${renderCompactGlobalCtoxAgentScopeHtml({
           view: agentScope,
-          labels: { scopeTitle: lang === 'de' ? 'CTOX Zugriff' : 'CTOX access' },
+          labels: { scopeTitle: lang === 'de' ? 'Crew-Zugriff' : 'Crew access' },
         })}
         <p class="ctox-context-mode-help" data-ctox-context-mode-help></p>
         <label class="ctox-context-user-row" hidden>
@@ -15416,10 +15416,10 @@ async function maybeShowRecordApprovalBanner() {
     banner.className = 'ctox-record-approval-banner';
     banner.dataset.recordApprovalBanner = pending.id || '';
     banner.setAttribute('role', 'region');
-    banner.setAttribute('aria-label', 'Offene CTOX-Freigabe zu diesem Objekt');
+    banner.setAttribute('aria-label', 'Offene Freigabe für die Crew zu diesem Objekt');
     banner.innerHTML = `
       <div class="ctox-record-approval-copy">
-        <strong>Offene CTOX-Freigabe</strong>
+        <strong>Offene Freigabe für die Crew</strong>
         <span>${escapeHtml(pending.prompt || pending.instruction || pending.source_label || pending.id || '')}</span>
       </div>
       <div class="ctox-record-approval-actions">

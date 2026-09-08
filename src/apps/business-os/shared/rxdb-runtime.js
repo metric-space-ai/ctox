@@ -1,5 +1,5 @@
 /* One module graph per page: all database and sync consumers share this promise. */
-export const RXDB_BUNDLE_URL = "../rxdb/dist/ctox-rxdb-js.mjs?v=20260908-shell-v2-command-receipts-v353";
+export const RXDB_BUNDLE_URL = "../rxdb/dist/ctox-rxdb-js.mjs?v=20260908-shell-v2-crew-language-v354";
 let runtimePromise;
 export function loadRxdbRuntime() {
   return runtimePromise ??= import(RXDB_BUNDLE_URL).catch((error) => {

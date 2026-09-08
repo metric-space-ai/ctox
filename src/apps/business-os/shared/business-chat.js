@@ -582,7 +582,7 @@ export function initBusinessChat({
         },
       });
       if (!submission) {
-        throw new Error('CTOX konnte den Task nicht an die Queue übergeben.');
+        throw new Error('Die Aufgabe konnte nicht an die Crew übergeben werden.');
       }
 
       // Queue acceptance is the app-facing contract. Remote chat persistence
@@ -595,7 +595,7 @@ export function initBusinessChat({
       syncAfterSubmit();
     } catch (error) {
       detail.rejectSubmission?.(
-        error instanceof Error ? error : new Error(String(error || 'Task konnte nicht übergeben werden.')),
+        error instanceof Error ? error : new Error(String(error || 'Aufgabe konnte nicht übergeben werden.')),
       );
       if (ownsChatOpenOwnership(state, presentationTicket)) {
         renderChatRoot({ root, state, commandBus, db, getActiveModule });
@@ -620,7 +620,7 @@ export function initBusinessChat({
     if (!ownsChatOpenOwnership(state, presentationTicket)) return;
     state.selectedDate = getLocalDateString(Date.now());
     const chat = resolveChatForOpenDetail(state, session, detail);
-    chat.title = String(detail.title || chat.title || 'CTOX').trim() || 'CTOX';
+    chat.title = String(detail.title || chat.title || 'Crew').trim() || 'Crew';
     const handedMember = String(detail.crew_member_id || detail.crewMemberId || '').trim();
     if (handedMember) {
       chat.crew_member_id = handedMember;
@@ -1376,7 +1376,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       }
     });
     root.querySelectorAll('.ctox-chat-fab-creatures:not(.is-members) .ctox-crew-creature').forEach((creature, index) => {
-      const chat = (openChats.length ? openChats : [{ id: 'ctox-crew', title: 'CTOX' }])[index];
+      const chat = (openChats.length ? openChats : [{ id: 'ctox-crew', title: 'Crew' }])[index];
       if (chat && syncCrewTelemetryNode(creature, chat)) inPlaceDomChanged = true;
     });
 
@@ -1449,7 +1449,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         const progress = executionProgressForChat(chat);
         const turns = progress?.activity_turns?.total || 0;
         if (setTextIfChanged(progressHead, `${progress?.percent || 0}% · ${turns}T`)) inPlaceDomChanged = true;
-        if (setAttrIfChanged(progressHead, 'title', `${turns} Aktivitäts-Turns`)) inPlaceDomChanged = true;
+        if (setAttrIfChanged(progressHead, 'title', `${turns} Aktivitäten`)) inPlaceDomChanged = true;
       }
 
       const creature = win.querySelector('.ctox-crew-creature');
@@ -1574,7 +1574,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         <span class="ctox-chat-fab-creatures ${(state.crewMembers || []).length ? 'is-members' : ''}" ${(state.crewMembers || []).length ? '' : 'aria-hidden="true"'}>
           ${(state.crewMembers || []).length
             ? state.crewMembers.slice(0, 6).map((member) => crewPoolSlotHtml(member, 'fab')).join('')
-            : (openChats.length ? openChats : [{ id: 'ctox-crew', title: 'CTOX' }]).slice(0, 3).map((chat) => crewCreatureHtml(chat, getTaskState(chat), 'fab')).join('')}
+            : (openChats.length ? openChats : [{ id: 'ctox-crew', title: 'Crew' }]).slice(0, 3).map((chat) => crewCreatureHtml(chat, getTaskState(chat), 'fab')).join('')}
         </span>
       </button>
 
@@ -2835,9 +2835,9 @@ function executionProgressTooltip(progress) {
     ? null
     : progress.steps.slice(nextIndex + 1).find((step) => step.status !== 'completed');
   const lines = [
-    isReviewPhase ? 'CTOX-Prüfung' : current?.label || 'CTOX',
-    `${progress.percent}% · ${stepTurns}/${progress.activity_turns.total} Turns · Plan v${progress.revision}`,
-    `Denkblöcke ${progress.activity_turns.thinking} · Tools ${progress.activity_turns.tools}`,
+    isReviewPhase ? 'Prüfung' : current?.label || 'Crew',
+    `${progress.percent}% · ${stepTurns}/${progress.activity_turns.total} Aktivitäten · Planstand ${progress.revision}`,
+    `Denkschritte ${progress.activity_turns.thinking} · Werkzeugeinsätze ${progress.activity_turns.tools}`,
     ...progress.steps.map((step) => `${step.status === 'completed' ? '✓' : step.status === 'in_progress' ? '●' : '○'} ${step.label}`),
   ];
   if (next) lines.push(`→ ${next.label}`);
@@ -2889,7 +2889,7 @@ function delegationProgressCardHtml(chat, { taskId = '', commandId = '', taskSta
         <span class="ctox-progress-activity" style="--ctox-turn-angle:${turnAngle}deg" aria-hidden="true"><i></i></span>
         <span class="ctox-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress.percent}">
           <div class="ctox-progress-work">${workSegments}</div>
-          <span class="ctox-progress-review is-${escapeAttr(reviewStatus)}" title="CTOX-Prüfung: ${escapeAttr(reviewStatus)}"></span>
+          <span class="ctox-progress-review is-${escapeAttr(reviewStatus)}" title="Prüfung: ${escapeAttr(reviewStatus)}"></span>
         </span>
       </button>
     </div>
@@ -2943,7 +2943,7 @@ function chatWindow(chat, activeId, relation = 'center') {
   let statusBadgeHtml = '';
   if (taskState === 'running') {
     statusBadgeHtml = `
-      <span class="ctox-chat-status-badge is-running" title="CTOX läuft...">
+      <span class="ctox-chat-status-badge is-running" title="Die Crew arbeitet…">
         <span class="ctox-status-spinner"></span>
         <span>Aktiv</span>
       </span>
@@ -3197,7 +3197,7 @@ function chatBusyPanel({ chats, selectedDate, state }) {
       <header>
         <div>
           <strong>${escapeHtml(formatGermanDateLabel(selectedDate))}</strong>
-          <span>${formatCompactCount(stats.total)} Tasks, ${formatCompactCount(filtered.length)} sichtbar</span>
+          <span>${formatCompactCount(stats.total)} Aufgaben, ${formatCompactCount(filtered.length)} sichtbar</span>
         </div>
         <button type="button" data-chat-overflow-close aria-label="Crew-Übersicht schließen">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
@@ -3239,18 +3239,18 @@ function dateWorkloadPanel({ chats, selectedDate }) {
   const max = Math.max(1, ...days.map((day) => day.count));
   const selected = days.find((day) => day.date === selectedDate);
   return `
-    <section class="ctox-date-workload-panel" data-chat-date-workload-panel aria-label="Task-Aufkommen nach Datum">
+    <section class="ctox-date-workload-panel" data-chat-date-workload-panel aria-label="Aufgaben nach Datum nach Datum">
       <header>
         <div>
           <strong>${escapeHtml(formatGermanDateLabel(selectedDate))}</strong>
-          <span>${formatCompactCount(selected?.count || 0)} Tasks am ausgewaehlten Tag</span>
+          <span>${formatCompactCount(selected?.count || 0)} Aufgaben am ausgewaehlten Tag</span>
         </div>
         <button type="button" data-chat-date-workload-close aria-label="Datumsauswahl schliessen">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
       </header>
       <input type="date" data-chat-date-picker-panel value="${escapeAttr(selectedDate)}" aria-label="Datum wählen" />
-      <div class="ctox-date-heatmap" role="list" aria-label="Task-Aufkommen der umliegenden Tage">
+      <div class="ctox-date-heatmap" role="list" aria-label="Aufgaben nach Datum der umliegenden Tage">
         ${days.map((day) => dateHeatmapDay(day, max, selectedDate)).join('')}
       </div>
     </section>
@@ -3276,7 +3276,7 @@ function workloadDaysAround(chats, selectedDate, count) {
 function dateHeatmapDay(day, max, selectedDate) {
   const intensity = day.count <= 0 ? 0 : Math.max(1, Math.ceil((day.count / max) * 4));
   const date = dateFromLocalDateString(day.date);
-  const label = `${formatGermanDateLabel(day.date)}: ${day.count} Tasks`;
+  const label = `${formatGermanDateLabel(day.date)}: ${day.count} Aufgaben`;
   return `
     <button class="ctox-date-heatmap-day ${day.date === selectedDate ? 'is-selected' : ''}" type="button" data-chat-date-select="${escapeAttr(day.date)}" data-intensity="${intensity}" aria-label="${escapeAttr(label)}">
       <span>${date.getDate()}</span>
@@ -3405,7 +3405,7 @@ function chatGroupDescriptor(chat, mode) {
   const hour = String(new Date(chat.createdAt || Date.now()).getHours()).padStart(2, '0');
   const seriesKey = chatSeriesKey(chat);
   const titleSignature = normalizedTaskSignature(chat.contextMeta?.source_title || chat.contextMeta?.title || chat.title || '');
-  const titleLabel = chat.contextMeta?.source_title || chat.contextMeta?.title || chat.title || source || 'Tasks';
+  const titleLabel = chat.contextMeta?.source_title || chat.contextMeta?.title || chat.title || source || 'Aufgaben';
 
   if (mode === 'thread' && seriesKey) {
     return { key: `series:${seriesKey}`, label: titleLabel, detail: 'Serie' };
@@ -3483,8 +3483,8 @@ function busyChatGroup(group, rows, activeId) {
     <section class="ctox-chat-busy-group" data-chat-busy-group="${escapeAttr(group.key)}">
       <button class="ctox-chat-busy-group-head ${group.chats.some((chat) => chat.id === activeId) ? 'is-active' : ''}" type="button" data-chat-list-focus="${escapeAttr(first?.id || '')}">
         <span class="ctox-chat-busy-group-copy">
-          <strong>${escapeHtml(group.label || 'Tasks')}</strong>
-          <small>${escapeHtml([formatCompactCount(group.chats.length) + ' Tasks', group.detail, statusSummary].filter(Boolean).join(' · '))}</small>
+          <strong>${escapeHtml(group.label || 'Aufgaben')}</strong>
+          <small>${escapeHtml([formatCompactCount(group.chats.length) + ' Aufgaben', group.detail, statusSummary].filter(Boolean).join(' · '))}</small>
         </span>
       </button>
       <div class="ctox-chat-busy-group-rows">
@@ -3503,7 +3503,7 @@ function busyChatRow(chat, activeId) {
     <button class="ctox-chat-busy-row ${chat.id === activeId ? 'is-active' : ''}" type="button" data-chat-list-focus="${escapeAttr(chat.id)}">
       <span class="ctox-chat-busy-time">${escapeHtml(time)}</span>
       <span class="ctox-chat-busy-main">
-        <strong>${escapeHtml(chat.title || 'CTOX')}</strong>
+        <strong>${escapeHtml(chat.title || 'Crew')}</strong>
         <small>${escapeHtml(moduleName)} · ${escapeHtml(status)}</small>
       </span>
     </button>
@@ -3558,7 +3558,7 @@ function chatDockItem(chat, activeId) {
 function chatDockStatusText(chat, taskState = getTaskState(chat)) {
   const labels = {
     running: 'Aktiv',
-    queued: 'Queue',
+    queued: 'Wartet',
     success: 'Erledigt',
     blocked: 'Blockiert',
     failed: 'Fehler',
@@ -3762,6 +3762,25 @@ function trackButtonLabel(message) {
   return de ? 'Fortschritt ansehen' : 'View progress';
 }
 
+function friendlyCrewMessage(text) {
+  const value = String(text || '');
+  const de = chatUiIsGerman();
+  if (/^Task angelegt und in der CTOX Queue\.(?: Antwort erscheint hier, sobald (?:CTOX ihn|der CTOX Service ihn) verarbeitet\.)?$/.test(value)) {
+    return de
+      ? 'Deine Aufgabe steht auf der Aufgabenliste. Die Antwort erscheint hier, sobald die Crew sie bearbeitet hat.'
+      : 'Your task is on the task list. The reply will appear here when the crew has worked on it.';
+  }
+  const legacy = {
+    'Command wird an CTOX übergeben.': ['Aufgabe wird an die Crew gesendet.', 'Sending your task to the crew.'],
+    'CTOX hat die Automatisierung ausgeführt.': ['Die Crew hat den Auftrag ausgeführt.', 'The crew has completed the task.'],
+    'CTOX führt die Automatisierung aus.': ['Die Crew führt den Auftrag aus.', 'The crew is working on the task.'],
+    'Verbindung unterbrochen. Annahme durch CTOX noch nicht bestätigt.': ['Verbindung unterbrochen. Die Crew hat die Annahme noch nicht bestätigt.', 'Connection interrupted. The crew has not confirmed receipt yet.'],
+    'CTOX konnte die Aufgabe nicht ausführen.': ['Die Crew konnte die Aufgabe nicht abschließen.', 'The crew could not complete the task.'],
+  };
+  if (legacy[value]) return legacy[value][de ? 0 : 1];
+  return humanizeHarnessLine(value);
+}
+
 // Harness status lines arrive as "<Satz>: technical:worker-runtime-api-failure — 2026-09-08T04:37:18Z".
 // The bar shows the sentence and a short reason in words plus the clock time.
 function humanizeHarnessLine(text) {
@@ -3770,13 +3789,18 @@ function humanizeHarnessLine(text) {
   const [, sentence, klass, code, iso] = match;
   const when = new Date(iso);
   const clock = Number.isFinite(when.getTime()) ? when.toLocaleTimeString(chatUiIsGerman() ? 'de-DE' : 'en-GB', { hour: '2-digit', minute: '2-digit' }) : '';
-  const reason = { technical: chatUiIsGerman() ? 'technischer Grund' : 'technical reason', review: 'Review', policy: chatUiIsGerman() ? 'Regel' : 'policy' }[klass] || klass;
-  const detail = code.replace(/[-_]+/g, ' ').replace(/\b(worker|api)\b/gi, (w) => w.toUpperCase());
-  return `${sentence} · ${reason}: ${detail}${clock ? ` · ${clock}` : ''}`;
+  const de = chatUiIsGerman();
+  const detail = /worker-runtime-api-failure|model.*(?:unavailable|timeout)|api.*failure/i.test(code)
+    ? (de ? 'Der Modelldienst ist gerade nicht erreichbar.' : 'The model service is currently unavailable.')
+    : klass === 'review'
+      ? (de ? 'Die Prüfung wurde nicht bestanden.' : 'The review did not pass.')
+      : klass === 'policy'
+        ? (de ? 'Eine Zugriffsregel verhindert die Bearbeitung.' : 'An access rule prevents this work.')
+        : (de ? 'Die Bearbeitung wurde durch einen Fehler unterbrochen.' : 'Work was interrupted by an error.');
+  return `${sentence.replace(/\bCTOX\b/g, de ? 'Die Crew' : 'The crew')} · ${detail}${clock ? ` · ${clock}` : ''}`;
 }
 
 function formatChatBodyHtml(rawText) {
-  rawText = humanizeHarnessLine(rawText);
   const text = String(rawText || '');
   return text
     .split(/(```[\s\S]*?```)/g)
@@ -3810,7 +3834,7 @@ function messageMarkup(message) {
   const tracking = message.trackable === false ? '' : (message.commandId || message.taskId)
     ? `<button class="ctox-chat-track" type="button" data-track-task data-task-id="${escapeAttr(message.taskId || '')}" data-command-id="${escapeAttr(message.commandId || '')}" data-task-status="${escapeAttr(message.status || '')}" title="${escapeAttr(`${trackButtonLabel(message)} · ${trackId}`)}" aria-label="${escapeAttr(`${trackButtonLabel(message)} · ${trackId}`)}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3h7v7"></path><path d="M10 14 21 3"></path><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"></path></svg><code class="ctox-chat-track-id">${escapeHtml(visibleTrackId)}</code></button>`
     : '';
-  const rawText = String(message.text || '');
+  const rawText = message.role === 'user' ? String(message.text || '') : friendlyCrewMessage(message.text);
   const promptIsLong = message.role === 'user'
     && (rawText.length > 180 || rawText.split('\n').length > 2);
   const compactText = rawText.replace(/\s+/g, ' ').trim();
@@ -3857,9 +3881,9 @@ async function submitChatMessage({
   followUpSubmission = false,
   onPending = null,
 }) {
-  const activeModule = getActiveModule?.() || { id: 'ctox', title: 'CTOX' };
+  const activeModule = getActiveModule?.() || { id: 'ctox', title: 'Crew' };
   const sourceModule = meta.module || meta.source_module || meta.sourceModule || activeModule.id || 'ctox';
-  const sourceTitle = meta.source_title || meta.sourceTitle || activeModule.title || activeModule.name || sourceModule || 'CTOX';
+  const sourceTitle = meta.source_title || meta.sourceTitle || activeModule.title || activeModule.name || sourceModule || 'Crew';
   const commandType = meta.command_type || meta.commandType || 'business_os.chat.task';
   const declaredControlCommand = meta.control_command === true || meta.controlCommand === true;
   const extraPayload = meta.payload && typeof meta.payload === 'object' ? meta.payload : {};
@@ -3906,11 +3930,11 @@ async function submitChatMessage({
     createdAt: now,
     attachments: attachments.map(chatMessageAttachmentSummary),
   });
-  chat.title = chat.title === 'CTOX' ? displayTitle : chat.title;
+  chat.title = ['CTOX', 'Crew'].includes(chat.title) ? displayTitle : chat.title;
   const pendingMessage = {
     id: `status_${commandId}`,
     role: 'ctox',
-    text: 'Command wird an CTOX übergeben.',
+    text: 'Aufgabe wird an die Crew gesendet.',
     commandId,
     taskId: '',
     status: 'pending_sync',
@@ -4000,14 +4024,14 @@ async function submitChatMessage({
     const taskId = result.task_id
       || (controlCommand ? '' : await waitForSubmittedTaskId(db, acceptedCommandId));
     if (!taskId && !controlCommand && !terminalCommand) {
-      throw new Error('CTOX hat keine echte Queue-ID zurueckprojiziert.');
+      throw new Error('Die Annahme der Aufgabe wurde noch nicht bestätigt.');
     }
     chat.lastTrackingId = taskId || acceptedCommandId;
     pendingMessage.text = taskId
-      ? 'Task angelegt und in der CTOX Queue. Antwort erscheint hier, sobald CTOX ihn verarbeitet.'
+      ? 'Deine Aufgabe steht auf der Aufgabenliste. Die Antwort erscheint hier, sobald die Crew sie bearbeitet hat.'
       : terminalCommand
-        ? 'CTOX hat die Automatisierung ausgeführt.'
-        : 'CTOX führt die Automatisierung aus.';
+        ? 'Die Crew hat den Auftrag ausgeführt.'
+        : 'Die Crew führt den Auftrag aus.';
     pendingMessage.commandId = acceptedCommandId;
     pendingMessage.taskId = taskId;
     pendingMessage.status = result.task_status || result.status || 'queued';
@@ -4020,7 +4044,7 @@ async function submitChatMessage({
     };
   } catch (error) {
     const failedCommandId = error?.command_id || error?.commandId || commandId;
-    pendingMessage.text = `Command konnte nicht an CTOX übergeben werden: ${error?.message || String(error)}`;
+    pendingMessage.text = `Die Aufgabe konnte nicht an die Crew übergeben werden: ${error?.message || String(error)}`;
     pendingMessage.commandId = failedCommandId;
     pendingMessage.taskId = '';
     pendingMessage.status = error?.status || 'failed';
@@ -4029,7 +4053,7 @@ async function submitChatMessage({
     pendingMessage.createdAt = Date.now();
     if (failedCommandId) chat.lastTrackingId = failedCommandId;
     if (isTransientCommandTrackingError(error)) {
-      pendingMessage.text = 'Verbindung unterbrochen. Annahme durch CTOX noch nicht bestätigt.';
+      pendingMessage.text = 'Verbindung unterbrochen. Die Crew hat die Annahme noch nicht bestätigt.';
       pendingMessage.commandId = failedCommandId;
       pendingMessage.taskId = '';
       pendingMessage.status = 'pending_sync';
@@ -4170,7 +4194,7 @@ async function syncTrackedMessages({ state, db, sync = null }) {
       if (nextStatus && nextStatus !== message.status) {
         message.status = nextStatus;
         if (orphanedTracking) {
-          message.text = 'CTOX kann diese ältere Aufgabe nicht mehr verfolgen: kein passender Command oder Queue-Task ist vorhanden.';
+          message.text = 'Zu dieser älteren Aufgabe ist kein gespeicherter Arbeitsstand mehr verfügbar.';
         }
         changed = true;
         chatChanged = true;
@@ -4452,7 +4476,7 @@ function trackingMessageAgeMs(message) {
 function isTransientCommandTrackingError(error) {
   if (error?.code === 'peer_connect_timeout') return true;
   const text = String(error?.message || error || '');
-  return /WebRTC native peer did not open|Timed out waiting for WebRTC response|rxdb\.query\.fetch|masterWrite|masterChangesSince|IDBDatabase.*closing|database connection is closing|collection is closed|closed collection|RxDB Error-Code: COL21|wartet noch auf die Rueckmeldung/i.test(text);
+  return /WebRTC native peer did not open|Timed out waiting for WebRTC response|rxdb\.query\.fetch|masterWrite|masterChangesSince|IDBDatabase.*closing|database connection is closing|collection is closed|closed collection|RxDB Error-Code: COL21|wartet noch auf die Rueckmeldung|Die Rückmeldung steht noch aus/i.test(text);
 }
 
 function failureText(commandDoc, taskDoc) {
@@ -4461,8 +4485,8 @@ function failureText(commandDoc, taskDoc) {
     || commandDoc?.error
     || commandDoc?.client_context?.dispatch_error
     || '';
-  if (error) return `CTOX konnte die Aufgabe nicht ausführen: ${error}`;
-  return 'CTOX konnte die Aufgabe nicht ausführen. Der Task ist in der CTOX Queue fehlgeschlagen.';
+  if (error) return `Die Crew konnte die Aufgabe nicht abschließen: ${error}`;
+  return 'Die Crew konnte die Aufgabe nicht abschließen. Öffne die Details, um den Grund zu sehen.';
 }
 
 function blockedText(commandDoc, taskDoc) {
@@ -4472,10 +4496,10 @@ function blockedText(commandDoc, taskDoc) {
     || '';
   const status = String(taskDoc?.status || commandDoc?.status || '').toLowerCase();
   if (status === 'stale_missing_native') {
-    return 'CTOX ist gerade nicht erreichbar. Die Aufgabe bleibt in der Queue und läuft weiter, sobald die Verbindung steht.';
+    return 'Die Crew ist gerade nicht erreichbar. Der gespeicherte Arbeitsstand bleibt erhalten.';
   }
   if (reason) return `Die Aufgabe wartet: ${reason}`;
-  return 'Die Aufgabe ist blockiert und wartet. Sie läuft weiter, sobald der Block aufgelöst ist.';
+  return 'Die Aufgabe wartet auf eine Freigabe oder Rückmeldung.';
 }
 
 async function openCtoxTask(taskId, commandId, taskStatus) {
@@ -4564,7 +4588,7 @@ function chatUiIsGerman() {
 function chatDateAriaLabel(dateStr, total = 0) {
   const label = formatGermanDateLabel(dateStr);
   const count = Number(total) || 0;
-  const countLabel = count === 1 ? '1 Task' : `${formatCompactCount(count)} Tasks`;
+  const countLabel = count === 1 ? '1 Aufgabe' : `${formatCompactCount(count)} Aufgaben`;
   return `${chatUiIsGerman() ? 'Crew-Einsätze' : 'Crew missions'}: ${label}, ${countLabel}`;
 }
 
@@ -4607,7 +4631,7 @@ function createChat(owner = '', dateStr = '') {
   const timestamp = createTimestampForDateString(targetDateStr);
   return applyChatTrackingSummary({
     id: `chat_${crypto.randomUUID()}`,
-    title: 'CTOX',
+    title: 'Crew',
     open: true,
     minimized: false,
     maximized: false,
@@ -4687,7 +4711,7 @@ function readChatState(session) {
         .filter((chat) => !chat.owner_user_id || chat.owner_user_id === owner)
         .map((chat) => ({
           id: chat.id || `chat_${crypto.randomUUID()}`,
-          title: chat.title || 'CTOX',
+          title: chat.title || 'Crew',
           open: chat.open !== false,
           minimized: Boolean(chat.minimized),
           userMinimized: Boolean(chat.userMinimized && chat.minimized),
@@ -5143,7 +5167,7 @@ function preferredChatTrackingId(local, remote, messages) {
 function normalizeChat(chat) {
   return applyChatTrackingSummary({
     id: chat.id || `chat_${crypto.randomUUID()}`,
-    title: chat.title || 'CTOX',
+    title: chat.title || 'Crew',
     open: chat.open !== false,
     minimized: Boolean(chat.minimized),
     userMinimized: Boolean(chat.userMinimized && chat.minimized),
@@ -5188,7 +5212,7 @@ function compactConversation(messages) {
 
 function titleFromText(text) {
   const clean = String(text || '').replace(/\s+/g, ' ').trim();
-  return clean.length > 42 ? `${clean.slice(0, 39)}...` : clean || 'CTOX';
+  return clean.length > 42 ? `${clean.slice(0, 39)}...` : clean || 'Crew';
 }
 
 function installChatStyles() {
@@ -8952,7 +8976,7 @@ async function dispatchScheduledChat({ chat, scheduledMsg, commandBus, db, sync 
       source: 'business-os-chat',
       module: chat.contextMeta?.module || 'ctox',
       source_module: chat.contextMeta?.module || 'ctox',
-      source_title: chat.contextMeta?.source_title || 'CTOX',
+      source_title: chat.contextMeta?.source_title || 'Crew',
       inbound_channel: CHAT_CHANNEL,
       outbound_channel: 'business_os_chat',
       chat_id: chat.id,
@@ -8982,13 +9006,13 @@ async function dispatchScheduledChat({ chat, scheduledMsg, commandBus, db, sync 
     const taskId = result.task_id || '';
     const acceptedCommandId = result.command_id || commandId;
     if (!taskId) {
-      throw new Error('CTOX hat keine echte Queue-ID zurueckprojiziert.');
+      throw new Error('Die Annahme der Aufgabe wurde noch nicht bestätigt.');
     }
     chat.lastTrackingId = taskId || acceptedCommandId;
 
     const statusMsg = chat.messages.find(m => m.id === `status_${commandId}`);
     if (statusMsg) {
-      statusMsg.text = 'Task angelegt und in der CTOX Queue. Antwort erscheint hier, sobald der CTOX Service ihn verarbeitet.';
+      statusMsg.text = 'Deine Aufgabe steht auf der Aufgabenliste. Die Antwort erscheint hier, sobald die Crew sie bearbeitet hat.';
       statusMsg.commandId = acceptedCommandId;
       statusMsg.taskId = taskId;
       statusMsg.status = result.task_status || result.status || 'queued';

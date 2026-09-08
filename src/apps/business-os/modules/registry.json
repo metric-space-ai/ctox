@@ -721,8 +721,8 @@
     },
     {
       "id": "ctox",
-      "title": "CTOX",
-      "description": "Native control surface for queues, runs, sync state, and agent context.",
+      "title": "Crew",
+      "description": "Deine Crew, ihre Aufgaben, Fortschritte und Ergebnisse.",
       "entry": "modules/ctox/index.html",
       "collections": [
         "business_commands",
@@ -771,7 +771,7 @@
         "governance"
       ],
       "store": {
-        "summary": "Native CTOX control surface for queue tasks, runs, module reports, releases, and source evidence.",
+        "summary": "Aufgaben an die Crew übergeben, ihre Arbeit verfolgen und Ergebnisse prüfen.",
         "repository": "metric-space-ai/ctox",
         "source_path": "modules/ctox",
         "installable": false,

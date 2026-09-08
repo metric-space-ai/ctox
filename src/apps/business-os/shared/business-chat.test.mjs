@@ -11,6 +11,34 @@ import {
 
 const businessChatSource = readFileSync(new URL('./business-chat.js', import.meta.url), 'utf8');
 
+test('saved crew status messages use plain language without rewriting user instructions', () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = { documentElement: { lang: 'de' } };
+  try {
+    for (const text of [
+      'Task angelegt und in der CTOX Queue.',
+      'Task angelegt und in der CTOX Queue. Antwort erscheint hier, sobald CTOX ihn verarbeitet.',
+      'Task angelegt und in der CTOX Queue. Antwort erscheint hier, sobald der CTOX Service ihn verarbeitet.',
+    ]) {
+      const message = { role: 'ctox', text, status: 'queued', taskId: 'queue:system::real-42' };
+      const html = __businessChatTestInternals.messageMarkup(message);
+      assert.match(html, /Deine Aufgabe steht auf der Aufgabenliste/);
+      assert.doesNotMatch(html, /CTOX Queue|CTOX Service|sobald CTOX/);
+      assert.match(html, /data-task-id="queue:system::real-42"/);
+      assert.equal(message.text, text, 'presentation must not rewrite stored evidence');
+      assert.match(__businessChatTestInternals.messageMarkup({ role: 'user', text }), /CTOX Queue/);
+    }
+    const failure = __businessChatTestInternals.messageMarkup({
+      role: 'ctox', status: 'failed',
+      text: 'CTOX konnte die Aufgabe nicht ausführen: technical:worker-runtime-api-failure — 2026-09-08T04:37:18Z',
+    });
+    assert.match(failure, /Modelldienst ist gerade nicht erreichbar/);
+    assert.doesNotMatch(failure, /technical:|worker-runtime|CTOX/);
+  } finally {
+    globalThis.document = previousDocument;
+  }
+});
+
 test('external chat submit confirms queue acceptance before remote chat persistence', () => {
   const resolveIndex = businessChatSource.indexOf('detail.resolveSubmission?.(submission)');
   const persistIndex = businessChatSource.indexOf('await persistChatState({ state, db });', resolveIndex);
@@ -479,7 +507,7 @@ test('business chat tracks a terminal native control command without inventing a
       task_id: '',
       queue_id: '',
     });
-    assert.equal(chat.messages[1].text, 'CTOX hat die Automatisierung ausgeführt.');
+    assert.equal(chat.messages[1].text, 'Die Crew hat den Auftrag ausgeführt.');
     assert.equal(chat.messages[1].commandId, 'cmd-control-research');
     assert.equal(chat.messages[1].taskId, '');
     assert.equal(chat.messages[1].status, 'completed');
@@ -523,7 +551,7 @@ test('business chat acknowledges a declared long-running control command locally
       task_id: '',
       queue_id: '',
     });
-    assert.equal(chat.messages[1].text, 'CTOX führt die Automatisierung aus.');
+    assert.equal(chat.messages[1].text, 'Die Crew führt den Auftrag aus.');
     assert.equal(chat.messages[1].commandId, 'cmd-control-local');
   } finally {
     globalThis.document = previousDocument;
@@ -603,7 +631,7 @@ test('business chat renders business-facing visible scope rows from client conte
     },
   });
 
-  assert.match(html, /CTOX Zugriff/);
+  assert.match(html, /Crew-Zugriff/);
   assert.match(html, /Nutzer/);
   assert.match(html, /App/);
   assert.match(html, /Daten/);
@@ -749,11 +777,11 @@ test('business chat projects durable execution progress into the tracked crew me
     taskStatus: 'running',
   });
   assert.match(card, /30%/);
-  assert.match(card, /4\/7 Turns/);
+  assert.match(card, /4\/7 Aktivitäten/);
   assert.match(card, /Daten prüfen/);
   assert.match(card, /→ Ergebnis schreiben/);
-  assert.match(card, /Plan v2/);
-  assert.match(card, /Denkblöcke 3 · Tools 4/);
+  assert.match(card, /Planstand 2/);
+  assert.match(card, /Denkschritte 3 · Werkzeugeinsätze 4/);
   assert.match(card, /ctox-progress-activity/);
   assert.match(card, /--ctox-turn-angle:24deg/);
   assert.doesNotMatch(card, /ctox-progress-summary/);

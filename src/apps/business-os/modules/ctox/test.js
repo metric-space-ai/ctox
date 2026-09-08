@@ -76,6 +76,25 @@ const {
   wireTaskSourceReadiness,
 } = hooks;
 
+test('crew labels describe work without exposing implementation terminology', () => {
+  function check(value, path) {
+    if (typeof value === 'string') {
+      assert.doesNotMatch(value, /\b(?:CTOX|Harness|Queue|Lease|RxDB|WebRTC|Tasks?|Drawer|Runtime|Credentials|Captures|Extracts)\b/i, path);
+    } else {
+      for (const [key, child] of Object.entries(value)) check(child, `${path}.${key}`);
+    }
+  }
+  check(labels.de, 'fallback.de');
+  const locale = JSON.parse(readFileSync(new URL('./locales/de.json', import.meta.url), 'utf8'));
+  check(locale, 'locale.de');
+  for (const [key, value] of Object.entries(locale)) {
+    if (typeof labels.de[key] === 'string') assert.equal(value, labels.de[key], key);
+  }
+  assert.equal(labels.de.harnessOpenTask, 'Aufgabe öffnen');
+  assert.match(labels.de.harnessCriticalMessage, /\{count\}/);
+  assert.match(labels.de.harnessCriticalMessage, /\{age\}/);
+});
+
 test('Missing authoritative task telemetry remains a safe empty state', () => {
   assert.equal(authoritativeTaskStatus(null), '');
   assert.equal(authoritativeTaskNodeId(null), '');
@@ -366,7 +385,7 @@ test('Task column pins the shell-owned canonical grammar contract', () => {
   assert.doesNotMatch(markup, /ctox-badge/);
   // index.html carries an empty left pane — the module builds the localized
   // chrome once (never a second static, drift-prone copy).
-  assert.match(html, /<aside class="ctox-pane ctox-harness-left" data-ctox-left aria-label="CTOX Tasks"><\/aside>/);
+  assert.match(html, /<aside class="ctox-pane ctox-harness-left" data-ctox-left aria-label="Aufgaben der Crew"><\/aside>/);
   assert.doesNotMatch(js, /localStorage/);
   assert.match(js, /moduleAssetUrl\('\.\/index\.html'\)/);
   assert.match(js, /moduleAssetUrl\('\.\/index\.css'\)/);
@@ -584,7 +603,7 @@ test('Web Stack panel is hidden by default and the toggle reveals it', () => {
   assert.match(js, /data-webstack-toggle/);
   assert.match(open, /<header class="ctox-pane-title-row ctox-web-stack-head">/);
   assert.match(open, /class="ctox-pane-actions ctox-web-stack-head-actions"[\s\S]*data-webstack-check-projection/);
-  assert.match(open, /data-webstack-check-projection[^>]*aria-label="Reload Web Stack projection"[^>]*title="Reload Web Stack projection"/);
+  assert.match(open, /data-webstack-check-projection[^>]*aria-label="Reload access details"[^>]*title="Reload access details"/);
   assert.match(open, /data-webstack-check-projection[\s\S]*data-icon="refresh"/);
   assert.doesNotMatch(open, /data-webstack-refresh/);
   assert.match(js, /data-webstack-auth-source/);

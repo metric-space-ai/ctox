@@ -1314,7 +1314,7 @@ async function waitForCommandState({ db, sync, commandId, until, options = {} })
         recordCommandMetric(sync, 'wait_timeout', commandId, timeoutMs);
         settle(reject, commandError(
           commandId,
-          'CTOX wartet noch auf die Rueckmeldung. Der Vorgang bleibt verfolgbar.',
+          'Die Rückmeldung steht noch aus. Du kannst den Vorgang weiter verfolgen.',
           {
             code: 'projection_delayed',
             status: 'projection_pending',
@@ -1453,7 +1453,7 @@ function nativeCommandFailure(command, commandId) {
   const outcome = command.result?.outcome || command.payload?.outcome || null;
   return commandError(
     commandId,
-    command.error_message || command.error || outcome?.stderr || outcome?.error || 'CTOX command failed.',
+    command.error_message || command.error || outcome?.stderr || outcome?.error || 'Die Aufgabe konnte nicht ausgeführt werden.',
     {
       code: command.error_code || 'command_terminal_failure',
       retryable: Boolean(command.retryable),
