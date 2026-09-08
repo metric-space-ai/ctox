@@ -1205,6 +1205,19 @@ the general app checks, which remain required. The retained command-plane
 observability JSON uses a synthetic collection adapter; it does not prove the
 Business OS command p50 or critical-collection boot p95 budgets.
 
+The full-host job separately runs the existing real Chromium/WebRTC/CTOX
+command-timing fixture: one warm-up followed by 30 policy-gated terminal
+commands. It preserves all seven correlated marks and recomputes the total
+browser-clock p50, requiring it to be strictly below 300 ms. Missing, duplicate,
+non-numeric or inconsistent measurements fail the gate. The synthetic
+`command-roundtrip-budget-smoke` cases validate only this rejection logic.
+The same built binary also runs the existing 21-collection reload fixture,
+including retained IndexedDB, offline revision/tombstone changes, native
+restart, competing commands and paged demand reads. Its three 60-second
+reload limits are a correctness deadline, not the separate five-second
+critical-collection boot p95 requirement. Neither fixture certifies the
+Desktop/Mobile SSH/QR workflow or public WAN signaling.
+
 | Test | One line |
 |---|---|
 | `active-collections-catchup-smoke` | **Regression:** a collection transitioning inactive→active triggers one catch-up pull through the real shared-peer registry wiring (§8.1 gating invariant). |
@@ -1214,6 +1227,7 @@ Business OS command p50 or critical-collection boot p95 budgets.
 | `checkpoint-age-diagnostics-smoke` | Per-collection checkpoint staleness: lwt recorded on transport activity (max across peers), `pull/pushCheckpointAgeMs` derived at snapshot time — no idle timers. |
 | `checkpoint-contract-smoke` | **Guard:** checkpoint wire shape (status fields, epoch derivation, validity-key v1/v2 formats) matches the `webrtc-checkpoint-contract.json` fixture; drives the real validity-key code through the replication harness. |
 | `command-bus-projection-smoke` | **Regression:** queue commands wait for the task projection; control commands' terminal `completed` ack without `task_id` is success; `failed` rejects. |
+| `command-roundtrip-budget-smoke` | **Guard regression:** rejects the 300-ms boundary, incomplete marks, duplicate measurements and fewer than 30 samples. Its synthetic values are not a performance result. |
 | `compression-roundtrip-smoke` | JS decoder reads inline and deflate-compressed chunks shaped like the Rust dispatcher's. |
 | `contract-drift-smoke` | **Guard:** re-runs both contract generators; generated files must match the fixtures (side-effect free). |
 | `correctness-reconnect-smoke` | Demand-loader correctness and window invalidation across reconnects. |
