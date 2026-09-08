@@ -86,6 +86,7 @@ test('Only configured communication accounts appear as inputs, never task-origin
   assert.deepEqual(hooks.buildInboundChannels(tasks), []);
   const channels = hooks.buildInboundChannels(tasks, [
     { channel: 'email' }, { channel: 'email' }, { channel: 'slack' },
+    { channel: 'queue' }, { channel: 'cron' }, { channel: 'plan' },
     { channel: 'discord', enabled: false }, { channel: 'jami', is_deleted: true },
   ]);
   assert.deepEqual(channels.map(({id, count}) => ({id, count})), [
