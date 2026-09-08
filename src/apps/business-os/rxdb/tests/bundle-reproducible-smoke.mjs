@@ -31,6 +31,7 @@ const BANNER = '// CTOX Sync Engine app-local bundle. Generated from src/apps/bu
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(testDir, '..');
+const repositoryRoot = resolve(appRoot, '../../../..');
 const entry = resolve(appRoot, 'src/index.mjs');
 const distPath = resolve(appRoot, 'dist/ctox-rxdb-js.mjs');
 
@@ -40,6 +41,9 @@ const outfile = join(workDir, 'ctox-rxdb-js.mjs');
 try {
   try {
     execFileSync('npx', ['-y', ESBUILD_PIN, entry, '--bundle', '--format=esm', `--outfile=${outfile}`, `--banner:js=${BANNER}`], {
+      // esbuild's source comments are relative to cwd. Reproduce the canonical
+      // root command even when a developer starts the suite from the app folder.
+      cwd: repositoryRoot,
       stdio: 'pipe',
       timeout: 180_000,
     });
