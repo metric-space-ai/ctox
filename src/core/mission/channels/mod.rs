@@ -60,6 +60,8 @@ pub use outbound_review::{
     record_terminal_no_send_verdict, send_reviewed_founder_reply,
 };
 
+mod auth_assist;
+pub(crate) use auth_assist::recover_auth_assist_requests;
 mod command_saga;
 use command_saga::transition_business_command_for_task_in_transaction;
 mod route_status;
