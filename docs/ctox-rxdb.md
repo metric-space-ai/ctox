@@ -147,6 +147,14 @@ regression holds each of the seven policy hooks across unrelated-peer,
 same-peer token and same-peer generation changes; the full browser/native
 gates remain necessary to establish end-to-end behavior and performance.
 
+Demand-query reservations are keyed by connection identity (including its
+native generation). Field-policy rejection releases that same key before
+sending the denial. Releasing only the signaling peer ID leaked the reserved
+slot on native connections and could exhaust their query capacity. The native
+regression retains an older generation's reservation, denies a hidden-field
+query on the replacement, and then reads allowed fields on that replacement
+with a per-connection capacity of one.
+
 The shell readiness mapping applies the same rule. Obsolete
 `httpBridgeStatus`/`httpBridgePulledAt` fields cannot establish initial
 replication, streaming readiness or an advertised checkpoint epoch. Their
