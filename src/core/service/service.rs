@@ -1,5 +1,8 @@
 use anyhow::Context;
 use anyhow::Result;
+#[cfg(test)]
+#[path = "service_auth_assist_tests.rs"]
+mod auth_assist_recovery_tests;
 #[path = "service_cv_print_recovery.rs"]
 mod cv_print_recovery;
 #[path = "service_runtime_support.rs"]
@@ -2071,6 +2074,16 @@ fn release_stale_service_communication_leases_on_boot(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
 ) {
+    // Human login requests must not enter generic artifact/plan recovery.
+    // Preserve their browser identity before releasing any stale worker lease.
+    match channels::recover_auth_assist_requests(root) {
+        Ok(count) if count > 0 => push_event(
+            state,
+            format!("Preserved {count} auth-assist request(s) awaiting browser confirmation"),
+        ),
+        Ok(_) => {}
+        Err(err) => push_event(state, format!("Auth-assist boot recovery failed: {err}")),
+    }
     reconcile_stale_queue_projections_for_service(root, state, &HashSet::new());
     recover_person_research_commands_for_service(root, state, "boot");
     match recover_abandoned_business_os_app_queue_tasks(root, state, 16) {

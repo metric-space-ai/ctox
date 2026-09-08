@@ -6,6 +6,24 @@ for engineers and coding agents, and every technical claim in it has been
 verified against the cited source file. When this document and the code
 disagree, the code wins — and this document should be fixed.
 
+### Auth-assist command recovery
+
+`web_stack.auth_assist.request` represents an outstanding human login request.
+Canonical admission persists its queue task as `blocked`, with
+`hold_reason=waiting_external`, `wait_entity_type=web_stack_auth_assist`, and
+`wait_entity_id=<command_id>`, in the same transaction as the command and task
+link. It does not lease a model worker or consume the worker retry budget.
+At daemon startup, bounded recovery pages preserve older nonterminal requests
+in this same wait before generic lease/artifact recovery. The original Owner,
+browser session, requesting task, and payload remain intact; expiration of the
+interactive handoff window does not close the durable login requirement.
+
+Only explicit browser confirmation through `web_stack.auth_assist.complete`
+settles the helper and requests continuation of the original task, under the
+existing browser controller and command policy. Recovery does not authenticate
+a session, pass review/validation, reopen terminal commands, or weaken the
+owned, expiring lease requirement for ordinary worker commands.
+
 Two implementations, one contract:
 
 | Side | Name | Location |

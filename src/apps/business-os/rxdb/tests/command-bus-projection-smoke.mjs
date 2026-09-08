@@ -113,6 +113,36 @@ const assert = (condition, message) => {
   assert(result.task_status === 'accepted', 'queue command: admission does not require queue projection detail');
 }
 
+// Auth-assist is admitted as an open human wait, not a failed command.
+{
+  const db = makeDb({
+    commandAck: {
+      status: 'accepted',
+      replication_phase: 'native_observed',
+      execution_mode: 'queue',
+      execution_phase: 'blocked',
+      terminal_status: 'none',
+      execution_task_id: 'queue:system::auth-assist',
+      task_id: 'queue:system::auth-assist',
+    },
+    queueTask: {
+      id: 'queue:system::auth-assist',
+      status: 'blocked',
+      hold_reason: 'waiting_external',
+    },
+  });
+  const bus = createCommandBus({ db });
+  const result = await bus.dispatch({
+    type: 'web_stack.auth_assist.request',
+    module: 'ctox',
+    payload: { purpose: 'web_stack_auth', session_id: 'auth-session' },
+  });
+  assert(result.ok === true, 'human login wait: command was accepted');
+  assert(result.status === 'blocked', 'human login wait remains open');
+  assert(result.task_id === 'queue:system::auth-assist', 'human login wait keeps its task');
+  assert(result.payload.session_id === 'auth-session', 'human login wait keeps its browser session');
+}
+
 // --- 2. control command: terminal completed WITHOUT task_id is success -----
 {
   const db = makeDb({
