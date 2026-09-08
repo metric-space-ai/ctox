@@ -101,6 +101,7 @@ const fs = require('fs');
 const os = require('os');
 const zlib = require('zlib');
 const { spawn, spawnSync } = require('child_process');
+const { forwardNativeLogLines } = require('./native_log_lines.js');
 const {
   businessOsProductionSmokeModes,
   businessOsProductionSmokeModeSet,
@@ -4147,16 +4148,14 @@ function startCtoxServer() {
     resolveListening = resolve;
     rejectListening = reject;
   });
-  child.stdout.on('data', (d) => {
-    const text = d.toString();
-    process.stdout.write(`[ctox] ${d}`);
-    if (text.includes('CTOX Business OS listening')) {
+  forwardNativeLogLines(child.stdout, process.stdout, '[ctox] ', (line) => {
+    if (line.includes('CTOX Business OS listening')) {
       sawListening = true;
       setSmokeStartupPhase('ctox-listening-output');
       resolveListening?.();
     }
   });
-  child.stderr.on('data', (d) => process.stderr.write(`[ctox:err] ${d}`));
+  forwardNativeLogLines(child.stderr, process.stderr, '[ctox:err] ');
   globalThis.__ctoxProcess = child;
   child.on('exit', (code, signal) => {
     if (!sawListening) rejectListening?.(new Error(`ctox exited before listening: code=${code} signal=${signal}`));

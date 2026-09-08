@@ -1,25 +1,39 @@
 # Native transport validation parity — 2026-09-08
 
 Status: **production acceptance remains incomplete; PR #69 is a draft**.
-At source `d7eea14a213bf1bc66ca38f6e70fd378a26d4f99`,
-[run 34240025961](https://github.com/metric-space-ai/ctox/actions/runs/34240025961)
-passes both native platforms and all 122 JavaScript/browser checks with no
-failures or skips. Its full-host run is complete: four-host and 21-collection
-reload correctness pass, but the 30-command budget fails at p50 447 ms and
-p95 596.70 ms. Reloads take 34.990 / 41.913 / 20.891 seconds. The exact built
-merge is `1085bde76d8fb5d10ac5679f69f83c54c9313e3f`; binary SHA256 is
-`660834b688ae518fd76d9f304b2cecedc7c402061f7a050d14d1b6f1a6935ce6`.
+At source `79ee5a2a4b154d6e837c4a158ef2602d931c1a6c`,
+[run 34244920380](https://github.com/metric-space-ai/ctox/actions/runs/34244920380)
+passes both native platforms, all 122 JavaScript/browser checks without skips,
+12 command-completion tests and six command transaction tests. Four actual
+host processes and the 21-collection reload scenario pass. The real browser
+command budget still **fails**: 30 complete samples, p50 **419.5 ms**, p95
+**620.15 ms**, minimum 266 ms and maximum 637 ms. Reloads take
+35.378 / 43.057 / 45.688 seconds, with revision 1 to 23, 36 to 19 live leads,
+3,911 thread states and 11,130,431 source bytes preserved across native restart.
+The exact built merge is `5b71236ba8023f3d5fb2dd81163784d44cae7b59`; binary
+SHA256 is `184f540331b64132fc28a2eaae7aae09baadfc3c6e6eb0dbda2110b9355bd9e6`.
+The strengthened rollback-trigger test added after this source is not covered
+by this result.
 
-The new measurements identify median initial RxDB projection 51.846 ms,
-canonical core completion 68.714 ms, canonical read 5.239 ms, local projection
-5.513 ms and final RxDB projection 66.545 ms. The next correction retains one
-command-scoped projection writer for both RxDB writes and attaches queue
-projection stores only when the same transaction finds a linked queue task.
-It preserves core claim/idempotency, outbox and projection ordering. Added
-regressions require the persisted canonical terminal document with one writer
-open, and core completion without a queue link despite unavailable queue
-projection storage. Runtime verification and the unchanged performance gate
-for this correction remain pending; these are not measured speedup claims.
+The command-scoped writer and deferred queue-store attachment preserve core
+claim/idempotency, outbox and projection ordering. Their 30-sample subphase
+medians are initial RxDB projection 49.293 ms, core completion 8.741 ms,
+canonical read 4.899 ms, local projection 6.781 ms and final RxDB projection
+2.403 ms. The preceding [run 34240025961](https://github.com/metric-space-ai/ctox/actions/runs/34240025961)
+at `d7eea14a213bf1bc66ca38f6e70fd378a26d4f99` measured core completion
+68.714 ms and final RxDB projection 66.545 ms, with overall p50 447 ms.
+These subphase reductions do not establish the required end-to-end p50 below
+300 ms or critical-boot p95 below five seconds.
+
+The latest run also exposes corrupt diagnostic framing in the browser harness:
+it prefixes arbitrary stderr chunks, which can split a JSON key or command ID.
+Initial/final projection diagnostics have 30 intact samples; the older intake
+and queue diagnostic streams do not. Incomplete parses are not valid 30-sample
+statistics. The harness now decodes and prefixes complete stdout/stderr lines,
+also recognizing a listening marker split across chunks. A focused stream
+regression passes for one-byte UTF-8/JSON chunks, multiple records per chunk,
+CRLF and a final line without a newline. Full browser verification of this
+harness change remains pending; the performance limit is unchanged.
 
 The preceding complete full-host run,
 [34237292653](https://github.com/metric-space-ai/ctox/actions/runs/34237292653)
