@@ -1188,6 +1188,23 @@ The shared fixture is `src/core/rxdb/tests/fixtures/crew-identity.json`; native
 field-policy tests and browser schema/permission tests consume it. Module JSON,
 native schemas and both hash registries are regenerated before the pinned
 esbuild 0.28.0 bundle build; the sole bundle URL remains in `shared/rxdb-runtime.js`.
+### Browser command receipts across reconnects
+
+Command tracking checks its exact command ID in local RxDB storage before
+waiting for bridge readiness and once more if readiness fails. Only a
+non-deleted document with the matching ID and `replication_phase = native_observed`
+can resolve this path. A local intent is not an acknowledgement; waiting for
+terminal completion still requires a terminal native outcome. Native failures
+retain their code and reason. This prevents a reconnect timeout from replacing
+already replicated queue acceptance with a failed-handoff message.
+
+Until that proof arrives, the Crew chat keeps the command trackable as
+`pending_sync` and says that acceptance is unconfirmed. It does not invent a
+queue ID or declare a successful handoff. Submission authorization, dependency
+flush order, follower failover deadlines and the WebRTC-only data path are
+unchanged. The reconnect race is covered by `command-bus-projection-smoke.mjs`
+and the pending chat message by `shared/business-chat.test.mjs`.
+
 ## 11. Test map
 
 ### 10.1 Browser suite (`src/apps/business-os/rxdb/tests/`)

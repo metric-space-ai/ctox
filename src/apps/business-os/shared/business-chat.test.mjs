@@ -363,6 +363,36 @@ test('business chat task submission returns the real queue id after rendering pe
   }
 });
 
+test('business chat reports an unconfirmed connection timeout without claiming rejection or acceptance', async () => {
+  const previousDocument = globalThis.document;
+  const previousLocation = globalThis.location;
+  globalThis.document = { documentElement: { lang: 'de' } };
+  globalThis.location = { href: 'https://customer.example.test/#desktop' };
+  try {
+    for (const code of ['peer_connect_timeout', undefined]) {
+      const chat = { id: 'chat-timeout', title: 'CTOX', messages: [], contextMeta: {} };
+      const submission = await __businessChatTestInternals.submitChatMessage({
+        state: { ownerUserId: 'user-1', chats: [] }, chat,
+        text: 'Kontrolltest', db: null, sync: null,
+        meta: { command_id: 'cmd-timeout' },
+        commandBus: { async dispatch() {
+          throw Object.assign(new Error('WebRTC native peer did not open for business_commands within 25000ms; reconnect repair is scheduled.'), { code });
+        } },
+      });
+      assert.equal(submission.status, 'pending_sync');
+      assert.equal(submission.command_id, 'cmd-timeout');
+      assert.equal(submission.task_id, '');
+      assert.equal(chat.messages[1].trackable, true);
+      assert.match(chat.messages[1].text, /noch nicht bestätigt/);
+      assert.doesNotMatch(chat.messages[1].text, /Task an CTOX übergeben|konnte nicht an CTOX übergeben/);
+      assert.equal(chat.lastTrackingId, 'cmd-timeout');
+    }
+  } finally {
+    globalThis.document = previousDocument;
+    globalThis.location = previousLocation;
+  }
+});
+
 test('business chat keeps the execution prompt intact while showing compact app copy', async () => {
   const previousDocument = globalThis.document;
   const previousLocation = globalThis.location;

@@ -4029,12 +4029,12 @@ async function submitChatMessage({
     pendingMessage.createdAt = Date.now();
     if (failedCommandId) chat.lastTrackingId = failedCommandId;
     if (isTransientCommandTrackingError(error)) {
-      pendingMessage.text = 'Task an CTOX übergeben. Warte auf die CTOX Queue-Projektion.';
+      pendingMessage.text = 'Verbindung unterbrochen. Annahme durch CTOX noch nicht bestätigt.';
       pendingMessage.commandId = failedCommandId;
       pendingMessage.taskId = '';
-      pendingMessage.status = 'queued';
+      pendingMessage.status = 'pending_sync';
       pendingMessage.trackable = true;
-      pendingMessage.detail = 'wartet auf queue';
+      pendingMessage.detail = 'Bestätigung ausstehend';
       submission = {
         status: pendingMessage.status,
         command_id: failedCommandId,
@@ -4450,8 +4450,9 @@ function trackingMessageAgeMs(message) {
 }
 
 function isTransientCommandTrackingError(error) {
+  if (error?.code === 'peer_connect_timeout') return true;
   const text = String(error?.message || error || '');
-  return /Timed out waiting for WebRTC response|rxdb\.query\.fetch|masterWrite|masterChangesSince|IDBDatabase.*closing|database connection is closing|collection is closed|closed collection|RxDB Error-Code: COL21|wartet noch auf die Rueckmeldung/i.test(text);
+  return /WebRTC native peer did not open|Timed out waiting for WebRTC response|rxdb\.query\.fetch|masterWrite|masterChangesSince|IDBDatabase.*closing|database connection is closing|collection is closed|closed collection|RxDB Error-Code: COL21|wartet noch auf die Rueckmeldung/i.test(text);
 }
 
 function failureText(commandDoc, taskDoc) {
