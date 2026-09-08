@@ -23,6 +23,7 @@ const html = stampShellDocument(Buffer.from(`<!doctype html><html data-theme="da
 import {__ctoxTestHooks as hooks} from '/bundle.js';
 import {readEmbeddedIdentity} from '/shared/shell-release-status.js';
 const host=document.querySelector('[data-module-root]');
+window.CTOX_BUSINESS_OS_APP = { openSettingsDrawer: (options) => { window.openedSettings = options; } };
 const data=hooks.mergeBundleWithCommands({runs:[],queue:[],communications:[],tickets:[],tools:[]},
 [{id:'layout-command',command_id:'layout-command',execution_task_id:'layout-task',execution_mode:'queue',execution_phase:'queued',status:'accepted',payload:{title:'Cereda'},execution_progress:{phase:'queued',steps:[]}}],
 [{id:'layout-task',command_id:'layout-command',status:'queued',route_status:'failed',failure_class:'terminal',failure_attempt_count:4,status_note:'thread/start MCP handshake timeout',updated_at_ms:Date.now()}]);
@@ -31,6 +32,8 @@ const task=model.tasks.find(task=>task.id==='layout-task');
 const state={ctx:{host},model,lang:'de',flow:{ok:false},selectedTaskId:task.id,selectedStepIndex:0,selectedTaskStepIndex:2,selectedNodeId:'',zoom:1,taskSearch:'',taskViewMode:'cards',taskPrimaryView:'all',taskSourceFilter:'all',taskPinFilter:'all',taskSort:'updated',taskSortDirection:'desc',pinnedTaskIds:new Set(),webStackPanelOpen:false,webStack:{loading:false,data:null,error:''},dataLoaded:true,dataError:'',runtimeStatus:'ready',flowViewport:{left:0,top:0}};
 host.querySelector('[data-ctox-left]').innerHTML=hooks.taskColumnMarkup(model.tasks,state);
 hooks.renderMain(state);
+state.ctx.session = { user: { role: 'admin' } };
+window.crewFixture = { state, hooks };
 document.body.dataset.loadedVersion=readEmbeddedIdentity(document).version;
 document.body.dataset.fixtureReady='true';
 </script></body></html>`), { version: '1.2.3-beta.1', sourceCommit: 'a'.repeat(40) });
@@ -75,6 +78,26 @@ try {
     const visible=await page.locator('[data-node-id="queued"]').evaluate(node=>{const r=node.getBoundingClientRect();return document.elementsFromPoint(r.x+r.width/2,r.y+r.height/2).some(e=>e===node||node.contains(e));});
     assert.ok(visible,`Harness node is clipped at width ${width}`);
     if(width===1280){
+      const headerHeight = await page.locator('[data-ctox-main] > header').evaluate(node => node.getBoundingClientRect().height);
+      assert.ok(headerHeight <= 40, `Header must be one row, got ${headerHeight}`);
+      const gap = await page.locator('.ctox-harness-app').evaluate(node => {
+        const frame = node.getBoundingClientRect();
+        const main = node.querySelector('[data-ctox-main]').getBoundingClientRect();
+        return frame.bottom - main.bottom;
+      });
+      assert.ok(gap <= 16, `Unused bottom reserve: ${gap}px`);
+      await page.locator('[data-job-toggle]').click();
+      await page.locator('[data-job-panel] input[name="title"]').fill('Ungespeicherter Entwurf');
+      await page.evaluate(() => window.crewFixture.hooks.renderMain(window.crewFixture.state));
+      assert.equal(await page.locator('[data-job-panel] input[name="title"]').inputValue(), 'Ungespeicherter Entwurf');
+      await page.locator('[data-job-toggle]').click();
+      assert.equal(await page.locator('[data-job-panel]').isVisible(), false);
+      await page.locator('[data-ctox-main] .ctox-more-actions > summary').click();
+      const manage = page.locator('[data-manage-channels]');
+      assert.equal(await manage.isVisible(), true);
+      await manage.click();
+      assert.deepEqual(await page.evaluate(() => window.openedSettings), { initialTab: 'channels' });
+      assert.equal(await page.locator('.ctox-more-actions-body:popover-open').count(), 0);
       await page.locator('[data-node-id="model-failed"]').scrollIntoViewIfNeeded();
       for(const theme of ['dark','light']){
         await page.locator('html').evaluate((element,theme)=>element.dataset.theme=theme,theme);

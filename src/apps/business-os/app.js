@@ -1,14 +1,14 @@
-import { CtoxResizer } from './shared/resizer.js?v=20260908-shell-v2-crew-language-v354';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260908-shell-v2-crew-language-v354';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260908-shell-v2-crew-language-v354';
-import { createAppActions } from './shared/app-actions.js?v=20260908-shell-v2-crew-language-v354';
+import { CtoxResizer } from './shared/resizer.js?v=20260909-shell-v2-crew-compact-v356';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260909-shell-v2-crew-compact-v356';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260909-shell-v2-crew-compact-v356';
+import { createAppActions } from './shared/app-actions.js?v=20260909-shell-v2-crew-compact-v356';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/app-lifecycle.js?v=20260909-shell-v2-crew-compact-v356';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -16,20 +16,20 @@ import {
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/permissions.js?v=20260909-shell-v2-crew-compact-v356';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260908-shell-v2-crew-language-v354';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/branding.js?v=20260909-shell-v2-crew-compact-v356';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260909-shell-v2-crew-compact-v356';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/presentation.js?v=20260909-shell-v2-crew-compact-v356';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -40,9 +40,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260908-shell-v2-crew-language-v354';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260908-shell-v2-crew-language-v354';
-import { createDocumentsFacade } from './shared/documents.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/shell-permissions-ui.js?v=20260909-shell-v2-crew-compact-v356';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260909-shell-v2-crew-compact-v356';
+import { createDocumentsFacade } from './shared/documents.js?v=20260909-shell-v2-crew-compact-v356';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -50,16 +50,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/maintenance-state.js?v=20260909-shell-v2-crew-compact-v356';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/workspace-session.js?v=20260909-shell-v2-crew-compact-v356';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/taskbar-pins.js?v=20260909-shell-v2-crew-compact-v356';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -67,9 +67,9 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260908-shell-v2-crew-language-v354';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260908-shell-v2-crew-language-v354';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260908-shell-v2-crew-language-v354';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260909-shell-v2-crew-compact-v356';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260909-shell-v2-crew-compact-v356';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260909-shell-v2-crew-compact-v356';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -84,7 +84,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260908-shell-v2-crew-language-v354';
+const APP_BUILD = '20260909-shell-v2-crew-compact-v356';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -6774,6 +6774,7 @@ const SCOPED_SYSTEM_MODULE_DB_COLLECTIONS = Object.freeze({
   ctox: Object.freeze([
     'business_chats',
     'business_commands',
+    'communication_accounts',
     WORKSPACE_BRANDING_COLLECTION,
     'ctox_bug_reports',
     'ctox_crew_learnings',
@@ -11687,6 +11688,7 @@ const OFFLINE_FALLBACK_CATALOG = {
       "description": "Deine Crew, ihre Aufgaben, Fortschritte und Ergebnisse.",
       "entry": "modules/ctox/index.html",
       "collections": [
+        "communication_accounts",
         "business_commands",
         "business_chats",
         "ctox_runtime_settings",

@@ -1,6 +1,6 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260908-shell-v2-crew-language-v354';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260909-shell-v2-crew-compact-v356';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
 
@@ -20,7 +20,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260908-shell-v2-crew-language-v354';
+const CTOX_STYLE_BUILD = '20260909-shell-v2-crew-compact-v356';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -910,7 +910,7 @@ async function hydrateFromLocal(state) {
   // The two task sources fail loudly: a failed read must never look like an
   // idle harness (showDataError keeps the last good model). Secondary sources
   // degrade quietly.
-  const [commands, queueTasks, bugReports, webStack, blobFlow, crewMembers, harnessStatus] = await Promise.all([
+  const [commands, queueTasks, bugReports, webStack, blobFlow, crewMembers, harnessStatus, channelAccounts] = await Promise.all([
     loadLocalCommands(state.ctx),
     loadLocalQueueTasks(state.ctx),
     loadLocalBugReports(state.ctx).catch(() => []),
@@ -918,9 +918,11 @@ async function hydrateFromLocal(state) {
     loadHarnessFlowSnapshot(state.ctx).catch(() => emptyHarnessFlow('harness_flow_unavailable')),
     loadLocalCrewMembers(state.ctx).catch(() => []),
     loadLocalHarnessStatus(state.ctx).catch(() => null),
+    loadLocalChannelAccounts(state.ctx).catch(() => []),
   ]);
   if (state.disposed) return;
   state.crewMembers = crewMembers;
+  state.channelAccounts = channelAccounts;
   state.harnessStatus = harnessStatus;
   armExpressionRefresh(state);
   state.webStack = {
@@ -934,7 +936,7 @@ async function hydrateFromLocal(state) {
   // First pass with the server blob decides the selection; the second pass
   // swaps in the selected task's own event stream when the blob is not about it.
   state.flow = state.blobFlow;
-  state.model = buildHarnessModel(state.bundle, state.flow, state.lang);
+  state.model = buildHarnessModel(state.bundle, state.flow, state.lang, state.channelAccounts);
   state.dataLoaded = true;
   state.dataError = '';
   state.focusTask = state.focusTaskConsumed ? null : readFocusTask();
@@ -968,7 +970,7 @@ function changeConcernsSelectedTask(state, change) {
 }
 
 function wireLocalRealtime(state) {
-  const collectionsToWatch = ['business_commands', 'ctox_runtime_settings', 'ctox_queue_tasks', 'ctox_bug_reports', 'ctox_crew_members', 'ctox_harness_status', 'ctox_runs', 'ctox_harness_events'];
+  const collectionsToWatch = ['business_commands', 'communication_accounts', 'ctox_runtime_settings', 'ctox_queue_tasks', 'ctox_bug_reports', 'ctox_crew_members', 'ctox_harness_status', 'ctox_runs', 'ctox_harness_events'];
   const selectedTaskOnly = new Set(['ctox_runs', 'ctox_harness_events']);
   let renderTimer = null;
   const scheduleRender = () => {
@@ -1338,6 +1340,38 @@ function buildTaskColumn(state, options = {}) {
   left.removeAttribute('data-pg-wired');
   left.__ctoxPaneGrammar = null;
   wireTaskColumn(state);
+  wireCompactMenus(left);
+}
+
+function wireCompactMenus(container) {
+  for (const details of container.querySelectorAll('.ctox-more-actions')) {
+    const summary = details.querySelector('summary');
+    const panel = details.querySelector('.ctox-more-actions-body');
+    panel.setAttribute('popover', 'auto');
+    summary.setAttribute('aria-expanded', 'false');
+    summary.addEventListener('click', (event) => {
+      event.preventDefault();
+      if (panel.matches(':popover-open')) { panel.hidePopover(); return; }
+      details.open = true;
+      const rect = summary.getBoundingClientRect();
+      panel.style.left = Math.max(8, Math.min(rect.right - 240, window.innerWidth - 248)) + 'px';
+      panel.style.top = Math.min(rect.bottom + 4, window.innerHeight - 120) + 'px';
+      panel.showPopover();
+      summary.setAttribute('aria-expanded', 'true');
+    });
+    panel.addEventListener('toggle', (event) => {
+      if (event.newState === 'closed') {
+        details.open = false;
+        summary.setAttribute('aria-expanded', 'false');
+      }
+    });
+    panel.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') summary.focus();
+    });
+    panel.addEventListener('click', (event) => {
+      if (event.target.closest('button')) panel.hidePopover();
+    });
+  }
 }
 
 // Persistent, delegated wiring on the pane element (survives list rebuilds).
@@ -2323,7 +2357,7 @@ function renderMain(state) {
     state.historyOpen = false;
   }
   const history = timelinePanel(state, selectedTask, selectedNode, metrics);
-  const hasHistory = !history.includes('is-disabled');
+  const hasHistory = selectedTask ? taskSteps(selectedTask, state).length > 1 : state.model.timeline.length > 1;
   const previousViewport = readFlowViewport(state);
   const viewBox = flowViewBox(selectedTask, state);
   // Without a selected task and without current data the workspace itself
@@ -2341,6 +2375,7 @@ function renderMain(state) {
             <summary aria-label="${escapeAttr(state.lang === 'de' ? 'Crew verwalten' : 'Manage crew')}">···</summary>
             <div class="ctox-more-actions-body">
               ${harnessControlsMarkup(state)}
+              <button type="button" class="ctox-button" data-manage-channels>${escapeHtml(state.lang === 'de' ? 'Kanäle verwalten' : 'Manage channels')}</button>
               <button type="button" class="ctox-button" data-webstack-toggle>${escapeHtml(t.webStack)}</button>
               ${selectedTask ? `<button type="button" class="ctox-button" data-open-selected-task>${escapeHtml(t.openTaskDetail)}</button>` : ''}
               ${crewStripMarkup(state)}
@@ -2363,13 +2398,17 @@ function renderMain(state) {
       </div>
     </div>`}
     <details class="ctox-history-fold" ${state.historyOpen && hasHistory ? 'open' : ''} ${hasHistory ? '' : 'hidden'}>
-      <summary>${escapeHtml(t.timeline)}</summary>
+      <summary>${escapeHtml(t.timeline)}${!syncIsConnected(state) && !stateInWorkspace ? `<span class="ctox-history-connection">${escapeHtml(t.syncDisconnected)}</span>` : ''}</summary>
       <div class="ctox-history-content">${history}${executionProgressBar(metrics, state)}${metricsStripMarkup(metrics, elapsedSeconds, live, state)}</div>
     </details>
-    ${!syncIsConnected(state) && !stateInWorkspace ? `<footer class="ctox-harness-footer is-disconnected" data-harness-health-tooltip>${dataStatusMarkup(state) || escapeHtml(t.syncDisconnected)}</footer>` : ''}
+    ${!hasHistory && !syncIsConnected(state) && !stateInWorkspace ? `<footer class="ctox-harness-footer is-disconnected" data-harness-health-tooltip>${dataStatusMarkup(state) || escapeHtml(t.syncDisconnected)}</footer>` : ''}
   `;
   restoreFlowViewport(state, previousViewport);
   const editor = main.querySelector('[data-job-panel]');
+  wireCompactMenus(main);
+  main.querySelector('[data-manage-channels]')?.addEventListener('click', () => {
+    window.CTOX_BUSINESS_OS_APP?.openSettingsDrawer?.({ initialTab: 'channels' });
+  });
   const mountEditor = () => {
     if (selectedTask && !editor.firstElementChild) editor.append(taskDrawer(selectedTask, state, { editorOnly: true }));
   };
@@ -2742,8 +2781,9 @@ function normalizeCoreStateKey(value) {
 function inboundEndpointFlowSvg(model, selectedTask, state) {
   const channels = model.inboundChannels || [];
   const t = labels[state.lang];
-  const endpoint = inboundEndpointForTask(selectedTask, state);
-  const selectedChannel = normalizeInboundChannel(endpoint.id);
+  const selectedChannel = selectedTask ? inferInboundChannel(selectedTask) : '';
+  const selected = channels.find((channel) => channel.id === selectedChannel);
+  const endpoint = selected || channels[0] || null;
   const queued = model.nodeMap.get('queued') || { x: 330, y: 520 };
   const nodeX = 44;
   const nodeWidth = 144;
@@ -2751,17 +2791,18 @@ function inboundEndpointFlowSvg(model, selectedTask, state) {
   const selectedEdgeY = nodeY + 26;
   const queueLeft = queued.x - NODE_WIDTH / 2;
   const queueApproachX = Math.max(nodeX + nodeWidth + 22, queueLeft - 26);
-  const detail = endpoint.detail || (channels.length ? `${channels.reduce((sum, channel) => sum + channel.count, 0)} ${t.inboundItems}` : '');
+  if (!endpoint) return `<g class="ctox-flow-inbound"><text class="ctox-flow-inbound-label" x="${nodeX}" y="${nodeY - 14}">${escapeHtml(t.inboundChannels)}</text><text class="ctox-flow-channel-count" x="${nodeX}" y="${nodeY + 16}">${escapeHtml(state.lang === 'de' ? 'Keine Kanäle eingerichtet' : 'No channels configured')}</text></g>`;
+  const detail = state.lang === 'de' ? `${endpoint.count} ${endpoint.count === 1 ? 'Aufgabe' : 'Aufgaben'}` : `${endpoint.count} ${endpoint.count === 1 ? 'task' : 'tasks'}`;
   return `
     <g class="ctox-flow-inbound" aria-label="Eingänge für die Crew">
-      <text class="ctox-flow-inbound-label" x="${nodeX}" y="${nodeY - 14}">${escapeHtml(t.inboundEndpoint)}</text>
-      <path class="ctox-flow-channel-edge is-selected" d="M ${nodeX + nodeWidth} ${selectedEdgeY} L ${queueApproachX} ${selectedEdgeY} L ${queueApproachX} ${queued.y} L ${queueLeft} ${queued.y}"></path>
-      <g class="ctox-flow-channel-node is-selected" transform="translate(${nodeX} ${nodeY})">
+      <text class="ctox-flow-inbound-label" x="${nodeX}" y="${nodeY - 14}">${escapeHtml(t.inboundChannels)}</text>
+      <path class="ctox-flow-channel-edge ${selected ? 'is-selected' : ''}" d="M ${nodeX + nodeWidth} ${selectedEdgeY} L ${queueApproachX} ${selectedEdgeY} L ${queueApproachX} ${queued.y} L ${queueLeft} ${queued.y}"></path>
+      <g class="ctox-flow-channel-node ${selected ? 'is-selected' : ''}" transform="translate(${nodeX} ${nodeY})">
         <rect width="${nodeWidth}" height="52" rx="12"></rect>
         <text class="ctox-flow-channel-name" x="12" y="19">${escapeHtml(clip(endpoint.label, 18))}</text>
         <text class="ctox-flow-channel-count" x="12" y="36">${escapeHtml(clip(detail || endpoint.kind, 20))}</text>
       </g>
-      ${channels.filter((channel) => channel.id !== selectedChannel).slice(0, 4).map((channel, index) => {
+      ${channels.filter((channel) => channel.id !== endpoint.id).slice(0, 4).map((channel, index) => {
         const x = nodeX;
         const y = nodeY + 66 + index * 56;
         const edgeY = y + 22;
@@ -3007,7 +3048,7 @@ function taskCrewStatus(task) {
   return 'queued';
 }
 
-function buildHarnessModel(data, flow, lang = 'de') {
+function buildHarnessModel(data, flow, lang = 'de', channelAccounts = []) {
   const tasks = applyHarnessFlowStatus(buildTaskList(data), flow)
     .filter(isTaskOverviewItemVisible);
   const activeTask = tasks.find(taskIsHarnessActive) || null;
@@ -3057,7 +3098,7 @@ function buildHarnessModel(data, flow, lang = 'de') {
     activeNodeId,
     completedRuns: data.runs.filter((run) => run.status === 'completed'),
     tasks,
-    inboundChannels: buildInboundChannels(tasks),
+    inboundChannels: buildInboundChannels(tasks, channelAccounts),
     recentTasks: buildRecentTasks(data),
     queueNow: data.queue.filter((item) => ['queued', 'running', 'leased', 'pending'].includes(item.status) || item.priority === 'urgent'),
     reviewItems: data.communications.filter((item) => item.status === 'review' || item.status === 'drafting'),
@@ -3161,9 +3202,17 @@ function buildTaskList(data) {
     .sort((left, right) => Date.parse(right.timestamp || right.createdAt || 0) - Date.parse(left.timestamp || left.createdAt || 0));
 }
 
-function buildInboundChannels(tasks) {
+function buildInboundChannels(tasks, accounts = []) {
   const channels = new Map();
-  for (const item of tasks || []) addInboundChannel(channels, item);
+  for (const account of accounts) {
+    if (!account?.channel || account._deleted === true || account.is_deleted === true || account.enabled === false) continue;
+    const key = normalizeInboundChannel(account.channel);
+    // A task's module is provenance, not an installed communication adapter.
+    if (!channels.has(key)) channels.set(key, { id: key, label: inboundChannelLabel(key), count: 0, active: false });
+  }
+  for (const item of tasks || []) {
+    if (channels.has(inferInboundChannel(item))) addInboundChannel(channels, item);
+  }
   return Array.from(channels.values())
     .sort((left, right) => right.active - left.active || right.count - left.count || left.label.localeCompare(right.label));
 }
@@ -3534,8 +3583,16 @@ function taskDrawer(task, state, { editorOnly = false } = {}) {
       if (!child.matches('.ctox-drawer-edit-fold, .ctox-task-status-strip')) child.remove();
     }
   }
-  body.querySelector('[data-ctox-task-edit]')?.addEventListener('input', (event) => {
-    event.currentTarget.dataset.dirty = 'true';
+  const editForm = body.querySelector('[data-ctox-task-edit]');
+  const draft = state.taskEditDrafts?.get(task.id);
+  for (const name of ['title', 'prompt', 'priority']) {
+    if (draft && editForm?.elements.namedItem(name)) editForm.elements.namedItem(name).value = draft[name];
+  }
+  editForm?.addEventListener('input', (event) => {
+    state.taskEditDrafts ||= new Map();
+    state.taskEditDrafts.set(task.id, Object.fromEntries(
+      ['title', 'prompt', 'priority'].map((name) => [name, event.currentTarget.elements.namedItem(name).value]),
+    ));
   });
   body.querySelector('[data-ctox-task-delete]')?.addEventListener('click', async () => {
     await deleteCtoxTaskFromDrawer(state, task, body);
@@ -3658,7 +3715,7 @@ async function saveCtoxTaskFromDrawer(state, task, form) {
       commandPath: 'ctox_task_update',
     });
     applyTaskMutationToModel(state, task.id, payload);
-    delete form.dataset.dirty;
+    state.taskEditDrafts?.delete(task.id);
     if (status) status.textContent = t.taskSaved;
     render(state);
     syncDetailDrawer(state);
@@ -4325,6 +4382,10 @@ function normalizeInboundChannel(value) {
 function inboundChannelLabel(channel) {
   const normalized = normalizeInboundChannel(channel);
   const labelsById = {
+    email: 'E-Mail',
+    whatsapp: 'WhatsApp',
+    teams: 'Microsoft Teams',
+    google_chat: 'Google Chat',
     'business_os.llm.chat': 'LLM Chat',
     'business-os': 'Business OS',
     ctox: 'Crew',
@@ -4622,6 +4683,17 @@ async function loadLocalCollection(ctx, collectionName) {
   return localDocs.map((doc) => doc.toJSON());
 }
 
+async function loadLocalChannelAccounts(ctx) {
+  const collection = ctoxCollection(ctx, 'communication_accounts');
+  if (!collection) return [];
+  const docs = await collection.find({ selector: {}, limit: 200 }).exec();
+  // No account addresses, credentials or adapter diagnostics enter this view.
+  return docs.map((doc) => {
+    const account = doc.toJSON();
+    return { channel: account.channel, enabled: account.enabled, _deleted: account._deleted, is_deleted: account.is_deleted };
+  });
+}
+
 async function loadLocalCrewMembers(ctx) {
   const collection = ctoxCollection(ctx, 'ctox_crew_members');
   if (!collection) return [];
@@ -4829,7 +4901,7 @@ function applyLiveFlow(state) {
   const flow = flowForSelectedTask(state);
   if (flow === state.flow) return false;
   state.flow = flow;
-  state.model = buildHarnessModel(state.bundle, flow, state.lang);
+  state.model = buildHarnessModel(state.bundle, flow, state.lang, state.channelAccounts);
   reconcileSelection(state);
   return true;
 }
@@ -4874,7 +4946,7 @@ function syncIsConnected(state) {
 function mainIsBusy(state) {
   if (state.mainInteracting) return true;
   const main = state.ctx?.host?.querySelector?.('[data-ctox-main]');
-  if (main?.querySelector('[data-job-panel] [data-ctox-task-edit]')?.dataset.dirty === 'true') return true;
+  if (main?.querySelector('.ctox-more-actions[open]')) return true;
   const active = typeof document !== 'undefined' ? document.activeElement : null;
   if (!main || !active || !main.contains(active)) return false;
   return ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName);
@@ -5815,7 +5887,7 @@ function harnessControlsMarkup(state) {
   const paused = Boolean(h.paused);
   const capacity = Number(h.worker_capacity) || 1;
   return `
-    <button type="button" class="ctox-pane-icon ${paused ? 'is-active' : ''}" data-harness-pause aria-pressed="${paused}" aria-label="${escapeAttr(paused ? t.resumeHarness : t.pauseHarness)}" title="${escapeAttr(paused ? t.resumeHarness : t.pauseHarness)}">${actionIcon(state, paused ? 'play' : 'pause')}</button>
+    <button type="button" class="ctox-button ${paused ? 'is-active' : ''}" data-harness-pause aria-pressed="${paused}">${escapeHtml(paused ? t.resumeHarness : t.pauseHarness)}</button>
     <label class="ctox-harness-capacity" title="${escapeAttr(t.capacity)}"><span class="ctox-field-label">${escapeHtml(t.capacity)}</span><select class="ctox-select" data-harness-capacity aria-label="${escapeAttr(t.capacity)}">${[1,2,3,4,5,6,7,8].map((n) => `<option value="${n}" ${n === capacity ? 'selected' : ''}>${n}</option>`).join('')}</select></label>`;
 }
 
@@ -6780,6 +6852,8 @@ export const __ctoxTestHooks = {
   authoritativeTaskNodeId,
   authoritativeTaskStatus,
   buildHarnessModel,
+  buildInboundChannels,
+  inboundEndpointFlowSvg,
   canModifyCtoxApp,
   clampMetric,
   deriveHarnessHealth,

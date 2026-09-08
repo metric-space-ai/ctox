@@ -1,0 +1,58 @@
+name: Crew UI acceptance
+on:
+  pull_request:
+    paths:
+      - 'src/apps/business-os/modules/ctox/**'
+      - 'src/apps/business-os/shared/business-chat*'
+      - '.github/workflows/crew-ui-acceptance.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  crew-ui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CTOX_EVIDENCE_DIR: ${{ runner.temp }}/crew-ui/layout
+      BUSINESS_CHAT_BEHAVIOR_OUTPUT_DIR: ${{ runner.temp }}/crew-ui/chat
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24'
+      - run: npm ci --prefix src/apps/business-os
+      - run: npx playwright install --with-deps chromium
+        working-directory: src/apps/business-os
+      - name: Module and chat behavior
+        working-directory: src/apps/business-os
+        run: |
+          node modules/ctox/test.js
+          node --test shared/business-chat.test.mjs
+          node modules/tickets/tickets.test.mjs
+      - name: Compact shell layout and interaction
+        if: ${{ !cancelled() }}
+        working-directory: src/apps/business-os
+        run: |
+          node modules/ctox/tests/layout.browser.mjs
+          node scripts/assert-business-chat-behavior.mjs
+      - name: Shell and data boundary contracts
+        if: ${{ !cancelled() }}
+        working-directory: src/apps/business-os
+        run: |
+          node scripts/assert-shell-v2-contract.mjs
+          node scripts/assert-accessibility-contract.mjs
+          node scripts/assert-module-collection-allowlists.mjs
+          node scripts/generate-module-registry.mjs --check
+          node scripts/assert-rxdb-only.mjs
+          node rxdb/tests/data-plane-guard-smoke.mjs
+          node scripts/assert-ctox-crew-map.mjs
+          node scripts/assert-ctox-data-state.mjs --output-dir "${RUNNER_TEMP}/crew-ui/data"
+          node scripts/shell-v2-geometry-lab.mjs --apps ctox,tickets --widths 640,1180,1440 --output-dir "${RUNNER_TEMP}/crew-ui/geometry"
+      - name: Browser database regressions
+        if: ${{ !cancelled() }}
+        run: node src/apps/business-os/rxdb/tests/run-all.mjs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: crew-ui-evidence
+          path: ${{ runner.temp }}/crew-ui

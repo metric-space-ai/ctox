@@ -76,6 +76,30 @@ const {
   wireTaskSourceReadiness,
 } = hooks;
 
+test('Only configured communication accounts appear as inputs, never task-origin apps', () => {
+  const tasks = [
+    { module: 'omarchy-radio', status: 'running' },
+    { inbound_channel: 'documents', status: 'queued' },
+    { inbound_channel: 'email', status: 'queued' },
+    { inbound_channel: 'email', status: 'completed' },
+  ];
+  assert.deepEqual(hooks.buildInboundChannels(tasks), []);
+  const channels = hooks.buildInboundChannels(tasks, [
+    { channel: 'email' }, { channel: 'email' }, { channel: 'slack' },
+    { channel: 'discord', enabled: false }, { channel: 'jami', is_deleted: true },
+  ]);
+  assert.deepEqual(channels.map(({id, count}) => ({id, count})), [
+    { id: 'email', count: 2 }, { id: 'slack', count: 0 },
+  ]);
+  const model = { inboundChannels: channels, nodeMap: new Map() };
+  const svg = hooks.inboundEndpointFlowSvg(model, tasks[0], { lang: 'de' });
+  assert.match(svg, /E-Mail/);
+  assert.doesNotMatch(svg, /omarchy|documents|is-selected|report_/i);
+  const empty = hooks.inboundEndpointFlowSvg({ ...model, inboundChannels: [] }, tasks[0], { lang: 'de' });
+  assert.match(empty, /Keine Kanäle eingerichtet/);
+  assert.doesNotMatch(empty, /ctox-flow-channel-edge/);
+});
+
 test('crew labels describe work without exposing implementation terminology', () => {
   function check(value, path) {
     if (typeof value === 'string') {

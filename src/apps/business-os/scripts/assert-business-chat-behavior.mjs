@@ -316,17 +316,23 @@ try {
     await page.screenshot({ path: progressScreenshotPath, fullPage: true });
   });
 
-  await scenario(page, 'task-link-opens-ctox-detail', { count: 1, activeIndex: 0, groupedResearch: true }, async () => {
+  await scenario(page, 'task-link-opens-unobstructed-flow', { count: 1, activeIndex: 0, groupedResearch: true }, async () => {
     const navigation = await page.evaluate(async () => {
       const link = document.querySelector('.ctox-chat-track');
       if (!link) throw new Error('tracked message has no CTOX task link');
       link.click();
       await window.chatHarness.waitFor(() => location.hash.includes('task_id='));
-      return { hash: location.hash, title: link.getAttribute('title') || '' };
+      return {
+        hash: location.hash, title: link.getAttribute('title') || '',
+        expandedChats: document.querySelectorAll('.ctox-chat-window:not(.is-minimized)').length,
+        stageHeight: document.querySelector('.ctox-chat-stage-inner')?.getBoundingClientRect().height || 0,
+      };
     });
     results.push({ scenario: 'task-link-navigation', navigation });
     expect(navigation.hash.includes('#ctox?'), `task link must navigate into CTOX, got ${navigation.hash}`);
-    expect(navigation.hash.includes('drawer=1'), `task link must request the CTOX detail drawer, got ${navigation.hash}`);
+    expect(navigation.hash.includes('drawer=0'), `task link must show the flow without a drawer, got ${navigation.hash}`);
+    expect(navigation.expandedChats === 0, 'task navigation must minimize overlaying chats');
+    expect(navigation.stageHeight === 0, 'minimized chat stage must not cover the flow');
     expect(navigation.title.includes('task_research_0'), `task link hover must expose its stable id, got ${navigation.title}`);
   });
 
@@ -404,6 +410,23 @@ try {
     results.push({ scenario: 'keyboard-focus-trace', focusTrace });
     expect(focusTrace.every((item) => !item.inactiveWindow || item.inactiveHeaderControl), 'tab focus may enter only the direct header actions of inactive chat windows');
     expect(focusTrace.every((item) => !String(item.className).includes('ctox-date-native-picker')), 'tab focus must not enter hidden native date input');
+  });
+
+  await scenario(page, 'maximize-restores-size-and-minimize-clears-stage', { count: 1, activeIndex: 0 }, async () => {
+    const normal = await page.locator('.ctox-chat-window.is-active').boundingBox();
+    await page.locator('.ctox-chat-window.is-active [data-chat-maximize]').click();
+    await page.waitForFunction(() => document.querySelector('.ctox-chat-window.is-maximized')?.getBoundingClientRect().width > 700);
+    const maximized = await page.locator('.ctox-chat-window.is-active').boundingBox();
+    expect(maximized.width > normal.width * 1.5, 'maximize must visibly grow the window');
+    expect(maximized.height > normal.height, 'maximize must use the available height');
+    await page.locator('.ctox-chat-window.is-active [data-chat-maximize]').click();
+    await page.waitForFunction(() => !document.querySelector('.ctox-chat-window.is-maximized'));
+    await page.evaluate(() => window.chatHarness.waitForPaint());
+    const restored = await page.locator('.ctox-chat-window.is-active').boundingBox();
+    expect(Math.abs(restored.width - normal.width) < 2, 'restore must recover the original width');
+    await page.locator('.ctox-chat-window.is-active [data-chat-minimize]').click();
+    await page.waitForFunction(() => document.querySelectorAll('.ctox-chat-window').length === 0);
+    expect(await page.locator('.ctox-chat-stage-inner').evaluate(node => node.getBoundingClientRect().height) === 0, 'empty stage must not intercept the app');
   });
 
   await scenario(page, 'active-controls-render-before-db-delay', { count: 1, dbDelay: 180 }, async () => {
