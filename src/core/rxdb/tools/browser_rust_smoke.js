@@ -340,6 +340,7 @@ const supportedSmokeModes = [
   'workspace-large-file-viewer-restart-rust-to-browser',
   'command-browser-to-rust',
   'command-roundtrip-timing-browser-to-rust',
+  'critical-browser-reload-timing',
   'module-source-lossless-browser-to-rust',
   'multiplex-reload-browser-to-rust',
   'tickets-browser-to-rust',
@@ -391,6 +392,7 @@ if ([
   'tickets-browser-to-rust',
   'tickets-clarification-browser-to-rust',
   'outbound-active-ui',
+  'critical-browser-reload-timing',
   'spreadsheets-active-ui',
   'documents-active-ui',
   'invoices-active-ui',
@@ -7641,6 +7643,13 @@ function ensureCtoxSmokeBinary() {
         chromium, launchOptions: chromiumLaunchOptions(), runtimeRoot, smokeUrl,
         capabilities: threadsRightClickCapabilities, smokeMode, threadsScaleSeed, browserDiagnostics,
         evidenceDir: smokeProcessLifecyclePath ? path.dirname(smokeProcessLifecyclePath) : runtimeRoot,
+      })
+      : smokeMode === 'critical-browser-reload-timing'
+      ? await require('./critical_browser_reload_probe.js').runCriticalBrowserReloads({
+        page, requiredCollections: BUSINESS_OS_SHELL_STATUS_COLLECTIONS,
+        waitForHealthyCompleteStatus, assertHealthyAdvancedStatusContract,
+        outputPath: path.join(smokeProcessLifecyclePath ? path.dirname(smokeProcessLifecyclePath) : runtimeRoot,
+          'critical-browser-reload.json'),
       })
       : await browserEvaluationTarget.evaluate(async (stateOrArgs, maybeArgs) => {
       const sellifyScaleAppState = maybeArgs ? stateOrArgs : null;
@@ -16610,7 +16619,9 @@ function ensureCtoxSmokeBinary() {
       result.screenshotEvidence = await captureBusinessOsVisualScreenshotEvidence(page);
     }
 
-    if (result.mode === 'workspace-agent-artifacts-rust-to-browser'
+    if (result.mode === 'critical-browser-reload-timing') {
+      console.log(`critical_browser_reload_passed=${result.report.sampleCount}`);
+    } else if (result.mode === 'workspace-agent-artifacts-rust-to-browser'
       || result.mode === 'workspace-agent-artifacts-stress-rust-to-browser'
       || result.mode === 'workspace-agent-artifacts-churn-rust-to-browser'
       || result.mode === 'workspace-agent-artifacts-background-rust-to-browser') {

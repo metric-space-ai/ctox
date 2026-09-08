@@ -292,6 +292,19 @@ jobs:
             SMOKE_PROCESS_LIFECYCLE_PATH="$RUNNER_TEMP/ctox-host-proof/reload-processes.json" \
             node src/core/rxdb/tools/browser_rust_smoke.js \
             | tee "$RUNNER_TEMP/ctox-host-proof/multiplex-reload.log"
+      - name: Measure 30 critical browser reloads against the native host
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        timeout-minutes: 35
+        shell: bash
+        run: |
+          set -o pipefail
+          node --test src/core/rxdb/tools/critical_browser_reload_probe.test.js
+          CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox" \
+            SMOKE_MODE=critical-browser-reload-timing SMOKE_PAGE_PATH=/index.html \
+            BUSINESS_PORT=8880 SIGNALING_PORT=18879 \
+            SMOKE_PROCESS_LIFECYCLE_PATH="$RUNNER_TEMP/ctox-host-proof/critical-reload-processes.json" \
+            node src/core/rxdb/tools/browser_rust_smoke.js \
+            | tee "$RUNNER_TEMP/ctox-host-proof/critical-browser-reload.log"
       - name: Retain host proof and binary provenance
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

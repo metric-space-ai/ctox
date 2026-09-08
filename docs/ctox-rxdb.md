@@ -1372,6 +1372,17 @@ reload limits are a correctness deadline, not the separate five-second
 critical-collection boot p95 requirement. Neither fixture certifies the
 Desktop/Mobile SSH/QR workflow or public WAN signaling.
 
+The independent `critical-browser-reload-timing` smoke measures 30 reloads of
+the initialized shell profile against the same live native host. Its critical
+set is the shell status contract: module catalog, runtime settings, commands,
+queue tasks and desktop files. Timing begins before navigation and ends only
+after healthy status proves every named collection complete, streaming-ready
+and advertising its checkpoint epoch. It does not restart collections, erase
+IndexedDB, or discard slow samples. The nearest-rank p95 must be strictly below
+5000 ms; errors and partial runs fail. Per-reload status and timing evidence is
+persisted even on failure. This is the retained-profile browser cohort only;
+30-run fresh-profile, native cold setup and native restart budgets remain open.
+
 | Test | One line |
 |---|---|
 | `active-collections-catchup-smoke` | **Regression:** a collection transitioning inactive→active triggers one catch-up pull through the real shared-peer registry wiring (§8.1 gating invariant). |
