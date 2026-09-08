@@ -47,6 +47,34 @@ Current storage emits a versionchange event when retiring a connection, but
 no consumer of that event was found. A controlled lifecycle reproduction must
 establish recovery and journal preservation before this gap is accepted.
 
+The current shell's `repairRecoveringDataPlane` restarts affected WebRTC
+collections; it neither reopens the local database nor replaces storage
+handles. `waitForDataPlaneReady` accepts the presence of a collection, sync
+runtime and command bus, which does not prove the IDB handle is usable.
+`CtoxIndexedDbStorage.collection` passes its concrete IDB connection into each
+collection. Retrying a bridge on those handles cannot repair a closed
+connection. The event is emitted by `openDatabase` on version change, but the
+Welsch observation does not establish that a version change occurred there.
+
+Required lifecycle acceptance therefore includes two distinct cases: a
+compatible database connection lost while writes are pending, and another tab
+requesting a newer storage version. In an isolated real browser, retain the
+shell and an app subscription, capture the pending journal, provoke each
+transition, and verify either confirmed compatible recovery or a visible
+incompatibility state. Neither case may delete pending writes, claim healthy
+sync on a closed handle, or recover by resetting the browser profile. Measure
+the time to recovered reads/subscriptions and confirmed command delivery
+separately. These cases have not passed; the coordinator and source guards
+must not stand in for them.
+
+Native Sync workflow path filters now also include
+`src/core/business_os/**`, `src/core/mission/channels/**` and
+`src/apps/business-os/app.js` for both pull requests and main pushes.
+Previously, changes only to command completion, queue transactions or the
+shell entry point did not trigger this acceptance workflow. YAML parsing and
+coverage of seven representative paths in both event filters are checked;
+this is workflow configuration validation, not another runtime pass.
+
 No tenant deployment is performed. The sections below retain historical
 results and failed attempts; use this status for the current acceptance scope.
 
