@@ -12,10 +12,11 @@ jobs:
   crew-ui:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
-    env:
-      CTOX_EVIDENCE_DIR: ${{ runner.temp }}/crew-ui/layout
-      BUSINESS_CHAT_BEHAVIOR_OUTPUT_DIR: ${{ runner.temp }}/crew-ui/chat
     steps:
+      - name: Evidence paths
+        run: |
+          echo "CTOX_EVIDENCE_DIR=${RUNNER_TEMP}/crew-ui/layout" >> "$GITHUB_ENV"
+          echo "BUSINESS_CHAT_BEHAVIOR_OUTPUT_DIR=${RUNNER_TEMP}/crew-ui/chat" >> "$GITHUB_ENV"
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
