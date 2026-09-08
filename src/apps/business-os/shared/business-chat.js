@@ -416,6 +416,23 @@ export function initBusinessChat({
       }
       return;
     }
+    const maximizeButton = event.target.closest?.('[data-chat-maximize]');
+    if (maximizeButton && root.contains(maximizeButton)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const node = maximizeButton.closest('[data-chat-id]');
+      const chat = state.chats.find((item) => item.id === node?.dataset.chatId);
+      if (!chat) return;
+      captureDrafts(root, state);
+      const ticket = claimChatOpenOwnership(state);
+      chat.maximized = !chat.maximized;
+      markChatExpandedByUser(state, chat, ticket);
+      state.dockCollapsed = false;
+      state.activeChatId = chat.id;
+      touchChats(state, [chat]);
+      renderAndPersistChatState({ root, state, commandBus, db, getActiveModule });
+      return;
+    }
     const minimizeButton = event.target.closest?.('[data-chat-minimize]');
     if (minimizeButton && root.contains(minimizeButton)) {
       event.preventDefault();
@@ -1245,6 +1262,7 @@ function ensureTaskTrackingDelegation(root) {
     if (!button || !root.contains(button)) return;
     event.preventDefault();
     event.stopPropagation();
+    root.__ctoxBeforeTaskNavigation?.();
     openCtoxTask(
       button.dataset.taskId || '',
       button.dataset.commandId || '',
@@ -1256,6 +1274,15 @@ function ensureTaskTrackingDelegation(root) {
 }
 
 function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
+  root.__ctoxBeforeTaskNavigation = () => {
+    captureDrafts(root, state);
+    const expanded = state.chats.filter((chat) => chat.open !== false && !chat.minimized);
+    for (const chat of expanded) markChatMinimizedByUser(state, chat);
+    state.dockCollapsed = true;
+    state.preCollapseExpandedChatIds = expanded.map((chat) => chat.id);
+    touchChats(state, expanded);
+    renderAndPersistChatState({ root, state, commandBus, db, getActiveModule });
+  };
   ensureTaskTrackingDelegation(root);
   const syncFacade = root.__ctoxChatSync || null;
   initSchedulerLoop({
@@ -3812,6 +3839,19 @@ function trackButtonLabel(message) {
 function friendlyCrewMessage(text) {
   const value = String(text || '');
   const de = chatUiIsGerman();
+  if (value === 'Aufgabe in der CTOX Queue angelegt. Fortschritt und Antwort erscheinen hier.') {
+    return de ? 'Die Crew hat deine Aufgabe erhalten. Fortschritt und Antwort erscheinen hier.'
+      : 'The crew has received your task. Progress and the reply will appear here.';
+  }
+  if (/^CTOX konnte die Aufgabe nicht ausführen: CTOX chat could not continue because the model API is (temporarily unavailable|rate-limited)\./.test(value)) {
+    return /rate-limited/.test(value)
+      ? (de ? 'Die Crew konnte die Aufgabe nicht abschließen: Der Modelldienst hat zu viele Anfragen erhalten.' : 'The crew could not complete the task: The model service received too many requests.')
+      : (de ? 'Die Crew konnte die Aufgabe nicht abschließen: Der Modelldienst war nicht erreichbar.' : 'The crew could not complete the task: The model service was unavailable.');
+  }
+  if (/^Der Versuch wird wiederholt: Harness retry feedback injected after runtime failure: direct session (error|timeout)/.test(value)) {
+    return de ? 'Die Crew versucht es erneut. Die Verbindung zum Modelldienst wurde unterbrochen.'
+      : 'The crew is trying again. The connection to the model service was interrupted.';
+  }
   if (/^Task angelegt und in der CTOX Queue\.(?: Antwort erscheint hier, sobald (?:CTOX ihn|der CTOX Service ihn) verarbeitet\.)?$/.test(value)) {
     return de
       ? 'Deine Aufgabe steht auf der Aufgabenliste. Die Antwort erscheint hier, sobald die Crew sie bearbeitet hat.'
@@ -4550,7 +4590,7 @@ function blockedText(commandDoc, taskDoc) {
 }
 
 async function openCtoxTask(taskId, commandId, taskStatus) {
-  const focus = { taskId, commandId, taskStatus, sourceModule: 'business-os-chat', openDrawer: true };
+  const focus = { taskId, commandId, taskStatus, sourceModule: 'business-os-chat', openDrawer: false };
   try {
     sessionStorage.setItem('ctox.businessOs.focusTask', JSON.stringify(focus));
   } catch {}
@@ -4559,7 +4599,7 @@ async function openCtoxTask(taskId, commandId, taskStatus) {
   if (commandId) params.set('command_id', commandId);
   if (taskStatus) params.set('task_status', taskStatus);
   params.set('source', 'business-os-chat');
-  params.set('drawer', '1');
+  params.set('drawer', '0');
   location.hash = `#ctox?${params.toString()}`;
   const app = window.CTOX_BUSINESS_OS_APP;
   if (typeof app?.openModule === 'function' && app.activeModule?.id !== 'ctox') {
@@ -7818,6 +7858,15 @@ function installChatStyles() {
     .ctox-chat-stage-inner,
     .ctox-chat-stage-inner.has-maximized {
       height: min(600px, calc(100dvh - 112px));
+    }
+    .ctox-chat-stage-inner.is-empty { height: 0; padding: 0; }
+    .ctox-chat-stage-inner.has-maximized { height: calc(100dvh - 112px); }
+    .ctox-chat-window.is-maximized {
+      width: min(960px, calc(100dvw - 24px)) !important;
+      max-width: min(960px, calc(100dvw - 24px));
+      height: calc(100dvh - 132px) !important;
+      min-height: 0;
+      max-height: calc(100dvh - 132px);
     }
     .ctox-chat-window:not(:has(.ctox-chat-form)):not(:has(.ctox-followup-container)):not(:has(.ctox-chat-scheduler-card)) {
       grid-template-rows: 64px minmax(0, 1fr);

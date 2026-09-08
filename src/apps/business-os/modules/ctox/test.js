@@ -76,6 +76,59 @@ const {
   wireTaskSourceReadiness,
 } = hooks;
 
+test('Only configured communication accounts appear as inputs, never task-origin apps', () => {
+  const tasks = [
+    { module: 'omarchy-radio', status: 'running' },
+    { inbound_channel: 'documents', status: 'queued' },
+    { inbound_channel: 'email', status: 'queued' },
+    { inbound_channel: 'email', status: 'completed' },
+  ];
+  assert.deepEqual(hooks.buildInboundChannels(tasks), []);
+  const channels = hooks.buildInboundChannels(tasks, [
+    { channel: 'email' }, { channel: 'email' }, { channel: 'slack' },
+    { channel: 'queue' }, { channel: 'cron' }, { channel: 'plan' },
+    { channel: 'discord', enabled: false }, { channel: 'jami', is_deleted: true },
+  ]);
+  assert.deepEqual(channels.map(({id, count}) => ({id, count})), [
+    { id: 'email', count: 2 }, { id: 'slack', count: 0 },
+  ]);
+  const model = { inboundChannels: channels, nodeMap: new Map() };
+  const svg = hooks.inboundEndpointFlowSvg(model, tasks[0], { lang: 'de' });
+  assert.match(svg, /E-Mail/);
+  assert.doesNotMatch(svg, /omarchy|documents|is-selected|report_/i);
+  const empty = hooks.inboundEndpointFlowSvg({ ...model, inboundChannels: [] }, tasks[0], { lang: 'de' });
+  assert.match(empty, /Keine Kanäle eingerichtet/);
+  assert.doesNotMatch(empty, /ctox-flow-channel-edge/);
+  assert.deepEqual(hooks.buildInboundChannels(tasks, null), []);
+  const unavailable = hooks.inboundEndpointFlowSvg({ ...model, inboundChannels: [], inboundChannelsAvailable: false }, tasks[0], { lang: 'de' });
+  assert.match(unavailable, /Kanäle nicht verfügbar/);
+  assert.doesNotMatch(unavailable, /Keine Kanäle eingerichtet/);
+});
+
+test('Task cards explain failures while original evidence remains inspectable', () => {
+  const task = { status: 'failed', failureAttemptCount: 4, statusNote: 'thread/start MCP handshake timeout <unsafe>' };
+  assert.equal(hooks.taskSummaryReason(task, { lang: 'de' }), 'Die Verbindung zu einem Werkzeug konnte nicht aufgebaut werden. · 4 Versuche');
+  assert.match(hooks.taskSummaryReason(task, { lang: 'en' }), /connection to a tool/);
+  const leased = { ...task, attempt: 4, leaseOwner: 'worker-internal-42', target: 'business_os.chat.task' };
+  const leaseLine = hooks.taskLeaseLineMarkup(leased, { lang: 'de' });
+  assert.match(leaseLine, /Versuch 4/);
+  assert.doesNotMatch(leaseLine, /worker-internal|business_os/);
+  assert.match(hooks.taskDiagnosticMarkup(leased, { lang: 'de' }), /worker-internal-42/);
+  assert.match(hooks.taskDiagnosticMarkup(leased, { lang: 'de' }), /business_os.chat.task/);
+  const details = hooks.taskDiagnosticMarkup(task, { lang: 'de' });
+  assert.match(details, /<details class="ctox-task-diagnostics">/);
+  assert.match(details, /thread\/start MCP handshake timeout &lt;unsafe&gt;/);
+  assert.doesNotMatch(details, /<unsafe>|<details[^>]* open/);
+  assert.match(hooks.taskSummaryReason({ status: 'failed', statusNote: 'CTOX chat could not continue because the model API is temporarily unavailable. The task must stay open and retry after cooldown.' }, { lang: 'de' }), /^Der Modelldienst war nicht erreichbar\.$/);
+});
+
+test('Reported task descriptions populate the order without replacing an explicit prompt', () => {
+  assert.equal(hooks.taskPromptDisplay({ description: 'Die Liste lädt dauerhaft.' }).text, 'Die Liste lädt dauerhaft.');
+  assert.equal(hooks.taskPromptDisplay({ prompt: 'Auftrag', description: 'Befund', summary: 'Kurzfassung' }).text, 'Auftrag');
+  assert.equal(hooks.taskPromptDisplay({ summary: 'Kurzfassung' }).text, 'Kurzfassung');
+  assert.equal(hooks.taskPromptDisplay({}).text, '');
+});
+
 test('crew labels describe work without exposing implementation terminology', () => {
   function check(value, path) {
     if (typeof value === 'string') {

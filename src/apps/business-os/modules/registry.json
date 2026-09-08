@@ -725,6 +725,7 @@
       "description": "Deine Crew, ihre Aufgaben, Fortschritte und Ergebnisse.",
       "entry": "modules/ctox/index.html",
       "collections": [
+        "communication_accounts",
         "business_commands",
         "business_chats",
         "ctox_runtime_settings",

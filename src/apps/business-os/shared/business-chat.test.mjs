@@ -34,6 +34,16 @@ test('saved crew status messages use plain language without rewriting user instr
     });
     assert.match(failure, /Anfrage an den Modelldienst ist fehlgeschlagen/);
     assert.doesNotMatch(failure, /technical:|worker-runtime|CTOX/);
+    for (const text of [
+      'Aufgabe in der CTOX Queue angelegt. Fortschritt und Antwort erscheinen hier.',
+      'CTOX konnte die Aufgabe nicht ausführen: CTOX chat could not continue because the model API is temporarily unavailable. The task must stay open and retry after cooldown.',
+      'Der Versuch wird wiederholt: Harness retry feedback injected after runtime failure: direct session error: ErrorEvent { message: unexpected status 502 Bad Gateway }',
+    ]) {
+      const message = { role: 'ctox', text };
+      assert.doesNotMatch(__businessChatTestInternals.messageMarkup(message), /CTOX|Harness|ErrorEvent|Queue|cooldown/);
+      assert.equal(message.text, text);
+      assert.match(__businessChatTestInternals.messageMarkup({ role: 'user', text }), /CTOX|Harness/);
+    }
   } finally {
     globalThis.document = previousDocument;
   }
