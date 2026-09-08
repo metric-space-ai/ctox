@@ -155,6 +155,17 @@ regression retains an older generation's reservation, denies a hidden-field
 query on the replacement, and then reads allowed fields on that replacement
 with a per-connection capacity of one.
 
+Native protocol negotiation has four reserved request permits, independent
+of the 32 data-request permits and eight interactive auxiliary permits.
+Only `ctoxProtocol` and `token` use the handshake reservation; reads, writes
+and transfers retain the data limit and their existing policy checks.
+All classes use one pool-owned registration/abort/join implementation.
+Inbound-frame regressions fill data and auxiliary capacity, require protocol
+and token responses, then release data capacity and require the queued pull.
+A second scenario verifies that a rejected session still receives an explicit
+denial under load. This scheduling boundary alone does not establish native
+command latency, wire backpressure behavior or complete browser acceptance.
+
 The shell readiness mapping applies the same rule. Obsolete
 `httpBridgeStatus`/`httpBridgePulledAt` fields cannot establish initial
 replication, streaming readiness or an advertised checkpoint epoch. Their

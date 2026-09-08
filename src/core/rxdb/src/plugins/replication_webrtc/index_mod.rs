@@ -78,6 +78,7 @@ const FORK_RESYNC_INTERVAL: Duration = Duration::from_secs(5);
 const PROTOCOL_ROOM_PAYLOAD_CACHE_TTL: Duration = Duration::from_secs(5);
 const MAX_CONCURRENT_MASTER_PULLS: usize = 4;
 const MAX_CONCURRENT_REQUEST_TASKS: usize = 32;
+const MAX_CONCURRENT_HANDSHAKE_REQUESTS: usize = 4;
 const MAX_CONCURRENT_AUXILIARY_REQUESTS: usize = 8;
 const BROWSER_LIVE_METHOD: &str = "ctox.browser.live.v1";
 const OUTBOUND_SELLIFY_LOOKUP_METHOD: &str = "ctox.outbound.sellify_lookup.v1";
@@ -291,9 +292,10 @@ pub struct RxWebRTCReplicationPool<H: WebRTCConnectionHandler> {
     /// Historical pulls perform synchronous SQLite work below an async
     /// boundary. Bound them so command writes retain a runnable Tokio worker.
     master_pull_semaphore: Semaphore,
-    /// Bounds concurrently executing inbound request futures across protocol,
-    /// replication, query, and file-fetch methods.
+    /// Bounds replication, query, and file-fetch request futures.
     request_semaphore: Arc<Semaphore>,
+    /// Protocol admission must remain runnable when data transfers back up.
+    handshake_request_semaphore: Arc<Semaphore>,
     auxiliary_request_semaphore: Arc<Semaphore>,
     /// Per-peer sub-tasks (the master-change relay tasks, one per collection).
     peer_states: Mutex<HashMap<H::Peer, PeerState>>,
@@ -376,6 +378,9 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
             protocol_room_payload_build: AsyncMutex::new(()),
             master_pull_semaphore: Semaphore::new(MAX_CONCURRENT_MASTER_PULLS),
             request_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUEST_TASKS)),
+            handshake_request_semaphore: Arc::new(Semaphore::new(
+                MAX_CONCURRENT_HANDSHAKE_REQUESTS,
+            )),
             auxiliary_request_semaphore: Arc::new(Semaphore::new(
                 MAX_CONCURRENT_AUXILIARY_REQUESTS,
             )),
@@ -542,6 +547,17 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         F: std::future::Future<Output = ()> + Send + 'static,
     {
         self.spawn_limited(Arc::clone(&self.request_semaphore), future);
+    }
+
+    fn spawn_replication_request<F>(self: &Arc<Self>, method: &str, future: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        if matches!(method, "token" | "ctoxProtocol") {
+            self.spawn_limited(Arc::clone(&self.handshake_request_semaphore), future);
+        } else {
+            self.spawn_tracked(future);
+        }
     }
 
     fn spawn_limited<F>(self: &Arc<Self>, request_semaphore: Arc<Semaphore>, future: F)
@@ -1312,7 +1328,8 @@ where
                 let storage_token = storage_token.clone();
                 let peer_session_id = peer_session_id.clone();
                 let is_peer_session_valid = is_peer_session_valid.clone();
-                pool_clone.spawn_tracked(async move {
+                let request_method = item.message.method.clone();
+                pool_clone.spawn_replication_request(&request_method, async move {
                     if pool_task
                         .canceled
                         .load(std::sync::atomic::Ordering::SeqCst)
@@ -5009,6 +5026,139 @@ mod tests {
         assert_eq!(storage_touches.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(responses.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert!(pool.tasks.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn inbound_handshakes_progress_while_data_and_auxiliary_capacity_is_full() {
+        let collection =
+            crate::rx_collection::test_support::test_collection_named("handshake-priority").await;
+        let handler = MockHandler::new();
+        let pool = replicate_web_rtc_multi_with_validators(
+            Arc::clone(&collection.database),
+            vec![collection],
+            handler.clone(),
+            None,
+            None,
+            Some("handshake-room".into()),
+            Some(StdArc::<str>::from("native-session")),
+        )
+        .await
+        .unwrap();
+        let data_permits = Arc::clone(&pool.request_semaphore)
+            .acquire_many_owned(MAX_CONCURRENT_REQUEST_TASKS as u32)
+            .await
+            .unwrap();
+        let auxiliary_permits = Arc::clone(&pool.auxiliary_request_semaphore)
+            .acquire_many_owned(MAX_CONCURRENT_AUXILIARY_REQUESTS as u32)
+            .await
+            .unwrap();
+        let mut sent = handler.sent_subject.subscribe();
+        handler.inject_message(
+            "browser",
+            master_changes_since_frame("bulk", "handshake-priority"),
+        );
+        handler.inject_message(
+            "browser",
+            ctox_protocol_frame("protocol", "handshake-priority"),
+        );
+        handler.inject_message(
+            "browser",
+            WebRTCMessage {
+                id: "token".into(),
+                method: "token".into(),
+                params: vec![],
+                collection: None,
+            },
+        );
+        let handshakes = tokio::time::timeout(Duration::from_secs(2), async {
+            let mut received = std::collections::HashSet::new();
+            while received.len() < 2 {
+                if let WebRTCWireFrame::Response(response) = sent.next().await.unwrap() {
+                    assert_ne!(
+                        response.id, "bulk",
+                        "data requests must retain their capacity limit"
+                    );
+                    assert!(response.error.is_none());
+                    match response.id.as_str() {
+                        "protocol" => assert_eq!(response.result["protocol"], CTOX_RXDB_PROTOCOL),
+                        "token" => assert!(response
+                            .result
+                            .as_str()
+                            .is_some_and(|token| !token.is_empty())),
+                        other => panic!("unexpected response {other}"),
+                    }
+                    received.insert(response.id);
+                }
+            }
+        })
+        .await;
+        drop(data_permits);
+        let bulk = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let WebRTCWireFrame::Response(response) = sent.next().await.unwrap() {
+                    if response.id == "bulk" {
+                        break;
+                    }
+                }
+            }
+        })
+        .await;
+        pool.cancel().await;
+        drop(auxiliary_permits);
+        assert!(
+            handshakes.is_ok(),
+            "protocol/token must not wait behind full data capacity"
+        );
+        assert!(
+            bulk.is_ok(),
+            "queued replication must resume after capacity is returned"
+        );
+    }
+
+    #[tokio::test]
+    async fn reserved_handshake_capacity_preserves_session_rejection() {
+        let collection =
+            crate::rx_collection::test_support::test_collection_named("handshake-denial").await;
+        let handler = MockHandler::new();
+        let pool = replicate_web_rtc_multi_with_validators(
+            Arc::clone(&collection.database),
+            vec![collection],
+            handler.clone(),
+            None,
+            Some(StdArc::new(|_, _| WebRTCPeerSessionValidation::Reject)),
+            Some("handshake-room".into()),
+            Some(StdArc::<str>::from("native-session")),
+        )
+        .await
+        .unwrap();
+        let permits = Arc::clone(&pool.request_semaphore)
+            .acquire_many_owned(MAX_CONCURRENT_REQUEST_TASKS as u32)
+            .await
+            .unwrap();
+        let mut sent = handler.sent_subject.subscribe();
+        handler.inject_message(
+            "rejected-browser",
+            ctox_protocol_frame("rejected", "handshake-denial"),
+        );
+        let response = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let WebRTCWireFrame::Response(response) = sent.next().await.unwrap() {
+                    if response.id == "rejected" {
+                        break response;
+                    }
+                }
+            }
+        })
+        .await;
+        pool.cancel().await;
+        drop(permits);
+        let response = response.expect("session rejection must not wait for bulk capacity");
+        assert_eq!(
+            response.error.as_deref(),
+            Some("peer_authentication_failed")
+        );
+        assert!(response.result.is_null());
+        assert!(pool.authenticated_peers.lock().is_empty());
     }
 
     #[tokio::test]
