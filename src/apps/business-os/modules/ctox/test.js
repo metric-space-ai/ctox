@@ -115,6 +115,13 @@ test('Task cards explain failures while original evidence remains inspectable', 
   assert.match(hooks.taskSummaryReason({ status: 'failed', statusNote: 'CTOX chat could not continue because the model API is temporarily unavailable. The task must stay open and retry after cooldown.' }, { lang: 'de' }), /^Der Modelldienst war nicht erreichbar\.$/);
 });
 
+test('Reported task descriptions populate the order without replacing an explicit prompt', () => {
+  assert.equal(hooks.taskPromptDisplay({ description: 'Die Liste lädt dauerhaft.' }).text, 'Die Liste lädt dauerhaft.');
+  assert.equal(hooks.taskPromptDisplay({ prompt: 'Auftrag', description: 'Befund', summary: 'Kurzfassung' }).text, 'Auftrag');
+  assert.equal(hooks.taskPromptDisplay({ summary: 'Kurzfassung' }).text, 'Kurzfassung');
+  assert.equal(hooks.taskPromptDisplay({}).text, '');
+});
+
 test('crew labels describe work without exposing implementation terminology', () => {
   function check(value, path) {
     if (typeof value === 'string') {

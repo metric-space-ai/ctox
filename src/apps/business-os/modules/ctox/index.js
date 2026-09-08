@@ -3476,13 +3476,15 @@ function taskDrawer(task, state, { editorOnly = false } = {}) {
   const titleField = taskFieldDisplay(task.title || '', state);
   const promptField = taskPromptDisplay(task, state);
   const summary = taskDetailText(itemSummary(task) || '', state);
-  const resultSummaryText = taskDetailText(task.resultSummary || '', state);
+  const resultSummaryText = String(task.resultSummary || '').trim() === promptField.text
+    ? '' : taskDetailText(task.resultSummary || '', state);
   const target = displayPathLike(task.target || task.commandId || task.taskId || '');
   const sourceLine = [
     displayWorkSource(task.source || task.moduleId || 'ctox'),
     formatShortTimestamp(task.createdAt || task.startedAt || task.timestamp),
   ].filter(Boolean).join(' · ');
-  const showSummary = summary && summary !== task.target && summary !== task.commandId && summary !== task.taskId;
+  const showSummary = summary && summary !== task.target && summary !== task.commandId && summary !== task.taskId
+    && summary !== taskDetailText(promptField.text, state);
   const body = document.createElement('div');
   body.className = 'drawer-body ctox-task-drawer';
   body.setAttribute('data-context-record-id', task.id);
@@ -3507,6 +3509,7 @@ function taskDrawer(task, state, { editorOnly = false } = {}) {
       ${taskLiveStatusMarkup(task, state)}
       ${taskControlsMarkup(task, state)}
     </section>
+    ${!editorOnly && promptField.text ? `<section class="ctox-task-description"><h3>${escapeHtml(t.taskPrompt)}</h3><p>${escapeHtml(promptField.text)}</p></section>` : ''}
     <details class="ctox-drawer-edit-fold" ${editorOnly ? 'open' : ''}>
     <summary>${escapeHtml(t.editTask)}</summary>
     <form class="ctox-card ctox-task-edit" data-ctox-task-edit>
@@ -6549,7 +6552,7 @@ function taskFieldDisplay(value) {
 }
 
 function taskPromptDisplay(task) {
-  return { redacted: false, text: String(task?.prompt || task?.summary || '').trim() };
+  return { redacted: false, text: String(task?.prompt || task?.description || task?.summary || '').trim() };
 }
 
 function taskDetailText(value, state) {
@@ -6851,6 +6854,7 @@ function escapeAttr(value) {
 }
 
 export const __ctoxTestHooks = {
+  taskPromptDisplay,
   aggregateFlowMetrics,
   crewHomeMarkup,
   crewMemberDrawer,
