@@ -101,6 +101,26 @@ try {
       await manage.click();
       assert.deepEqual(await page.evaluate(() => window.openedSettings), { initialTab: 'channels' });
       assert.equal(await page.locator('.ctox-more-actions-body:popover-open').count(), 0);
+      await page.evaluate(() => {
+        window.crewFixture.state.ctx.openLeftDrawer = content => {
+          const panel = document.createElement("aside");
+          panel.id = "fixture-task-drawer";
+          panel.style.cssText = "position:fixed;inset:0 0 0 50%;overflow:auto;z-index:100";
+          panel.append(content);
+          document.body.append(panel);
+        };
+      });
+      await page.locator("[data-ctox-main] .ctox-more-actions > summary").click();
+      await page.locator("[data-open-selected-task]").click();
+      const taskHistory = page.locator(".ctox-drawer-timeline");
+      assert.equal(await taskHistory.getAttribute("open"), null);
+      assert.equal(await taskHistory.locator(".ctox-drawer-steps").isVisible(), false);
+      assert.ok(await taskHistory.evaluate(e => e.getBoundingClientRect().height) <= 40);
+      await taskHistory.locator("summary").click();
+      assert.equal(await taskHistory.locator(".ctox-drawer-steps").isVisible(), true);
+      await taskHistory.locator("summary").click();
+      assert.equal(await taskHistory.locator(".ctox-drawer-steps").isVisible(), false);
+      await page.locator("#fixture-task-drawer").evaluate(e => e.remove());
       await page.locator('[data-node-id="model-failed"]').scrollIntoViewIfNeeded();
       for(const theme of ['dark','light']){
         await page.locator('html').evaluate((element,theme)=>element.dataset.theme=theme,theme);
