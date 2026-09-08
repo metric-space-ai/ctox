@@ -2833,15 +2833,19 @@ mod tests {
     ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        let business_store = open_store(root)?;
+        let rxdb = create_repair_rxdb_tables(root)?;
 
-        for (suffix, terminal_status, expected_route, error_message) in [
-            ("success", "completed", "handled", None),
+        for (suffix, terminal_status, expected_route, error_message, reject_projection) in [
+            ("success", "completed", "handled", None, false),
             (
                 "failure",
                 "failed",
                 "failed",
                 Some("synthetic terminal failure"),
+                false,
             ),
+            ("projection-rollback", "completed", "leased", None, true),
         ] {
             let command_id = format!("cmd_terminal_linked_queue_{suffix}");
             let command = BusinessCommand {
@@ -2881,7 +2885,31 @@ mod tests {
                 "test worker leased linked task",
             )?;
 
-            channels::complete_business_control_command(
+            let initial_projection = serde_json::json!({
+                "id": task_id,
+                "command_id": command_id,
+                "status": "running",
+                "route_status": "leased",
+            });
+            upsert_business_record(
+                &business_store,
+                "ctox_queue_tasks",
+                &task_id,
+                1,
+                initial_projection.clone(),
+            )?;
+            rxdb.execute(
+                "INSERT INTO ctox_business_os__ctox_queue_tasks__v0(id, data) VALUES(?1, ?2)",
+                params![task_id, serde_json::to_string(&initial_projection)?],
+            )?;
+            if reject_projection {
+                rxdb.execute_batch(
+                    "CREATE TRIGGER reject_linked_queue_projection
+                     BEFORE UPDATE ON ctox_business_os__ctox_queue_tasks__v0
+                     BEGIN SELECT RAISE(ABORT, 'injected linked queue projection failure'); END;",
+                )?;
+            }
+            let completion = channels::complete_business_control_command(
                 root,
                 &command_id,
                 terminal_status,
@@ -2890,7 +2918,16 @@ mod tests {
                     "status": terminal_status,
                 }),
                 error_message,
-            )?;
+            );
+            if reject_projection {
+                let error = completion.expect_err("a failed projection must abort completion");
+                assert!(format!("{error:#}").contains("injected linked queue projection failure"));
+                let canonical = channels::business_command_projection(root, &command_id)?;
+                assert_eq!(canonical["execution_phase"], "leased");
+                assert_eq!(canonical["terminal_status"], "none");
+            } else {
+                completion?;
+            }
 
             let task = channels::load_queue_task(root, &task_id)?
                 .context("linked queue task must remain loadable after terminalization")?;
@@ -2898,8 +2935,29 @@ mod tests {
                 task.route_status, expected_route,
                 "terminal command must settle its canonical queue task without repair"
             );
-            assert!(task.lease_owner.is_none());
-            assert!(task.leased_at.is_none());
+            if reject_projection {
+                assert_eq!(task.lease_owner.as_deref(), Some("ctox-test"));
+                assert!(task.leased_at.is_some());
+            } else {
+                assert!(task.lease_owner.is_none());
+                assert!(task.leased_at.is_none());
+            }
+            let local_projection: String = business_store.query_row(
+                "SELECT payload_json FROM business_records WHERE collection = 'ctox_queue_tasks' AND record_id = ?1",
+                [&task_id], |row| row.get(0),
+            )?;
+            let replicated_projection: String = rxdb.query_row(
+                "SELECT data FROM ctox_business_os__ctox_queue_tasks__v0 WHERE id = ?1",
+                [&task_id],
+                |row| row.get(0),
+            )?;
+            for raw in [local_projection, replicated_projection] {
+                let projection: Value = serde_json::from_str(&raw)?;
+                assert_eq!(projection["route_status"], expected_route);
+                if reject_projection {
+                    assert_eq!(projection["status"], "running");
+                }
+            }
         }
 
         Ok(())

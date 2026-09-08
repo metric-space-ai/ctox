@@ -1230,6 +1230,9 @@ stores only after its transaction finds a linked task; unrelated control
 commands do not open them. The linked-task lookup, queue settlement and core
 completion remain in the same transaction. The full-host job runs the command
 plane and command transaction regressions before the unchanged browser budget.
+The linked-task regression opens both actual SQLite projection stores and
+injects an RxDB update failure. Core command phase, task lease and both
+projections must remain unchanged after that failed transaction.
 The same built binary also runs the existing 21-collection reload fixture,
 including retained IndexedDB, offline revision/tombstone changes, native
 restart, competing commands and paged demand reads. Its three 60-second
