@@ -14,6 +14,10 @@ on:
       - 'src/core/sync_host.rs'
       - 'src/core/rxdb/**'
       - 'src/apps/business-os/app.js'
+      - 'src/apps/business-os/index.html'
+      - 'src/apps/business-os/scripts/assert-business-chat-behavior.mjs'
+      - 'src/apps/business-os/scripts/assert-shell-v2-contract.mjs'
+      - 'src/apps/business-os/scripts/shell-v2-geometry-lab.mjs'
       - 'src/apps/business-os/rxdb/**'
       - 'src/apps/business-os/shared/**'
       - 'src/apps/business-os/package.json'
@@ -31,6 +35,10 @@ on:
       - 'src/core/sync_host.rs'
       - 'src/core/rxdb/**'
       - 'src/apps/business-os/app.js'
+      - 'src/apps/business-os/index.html'
+      - 'src/apps/business-os/scripts/assert-business-chat-behavior.mjs'
+      - 'src/apps/business-os/scripts/assert-shell-v2-contract.mjs'
+      - 'src/apps/business-os/scripts/shell-v2-geometry-lab.mjs'
       - 'src/apps/business-os/rxdb/**'
       - 'src/apps/business-os/shared/**'
       - 'src/apps/business-os/package.json'
@@ -141,6 +149,45 @@ jobs:
           path: ${{ runner.temp }}/ctox-browser-proof/
           if-no-files-found: error
 
+  chat-presentation:
+    name: Chat presentation (Chromium)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Configure disposable browser evidence storage
+        shell: bash
+        run: |
+          printf 'TMPDIR=%s\nPLAYWRIGHT_BROWSERS_PATH=%s/ctox-chat-chromium\nnpm_config_cache=%s/ctox-chat-npm\n' "$RUNNER_TEMP" "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/ctox-chat-proof"
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.13.1'
+      - name: Install the pinned browser runtime
+        run: |
+          npm --prefix src/apps/business-os ci
+          npm --prefix src/apps/business-os exec playwright install --with-deps chromium
+      - name: Record tested source
+        run: git rev-parse HEAD > "$RUNNER_TEMP/ctox-chat-proof/source-revision.txt"
+      - name: Shell geometry contract
+        run: |
+          node src/apps/business-os/scripts/assert-shell-v2-contract.mjs
+          node src/apps/business-os/scripts/shell-v2-geometry-lab.mjs \
+            --apps ctox --widths 1180,1000,720 \
+            --output-dir "$RUNNER_TEMP/ctox-chat-proof/shell-geometry"
+      - name: Chat interaction and delayed storage presentation
+        if: ${{ !cancelled() }}
+        run: |
+          BUSINESS_CHAT_BEHAVIOR_OUTPUT_DIR="$RUNNER_TEMP/ctox-chat-proof/chat-behavior" \
+            node src/apps/business-os/scripts/assert-business-chat-behavior.mjs
+      - name: Retain browser presentation evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ctox-chat-presentation-proof
+          path: ${{ runner.temp }}/ctox-chat-proof/
+          if-no-files-found: error
+
   full-host-acceptance:
     name: Full CTOX host acceptance (Linux)
     runs-on: ubuntu-22.04
@@ -203,17 +250,6 @@ jobs:
             | tee "$RUNNER_TEMP/ctox-host-proof/command-completion-tests.log"
           cargo test --locked --bin ctox -- mission::channels::tests::business_command mission::channels::tests::business_control --test-threads=2 \
             | tee "$RUNNER_TEMP/ctox-host-proof/command-transaction-tests.log"
-      - name: Shell and chat presentation regressions
-        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          node src/apps/business-os/scripts/assert-shell-v2-contract.mjs
-          node src/apps/business-os/scripts/shell-v2-geometry-lab.mjs \
-            --apps ctox --widths 1180,1000,720 \
-            --output-dir "$RUNNER_TEMP/ctox-host-proof/shell-geometry"
-          BUSINESS_CHAT_BEHAVIOR_OUTPUT_DIR="$RUNNER_TEMP/ctox-host-proof/chat-behavior" \
-            node src/apps/business-os/scripts/assert-business-chat-behavior.mjs
       - name: Context prompt first paint and authorized native command
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         timeout-minutes: 10

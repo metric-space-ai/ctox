@@ -1343,6 +1343,30 @@ test('business chat open resolves the already submitted task instead of creating
   assert.equal(state.chats.length, 3);
 });
 
+test('chat opening reads storage only to resolve a missing current tracking identity', () => {
+  const { chatOpenNeedsHydration } = __businessChatTestInternals;
+  const state = { chats: [{
+    id: 'known',
+    createdAt: Date.now(),
+    lastTrackingId: 'task-known',
+    messages: [{ commandId: 'command-known' }],
+  }] };
+  for (const detail of [{ draft: 'new' }, { reuseActive: true }, { focus: {} }]) {
+    assert.equal(chatOpenNeedsHydration(state, detail), false);
+  }
+  for (const detail of [
+    { task_id: 'task-known' }, { taskId: 'task-known' },
+    { command_id: 'command-known' }, { commandId: 'command-known' },
+    { focus: { task_id: 'task-known' } }, { focus: { commandId: 'command-known' } },
+  ]) assert.equal(chatOpenNeedsHydration(state, detail), false);
+  for (const detail of [
+    { task_id: 'not-loaded' }, { command_id: 'not-loaded', reuseActive: true },
+    { focus: { taskId: 'not-loaded' } },
+  ]) assert.equal(chatOpenNeedsHydration(state, detail), true);
+  state.chats[0].createdAt = Date.now() - 86400000 * 2;
+  assert.equal(chatOpenNeedsHydration(state, { task_id: 'task-known' }), true);
+});
+
 test('first remote hydration keeps a newly submitted chat focused', async () => {
   const previousLocalStorage = globalThis.localStorage;
   globalThis.localStorage = {

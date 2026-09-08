@@ -42,6 +42,19 @@ high swap use. No tenant is upgraded; PR #69 remains draft. Generic draft/open
 hydration, database lifecycle recovery and the architecture-wide acceptance
 criteria remain open.
 
+The following chat-open change removes all-chat and crew reads from new-draft
+and already-loaded-chat presentation, and removes the redundant per-open crew
+subscription. Unknown tracking identities still hydrate before resolution;
+the existing presentation ownership ticket prevents a delayed lookup from
+overriding a newer opening. The 76 chat tests pass locally. Four delayed-store
+browser cases are added for first paint, edit/focus preservation, remote-only
+history reuse and superseded lookups; their execution is pending. These use
+the real chat component with a controlled storage adapter, and are not native
+or production end-to-end evidence. The component/geometry browser job now
+runs independently of the full Rust build and retains its own source revision,
+report and screenshots; the real native context-action gate remains in the
+full-host job. Workflow YAML and this separation are checked locally.
+
 The command-scoped writer and deferred queue-store attachment preserve core
 claim/idempotency, outbox and projection ordering. Their 30-sample subphase
 medians are initial RxDB projection 49.293 ms, core completion 8.741 ms,

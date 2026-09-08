@@ -1241,9 +1241,18 @@ assertions. This is separate from the warm end-to-end command p50 below
 300 ms. The new browser measurement has not yet passed; the focused facade
 contract test is not a substitute for it.
 
-The generic draft/open handler still waits for chat and crew hydration.
-This change does not establish its responsiveness, database lifecycle
-recovery or critical-collection boot p95 below five seconds.
+The generic open handler presents new drafts and already loaded chats
+without a preceding storage read. Existing crew readiness and change
+subscriptions own crew refresh; opening another chat adds no subscription.
+An unresolved task/command identity still requires hydration before choosing
+a chat, to avoid duplicating remote history. An opening request superseded
+during that lookup cannot change the current focus or draft.
+
+The component browser harness adds delayed-storage cases for immediate draft
+and known-chat presentation below 150 ms, preservation of edits after
+hydration, reuse of remote-only history, and superseded lookup ownership.
+These cases have not yet run. They do not establish cold tracked-chat opening,
+database lifecycle recovery, or critical-collection boot p95 below five seconds.
 
 ## 11. Test map
 

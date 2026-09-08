@@ -526,6 +526,68 @@ try {
     expect(chipLatency < 150, `chip selection must render before persistence delay, got ${chipLatency.toFixed(1)}ms`);
   });
 
+  for (const reuseKnown of [false, true]) {
+    await scenario(page, reuseKnown ? 'known-chat-opens-before-storage' : 'new-draft-opens-before-storage', {
+      count: 1, groupedResearch: true, staticTracking: true, dbDelay: 1000,
+    }, async () => {
+      const opened = await page.evaluate(async (reuse) => {
+        const start = performance.now();
+        window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail: {
+          title: 'Immediate draft', draft: 'Prepared prompt', reuseActive: false,
+          ...(reuse ? { task_id: 'task_research_0' } : {}),
+        } }));
+        await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-active textarea')?.value === 'Prepared prompt');
+        await window.chatHarness.waitForPaint();
+        const input = document.querySelector('.ctox-chat-window.is-active textarea');
+        const rect = input.getBoundingClientRect();
+        return { firstPaintMs: performance.now() - start, visible: rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight, ...window.chatHarness.collect() };
+      }, reuseKnown);
+      results.push({ scenario: reuseKnown ? 'known-chat-first-paint' : 'new-draft-first-paint', metrics: opened });
+      expect(opened.visible, 'the prepared draft must be visible');
+      expect(opened.firstPaintMs < 150, `draft must paint before 1000 ms storage, got ${opened.firstPaintMs} ms`);
+      expect(opened.storedChats === (reuseKnown ? 1 : 2), 'opening must preserve existing chats without duplicating a known task');
+      if (reuseKnown) expect(opened.activeId === 'chat_0', 'known task must reuse its original chat ID');
+      await page.locator('.ctox-chat-window.is-active textarea').fill('Edited while storage is pending');
+      await page.evaluate(() => window.chatHarness.waitFor(() => window.chatHarness.chatReadStats.completed > 0));
+      await page.evaluate(() => window.chatHarness.waitForPaint());
+      const hydrated = await page.evaluate(() => ({
+        ...window.chatHarness.collect(),
+        draft: document.querySelector('.ctox-chat-window.is-active textarea')?.value,
+      }));
+      expect(hydrated.activeId === opened.activeId, 'late hydration must preserve the selected chat');
+      expect(hydrated.storedChats === opened.storedChats, 'late hydration must not duplicate chats');
+      expect(hydrated.draft === 'Edited while storage is pending', 'late hydration must preserve user edits');
+    });
+  }
+
+  await scenario(page, 'unloaded-task-reuses-history-after-lookup', {
+    count: 1, groupedResearch: true, staticTracking: true, remoteOnly: true, dbDelay: 500,
+  }, async () => {
+    const resolved = await page.evaluate(async () => {
+      window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail: { task_id: 'task_research_0' } }));
+      await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-active')?.dataset.chatId === 'chat_0');
+      return window.chatHarness.collect();
+    });
+    expect(resolved.storedChats === 1, 'remote-only task must resolve its existing history without a placeholder duplicate');
+  });
+
+  await scenario(page, 'delayed-task-lookup-cannot-reopen-over-new-draft', {
+    count: 1, groupedResearch: true, staticTracking: true, remoteOnly: true, dbDelay: 500,
+  }, async () => {
+    const after = await page.evaluate(async () => {
+      window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail: { task_id: 'task_research_0' } }));
+      window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail: { draft: 'Newer user intent', reuseActive: false } }));
+      await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-active textarea')?.value === 'Newer user intent');
+      const activeId = window.chatHarness.collect().activeId;
+      await window.chatHarness.waitFor(() => window.chatHarness.chatReadStats.completed >= 2);
+      await window.chatHarness.waitForPaint();
+      return { intendedId: activeId, ...window.chatHarness.collect(), draft: document.querySelector('.ctox-chat-window.is-active textarea')?.value };
+    });
+    expect(after.activeId === after.intendedId && after.activeId !== 'chat_0', 'late task lookup must not steal focus');
+    expect(after.draft === 'Newer user intent', 'late task lookup must not overwrite the newer draft');
+    expect(after.storedChats === 2, 'remote history and the explicit new draft must each remain once');
+  });
+
   await scenario(page, 'active-input-focus-and-type', { count: 1 }, async () => {
     await page.click('.ctox-chat-window.is-active textarea');
     await page.keyboard.type('Browser Test Aufgabe');
@@ -806,10 +868,10 @@ function harnessHtml() {
       if (chats.length) chats[activeIndex].minimized = false;
       localStorage.setItem(CHAT_STATE_KEY, JSON.stringify({
         selectedDate,
-        activeChatId: options.activeChatId || chats[activeIndex]?.id || '',
+        activeChatId: options.remoteOnly ? '' : options.activeChatId || chats[activeIndex]?.id || '',
         dockCollapsed: Boolean(options.dockCollapsed),
         preCollapseExpandedChatIds: Array.isArray(options.preCollapseExpandedChatIds) ? options.preCollapseExpandedChatIds : [],
-        chats,
+        chats: options.remoteOnly ? [] : chats,
       }));
       initBusinessChat({
         session: { authenticated: true, user: { id: owner, name: 'Harness User' } },
@@ -958,6 +1020,8 @@ function harnessHtml() {
 
     function makeDb(chats, delayMs, transientError, deleteError, crewMemberCount = 0, queueTasks = []) {
       const store = new Map(chats.map((chat) => [chat.id, structuredClone(chat)]));
+      const readStats = { completed: 0 };
+      window.chatHarness.chatReadStats = readStats;
       const crewMembers = makeCrewMembers(crewMemberCount);
       const delay = () => new Promise((resolve) => setTimeout(resolve, delayMs));
       const maybeThrow = async () => {
@@ -986,7 +1050,7 @@ function harnessHtml() {
                 return { unsubscribe: () => chatCollectionSubscribers.delete(callback) };
               },
             },
-            find: () => ({ exec: async () => { await maybeThrow(); return Array.from(store.keys()).map(docFor).filter(Boolean); } }),
+            find: () => ({ exec: async () => { await maybeThrow(); readStats.completed += 1; return Array.from(store.keys()).map(docFor).filter(Boolean); } }),
             findOne: (id) => ({ exec: async () => { await maybeThrow(); return docFor(id); } }),
             insert: async (doc) => { await maybeThrow(); store.set(doc.id, structuredClone(doc)); return docFor(doc.id); },
           },

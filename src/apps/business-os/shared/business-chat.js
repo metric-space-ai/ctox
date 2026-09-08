@@ -613,17 +613,13 @@ export function initBusinessChat({
   const handleExternalOpen = async (event) => {
     const detail = event.detail || {};
     const presentationTicket = claimChatOpenOwnership(state);
-    await hydrateChatsFromRxDb({ state, db, session }).catch(() => false);
-    await loadCrewMembers({ state, db }).catch(() => false);
-    // The pool follows the crew: a new or archived member shows up without a
-    // reload, a member on duty changes its expression in the bar.
-    try {
-      db?.raw?.ctox_crew_members?.$?.subscribe?.(() => {
-        loadCrewMembers({ state, db }).then((changed) => {
-          if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
-        }).catch(() => {});
-      });
-    } catch {}
+    // A fresh draft and an already loaded conversation are local presentation
+    // operations. Only an unresolved tracking identity needs a lookup before
+    // choosing a chat; creating one first could duplicate the remote history.
+    if (chatOpenNeedsHydration(state, detail)) {
+      await hydrateChatsFromRxDb({ state, db, session }).catch(() => false);
+    }
+    // Crew readiness and updates already belong to refreshCrewPool above.
     if (!ownsChatOpenOwnership(state, presentationTicket)) return;
     state.selectedDate = getLocalDateString(Date.now());
     const chat = resolveChatForOpenDetail(state, session, detail);
@@ -2240,6 +2236,15 @@ function findChatForOpenDetail(state, detail = {}) {
       || (commandId && [message?.commandId, message?.command_id, message?.replyFor].some((value) => String(value || '').trim() === commandId))
     ));
   }) || null;
+}
+
+function chatOpenNeedsHydration(state, detail = {}) {
+  const focus = detail.focus && typeof detail.focus === 'object' ? detail.focus : {};
+  const taskId = String(detail.task_id || detail.taskId || focus.task_id || focus.taskId || '').trim();
+  const commandId = String(detail.command_id || detail.commandId || focus.command_id || focus.commandId || '').trim();
+  if (!taskId && !commandId) return false;
+  const trackedChat = findChatForOpenDetail(state, detail);
+  return !trackedChat || getLocalDateString(trackedChat.createdAt) !== getLocalDateString(Date.now());
 }
 
 function resolveChatForOpenDetail(state, session, detail = {}) {
@@ -9089,6 +9094,7 @@ export const __businessChatTestInternals = Object.freeze({
   createTrackedMessageWatch,
   findDocsByIds,
   findChatForOpenDetail,
+  chatOpenNeedsHydration,
   focusChatForUser,
   getLocalDateString,
   hasActiveTrackedMessages,
