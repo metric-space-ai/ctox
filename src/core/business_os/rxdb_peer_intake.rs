@@ -812,12 +812,38 @@ pub(super) async fn accept_pending_business_command(
     // its client_context (incl. actor) is attacker-controllable, so it is tagged
     // ReplicatedPeer and cannot authorize a privileged role without a verified
     // capability token (see store::rxdb_session_from_command).
+    let intake_probe = document_for_store
+        .pointer("/client_context/command_timing_probe")
+        .and_then(Value::as_bool)
+        .filter(|requested| *requested)
+        .map(|_| {
+            (
+                Instant::now(),
+                command_id_from_document(&document_for_store).ok(),
+            )
+        });
     let accepted_result = tokio::task::spawn_blocking(move || {
-        store::accept_rxdb_business_command_with_origin(
+        let queue_wait_ms = intake_probe
+            .as_ref()
+            .map(|(started, _)| started.elapsed().as_secs_f64() * 1_000.0);
+        let result = store::accept_rxdb_business_command_with_origin(
             &accept_root,
             document_for_store,
             store::CommandOrigin::ReplicatedPeer,
-        )
+        );
+        if let Some(((started, command_id), queue_wait_ms)) = intake_probe.zip(queue_wait_ms) {
+            eprintln!(
+                "command_intake_queue_sample={}",
+                json!({
+                    "command_id": command_id,
+                    "queue_wait_ms": queue_wait_ms,
+                    "store_execution_ms":
+                        started.elapsed().as_secs_f64() * 1_000.0 - queue_wait_ms,
+                    "ok": result.is_ok(),
+                })
+            );
+        }
+        result
     })
     .await;
 

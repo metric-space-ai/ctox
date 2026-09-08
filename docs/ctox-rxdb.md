@@ -1211,6 +1211,14 @@ commands. It preserves all seven correlated marks and recomputes the total
 browser-clock p50, requiring it to be strictly below 300 ms. Missing, duplicate,
 non-numeric or inconsistent measurements fail the gate. The synthetic
 `command-roundtrip-budget-smoke` cases validate only this rejection logic.
+For explicitly requested command timing probes, the native log additionally
+emits `command_intake_sample` with the command ID and measured authentication
+and identity-stamping milliseconds. Both phases precede the existing
+`native_dispatch_entered` mark. `command_intake_queue_sample` separately measures
+blocking-pool queue wait and the store execution duration for the same command.
+The full-host artifact retains those logs; these
+subphase diagnostics never change the seven marks or the total latency budget,
+and contain no token, identity claims or command payload.
 The same built binary also runs the existing 21-collection reload fixture,
 including retained IndexedDB, offline revision/tombstone changes, native
 restart, competing commands and paged demand reads. Its three 60-second

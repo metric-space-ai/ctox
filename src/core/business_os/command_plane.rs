@@ -634,8 +634,25 @@ pub fn accept_rxdb_business_command_with_origin(
             .unwrap_or(Value::Null),
     };
     if matches!(command.origin, CommandOrigin::ReplicatedPeer) {
+        let intake_started = command_timing_probe_requested(&command).then(std::time::Instant::now);
         let session = rxdb_authenticated_session(root, &command)?;
+        let authentication_ms =
+            intake_started.map(|started| started.elapsed().as_secs_f64() * 1_000.0);
         stamp_verified_session_identity(root, &mut command, &session);
+        if let Some((started, authentication_ms)) = intake_started.zip(authentication_ms) {
+            // This work precedes native_dispatch_entered in the existing
+            // roundtrip marks. Keep the budget unchanged and expose the two
+            // measured phases only for explicitly requested timing probes.
+            eprintln!(
+                "command_intake_sample={}",
+                serde_json::json!({
+                    "command_id": command_id,
+                    "authentication_ms": authentication_ms,
+                    "identity_stamping_ms":
+                        started.elapsed().as_secs_f64() * 1_000.0 - authentication_ms,
+                })
+            );
+        }
     }
     let _command_timing_probe = install_command_timing_probe(&command);
     let native_authorization = recoverable_background_control_claim_authorization(root, &command);
