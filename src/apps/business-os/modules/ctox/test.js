@@ -98,6 +98,10 @@ test('Only configured communication accounts appear as inputs, never task-origin
   const empty = hooks.inboundEndpointFlowSvg({ ...model, inboundChannels: [] }, tasks[0], { lang: 'de' });
   assert.match(empty, /Keine Kanäle eingerichtet/);
   assert.doesNotMatch(empty, /ctox-flow-channel-edge/);
+  assert.deepEqual(hooks.buildInboundChannels(tasks, null), []);
+  const unavailable = hooks.inboundEndpointFlowSvg({ ...model, inboundChannels: [], inboundChannelsAvailable: false }, tasks[0], { lang: 'de' });
+  assert.match(unavailable, /Kanäle nicht verfügbar/);
+  assert.doesNotMatch(unavailable, /Keine Kanäle eingerichtet/);
 });
 
 test('Task cards explain failures while original evidence remains inspectable', () => {

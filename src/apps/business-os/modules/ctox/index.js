@@ -918,7 +918,7 @@ async function hydrateFromLocal(state) {
     loadHarnessFlowSnapshot(state.ctx).catch(() => emptyHarnessFlow('harness_flow_unavailable')),
     loadLocalCrewMembers(state.ctx).catch(() => []),
     loadLocalHarnessStatus(state.ctx).catch(() => null),
-    loadLocalChannelAccounts(state.ctx).catch(() => []),
+    loadLocalChannelAccounts(state.ctx).catch(() => null),
   ]);
   if (state.disposed) return;
   state.crewMembers = crewMembers;
@@ -2792,7 +2792,7 @@ function inboundEndpointFlowSvg(model, selectedTask, state) {
   const selectedEdgeY = nodeY + 26;
   const queueLeft = queued.x - NODE_WIDTH / 2;
   const queueApproachX = Math.max(nodeX + nodeWidth + 22, queueLeft - 26);
-  if (!endpoint) return `<g class="ctox-flow-inbound"><text class="ctox-flow-inbound-label" x="${nodeX}" y="${nodeY - 14}">${escapeHtml(t.inboundChannels)}</text><text class="ctox-flow-channel-count" x="${nodeX}" y="${nodeY + 16}">${escapeHtml(state.lang === 'de' ? 'Keine Kanäle eingerichtet' : 'No channels configured')}</text></g>`;
+  if (!endpoint) return `<g class="ctox-flow-inbound"><text class="ctox-flow-inbound-label" x="${nodeX}" y="${nodeY - 14}">${escapeHtml(t.inboundChannels)}</text><text class="ctox-flow-channel-count" x="${nodeX}" y="${nodeY + 16}">${escapeHtml(model.inboundChannelsAvailable === false ? (state.lang === 'de' ? 'Kanäle nicht verfügbar' : 'Channels unavailable') : (state.lang === 'de' ? 'Keine Kanäle eingerichtet' : 'No channels configured'))}</text></g>`;
   const detail = state.lang === 'de' ? `${endpoint.count} ${endpoint.count === 1 ? 'Aufgabe' : 'Aufgaben'}` : `${endpoint.count} ${endpoint.count === 1 ? 'task' : 'tasks'}`;
   return `
     <g class="ctox-flow-inbound" aria-label="Eingänge für die Crew">
@@ -3100,6 +3100,7 @@ function buildHarnessModel(data, flow, lang = 'de', channelAccounts = []) {
     completedRuns: data.runs.filter((run) => run.status === 'completed'),
     tasks,
     inboundChannels: buildInboundChannels(tasks, channelAccounts),
+    inboundChannelsAvailable: channelAccounts !== null,
     recentTasks: buildRecentTasks(data),
     queueNow: data.queue.filter((item) => ['queued', 'running', 'leased', 'pending'].includes(item.status) || item.priority === 'urgent'),
     reviewItems: data.communications.filter((item) => item.status === 'review' || item.status === 'drafting'),
@@ -3205,7 +3206,7 @@ function buildTaskList(data) {
 
 function buildInboundChannels(tasks, accounts = []) {
   const channels = new Map();
-  for (const account of accounts) {
+  for (const account of accounts || []) {
     if (!account?.channel || account._deleted === true || account.is_deleted === true || account.enabled === false) continue;
     const key = normalizeInboundChannel(account.channel);
     // A task's module is provenance, not an installed communication adapter.
@@ -4687,7 +4688,7 @@ async function loadLocalCollection(ctx, collectionName) {
 
 async function loadLocalChannelAccounts(ctx) {
   const collection = ctoxCollection(ctx, 'communication_accounts');
-  if (!collection) return [];
+  if (!collection) return null;
   const docs = await collection.find({ selector: {}, limit: 200 }).exec();
   // No account addresses, credentials or adapter diagnostics enter this view.
   return docs.map((doc) => {
