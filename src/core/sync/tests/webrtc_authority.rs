@@ -325,29 +325,36 @@ async fn exercise_worker_session(reconnect: Option<u64>) {
         assert_eq!(ownership.node_id, 4);
         assert_eq!(ownership.generation, 1);
         if reconnect == Some(4) {
+            // Capture old generations BEFORE rejoining. Looking them up after
+            // signaling announces the new address can select a replacement.
+            let retired: Vec<_> = routes.values().map(|route| {
+                session.pool().connection_handler.connection_for_peer(route)
+                    .expect("old worker channel is open")
+            }).collect();
             let reopened = signal.disconnect_and_wait_for_rejoin("native000004").await;
             assert_eq!(reopened, "native000005");
-            // Tear down the old P2P edges as well: continued use of an old open
-            // DataChannel is insufficient proof of a successful reconnect.
-            let reconnects: Vec<_> = (1..=3).map(|id| {
-                diagnostic_pools[&id].upgrade().unwrap().connection_handler.connect_stream()
-            }).collect();
-            for route in routes.values() {
-                let handler = &session.pool().connection_handler;
-                let connection = handler.connection_for_peer(route).expect("old worker channel is open");
-                handler.close_peer(&connection).await;
-            }
+            // Leave the old DataChannels open. A fresh offer to the new local
+            // signaling identity must replace them without a manual reset.
             tokio::time::timeout(Duration::from_secs(15), async {
-                for mut connected in reconnects {
-                    loop {
-                        let peer = connected.next().await.expect("voter connection stream ended");
-                        if peer.peer_id() == reopened { break; }
-                    }
-                }
-                while !routes.values().all(|route| route_ready(session.pool(), route)) {
+                while !retired.iter().all(|old| {
+                    let pool = session.pool();
+                    pool.connection_handler.connection_for_peer(old.peer_id())
+                        .is_some_and(|current| current != *old && pool.is_peer_ready_for_control(&current))
+                }) || !(1..=3).all(|id| {
+                    route_ready(&diagnostic_pools[&id].upgrade().unwrap(), &reopened)
+                }) {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
             }).await.unwrap_or_else(|error| panic!("worker did not establish three admitted channels from its new signaling route: {error}; {:?}", diagnostics()));
+            // Delayed teardown must target the retired generation, never the
+            // replacement sharing the same remote signaling address.
+            for old in retired {
+                let handler = &session.pool().connection_handler;
+                let replacement = handler.connection_for_peer(old.peer_id()).unwrap();
+                handler.close_peer(&old).await;
+                assert_eq!(handler.connection_for_peer(old.peer_id()), Some(replacement));
+                assert!(route_ready(session.pool(), old.peer_id()));
+            }
             let restored = call(worker.ipc_endpoint(), "after-reconnect", SyncIpcOperation::Validate {
                 job_id: "worker-job".into(), ownership: ownership.clone(),
             }).await;
@@ -361,15 +368,18 @@ async fn exercise_worker_session(reconnect: Option<u64>) {
                     if current == &member), "{membership:?}; {:?}", diagnostics());
         }
         if reconnect == Some(3) {
+            let pool = sessions[&3].pool();
+            let retired: Vec<_> = ["native000001", "native000002", "native000004"]
+                .into_iter().map(|route| {
+                    pool.connection_handler.connection_for_peer(route)
+                        .expect("old voter channel is open")
+                }).collect();
             let reopened = signal.disconnect_and_wait_for_rejoin("native000003").await;
             assert_eq!(reopened, "native000005");
-            let pool = sessions[&3].pool();
-            // Remove every old edge, so neither a surviving DataChannel nor the
-            // old configured address can satisfy the following quorum checks.
-            for route in ["native000001", "native000002", "native000004"] {
-                if let Some(connection) = pool.connection_handler.connection_for_peer(route) {
-                    pool.connection_handler.close_peer(&connection).await;
-                }
+            // Tear down precisely the pre-reconnect generations. A fresh offer
+            // may already have installed a replacement at the same remote route.
+            for connection in &retired {
+                pool.connection_handler.close_peer(connection).await;
             }
             tokio::time::timeout(Duration::from_secs(15), async {
                 loop {

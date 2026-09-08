@@ -121,6 +121,13 @@ deployable replacement daemon. Business records still replicate through RxDB.
   SignedTransport continues to verify the configured recipient key and nonce on
   every exchange, including newly opened channels. Loss of signaling alone does
   not revoke an otherwise quorum-confirmed execution.
+  Each transport generation captures the local signaling identity at creation.
+  A fresh offer addressed to a changed local identity replaces the old responder
+  even if its DataChannel remains open; it cannot renegotiate against the retired
+  connection. Removal is generation-bound, so delayed closes cannot erase the
+  replacement. The worker reconnect test keeps old channels open until all three
+  new routes are mutually admitted, then closes the retained old handles and
+  validates the same quorum-confirmed membership and job ownership over IPC.
   The real four-peer WebRTC/Unix-IPC test passes: admission, execution ownership,
   replay, revocation, denied business reads and retained-handle shutdown. The
   worker has the greatest signaling ID and opens no Raft store. This is a native
