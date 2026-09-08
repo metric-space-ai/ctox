@@ -8,11 +8,40 @@ const path = require('path');
 // records and commands still travel through the real WebRTC data plane.
 async function runThreadsRightClickPeers({
   chromium, launchOptions, runtimeRoot, smokeUrl, capabilities,
-  smokeMode, threadsScaleSeed, browserDiagnostics, evidenceDir,
+  smokeMode, threadsScaleSeed, browserDiagnostics, evidenceDir, readNativeAuthorizationState,
 }) {
   const origin = new URL(smokeUrl).origin;
   const contexts = [];
   const identities = [];
+  const authorizationEvidence = {
+    schema: 'ctox.threads.authorization_probe.v1',
+    // Decoded payloads are diagnostic claims, not signature verification.
+    issuedClaims: {
+      requester: summarizeCapability(capabilities.requester?.token),
+      reviewer: summarizeCapability(capabilities.reviewer?.token),
+    },
+    snapshots: [], deliveredCapabilities: [], deliveredCapabilityCount: 0,
+  };
+  const pendingCapabilityReads = new Set();
+  const persistAuthorizationEvidence = () => {
+    if (!evidenceDir) return;
+    fs.mkdirSync(evidenceDir, { recursive: true });
+    fs.writeFileSync(path.join(evidenceDir, 'threads-authorization.json'),
+      JSON.stringify(authorizationEvidence, null, 2) + '\n');
+  };
+  const snapshotAuthorization = (phase) => {
+    try {
+      authorizationEvidence.snapshots.push({
+        phase, atMs: Date.now(), identities: identities.map(identity => ({ ...identity })),
+        native: readNativeAuthorizationState?.() ?? null,
+      });
+    } catch {
+      // Preserve the workflow failure and make unavailable evidence explicit.
+      authorizationEvidence.snapshots.push({ phase, atMs: Date.now(), nativeReadFailed: true });
+    }
+    persistAuthorizationEvidence();
+  };
+  snapshotAuthorization('before-browser-profiles');
   async function openActor(actor, role, capability) {
     if (!capability?.token) throw new Error('missing native capability for ' + actor);
     const profile = fs.mkdtempSync(path.join(runtimeRoot, actor + '-profile-'));
@@ -41,6 +70,31 @@ async function runThreadsRightClickPeers({
         browserDiagnostics.assetResponseErrors += 1;
         console.error('[browser:' + actor + ':response] ' + response.status() + ' ' + response.url());
       }
+      const url = new URL(response.url());
+      if (url.origin === origin && url.pathname === '/api/business-os/auth/capability') {
+        authorizationEvidence.deliveredCapabilityCount++;
+        if (authorizationEvidence.deliveredCapabilities.length + pendingCapabilityReads.size < 40) {
+          const work = (async () => {
+            let claims = null;
+            let bodyReadFailed = false;
+            let timer;
+            try {
+              const body = await Promise.race([
+                response.json(),
+                new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('response timeout')), 3000); }),
+              ]);
+              claims = summarizeCapability(body.capability_token);
+            } catch { bodyReadFailed = true; }
+            finally { clearTimeout(timer); }
+            authorizationEvidence.deliveredCapabilities.push({
+              actor, atMs: Date.now(), httpStatus: response.status(), claims, bodyReadFailed,
+            });
+            persistAuthorizationEvidence();
+          })();
+          pendingCapabilityReads.add(work);
+          work.catch(() => {}).finally(() => pendingCapabilityReads.delete(work));
+        }
+      }
     });
     await page.goto(smokeUrl, { waitUntil: 'commit', timeout: 60000 });
     await page.waitForFunction(({ actor, role }) => {
@@ -58,6 +112,7 @@ async function runThreadsRightClickPeers({
       };
     });
     identities.push(identity);
+    snapshotAuthorization(actor + '-bootstrapped');
     return page;
   }
 
@@ -74,6 +129,8 @@ async function runThreadsRightClickPeers({
     console.log('threads_authenticated_peers=' + JSON.stringify(identities));
     return { ...result, authenticatedPeers: identities, isolatedBrowserProfiles: true };
   } catch (error) {
+    await Promise.allSettled([...pendingCapabilityReads]);
+    snapshotAuthorization('workflow-failed');
     for (let index = 0; index < contexts.length; index += 1) {
       const pages = contexts[index].pages();
       const page = pages[pages.length - 1];
@@ -93,6 +150,26 @@ async function runThreadsRightClickPeers({
     throw error;
   } finally {
     for (const context of contexts.reverse()) await context.close().catch(() => {});
+    await Promise.allSettled([...pendingCapabilityReads]);
+    snapshotAuthorization('profiles-closed');
+  }
+}
+
+function summarizeCapability(token) {
+  if (typeof token !== 'string' || !token) return { present: false };
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString('utf8'));
+    return {
+      present: true, unverifiedPayload: true,
+      userId: typeof payload.uid === 'string' ? payload.uid.slice(0, 160) : null,
+      role: typeof payload.role === 'string' ? payload.role.slice(0, 32) : null,
+      epoch: Number.isSafeInteger(payload.epoch) ? payload.epoch : null,
+      issuedAtMs: Number.isSafeInteger(payload.iat) ? payload.iat : null,
+      expiresAtMs: Number.isSafeInteger(payload.exp) ? payload.exp : null,
+      deviceBound: Boolean(payload.cnf || payload.device_pairing_id || payload.device_id),
+    };
+  } catch {
+    return { present: true, payloadDecodeFailed: true };
   }
 }
 

@@ -1321,7 +1321,16 @@ projections, reviewer notification, approval UI and decision are checked on
 the reviewer profile. No browser session globals are overwritten. The old
 inline actor-switch implementation is removed into a dedicated two-peer
 fixture; native permission assertions and the 150 ms gate remain intact.
-Execution of this fixture is pending. This tests managed bearer identity,
+Run 34259869288 (source 484b21ef5) still fails before prompt submission:
+the requester receives collection authorization errors followed by
+masterChangesSince timeouts and a cancelled command collection. Its screenshot
+shows Threads stuck synchronizing. The cause is not established. The fixture
+now retains native actor/role/active/epoch snapshots before browser creation,
+after each actor bootstrap and on failure, together with selected decoded
+claims from the actual capability responses. These payloads are explicitly
+unverified diagnostic claims; tokens, signatures, email and device key material
+are excluded. Response-body reads are bounded and the diagnostic creates no
+new authorization request or grant. This tests managed bearer identity,
 not password-login/logout acceptance. Its separate actual warm-command fixture has
 30 complete samples with p50 369.5 ms and p95 525.95 ms, still failing the
 300 ms gate. All 21 collections complete in 34.951 / 42.754 / 17.497 s

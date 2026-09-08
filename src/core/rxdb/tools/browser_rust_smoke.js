@@ -7643,6 +7643,13 @@ function ensureCtoxSmokeBinary() {
         chromium, launchOptions: chromiumLaunchOptions(), runtimeRoot, smokeUrl,
         capabilities: threadsRightClickCapabilities, smokeMode, threadsScaleSeed, browserDiagnostics,
         evidenceDir: smokeProcessLifecyclePath ? path.dirname(smokeProcessLifecyclePath) : runtimeRoot,
+        readNativeAuthorizationState: () => JSON.parse(sqlite(`
+          SELECT json_group_array(json_object(
+            'userId',user_id,'role',role,'active',active,'epoch',capability_epoch))
+          FROM business_users
+          WHERE user_id IN ('threads-requester','threads-reviewer')
+          ORDER BY user_id;
+        `, nativeBusinessOsSqlitePath).trim()),
       })
       : smokeMode === 'critical-browser-reload-timing'
       ? await require('./critical_browser_reload_probe.js').runCriticalBrowserReloads({

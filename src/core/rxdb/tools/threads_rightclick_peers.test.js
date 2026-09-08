@@ -9,7 +9,7 @@ const { runThreadsRightClickPeers } = require('./threads_rightclick_peers.js');
 
 // Driver-contract tests only: actual shell/WebRTC behavior is tested by the
 // full native smoke mode. These guard credential routing and teardown.
-function driver({ wrongSecondActor = false, failReview = false } = {}) {
+function driver({ wrongSecondActor = false, failReview = false, deliveredToken = null } = {}) {
   const contexts = [];
   const chromium = {
     async launchPersistentContext(profile) {
@@ -23,7 +23,14 @@ function driver({ wrongSecondActor = false, failReview = false } = {}) {
       const page = {
         listeners: {}, bindings: {}, calls: [],
         on(name, callback) { this.listeners[name] = callback; },
-        async goto() {},
+        async goto() {
+          if (deliveredToken) this.listeners.response({
+            status: () => 200,
+            url: () => 'http://127.0.0.1:8879/api/business-os/auth/capability',
+            json: async () => ({ capability_token: deliveredToken }),
+          });
+        },
+        async screenshot() {},
         async waitForFunction(predicate, args) {
           const ready = vm.runInNewContext('(' + predicate.toString() + ')(args)', {
             args, CTOX_BUSINESS_OS_APP: state, CTOX_BUSINESS_OS_STATUS: {},
@@ -72,8 +79,10 @@ async function run(options, assertions) {
     capabilities: { requester: { token: 'requester-test-token' }, reviewer: { token: 'reviewer-test-token' } },
     smokeMode: 'business-os-threads-rightclick-ui', threadsScaleSeed: null,
     browserDiagnostics: { warnings: 0, errors: 0, requestFailures: 0, assetResponseErrors: 0 },
+    evidenceDir: options.evidence ? path.join(runtimeRoot, 'evidence') : undefined,
+    readNativeAuthorizationState: options.readNativeAuthorizationState,
   });
-  try { await assertions(promise, fake.contexts); }
+  try { await assertions(promise, fake.contexts, runtimeRoot); }
   finally {
     log.mock.restore();
     error.mock.restore();
@@ -118,5 +127,34 @@ test('a reviewer failure propagates and closes both profiles', async () => {
   await run({ failReview: true }, async (result, contexts) => {
     await assert.rejects(result, /native review failed/);
     assert.ok(contexts.every((context) => context.closed));
+  });
+});
+
+test('authorization failure evidence preserves epochs without bearer secrets', async () => {
+  const payload = {
+    uid: 'threads-requester', role: 'user', epoch: 7, iat: 10, exp: 9999999999999,
+    email: 'must-not-persist@example.test', cnf: { jkt: 'secret-key-thumbprint' },
+  };
+  const token = Buffer.from(JSON.stringify(payload)).toString('base64url') + '.secret-signature';
+  let epoch = 7;
+  await run({
+    evidence: true, failReview: true, deliveredToken: token,
+    readNativeAuthorizationState: () => [{ userId: 'threads-requester', role: 'user', active: 1, epoch: epoch++ }],
+  }, async (result, contexts, runtimeRoot) => {
+    await assert.rejects(result, /native review failed/);
+    const text = fs.readFileSync(path.join(runtimeRoot, 'evidence/threads-authorization.json'), 'utf8');
+    const evidence = JSON.parse(text);
+    assert.equal(evidence.snapshots[0].native[0].epoch, 7);
+    assert(evidence.snapshots.some(snapshot => snapshot.phase === 'workflow-failed'));
+    assert.equal(evidence.snapshots.at(-1).phase, 'profiles-closed');
+    assert.equal(evidence.deliveredCapabilityCount, 2);
+    assert.equal(evidence.deliveredCapabilities.length, 2);
+    assert.equal(evidence.deliveredCapabilities[0].claims.epoch, 7);
+    assert.equal(evidence.deliveredCapabilities[0].claims.unverifiedPayload, true);
+    assert.equal(evidence.deliveredCapabilities[0].claims.deviceBound, true);
+    for (const secret of [token, 'secret-signature', payload.email, payload.cnf.jkt]) {
+      assert.equal(text.includes(secret), false);
+    }
+    assert(contexts.every(context => context.closed));
   });
 });
