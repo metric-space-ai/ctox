@@ -139,6 +139,9 @@ async function runThreadsRightClickPeers({
     await requester.exposeFunction('__ctoxReviewThreadsApproval', async (request) => (
       reviewer.evaluate(runReviewerInBrowser, request)
     ));
+    await requester.exposeFunction('__ctoxOpenContextTarget', async (request) => (
+      requester.evaluate(openContextTargetInBrowser, request)
+    ));
     await requester.exposeFunction('__ctoxReportThreadsPhase', (phase) => {
       if (workflowFinished) return;
       // Only fixture-owned phase labels are persisted, never browser records.
@@ -211,6 +214,53 @@ function summarizeCapability(token) {
   } catch {
     return { present: true, payloadDecodeFailed: true };
   }
+}
+
+async function openContextTargetInBrowser({ moduleId, recordId, timeoutMs = 30000 }) {
+  const state = globalThis.CTOX_BUSINESS_OS_APP || globalThis.ctoxBusinessOsSmoke?.state;
+  await state.openModule(moduleId, { force: true, asModule: true });
+  const ownerId = 'desktop-app:' + moduleId;
+  const selector = `[data-shell-window="true"][data-owner-id="${CSS.escape(ownerId)}"] [data-module-root="${CSS.escape(moduleId)}"]`;
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    const win = state.windowManager?.listWindows?.().find(entry => entry.ownerId === ownerId);
+    const root = document.querySelector(selector);
+    const bounds = root?.getBoundingClientRect();
+    const host = root?.querySelector('[data-module-content]');
+    last = {
+      ok: Boolean(win?.isFocused && win.state !== 'minimized'
+        && root?.dataset.moduleReady === 'true' && root?.dataset.moduleLoadFailed !== 'true'
+        && bounds?.width > 0 && bounds?.height > 0 && host),
+      windowId: win?.id || null, ownerId: win?.ownerId || null,
+      activeModule: state.activeModule?.id || '', moduleReady: root?.dataset.moduleReady || null,
+      moduleLoadFailed: root?.dataset.moduleLoadFailed || null,
+      focused: win?.isFocused === true,
+    };
+    if (last.ok) {
+      let marker = host.querySelector('[data-threads-rightclick-fixture]');
+      for (const other of document.querySelectorAll('[data-threads-rightclick-fixture]')) {
+        if (other !== marker) other.remove();
+      }
+      if (!marker) {
+        marker = document.createElement('section');
+        marker.dataset.threadsRightclickFixture = 'true';
+        marker.dataset.moduleRoot = moduleId;
+        marker.dataset.contextRecordId = recordId;
+        marker.dataset.contextRecordType = 'smoke-record';
+        marker.dataset.contextLabel = 'Threads Right-Click Smoke Record';
+        marker.style.padding = '8px';
+        marker.style.margin = '8px';
+        marker.textContent = 'Threads Right-Click Smoke Record';
+        host.prepend(marker);
+      }
+      marker.scrollIntoView({ block: 'nearest' });
+      console.log('threads_context_target=' + JSON.stringify(last));
+      return last;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error('threads right-click target window open timed out: ' + JSON.stringify(last));
 }
 
 async function runRequesterInBrowser({ smokeMode, threadsScaleSeed }) {
@@ -290,32 +340,7 @@ async function runRequesterInBrowser({ smokeMode, threadsScaleSeed }) {
     }
   };
   const openTargetModule = async () => {
-    await state.openModule(targetModule.id, { force: true, asModule: true });
-    return waitFor(() => {
-      const host = document.querySelector('[data-module-content], [data-module-root], [data-ctox-chat-root]')
-        || document.querySelector('main')
-        || document.body;
-      let marker = document.querySelector('[data-threads-rightclick-fixture]');
-      if (!marker && host) {
-        marker = document.createElement('section');
-        marker.dataset.threadsRightclickFixture = 'true';
-        marker.dataset.moduleRoot = targetModule.id;
-        marker.dataset.contextRecordId = targetRecordId;
-        marker.dataset.contextRecordType = 'smoke-record';
-        marker.dataset.contextLabel = 'Threads Right-Click Smoke Record';
-        marker.style.position = 'relative';
-        marker.style.padding = '8px';
-        marker.style.margin = '8px';
-        marker.style.border = '1px solid transparent';
-        marker.textContent = 'Threads Right-Click Smoke Record';
-        host.append(marker);
-      }
-      return {
-        ok: state.activeModule?.id === targetModule.id && Boolean(marker),
-        activeModule: state.activeModule?.id || '',
-        hasMarker: Boolean(marker),
-      };
-    }, 30000, 'threads right-click target module open');
+    return globalThis.__ctoxOpenContextTarget({ moduleId: targetModule.id, recordId: targetRecordId });
   };
   const openGlobalContextMenu = async () => {
     const target = document.querySelector('[data-threads-rightclick-fixture]');
@@ -890,4 +915,4 @@ async function runReviewerInBrowser({
   return { projections, rendered, approvalDecision, status, authenticatedReviewer: state.session.user };
 }
 
-module.exports = { runThreadsRightClickPeers, runRequesterInBrowser, runReviewerInBrowser };
+module.exports = { runThreadsRightClickPeers, runRequesterInBrowser, runReviewerInBrowser, openContextTargetInBrowser };

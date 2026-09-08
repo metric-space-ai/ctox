@@ -5,7 +5,66 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const vm = require('vm');
-const { runThreadsRightClickPeers } = require('./threads_rightclick_peers.js');
+const { runThreadsRightClickPeers, openContextTargetInBrowser } = require('./threads_rightclick_peers.js');
+
+
+function targetWindowDriver({ focused = true, failed = false, minimized = false, missing = false, hidden = false } = {}) {
+  let marker = null;
+  let staleRemoved = false;
+  const host = {
+    querySelector: () => marker,
+    prepend(node) { marker = node; },
+  };
+  const root = {
+    dataset: { moduleReady: 'true', moduleLoadFailed: String(failed) },
+    getBoundingClientRect: () => ({ width: hidden ? 0 : 500, height: 400 }),
+    querySelector(selector) { assert.equal(selector, '[data-module-content]'); return host; },
+  };
+  const state = {
+    activeModule: { id: 'desktop' },
+    async openModule(id) { assert.equal(id, 'tickets'); },
+    windowManager: {
+      listWindows: () => missing ? [] : [{
+        id: 'tickets-window', ownerId: 'desktop-app:tickets', isFocused: focused,
+        state: minimized ? 'minimized' : 'normal',
+      }],
+    },
+  };
+  const promise = vm.runInNewContext('(' + openContextTargetInBrowser.toString() + ')(args)', {
+    args: { moduleId: 'tickets', recordId: 'ticket-1', timeoutMs: 25 },
+    CTOX_BUSINESS_OS_APP: state, CSS: { escape: value => value },
+    Date, setTimeout, console: { log() {} },
+    document: {
+      querySelector(selector) {
+        assert.equal(selector, '[data-shell-window="true"][data-owner-id="desktop-app:tickets"] [data-module-root="tickets"]');
+        return missing ? null : root;
+      },
+      querySelectorAll: () => [{ remove() { staleRemoved = true; } }],
+      createElement: () => ({ dataset: {}, style: {}, scrollIntoView() { this.scrolled = true; } }),
+    },
+  });
+  return { promise, marker: () => marker, staleRemoved: () => staleRemoved };
+}
+
+test('context target uses the focused mounted app window while the shell remains desktop', async () => {
+  const target = targetWindowDriver();
+  const result = await target.promise;
+  assert.equal(result.ok, true);
+  assert.equal(result.activeModule, 'desktop');
+  assert.equal(result.windowId, 'tickets-window');
+  assert.equal(target.marker().dataset.contextRecordId, 'ticket-1');
+  assert.equal(target.marker().dataset.moduleRoot, 'tickets');
+  assert.equal(target.marker().scrolled, true);
+  assert.equal(target.staleRemoved(), true);
+});
+
+test('context target rejects missing, background, failed, minimized or hidden app windows', { timeout: 2000 }, async () => {
+  for (const options of [{ missing: true }, { focused: false }, { failed: true }, { minimized: true }, { hidden: true }]) {
+    const target = targetWindowDriver(options);
+    await assert.rejects(target.promise, /target window open timed out/);
+    assert.equal(target.marker(), null);
+  }
+});
 
 // Driver-contract tests only: actual shell/WebRTC behavior is tested by the
 // full native smoke mode. These guard credential routing and teardown.
