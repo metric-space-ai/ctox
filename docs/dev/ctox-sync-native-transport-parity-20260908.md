@@ -191,6 +191,21 @@ not evidence of visible CTOX data or complete application behavior.
 The tested merge is `76c4f53e4ddb3ab06a1e06861195c67fb268b77f`.
 No production source or timing budgets change in this test correction.
 
+The next Chromium job, source `47de8119045d81f043c9a04f018128f3a221cfd3`,
+[run 34255856028](https://github.com/metric-space-ai/ctox/actions/runs/34255856028)
+job `102161358866`, records new-draft first paint **28.9 ms** and known-chat
+first paint **29.5 ms**, both visible and passing preservation checks.
+Crew cleanup before/after reads and remote-history reuse also pass. The suite
+still fails at the superseded-lookup case's `completed >= 2` wait. Its seed
+metrics already contain one stored remote chat before the open events:
+the 500 ms delay did not guarantee an unresolved lookup. The retained
+screenshot shows the newer draft, but cannot accept the intended overlap.
+The fixture now holds chat reads explicitly through the two open events,
+requires the outstanding lookup to start, then releases reads after the
+newer draft is visible. Focus/draft/history assertions and deadlines remain
+unchanged. Read counters are retained in scenario metrics. This correction
+is pending browser execution; no production source is changed.
+
 ## Current browser verification correction
 
 The bundle reproducibility guard previously exited successfully when npx,

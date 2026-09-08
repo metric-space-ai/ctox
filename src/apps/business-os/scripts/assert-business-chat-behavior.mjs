@@ -602,10 +602,12 @@ try {
   }
 
   await scenario(page, 'unloaded-task-reuses-history-after-lookup', {
-    count: 1, groupedResearch: true, staticTracking: true, remoteOnly: true, dbDelay: 500,
+    count: 1, groupedResearch: true, staticTracking: true, remoteOnly: true, dbDelay: 500, holdChatReads: true,
   }, async () => {
     const resolved = await page.evaluate(async () => {
       window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail: { task_id: 'task_research_0' } }));
+      await window.chatHarness.waitFor(() => window.chatHarness.chatReadStats.started >= 2);
+      window.chatHarness.releaseChatReads();
       await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-active')?.dataset.chatId === 'chat_0');
       return window.chatHarness.collect();
     });
@@ -613,13 +615,17 @@ try {
   });
 
   await scenario(page, 'delayed-task-lookup-cannot-reopen-over-new-draft', {
-    count: 1, groupedResearch: true, staticTracking: true, remoteOnly: true, dbDelay: 500,
+    count: 1, groupedResearch: true, staticTracking: true, remoteOnly: true, dbDelay: 500, holdChatReads: true,
   }, async () => {
     const after = await page.evaluate(async () => {
       window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail: { task_id: 'task_research_0' } }));
+      // Keep the initial hydration and explicit lookup pending until the newer
+      // user intent is visible, independently of CI scheduling delays.
+      await window.chatHarness.waitFor(() => window.chatHarness.chatReadStats.started >= 2);
       window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail: { draft: 'Newer user intent', reuseActive: false } }));
       await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-active textarea')?.value === 'Newer user intent');
       const activeId = window.chatHarness.collect().activeId;
+      window.chatHarness.releaseChatReads();
       await window.chatHarness.waitFor(() => window.chatHarness.chatReadStats.completed >= 2);
       await window.chatHarness.waitForPaint();
       return { intendedId: activeId, ...window.chatHarness.collect(), draft: document.querySelector('.ctox-chat-window.is-active textarea')?.value };
@@ -956,7 +962,7 @@ function harnessHtml() {
         session: { authenticated: true, user: { id: owner, name: 'Harness User' } },
         commandBus: makeCommandBus(options),
         sync: makeReadiness(),
-        db: makeDb(chats, options.dbDelay || 0, Boolean(options.dbTransientError), Boolean(options.dbDeleteError), Number(options.crewMembers) || 0, Array.isArray(options.queueTasks) ? options.queueTasks : []),
+        db: makeDb(chats, options.dbDelay || 0, Boolean(options.dbTransientError), Boolean(options.dbDeleteError), Number(options.crewMembers) || 0, Array.isArray(options.queueTasks) ? options.queueTasks : [], Boolean(options.holdChatReads)),
         getActiveModule: () => ({ id: 'ctox', name: 'CTOX' }),
       });
       await waitFor(() => document.querySelector('[data-chat-dock]'));
@@ -1114,9 +1120,13 @@ function harnessHtml() {
       }));
     }
 
-    function makeDb(chats, delayMs, transientError, deleteError, crewMemberCount = 0, queueTasks = []) {
+    function makeDb(chats, delayMs, transientError, deleteError, crewMemberCount = 0, queueTasks = [], holdChatReads = false) {
       const store = new Map(chats.map((chat) => [chat.id, structuredClone(chat)]));
-      const readStats = { completed: 0, crewReads: 0, crewSubscriptions: 0 };
+      const readStats = { started: 0, completed: 0, crewReads: 0, crewSubscriptions: 0 };
+      const chatReadGate = new Promise((resolve) => {
+        window.chatHarness.releaseChatReads = resolve;
+        if (!holdChatReads) resolve();
+      });
       const crewSubscribers = new Set();
       window.chatHarness.emitCrew = () => { for (const callback of [...crewSubscribers]) callback(); };
       window.chatHarness.chatReadStats = readStats;
@@ -1148,7 +1158,7 @@ function harnessHtml() {
                 return { unsubscribe: () => chatCollectionSubscribers.delete(callback) };
               },
             },
-            find: () => ({ exec: async () => { await maybeThrow(); readStats.completed += 1; return Array.from(store.keys()).map(docFor).filter(Boolean); } }),
+            find: () => ({ exec: async () => { readStats.started += 1; await chatReadGate; await maybeThrow(); readStats.completed += 1; return Array.from(store.keys()).map(docFor).filter(Boolean); } }),
             findOne: (id) => ({ exec: async () => { await maybeThrow(); return docFor(id); } }),
             insert: async (doc) => { await maybeThrow(); store.set(doc.id, structuredClone(doc)); return docFor(doc.id); },
           },
@@ -1316,6 +1326,7 @@ function harnessHtml() {
         activeStatusText: document.querySelector('.ctox-chat-window.is-active .ctox-chat-status-badge')?.textContent?.trim() || '',
         activeMessageText: document.querySelector('.ctox-chat-window.is-active .ctox-chat-messages')?.textContent?.trim() || '',
         storedChats: Array.isArray(stored.chats) ? stored.chats.length : 0,
+        chatReadStats: { ...window.chatHarness.chatReadStats },
         deletedChatTombstones: Object.keys(deletedChatIds).length,
       };
     }

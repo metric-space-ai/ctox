@@ -1267,9 +1267,17 @@ existing history and retain its task identity/status. Both still require
 first paint below 150 ms. Timeouts and failed assertions now retain the named
 scenario, visible text, screenshot and console report before teardown.
 
-The corrected cases have not passed yet. They do not establish cold
-tracked-chat opening, database lifecycle recovery, or critical-collection boot
-p95 below five seconds.
+Run 34255856028 (source 47de81190) measures new-draft first paint at 28.9 ms
+and known-chat first paint at 29.5 ms with the delayed fixture; both cases
+pass, including preservation after hydration. Crew disposal cases also pass.
+The suite still fails in the superseded-lookup case: the seed already contains
+the hydrated remote record before the open events, so waiting for a second
+read does not establish the intended overlap. The fixture now explicitly
+holds chat reads until the newer draft is visible, then releases them and
+checks the same focus, draft and history invariants. This correction has not
+passed yet. Component results do not establish the native context-command
+path, cold tracked-chat latency, database lifecycle recovery, or
+critical-collection boot p95 below five seconds.
 
 ## 11. Test map
 
