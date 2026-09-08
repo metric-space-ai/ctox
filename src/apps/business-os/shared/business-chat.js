@@ -3791,7 +3791,7 @@ function humanizeHarnessLine(text) {
   const clock = Number.isFinite(when.getTime()) ? when.toLocaleTimeString(chatUiIsGerman() ? 'de-DE' : 'en-GB', { hour: '2-digit', minute: '2-digit' }) : '';
   const de = chatUiIsGerman();
   const detail = /worker-runtime-api-failure|model.*(?:unavailable|timeout)|api.*failure/i.test(code)
-    ? (de ? 'Der Modelldienst ist gerade nicht erreichbar.' : 'The model service is currently unavailable.')
+    ? (de ? 'Die Anfrage an den Modelldienst ist fehlgeschlagen.' : 'The request to the model service failed.')
     : klass === 'review'
       ? (de ? 'Die Prüfung wurde nicht bestanden.' : 'The review did not pass.')
       : klass === 'policy'

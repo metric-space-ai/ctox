@@ -32,7 +32,7 @@ test('saved crew status messages use plain language without rewriting user instr
       role: 'ctox', status: 'failed',
       text: 'CTOX konnte die Aufgabe nicht ausführen: technical:worker-runtime-api-failure — 2026-09-08T04:37:18Z',
     });
-    assert.match(failure, /Modelldienst ist gerade nicht erreichbar/);
+    assert.match(failure, /Anfrage an den Modelldienst ist fehlgeschlagen/);
     assert.doesNotMatch(failure, /technical:|worker-runtime|CTOX/);
   } finally {
     globalThis.document = previousDocument;
