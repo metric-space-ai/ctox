@@ -3508,7 +3508,7 @@ function taskDrawer(task, state, { editorOnly = false } = {}) {
     <section class="ctox-callout ${['blocked', 'failed'].includes(normalizeCommandStatus(task.routeStatus || task.status)) ? 'is-danger' : 'is-info'} ctox-task-status-strip">
       <div>
         <strong class="ctox-badge ${statusBadgeVariant(statusClass(task.routeStatus || task.status))}">${escapeHtml(displayStatus(task.routeStatus || task.status, state.lang))}</strong>
-        ${target ? `<small>${escapeHtml(target)}</small>` : ''}
+        ${target ? `<span title="${escapeAttr(target)}" aria-hidden="true"></span>` : ''}
       </div>
       ${taskSummaryReason(task, state) ? `<p class="ctox-task-reason-line">${escapeHtml(taskSummaryReason(task, state))}</p>` : ''}
       ${taskLeaseLineMarkup(task, state)}
@@ -3643,11 +3643,10 @@ function taskLeaseLineMarkup(task, state) {
   const memberBit = member
     ? `<button type="button" class="ctox-task-member" data-open-crew-member="${escapeAttr(member.id)}"><span class="ctox-flow-creature-shell ctox-task-member-portrait">${memberCreatureHtml(member, state)}</span>${escapeHtml(task.crewMemberId === member.id ? member.name : `${t.assignedTo} ${member.name}`)}</button>`
     : '';
-  if (task.leaseOwner) bits.push(`${t.leaseOwner}: ${task.leaseOwner}${task.leaseExpiresAt ? ` (${t.until} ${formatClockTime(task.leaseExpiresAt)})` : ''}`);
+
   if (Number.isFinite(task.attempt) && task.attempt > 0) bits.push(`${t.attemptLabel} ${task.attempt}`);
   if (!bits.length && !memberBit) return '';
-  const selection = taskSelectionSentence(task, state);
-  return `<small class="ctox-task-lease-line">${memberBit}${bits.map((bit) => `<span>${escapeHtml(bit)}</span>`).join('')}</small>${selection ? `<small class="ctox-task-selection-line">${escapeHtml(selection)}</small>` : ''}`;
+  return `<small class="ctox-task-lease-line">${memberBit}${bits.map((bit) => `<span>${escapeHtml(bit)}</span>`).join('')}</small>`;
 }
 
 function canResumeCtoxTask(task) {
@@ -6705,7 +6704,12 @@ function taskSummaryReason(task, state) {
 }
 
 function taskDiagnosticMarkup(task, state) {
-  const note = String(task.statusNote || task.error || '').trim();
+  const note = [
+    task.statusNote || task.error,
+    taskSelectionSentence(task, state),
+    task.leaseOwner ? `${labels[state.lang].leaseOwner}: ${task.leaseOwner}` : '',
+    task.target || task.commandId || task.taskId,
+  ].map(value => String(value || '').trim()).filter(Boolean).join('\n\n');
   if (!note) return '';
   return `<details class="ctox-task-diagnostics"><summary>${state.lang === 'de' ? 'Technische Details' : 'Technical details'}</summary><pre>${escapeHtml(note)}</pre></details>`;
 }
