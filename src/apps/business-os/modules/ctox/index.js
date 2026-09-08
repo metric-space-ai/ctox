@@ -3484,7 +3484,7 @@ function taskDrawer(task, state, { editorOnly = false } = {}) {
   const summary = taskDetailText(itemSummary(task) || '', state);
   const resultSummaryText = String(task.resultSummary || '').trim() === promptField.text
     ? '' : taskDetailText(task.resultSummary || '', state);
-  const target = displayPathLike(task.target || task.commandId || task.taskId || '');
+
   const sourceLine = [
     displayWorkSource(task.source || task.moduleId || 'ctox'),
     formatShortTimestamp(task.createdAt || task.startedAt || task.timestamp),
@@ -3508,7 +3508,7 @@ function taskDrawer(task, state, { editorOnly = false } = {}) {
     <section class="ctox-callout ${['blocked', 'failed'].includes(normalizeCommandStatus(task.routeStatus || task.status)) ? 'is-danger' : 'is-info'} ctox-task-status-strip">
       <div>
         <strong class="ctox-badge ${statusBadgeVariant(statusClass(task.routeStatus || task.status))}">${escapeHtml(displayStatus(task.routeStatus || task.status, state.lang))}</strong>
-        ${target ? `<span title="${escapeAttr(target)}" aria-hidden="true"></span>` : ''}
+
       </div>
       ${taskSummaryReason(task, state) ? `<p class="ctox-task-reason-line">${escapeHtml(taskSummaryReason(task, state))}</p>` : ''}
       ${taskLeaseLineMarkup(task, state)}
@@ -6866,6 +6866,7 @@ function escapeAttr(value) {
 }
 
 export const __ctoxTestHooks = {
+  taskLeaseLineMarkup,
   taskPromptDisplay,
   aggregateFlowMetrics,
   crewHomeMarkup,

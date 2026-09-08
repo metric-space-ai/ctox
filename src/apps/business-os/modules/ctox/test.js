@@ -109,6 +109,12 @@ test('Task cards explain failures while original evidence remains inspectable', 
   const task = { status: 'failed', failureAttemptCount: 4, statusNote: 'thread/start MCP handshake timeout <unsafe>' };
   assert.equal(hooks.taskSummaryReason(task, { lang: 'de' }), 'Die Verbindung zu einem Werkzeug konnte nicht aufgebaut werden. · 4 Versuche');
   assert.match(hooks.taskSummaryReason(task, { lang: 'en' }), /connection to a tool/);
+  const leased = { ...task, attempt: 4, leaseOwner: 'worker-internal-42', target: 'business_os.chat.task' };
+  const leaseLine = hooks.taskLeaseLineMarkup(leased, { lang: 'de' });
+  assert.match(leaseLine, /Versuch 4/);
+  assert.doesNotMatch(leaseLine, /worker-internal|business_os/);
+  assert.match(hooks.taskDiagnosticMarkup(leased, { lang: 'de' }), /worker-internal-42/);
+  assert.match(hooks.taskDiagnosticMarkup(leased, { lang: 'de' }), /business_os.chat.task/);
   const details = hooks.taskDiagnosticMarkup(task, { lang: 'de' });
   assert.match(details, /<details class="ctox-task-diagnostics">/);
   assert.match(details, /thread\/start MCP handshake timeout &lt;unsafe&gt;/);
