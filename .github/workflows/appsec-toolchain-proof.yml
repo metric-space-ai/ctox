@@ -13,10 +13,11 @@ on:
       profile:
         description: "AppSec scanner profile to prove"
         required: true
-        default: "standard"
+        default: "core"
         type: choice
         options:
           - minimal
+          - core
           - standard
           - full
       include_data_bundles:
@@ -48,7 +49,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: appsec-toolchain-proof-${{ github.ref }}-${{ inputs.profile || 'standard' }}-${{ inputs.platform_scope || 'all' }}
+  group: appsec-toolchain-proof-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.profile || github.event_name == 'pull_request' && 'minimal' || 'core' }}-${{ inputs.platform_scope || 'all' }}
   cancel-in-progress: false
 
 jobs:
@@ -59,11 +60,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"ubuntu-22.04","platform":"linux-x86_64","label":"Linux x86_64 deployment audit proof"}]' || inputs.platform_scope == 'windows-only' && '[{"os":"windows-latest","platform":"windows-x86_64","label":"Windows x86_64 deployment audit proof"}]' || inputs.platform_scope == 'macos-intel-only' && '[{"os":"macos-15-intel","platform":"macos-x86_64","label":"macOS x86_64 deployment audit proof"}]' || '[{"os":"ubuntu-22.04","platform":"linux-x86_64","label":"Linux x86_64 deployment audit proof"},{"os":"ubuntu-24.04-arm","platform":"linux-aarch64","label":"Linux aarch64 deployment audit proof"},{"os":"macos-latest","platform":"macos-aarch64","label":"macOS aarch64 deployment audit proof"},{"os":"macos-15-intel","platform":"macos-x86_64","label":"macOS x86_64 deployment audit proof"},{"os":"windows-latest","platform":"windows-x86_64","label":"Windows x86_64 deployment audit proof"}]') }}
+        include: ${{ fromJSON((github.event_name == 'pull_request' || github.event_name == 'schedule') && '[{"os":"ubuntu-22.04","platform":"linux-x86_64","label":"Linux x86_64 deployment audit proof"}]' || inputs.platform_scope == 'windows-only' && '[{"os":"windows-latest","platform":"windows-x86_64","label":"Windows x86_64 deployment audit proof"}]' || inputs.platform_scope == 'macos-intel-only' && '[{"os":"macos-15-intel","platform":"macos-x86_64","label":"macOS x86_64 deployment audit proof"}]' || '[{"os":"ubuntu-22.04","platform":"linux-x86_64","label":"Linux x86_64 deployment audit proof"},{"os":"ubuntu-24.04-arm","platform":"linux-aarch64","label":"Linux aarch64 deployment audit proof"},{"os":"macos-latest","platform":"macos-aarch64","label":"macOS aarch64 deployment audit proof"},{"os":"macos-15-intel","platform":"macos-x86_64","label":"macOS x86_64 deployment audit proof"},{"os":"windows-latest","platform":"windows-x86_64","label":"Windows x86_64 deployment audit proof"}]') }}
 
     env:
       CARGO_TERM_COLOR: always
-      APPSEC_PROFILE: ${{ inputs.profile || 'standard' }}
+      APPSEC_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || github.event_name == 'pull_request' && 'minimal' || 'core' }}
       APPSEC_INCLUDE_DATA_BUNDLES: ${{ github.event_name != 'workflow_dispatch' || inputs.include_data_bundles }}
       APPSEC_ATTEST_NATIVE: ${{ github.event_name != 'workflow_dispatch' || inputs.attest_native }}
       APPSEC_SMOKE_TIMEOUT_SECONDS: ${{ inputs.smoke_timeout_seconds || '45' }}
@@ -90,11 +91,16 @@ jobs:
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: "3.13"
+          # Semgrep 1.172.0's current dependency set is not importable on
+          # Python 3.13. Keep the proof on its supported, reproducible ABI.
+          python-version: "3.12"
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: "1.25.x"
+          # osv-scanner 2.4.0 requires >=1.26.4 and syft 1.51.0 requires
+          # >=1.26.3. GOTOOLCHAIN remains local, so the workflow owns the
+          # compiler instead of allowing installer-time toolchain downloads.
+          go-version: "1.26.4"
           check-latest: true
 
       - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a
@@ -106,12 +112,49 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
+          set -euo pipefail
           sudo apt-get update
-          packages=(nmap ncat ndiff bubblewrap git ca-certificates pkg-config libssl-dev libfontconfig1-dev libpcap-dev)
+          packages=(nmap ncat ndiff bubblewrap curl git ca-certificates pkg-config libssl-dev libfontconfig1-dev libpcap-dev)
           if [ "$APPSEC_PROFILE" = "full" ]; then
             packages+=(clamav clamav-freshclam)
           fi
           sudo apt-get install -y "${packages[@]}"
+
+          if [ "$APPSEC_PROFILE" != "minimal" ]; then
+            native_bin="$RUNNER_TEMP/appsec-native/bin"
+            native_src="$RUNNER_TEMP/appsec-native/src"
+            mkdir -p "$native_bin" "$native_src"
+            case "$(uname -m)" in
+              x86_64)
+                dalfox_platform="linux-x86_64"
+                dalfox_sha256="ef48d30c183cead88eb89da10bdc1a7fa58a484d175319096075b470f3652fd4"
+                ;;
+              aarch64|arm64)
+                dalfox_platform="linux-aarch64"
+                dalfox_sha256="b61dc832582e738dc5b838197d28b6d0d4d33de2d849fc73741635fc380f0348"
+                ;;
+              *)
+                echo "Unsupported Linux architecture for Dalfox: $(uname -m)" >&2
+                exit 1
+                ;;
+            esac
+            dalfox_archive="$RUNNER_TEMP/dalfox-v3.1.2-${dalfox_platform}.tar.gz"
+            curl --fail --location --silent --show-error \
+              "https://github.com/hahwul/dalfox/releases/download/v3.1.2/dalfox-v3.1.2-${dalfox_platform}.tar.gz" \
+              --output "$dalfox_archive"
+            printf '%s  %s\n' "$dalfox_sha256" "$dalfox_archive" | sha256sum --check --strict
+            tar -xzf "$dalfox_archive" -C "$native_src"
+            install -m 0755 "$native_src/dalfox-v3.1.2-${dalfox_platform}/dalfox" "$native_bin/dalfox"
+
+            testssl_src="$native_src/testssl.sh"
+            git init "$testssl_src"
+            git -C "$testssl_src" remote add origin https://github.com/testssl/testssl.sh.git
+            git -C "$testssl_src" fetch --depth 1 origin 97763a411c525720a5f9bd9d2cded416b10f210a
+            git -C "$testssl_src" checkout --detach 97763a411c525720a5f9bd9d2cded416b10f210a
+            test "$(git -C "$testssl_src" rev-parse HEAD)" = "97763a411c525720a5f9bd9d2cded416b10f210a"
+            ln -s "$testssl_src/testssl.sh" "$native_bin/testssl.sh"
+            echo "$native_bin" >> "$GITHUB_PATH"
+          fi
 
       - name: Install macOS native AppSec packages
         if: runner.os == 'macOS'
@@ -288,11 +331,20 @@ jobs:
           const verified = read('verify-export.json');
           const inventoryPath = path.join(root, 'runtime', 'appsec', 'default', 'tool-inventory.json');
           const inventory = JSON.parse(fs.readFileSync(inventoryPath, 'utf8'));
+          const proofRun = proof?.proof_run || {};
+          const requiredToolNames = new Set(
+            (proofRun?.install?.tools || []).map(tool => tool.name));
+          const smokeByTool = new Map(
+            (proofRun?.smoke?.results || []).map(result => [result.tool, result]));
           const requiredTools = (inventory.tools || []).filter(tool =>
-            ['httpx', 'katana', 'nuclei'].includes(tool.name));
+            requiredToolNames.has(tool.name));
           const zap = (inventory.tools || []).find(tool => tool.name === 'zaproxy');
+          const requiredDataIds = new Set(
+            (proofRun?.data?.bundles || []).map(bundle => bundle.id));
           const requiredDataBundles = (inventory.data_bundles || []).filter(bundle =>
-            bundle.profile === 'minimal');
+            requiredDataIds.has(bundle.id));
+          const expectedRequiredToolCount = proofRun?.summary?.required_tools;
+          const coreProfile = process.env.APPSEC_PROFILE === 'core';
           const acceptance = {
             version: 'ctox.deployment_audit.platform_acceptance.v1',
             generated_at: new Date().toISOString(),
@@ -308,20 +360,29 @@ jobs:
               report: report?.ok === true && report?.report_complete === true,
               retained_export: exported?.ok === true && verified?.ok === true,
               zap_nonblocking: zap?.default_enabled === false,
+              core_registry_contract: !coreProfile
+                || (requiredTools.length === 16
+                  && requiredTools.every(tool => tool.tier === 'core')),
+              core_functional_fixtures: !coreProfile
+                || requiredTools.every(tool =>
+                  smokeByTool.get(tool.name)?.functional_fixture?.ok === true),
             },
             required_tools: requiredTools.map(tool => ({
               name: tool.name,
+              tier: tool.tier,
               available: tool.available,
               detected_version: tool.detected_version,
               pinned_version: tool.pinned_version,
               license: tool.license,
               checksum: tool.checksum,
               provenance: tool.provenance,
+              functional_fixture: smokeByTool.get(tool.name)?.functional_fixture || null,
             })),
             required_data_bundles: requiredDataBundles,
           };
           acceptance.ok = Object.values(acceptance.gates).every(Boolean)
-            && acceptance.required_tools.length === 3
+            && Number.isInteger(expectedRequiredToolCount)
+            && acceptance.required_tools.length === expectedRequiredToolCount
             && acceptance.required_tools.every(tool =>
               tool.available === true
               && typeof tool.detected_version === 'string'
