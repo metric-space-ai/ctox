@@ -238,6 +238,7 @@
       "scoped_collections": [
         "business_chats",
         "business_commands",
+        "communication_accounts",
         "ctox_bug_reports",
         "ctox_crew_learnings",
         "ctox_crew_members",
