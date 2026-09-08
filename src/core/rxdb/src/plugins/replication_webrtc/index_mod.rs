@@ -541,8 +541,14 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
+        self.spawn_limited(Arc::clone(&self.request_semaphore), future);
+    }
+
+    fn spawn_limited<F>(self: &Arc<Self>, request_semaphore: Arc<Semaphore>, future: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
-        let request_semaphore = Arc::clone(&self.request_semaphore);
         let task = tokio::spawn(async move {
             if start_rx.await.is_err() {
                 return;
@@ -572,26 +578,7 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
-        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
-        let semaphore = Arc::clone(&self.auxiliary_request_semaphore);
-        let task = tokio::spawn(async move {
-            if start_rx.await.is_err() {
-                return;
-            }
-            let Ok(_permit) = semaphore.acquire_owned().await else {
-                return;
-            };
-            future.await;
-        });
-        let mut tasks = self.tasks.lock();
-        tasks.retain(|task| !task.is_finished());
-        if self.canceled.load(std::sync::atomic::Ordering::SeqCst) {
-            task.abort();
-            return;
-        }
-        tasks.push(task);
-        drop(tasks);
-        let _ = start_tx.send(());
+        self.spawn_limited(Arc::clone(&self.auxiliary_request_semaphore), future);
     }
 
     /// Record a per-(collection, peer) fork replication state so cancel
