@@ -5,10 +5,39 @@ import { readFileSync } from 'node:fs';
 import {
   __businessChatTestInternals,
   chatAgentScopeViewFromMeta,
+  crewAppPresenceFromTasks,
   renderChatAgentScopeHtml,
 } from './business-chat.js';
 
 const businessChatSource = readFileSync(new URL('./business-chat.js', import.meta.url), 'utf8');
+
+test('saved crew status messages use plain language without rewriting user instructions', () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = { documentElement: { lang: 'de' } };
+  try {
+    for (const text of [
+      'Task angelegt und in der CTOX Queue.',
+      'Task angelegt und in der CTOX Queue. Antwort erscheint hier, sobald CTOX ihn verarbeitet.',
+      'Task angelegt und in der CTOX Queue. Antwort erscheint hier, sobald der CTOX Service ihn verarbeitet.',
+    ]) {
+      const message = { role: 'ctox', text, status: 'queued', taskId: 'queue:system::real-42' };
+      const html = __businessChatTestInternals.messageMarkup(message);
+      assert.match(html, /Deine Aufgabe steht auf der Aufgabenliste/);
+      assert.doesNotMatch(html, /CTOX Queue|CTOX Service|sobald CTOX/);
+      assert.match(html, /data-task-id="queue:system::real-42"/);
+      assert.equal(message.text, text, 'presentation must not rewrite stored evidence');
+      assert.match(__businessChatTestInternals.messageMarkup({ role: 'user', text }), /CTOX Queue/);
+    }
+    const failure = __businessChatTestInternals.messageMarkup({
+      role: 'ctox', status: 'failed',
+      text: 'CTOX konnte die Aufgabe nicht ausführen: technical:worker-runtime-api-failure — 2026-09-08T04:37:18Z',
+    });
+    assert.match(failure, /Anfrage an den Modelldienst ist fehlgeschlagen/);
+    assert.doesNotMatch(failure, /technical:|worker-runtime|CTOX/);
+  } finally {
+    globalThis.document = previousDocument;
+  }
+});
 
 test('external chat submit confirms queue acceptance before remote chat persistence', () => {
   const resolveIndex = businessChatSource.indexOf('detail.resolveSubmission?.(submission)');
@@ -53,7 +82,9 @@ test('tracked crew messages expose a compact task id that deep-links to CTOX', (
   globalThis.document = previousDocument;
   assert.match(html, /data-track-task/);
   assert.match(html, new RegExp(`data-task-id="${taskId}"`));
-  assert.match(html, /<code>…567890abcdef<\/code>/);
+  // The id stays in the tooltip; the bar shows only the link icon (Owner 08.09.).
+  assert.match(html, /title="[^"]*567890abcdef/);
+  assert.match(html, /<code class="ctox-chat-track-id">…567890abcdef<\/code>/);
   assert.match(html, new RegExp(`aria-label="[^"]+${taskId}`));
 });
 
@@ -360,6 +391,36 @@ test('business chat task submission returns the real queue id after rendering pe
   }
 });
 
+test('business chat reports an unconfirmed connection timeout without claiming rejection or acceptance', async () => {
+  const previousDocument = globalThis.document;
+  const previousLocation = globalThis.location;
+  globalThis.document = { documentElement: { lang: 'de' } };
+  globalThis.location = { href: 'https://customer.example.test/#desktop' };
+  try {
+    for (const code of ['peer_connect_timeout', undefined]) {
+      const chat = { id: 'chat-timeout', title: 'CTOX', messages: [], contextMeta: {} };
+      const submission = await __businessChatTestInternals.submitChatMessage({
+        state: { ownerUserId: 'user-1', chats: [] }, chat,
+        text: 'Kontrolltest', db: null, sync: null,
+        meta: { command_id: 'cmd-timeout' },
+        commandBus: { async dispatch() {
+          throw Object.assign(new Error('WebRTC native peer did not open for business_commands within 25000ms; reconnect repair is scheduled.'), { code });
+        } },
+      });
+      assert.equal(submission.status, 'pending_sync');
+      assert.equal(submission.command_id, 'cmd-timeout');
+      assert.equal(submission.task_id, '');
+      assert.equal(chat.messages[1].trackable, true);
+      assert.match(chat.messages[1].text, /noch nicht bestätigt/);
+      assert.doesNotMatch(chat.messages[1].text, /Task an CTOX übergeben|konnte nicht an CTOX übergeben/);
+      assert.equal(chat.lastTrackingId, 'cmd-timeout');
+    }
+  } finally {
+    globalThis.document = previousDocument;
+    globalThis.location = previousLocation;
+  }
+});
+
 test('business chat keeps the execution prompt intact while showing compact app copy', async () => {
   const previousDocument = globalThis.document;
   const previousLocation = globalThis.location;
@@ -446,7 +507,7 @@ test('business chat tracks a terminal native control command without inventing a
       task_id: '',
       queue_id: '',
     });
-    assert.equal(chat.messages[1].text, 'CTOX hat die Automatisierung ausgeführt.');
+    assert.equal(chat.messages[1].text, 'Die Crew hat den Auftrag ausgeführt.');
     assert.equal(chat.messages[1].commandId, 'cmd-control-research');
     assert.equal(chat.messages[1].taskId, '');
     assert.equal(chat.messages[1].status, 'completed');
@@ -490,7 +551,7 @@ test('business chat acknowledges a declared long-running control command locally
       task_id: '',
       queue_id: '',
     });
-    assert.equal(chat.messages[1].text, 'CTOX führt die Automatisierung aus.');
+    assert.equal(chat.messages[1].text, 'Die Crew führt den Auftrag aus.');
     assert.equal(chat.messages[1].commandId, 'cmd-control-local');
   } finally {
     globalThis.document = previousDocument;
@@ -570,7 +631,7 @@ test('business chat renders business-facing visible scope rows from client conte
     },
   });
 
-  assert.match(html, /CTOX Zugriff/);
+  assert.match(html, /Crew-Zugriff/);
   assert.match(html, /Nutzer/);
   assert.match(html, /App/);
   assert.match(html, /Daten/);
@@ -716,11 +777,11 @@ test('business chat projects durable execution progress into the tracked crew me
     taskStatus: 'running',
   });
   assert.match(card, /30%/);
-  assert.match(card, /4\/7 Turns/);
+  assert.match(card, /4\/7 Aktivitäten/);
   assert.match(card, /Daten prüfen/);
   assert.match(card, /→ Ergebnis schreiben/);
-  assert.match(card, /Plan v2/);
-  assert.match(card, /Denkblöcke 3 · Tools 4/);
+  assert.match(card, /Planstand 2/);
+  assert.match(card, /Denkschritte 3 · Werkzeugeinsätze 4/);
   assert.match(card, /ctox-progress-activity/);
   assert.match(card, /--ctox-turn-angle:24deg/);
   assert.doesNotMatch(card, /ctox-progress-summary/);
@@ -2915,4 +2976,25 @@ test('Web Research oeffnet den Chat und dispatcht nicht direkt', () => {
   const fallbackIndex = runBody.indexOf('} else {');
   assert.ok(dispatchIndex > fallbackIndex && fallbackIndex >= 0,
     'commandBus.dispatch darf nur im Rueckfallzweig stehen');
+});
+
+test('crew app presence maps active queue tasks to their app by member', () => {
+  const members = [
+    { id: 'm1', name: 'Pico', shape: 'round', color: '#e0a458', state: 'on_duty' },
+    { id: 'm2', name: 'Nia', shape: 'tall', color: '#5aa9e6', state: 'home' },
+  ];
+  const tasks = [
+    { id: 't1', status: 'running', module: 'documents', crew_member_id: 'm1' },
+    { id: 't2', status: 'leased', source_module: 'documents', crew_member_id: 'm1' }, // same member twice → once
+    { id: 't3', status: 'review', module: 'tickets', crew_member_id: 'm2' },
+    { id: 't4', status: 'succeeded', module: 'tickets', crew_member_id: 'm1' }, // finished → no presence
+    { id: 't5', status: 'running', module: 'tickets', crew_member_id: 'ghost' }, // unknown member → skipped
+    { id: 't6', status: 'running', crew_member_id: 'm2' }, // no module → skipped
+  ];
+  const presence = crewAppPresenceFromTasks(tasks, members);
+  assert.deepEqual([...presence.keys()].sort(), ['documents', 'tickets']);
+  assert.deepEqual(presence.get('documents').map((entry) => entry.member.id), ['m1']);
+  assert.deepEqual(presence.get('tickets').map((entry) => entry.member.id), ['m2']);
+  assert.equal(crewAppPresenceFromTasks([], members).size, 0);
+  assert.equal(crewAppPresenceFromTasks(tasks, []).size, 0);
 });

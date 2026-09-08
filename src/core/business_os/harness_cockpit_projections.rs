@@ -386,6 +386,11 @@ pub(crate) fn schedule_refresh(root: &Path) {
     wake(root, STATUS | QUEUE | CHAT);
 }
 
+// Continue a bounded chat page through the same per-root pump throttle.
+pub(super) fn schedule_chat_refresh(root: &Path) {
+    wake(root, CHAT);
+}
+
 /// Only a short in-memory update and a nonblocking wake, including when called under SharedState.
 pub(crate) fn publish_worker_snapshot(root: &Path, snapshot: WorkerSnapshot) {
     if let Some(pump) = pump() {

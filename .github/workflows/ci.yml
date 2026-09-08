@@ -287,6 +287,8 @@ jobs:
           node --check src/apps/business-os/scripts/assert-security-privacy-signoff.mjs
           node --check src/apps/business-os/scripts/audit-business-os-content.mjs
           node src/apps/business-os/scripts/assert-rxdb-only.mjs
+          node src/apps/business-os/scripts/generate-module-registry.mjs --check
+          node src/apps/business-os/scripts/assert-module-collection-allowlists.mjs
           node src/apps/business-os/scripts/assert-module-conformance.mjs
           node src/apps/business-os/scripts/assert-command-consumer-inventory.mjs
           node src/apps/business-os/scripts/assert-production-release-docs.mjs

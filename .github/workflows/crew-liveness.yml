@@ -1,0 +1,119 @@
+name: Crew liveness
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/core/business_os/harness_cockpit_chat*'
+      - 'src/core/business_os/rxdb_peer*'
+      - 'src/core/service/service_queue_capacity.rs'
+      - 'src/core/mission/channels/command_saga.rs'
+      - 'src/core/mission/channels/auth_assist.rs'
+      - 'src/core/service/service_auth_assist_tests.rs'
+      - 'src/core/mission/channels/outbound_review.rs'
+      - '.github/workflows/crew-liveness.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crew-liveness-${{ github.ref }}
+  # Preserve baseline evidence and the compiled cache while a follow-up waits.
+  cancel-in-progress: false
+
+jobs:
+  regression:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: ./.github/actions/build-pi-sidecar
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: '1.93.0'
+          components: clippy
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+        with:
+          key: crew-liveness
+          cache-on-failure: 'true'
+      - name: Native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev sqlite3 ripgrep
+          df -h /
+      - name: Check and compile regression tests
+        id: compile
+        run: |
+          cargo check --locked --bin ctox
+          cargo test --locked --bin ctox --no-run --message-format=json-render-diagnostics > "$RUNNER_TEMP/crew-head-tests.jsonl"
+          CREW_TEST_BINARY=$(python3 -c '
+          import json, sys
+          rows = [json.loads(line) for line in open(sys.argv[1]) if line.strip()]
+          paths = {r["executable"] for r in rows if r.get("reason") == "compiler-artifact" and r.get("target", {}).get("name") == "ctox" and r.get("profile", {}).get("test") and r.get("executable")}
+          assert len(paths) == 1, f"Expected exactly one CTOX test binary, found {paths}"
+          print(paths.pop())
+          ' "$RUNNER_TEMP/crew-head-tests.jsonl")
+          echo "CREW_TEST_BINARY=$CREW_TEST_BINARY" >> "$GITHUB_ENV"
+      - name: Admission and projection regressions
+        run: |
+          export CARGO_MANIFEST_DIR="$GITHUB_WORKSPACE"
+          export LD_LIBRARY_PATH="$CARGO_TARGET_DIR/debug/deps:$(rustc --print target-libdir)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          failed=0
+          for filter in auth_assist_recovery web_stack_auth_assist_reuses boot_releases_typed_command_lease queue_capacity_tests crew:: queued_prompt adapter_reconciliation business_os::harness_cockpit::chat::tests background_projection_releases_writer_between_pages sync_ticket_state sync_knowledge_tables; do
+            "$CREW_TEST_BINARY" "$filter" --test-threads=1 || failed=1
+          done
+          exit "$failed"
+      - name: Clippy
+        if: ${{ always() && steps.compile.outcome == 'success' }}
+        run: cargo clippy --locked --bin ctox --tests
+      - name: Native RxDB suite
+        if: ${{ always() && steps.compile.outcome == 'success' }}
+        run: cargo test --locked --manifest-path src/core/rxdb/Cargo.toml -- --test-threads=1
+      - name: Browser wire contract and JS suite
+        if: ${{ always() && steps.compile.outcome == 'success' }}
+        run: |
+          cargo build --locked --manifest-path src/core/rxdb/Cargo.toml --example v15_wire_daemon
+          mkdir -p runtime/build
+          ln -s "$CARGO_TARGET_DIR" runtime/build/cargo-target
+          npm ci --ignore-scripts --prefix src/apps/business-os
+          npm audit --audit-level=low --prefix src/apps/business-os
+          npm --prefix src/apps/business-os exec -- playwright install --with-deps chromium
+          node src/apps/business-os/rxdb/tests/run-all.mjs --require-wire-daemon
+      - name: Measure existing regression filters on campaign base
+        if: ${{ always() && steps.compile.outcome == 'success' && (github.head_ref == 'codex/crew-open-items' || github.head_ref == 'codex/auth-assist-recovery') }}
+        run: |
+          CREW_TEST_HEAD=$(git rev-parse HEAD)
+          trap 'git checkout --detach "$CREW_TEST_HEAD"' EXIT
+          CREW_BASE=8e6f132a82549be9235dd433fc9bd28d5ae868e6
+          if [ "$GITHUB_HEAD_REF" = 'codex/auth-assist-recovery' ]; then CREW_BASE=b56cd3b781e36bd7eff04e2891d55b41015839fd; fi
+          git fetch --no-tags origin "$CREW_BASE"
+          git checkout --detach "$CREW_BASE"
+          cargo test --locked --bin ctox --no-run --message-format=json-render-diagnostics > "$RUNNER_TEMP/crew-base-tests.jsonl"
+          CREW_BASE_TEST_BINARY=$(python3 -c '
+          import json, sys
+          rows = [json.loads(line) for line in open(sys.argv[1]) if line.strip()]
+          paths = {r["executable"] for r in rows if r.get("reason") == "compiler-artifact" and r.get("target", {}).get("name") == "ctox" and r.get("profile", {}).get("test") and r.get("executable")}
+          assert len(paths) == 1, f"Expected exactly one CTOX test binary, found {paths}"
+          print(paths.pop())
+          ' "$RUNNER_TEMP/crew-base-tests.jsonl")
+          export CARGO_MANIFEST_DIR="$GITHUB_WORKSPACE"
+          export LD_LIBRARY_PATH="$CARGO_TARGET_DIR/debug/deps:$(rustc --print target-libdir)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          failed=0
+          for filter in crew:: queued_prompt adapter_reconciliation business_os::harness_cockpit::chat::tests sync_ticket_state sync_knowledge_tables; do
+            status=0
+            "$CREW_BASE_TEST_BINARY" "$filter" --test-threads=1 || status=$?
+            echo "Baseline $CREW_BASE: $filter exit=$status"
+            if [ "$status" -ne 0 ]; then failed=1; fi
+          done
+          status=0
+          node src/apps/business-os/rxdb/tests/run-all.mjs --require-wire-daemon || status=$?
+          echo "Baseline $CREW_BASE: JS/wire exit=$status"
+          if [ "$status" -ne 0 ]; then failed=1; fi
+          exit "$failed"

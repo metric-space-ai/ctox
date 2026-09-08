@@ -6353,6 +6353,34 @@ pub fn record_command(
     }
     let queue_task =
         create_ctox_queue_task(root, &command_id, &command, native_authorization.as_ref())?;
+    if let Some(task) = queue_task
+        .as_ref()
+        .filter(|task| task.route_status == "cancelled")
+    {
+        // Atomic admission can supersede a duplicate adapter reconciliation.
+        // Preserve that terminal decision instead of overwriting it with the
+        // compatibility path's usual accepted/queued projection.
+        let projection = channels::business_command_projection(root, &command_id)?;
+        conn.execute(
+            "INSERT INTO business_commands(command_id,module,command_type,record_id,status,payload_json,client_context_json,observed_at_ms)
+             VALUES(?1,?2,?3,?4,'cancelled',?5,?6,?7)
+             ON CONFLICT(command_id) DO UPDATE SET status='cancelled'",
+            params![command_id,command.module,command.command_type,command.record_id,
+                serde_json::to_string(&command.payload)?,serde_json::to_string(&command.client_context)?,observed_at_ms],
+        )?;
+        persist_business_command_lifecycle_projection(root, &projection)?;
+        return Ok(CommandAccepted {
+            ok: true,
+            command_id,
+            status: "cancelled",
+            execution_mode: "queue",
+            task_id: Some(task.message_key.clone()),
+            execution_task_id: Some(task.message_key.clone()),
+            task_status: Some("cancelled".into()),
+            result: projection.get("result").cloned(),
+            ..CommandAccepted::default()
+        });
+    }
     let inbound_channel = command_inbound_channel(&command);
     let chat_id = if is_business_chat_command(&command) {
         Some(materialize_pending_business_chat(
@@ -22798,9 +22826,17 @@ pub(super) fn clamp_projected_document_to_wire_budget(
     };
     // Largest field first: trimming one huge `result` usually suffices, and
     // trimming the fewest fields keeps the most information on the wire.
+    // The module catalog is the shell's routing contract: its `modules` list is
+    // the last field to go, after marketplace, templates, governance and
+    // version states — dropping `modules` first left browsers with a stale
+    // module list (07.09.2026: the CTOX module lost its crew collections).
+    let catalog_table = table.starts_with("ctox_business_os__business_module_catalog__v");
     let mut candidates: Vec<(String, usize)> = object
         .iter()
         .filter(|(key, _)| !WIRE_BUDGET_PROTECTED_FIELDS.contains(&key.as_str()))
+        .filter(|(key, _)| {
+            !(catalog_table && matches!(key.as_str(), "modules" | "allowed_module_ids"))
+        })
         .map(|(key, value)| {
             (
                 key.clone(),
@@ -22812,6 +22848,18 @@ pub(super) fn clamp_projected_document_to_wire_budget(
 
     let mut remaining = total;
     let mut trimmed: Vec<String> = Vec::new();
+    if catalog_table {
+        // Only when everything else is gone may the module list itself be cut.
+        let others: usize = candidates.iter().map(|(_, bytes)| bytes).sum();
+        if total.saturating_sub(others) > MAX_PROJECTED_DOCUMENT_BYTES {
+            if let Some(modules) = object.get("modules") {
+                let bytes = serde_json::to_vec(modules)
+                    .map(|raw| raw.len())
+                    .unwrap_or(0);
+                candidates.push(("modules".to_owned(), bytes));
+            }
+        }
+    }
     for (key, bytes) in candidates {
         if remaining <= MAX_PROJECTED_DOCUMENT_BYTES {
             break;

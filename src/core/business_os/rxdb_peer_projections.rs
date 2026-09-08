@@ -16,8 +16,8 @@ use super::rxdb_peer::{
     workspace_branding_projection_stamp, BackgroundProjectionLoopConfig, NativePeerLoopMetrics,
     BUSINESS_RECORD_PROJECTION_WRITE_BATCH_SIZE, BUSINESS_USERS_PROJECTION_LOOP,
     CHANNEL_STATE_PROJECTION_LOOP, KNOWLEDGE_TABLES_PROJECTION_LOOP,
-    MODULE_CATALOG_PROJECTION_LOOP, RUNTIME_SETTINGS_PROJECTION_LOOP, TICKET_STATE_PROJECTION_LOOP,
-    WORKSPACE_BRANDING_PROJECTION_LOOP,
+    MODULE_CATALOG_PROJECTION_LOOP, NATIVE_RXDB_WRITE_LOCK, RUNTIME_SETTINGS_PROJECTION_LOOP,
+    TICKET_STATE_PROJECTION_LOOP, WORKSPACE_BRANDING_PROJECTION_LOOP,
 };
 use rxdb::rx_collection::RxCollection;
 use rxdb::rx_database::RxDatabase;
@@ -282,7 +282,7 @@ pub(super) async fn sync_module_catalog_background_loop(
 pub(super) async fn sync_ticket_state_background_loop(
     root: PathBuf,
     database: Arc<RxDatabase>,
-    database_write_lock: Arc<AsyncMutex<()>>,
+    _database_write_lock: Arc<AsyncMutex<()>>,
 ) {
     let stamp_root = root.clone();
     run_background_projection_loop(
@@ -294,9 +294,9 @@ pub(super) async fn sync_ticket_state_background_loop(
         move || {
             let root = root.clone();
             let database = Arc::clone(&database);
-            let database_write_lock = Arc::clone(&database_write_lock);
             async move {
-                let _guard = database_write_lock.lock().await;
+                // This collection family has one writer. Source loading must
+                // not hold the cross-loop lock; writes yield between batches.
                 sync_ticket_state_with_database(&root, &database).await
             }
         },
@@ -307,7 +307,7 @@ pub(super) async fn sync_ticket_state_background_loop(
 pub(super) async fn sync_knowledge_tables_background_loop(
     root: PathBuf,
     database: Arc<RxDatabase>,
-    database_write_lock: Arc<AsyncMutex<()>>,
+    _database_write_lock: Arc<AsyncMutex<()>>,
 ) {
     let stamp_root = root.clone();
     run_background_projection_loop(
@@ -319,14 +319,41 @@ pub(super) async fn sync_knowledge_tables_background_loop(
         move || {
             let root = root.clone();
             let database = Arc::clone(&database);
-            let database_write_lock = Arc::clone(&database_write_lock);
-            async move {
-                let _guard = database_write_lock.lock().await;
-                sync_knowledge_tables_with_database(&root, &database).await
-            }
+            async move { sync_knowledge_tables_with_database(&root, &database).await }
         },
     )
     .await;
+}
+
+/// Bound the shared writer's occupancy by both count and approximate payload
+/// bytes. A large first projection may keep working, but intake gets a turn
+/// between pages. Never cancel a partially written batch on a wall timer.
+pub(super) async fn upsert_background_projection_pages(
+    collection: &Arc<RxCollection>,
+    collection_name: &str,
+    documents: Vec<Value>,
+) -> anyhow::Result<usize> {
+    let mut documents = documents.into_iter().peekable();
+    let mut count = 0;
+    while documents.peek().is_some() {
+        let mut page = Vec::new();
+        let mut bytes = 0;
+        while page.len() < 16 && (page.is_empty() || bytes < 256 * 1024) {
+            let Some(document) = documents.next() else {
+                break;
+            };
+            bytes += serde_json::to_vec(&document)?.len();
+            page.push(document);
+        }
+        {
+            let _guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
+            count +=
+                bulk_upsert_business_record_projection_documents(collection, collection_name, page)
+                    .await?;
+        }
+        tokio::task::yield_now().await;
+    }
+    Ok(count)
 }
 
 pub(super) fn support_projection_collection(collection: &str) -> Option<&'static str> {

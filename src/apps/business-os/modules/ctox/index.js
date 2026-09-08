@@ -1,6 +1,6 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260907-shell-v2-crew-home-v347';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260908-shell-v2-crew-language-v354';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
 
@@ -20,7 +20,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260907-shell-v2-crew-home-v347';
+const CTOX_STYLE_BUILD = '20260908-shell-v2-crew-language-v354';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -29,30 +29,30 @@ const TASK_SOURCE_COLLECTIONS = ['ctox_queue_tasks', 'business_commands', 'ctox_
 const labels = {
   de: {
     now: 'Jetzt',
-    loadingRuntime: 'CTOX Runtime wird geladen',
-    loadingRuntimeDetail: 'Flow, Queue und Status werden aktualisiert.',
+    loadingRuntime: "Crew wird geladen",
+    loadingRuntimeDetail: "Aufgaben und Fortschritt werden aktualisiert.",
     live: 'Live',
-    tasks: 'Tasks',
+    tasks: "Aufgaben",
     newestFirst: 'neueste zuerst',
     taskSteps: 'Zwischenschritte',
-    selectedTask: 'Ausgewählter Task',
-    inboundChannels: 'Inbound-Kanäle',
+    selectedTask: "Ausgewählte Aufgabe",
+    inboundChannels: "Eingangskanäle",
     inboundItems: 'Eingänge',
-    inboundEndpoint: 'Task-Eingang',
-    outboundEndpoint: 'Task-Abschluss',
+    inboundEndpoint: "Aufgabeneingang",
+    outboundEndpoint: "Aufgabenabschluss",
     openOutcome: 'Abschluss offen',
     unprovenOutcome: 'Abschluss nicht belegt',
-    taskDetail: 'Task-Details',
-    editTask: 'Task bearbeiten',
+    taskDetail: "Aufgabendetails",
+    editTask: "Aufgabe bearbeiten",
     taskTitle: 'Titel',
-    taskPrompt: 'Prompt',
+    taskPrompt: "Auftrag",
     saveTask: 'Speichern',
     resumeTask: 'Als Folgeauftrag fortsetzen',
     deleteTask: 'Löschen',
-    deleteTaskConfirm: 'Diesen CTOX Task wirklich löschen?',
-    taskSaved: 'Task gespeichert.',
+    deleteTaskConfirm: "Diese Aufgabe wirklich löschen?",
+    taskSaved: "Aufgabe gespeichert.",
     taskResumed: 'Folgeauftrag angelegt.',
-    taskDeleted: 'Task gelöscht.',
+    taskDeleted: "Aufgabe gelöscht.",
     taskActionFailed: 'Aktion fehlgeschlagen.',
     memoryTitle: "Gedächtnis",
     knowledge: "Was es weiß",
@@ -61,7 +61,7 @@ const labels = {
     saveMemory: "Speichern",
     cancelEdit: "Abbrechen",
     confirmAnchor: "Bestätigen",
-    memoryConfirmed: "vom Owner bestätigt",
+    memoryConfirmed: "bestätigt",
     memoryHypothesis: "Hypothese",
     memoryEmpty: "Noch nichts. Entsteht mit den ersten Einsätzen.",
     noDomain: "noch ohne Fachgebiet",
@@ -77,7 +77,7 @@ const labels = {
     shape_square: "eckig",
     shape_triangle: "Dreieck",
     retryLoad: "Erneut laden",
-    syncDisconnected: "Sync nicht verbunden – Anzeige kann veraltet sein",
+    syncDisconnected: "Verbindung unterbrochen – die Anzeige kann veraltet sein",
     openInChat: "Im Chat öffnen",
     zoomOut: "Verkleinern",
     zoomIn: "Vergrößern",
@@ -85,14 +85,18 @@ const labels = {
     activityTimeline: "Aktivitätsverlauf",
     selectActivityEvent: "Ereignis wählen",
     noEventDetail: "Zu diesem Ereignis liegt noch kein Detail vor.",
-    flowDiagram: "CTOX-Arbeitsfluss",
-    laneCommunication: "Kommunikation mit dem Owner",
-    laneQueue: "Warteschlange und Ausführung",
+    flowDiagram: "Arbeitsablauf der Crew",
+    laneCommunication: "Abstimmung",
+    laneQueue: "Aufgaben und Bearbeitung",
     laneEvidence: "Nachweisprüfung",
     crewHome: "Crew zu Hause",
     atHome: "zu Hause",
     restingAfterFailure: "erholt sich nach einem Fehlschlag",
     readingMemory: "liest sein Gedächtnis",
+    memoryLinePlaceholder: "Ein Satz je Zeile: was dieses Wesen sicher weiß.",
+    outcomeExecutionError: "Fehler bei der Ausführung",
+    outcomeCompleted: "erledigt",
+    outcomeReviewRejected: "Prüfung nicht bestanden",
     notPermittedForRole: "für deine Rolle nicht freigegeben",
     noLiveMetrics: "keine Live-Messwerte",
     noPlanYet: "noch kein Plan",
@@ -109,16 +113,16 @@ const labels = {
     sketch: "Skizze",
     specialties: "Spezialitäten",
     specialtiesHint: "kommagetrennt",
-    spec_modules: "Module",
-    spec_command_types: "Befehle",
+    spec_modules: "Apps",
+    spec_command_types: "Auftragsarten",
     spec_skills: "Fähigkeiten",
-    spec_tags: "Tags",
+    spec_tags: "Stichwörter",
     cv: "Lebenslauf",
     tasksTotal: "Einsätze",
     succeededCount: "gelungen",
     failedCount: "gescheitert",
-    reviewPassedCount: "Review bestanden",
-    reviewRejectedCount: "Review abgelehnt",
+    reviewPassedCount: "Prüfung bestanden",
+    reviewRejectedCount: "Prüfung nicht bestanden",
     avgElapsed: "Ø Dauer",
     lastActive: "zuletzt aktiv",
     timesheet: "Stundenzettel",
@@ -143,9 +147,9 @@ const labels = {
     retryTask: "Wiederholen",
     assignTask: "Zuweisen",
     assignChoose: "Mitglied wählen",
-    cancelReasonDefault: "Vom Owner abgebrochen",
-    blockReasonDefault: "Vom Owner blockiert",
-    pauseReasonDefault: "Vom Owner pausiert",
+    cancelReasonDefault: "Vom Nutzer abgebrochen",
+    blockReasonDefault: "Vom Nutzer blockiert",
+    pauseReasonDefault: "Vom Nutzer pausiert",
     controlApplied: "Übernommen.",
     harnessRunning: "Läuft",
     harnessPaused: "Pausiert",
@@ -155,14 +159,14 @@ const labels = {
     countWaiting: "warten",
     countWorking: "im Einsatz",
     countBlocked: "blockiert",
-    pressureActive: "Druck aktiv",
-    pauseHarness: "Queue pausieren",
-    resumeHarness: "Queue fortsetzen",
+    pressureActive: "Hohe Auslastung",
+    pauseHarness: "Crew pausieren",
+    resumeHarness: "Crew weiterarbeiten lassen",
     holdTechnical: "technischer Grund",
-    holdMissingReviewEvidence: "Review-Beleg fehlt",
-    holdMissingArtifact: "Artefakt fehlt",
-    holdWaitingExternal: "wartet auf extern",
-    holdAbortedByOwner: "vom Owner abgebrochen",
+    holdMissingReviewEvidence: "Prüfergebnis fehlt",
+    holdMissingArtifact: "Arbeitsergebnis fehlt",
+    holdWaitingExternal: "wartet auf eine Rückmeldung",
+    holdAbortedByOwner: "vom Nutzer abgebrochen",
     holdOther: "blockiert",
     failureRetryable: "wiederholbar",
     failureTerminal: "endgültig",
@@ -180,122 +184,122 @@ const labels = {
     leasedWord: "übernommen",
     assignedTo: "zugewiesen an",
     crewMember: "Crew-Mitglied",
-    leaseOwner: "Lease",
+    leaseOwner: "Übernommen von",
     until: "bis",
-    chefAdminOnly: 'Nur Chef oder Admin dürfen Tasks ändern.',
+    chefAdminOnly: "Nur Verantwortliche und Administratoren dürfen Aufgaben ändern.",
     currentStep: 'Aktuelle Station',
     source: 'Quelle',
     status: 'Status',
     created: 'Angelegt',
     summary: 'Zusammenfassung',
-    evidence: 'Evidenz',
+    evidence: "Nachweise",
     stationDetail: 'Stationsdetails',
     tools: 'Werkzeuge',
-    openTaskDetail: 'Details im Drawer anzeigen',
-    liveFlow: 'CTOX Live Flow',
-    doingNow: 'Was CTOX gerade tut',
+    openTaskDetail: "Details anzeigen",
+    liveFlow: "Crew im Einsatz",
+    doingNow: "Was die Crew gerade tut",
     measurements: 'Messung',
-    inputTokens: 'Input Tokens',
-    outputTokens: 'Output Tokens',
-    toolCalls: 'Tool Calls',
-    reasoningTurns: 'Reasoning',
+    inputTokens: "Gelesene Tokens",
+    outputTokens: "Erzeugte Tokens",
+    toolCalls: "Werkzeugeinsätze",
+    reasoningTurns: "Denkschritte",
     elapsed: 'Zeit',
     notCaptured: 'nicht erfasst',
     executionProgress: 'Fortschritt',
     step: 'Schritt',
-    activityTurnSingular: 'Turn',
-    activityTurnPlural: 'Turns',
+    activityTurnSingular: "Arbeitsschritt",
+    activityTurnPlural: "Arbeitsschritte",
     executionPhases: {
-      work: 'Modellarbeit',
-      working: 'Modellarbeit',
+      work: 'Bearbeitung',
+      working: 'Bearbeitung',
       plan: 'Planung',
       planning: 'Planung',
-      review: 'Review',
+      review: 'Prüfung',
       validation: 'Nachweis',
       validating: 'Nachweis',
       rework: 'Nacharbeit',
       completed: 'Abgeschlossen',
       done: 'Abgeschlossen',
     },
-    agentPreparing: 'Agent wird vorbereitet',
-    agentWorking: 'Agent arbeitet',
-    agentCompleted: 'Agent-Durchlauf abgeschlossen',
-    agentTimeout: 'Zeitlimit des Agenten erreicht',
-    modelUsageUpdated: 'Modellnutzung aktualisiert',
+    agentPreparing: "Crew bereitet sich vor",
+    agentWorking: "Crew arbeitet",
+    agentCompleted: "Arbeitsschritt abgeschlossen",
+    agentTimeout: "Zeitlimit für diesen Arbeitsschritt erreicht",
+    modelUsageUpdated: "Textverbrauch aktualisiert",
     toolStarted: 'Werkzeug gestartet',
     toolFinished: 'Werkzeug abgeschlossen',
     connected: 'verbunden',
     notLive: 'nicht live',
-    notLogged: 'Zeit nicht geloggt',
-    timeline: 'Timeline',
-    queue: 'Pipeline',
+    notLogged: "Zeit nicht erfasst",
+    timeline: "Verlauf",
+    queue: "Aufgabenliste",
     active: 'aktiv',
     tickets: 'Tickets',
     task: 'Neue Aufgabe',
-    instruction: 'CTOX Anweisung',
+    instruction: "Auftrag an die Crew",
     priority: 'Priorität',
     send: 'Senden',
     sending: 'Sendet...',
-    runtime: 'Runtime',
+    runtime: "Betrieb",
     model: 'Modell',
     mode: 'Modus',
     context: 'Kontext',
-    importTasks: 'Tasks importieren',
-    exportTasks: 'Tasks exportieren',
-    tasksImported: '{count} Tasks importiert.',
-    taskImportFailed: 'Import fehlgeschlagen — keine importierbaren Tasks in der Datei.',
+    importTasks: "Aufgaben importieren",
+    exportTasks: "Aufgaben exportieren",
+    tasksImported: "{count} Aufgaben importiert.",
+    taskImportFailed: "Import fehlgeschlagen – die Datei enthält keine lesbaren Aufgaben.",
     noWorkHere: 'Hier liegt gerade keine Arbeit.',
-    syncingTasks: 'Tasks werden synchronisiert.',
+    syncingTasks: "Aufgaben werden aktualisiert.",
     noRecentWork: 'Noch keine aktuelle Arbeit erfasst.',
-    noMetrics: 'keine Live-Tokenmetriken',
-    routing: 'Routing',
-    inbound: 'Inbound',
-    outbound: 'Outbound',
-    queued: 'Command angelegt',
-    webStack: 'Web Stack',
+    noMetrics: "noch keine Verbrauchsdaten",
+    routing: "Zuordnung",
+    inbound: "Eingang",
+    outbound: "Ausgang",
+    queued: "Auftrag angelegt",
+    webStack: "Internet-Zugänge",
     webStackSources: 'Quellen',
-    webStackCredentials: 'Credentials',
+    webStackCredentials: "Zugangsdaten",
     webStackMissing: 'fehlen',
     webStackConfigured: 'konfiguriert',
-    webStackSecret: 'Secret',
-    webStackCredentialValue: 'Credential-Wert',
+    webStackSecret: "Zugangsschlüssel",
+    webStackCredentialValue: "Zugangsschlüssel",
     webStackSaveCredential: 'Speichern',
     webStackVerifyCredential: 'Prüfen',
     webStackAuthAssist: 'Login im Browser',
-    webStackRxdbOnly: 'Browser-Stream über RxDB, Secrets im CTOX Secret Store.',
-    webStackLoading: 'Web Stack Projektion wird geladen…',
-    webStackConnecting: 'RxDB ist verbunden, die CTOX Web-Stack-Projektion fehlt noch.',
-    webStackUnavailable: 'Web Stack ist gerade nicht erreichbar.',
+    webStackRxdbOnly: "Zugangsdaten werden verschlüsselt gespeichert.",
+    webStackLoading: "Internet-Zugänge werden geladen…",
+    webStackConnecting: "Verbunden. Die Zugangsdaten werden noch geladen.",
+    webStackUnavailable: "Internet-Zugänge sind gerade nicht erreichbar.",
     webStackSyncRequired: 'Verbindung prüfen',
-    webStackCheckProjection: 'Web-Stack-Projektion neu einlesen',
-    webStackProjectionMissing: 'Der Web Stack ist gerade nicht vollständig verfügbar. Die reaktive Verbindung prüft weiter.',
-    webStackCredentialSaved: 'Credential gespeichert.',
+    webStackCheckProjection: "Zugänge neu laden",
+    webStackProjectionMissing: "Die Zugangsdaten sind noch nicht vollständig geladen.",
+    webStackCredentialSaved: "Zugangsdaten gespeichert.",
     webStackAuthQueued: 'Browser-Login angefordert.',
-    webStackRecentCaptures: 'Letzte Captures',
-    webStackNoCaptures: 'Noch keine Browser-Captures.',
-    webStackRecentExtracts: 'Letzte Extracts',
-    webStackNoExtracts: 'Noch keine Browser-Extracts.',
-    timelineUnavailable: 'Keine Timeline-Ereignisse verfügbar',
-    timelineUnavailableDetail: 'Der Regler ist deaktiviert, bis CTOX mehr als einen Schritt projiziert.',
-    flowProjectionMissing: 'RxDB verbunden, CTOX Flow-Projektion fehlt',
-    harnessHealth: 'Harness Health',
-    harnessCriticalTitle: 'CTOX Harness verarbeitet keine Queue',
-    harnessCriticalMessage: '{count} Aufgaben warten seit {age}; keine geleaste oder laufende Verarbeitung sichtbar.',
-    harnessCriticalProjection: '{count} Aufgaben warten seit {age}; RxDB ist verbunden, aber die CTOX Flow-Projektion fehlt.',
-    harnessWarningTitle: 'Queue wartet auf CTOX Harness',
-    harnessWarningMessage: '{count} Aufgaben warten; noch keine Lease sichtbar.',
-    harnessOpenTask: 'Task öffnen',
-    harnessHealthy: 'Harness verarbeitet Queue',
+    webStackRecentCaptures: "Letzte Aufnahmen",
+    webStackNoCaptures: "Noch keine Browser-Aufnahmen.",
+    webStackRecentExtracts: "Zuletzt gelesene Inhalte",
+    webStackNoExtracts: "Noch keine Inhalte gelesen.",
+    timelineUnavailable: "Noch kein Verlauf verfügbar",
+    timelineUnavailableDetail: "Der Verlauf wird mit dem nächsten Arbeitsschritt verfügbar.",
+    flowProjectionMissing: "Verbunden. Der Arbeitsstand wird noch geladen.",
+    harnessHealth: "Crew-Status",
+    harnessCriticalTitle: "Die Crew arbeitet gerade keine Aufgaben ab",
+    harnessCriticalMessage: "Offene Aufgaben: {count}. Längste Wartezeit: {age}.",
+    harnessCriticalProjection: "Offene Aufgaben: {count}. Längste Wartezeit: {age}. Der aktuelle Arbeitsstand ist noch nicht verfügbar.",
+    harnessWarningTitle: "Aufgaben warten auf die Crew",
+    harnessWarningMessage: "Offene Aufgaben: {count}. Noch kein Arbeitsbeginn sichtbar.",
+    harnessOpenTask: "Aufgabe öffnen",
+    harnessHealthy: "Die Crew bearbeitet die Aufgabenliste",
     auxShow: 'Status & Quellen',
     auxHide: 'Status & Quellen ausblenden',
-    harnessKicker: 'Harness',
-    taskSearch: 'Tasks suchen',
+    harnessKicker: "Crew",
+    taskSearch: "Aufgaben suchen",
     showAsList: 'Als Liste anzeigen',
     showAsCards: 'Als Karten anzeigen',
     filters: 'Filter',
     resetFilters: 'Filter zurücksetzen',
     allSources: 'Alle Quellen',
-    allTasks: 'Alle Tasks',
+    allTasks: "Alle Aufgaben",
     pinnedOnly: 'Nur Pins',
     sortUpdated: 'Aktualisiert',
     sortTitle: 'Titel',
@@ -307,19 +311,19 @@ const labels = {
     viewWaiting: 'Wartet',
     viewDone: 'Erledigt',
     entries: 'Einträge',
-    pinTask: 'Task anpinnen',
+    pinTask: "Aufgabe anpinnen",
     unpinTask: 'Pin lösen',
     pinned: 'Angepinnt',
-    pipelineQueued: 'Queue',
+    pipelineQueued: "Wartet",
     pipelineWorking: 'Arbeit',
-    pipelineReview: 'Review',
+    pipelineReview: "Prüfung",
     pipelineDone: 'Fertig',
-    flowFooterEmpty: 'Kein Task ausgewählt',
+    flowFooterEmpty: "Keine Aufgabe ausgewählt",
   },
   en: {
     now: 'Now',
-    loadingRuntime: 'Loading CTOX runtime',
-    loadingRuntimeDetail: 'Updating flow, queue, and status.',
+    loadingRuntime: "Loading the crew",
+    loadingRuntimeDetail: "Updating tasks and progress.",
     live: 'Live',
     tasks: 'Tasks',
     newestFirst: 'newest first',
@@ -338,7 +342,7 @@ const labels = {
     saveTask: 'Save',
     resumeTask: 'Continue as follow-up',
     deleteTask: 'Delete',
-    deleteTaskConfirm: 'Delete this CTOX task?',
+    deleteTaskConfirm: "Delete this task?",
     taskSaved: 'Task saved.',
     taskResumed: 'Follow-up task queued.',
     taskDeleted: 'Task deleted.',
@@ -366,7 +370,7 @@ const labels = {
     shape_square: "square",
     shape_triangle: "triangle",
     retryLoad: "Reload",
-    syncDisconnected: "Sync not connected – the view may be stale",
+    syncDisconnected: "Disconnected – the view may be out of date",
     openInChat: "Open in chat",
     zoomOut: "Zoom out",
     zoomIn: "Zoom in",
@@ -374,14 +378,18 @@ const labels = {
     activityTimeline: "Activity timeline",
     selectActivityEvent: "Select activity event",
     noEventDetail: "No detail is available for this event yet.",
-    flowDiagram: "CTOX work flow",
-    laneCommunication: "Owner communication",
-    laneQueue: "Queue and execution",
+    flowDiagram: "Crew workflow",
+    laneCommunication: "Coordination",
+    laneQueue: "Tasks and work",
     laneEvidence: "Evidence check",
     crewHome: "Crew at home",
     atHome: "at home",
     restingAfterFailure: "recovering after a failure",
     readingMemory: "reading its memory",
+    memoryLinePlaceholder: "One sentence per line: what this member knows for sure.",
+    outcomeExecutionError: "execution error",
+    outcomeCompleted: "done",
+    outcomeReviewRejected: "review rejected",
     notPermittedForRole: "not released for your role",
     noLiveMetrics: "no live measurements",
     noPlanYet: "no plan yet",
@@ -444,12 +452,12 @@ const labels = {
     countWaiting: "waiting",
     countWorking: "on duty",
     countBlocked: "blocked",
-    pressureActive: "pressure active",
-    pauseHarness: "Pause queue",
-    resumeHarness: "Resume queue",
+    pressureActive: "High workload",
+    pauseHarness: "Pause the crew",
+    resumeHarness: "Resume the crew",
     holdTechnical: "technical reason",
     holdMissingReviewEvidence: "review evidence missing",
-    holdMissingArtifact: "artifact missing",
+    holdMissingArtifact: "work result missing",
     holdWaitingExternal: "waiting for external input",
     holdAbortedByOwner: "aborted by owner",
     holdOther: "blocked",
@@ -469,7 +477,7 @@ const labels = {
     leasedWord: "picked up",
     assignedTo: "assigned to",
     crewMember: "Crew member",
-    leaseOwner: "Lease",
+    leaseOwner: "Picked up by",
     until: "until",
     chefAdminOnly: 'Only chef or admin can change tasks.',
     currentStep: 'Current station',
@@ -480,9 +488,9 @@ const labels = {
     evidence: 'Evidence',
     stationDetail: 'Station details',
     tools: 'Tools',
-    openTaskDetail: 'Show details in drawer',
-    liveFlow: 'CTOX live flow',
-    doingNow: 'What CTOX is doing now',
+    openTaskDetail: "Show details",
+    liveFlow: "Crew at work",
+    doingNow: "What the crew is doing",
     measurements: 'Measurements',
     inputTokens: 'Input tokens',
     outputTokens: 'Output tokens',
@@ -506,10 +514,10 @@ const labels = {
       completed: 'Completed',
       done: 'Completed',
     },
-    agentPreparing: 'Preparing agent',
-    agentWorking: 'Agent is working',
-    agentCompleted: 'Agent turn completed',
-    agentTimeout: 'Agent turn timed out',
+    agentPreparing: "Crew is preparing",
+    agentWorking: "Crew is working",
+    agentCompleted: "Work step completed",
+    agentTimeout: "Time limit reached for this step",
     modelUsageUpdated: 'Model usage updated',
     toolStarted: 'Tool started',
     toolFinished: 'Tool finished',
@@ -517,15 +525,15 @@ const labels = {
     notLive: 'not live',
     notLogged: 'time not logged',
     timeline: 'Timeline',
-    queue: 'Pipeline',
+    queue: "Task list",
     active: 'active',
     tickets: 'Tickets',
     task: 'New task',
-    instruction: 'CTOX instruction',
+    instruction: "Instructions for the crew",
     priority: 'Priority',
     send: 'Send',
     sending: 'Sending...',
-    runtime: 'Runtime',
+    runtime: "Operation",
     model: 'Model',
     mode: 'Mode',
     context: 'Context',
@@ -537,11 +545,11 @@ const labels = {
     syncingTasks: 'Syncing tasks.',
     noRecentWork: 'No recent work recorded yet.',
     noMetrics: 'no live token metrics',
-    routing: 'Routing',
+    routing: "Assignment",
     inbound: 'Inbound',
     outbound: 'Outbound',
-    queued: 'Command queued',
-    webStack: 'Web Stack',
+    queued: "Task created",
+    webStack: "Online access",
     webStackSources: 'Sources',
     webStackCredentials: 'Credentials',
     webStackMissing: 'missing',
@@ -551,33 +559,33 @@ const labels = {
     webStackSaveCredential: 'Save',
     webStackVerifyCredential: 'Verify',
     webStackAuthAssist: 'Login in Browser',
-    webStackRxdbOnly: 'Browser stream over RxDB, secrets in CTOX Secret Store.',
-    webStackLoading: 'Loading Web Stack projection…',
-    webStackConnecting: 'RxDB is connected, but the CTOX Web Stack projection is still missing.',
-    webStackUnavailable: 'Web Stack is currently unreachable.',
+    webStackRxdbOnly: "Credentials are stored encrypted.",
+    webStackLoading: "Loading online access…",
+    webStackConnecting: "Connected. Access details are still loading.",
+    webStackUnavailable: "Online access is currently unavailable.",
     webStackSyncRequired: 'Check connection',
-    webStackCheckProjection: 'Reload Web Stack projection',
-    webStackProjectionMissing: 'The Web Stack is not fully available right now. The reactive connection keeps checking.',
+    webStackCheckProjection: "Reload access details",
+    webStackProjectionMissing: "Access details have not finished loading.",
     webStackCredentialSaved: 'Credential saved.',
     webStackAuthQueued: 'Browser login requested.',
-    webStackRecentCaptures: 'Recent captures',
-    webStackNoCaptures: 'No browser captures yet.',
-    webStackRecentExtracts: 'Recent extracts',
-    webStackNoExtracts: 'No browser extracts yet.',
+    webStackRecentCaptures: "Recent recordings",
+    webStackNoCaptures: "No browser recordings yet.",
+    webStackRecentExtracts: "Recently read content",
+    webStackNoExtracts: "No content read yet.",
     timelineUnavailable: 'No timeline events available',
-    timelineUnavailableDetail: 'The scrubber is disabled until CTOX projects more than one step.',
-    flowProjectionMissing: 'RxDB connected, CTOX flow projection missing',
-    harnessHealth: 'Harness health',
-    harnessCriticalTitle: 'CTOX harness is not processing the queue',
-    harnessCriticalMessage: '{count} tasks have been waiting for {age}; no leased or running work is visible.',
-    harnessCriticalProjection: '{count} tasks have been waiting for {age}; RxDB is connected, but the CTOX flow projection is missing.',
-    harnessWarningTitle: 'Queue is waiting for CTOX harness',
-    harnessWarningMessage: '{count} tasks are waiting; no lease is visible yet.',
+    timelineUnavailableDetail: "The timeline becomes available with the next step.",
+    flowProjectionMissing: "Connected. Work progress is still loading.",
+    harnessHealth: "Crew status",
+    harnessCriticalTitle: "The crew is not working on tasks right now",
+    harnessCriticalMessage: "Open tasks: {count}. Longest wait: {age}.",
+    harnessCriticalProjection: "Open tasks: {count}. Longest wait: {age}. Current progress is not available yet.",
+    harnessWarningTitle: "Tasks are waiting for the crew",
+    harnessWarningMessage: "Open tasks: {count}. No work has started yet.",
     harnessOpenTask: 'Open task',
-    harnessHealthy: 'Harness is processing queue',
+    harnessHealthy: "The crew is working through the task list",
     auxShow: 'Status & sources',
     auxHide: 'Hide status & sources',
-    harnessKicker: 'Harness',
+    harnessKicker: "Crew",
     taskSearch: 'Search tasks',
     showAsList: 'Show as list',
     showAsCards: 'Show as cards',
@@ -631,16 +639,16 @@ const STATE_MACHINE_NODES = [
 // names for tooltips and tests; what the screen shows comes from here.
 const FLOW_NODE_COPY = {
   de: {
-    queued: ['Warteschlange', 'Wartet in der Schlange'],
-    leased: ['Übernommen', 'Abgeholt'],
+    queued: ['Aufgabenliste', 'Wartet auf den Start'],
+    leased: ['Übernommen', 'Bereit zum Start'],
     running: ['Arbeit', 'Arbeitet'],
-    'awaiting-review': ['Review', 'Bereit fürs Review'],
-    'review-queued': ['Review', 'Review wartet'],
-    reviewing: ['Review', 'Im Review'],
-    'review-passed': ['Review', 'Review bestanden'],
-    'review-rejected': ['Review', 'Review abgelehnt'],
-    'review-unavailable': ['Review', 'Reviewer nicht erreichbar'],
-    'review-retry': ['Review', 'Review wiederholen'],
+    'awaiting-review': ['Prüfung', 'Bereit zur Prüfung'],
+    'review-queued': ['Prüfung', 'Prüfung steht aus'],
+    reviewing: ['Prüfung', 'Wird geprüft'],
+    'review-passed': ['Prüfung', 'Prüfung bestanden'],
+    'review-rejected': ['Prüfung', 'Prüfung nicht bestanden'],
+    'review-unavailable': ['Prüfung', 'Prüfung nicht verfügbar'],
+    'review-retry': ['Prüfung', 'Prüfung wiederholen'],
     'rework-required': ['Nacharbeit', 'Nacharbeit nötig'],
     'awaiting-validation': ['Nachweis', 'Nachweis nötig'],
     validating: ['Nachweis', 'Nachweis wird geprüft'],
@@ -649,8 +657,8 @@ const FLOW_NODE_COPY = {
     'infra-failed': ['Gescheitert', 'Dienst gescheitert'],
   },
   en: {
-    queued: ['Queue', 'Waiting in queue'],
-    leased: ['Leased', 'Picked up'],
+    queued: ['Task list', 'Waiting to start'],
+    leased: ['Picked up', 'Ready to start'],
     running: ['Work', 'Working'],
     'awaiting-review': ['Review', 'Ready for review'],
     'review-queued': ['Review', 'Review waiting'],
@@ -1734,16 +1742,25 @@ function taskCardMarkup(task, state) {
   const status = displayStatus(task.routeStatus || task.status, state.lang);
   const changed = formatShortTimestamp(task.updatedAt || task.createdAt || task.timestamp);
   const problem = ['blocked', 'failed', 'cancelled'].includes(normalizeCommandStatus(task.routeStatus || task.status));
-  const detail = [source, changed].filter(Boolean)
-    .map((value) => `<span>${escapeHtml(value)}</span>`).join('');
   const reason = taskReasonText(task, state);
+  // The card says who and how, not why: the member's creature carries the
+  // state, the reason lives in the tooltip and the drawer (Owner 08.09.).
+  // The one exception is a task that stopped — blocked, failed, cancelled —
+  // where the reason is the fact the reader came for; it gets one quiet line.
+  const member = taskCrewMember(task, state);
+  const crewStatus = taskCrewStatus(task);
+  const portrait = member
+    ? `<span class="ctox-flow-creature-shell ctox-task-portrait" title="${escapeAttr(member.name)}">${memberCreatureHtml(member, state, crewStatus === 'running' ? 'running' : crewStatus === 'failed' ? 'failed' : memberCreatureState(member))}</span>`
+    : '';
+  const tooltip = [status, source, changed, reason].filter(Boolean).join(' · ');
   return `
-    <article class="ctox-list-item ctox-task-card ${selected ? 'is-selected' : ''} ${pinned ? 'is-pinned' : ''}"
+    <article class="ctox-list-item ctox-task-card ${selected ? 'is-selected' : ''} ${pinned ? 'is-pinned' : ''} ${member ? 'has-member' : ''}"
       data-task-id="${escapeAttr(task.id)}" data-context-record-id="${escapeAttr(task.id)}" data-context-record-type="ctox_task" data-context-label="${escapeAttr(title)}">
-      <button type="button" class="ctox-task-selector" data-select-task-id="${escapeAttr(task.id)}" aria-label="${escapeAttr(`${t.openTaskDetail}: ${title}`)}">
+      <button type="button" class="ctox-task-selector" data-select-task-id="${escapeAttr(task.id)}" aria-label="${escapeAttr(`${t.openTaskDetail}: ${title}`)}" title="${escapeAttr(tooltip)}">
+        ${portrait}
         <strong>${escapeHtml(title)}</strong>
-        <small class="ctox-task-meta">${status ? `<span class="ctox-task-meta-status ${problem ? 'is-problem' : ''}">${escapeHtml(status)}</span>` : ''}${detail}</small>
-        ${reason ? `<small class="ctox-task-reason ${problem ? 'is-problem' : ''}" title="${escapeAttr(reason)}">${escapeHtml(reason)}</small>` : ''}
+        <small class="ctox-task-meta">${status ? `<span class="ctox-task-meta-status ${problem ? 'is-problem' : ''}">${escapeHtml(status)}</span>` : ''}${changed ? `<span>${escapeHtml(changed)}</span>` : ''}</small>
+        ${problem && reason ? `<span class="ctox-task-reason is-problem">${escapeHtml(reason)}</span>` : ''}
         ${taskPipelineMarkup(task, state)}
       </button>
       <div class="ctox-task-actions">
@@ -2318,6 +2335,7 @@ function renderMain(state) {
     </header>
     ${metricsStripMarkup(metrics, elapsedSeconds, live, state)}
     ${executionProgressBar(metrics, state)}
+    ${shouldShowCrewHome(state) ? '' : crewStripMarkup(state)}
     ${shouldShowCrewHome(state) ? crewHomeMarkup(state) : stateInWorkspace ? emptyWorkspaceMarkup(state) : `<div class="ctox-canvas-container ctox-flow-well">
       <div class="ctox-flow-toolbar" aria-label="${escapeAttr(t.flowControls)}" data-flow-control>
         <button type="button" class="ctox-pane-icon" data-zoom="-" aria-label="${escapeAttr(t.zoomOut)}" title="${escapeAttr(t.zoomOut)}" ${state.zoom <= MIN_ZOOM ? 'disabled' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg></button>
@@ -2704,7 +2722,7 @@ function inboundEndpointFlowSvg(model, selectedTask, state) {
   const queueApproachX = Math.max(nodeX + nodeWidth + 22, queueLeft - 26);
   const detail = endpoint.detail || (channels.length ? `${channels.reduce((sum, channel) => sum + channel.count, 0)} ${t.inboundItems}` : '');
   return `
-    <g class="ctox-flow-inbound" aria-label="Inbound channels feeding CTOX queue">
+    <g class="ctox-flow-inbound" aria-label="Eingänge für die Crew">
       <text class="ctox-flow-inbound-label" x="${nodeX}" y="${nodeY - 14}">${escapeHtml(t.inboundEndpoint)}</text>
       <path class="ctox-flow-channel-edge is-selected" d="M ${nodeX + nodeWidth} ${selectedEdgeY} L ${queueApproachX} ${selectedEdgeY} L ${queueApproachX} ${queued.y} L ${queueLeft} ${queued.y}"></path>
       <g class="ctox-flow-channel-node is-selected" transform="translate(${nodeX} ${nodeY})">
@@ -3037,7 +3055,7 @@ function applyHarnessFlowStatus(tasks, flowResult) {
     || [...observedIds].reverse().find((id) => ['passed', 'model-failed', 'infra-failed'].includes(id));
   if (!terminalNode) return tasks;
   const status = terminalNode === 'passed' ? 'completed' : 'failed';
-  const summary = terminalSummaryFromFlow(flowResult) || (terminalNode === 'passed' ? 'Completed by CTOX harness' : 'CTOX harness marked this queue item failed');
+  const summary = terminalSummaryFromFlow(flowResult) || (terminalNode === 'passed' ? 'Completed by the crew' : 'The crew could not complete this task');
   return tasks.map((task) => {
     if (!ids.has(task.id) && !ids.has(task.taskId) && !ids.has(task.commandId) && !ids.has(task.runId)) return task;
     if (authoritativeTaskStatus(task)) return task;
@@ -3099,7 +3117,7 @@ function buildTaskList(data) {
     ...ticket,
     id: `ticket-${ticket.id}`,
     ticketId: ticket.id,
-    title: ticket.title || ticket.summary || ticket.id || 'CTOX ticket',
+    title: ticket.title || ticket.summary || ticket.id || 'Ticket',
     status: normalizeCommandStatus(ticket.status || ticket.severity || 'open'),
     source: ticket.source || ticket.module || ticket.surface || 'ctox',
     channel: ticket.channel || inferInboundChannel(ticket),
@@ -3322,7 +3340,22 @@ function syncDetailDrawer(state) {
   }
   if (state.detailDrawer.type === 'member') {
     const member = crewMemberById(state, state.detailDrawer.memberId);
-    if (member && !drawerIsBusy()) state.ctx.openLeftDrawer(crewMemberDrawer(member, state));
+    if (!member || drawerIsBusy()) return;
+    // Rebuild the drawer only when its facts changed; a rebuild resets the
+    // scroll position, so keep it across the swap.
+    const data = state.memberDrawerData?.memberId === member.id ? state.memberDrawerData : null;
+    const signature = JSON.stringify([member.id, member.updated_at_ms, member.state, memberCreatureState(member), data?.runs?.length || 0, data?.runs?.[0]?.finished_at_ms || 0]);
+    if (state.memberDrawerSignature === signature) return;
+    state.memberDrawerSignature = signature;
+    const previous = document.querySelector('.ctox-member-drawer');
+    const scroller = previous ? scrollParentOf(previous) : null;
+    const scrollTop = scroller?.scrollTop || 0;
+    state.ctx.openLeftDrawer(crewMemberDrawer(member, state));
+    if (scrollTop) {
+      const next = document.querySelector('.ctox-member-drawer');
+      const nextScroller = next ? scrollParentOf(next) : null;
+      if (nextScroller) nextScroller.scrollTop = scrollTop;
+    }
     return;
   }
   if (state.detailDrawer.type === 'node') {
@@ -3330,6 +3363,16 @@ function syncDetailDrawer(state) {
       || state.model?.timeline?.[clampIndex(state.selectedStepIndex, state.model.timeline.length)];
     if (node) state.ctx.openLeftDrawer(flowNodeDrawer(node, getSelectedTask(state), state));
   }
+}
+
+function scrollParentOf(node) {
+  let current = node;
+  while (current && current !== document.body) {
+    const overflow = getComputedStyle(current).overflowY;
+    if ((overflow === 'auto' || overflow === 'scroll') && current.scrollHeight > current.clientHeight) return current;
+    current = current.parentElement;
+  }
+  return null;
 }
 
 function closeDetailDrawer(state) {
@@ -3620,7 +3663,7 @@ async function deleteCtoxTaskFromDrawer(state, task, body) {
 
 async function dispatchCtoxTaskMutation(state, { commandType, payload, commandPath }) {
   if (!state.ctx?.commandBus?.dispatch) {
-    throw new Error('RxDB command bus is not available');
+    throw new Error('Die Verbindung zur Crew ist nicht verfügbar.');
   }
   const commandId = `cmd_${commandType.replace(/[^a-z0-9]+/gi, '_')}_${crypto.randomUUID()}`;
   return state.ctx.commandBus.dispatch({
@@ -3992,7 +4035,7 @@ function mergeBundleWithCommands(bundle, commands, queueTasks = [], bugReports =
     id: doc.id || doc.task_id || doc.command_id,
     taskId: doc.task_id || doc.id || '',
     commandId: doc.command_id || '',
-    title: doc.title || doc.command_type || doc.id || 'CTOX queue task',
+    title: doc.title || doc.command_type || doc.id || 'Aufgabe',
     prompt: doc.prompt || doc.payload?.prompt || doc.payload?.instruction || '',
     source: doc.source_module || doc.module || 'ctox',
     channel: inferInboundChannel(doc),
@@ -4039,7 +4082,7 @@ function mergeBundleWithCommands(bundle, commands, queueTasks = [], bugReports =
     .filter(Boolean);
   const tickets = bugReports.map((doc) => ({
     id: doc.id || doc.report_id,
-    title: doc.title || doc.surface || doc.id || 'CTOX ticket',
+    title: doc.title || doc.surface || doc.id || 'Ticket',
     status: normalizeCommandStatus(doc.status || doc.severity || 'open'),
     severity: doc.severity || '',
     module: doc.module || doc.module_id || 'ctox',
@@ -4238,7 +4281,7 @@ function inboundChannelLabel(channel) {
   const labelsById = {
     'business_os.llm.chat': 'LLM Chat',
     'business-os': 'Business OS',
-    ctox: 'CTOX',
+    ctox: 'Crew',
     documents: 'Documents',
     knowledge: 'Knowledge',
     'requirement-matching': 'Requirement Matching',
@@ -4460,8 +4503,8 @@ async function verifyWebStackCredential(state, sourceId, secretName) {
     loading: false,
     error: '',
     notice: configured
-      ? `${secretName || sourceId}: Credential ist im CTOX Secret Store vorhanden.`
-      : `${secretName || sourceId}: Credential fehlt im CTOX Secret Store. Hinterlegen bleibt aus Datenschutzgründen außerhalb von RxDB.`,
+      ? `${secretName || sourceId}: Zugangsdaten sind sicher gespeichert.`
+      : `${secretName || sourceId}: Zugangsdaten fehlen. Bitte hinterlegen.`,
   };
   renderMain(state);
 }
@@ -4469,7 +4512,7 @@ async function verifyWebStackCredential(state, sourceId, secretName) {
 async function requestWebStackAuthAssist(state, source) {
   const t = labels[state.lang];
   if (!state.ctx?.commandBus?.dispatch) {
-    state.webStack = { ...(state.webStack || {}), error: 'RxDB command bus is not available' };
+    state.webStack = { ...(state.webStack || {}), error: 'Die Verbindung zur Crew ist nicht verfügbar.' };
     renderMain(state);
     return;
   }
@@ -5003,6 +5046,24 @@ function memberCreatureHtml(member, state, taskState = memberCreatureState(membe
   }, taskState, 'map');
 }
 
+// While work runs, the rest of the crew stays in view as one quiet row under
+// the metrics (Review-Befund B7): creature, name, what each one does now.
+function crewStripMarkup(state) {
+  const t = labels[state.lang];
+  const members = (state.crewMembers || []).filter((member) => !member.archived);
+  if (!members.length) return '';
+  const items = members.map((member) => {
+    const line = memberStateLine(member, state);
+    const stateClass = String(member.state || 'home').replace(/[^a-z_]/g, '');
+    return `
+      <button type="button" class="ctox-crew-strip-member is-${escapeAttr(stateClass)}" data-crew-member-id="${escapeAttr(member.id)}"
+        aria-label="${escapeAttr(`${member.name}: ${line}`)}" title="${escapeAttr(`${member.name} · ${line}`)}">
+        <span class="ctox-flow-creature-shell ctox-crew-strip-creature">${memberCreatureHtml(member, state)}</span>
+      </button>`;
+  }).join('');
+  return `<section class="ctox-crew-strip" aria-label="${escapeAttr(t.crewHome)}">${items}</section>`;
+}
+
 function crewHomeMarkup(state) {
   const t = labels[state.lang];
   const members = (state.crewMembers || []).filter((member) => !member.archived);
@@ -5029,9 +5090,12 @@ function crewHomeMarkup(state) {
     </section>`;
 }
 
+// The home is the idle view: no live work AND no task chosen. A chosen task
+// always gets the map with its creature on the station it stands at.
 function shouldShowCrewHome(state) {
   const members = (state.crewMembers || []).filter((member) => !member.archived);
   if (!members.length) return false;
+  if (state.selectedTaskId) return false;
   return !state.model?.liveWork;
 }
 
@@ -5161,6 +5225,7 @@ function openCrewMemberDrawer(state, memberId) {
   const member = crewMemberById(state, memberId);
   if (!member) return;
   state.detailDrawer = { type: 'member', memberId };
+  state.memberDrawerSignature = '';
   state.memberDrawerData = state.memberDrawerData?.memberId === memberId ? state.memberDrawerData : { memberId, runs: null };
   state.ctx.openLeftDrawer(crewMemberDrawer(member, state));
   void loadLocalRunsForMember(state.ctx, memberId).catch(() => []).then((runs) => {
@@ -5273,14 +5338,15 @@ function memberMemoryMarkup(member, state) {
       <p>${escapeHtml(entry.text)}${entry.more ? ` <span class="ctox-memory-consequence">${escapeHtml(entry.more)}</span>` : ''}</p>
       ${entry.tag ? `<small>${escapeHtml(entry.tag)}</small>` : ''}
     </li>`).join('');
+  // The owner edits statements, one per line; the document syntax stays ours.
   const document = (kind, title, items, raw) => `
     <section class="ctox-card ctox-memory-doc" data-memory-kind="${kind}">
-      <header>${escapeHtml(title)}${editable ? `<button type="button" class="ctox-pane-icon" data-memory-edit="${kind}" aria-label="${escapeAttr(t.editMemory)}" title="${escapeAttr(t.editMemory)}">${actionIcon(state, 'edit')}</button>` : ''}</header>
+      <header>${escapeHtml(title)}${editable && kind === 'anchors' ? `<button type="button" class="ctox-pane-icon" data-memory-edit="${kind}" aria-label="${escapeAttr(t.editMemory)}" title="${escapeAttr(t.editMemory)}">${actionIcon(state, 'edit')}</button>` : ''}</header>
       <div class="ctox-card-body">
-        ${items ? `<ul class="ctox-memory-entries" data-memory-view>${items}</ul>` : `<p data-memory-view>${escapeHtml(t.memoryEmpty)}</p>`}
-        ${editable ? `
+        ${items ? `<ul class="ctox-memory-entries" data-memory-view>${items}</ul>` : `<p class="ctox-memory-empty" data-memory-view>${escapeHtml(t.memoryEmpty)}</p>`}
+        ${editable && kind === 'anchors' ? `
           <form class="ctox-memory-editor" data-memory-form="${kind}" hidden>
-            <textarea class="ctox-textarea" name="body" rows="10" spellcheck="false">${escapeHtml(raw || '')}</textarea>
+            <textarea class="ctox-textarea" name="body" rows="6" spellcheck="false" placeholder="${escapeAttr(t.memoryLinePlaceholder)}">${escapeHtml(anchors.map((entry) => entry.text).join('\n'))}</textarea>
             <div class="ctox-task-edit-actions">
               <button type="submit" class="ctox-button is-primary">${escapeHtml(t.saveMemory)}</button>
               <button type="button" class="ctox-button" data-memory-cancel>${escapeHtml(t.cancelEdit)}</button>
@@ -5311,6 +5377,28 @@ async function saveMemberMemory(state, member, kind, body, statusNode) {
     if (statusNode) statusNode.textContent = humanTaskActionError(error, t);
     return false;
   }
+}
+
+// Statements typed by the owner become owner-confirmed anchors in the
+// document syntax the harness reads (see memoryEntries); existing entries keep
+// their ids and types when their statement is unchanged.
+function anchorsDocumentFromLines(text, previousDocument) {
+  const previous = memoryEntries(previousDocument, 'anchor_id', 'anchor_type', 'statement');
+  const now = new Date().toISOString();
+  const lines = String(text || '').split('\n').map((line) => line.trim()).filter(Boolean);
+  const entries = lines.map((statement, index) => {
+    const known = previous.find((entry) => entry.text === statement);
+    return [
+      `anchor_id: ${known?.id || `owner_${Date.now().toString(36)}_${index + 1}`}`,
+      `anchor_type: ${known?.tag || 'owner_confirmed'}`,
+      `statement: ${statement}`,
+      'source_class: owner',
+      `source_ref: ${known?.source || 'owner'}`,
+      `observed_at: ${now}`,
+      'confidence: high',
+    ].join('\n');
+  });
+  return `# CONTINUITY ANCHORS\n\n## Entries\n${entries.join('\n\n')}\n`;
 }
 
 // Confirming a hypothesis rewrites only that entry's type in the document.
@@ -5355,8 +5443,9 @@ function wireMemberMemory(state, member, body) {
       event.preventDefault();
       const kind = form.dataset.memoryForm;
       const text = String(new FormData(form).get('body') || '').trim();
-      if (!text) return;
-      const ok = await saveMemberMemory(state, member, kind, text, form.querySelector('[data-memory-status]'));
+      const body = kind === 'anchors' ? anchorsDocumentFromLines(text, member.memory?.anchors) : text;
+      if (!body) return;
+      const ok = await saveMemberMemory(state, member, kind, body, form.querySelector('[data-memory-status]'));
       if (ok) body.dataset.dirty = '0';
     });
   });
@@ -5371,6 +5460,21 @@ function wireMemberMemory(state, member, body) {
   });
 }
 
+// Run outcomes in the owner's words.
+function displayRunOutcome(value, state) {
+  const t = labels[state.lang];
+  const key = String(value || '').toLowerCase().replace(/[^a-z]/g, '');
+  const map = {
+    executionerror: t.outcomeExecutionError,
+    error: t.outcomeExecutionError,
+    failed: t.failedWord,
+    completed: t.outcomeCompleted,
+    success: t.outcomeCompleted,
+    reviewrejected: t.outcomeReviewRejected,
+  };
+  return map[key] || displayStatus(value, state.lang);
+}
+
 function memberTimesheetMarkup(member, state) {
   const t = labels[state.lang];
   const data = state.memberDrawerData?.memberId === member.id ? state.memberDrawerData : null;
@@ -5380,7 +5484,7 @@ function memberTimesheetMarkup(member, state) {
     const task = taskByNativeId(state, run.task_id);
     const title = task ? taskDisplayTitle(task, state) : String(run.task_id || '');
     const when = formatShortTimestamp(run.finished_at_ms || run.started_at_ms || run.updated_at_ms);
-    const outcome = displayStatus(run.agent_outcome || run.status || '', state.lang);
+    const outcome = displayRunOutcome(run.agent_outcome || run.status || '', state);
     const facts = [
       formatDurationShort(run.metrics?.elapsed_ms, state.lang),
       hasFiniteValue(run.metrics?.input_tokens) ? `${formatMetricValue(Number(run.metrics.input_tokens) + (Number(run.metrics?.output_tokens) || 0), 'tokens', state.lang)} ${t.tokensWord}` : '',
@@ -5616,7 +5720,7 @@ async function runTaskControl(state, task, control, body, extra = {}) {
   if (status) status.textContent = '';
   try {
     if (control === 'cancel') {
-      if (!state.ctx?.commandBus?.cancel) throw new Error('RxDB command bus is not available');
+      if (!state.ctx?.commandBus?.cancel) throw new Error('Die Verbindung zur Crew ist nicht verfügbar.');
       await state.ctx.commandBus.cancel(task.commandId, { reason: t.cancelReasonDefault, until: 'accepted' });
     } else if (control === 'block') {
       await dispatchCtoxTaskMutation(state, { commandType: 'ctox.queue.block', payload: { task_id: taskId, reason: t.blockReasonDefault }, commandPath: 'ctox_queue_block' });
@@ -5654,7 +5758,6 @@ function harnessStatusText(state) {
   if (Number(h.blocked_count) > 0) counts.push(`${h.blocked_count} ${t.countBlocked}`);
   if (counts.length) bits.push(counts.join(' · '));
   if (h.pressure_active) bits.push(t.pressureActive);
-  if (h.last_error) bits.push(String(h.last_error).slice(0, 80));
   return bits.join(' · ');
 }
 
@@ -5885,10 +5988,8 @@ function metricsLabel(node, lang) {
   return `${formatTokenCount(node.inputTokens)}/${formatTokenCount(node.outputTokens)} tokens (${toolLabel}, ${node.seconds}s)`;
 }
 
-function stepMetaLabel(step, state) {
-  const t = labels[state.lang] || labels.de;
-  const timestamp = formatShortTimestamp(step?.timestamp);
-  return timestamp || t.notLogged;
+function stepMetaLabel(step) {
+  return formatShortTimestamp(step?.timestamp) || '';
 }
 
 // The ticker exists only to advance a clock that is already anchored to a real
@@ -6209,7 +6310,7 @@ function formatTokenCount(value) {
 }
 
 function displayFlowMode(mode) {
-  if (mode === 'ctox_cli' || mode === 'ctox_core') return 'CTOX core';
+  if (mode === 'ctox_cli' || mode === 'ctox_core') return 'Crew';
   return String(mode || 'unavailable').replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
@@ -6311,7 +6412,7 @@ function eventToNodeId(kind, title) {
 
 function taskDisplayTitle(task, state) {
   return safeTaskDisplayText(itemTitle(task), state.lang, {
-    fallback: nativeTaskId(task) || 'CTOX task',
+    fallback: nativeTaskId(task) || 'Aufgabe',
     max: 120,
   });
 }
@@ -6375,7 +6476,8 @@ function itemSummary(item) {
 }
 
 function formatShortTimestamp(value) {
-  const parsed = Date.parse(value);
+  if (value === null || value === undefined || value === '') return '';
+  const parsed = typeof value === 'number' ? value : (/^\d{12,}$/.test(String(value)) ? Number(value) : Date.parse(value));
   if (!Number.isFinite(parsed)) return value || '';
   return new Intl.DateTimeFormat('de-DE', { day: '2-digit', hour: '2-digit', minute: '2-digit', month: '2-digit' }).format(new Date(parsed));
 }
@@ -6390,11 +6492,11 @@ function statusClass(status) {
 
 function displayWorkSource(source) {
   return String(source || 'ctox')
-    .replace(/^ctox[-_\s]*/i, 'CTOX ')
+    .replace(/^ctox[-_\s]*/i, 'Crew ')
     .trim()
     .split(/[/:]+/)
     .filter(Boolean)
-    .map((part) => part.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()).replace(/\bCtox\b/g, 'CTOX').replace(/\bOs\b/g, 'OS'))
+    .map((part) => part.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()).replace(/\bCtox\b/g, 'Crew').replace(/\bOs\b/g, 'OS'))
     .join(' / ');
 }
 
@@ -6432,6 +6534,7 @@ function displayFailureClass(failureClass, state) {
   if (!value) return '';
   if (value === 'retryable') return t.failureRetryable;
   if (value === 'terminal') return t.failureTerminal;
+  if (value === 'technical') return t.holdTechnical;
   return value.replace(/[_-]+/g, ' ');
 }
 
@@ -6491,7 +6594,7 @@ function displayStatus(status, lang = 'de') {
 
 function displayCommandTitle(doc) {
   const payload = doc.payload || {};
-  return payload.title || payload.instruction || doc.command_type || doc.command_id || 'CTOX command';
+  return payload.title || payload.instruction || doc.command_type || doc.command_id || 'Auftrag';
 }
 
 function resultSummary(result) {
@@ -6610,6 +6713,7 @@ export const __ctoxTestHooks = {
   taskSelectionSentence,
   memberIdentity,
   memberCreatureState,
+  crewStripMarkup,
   shouldShowCrewHome,
   taskCrewMember,
   aggregateRunMetrics,

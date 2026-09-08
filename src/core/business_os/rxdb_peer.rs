@@ -4705,33 +4705,29 @@ pub(super) async fn sync_ticket_state_with_database(
     .await
     .context("join native ticket state projection load")??;
 
-    let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
     let mut count = 0usize;
     for collection_name in tickets::BUSINESS_OS_TICKET_COLLECTIONS {
         let collection = database
             .collection(collection_name)
             .with_context(|| format!("{collection_name} collection is not registered"))?;
-        for mut document in projection
+        let mut documents = projection
             .get(*collection_name)
             .cloned()
-            .unwrap_or_default()
-        {
+            .unwrap_or_default();
+        for document in &mut documents {
             if let Some(object) = document.as_object_mut() {
                 object.remove("_rev");
                 object.remove("_meta");
                 object.insert("_deleted".to_string(), Value::Bool(false));
                 object.insert("is_deleted".to_string(), Value::Bool(false));
             }
-            if incremental_upsert_projection_if_changed(
-                &collection,
-                document,
-                &format!("{collection_name} ticket"),
-            )
-            .await?
-            {
-                count += 1;
-            }
         }
+        count += super::rxdb_peer_projections::upsert_background_projection_pages(
+            &collection,
+            collection_name,
+            documents,
+        )
+        .await?;
     }
     Ok(count)
 }
@@ -4787,13 +4783,13 @@ pub(super) async fn sync_knowledge_tables_with_database(
     .await
     .context("join native knowledge tables projection load")??;
 
-    let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
     let collection = database
         .collection("knowledge_tables")
         .context("knowledge_tables collection is not registered")?;
     let mut count = 0usize;
     let mut current_ids = HashSet::new();
-    for mut document in documents {
+    let mut documents = documents;
+    for document in &mut documents {
         if let Some(id) = document
             .get("id")
             .and_then(Value::as_str)
@@ -4807,12 +4803,13 @@ pub(super) async fn sync_knowledge_tables_with_database(
             object.insert("_deleted".to_string(), Value::Bool(false));
             object.insert("is_deleted".to_string(), Value::Bool(false));
         }
-        if incremental_upsert_projection_if_changed(&collection, document, "knowledge table")
-            .await?
-        {
-            count += 1;
-        }
     }
+    count += super::rxdb_peer_projections::upsert_background_projection_pages(
+        &collection,
+        "knowledge_tables",
+        documents,
+    )
+    .await?;
     let existing = collection
         .find(Some(MangoQuery {
             limit: Some(10_000),
@@ -4833,6 +4830,7 @@ pub(super) async fn sync_knowledge_tables_with_database(
             object.remove("_rev");
             object.remove("_meta");
         }
+        let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
         upsert_business_record_projection_tombstone(&collection, stale)
             .await
             .map_err(|err| anyhow::anyhow!("tombstone stale knowledge_tables projection: {err}"))?;
@@ -4892,7 +4890,6 @@ async fn sync_knowledge_catalog_with_database(
         .cloned()
         .unwrap_or_default();
 
-    let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
     let mut count = 0usize;
     count += sync_knowledge_catalog_collection(database, "knowledge_items", item_documents).await?;
     count += sync_knowledge_catalog_collection(database, "knowledge_runbooks", runbook_documents)
@@ -4937,6 +4934,7 @@ async fn sync_knowledge_catalog_collection(
         .with_context(|| format!("{collection_name} collection is not registered"))?;
     let mut count = 0usize;
     let mut current_ids = HashSet::new();
+    let mut projected = Vec::new();
     for mut document in documents {
         let Some(id) = document
             .get("id")
@@ -4959,12 +4957,14 @@ async fn sync_knowledge_catalog_collection(
                 .unwrap_or(0);
             object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
         }
-        if incremental_upsert_projection_if_changed(&collection, document, "procedural knowledge")
-            .await?
-        {
-            count += 1;
-        }
+        projected.push(document);
     }
+    count += super::rxdb_peer_projections::upsert_background_projection_pages(
+        &collection,
+        collection_name,
+        projected,
+    )
+    .await?;
 
     let existing = collection
         .find(Some(MangoQuery {
@@ -4996,6 +4996,7 @@ async fn sync_knowledge_catalog_collection(
             object.remove("_rev");
             object.remove("_meta");
         }
+        let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
         upsert_business_record_projection_tombstone(&collection, stale)
             .await
             .map_err(|err| {
@@ -13501,6 +13502,63 @@ pub(in crate::business_os) mod tests {
         let test_id = TEST_RXDB_DATABASE_COUNTER.fetch_add(1, Ordering::Relaxed);
         open_test_database_with_name(database_path, format!("ctox-business-os-test-{test_id}"))
             .await
+    }
+
+    #[tokio::test]
+    async fn background_projection_releases_writer_between_pages() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = store::rxdb_store_path(root.path());
+        fs::create_dir_all(path.parent().unwrap())?;
+        let database = open_test_database(path).await?;
+        database
+            .add_collections(HashMap::from([(
+                "knowledge_tables".to_string(),
+                RxCollectionCreator {
+                    schema: business_os_schema("knowledge_tables", "id"),
+                    conflict_handler: None,
+                    options: HashMap::new(),
+                },
+            )]))
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let collection = database.collection("knowledge_tables").unwrap();
+        let documents = (0..48)
+            .map(|n| json!({"id":format!("table-{n:03}"),"title":"Fixture","updated_at_ms":1}))
+            .collect();
+        let guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
+        let mut projection = Box::pin(
+            super::super::rxdb_peer_projections::upsert_background_projection_pages(
+                &collection,
+                "knowledge_tables",
+                documents,
+            ),
+        );
+        assert!(futures_util::poll!(&mut projection).is_pending());
+        // Queue an intake writer behind the first projection page, before
+        // allowing it to run. Tokio's FIFO mutex must admit it before page 2.
+        let mut intake = Box::pin(NATIVE_RXDB_WRITE_LOCK.lock());
+        assert!(futures_util::poll!(&mut intake).is_pending());
+        drop(guard);
+        let inspect = async {
+            let _guard = intake.await;
+            let ids = (0..48).map(|n| format!("table-{n:03}")).collect::<Vec<_>>();
+            collection
+                .storage_instance
+                .find_documents_by_id(&ids, false)
+                .await
+                .unwrap()
+                .len()
+        };
+        let (written, observed) = tokio::join!(projection, inspect);
+        assert_eq!(written?, 48);
+        assert_eq!(
+            observed, 16,
+            "intake must run before the remaining 32 documents"
+        );
+        assert_eq!(super::super::rxdb_peer_projections::upsert_background_projection_pages(
+            &collection,"knowledge_tables",(0..48).map(|n|json!({"id":format!("table-{n:03}"),"title":"Fixture","updated_at_ms":1})).collect(),
+        ).await?,0,"unchanged documents do not create new revisions");
+        Ok(())
     }
 
     async fn open_test_database_with_name(

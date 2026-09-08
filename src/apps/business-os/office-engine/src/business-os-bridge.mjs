@@ -1,4 +1,4 @@
-// 20260726-office-demand-file-loader-v220
+// 20260908-office-source-upload-v1
 const KIND_CONFIG = Object.freeze({
   document: {
     module: 'documents',
@@ -35,6 +35,25 @@ export function createBusinessOsOfficeBridge(ctx, kind) {
     && ctx?.permissions?.canWriteCollection?.(config.chunks) !== false;
 
   return Object.freeze({
+    async stageSourceBlob({ recordId, versionId, blobId, mimeType, bytes } = {}) {
+      if (!canWrite()) throw permissionError('CTOX product write permission is required');
+      for (const [name, value] of Object.entries({ recordId, versionId, blobId, mimeType })) {
+        if (typeof value !== 'string' || !value.trim()) {
+          throw new TypeError(`CTOX product source ${name} is required`);
+        }
+      }
+      const payloadBytes = normalizeBytes(bytes);
+      return withChunkLease(ctx, config, `${config.module}-stage-source`, async (lease) => {
+        const documents = await saveBlob(collection(config.chunks), config, {
+          recordId, versionId, blobId, mimeType, bytes: payloadBytes, source: true,
+        });
+        // Creation/import must not publish references before the native peer
+        // has the source. loadVersion runs before prepare and can use a remote
+        // read-through query even immediately after the local write.
+        await flushExactDocuments(ctx, lease, config.chunks, documents);
+      });
+    },
+
     async loadVersion({ recordId, versionId } = {}) {
       return withChunkLease(ctx, config, `${config.module}-load-version`, async (lease) => {
         const fileLoader = lazyDemandFileLoader(ctx, lease, config.chunks);
@@ -312,8 +331,9 @@ async function assembleStreamedBlob(chunks, blobId, expectedSha256 = '') {
   return result;
 }
 
-async function saveBlob(chunks, config, { blobId, recordId, versionId, bytes }) {
-  const chunkSize = 256000;
+async function saveBlob(chunks, config, { blobId, recordId, versionId, bytes, mimeType = config.mime, source = false }) {
+  // Source rows include base64 overhead within the 256KiB wire budget.
+  const chunkSize = source ? 192000 : 256000;
   const total = Math.max(1, Math.ceil(bytes.length / chunkSize));
   const now = Date.now();
   const rows = [];
@@ -326,7 +346,7 @@ async function saveBlob(chunks, config, { blobId, recordId, versionId, bytes }) 
       version_id: versionId,
       idx,
       total,
-      mime_type: config.mime,
+      mime_type: mimeType,
       encoding: 'base64',
       data: uint8ToBase64(chunk),
       created_at_ms: now,

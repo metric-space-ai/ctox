@@ -58,7 +58,7 @@
 /* Give every rendered section a track; the canvas must remain usable even
    when metrics, progress and timeline consume the rest of a short window. */
 .ctox-harness-main {
-  grid-template-rows: auto auto auto minmax(240px, 1fr) auto auto;
+  grid-template-rows: auto auto auto auto minmax(240px, 1fr) auto auto;
   overflow: auto;
 }
 
@@ -75,9 +75,10 @@
 .ctox-harness-main > .ctox-pane-header { grid-row: 1; }
 .ctox-harness-main > .ctox-metrics-strip { grid-row: 2; }
 .ctox-harness-main > .ctox-execution-progress { grid-row: 3; }
-.ctox-harness-main > .ctox-flow-well { grid-row: 4; }
-.ctox-harness-main > .ctox-timeline-panel { grid-row: 5; }
-.ctox-harness-main > .ctox-harness-footer { grid-row: 6; }
+.ctox-harness-main > .ctox-crew-strip { grid-row: 4; }
+.ctox-harness-main > .ctox-flow-well { grid-row: 5; }
+.ctox-harness-main > .ctox-timeline-panel { grid-row: 6; }
+.ctox-harness-main > .ctox-harness-footer { grid-row: 7; }
 
 /* Anonymous loading silhouette; never a generated or invented Crew member. */
 .ctox-data-placeholder { width: 56px; height: 56px; color: var(--muted); }
@@ -397,7 +398,7 @@
 }
 
 .ctox-task-meta > span + span::before {
-  content: "· ";
+  content: "\00B7 ";
   color: color-mix(in srgb, var(--muted) 60%, transparent);
 }
 
@@ -456,6 +457,31 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The four stage words under every card were the loudest repeated text on
+   the page (Owner 08.09.). The bar keeps its colour, the words stay for
+   screen readers and the tooltip. */
+.ctox-task-card .ctox-task-pipeline em {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.ctox-task-card .ctox-task-pipeline > span { gap: 0; }
+.ctox-task-card.has-member .ctox-task-selector {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-areas: "portrait title" "portrait meta" "reason reason" "bar bar";
+  column-gap: var(--space-2);
+  align-items: center;
+}
+.ctox-task-card.has-member .ctox-task-portrait { grid-area: portrait; width: 28px; height: 28px; }
+.ctox-task-card.has-member .ctox-task-selector > strong { grid-area: title; }
+.ctox-task-card.has-member .ctox-task-selector > .ctox-task-meta { grid-area: meta; }
+.ctox-task-card.has-member .ctox-task-selector > .ctox-task-reason { grid-area: reason; }
+.ctox-task-card .ctox-task-selector > .ctox-task-reason { margin-top: 2px; }
+.ctox-task-card.has-member .ctox-task-selector > .ctox-task-pipeline { grid-area: bar; margin-top: var(--space-1); }
 
 .ctox-task-pipeline .is-complete i {
   background: color-mix(in srgb, var(--success) 72%, var(--line));
@@ -1487,10 +1513,14 @@
 /* custom: live status strip — flex layout around the kit callout */
 .ctox-task-status-strip {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
+  gap: var(--space-2) var(--space-3);
 }
+.ctox-task-status-strip .ctox-task-reason-line { flex: 1 1 100%; margin: 0; }
+.ctox-task-status-strip .ctox-button,
+.ctox-task-status-strip .ctox-task-member { flex: 0 0 auto; white-space: nowrap; }
 
 .ctox-task-status-strip > div {
   display: flex;
@@ -1501,6 +1531,40 @@
 
 /* Crew at home (slice 4): the members as the existing map creatures, resting
    side by side while nothing runs. Same shell as on the map, only larger. */
+/* The crew during work: one quiet row, same creatures, same drawer on click. */
+.ctox-crew-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  min-height: 34px;
+  padding: 2px var(--space-3);
+  border-bottom: 1px solid var(--line);
+}
+.ctox-crew-strip-member {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.ctox-crew-strip-member:hover,
+.ctox-crew-strip-member:focus-visible {
+  border-color: var(--line);
+  background: var(--kit-hover, color-mix(in srgb, var(--text) 5%, transparent));
+  outline: none;
+}
+.ctox-crew-strip-member:focus-visible {
+  box-shadow: var(--focus-ring, 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent));
+}
+.ctox-crew-strip-creature { width: 26px; height: 26px; flex: 0 0 26px; }
+.ctox-crew-strip-member.is-on_duty { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+
 .ctox-crew-home {
   display: grid;
   place-items: center;
@@ -1818,6 +1882,7 @@
   gap: 8px;
   margin-top: 8px;
 }
+.ctox-memory-editor[hidden] { display: none; }
 .ctox-memory-editor textarea {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;

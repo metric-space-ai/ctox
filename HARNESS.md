@@ -422,6 +422,22 @@ app authoring and jobs that share context retain serial dispatch. Slots are
 reserved before thread startup and released through worker cleanup or lease
 expiry. The orphan sweep protects live worker registrations, never the entire
 inflight cache merely because an unrelated worker is busy.
+A serial worker consumes one capacity slot instead of blocking every isolated
+chat. A buffered serial backlog reserves one serial slot rather than consuming
+one slot per waiting job; unstarted chat reservations each consume a slot.
+Active thread identities remain exclusive across both admission paths. Direct and
+buffered serial prompts wait for worker registrations and startup reservations
+to drain, even when another worker's finalization has cleared the UI busy flag.
+The normal idle dispatcher then starts the next buffered prompt. App recovery,
+lease acquisition, pause, working hours, and runtime-blocker gates still apply.
+
+Adapter reconciliation admission coalesces an identical configuration while an
+open reconciliation exists in the same module, record and authorization/context.
+The redundant command keeps its own immutable task identity and is cancelled
+atomically before leasing, with `adapter_reconciliation_superseded` and result
+references `superseded_by_command_id` / `superseded_by_task_id`. It is not marked
+successful and shares no review evidence. Changed configurations and a new
+request after the preceding reconciliation finishes still create work.
 
 A research writeback contract with mechanism=business_command, command_type,
 collection and record_ids enables a signed, scoped Business OS MCP session even

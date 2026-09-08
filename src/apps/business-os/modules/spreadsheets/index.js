@@ -2,7 +2,7 @@ import { showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { createCoalescedRefresh } from '../../office-engine/src/coalesced-refresh.mjs';
 import { autoWirePaneGrammar } from '../../shared/pane-grammar.js';
-import { createBusinessOsOfficeBridge } from '../../office-engine/src/business-os-bridge.mjs?v=20260816-browser-sync-guards-v141';
+import { createBusinessOsOfficeBridge } from '../../office-engine/src/business-os-bridge.mjs?v=20260908-office-source-upload-v1';
 
 const CSV_MIME = 'text/csv';
 const TSV_MIME = 'text/tab-separated-values';
@@ -1509,8 +1509,9 @@ async function renderCenter(state) {
   }
   const badge = head.querySelector('[data-spreadsheets-dirty-indicator]');
   if (badge) {
-    // A save status is meaningful only after a version has actually loaded.
-    badge.hidden = !state.selectedVersion || Boolean(load && load.status !== 'ready');
+    // Metadata readiness is not editor readiness: opening the source blob can
+    // still fail. Never advertise a saved spreadsheet before editor.open succeeds.
+    badge.hidden = true;
     badge.classList.toggle('is-dirty', state.dirty);
     badge.classList.toggle('is-saving', state.saving);
     badge.querySelector('[data-spreadsheets-dirty-label]').textContent = saveLabel;
@@ -1559,7 +1560,11 @@ async function renderCenter(state) {
     return;
   }
   try {
-    await mountCtoxSpreadsheets(state, canvas, record, state.selectedVersion);
+    const mounted = await mountCtoxSpreadsheets(state, canvas, record, state.selectedVersion);
+    if (badge && mounted && state.editorHandle === mounted
+      && !state.disposed && canvas.isConnected && state.selectedId === record.id) {
+      badge.hidden = false;
+    }
   } catch (error) {
     if (canvas.isConnected && state.selectedId === record.id) {
       console.error('[spreadsheets] editor open failed', error);
@@ -2376,22 +2381,13 @@ function base64ToUint8(base64) {
 }
 
 function saveBlobChunks(ctx, input) {
-  const base64 = uint8ToBase64(input.bytes);
-  const total = Math.ceil(base64.length / CHUNK_SIZE) || 1;
-  const now = Date.now();
-  const docs = Array.from({ length: total }, (_, idx) => ({
-    id: `${input.blobId}_${idx}`,
-    blob_id: input.blobId,
-    spreadsheet_id: input.spreadsheetId,
-    version_id: input.versionId,
-    idx,
-    total,
-    mime_type: input.mimeType,
-    encoding: 'base64',
-    data: base64.slice(idx * CHUNK_SIZE, (idx + 1) * CHUNK_SIZE),
-    created_at_ms: now,
-  }));
-  return writeCollectionDocuments(spreadsheetCollection(ctx, 'spreadsheet_blob_chunks'), docs);
+  return createBusinessOsOfficeBridge(ctx, 'spreadsheet').stageSourceBlob({
+    recordId: input.spreadsheetId,
+    versionId: input.versionId,
+    blobId: input.blobId,
+    mimeType: input.mimeType,
+    bytes: input.bytes,
+  });
 }
 
 async function writeCollectionDocuments(collection, docs) {

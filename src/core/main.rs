@@ -189,6 +189,7 @@ ENGINE / GPU
 
 RUN / EXEC
   ctox runtime switch <model> <quality|performance> [--context 256k] [--timeout <secs>]
+  ctox runtime timeout <secs>    set only the per-turn worker budget (CTOX_CHAT_TURN_TIMEOUT_SECS)
   ctox runtime embedding-doctor
   ctox runtime embedding-smoke [--token-id <id>]
   ctox runtime stt-doctor
@@ -582,6 +583,22 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
             Some("openrouter-tool-smoke") => {
                 let result = openrouter_tool_smoke_json(&root, &args[2..])?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
+                Ok(())
+            }
+            Some("timeout") => {
+                // Sets only the per-turn budget. `runtime switch --timeout` also
+                // re-runs the model switch, which is the wrong tool when the
+                // operator merely wants longer research sessions (thesen,
+                // 07.09.2026: no way to move 1800 s to 3600 s without the TUI).
+                persist_runtime_turn_timeout(&root, args.get(2).map(String::as_str))?;
+                let env_map = runtime_env::load_runtime_env_map(&root)?;
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "ok": true,
+                        "CTOX_CHAT_TURN_TIMEOUT_SECS": env_map.get("CTOX_CHAT_TURN_TIMEOUT_SECS"),
+                    })
+                );
                 Ok(())
             }
             Some("switch") => {

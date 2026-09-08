@@ -7065,7 +7065,7 @@ mod tests {
             second
                 .get("route_status")
                 .and_then(serde_json::Value::as_str),
-            Some("pending")
+            Some("blocked")
         );
         let other_owner = enqueue_web_stack_auth_assist_request(
             root.path(),

@@ -19,6 +19,50 @@ const { __spreadsheetsTestHooks: hooks } = await import(
   `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
 );
 
+for (const format of ['csv', 'unsupported']) {
+  test(`spreadsheet ${format} editor failure never advertises saved metadata as a loaded file`, async t => {
+    t.mock.method(console, 'error', () => {});
+    const label = { textContent: '' };
+    const badge = { hidden: false, classList: { toggle() {} }, querySelector: () => label };
+    const head = {
+      querySelector: selector => selector === '[data-spreadsheets-dirty-indicator]' ? badge : null,
+      querySelectorAll: () => [],
+    };
+    let canvas;
+    const shell = {
+      replaceChildren(_head, next) { canvas = next; },
+      querySelector: selector => selector === '[data-spreadsheets-canvas]' ? canvas : null,
+    };
+    const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+    Object.defineProperty(globalThis, 'document', { configurable: true, value: {
+      createElement: () => ({ isConnected: true, setAttribute() {} }),
+    } });
+    t.after(() => {
+      if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument);
+      else delete globalThis.document;
+    });
+    const state = {
+      disposed: false, selectedId: 'sheet', selectedVersion: { id: 'version' },
+      versionLoad: { selection: 'sheet', versionId: 'version', status: 'ready' },
+      spreadsheets: [{ id: 'sheet', title: 'Test', filename: `test.${format}`, current_version_id: 'version' }],
+      officeEngine: 'unavailable-test-engine', t: (_key, fallback) => fallback,
+      ctx: { host: { isConnected: true, querySelector(selector) {
+        if (selector === '[data-spreadsheets-editor]') return shell;
+        if (selector === 'template[data-spreadsheets-head="editor"]') {
+          return { content: { cloneNode: () => head } };
+        }
+        return null;
+      } } },
+    };
+    const pending = hooks.renderCenter(state);
+    assert.equal(badge.hidden, true, 'status stays hidden while opening');
+    await pending;
+    assert.match(canvas.innerHTML, /spreadsheets-error/);
+    assert.equal(badge.hidden, true, 'failure cannot show the saved badge');
+    assert.equal(state.editorHandle, null);
+  });
+}
+
 test('spreadsheet chunk refresh does not re-query the file library or runbooks', async () => {
   const queried = [];
   const state = { spreadsheets: [], selectedId: '', ctx: {
@@ -487,11 +531,19 @@ test('CSV serialization quotes only when required, preserving numeric round-trip
 
 test('spreadsheet blob chunks are persisted with one bulk write', async () => {
   const bulkWrites = [];
+  let acknowledged = false;
   const blobChunks = {
-    bulkUpsert: async (docs) => { bulkWrites.push(docs); },
+    bulkUpsert: async (docs) => {
+      bulkWrites.push(docs);
+      return docs.map(row => ({ toJSON: () => ({ ...row, _meta: { lwt: Date.now() } }) }));
+    },
     insert: async () => { throw new Error('spreadsheet_blob_chunks insert must not run per chunk'); },
   };
   const ctx = {
+    sync: { async leaseCollection() { return { bridge: { state: {
+      async waitForOpenPeerId() { return 'native'; },
+      async pushDocumentsToPeer(_peer, rows) { assert.equal(rows.length, bulkWrites[0].length); acknowledged = true; },
+    } }, async release() {} }; } },
     db: {
       collection(name) {
         if (name === 'spreadsheet_blob_chunks') return blobChunks;
@@ -512,6 +564,7 @@ test('spreadsheet blob chunks are persisted with one bulk write', async () => {
 
   assert.equal(bulkWrites.length, 1, 'blob chunks are written through one bulkUpsert call');
   assert.ok(bulkWrites[0].length > 1, 'test payload spans multiple chunk documents');
+  assert.equal(acknowledged, true, 'source bytes are acknowledged before exposing references');
 });
 
 test('empty spreadsheet explorer shows syncing only while the collection is unready', () => {

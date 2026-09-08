@@ -30,7 +30,10 @@ pub(crate) fn claim_business_command_with_queue(
     let mut conn = open_channel_db(&db_path)?;
     ensure_queue_account(&mut conn)?;
     attach_queue_projection_store(root, &conn)?;
-    let tx = conn.transaction()?;
+    // Admission reads and writes one aggregate. Reserve the writer before
+    // reading so concurrent admissions cannot both observe no active work,
+    // or fail upgrading a stale deferred snapshot with SQLITE_BUSY.
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let existing = tx
         .query_row(
             "SELECT idempotency_key, payload_hash, execution_phase, projection_version
@@ -61,6 +64,13 @@ pub(crate) fn claim_business_command_with_queue(
                 )
                 .optional()?;
             if let Some(task_id) = task_id {
+                if claim.command_type == super::auth_assist::REQUEST_TYPE
+                    && super::auth_assist::preserve_request(&tx, &task_id, &claim.command_id)?
+                {
+                    let task = load_queue_task_from_conn(&tx, &task_id)?
+                        .context("auth-assist task missing")?;
+                    refresh_queue_projection_tasks(root, &tx, std::slice::from_ref(&task))?;
+                }
                 let task = load_queue_task_from_conn(&tx, &task_id)?
                     .context("claimed queue command task link points to a missing task")?;
                 tx.commit()?;
@@ -78,6 +88,48 @@ pub(crate) fn claim_business_command_with_queue(
             (false, "local".to_string(), 1)
         };
 
+    let superseded_by = if claim.command_type == "outbound.research.adapters.reconcile" {
+        let digest = claim
+            .intent
+            .pointer("/payload/configuration_digest")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty());
+        match digest {
+            Some(digest) => tx
+                .query_row(
+                    "SELECT a.command_id, l.task_id
+                 FROM business_command_aggregates a
+                 JOIN business_command_task_links l ON l.command_id=a.command_id
+                 JOIN communication_routing_state r ON r.message_key=l.task_id
+                 WHERE a.command_type='outbound.research.adapters.reconcile'
+                   AND a.module=?1 AND a.record_id=?2 AND a.execution_phase!='terminal'
+                   AND json_extract(a.intent_json,'$.payload.configuration_digest')=?3
+                   AND COALESCE(json_extract(a.intent_json,'$.native_authorization'),'null')=?4
+                   AND COALESCE(json_extract(a.intent_json,'$.client_context'),'null')=?5
+                   AND r.route_status IN ('pending','leased','review_rework','blocked')
+                 ORDER BY a.created_at_ms,a.command_id LIMIT 1",
+                    params![
+                        claim.module,
+                        claim.record_id,
+                        digest,
+                        serde_json::to_string(
+                            claim
+                                .intent
+                                .get("native_authorization")
+                                .unwrap_or(&Value::Null)
+                        )?,
+                        serde_json::to_string(
+                            claim.intent.get("client_context").unwrap_or(&Value::Null)
+                        )?
+                    ],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()?,
+            None => None,
+        }
+    } else {
+        None
+    };
     let now_ms = epoch_millis();
     if from_phase != "local" {
         crate::command_lifecycle::validate_execution_phase_transition(&from_phase, "accepted")?;
@@ -130,7 +182,7 @@ pub(crate) fn claim_business_command_with_queue(
         }),
         now_ms,
     )?;
-    let task = create_queue_task_with_metadata_tx(&tx, request)?;
+    let mut task = create_queue_task_with_metadata_tx(&tx, request)?;
     let queued_version = accepted_version.saturating_add(1);
     tx.execute(
         "INSERT INTO business_command_task_links (command_id, task_id, created_at_ms)
@@ -180,6 +232,26 @@ pub(crate) fn claim_business_command_with_queue(
         }),
         now_ms,
     )?;
+    if claim.command_type == super::auth_assist::REQUEST_TYPE
+        && super::auth_assist::preserve_request(&tx, &task.message_key, &claim.command_id)?
+    {
+        task = load_queue_task_from_conn(&tx, &task.message_key)?
+            .context("auth-assist task missing")?;
+    }
+    if let Some((command_id, task_id)) = superseded_by {
+        let reason = format!("Adapterabgleich bereits offen: {task_id}");
+        transition_business_command_for_task_in_transaction(
+            &tx,
+            &task.message_key,
+            "cancelled",
+            Some(&json!({"superseded_by_command_id":command_id,"superseded_by_task_id":task_id})),
+            Some("adapter_reconciliation_superseded"),
+            Some(&reason),
+            &reason,
+        )?;
+        task = load_queue_task_from_conn(&tx, &task.message_key)?
+            .context("superseded task missing")?;
+    }
     refresh_queue_projection_tasks(root, &tx, std::slice::from_ref(&task))?;
     tx.commit()?;
     Ok(BusinessCommandQueueClaim {

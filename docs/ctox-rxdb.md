@@ -6,6 +6,24 @@ for engineers and coding agents, and every technical claim in it has been
 verified against the cited source file. When this document and the code
 disagree, the code wins — and this document should be fixed.
 
+### Auth-assist command recovery
+
+`web_stack.auth_assist.request` represents an outstanding human login request.
+Canonical admission persists its queue task as `blocked`, with
+`hold_reason=waiting_external`, `wait_entity_type=web_stack_auth_assist`, and
+`wait_entity_id=<command_id>`, in the same transaction as the command and task
+link. It does not lease a model worker or consume the worker retry budget.
+At daemon startup, bounded recovery pages preserve older nonterminal requests
+in this same wait before generic lease/artifact recovery. The original Owner,
+browser session, requesting task, and payload remain intact; expiration of the
+interactive handoff window does not close the durable login requirement.
+
+Only explicit browser confirmation through `web_stack.auth_assist.complete`
+settles the helper and requests continuation of the original task, under the
+existing browser controller and command policy. Recovery does not authenticate
+a session, pass review/validation, reopen terminal commands, or weaken the
+owned, expiring lease requirement for ordinary worker commands.
+
 Two implementations, one contract:
 
 | Side | Name | Location |
@@ -1188,6 +1206,23 @@ The shared fixture is `src/core/rxdb/tests/fixtures/crew-identity.json`; native
 field-policy tests and browser schema/permission tests consume it. Module JSON,
 native schemas and both hash registries are regenerated before the pinned
 esbuild 0.28.0 bundle build; the sole bundle URL remains in `shared/rxdb-runtime.js`.
+### Browser command receipts across reconnects
+
+Command tracking checks its exact command ID in local RxDB storage before
+waiting for bridge readiness and once more if readiness fails. Only a
+non-deleted document with the matching ID and `replication_phase = native_observed`
+can resolve this path. A local intent is not an acknowledgement; waiting for
+terminal completion still requires a terminal native outcome. Native failures
+retain their code and reason. This prevents a reconnect timeout from replacing
+already replicated queue acceptance with a failed-handoff message.
+
+Until that proof arrives, the Crew chat keeps the command trackable as
+`pending_sync` and says that acceptance is unconfirmed. It does not invent a
+queue ID or declare a successful handoff. Submission authorization, dependency
+flush order, follower failover deadlines and the WebRTC-only data path are
+unchanged. The reconnect race is covered by `command-bus-projection-smoke.mjs`
+and the pending chat message by `shared/business-chat.test.mjs`.
+
 ## 11. Test map
 
 ### 10.1 Browser suite (`src/apps/business-os/rxdb/tests/`)
@@ -1501,6 +1536,25 @@ crew, chat and projection retention. Failed phases are timed too; absent phases
 were not executed. No payload content is logged. The three-second per-root
 interval bounds these lines; the minute counters distinguish publications and
 incoming wakes from actual passes.
+
+Chat delivery keeps the terminal-settle receipt and a durable command-ID cursor.
+Each page reads at most 32 candidates plus one continuation sentinel; a 250 ms
+budget is checked between candidates and continuations obey the pump throttle.
+This is a cooperative budget, not a hard SQL execution deadline. Source hashes
+cover lifecycle/result fields and the newest retained plan revision. Unchanged
+chats skip rendering and message reads. The projection reads minimal routing,
+aggregate, flow and plan evidence through its existing core connection; it does
+not initialize LCM or load worker transcripts. Native partial indexes bound the
+candidate seek and retained terminal-command lookup. Receipt hashes advance only
+after delivery, so a failed write remains retryable.
+
+Native ticket and knowledge first projections load their source snapshots on
+blocking tasks without holding the cross-loop writer lock. Publication releases
+the shared native writer lock between pages of up to 16 documents and roughly
+256 KiB (one oversized document may exceed that byte target), then yields to
+waiting intake/replication writers. Unchanged rows retain their revisions. This
+bounds lock ownership by work units; it does not impose a wall-clock deadline
+on a single storage operation or cancel partially published pages.
 
 Run-to-flow correlated lookups must seek `idx_cockpit_flow_attempt`. JSON
 expressions have no SQLite affinity; comparing one directly with the outer

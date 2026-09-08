@@ -13,7 +13,10 @@ const oneChatStripRule = source.match(/\.ctox-chat-dock\.has-one-chat\s+\.ctox-c
 const fewChatsStripRule = source.match(/\.ctox-chat-dock\.has-few-chats\s+\.ctox-chat-strip\s*\{(?<body>[\s\S]*?)\n\s*\}/)?.groups?.body || '';
 const collapsedRootRules = [...source.matchAll(/\.ctox-chat-root\.is-collapsed\s*\{(?<body>[\s\S]*?)\n\s*\}/g)];
 const collapsedDockRules = [...source.matchAll(/\.ctox-chat-dock\.is-collapsed\s*\{(?<body>[\s\S]*?)\n\s*\}/g)];
-const expandedDockRule = source.match(/\.ctox-chat-dock:not\(\.is-collapsed\)\s*\{(?<body>[\s\S]*?)\n\s*\}/)?.groups?.body || '';
+// Anchored at the line start: the reporter-slot rule
+// `body:not([data-shell-chat-dock-side]) .ctox-chat-dock:not(.is-collapsed)`
+// shares the suffix and must not shadow the geometry rule.
+const expandedDockRule = source.match(/\n\s*\.ctox-chat-dock:not\(\.is-collapsed\)\s*\{(?<body>[\s\S]*?)\n\s*\}/)?.groups?.body || '';
 const expandedVisibleRule = source.match(/\.ctox-chat-dock\.has-visible-chats:not\(\.is-collapsed\)\s*\{(?<body>[\s\S]*?)\n\s*\}/)?.groups?.body || '';
 const finalCollapsedRootRule = collapsedRootRules.at(-1)?.groups?.body || '';
 const finalCollapsedDockRule = collapsedDockRules.at(-1)?.groups?.body || '';

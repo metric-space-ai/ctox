@@ -21,6 +21,71 @@ async function importBrowserBundle(relativePath) {
 
 const { __documentsTestHooks: hooks } = await importBrowserBundle('./index.js');
 
+test('native Word dirty events never republish a stale persisted version head', t => {
+  const scheduled = [];
+  const cancelled = [];
+  t.mock.method(globalThis, 'setTimeout', (callback, delay) => {
+    scheduled.push({ callback, delay });
+    return scheduled.length;
+  });
+  t.mock.method(globalThis, 'clearTimeout', id => cancelled.push(id));
+  const persisted = { id: 'word', current_version_id: 'v2', status: 'Final' };
+  const record = { ...persisted, current_version_id: 'v3' };
+  const handle = { kind: 'ctox-documents', recordId: 'word', activity: 7 };
+  const state = { editorHandle: handle, selectedId: 'word', selectedVersion: { id: 'v3' },
+    dirty: false, needsFinalSave: false, superdocSaveTimer: null,
+    ctx: { db: { collection() { assert.fail('dirty event must not read or write replicated records'); } } },
+  };
+  hooks.markCtoxDocumentsDraft(state, record, handle);
+  hooks.markCtoxDocumentsDraft(state, record, handle);
+  assert.equal(handle.activity, 9);
+  assert.equal(state.dirty, true);
+  assert.equal(state.needsFinalSave, true);
+  assert.equal(record.status, 'Draft');
+  assert.equal(record.current_version_id, 'v3');
+  assert.equal(state.selectedVersion.id, 'v3');
+  assert.deepEqual(persisted, { id: 'word', current_version_id: 'v2', status: 'Final' });
+  assert.deepEqual(scheduled.map(item => item.delay), [900, 900]);
+  assert.deepEqual(cancelled, [1]);
+});
+
+for (const scenario of ['missing-head', 'missing-history', 'head-after-recovery', 'no-head']) {
+  test(`Word version loading ${scenario} never rewrites the authoritative head`, async () => {
+    const record = { id: 'word', title: 'Word', document_type: 'word_document',
+      current_version_id: scenario === 'no-head' ? '' : 'v3' };
+    let reads = 0;
+    let fallbackReads = 0;
+    const exactId = scenario === 'missing-history' ? 'history-v1' : 'v3';
+    const state = { documents: [record], selectedId: 'word', selectedVersion: null,
+      editorHandle: null, dirty: false,
+      requestedVersionId: scenario === 'missing-history' ? exactId : '',
+      requestedVersionDocumentId: 'word',
+      ctx: {
+        db: { collection(name) {
+          assert.equal(name, 'document_versions', 'reading a version cannot write the documents collection');
+          return {
+            findOne(id) { assert.equal(id, exactId); return { async exec() {
+              reads += 1;
+              return scenario === 'head-after-recovery' && reads > 1
+                ? { toJSON: () => ({ id: 'v3', document_id: 'word' }) } : null;
+            } }; },
+            find() {
+              fallbackReads += 1;
+              assert.equal(scenario, 'no-head', 'missing exact version must not fall back to another version');
+              return { exec: async () => [{ toJSON: () => ({ id: 'v2', document_id: 'word' }) }] };
+            },
+          };
+        } },
+        sync: { startCollection: async () => ({ state: { waitForOpenPeerId: async () => 'native' } }) },
+      },
+    };
+    const loaded = await hooks.loadSelectedVersion(state);
+    assert.equal(loaded?.id || null, scenario === 'no-head' ? 'v2' : scenario === 'head-after-recovery' ? 'v3' : null);
+    assert.equal(record.current_version_id, scenario === 'no-head' ? '' : 'v3');
+    assert.equal(fallbackReads, scenario === 'no-head' ? 1 : 0);
+  });
+}
+
 test('document chunk refresh does not re-query the file library, runbooks or Knowledge', async () => {
   const queried = [];
   const state = { documents: [], selectedId: '', ctx: {
@@ -1096,11 +1161,19 @@ test('file-open deduplication reuses the imported document with the same source 
 
 test('document blob chunks are persisted with one bulk write', async () => {
   const bulkWrites = [];
+  let acknowledged = false;
   const blobChunks = {
-    bulkUpsert: async (docs) => { bulkWrites.push(docs); },
+    bulkUpsert: async (docs) => {
+      bulkWrites.push(docs);
+      return docs.map(row => ({ toJSON: () => ({ ...row, _meta: { lwt: Date.now() } }) }));
+    },
     insert: async () => { throw new Error('document_blob_chunks insert must not run per chunk'); },
   };
   const ctx = {
+    sync: { async leaseCollection() { return { bridge: { state: {
+      async waitForOpenPeerId() { return 'native'; },
+      async pushDocumentsToPeer(_peer, rows) { assert.equal(rows.length, bulkWrites[0].length); acknowledged = true; },
+    } }, async release() {} }; } },
     db: {
       collection(name) {
         if (name === 'document_blob_chunks') return blobChunks;
@@ -1122,4 +1195,5 @@ test('document blob chunks are persisted with one bulk write', async () => {
 
   assert.equal(bulkWrites.length, 1, 'blob chunks are written through one bulkUpsert call');
   assert.ok(bulkWrites[0].length > 1, 'test payload spans multiple chunk documents');
+  assert.equal(acknowledged, true, 'source bytes are acknowledged before exposing references');
 });

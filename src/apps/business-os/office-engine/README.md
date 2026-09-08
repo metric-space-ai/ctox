@@ -59,6 +59,12 @@ two-row geometry. Small windows expose the library as a dismissible drawer.
 There is no permanent Runbook column. Creating a blank file is a direct action,
 independent of research prompts or automation.
 
+Source creation and import acquire a chunk lease and wait for the native peer
+to acknowledge the exact persisted source rows before publishing version and
+file references. Source chunks reserve room for base64 and metadata within the
+wire budget. A local write alone is not a successful upload; transport or
+permission failures must reject creation rather than expose an unreadable file.
+
 The capsule forwards a validated subset of the live Shell palette and theme to
 both isolated editor frames. The frames use locally generated HTML rather than
 navigating to a tenant HTML response that may deny framing. No document data
@@ -85,6 +91,17 @@ node src/apps/business-os/office-engine/shell-integration.browser.mjs
 
 The lab prepares its DOCX/XLSX fixtures using the native CLI. Screenshots and
 native roundtrip artifacts are written to `output/playwright/office-integration/`.
+
+Native document inspection (`ctox office read document INPUT`) preserves
+paragraph boundaries, explicit line breaks, tabs, and blank paragraphs in
+`primary_text`. Formatting runs inside a paragraph are concatenated, not
+reported as separate lines. Reading does not mutate the source package or
+write back to a Business OS record.
+
+DOCX export also accepts first content in paragraphs that retain empty or
+formatting-only runs from an earlier save. Those templates are preserved,
+including across repeated saves; fields, comments, bookmarks, and existing
+text are not discarded to resolve a run-count mismatch.
 
 To materialize the reviewed source closure from already checked-out pinned
 repositories:

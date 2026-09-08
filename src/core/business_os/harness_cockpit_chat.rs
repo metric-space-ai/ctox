@@ -9,6 +9,28 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::path::Path;
 
+const CHAT_CANDIDATES_SQL: &str = "SELECT c.command_id FROM business_commands c
+    LEFT JOIN cockpit_chat_delivery d ON d.command_id=c.command_id
+    WHERE c.command_type='business_os.chat.task' AND c.command_id>?1 AND COALESCE(d.terminal,0)=0
+      AND (c.status NOT IN ('completed','failed','cancelled') OR c.command_id IN (
+        SELECT command_id FROM business_commands
+        WHERE command_type='business_os.chat.task' AND status IN ('completed','failed','cancelled')
+        ORDER BY observed_at_ms DESC,command_id DESC LIMIT 300))
+    ORDER BY c.command_id LIMIT 33";
+
+fn ensure_chat_candidate_indexes(business: &Connection) -> Result<()> {
+    business.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_cockpit_chat_candidates
+            ON business_commands(command_id)
+            WHERE command_type='business_os.chat.task';
+         CREATE INDEX IF NOT EXISTS idx_cockpit_chat_terminal
+            ON business_commands(observed_at_ms DESC,command_id DESC)
+            WHERE command_type='business_os.chat.task'
+              AND status IN ('completed','failed','cancelled');",
+    )?;
+    Ok(())
+}
+
 pub(crate) fn trim_messages(messages: &mut Vec<Value>) {
     while messages.len() > 40 {
         let position = messages
@@ -66,6 +88,10 @@ pub(crate) fn queued_chat_text(command: &store::BusinessCommand) -> &'static str
 pub(super) fn project(root: &Path, core: &Connection) -> Result<()> {
     let business = store::open_store(root)?;
     let mut writer = store::BusinessProjectionWriter::open(root)?;
+    business.busy_timeout(std::time::Duration::from_millis(100))?;
+    writer
+        .source_connection()
+        .busy_timeout(std::time::Duration::from_millis(100))?;
     business.execute_batch("CREATE TABLE IF NOT EXISTS cockpit_chat_delivery(command_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS cockpit_chat_message_delivery(command_id TEXT NOT NULL, message_id TEXT NOT NULL, PRIMARY KEY(command_id,message_id));")?;
     // `terminal` marks a delivery made after the task reached a terminal route
@@ -77,18 +103,59 @@ pub(super) fn project(root: &Path, core: &Connection) -> Result<()> {
         "ALTER TABLE cockpit_chat_delivery ADD COLUMN terminal INTEGER NOT NULL DEFAULT 0",
         [],
     );
-    // Only materialized chats are candidates; projection never creates chats for background work.
-    let mut cursor = String::new();
-    loop {
-        let mut statement=business.prepare("SELECT command_id FROM business_commands WHERE command_id>?1 AND command_type='business_os.chat.task' AND (status NOT IN ('completed','failed','cancelled') OR command_id IN (SELECT command_id FROM business_commands WHERE command_type='business_os.chat.task' AND status IN ('completed','failed','cancelled') ORDER BY observed_at_ms DESC,command_id DESC LIMIT 300)) ORDER BY command_id LIMIT 128")?;
-        let commands = statement
+    let _ = business.execute(
+        "ALTER TABLE cockpit_chat_delivery ADD COLUMN source_fingerprint TEXT",
+        [],
+    );
+    business.execute_batch(
+        "CREATE TABLE IF NOT EXISTS cockpit_chat_cursor (
+        id INTEGER PRIMARY KEY CHECK(id=1), command_id TEXT NOT NULL
+    );",
+    )?;
+    ensure_chat_candidate_indexes(&business)?;
+    let cursor: String = business
+        .query_row(
+            "SELECT command_id FROM cockpit_chat_cursor WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or_default();
+    // A queued chat can precede the first LCM turn. Missing optional evidence
+    // is empty progress; observing it must never initialize or scan LCM.
+    let has_plans: bool = core.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_execution_plan_revisions')",
+        [], |row| row.get(0),
+    )?;
+    let has_flow: bool = core.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='ctox_harness_flow_events')",
+        [], |row| row.get(0),
+    )?;
+    let started = std::time::Instant::now();
+    // A durable round-robin cursor prevents a busy/failed early chat from
+    // starving later chats. At most 32 candidates, and 250 ms between items;
+    // lock waits have a short timeout (this is not a hard SQL execution deadline).
+    {
+        let mut statement = business.prepare(CHAT_CANDIDATES_SQL)?;
+        let mut commands = statement
             .query_map([&cursor], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        if commands.is_empty() {
-            break;
+        if commands.is_empty() && !cursor.is_empty() {
+            commands = statement
+                .query_map([""], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
         }
-        for command_id in commands {
-            cursor = command_id.clone();
+        let has_more = commands.len() > 32;
+        for (position, command_id) in commands.into_iter().take(32).enumerate() {
+            if position > 0 && started.elapsed() >= std::time::Duration::from_millis(250) {
+                super::projections::schedule_chat_refresh(root);
+                break;
+            }
+            business.execute(
+                "INSERT INTO cockpit_chat_cursor(id,command_id) VALUES(1,?1)
+                ON CONFLICT(id) DO UPDATE SET command_id=excluded.command_id",
+                [&command_id],
+            )?;
             let settled: bool = business
                 .query_row(
                     "SELECT terminal FROM cockpit_chat_delivery WHERE command_id=?1",
@@ -100,6 +167,95 @@ pub(super) fn project(root: &Path, core: &Connection) -> Result<()> {
             if settled {
                 continue;
             }
+            // Read only lifecycle evidence through the pump's connection. The
+            // general command/queue readers initialize LCM and load message
+            // bodies; a chat projection must never read the worker transcript.
+            let lifecycle = core
+                .query_row(
+                    "SELECT l.task_id, a.execution_phase, a.result_json,
+                        r.route_status, r.attempt, r.hold_reason,
+                        r.last_error, r.retry_not_before
+                 FROM business_command_task_links l
+                 JOIN business_command_aggregates a ON a.command_id=l.command_id
+                 JOIN communication_routing_state r ON r.message_key=l.task_id
+                 WHERE l.command_id=?1",
+                    [&command_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, i64>(4)?,
+                            row.get::<_, Option<String>>(5)?,
+                            row.get::<_, Option<String>>(6)?,
+                            row.get::<_, Option<String>>(7)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let Some((
+                task_id,
+                execution_phase,
+                result,
+                route_status,
+                attempt,
+                hold_reason,
+                status_note,
+                retry_not_before,
+            )) = lifecycle
+            else {
+                continue;
+            };
+            let task_id = task_id.as_str();
+            let run_id: Option<String> = if has_flow {
+                core.query_row(
+                    "SELECT json_extract(metadata_json,'$.attempt_id')
+                     FROM ctox_harness_flow_events
+                     WHERE message_key=?1 AND json_extract(metadata_json,'$.attempt_id') IS NOT NULL
+                     ORDER BY created_at DESC LIMIT 1",
+                    [task_id],
+                    |row| row.get(0),
+                )
+                .optional()?
+            } else {
+                None
+            };
+            let plan_stamp: Option<(i64, i64)> = if has_plans {
+                core.query_row(
+                    "SELECT revision,updated_at_ms FROM task_execution_plan_revisions
+                     WHERE task_id=?1 AND (?2 IS NULL OR attempt_id=?2)
+                     ORDER BY revision DESC LIMIT 1",
+                    params![task_id, run_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?
+            } else {
+                None
+            };
+            let source_fingerprint = channels::stable_digest(&serde_json::to_string(&json!([
+                task_id,
+                execution_phase,
+                result,
+                route_status,
+                attempt,
+                hold_reason,
+                status_note,
+                retry_not_before,
+                run_id,
+                plan_stamp
+            ]))?);
+            let prior_source: Option<String> = business
+                .query_row(
+                    "SELECT source_fingerprint FROM cockpit_chat_delivery WHERE command_id=?1",
+                    [&command_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten();
+            if prior_source.as_deref() == Some(&source_fingerprint) {
+                continue;
+            }
             let command = store::load_business_command(&business, &command_id)?;
             let chat_id = store_projections::business_chat_id(&command, &command_id);
             let raw:Option<String>=business.query_row("SELECT payload_json FROM business_records WHERE collection='business_chats' AND record_id=?1 AND deleted=0",[&chat_id],|row|row.get(0)).optional()?;
@@ -107,42 +263,24 @@ pub(super) fn project(root: &Path, core: &Connection) -> Result<()> {
                 continue;
             };
             let mut chat: Value = serde_json::from_str(&raw)?;
-            let projection = channels::business_command_projection(root, &command_id)?;
-            let Some(task_id) = projection
-                .get("task_id")
-                .and_then(Value::as_str)
-                .filter(|id| !id.is_empty())
-            else {
-                continue;
-            };
-            let Some(task) = channels::load_queue_task(root, task_id)? else {
-                continue;
-            };
-            let run_id:Option<String>=core.query_row("SELECT json_extract(metadata_json,'$.attempt_id') FROM ctox_harness_flow_events WHERE message_key=?1 AND json_extract(metadata_json,'$.attempt_id') IS NOT NULL ORDER BY created_at DESC LIMIT 1",[task_id],|row|row.get(0)).optional()?;
-            let progress = crate::lcm::run_task_execution_progress_for_task(
-                &crate::paths::core_db(root),
-                task_id,
-            )?;
+            let result: Value = result
+                .map(|raw| serde_json::from_str(&raw))
+                .transpose()?
+                .unwrap_or(Value::Null);
             let language = resolve_chat_reply_language(&command);
             let mut additions = Vec::new();
-            let terminal = matches!(
-                task.route_status.as_str(),
-                "handled" | "failed" | "cancelled"
-            );
-            let status = if !terminal
-                && projection.get("execution_phase").and_then(Value::as_str) == Some("retry_wait")
-            {
+            let terminal = matches!(route_status.as_str(), "handled" | "failed" | "cancelled");
+            let status = if !terminal && execution_phase == "retry_wait" {
                 "retry_wait"
             } else {
-                task.route_status.as_str()
+                route_status.as_str()
             };
-            let note = task
-                .hold_reason
+            let note = hold_reason
                 .as_deref()
-                .or(task.status_note.as_deref())
+                .or(status_note.as_deref())
                 .unwrap_or("");
             // The durable lease counter also covers a slice that finished before delivery.
-            if task.attempt > 0 {
+            if attempt > 0 {
                 additions.push(("status", text(language, "leased").to_string()));
             }
             if matches!(status, "retry_wait" | "blocked" | "review_rework") {
@@ -152,14 +290,14 @@ pub(super) fn project(root: &Path, core: &Connection) -> Result<()> {
                     message.push_str(note);
                 }
                 if status == "retry_wait" {
-                    if let Some(next) = &task.retry_not_before {
+                    if let Some(next) = &retry_not_before {
                         message.push_str(" — ");
                         message.push_str(next);
                     }
                 }
                 additions.push(("status", message));
             }
-            if progress.is_some() {
+            if has_plans {
                 // Replay every retained revision, not just the latest coalesced snapshot.
                 // Forty is the chat's own message cap; older status messages cannot survive it.
                 let mut plans = core.prepare("SELECT revision,steps_json FROM (SELECT revision,steps_json FROM task_execution_plan_revisions WHERE task_id=?1 AND (?2 IS NULL OR attempt_id=?2) ORDER BY revision DESC LIMIT 40) ORDER BY revision")?;
@@ -186,27 +324,24 @@ pub(super) fn project(root: &Path, core: &Connection) -> Result<()> {
                 }
             }
             if !terminal {
-                if let Some(message) = projection
-                    .pointer("/result/user_message")
+                if let Some(message) = result
+                    .get("user_message")
                     .and_then(Value::as_str)
                     .filter(|s| !s.trim().is_empty())
                 {
-                    let kind = if projection
-                        .pointer("/result/requires_input")
-                        .and_then(Value::as_bool)
-                        == Some(true)
-                    {
-                        "question"
-                    } else {
-                        "interim"
-                    };
+                    let kind =
+                        if result.get("requires_input").and_then(Value::as_bool) == Some(true) {
+                            "question"
+                        } else {
+                            "interim"
+                        };
                     additions.push((kind, message.to_string()));
                 }
             }
             // Receipt survives status-first trimming, so maintenance cannot resurrect old messages.
             // Record it only after delivery to both stores; partial delivery remains retryable.
             let fingerprint = channels::stable_digest(&serde_json::to_string(&json!({
-                "task_id":task_id,"attempt":task.attempt,"run_id":run_id,"messages":additions
+                "task_id":task_id,"attempt":attempt,"run_id":run_id,"messages":additions
             }))?);
             let delivered: Option<String> = business
                 .query_row(
@@ -216,6 +351,10 @@ pub(super) fn project(root: &Path, core: &Connection) -> Result<()> {
                 )
                 .optional()?;
             if delivered.as_deref() == Some(&fingerprint) {
+                business.execute(
+                    "UPDATE cockpit_chat_delivery SET source_fingerprint=?2 WHERE command_id=?1",
+                    params![command_id, source_fingerprint],
+                )?;
                 if terminal {
                     business.execute(
                         "UPDATE cockpit_chat_delivery SET terminal=1 WHERE command_id=?1",
@@ -240,10 +379,8 @@ pub(super) fn project(root: &Path, core: &Connection) -> Result<()> {
             let now = chrono::Utc::now().timestamp_millis();
             let mut message_receipts = Vec::new();
             for (kind, message) in additions {
-                let digest = channels::stable_digest(&format!(
-                    "{task_id}:{}:{kind}:{message}",
-                    task.attempt
-                ));
+                let digest =
+                    channels::stable_digest(&format!("{task_id}:{}:{kind}:{message}", attempt));
                 let id = format!("cockpit_{digest}");
                 message_receipts.push(id.clone());
                 if let Some(existing) = messages
@@ -270,10 +407,13 @@ pub(super) fn project(root: &Path, core: &Connection) -> Result<()> {
                     for id in message_receipts {
                         tx.execute("INSERT OR IGNORE INTO cockpit_chat_message_delivery(command_id,message_id) VALUES(?1,?2)",params![command_id,id])?;
                     }
-                    tx.execute("INSERT INTO cockpit_chat_delivery(command_id,fingerprint,terminal) VALUES(?1,?2,?3) ON CONFLICT(command_id) DO UPDATE SET fingerprint=excluded.fingerprint, terminal=excluded.terminal",params![command_id,fingerprint,i64::from(terminal)])?;
+                    tx.execute("INSERT INTO cockpit_chat_delivery(command_id,fingerprint,terminal,source_fingerprint) VALUES(?1,?2,?3,?4) ON CONFLICT(command_id) DO UPDATE SET fingerprint=excluded.fingerprint, terminal=excluded.terminal, source_fingerprint=excluded.source_fingerprint",params![command_id,fingerprint,i64::from(terminal),source_fingerprint])?;
                     tx.commit()?;
                 }
             }
+        }
+        if has_more {
+            super::projections::schedule_chat_refresh(root);
         }
     }
     business.execute("DELETE FROM cockpit_chat_delivery WHERE command_id NOT IN (SELECT command_id FROM business_commands WHERE command_type='business_os.chat.task' AND (status NOT IN ('completed','failed','cancelled') OR command_id IN (SELECT command_id FROM business_commands WHERE command_type='business_os.chat.task' AND status IN ('completed','failed','cancelled') ORDER BY observed_at_ms DESC,command_id DESC LIMIT 300)))",[])?;

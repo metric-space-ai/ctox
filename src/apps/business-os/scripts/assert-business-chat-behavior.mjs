@@ -179,7 +179,7 @@ try {
     expect(m.chipCount <= 12, `thousand-chat dock must cap rendered chips, got ${m.chipCount}`);
     expect(m.windowCount <= 12, `thousand-chat dock must cap rendered windows, got ${m.windowCount}`);
     expect(m.overflowCount === 1, 'thousand-chat dock must expose one overflow chip');
-    expect(m.dateTriggerLabel.includes('1k Tasks'), `date hover hint should expose compact workload, got ${m.dateTriggerLabel}`);
+    expect(m.dateTriggerLabel.includes('1k Aufgaben'), `date hover hint should expose compact workload, got ${m.dateTriggerLabel}`);
     const open = await page.evaluate(async () => {
       document.querySelector('[data-chat-overflow-open]').click();
       await window.chatHarness.waitFor(() => document.querySelector('[data-chat-busy-panel]'));
@@ -223,7 +223,13 @@ try {
     await page.screenshot({ path: groupedScreenshotPath, fullPage: true });
   });
 
-  await scenario(page, 'expanded-crew-windows-render-side-by-side', { count: 3, activeIndex: 1 }, async (m) => {
+  await scenario(page, 'expanded-crew-windows-render-side-by-side', { count: 3, activeIndex: 1, crewMembers: 4 }, async (m) => {
+    // Regression 08.09.2026: an extra dock child (crew pool row) shifted the chip
+    // strip into a 26px grid column, so every chip sat at the right edge and the
+    // three windows piled on top of each other while still claiming side-by-side.
+    expect(m.fabMemberCount === 4, `the crew button must carry the pool members, got ${m.fabMemberCount}`);
+    expect(m.stripWidth >= 120, `the chip strip must keep its own room in the dock, got ${m.stripWidth}px`);
+    expect(m.windowOverlap <= 0, `side-by-side windows must not overlap, worst overlap ${m.windowOverlap}px (${m.windowRects.join(' | ')})`);
     expect(m.inactiveFocusable >= 3, `inactive window actions must be directly tabbable, got ${m.inactiveFocusable}`);
     expect(m.inactiveVisibleActions >= 1, `inactive header actions must remain visible, got ${m.inactiveVisibleActions}`);
     expect(m.windowCount === 3, `the stage must render all three expanded crew windows, got ${m.windowCount}`);
@@ -232,6 +238,40 @@ try {
     expect(m.windowCreatureCount === 3, `each work window needs its own creature, got ${m.windowCreatureCount}`);
     expect(m.dockCreatureCount === 3, `the dock must show the same three crew members, got ${m.dockCreatureCount}`);
     expect(m.dockLabel === 'Crew', `crew navigation label must remain visible, got ${m.dockLabel}`);
+  });
+
+  await viewportScenario(page, 'carousel-fan-stays-on-stage-with-left-active-chip', { width: 1000, height: 820 }, { count: 3, activeIndex: 0 }, async (m) => {
+    expect(!m.stageClasses.includes('is-side-by-side'), `three 460px windows in a 1000px stage must fan out, got ${m.stageClasses}`);
+    expect(m.windowCount === 3, `all three windows must render, got ${m.windowCount}`);
+    expect(m.windowMinLeft >= m.stageLeft - 0.5, `the fan must not hang off the left stage edge: min left ${m.windowMinLeft} < stage ${m.stageLeft} (${m.windowRects.join(' | ')})`);
+    expect(m.windowMaxRight <= m.stageRight + 0.5, `the fan must not hang off the right stage edge: max right ${m.windowMaxRight} > stage ${m.stageRight}`);
+  });
+
+  await scenario(page, 'crew-presence-on-app-window-and-desktop-icon', {
+    count: 1,
+    activeIndex: 0,
+    crewMembers: 3,
+    appPresence: true,
+    queueTasks: [
+      { id: 'task_doc_1', status: 'running', module: 'documents', crew_member_id: 'member_0', updated_at_ms: Date.now() },
+      { id: 'task_doc_2', status: 'leased', module: 'documents', crew_member_id: 'member_1', updated_at_ms: Date.now() - 1000 },
+      { id: 'task_ctox_done', status: 'succeeded', module: 'ctox', crew_member_id: 'member_2', updated_at_ms: Date.now() - 2000 },
+    ],
+  }, async () => {
+    const after = await page.evaluate(async () => {
+      await window.chatHarness.waitFor(() => document.querySelectorAll('[data-crew-presence]').length >= 2);
+      await window.chatHarness.waitForPaint();
+      return window.chatHarness.collect();
+    });
+    results.push({ scenario: 'crew-presence-after-load', metrics: after });
+    await page.screenshot({ path: path.join(outputDir, 'crew-presence.png'), clip: { x: 280, y: 100, width: 900, height: 400 } });
+    const byHost = Object.fromEntries((after.appPresence || []).map((entry) => [entry.host, entry]));
+    expect(byHost['window:module:documents']?.creatures === 2, `documents window icon must carry both working members, got ${JSON.stringify(byHost['window:module:documents'])}`);
+    expect(byHost['desktop:documents']?.creatures === 2, `documents desktop icon must carry both working members, got ${JSON.stringify(byHost['desktop:documents'])}`);
+    expect(/Pico, Nia arbeiten hier/.test(byHost['window:module:documents']?.title || ''), `presence hint must name the members, got ${byHost['window:module:documents']?.title}`);
+    expect(byHost['window:module:ctox']?.creatures === 0, `finished tasks must not show presence, got ${JSON.stringify(byHost['window:module:ctox'])}`);
+    expect(byHost['desktop:ctox']?.creatures === 0, `finished tasks must not show desktop presence, got ${JSON.stringify(byHost['desktop:ctox'])}`);
+    expect((after.appPresence || []).every((entry) => entry.inside), `presence badges must stay inside their icon, got ${JSON.stringify(after.appPresence)}`);
   });
 
   await scenario(page, 'inactive-window-minimizes-with-one-click', { count: 3, activeIndex: 1 }, async () => {
@@ -258,7 +298,7 @@ try {
     expect(m.progressHeaderText === '', `window header must not duplicate progress copy, got ${m.progressHeaderText}`);
     expect(m.progressSegmentCount === 4, `three work steps plus review segment expected, got ${m.progressSegmentCount}`);
     expect(m.progressTooltip.includes('Daten prüfen'), `hover hint must expose the active step, got ${m.progressTooltip}`);
-    expect(m.progressTooltip.includes('30% · 4/7 Turns · Plan v2'), `hover hint must expose exact progress, got ${m.progressTooltip}`);
+    expect(m.progressTooltip.includes('30% · 4/7 Aktivitäten · Planstand 2'), `hover hint must expose exact progress, got ${m.progressTooltip}`);
     expect(m.progressTooltip.includes('→ Ergebnis schreiben'), `hover hint must expose the next step, got ${m.progressTooltip}`);
     expect(m.progressCurrentText === '' && m.progressNextText === '' && m.progressPlanText === '', 'progress labels must not be persistently visible');
     expect(m.progressInHeader === true, 'visual progress must live inside the window header');
@@ -394,6 +434,9 @@ try {
     dbDelay: 500,
   }, async () => {
     const followUpResult = await page.evaluate(async () => {
+      // The window itself may still be painting under load; the measured
+      // latency is click -> composer, not seed -> trigger.
+      await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-active [data-chat-followup-trigger]'));
       const start = performance.now();
       document.querySelector('.ctox-chat-window.is-active [data-chat-followup-trigger]').click();
       await window.chatHarness.waitForPaint();
@@ -501,13 +544,15 @@ try {
       input.value = 'Bitte als CTOX Task verarbeiten';
       input.dispatchEvent(new InputEvent('input', { bubbles: true }));
       document.querySelector('.ctox-chat-window.is-active [data-chat-send]').click();
-      await window.chatHarness.waitFor(() => /Warte auf die CTOX Queue-Projektion/.test(document.body.innerText || ''));
+      await window.chatHarness.waitFor(() => /Die Crew hat die Annahme noch nicht bestätigt/.test(document.body.innerText || ''));
       return window.chatHarness.collect();
     });
     results.push({ scenario: 'transient-command-timeout-after-send', metrics: after });
     expect(after.activeTaskClass.includes('is-task-queued'), `transient command timeout must keep chat queued, got ${after.activeTaskClass}`);
     expect(!after.activeTaskClass.includes('is-task-failed'), `transient command timeout must not mark failed, got ${after.activeTaskClass}`);
-    expect(after.activeMessageText.includes('Warte auf die CTOX Queue-Projektion'), 'transient command timeout must explain that tracking continues');
+    expect(after.activeMessageText.includes('Die Crew hat die Annahme noch nicht bestätigt'), 'transient command timeout must explain that tracking continues');
+    expect(!after.activeMessageText.includes('Task an CTOX übergeben'), 'an unconfirmed timeout must not claim native acceptance');
+    expect(!after.activeMessageText.includes('pending_sync'), 'pending receipt enum must not leak as visible text');
     expect(!after.activeMessageText.includes('queued'), `transient status must not leak as chrome text, got ${after.activeMessageText}`);
   });
 
@@ -526,7 +571,11 @@ try {
   });
 
   await viewportScenario(page, 'viewport-1440-eight-chats', { width: 1440, height: 820 }, { count: 8, activeIndex: 4 }, (m) => {
-    expect(m.dockWidth <= m.viewportWidth - 90, `1440px dock must leave shell space for eight chats, got ${m.dockWidth}`);
+    // The dock deliberately runs the full shell width (18px margins) and keeps
+    // the bug-reporter slot free at its right end via padding, so the chip
+    // strip must end before that slot instead of the dock shrinking.
+    expect(m.dockWidth <= m.viewportWidth - 36, `1440px dock must stay inside the shell margins for eight chats, got ${m.dockWidth}`);
+    expect(m.stripRight <= m.viewportWidth - 18 - 58, `1440px chip strip must leave the reporter slot free, ends at ${m.stripRight}`);
     expect(m.chipCount === 8, `1440px eight-chat state should render eight chips, got ${m.chipCount}`);
   });
 
@@ -565,7 +614,8 @@ try {
 
 async function scenario(page, name, seedOptions, assertions) {
   await page.goto(url, { waitUntil: 'load' });
-  await page.waitForFunction(() => window.chatHarness?.seed, null, { timeout: 2500 });
+  // Page load, not an assertion: a busy host may need seconds to serve the module.
+  await page.waitForFunction(() => window.chatHarness?.seed, null, { timeout: 20000 });
   await page.evaluate(async (options) => {
     await window.chatHarness.seed(options);
   }, seedOptions);
@@ -731,6 +781,12 @@ function harnessHtml() {
         window._ctoxChatSchedulerInterval = null;
       }
       document.body.innerHTML = '<main class="harness-app">' + ['Tickets', 'Conversations', 'Notizen', 'Documents', 'Knowledge', 'Kunden', 'App Store', 'Source Editor'].map((name) => '<div class="harness-module">' + name + '</div>').join('') + '</main>';
+      if (options.appPresence) {
+        // Shell stand-ins: a v2 window per app plus the desktop icon grid,
+        // shaped like window-manager.js / app.js render them.
+        document.body.insertAdjacentHTML('beforeend', ['documents', 'ctox'].map((id) => '<div class="shell-window" data-owner-id="module:' + id + '" style="position:absolute;top:120px;left:' + (id === 'ctox' ? 700 : 300) + 'px;width:320px;height:200px;border:1px solid #333"><div class="shell-window-v2-icon" style="position:absolute;top:0;left:0;width:44px;height:44px;overflow:hidden;background:#222"><span data-window-app-label>' + id[0].toUpperCase() + '</span></div></div>').join('')
+          + '<div data-desktop-icons style="position:absolute;top:400px;left:900px;display:flex;gap:24px">' + ['documents', 'ctox'].map((id) => '<button class="desktop-icon" data-target="' + id + '"><span class="desktop-icon-glyph" style="display:block;width:56px;height:56px;border-radius:14px;background:#2a2a2a"></span><span class="desktop-icon-label">' + id + '</span></button>').join('') + '</div>');
+      }
       localStorage.clear();
       sessionStorage.clear();
       chatCollectionSubscribers = new Set();
@@ -758,7 +814,7 @@ function harnessHtml() {
       initBusinessChat({
         session: { authenticated: true, user: { id: owner, name: 'Harness User' } },
         commandBus: makeCommandBus(options),
-        db: makeDb(chats, options.dbDelay || 0, Boolean(options.dbTransientError), Boolean(options.dbDeleteError)),
+        db: makeDb(chats, options.dbDelay || 0, Boolean(options.dbTransientError), Boolean(options.dbDeleteError), Number(options.crewMembers) || 0, Array.isArray(options.queueTasks) ? options.queueTasks : []),
         getActiveModule: () => ({ id: 'ctox', name: 'CTOX' }),
       });
       await waitFor(() => document.querySelector('[data-chat-dock]'));
@@ -885,8 +941,24 @@ function harnessHtml() {
       };
     }
 
-    function makeDb(chats, delayMs, transientError, deleteError) {
+    function makeCrewMembers(count) {
+      const shapes = ['round', 'tall', 'wide', 'blob'];
+      const colors = ['#e0a458', '#5aa9e6', '#8fbf7f', '#c77dff'];
+      return Array.from({ length: count }, (_, index) => ({
+        id: 'member_' + index,
+        name: ['Pico', 'Nia', 'Odo', 'Lumi'][index % 4] + (index >= 4 ? ' ' + index : ''),
+        shape: shapes[index % shapes.length],
+        color: colors[index % colors.length],
+        state: index === 0 ? 'on_duty' : 'home',
+        domain: [],
+        archived: false,
+        updated_at_ms: Date.now(),
+      }));
+    }
+
+    function makeDb(chats, delayMs, transientError, deleteError, crewMemberCount = 0, queueTasks = []) {
       const store = new Map(chats.map((chat) => [chat.id, structuredClone(chat)]));
+      const crewMembers = makeCrewMembers(crewMemberCount);
       const delay = () => new Promise((resolve) => setTimeout(resolve, delayMs));
       const maybeThrow = async () => {
         await delay();
@@ -919,13 +991,23 @@ function harnessHtml() {
             insert: async (doc) => { await maybeThrow(); store.set(doc.id, structuredClone(doc)); return docFor(doc.id); },
           },
           business_commands: { $: { subscribe: () => ({ unsubscribe() {} }) } },
-          ctox_queue_tasks: { $: { subscribe: () => ({ unsubscribe() {} }) } },
+          ctox_queue_tasks: {
+            $: { subscribe: () => ({ unsubscribe() {} }) },
+            find: () => ({ exec: async () => { await maybeThrow(); return queueTasks.map((task) => ({ toJSON: () => structuredClone(task) })); } }),
+          },
+          ctox_crew_members: {
+            $: { subscribe: () => ({ unsubscribe() {} }) },
+            find: () => ({ exec: async () => { await maybeThrow(); return crewMembers.map((member) => ({ toJSON: () => structuredClone(member) })); } }),
+          },
         },
       };
     }
 
     function collect() {
       const root = document.querySelector('[data-ctox-chat-root]');
+      const windowRects = Array.from(document.querySelectorAll('.ctox-chat-window'))
+        .map((el) => el.getBoundingClientRect())
+        .sort((a, b) => a.left - b.left);
       const dock = document.querySelector('[data-chat-dock]');
       const strip = document.querySelector('[data-chat-strip]');
       const activeWindow = document.querySelector('.ctox-chat-window.is-active');
@@ -992,6 +1074,21 @@ function harnessHtml() {
         datePanelTaskText: document.querySelector('[data-chat-date-workload-panel] header span')?.textContent || '',
         chipCount: document.querySelectorAll('[data-chat-focus]').length,
         windowCount: document.querySelectorAll('.ctox-chat-window').length,
+        windowRects: windowRects.map((r) => Math.round(r.left) + '+' + Math.round(r.width)),
+        windowMinLeft: windowRects.length ? Math.round(Math.min(...windowRects.map((r) => r.left))) : 0,
+        windowMaxRight: windowRects.length ? Math.round(Math.max(...windowRects.map((r) => r.right))) : 0,
+        stageLeft: Math.round(stageInner?.getBoundingClientRect().left || 0),
+        stageRight: Math.round(stageInner?.getBoundingClientRect().right || 0),
+        windowOverlap: windowRects.slice(1).reduce((worst, rect, index) => Math.max(worst, Math.round(windowRects[index].right - rect.left)), 0),
+        stripWidth: Math.round(strip?.getBoundingClientRect().width || 0),
+        stripRight: Math.round(strip?.getBoundingClientRect().right || 0),
+        fabMemberCount: document.querySelectorAll('.ctox-chat-fab-creatures.is-members .ctox-chat-crew-slot').length,
+        appPresence: Array.from(document.querySelectorAll('.shell-window-v2-icon, .desktop-icon-glyph')).map((host) => ({
+          host: host.classList.contains('desktop-icon-glyph') ? 'desktop:' + host.closest('.desktop-icon')?.dataset.target : 'window:' + host.closest('.shell-window')?.dataset.ownerId,
+          creatures: host.querySelectorAll('[data-crew-presence] .ctox-crew-creature').length,
+          title: host.querySelector('[data-crew-presence]')?.getAttribute('title') || '',
+          inside: (() => { const badge = host.querySelector('[data-crew-presence]'); if (!badge) return true; const a = host.getBoundingClientRect(); const b = badge.getBoundingClientRect(); return b.left >= a.left - 0.5 && b.right <= a.right + 0.5 && b.top >= a.top - 0.5 && b.bottom <= a.bottom + 0.5; })(),
+        })),
         windowCreatureCount: document.querySelectorAll('.ctox-chat-window .ctox-crew-creature').length,
         dockCreatureCount: document.querySelectorAll('.ctox-chat-chip .ctox-crew-creature').length,
         progressCardCount: document.querySelectorAll('.ctox-chat-delegation-card .ctox-progress-visual').length,

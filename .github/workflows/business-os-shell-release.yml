@@ -72,8 +72,16 @@ jobs:
       - name: Guard visible harness layout and loaded document identity
         run: node src/apps/business-os/modules/ctox/tests/layout.browser.mjs
 
-      - name: Run Office bridge regressions
-        run: node --test src/apps/business-os/office-engine/office-engine.test.mjs src/apps/business-os/office-engine/office-commit-upload.test.mjs src/apps/business-os/office-engine/save-lifecycle.test.mjs
+      - name: Run Office editor and sync regressions
+        run: >-
+          node --test
+          src/apps/business-os/office-engine/office-engine.test.mjs
+          src/apps/business-os/office-engine/office-commit-upload.test.mjs
+          src/apps/business-os/office-engine/office-source-upload.test.mjs
+          src/apps/business-os/office-engine/save-lifecycle.test.mjs
+          src/apps/business-os/office-engine/version-recovery-races.test.mjs
+          src/apps/business-os/modules/documents/documents.test.mjs
+          src/apps/business-os/modules/spreadsheets/spreadsheets.test.mjs
 
       - name: Guard mobile Office editor height
         run: npm --prefix src/apps/business-os run qa:shell-office-height -- --output-dir "${RUNNER_TEMP}/ctox-shell-office-height"

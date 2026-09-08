@@ -1192,7 +1192,34 @@ async function waitForCommandState({ db, sync, commandId, until, options = {} })
   rememberActiveCommandId(commandId);
   try {
     currentDb = await resolveCommandDb(db);
-    syncPlan = await prepareCommandSync({ db: currentDb, sync, command: options });
+    // Native acceptance is durable. Reopening the data channel must not turn
+    // an already replicated receipt into a failed handoff after a reconnect.
+    const localReceipt = async () => {
+      let command;
+      try {
+        command = await findLocalDoc(currentDb?.raw?.business_commands, commandId);
+      } catch {
+        return null; // An unavailable local cache is not an acknowledgement.
+      }
+      if (command?.id !== commandId || command?._deleted
+        || command?.replication_phase !== 'native_observed') return null;
+      if (commandIsTerminal(command)) forgetActiveCommandId(commandId);
+      if (commandIsFailed(command)) throw nativeCommandFailure(command, commandId);
+      if (!commandHasReached(command, until)) return null;
+      recordObservedCommandMetrics(sync, commandId, command);
+      return commandReceipt(command, commandId);
+    };
+    const observed = await localReceipt();
+    if (observed) return observed;
+    try {
+      syncPlan = await prepareCommandSync({ db: currentDb, sync, command: options });
+    } catch (error) {
+      // A native receipt can arrive while bridge readiness is waiting. Read
+      // only this command id; a local intent alone never proves acceptance.
+      const arrived = await localReceipt();
+      if (arrived) return arrived;
+      throw error;
+    }
     return await new Promise((resolve, reject) => {
       let settled = false;
       let rebindInFlight = false;
@@ -1229,15 +1256,7 @@ async function waitForCommandState({ db, sync, commandId, until, options = {} })
         lastCommand = value?.toJSON?.() || value;
         observeProgress(lastCommand);
         if (commandIsFailed(lastCommand)) {
-          const outcome = lastCommand.result?.outcome || lastCommand.payload?.outcome || null;
-          settle(reject, commandError(
-            commandId,
-            lastCommand.error_message || lastCommand.error || outcome?.stderr || outcome?.error || 'CTOX command failed.',
-            {
-              code: lastCommand.error_code || 'command_terminal_failure',
-              retryable: Boolean(lastCommand.retryable),
-            },
-          ));
+          settle(reject, nativeCommandFailure(lastCommand, commandId));
           return;
         }
         if (!commandHasReached(lastCommand, until)) return;
@@ -1295,7 +1314,7 @@ async function waitForCommandState({ db, sync, commandId, until, options = {} })
         recordCommandMetric(sync, 'wait_timeout', commandId, timeoutMs);
         settle(reject, commandError(
           commandId,
-          'CTOX wartet noch auf die Rueckmeldung. Der Vorgang bleibt verfolgbar.',
+          'Die Rückmeldung steht noch aus. Du kannst den Vorgang weiter verfolgen.',
           {
             code: 'projection_delayed',
             status: 'projection_pending',
@@ -1428,6 +1447,18 @@ function commandHasReached(command, until) {
 function commandIsTerminal(command) {
   return command?.execution_phase === 'terminal'
     || ['completed', 'failed', 'cancelled'].includes(String(command?.terminal_status || command?.status || ''));
+}
+
+function nativeCommandFailure(command, commandId) {
+  const outcome = command.result?.outcome || command.payload?.outcome || null;
+  return commandError(
+    commandId,
+    command.error_message || command.error || outcome?.stderr || outcome?.error || 'Die Aufgabe konnte nicht ausgeführt werden.',
+    {
+      code: command.error_code || 'command_terminal_failure',
+      retryable: Boolean(command.retryable),
+    },
+  );
 }
 
 function commandIsFailed(command) {

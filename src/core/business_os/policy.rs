@@ -359,6 +359,13 @@ pub fn is_cockpit_projection(collection: &str) -> bool {
     )
 }
 
+/// Owner decision 08.09.2026: a user sees who the crew is and whether the
+/// harness runs (names, expressions, pause, capacity) — never runs, event
+/// streams or learnings, which carry costs and other people's work.
+pub fn user_readable_cockpit_projection(collection: &str) -> bool {
+    matches!(collection, "ctox_crew_members" | "ctox_harness_status")
+}
+
 /// Role-only summary for CLI policy audits. Runtime authorization additionally
 /// checks the actor, permission and scope through `evaluate`.
 pub fn role_may_read_collection(role: BusinessOsRole, collection: &str) -> bool {
@@ -367,7 +374,8 @@ pub fn role_may_read_collection(role: BusinessOsRole, collection: &str) -> bool 
         BusinessOsRole::Founder => !ADMIN_ONLY_COLLECTIONS.contains(&collection),
         BusinessOsRole::User => {
             !ADMIN_ONLY_COLLECTIONS.contains(&collection)
-                && (!is_cockpit_projection(collection) || collection == "ctox_crew_members")
+                && (!is_cockpit_projection(collection)
+                    || user_readable_cockpit_projection(collection))
         }
     }
 }
@@ -385,7 +393,10 @@ pub fn evaluate(
     {
         return if permission == BusinessOsPermission::DataRead
             && (actor.role != BusinessOsRole::User
-                || scope.scope_id.as_deref() == Some("ctox_crew_members"))
+                || scope
+                    .scope_id
+                    .as_deref()
+                    .is_some_and(user_readable_cockpit_projection))
         {
             PolicyDecision::allow(permission, scope)
         } else {

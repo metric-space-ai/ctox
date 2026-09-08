@@ -5866,6 +5866,114 @@ fn business_command_queue_claim_is_atomic_and_idempotent() {
 }
 
 #[test]
+fn adapter_reconciliation_keeps_one_open_task_per_configuration() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let claim = |id: &str, digest: &str| {
+        let mut claim = business_command_claim(id, id);
+        claim.command_type = "outbound.research.adapters.reconcile".into();
+        claim.intent["payload"] = json!({"configuration_digest":digest});
+        claim
+    };
+    let request = |id: &str| QueueTaskCreateRequest {
+        title: "Adapterabgleich".into(),
+        prompt: "Reconcile the adapters".into(),
+        thread_key: format!("adapter/{id}"),
+        workspace_root: None,
+        priority: "low".into(),
+        suggested_skill: None,
+        parent_message_key: None,
+        extra_metadata: Some(json!({"idempotency_key":id})),
+    };
+    let first = claim_business_command_with_queue(
+        root.path(),
+        claim("adapter-first", "v1"),
+        request("adapter-first"),
+    )?;
+    lease_queue_task(root.path(), &first.task.message_key, "worker")?;
+    for n in 0..10 {
+        let id = format!("adapter-duplicate-{n}");
+        let duplicate =
+            claim_business_command_with_queue(root.path(), claim(&id, "v1"), request(&id))?;
+        assert_eq!(duplicate.task.route_status, "cancelled");
+        let projection = business_command_projection(root.path(), &id)?;
+        assert_eq!(projection["terminal_status"], "cancelled");
+        assert_eq!(
+            projection["result"]["superseded_by_task_id"],
+            first.task.message_key
+        );
+    }
+    let changed = claim_business_command_with_queue(
+        root.path(),
+        claim("adapter-new", "v2"),
+        request("adapter-new"),
+    )?;
+    assert_eq!(changed.task.route_status, "pending");
+    let conn = open_channel_db(&resolve_db_path(root.path(), None))?;
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM communication_routing_state WHERE route_status IN ('pending','leased')", [], |r|r.get(0))?;
+    assert_eq!(count, 2);
+    let plan: Vec<String> = conn.prepare("EXPLAIN QUERY PLAN SELECT command_id FROM business_command_aggregates
+        WHERE command_type='outbound.research.adapters.reconcile' AND execution_phase!='terminal'
+          AND module=?1 AND record_id=?2 AND json_extract(intent_json,'$.payload.configuration_digest')=?3
+        ORDER BY created_at_ms,command_id LIMIT 1")?
+        .query_map(params!["tests","record-1","v1"], |r|r.get(3))?.collect::<rusqlite::Result<_>>()?;
+    assert!(
+        plan.iter()
+            .any(|line| line.contains("idx_active_adapter_reconciliation")),
+        "{plan:?}"
+    );
+    let replay = claim_business_command_with_queue(
+        root.path(),
+        claim("adapter-duplicate-0", "v1"),
+        request("adapter-duplicate-0"),
+    )?;
+    assert_eq!(
+        replay.task.route_status, "cancelled",
+        "idempotent replay must not revive duplicate work"
+    );
+    let mut other_actor = claim("adapter-other-actor", "v1");
+    other_actor.intent["native_authorization"] = json!({"actor":{"user_id":"other"}});
+    let other = claim_business_command_with_queue(
+        root.path(),
+        other_actor,
+        request("adapter-other-actor"),
+    )?;
+    assert_eq!(
+        other.task.route_status, "pending",
+        "different authority must not share work"
+    );
+    let mut other_context = claim("adapter-other-context", "v1");
+    other_context.intent["client_context"] = json!({"source":"other-surface"});
+    let other = claim_business_command_with_queue(
+        root.path(),
+        other_context,
+        request("adapter-other-context"),
+    )?;
+    assert_eq!(
+        other.task.route_status, "pending",
+        "different audited context must not share work"
+    );
+    transition_business_command_for_task(
+        root.path(),
+        &first.task.message_key,
+        "cancelled",
+        None,
+        None,
+        None,
+        "fixture cancels original",
+    )?;
+    let fresh = claim_business_command_with_queue(
+        root.path(),
+        claim("adapter-after-terminal", "v1"),
+        request("adapter-after-terminal"),
+    )?;
+    assert_eq!(
+        fresh.task.route_status, "pending",
+        "a completed reconciliation must not suppress future work"
+    );
+    Ok(())
+}
+
+#[test]
 fn business_control_claim_suppresses_uncertain_replay_and_returns_terminal_result() {
     let root = business_command_test_root("ctox-business-command-control-claim");
     let first = claim_business_control_command(

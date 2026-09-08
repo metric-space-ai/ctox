@@ -1,5 +1,8 @@
 use anyhow::Context;
 use anyhow::Result;
+#[cfg(test)]
+#[path = "service_auth_assist_tests.rs"]
+mod auth_assist_recovery_tests;
 #[path = "service_cv_print_recovery.rs"]
 mod cv_print_recovery;
 #[path = "service_runtime_support.rs"]
@@ -957,6 +960,7 @@ impl Default for WorkerSessionSlot {
 struct SharedState {
     busy: bool,
     worker_active_count: usize,
+    serial_prompt_starting: bool,
     worker_phase: Option<String>,
     app_recovery_active: bool,
     app_recovery_started_epoch_secs: Option<u64>,
@@ -966,6 +970,7 @@ struct SharedState {
     // Only a live PromptWorkerActivity owns these keys. Routing cache entries
     // alone do not prove that a worker still exists.
     active_worker_lease_keys: HashSet<String>,
+    active_worker_threads: BTreeMap<String, usize>,
     parallel_queue_jobs: BTreeMap<String, QueuedPrompt>,
     current_goal_preview: Option<String>,
     active_source_label: Option<String>,
@@ -982,6 +987,7 @@ impl Default for SharedState {
         Self {
             busy: false,
             worker_active_count: 0,
+            serial_prompt_starting: false,
             worker_phase: None,
             app_recovery_active: false,
             app_recovery_started_epoch_secs: None,
@@ -989,6 +995,7 @@ impl Default for SharedState {
             pending_prompts: VecDeque::new(),
             leased_message_keys_inflight: HashSet::new(),
             active_worker_lease_keys: HashSet::new(),
+            active_worker_threads: BTreeMap::new(),
             parallel_queue_jobs: BTreeMap::new(),
             current_goal_preview: None,
             active_source_label: None,
@@ -2067,6 +2074,16 @@ fn release_stale_service_communication_leases_on_boot(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
 ) {
+    // Human login requests must not enter generic artifact/plan recovery.
+    // Preserve their browser identity before releasing any stale worker lease.
+    match channels::recover_auth_assist_requests(root) {
+        Ok(count) if count > 0 => push_event(
+            state,
+            format!("Preserved {count} auth-assist request(s) awaiting browser confirmation"),
+        ),
+        Ok(_) => {}
+        Err(err) => push_event(state, format!("Auth-assist boot recovery failed: {err}")),
+    }
     reconcile_stale_queue_projections_for_service(root, state, &HashSet::new());
     recover_person_research_commands_for_service(root, state, "boot");
     match recover_abandoned_business_os_app_queue_tasks(root, state, 16) {
@@ -3783,7 +3800,9 @@ fn handle_service_ipc_request(
                         format!("Queued prompt outside working hours (queue #{pending}): {reason}"),
                     );
                     true
-                } else if shared.busy || runtime_blocker_backoff_remaining_secs(&shared).is_some() {
+                } else if serial_prompt_admission_is_busy(&shared)
+                    || runtime_blocker_backoff_remaining_secs(&shared).is_some()
+                {
                     insert_pending_prompt_ordered(
                         &mut shared.pending_prompts,
                         QueuedPrompt {
@@ -3817,6 +3836,7 @@ fn handle_service_ipc_request(
                     true
                 } else {
                     shared.busy = true;
+                    shared.serial_prompt_starting = true;
                     shared.current_goal_preview = Some(preview_text(&prompt));
                     shared.active_source_label = Some("tui".to_string());
                     shared.last_error = None;
@@ -4130,7 +4150,9 @@ fn handle_request(
                         format!("Queued prompt outside working hours (queue #{pending}): {reason}"),
                     );
                     true
-                } else if shared.busy || runtime_blocker_backoff_remaining_secs(&shared).is_some() {
+                } else if serial_prompt_admission_is_busy(&shared)
+                    || runtime_blocker_backoff_remaining_secs(&shared).is_some()
+                {
                     insert_pending_prompt_ordered(
                         &mut shared.pending_prompts,
                         QueuedPrompt {
@@ -4164,6 +4186,7 @@ fn handle_request(
                     true
                 } else {
                     shared.busy = true;
+                    shared.serial_prompt_starting = true;
                     shared.current_goal_preview = Some(preview_text(&prompt));
                     shared.active_source_label = Some("tui".to_string());
                     shared.last_error = None;
@@ -5034,6 +5057,7 @@ struct PromptWorkerActivity {
     root: std::path::PathBuf,
     state: Arc<Mutex<SharedState>>,
     source_label: String,
+    thread_key: Option<String>,
     leased_message_keys: Vec<String>,
     leased_ticket_event_keys: Vec<String>,
     leases_released: bool,
@@ -5213,12 +5237,23 @@ impl PromptWorkerActivity {
     fn start(root: &Path, state: &Arc<Mutex<SharedState>>, job: &QueuedPrompt) -> Self {
         {
             let mut shared = lock_shared_state(state);
+            let parallel_reserved = queue_job_has_independent_business_session(job)
+                && job
+                    .leased_message_keys
+                    .iter()
+                    .all(|key| shared.parallel_queue_jobs.contains_key(key));
+            if !parallel_reserved {
+                shared.serial_prompt_starting = false;
+            }
             if queue_job_has_independent_business_session(job) {
                 for key in &job.leased_message_keys {
                     shared.parallel_queue_jobs.insert(key.clone(), job.clone());
                 }
             }
             shared.worker_active_count = shared.worker_active_count.saturating_add(1);
+            if let Some(key) = &job.thread_key {
+                *shared.active_worker_threads.entry(key.clone()).or_default() += 1;
+            }
             shared
                 .active_worker_lease_keys
                 .extend(job.leased_message_keys.iter().cloned());
@@ -5285,6 +5320,7 @@ impl PromptWorkerActivity {
             root: root.to_path_buf(),
             state: state.clone(),
             source_label: job.source_label.clone(),
+            thread_key: job.thread_key.clone(),
             leased_message_keys: job.leased_message_keys.clone(),
             leased_ticket_event_keys: job.leased_ticket_event_keys.clone(),
             leases_released: false,
@@ -5320,6 +5356,14 @@ impl Drop for PromptWorkerActivity {
         }
         let (leaked_message_keys, leaked_ticket_event_keys) = {
             let mut shared = lock_shared_state(&self.state);
+            if let Some(key) = &self.thread_key {
+                if let Some(count) = shared.active_worker_threads.get_mut(key) {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        shared.active_worker_threads.remove(key);
+                    }
+                }
+            }
             for key in self
                 .leased_message_keys
                 .iter()
@@ -17400,6 +17444,7 @@ fn activate_prompt_dispatch_locked(shared: &mut SharedState, prompt: &QueuedProm
         &prompt.leased_ticket_event_keys,
     );
     shared.busy = true;
+    shared.serial_prompt_starting = true;
     shared.current_goal_preview = Some(prompt.preview.clone());
     shared.active_source_label = Some(prompt.source_label.clone());
     shared.last_error = None;
@@ -17524,10 +17569,23 @@ fn decorate_service_event_with_skill(event: &str, suggested_skill: Option<&str>)
     format!("{event} [skill {skill}]")
 }
 
+fn serial_prompt_admission_is_busy(shared: &SharedState) -> bool {
+    shared.busy
+        || shared.worker_active_count > 0
+        || shared.serial_prompt_starting
+        || !shared.parallel_queue_jobs.is_empty()
+}
+
 fn maybe_start_next_queued_prompt_locked(
     root: &Path,
     shared: &mut SharedState,
 ) -> Option<QueuedPrompt> {
+    // A finishing chat may clear the display's busy flag while another worker
+    // still owns a serial context. Buffered serial work waits for actual worker
+    // cleanup; the idle dispatcher starts it after the registrations drain.
+    if serial_prompt_admission_is_busy(shared) {
+        return None;
+    }
     if let Some(reason) = crate::service::working_hours::hold_reason(root) {
         if !shared.pending_prompts.is_empty() {
             push_event_locked(
@@ -17539,6 +17597,7 @@ fn maybe_start_next_queued_prompt_locked(
     }
     let queued = shared.pending_prompts.pop_front()?;
     shared.busy = true;
+    shared.serial_prompt_starting = true;
     shared.current_goal_preview = Some(queued.preview.clone());
     shared.active_source_label = Some(queued.source_label.clone());
     shared.last_error = None;
