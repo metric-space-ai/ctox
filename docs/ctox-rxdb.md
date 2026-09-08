@@ -92,33 +92,30 @@ Consequences (all from `src/apps/business-os/rxdb/README.md`):
 
 The Rust side is a byte-correct port of RxDB 16.20.0 (upstream pin
 `c69c94bb…`, see `src/core/rxdb/PORTING.md` and `vendor/rxdb.version`),
-reduced to the CTOX-as-WebRTC-peer scope. Root `README.md` ("Business OS
-Connectivity", from line 54) defines the relationship: the browser shell may
-be delivered by CTOX itself, ctox.dev, or the desktop app, but business data
-always uses one path — CTOX Sync Engine over WebRTC between browser IndexedDB and the
-CTOX SQLite store.
+reduced to the CTOX-as-WebRTC-peer scope. The
+[README's peer-to-peer sync overview](../README.md#features) describes one
+business-data path: CTOX Sync Engine over WebRTC between browser IndexedDB and
+the native replicated document store. The instance's selected, verified shell
+release determines static asset identity; see the shell artifact boundary
+above. A routing host does not select an independent shell release.
 
 ---
 
 ## 2. The Data Boundary (normative)
 
-Root `README.md:165-176` ("### Data Boundary") is the normative statement.
-Verbatim:
+The [repository's Business OS data boundary](../AGENTS.md#business-os-data-boundary)
+requires WebRTC replication for Business OS collections and module runtime
+data, commands and queue projections, files/chunks, module manifests and native
+runtime status. HTTP may serve static shell assets, bootstrap, status, auth and
+explicit control-plane endpoints; it must not bridge or fall back for these
+business records.
 
-> The following records must never be proxied through HTTP between the
-> browser and CTOX:
->
-> - Business OS collections and module runtime data
-> - `business_commands` and `ctox_queue_tasks`
-> - `desktop_files` and `desktop_file_chunks`
-> - module manifests and native runtime status
->
-> Those records replicate only through RxDB/WebRTC and persist on the CTOX
-> side in `runtime/ctox.sqlite3`.
-
-(On the exact SQLite file see the persistence map in §4 — the document store
-is `runtime/business-os-rxdb.sqlite3`; the README sentence is a boundary-level
-simplification, not a path spec.)
+Replicated documents persist in `runtime/business-os-rxdb.sqlite3`, resolved
+by `store_sync_turn_auth.rs::rxdb_store_path` using `store.rs::RXDB_STORE_FILE`.
+Canonical execution and command state in `runtime/ctox.sqlite3` and domain
+records in `runtime/business-os.sqlite3` remain distinct owners/stores. See
+§4 and [HARNESS.md](../HARNESS.md#business-os-command-architecture) for their
+relationship; no cross-WAL atomicity is implied.
 
 Workspace branding (`business_workspace_branding`) is treated as Business OS
 collection data under the same boundary: update through the Business OS command
