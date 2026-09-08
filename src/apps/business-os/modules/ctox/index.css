@@ -9,7 +9,7 @@
 
 /* Shell V2 compact pane headers: task/live-flow titles share one row and the
    task filter strip scrolls locally instead of wrapping into the shell chrome. */
-.shell-window[data-shell-contract="v2"] .ctox-harness-app { padding: 0 0 84px; overflow: hidden; background: var(--bg); }
+.shell-window[data-shell-contract="v2"] .ctox-harness-app { padding: 0; height: 100%; min-height: 0; overflow: hidden; background: var(--bg); }
 .shell-window[data-shell-contract="v2"] .ctox-harness-app .ctox-pane { border: 0; border-radius: 0; background: var(--surface); box-shadow: none; }
 .shell-window[data-shell-contract="v2"] .ctox-harness-app .ctox-pane-header { box-sizing: border-box; min-height: var(--shell-v2-header-row-size, 37px); padding: 0 var(--space-2); background: var(--surface-2); border-bottom: 1px solid var(--line); display: grid; grid-template-rows: var(--shell-v2-header-row-size, 37px) auto; align-content: start; }
 .shell-window[data-shell-contract="v2"] .ctox-harness-app .ctox-pane-title-row { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); }
@@ -30,8 +30,7 @@
   --ctox-flow-channel-fill: color-mix(in srgb, var(--surface) 90%, var(--surface-2));
   --ctox-flow-channel-open-fill: color-mix(in srgb, var(--surface-2) 76%, var(--surface));
   --ctox-flow-muted-fill: color-mix(in srgb, var(--muted) 66%, transparent);
-  /* custom: keep the console bottom clear of the floating shell chat dock */
-  padding-bottom: 84px;
+  padding-bottom: 0;
 }
 
 /* The kit owns the tracks and resizer behavior; the module only pins panes to
@@ -58,8 +57,9 @@
 /* Give every rendered section a track; the canvas must remain usable even
    when metrics, progress and timeline consume the rest of a short window. */
 .ctox-harness-main {
-  grid-template-rows: auto auto auto auto minmax(240px, 1fr) auto auto;
-  overflow: auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* Left column rides the shell-owned canonical grammar (header → filterbar →
@@ -73,12 +73,42 @@
 .ctox-harness-left > .ctox-well { grid-row: 5; }
 .ctox-harness-left > .ctox-pane-footer { grid-row: 6; }
 .ctox-harness-main > .ctox-pane-header { grid-row: 1; }
-.ctox-harness-main > .ctox-metrics-strip { grid-row: 2; }
-.ctox-harness-main > .ctox-execution-progress { grid-row: 3; }
-.ctox-harness-main > .ctox-crew-strip { grid-row: 4; }
-.ctox-harness-main > .ctox-flow-well { grid-row: 5; }
-.ctox-harness-main > .ctox-timeline-panel { grid-row: 6; }
-.ctox-harness-main > .ctox-harness-footer { grid-row: 7; }
+.ctox-harness-main > .ctox-job-panel { grid-row: 2; }
+.ctox-harness-main > .ctox-flow-well { grid-row: 3; min-height: 0; }
+.ctox-harness-main > .ctox-history-fold { grid-row: 4; }
+.ctox-harness-main > .ctox-harness-footer { grid-row: 5; }
+
+/* Quiet default: one header row, one optional history row. Expanded sections
+   scroll inside the window, leaving the existing flow and creatures intact. */
+.ctox-harness-app [hidden] { display: none !important; }
+.ctox-job-panel { max-height: 45vh; overflow: auto; border-bottom: 1px solid var(--line); }
+.ctox-job-panel .drawer-body { padding: var(--space-2); }
+.ctox-job-panel .ctox-drawer-edit-fold > summary,
+.ctox-job-panel .ctox-task-edit > header { display: none; }
+.ctox-job-panel .ctox-task-edit { margin: 0; border: 0; background: transparent; }
+.ctox-job-panel .ctox-task-edit .ctox-card-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(100px, .3fr); gap: var(--space-2); }
+.ctox-job-panel .ctox-task-edit-field:has(textarea) { grid-column: 1 / -1; grid-row: 2; }
+.ctox-history-fold { min-height: 0; border-top: 1px solid var(--line); }
+.ctox-history-fold > summary,
+.ctox-drawer-edit-fold > summary { padding: var(--space-2) var(--space-3); cursor: pointer; font-size: var(--fs-meta); color: var(--muted); }
+.ctox-history-content { max-height: 32vh; overflow: auto; }
+.ctox-history-content .ctox-timeline-head { display: none; }
+.ctox-more-actions { position: relative; }
+.ctox-more-actions > summary { cursor: pointer; padding: var(--space-1) var(--space-2); list-style: none; color: var(--muted); }
+.ctox-more-actions > summary::-webkit-details-marker { display: none; }
+.ctox-more-actions-body { position: absolute; right: 0; top: 100%; z-index: 20; min-width: 220px; padding: var(--space-2); display: grid; gap: var(--space-2); background: var(--surface); border: 1px solid var(--line); border-radius: var(--panel-radius); box-shadow: var(--shadow-md); }
+.ctox-more-actions-body .ctox-button { text-align: left; }
+.ctox-harness-app .ctox-pane-title { font-size: var(--fs-base); font-weight: 600; }
+.ctox-harness-app .ctox-task-list { gap: 0; }
+.ctox-harness-app .ctox-task-selector { padding: var(--space-2) 32px var(--space-2) var(--space-3); }
+.ctox-harness-app .ctox-task-selector > strong { font-size: var(--fs-base); font-weight: 500; }
+.ctox-harness-app .ctox-task-card .ctox-task-pipeline { display: none; }
+.ctox-harness-app .ctox-task-card .ctox-task-actions { opacity: 0; }
+.ctox-harness-app .ctox-task-card:hover .ctox-task-actions,
+.ctox-harness-app .ctox-task-card:focus-within .ctox-task-actions,
+.ctox-harness-app .ctox-task-card.is-pinned .ctox-task-actions { opacity: 1; }
+.ctox-harness-app .ctox-task-reason.is-problem { color: var(--muted); font-size: var(--fs-meta); }
+@media (hover: none) { .ctox-harness-app .ctox-task-card .ctox-task-actions { opacity: 1; } }
 
 /* Anonymous loading silhouette; never a generated or invented Crew member. */
 .ctox-data-placeholder { width: 56px; height: 56px; color: var(--muted); }
@@ -2265,7 +2295,7 @@
 
   .ctox-harness-main {
     height: auto;
-    grid-template-rows: auto auto auto 280px auto auto;
+    grid-template-rows: auto auto minmax(280px, 1fr) auto auto;
   }
 
   /* Stacked: the task column is the only column, so its head is the only head

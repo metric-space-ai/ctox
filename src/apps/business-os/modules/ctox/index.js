@@ -1388,7 +1388,7 @@ function wireTaskColumn(state) {
       return;
     }
     const select = target.closest('[data-select-task-id]');
-    if (select) selectTask(state, select.dataset.selectTaskId, { drawer: true, center: true });
+    if (select) selectTask(state, select.dataset.selectTaskId, { drawer: false, center: true });
   });
 }
 
@@ -1676,12 +1676,16 @@ function taskColumnMarkup(tasks, state, options = {}) {
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">${escapeHtml(t.harnessKicker)}</span>
           <h2 class="ctox-pane-title">${escapeHtml(t.tasks)}</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button type="button" class="ctox-pane-icon" data-task-import aria-label="${escapeAttr(t.importTasks)}" title="${escapeAttr(t.importTasks)}">${actionIcon(state, 'download')}</button>
-          <button type="button" class="ctox-pane-icon" data-task-export aria-label="${escapeAttr(t.exportTasks)}" title="${escapeAttr(t.exportTasks)}">${actionIcon(state, 'export')}</button>
+          <details class="ctox-more-actions">
+            <summary aria-label="${escapeAttr(state.lang === 'de' ? 'Weitere Aktionen' : 'More actions')}">···</summary>
+            <div class="ctox-more-actions-body">
+              <button type="button" class="ctox-button" data-task-import>${escapeHtml(t.importTasks)}</button>
+              <button type="button" class="ctox-button" data-task-export>${escapeHtml(t.exportTasks)}</button>
+            </div>
+          </details>
         </div>
       </div>
     </header>
@@ -2311,8 +2315,15 @@ function renderMain(state) {
   // real start timestamp shows a clock anchored to that timestamp. No anchor
   // means no number — never a free-running animation.
   const elapsedSeconds = live ? liveElapsedSeconds(state) : metrics.seconds;
-  const flowSource = flowSourceView(state);
   const main = state.ctx.host.querySelector('[data-ctox-main]');
+  const panelTaskId = selectedTask?.id || '';
+  if (state.compactPanelTaskId !== panelTaskId) {
+    state.compactPanelTaskId = panelTaskId;
+    state.jobEditorOpen = false;
+    state.historyOpen = false;
+  }
+  const history = timelinePanel(state, selectedTask, selectedNode, metrics);
+  const hasHistory = !history.includes('is-disabled');
   const previousViewport = readFlowViewport(state);
   const viewBox = flowViewBox(selectedTask, state);
   // Without a selected task and without current data the workspace itself
@@ -2322,20 +2333,23 @@ function renderMain(state) {
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">${escapeHtml(t.liveFlow)}</span>
-          <h2 class="ctox-pane-title">${escapeHtml(t.doingNow)}</h2>
-          ${harnessStatusText(state) ? `<small class="ctox-harness-status-line" data-harness-status>${escapeHtml(harnessStatusText(state))}</small>` : ''}
+          <h2 class="ctox-pane-title">${escapeHtml(selectedTask ? taskDisplayTitle(selectedTask, state) : t.doingNow)}</h2>
         </div>
         <div class="ctox-pane-actions">
-          ${harnessControlsMarkup(state)}
-          <button type="button" class="ctox-pane-icon ${state.detailDrawer?.type === 'webstack' ? 'is-active' : ''}" data-webstack-toggle aria-pressed="${state.detailDrawer?.type === 'webstack'}" aria-label="${escapeAttr(t.webStack)}" title="${escapeAttr(t.webStack)}">${webStackIcon()}</button>
-          ${selectedTask ? `<button type="button" class="ctox-pane-icon" data-open-selected-task aria-label="${escapeAttr(t.openTaskDetail)}" title="${escapeAttr(t.openTaskDetail)}">${actionIcon(state, 'open')}</button>` : ''}
+          ${selectedTask ? `<button type="button" class="ctox-button ctox-job-toggle" data-job-toggle aria-expanded="${Boolean(state.jobEditorOpen)}">${escapeHtml(t.editTask)}</button>` : ''}
+          <details class="ctox-more-actions">
+            <summary aria-label="${escapeAttr(state.lang === 'de' ? 'Crew verwalten' : 'Manage crew')}">···</summary>
+            <div class="ctox-more-actions-body">
+              ${harnessControlsMarkup(state)}
+              <button type="button" class="ctox-button" data-webstack-toggle>${escapeHtml(t.webStack)}</button>
+              ${selectedTask ? `<button type="button" class="ctox-button" data-open-selected-task>${escapeHtml(t.openTaskDetail)}</button>` : ''}
+              ${crewStripMarkup(state)}
+            </div>
+          </details>
         </div>
       </div>
     </header>
-    ${metricsStripMarkup(metrics, elapsedSeconds, live, state)}
-    ${executionProgressBar(metrics, state)}
-    ${shouldShowCrewHome(state) ? '' : crewStripMarkup(state)}
+    <section class="ctox-job-panel" data-job-panel ${state.jobEditorOpen ? '' : 'hidden'} aria-label="${escapeAttr(t.editTask)}"></section>
     ${shouldShowCrewHome(state) ? crewHomeMarkup(state) : stateInWorkspace ? emptyWorkspaceMarkup(state) : `<div class="ctox-canvas-container ctox-flow-well">
       <div class="ctox-flow-toolbar" aria-label="${escapeAttr(t.flowControls)}" data-flow-control>
         <button type="button" class="ctox-pane-icon" data-zoom="-" aria-label="${escapeAttr(t.zoomOut)}" title="${escapeAttr(t.zoomOut)}" ${state.zoom <= MIN_ZOOM ? 'disabled' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg></button>
@@ -2348,10 +2362,27 @@ function renderMain(state) {
         </div>
       </div>
     </div>`}
-    ${timelinePanel(state, selectedTask, selectedNode, metrics)}
-    <footer class="ctox-harness-footer ${syncIsConnected(state) ? '' : 'is-disconnected'}" data-harness-health-tooltip>${(stateInWorkspace ? '' : dataStatusMarkup(state)) || `${syncIsConnected(state) ? '' : `<span class="ctox-footer-hint">${escapeHtml(t.syncDisconnected)}</span> · `}${escapeHtml(selectedTask ? taskDisplayTitle(selectedTask, state) : t.flowFooterEmpty)} · ${escapeHtml(flowSource.mode)} · ${escapeHtml(flowSource.status)}${live ? ` · ${escapeHtml(t.live)}` : ''}`}</footer>
+    <details class="ctox-history-fold" ${state.historyOpen && hasHistory ? 'open' : ''} ${hasHistory ? '' : 'hidden'}>
+      <summary>${escapeHtml(t.timeline)}</summary>
+      <div class="ctox-history-content">${history}${executionProgressBar(metrics, state)}${metricsStripMarkup(metrics, elapsedSeconds, live, state)}</div>
+    </details>
+    ${!syncIsConnected(state) && !stateInWorkspace ? `<footer class="ctox-harness-footer is-disconnected" data-harness-health-tooltip>${dataStatusMarkup(state) || escapeHtml(t.syncDisconnected)}</footer>` : ''}
   `;
   restoreFlowViewport(state, previousViewport);
+  const editor = main.querySelector('[data-job-panel]');
+  const mountEditor = () => {
+    if (selectedTask && !editor.firstElementChild) editor.append(taskDrawer(selectedTask, state, { editorOnly: true }));
+  };
+  if (state.jobEditorOpen) mountEditor();
+  main.querySelector('[data-job-toggle]')?.addEventListener('click', (event) => {
+    state.jobEditorOpen = !state.jobEditorOpen;
+    editor.hidden = !state.jobEditorOpen;
+    event.currentTarget.setAttribute('aria-expanded', String(state.jobEditorOpen));
+    if (state.jobEditorOpen) mountEditor();
+  });
+  main.querySelector('.ctox-history-fold')?.addEventListener('toggle', (event) => {
+    state.historyOpen = event.currentTarget.open;
+  });
   main.querySelector('[data-harness-pause]')?.addEventListener('click', () => {
     runHarnessControl(state, 'pause', !state.harnessStatus?.paused);
   });
@@ -3236,7 +3267,10 @@ function openFocusedTaskDrawer(state) {
   const nextIndex = timelineIndexForSelectedTask(state);
   if (nextIndex !== null) state.selectedStepIndex = nextIndex;
   state.selectedTaskStepIndex = activeTaskStepIndex(task, state);
-  state.detailDrawer = { type: 'task', taskId: task.id };
+  state.detailDrawer = state.focusTaskOpenDrawer ? { type: 'task', taskId: task.id } : null;
+  if (!state.focusTaskOpenDrawer) state.ctx.closeDrawers();
+  state.jobEditorOpen = false;
+  state.historyOpen = false;
   state.focusTaskOpenDrawer = false;
   return true;
 }
@@ -3382,7 +3416,7 @@ function closeDetailDrawer(state) {
   if (wasWebStack && state.model) renderMain(state);
 }
 
-function taskDrawer(task, state) {
+function taskDrawer(task, state, { editorOnly = false } = {}) {
   const t = labels[state.lang];
   const steps = taskSteps(task, state);
   const selectedTaskStepIndex = clampMetric(state.selectedTaskStepIndex || 0, 0, Math.max(steps.length - 1, 0));
@@ -3421,6 +3455,8 @@ function taskDrawer(task, state) {
       ${taskLiveStatusMarkup(task, state)}
       ${taskControlsMarkup(task, state)}
     </section>
+    <details class="ctox-drawer-edit-fold" ${editorOnly ? 'open' : ''}>
+    <summary>${escapeHtml(t.editTask)}</summary>
     <form class="ctox-card ctox-task-edit" data-ctox-task-edit>
       <header>
         <div class="ctox-task-edit-heading">
@@ -3454,6 +3490,7 @@ function taskDrawer(task, state) {
         <small data-ctox-task-action-status></small>
       </footer>
     </form>
+    </details>
     ${showSummary ? `
       <section class="ctox-card">
         <header>${escapeHtml(t.summary)}</header>
@@ -3491,6 +3528,14 @@ function taskDrawer(task, state) {
   body.querySelector('[data-ctox-task-edit]')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     await saveCtoxTaskFromDrawer(state, task, event.currentTarget);
+  });
+  if (editorOnly) {
+    for (const child of [...body.children]) {
+      if (!child.matches('.ctox-drawer-edit-fold, .ctox-task-status-strip')) child.remove();
+    }
+  }
+  body.querySelector('[data-ctox-task-edit]')?.addEventListener('input', (event) => {
+    event.currentTarget.dataset.dirty = 'true';
   });
   body.querySelector('[data-ctox-task-delete]')?.addEventListener('click', async () => {
     await deleteCtoxTaskFromDrawer(state, task, body);
@@ -3613,6 +3658,7 @@ async function saveCtoxTaskFromDrawer(state, task, form) {
       commandPath: 'ctox_task_update',
     });
     applyTaskMutationToModel(state, task.id, payload);
+    delete form.dataset.dirty;
     if (status) status.textContent = t.taskSaved;
     render(state);
     syncDetailDrawer(state);
@@ -4828,6 +4874,7 @@ function syncIsConnected(state) {
 function mainIsBusy(state) {
   if (state.mainInteracting) return true;
   const main = state.ctx?.host?.querySelector?.('[data-ctox-main]');
+  if (main?.querySelector('[data-job-panel] [data-ctox-task-edit]')?.dataset.dirty === 'true') return true;
   const active = typeof document !== 'undefined' ? document.activeElement : null;
   if (!main || !active || !main.contains(active)) return false;
   return ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName);
