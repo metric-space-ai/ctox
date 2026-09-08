@@ -22,9 +22,9 @@ use super::store::{
     record_business_module_lifecycle_event, record_command, record_report_command,
     recoverable_background_control_claim_authorization, run_channel_command,
     rxdb_authenticated_session, rxdb_command_session, rxdb_verified_identity_email,
-    stored_rxdb_business_command_outcome, upsert_rxdb_collection_record,
-    write_rxdb_failed_control_command_outcome, BusinessCommand, BusinessOsReportMutation,
-    ChannelCommandRequest, CommandOrigin, APPSEC_MODULE_ID,
+    stored_rxdb_business_command_outcome, write_rxdb_failed_control_command_outcome,
+    BusinessCommand, BusinessOsReportMutation, ChannelCommandRequest, CommandOrigin,
+    RxdbProjectionWriterCache, APPSEC_MODULE_ID,
 };
 use super::store_appsec_commands::handle_appsec_business_command;
 use super::store_ats_commands::{handle_ats_active_command, handle_ats_mutating_command};
@@ -1981,8 +1981,11 @@ fn write_rxdb_control_command_state(
         attach_command_timing_to_result(&mut result);
         projection["result"] = result.clone();
     }
+    // Both writes belong to this command. Retain its writer until canonical
+    // completion instead of reopening and inspecting the entire RxDB schema.
+    let mut projection_writers = RxdbProjectionWriterCache::new(root);
     let projection_started = command_timing_probe_requested(command).then(std::time::Instant::now);
-    upsert_rxdb_collection_record(root, "business_commands", command_id, now, projection)?;
+    projection_writers.upsert("business_commands", command_id, now, projection)?;
     if let Some(started) = projection_started {
         let sample = serde_json::json!({
             "command_id": command_id,
@@ -2007,6 +2010,7 @@ fn write_rxdb_control_command_state(
                         .and_then(Value::as_str)
                 })
                 .flatten(),
+            &mut projection_writers,
         )?;
     }
     Ok(serde_json::json!({
@@ -2033,6 +2037,7 @@ pub(super) fn complete_and_project_business_control_command(
     terminal_status: &str,
     result: &Value,
     error_message: Option<&str>,
+    projection_writers: &mut RxdbProjectionWriterCache,
 ) -> anyhow::Result<()> {
     let completion_started = COMMAND_TIMING_PROBE
         .with(|slot| slot.borrow().is_some())
@@ -2075,13 +2080,7 @@ pub(super) fn complete_and_project_business_control_command(
         .get("updated_at_ms")
         .and_then(Value::as_i64)
         .unwrap_or_else(|| now_ms() as i64);
-    upsert_rxdb_collection_record(
-        root,
-        "business_commands",
-        command_id,
-        updated_at_ms,
-        canonical,
-    )?;
+    projection_writers.upsert("business_commands", command_id, updated_at_ms, canonical)?;
     if let Some((((started, core_ms), read_ms), local_ms)) = completion_started
         .zip(core_completed_ms)
         .zip(canonical_read_ms)
@@ -3027,6 +3026,11 @@ mod tests {
     #[test]
     fn command_timing_probe_writes_ordered_native_marks() -> anyhow::Result<()> {
         let root = tempdir()?;
+        let rxdb = create_repair_rxdb_tables(root.path())?;
+        super::super::store::reset_rxdb_collection_writer_open_count(
+            root.path(),
+            "business_commands",
+        );
         let command_id = "cmd_timing_probe_on";
         let command = BusinessCommand {
             origin: CommandOrigin::TrustedLocal,
@@ -3067,6 +3071,63 @@ mod tests {
         assert!(committed >= completed);
         assert!(timing.get("capability_token").is_none());
         assert!(timing.get("payload").is_none());
+        assert_eq!(
+            super::super::store::rxdb_collection_writer_open_count(
+                root.path(),
+                "business_commands"
+            ),
+            1,
+            "one command must retain its projection writer through canonical completion",
+        );
+        let persisted: String = rxdb.query_row(
+            "SELECT data FROM ctox_business_os__business_commands__v1 WHERE id = ?1",
+            [command_id],
+            |row| row.get(0),
+        )?;
+        let persisted: Value = serde_json::from_str(&persisted)?;
+        assert_eq!(persisted["execution_phase"], "terminal");
+        assert_eq!(persisted["terminal_status"], "completed");
+        Ok(())
+    }
+
+    #[test]
+    fn control_completion_without_queue_link_does_not_open_queue_projections() -> anyhow::Result<()>
+    {
+        let root = tempdir()?;
+        drop(open_store(root.path())?); // Register the real projection hooks.
+        let command_id = "cmd_core_only_completion";
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some(command_id.into()),
+            module: "ctox".into(),
+            command_type: "ctox.provider_subscription.status".into(),
+            record_id: None,
+            payload: serde_json::json!({}),
+            client_context: serde_json::json!({}),
+        };
+        channels::claim_business_control_command(
+            root.path(),
+            business_command_core_claim(command_id, &command)?,
+        )?;
+        let projection_path = rxdb_store_path(root.path());
+        std::fs::create_dir_all(projection_path.parent().unwrap())?;
+        std::fs::write(&projection_path, b"unavailable queue projection database")?;
+        channels::complete_business_control_command(
+            root.path(),
+            command_id,
+            "completed",
+            &serde_json::json!({"ok": true}),
+            None,
+        )?;
+        let canonical = channels::business_command_projection(root.path(), command_id)?;
+        assert_eq!(canonical["terminal_status"], "completed");
+        // Completion stays durable/idempotent even when unrelated queue
+        // projection storage cannot be opened. Delivery still has its outbox.
+        let replay = channels::claim_business_control_command(
+            root.path(),
+            business_command_core_claim(command_id, &command)?,
+        )?;
+        assert_eq!(replay.disposition, "terminal");
         Ok(())
     }
 }

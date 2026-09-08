@@ -1224,6 +1224,12 @@ a visible terminal status alone does not establish the canonical completion
 barrier. The full-host artifact retains those logs. These
 subphase diagnostics never change the seven marks or the total latency budget,
 and contain no token, identity claims or command payload.
+The command state writer retains one command-scoped RxDB projection writer
+through canonical completion. Core control completion attaches queue projection
+stores only after its transaction finds a linked task; unrelated control
+commands do not open them. The linked-task lookup, queue settlement and core
+completion remain in the same transaction. The full-host job runs the command
+plane and command transaction regressions before the unchanged browser budget.
 The same built binary also runs the existing 21-collection reload fixture,
 including retained IndexedDB, offline revision/tombstone changes, native
 restart, competing commands and paged demand reads. Its three 60-second

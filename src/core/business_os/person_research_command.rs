@@ -118,6 +118,7 @@ pub(crate) fn recover_once(root: &Path) -> anyhow::Result<usize> {
             &candidate.terminal_status,
             &candidate.result,
             candidate.error_message.as_deref(),
+            &mut store::RxdbProjectionWriterCache::new(root),
         )?;
         let mut recovered_result = candidate.result.clone();
         let (lead_status, lead_error) = if candidate.terminal_status == "completed" {

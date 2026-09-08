@@ -794,7 +794,6 @@ pub(crate) fn complete_business_control_command(
     );
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
-    attach_queue_projection_store(root, &conn)?;
     let tx = conn.transaction()?;
     let (phase, version, command_type) = tx.query_row(
         "SELECT execution_phase, projection_version, command_type
@@ -843,6 +842,10 @@ pub(crate) fn complete_business_control_command(
         )
         .optional()?
     {
+        // Only a linked queue task needs the attached projection stores.
+        // Keep this decision under the same transaction as the link lookup
+        // and queue settlement; unrelated control commands stay core-only.
+        attach_queue_projection_store(root, &tx)?;
         linked_task_id = Some(task_id.clone());
         let current_route =
             canonical_queue_route_status(&current_queue_route_status(&tx, &task_id)?)?;

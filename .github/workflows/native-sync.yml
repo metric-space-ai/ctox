@@ -185,6 +185,15 @@ jobs:
           cargo run --locked --manifest-path src/core/sync/Cargo.toml --features webrtc --example host_cli_acceptance -- \
             "$CARGO_TARGET_DIR/debug/ctox" "$RUNNER_TEMP/ctox-host-fixtures" \
             | tee "$RUNNER_TEMP/ctox-host-proof/acceptance.json"
+      - name: Command completion and queue transaction regressions
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked --bin ctox business_os::command_plane::tests -- --test-threads=2 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/command-completion-tests.log"
+          cargo test --locked --bin ctox -- mission::channels::tests::business_command mission::channels::tests::business_control --test-threads=2 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/command-transaction-tests.log"
       - name: Measure warm Browser-WebRTC-CTOX command roundtrips
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         timeout-minutes: 10

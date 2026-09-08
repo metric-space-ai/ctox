@@ -1,11 +1,54 @@
 # Native transport validation parity — 2026-09-08
 
-Status: native Linux/macOS and four-host control acceptance passed at
-`0f02369137449fb4d7e9e6a3fe2ae1609c366f39` in
-[run 34222083233](https://github.com/metric-space-ai/ctox/actions/runs/34222083233).
-This is not product acceptance or a tenant deployment. The new browser-suite
-CI coverage and bundle-guard correction below still require their own complete
-run. Earlier sections retain the chronological evidence and failed attempts.
+Status: **production acceptance remains incomplete; PR #69 is a draft**.
+At source `d7eea14a213bf1bc66ca38f6e70fd378a26d4f99`,
+[run 34240025961](https://github.com/metric-space-ai/ctox/actions/runs/34240025961)
+passes both native platforms and all 122 JavaScript/browser checks with no
+failures or skips. Its full-host run is complete: four-host and 21-collection
+reload correctness pass, but the 30-command budget fails at p50 447 ms and
+p95 596.70 ms. Reloads take 34.990 / 41.913 / 20.891 seconds. The exact built
+merge is `1085bde76d8fb5d10ac5679f69f83c54c9313e3f`; binary SHA256 is
+`660834b688ae518fd76d9f304b2cecedc7c402061f7a050d14d1b6f1a6935ce6`.
+
+The new measurements identify median initial RxDB projection 51.846 ms,
+canonical core completion 68.714 ms, canonical read 5.239 ms, local projection
+5.513 ms and final RxDB projection 66.545 ms. The next correction retains one
+command-scoped projection writer for both RxDB writes and attaches queue
+projection stores only when the same transaction finds a linked queue task.
+It preserves core claim/idempotency, outbox and projection ordering. Added
+regressions require the persisted canonical terminal document with one writer
+open, and core completion without a queue link despite unavailable queue
+projection storage. Runtime verification and the unchanged performance gate
+for this correction remain pending; these are not measured speedup claims.
+
+The preceding complete full-host run,
+[34237292653](https://github.com/metric-space-ai/ctox/actions/runs/34237292653)
+at source `5eeffaa40ad6147dd14c46f47c0282a5d2f158da`, passes four real CTOX
+hosts and all 21 browser collections across three reloads. The warm command
+budget **fails**: 30 actual samples, p50 389 ms, p95 509.35 ms; required p50
+is strictly below 300 ms. Reloads take 29.575 / 30.097 / 37.061 seconds,
+retain revision 23, deliver the deletion transition from 36 to 19 live leads,
+and preserve 11,130,431 source bytes across native restart. These reload
+correctness deadlines do not establish critical-boot p95 below five seconds.
+
+The native subphase medians are authentication 6.582 ms, identity stamping
+2.996 ms, blocking-pool wait 0.058 ms and full store execution 248.041 ms.
+The store can keep working after the browser observes a terminal projection;
+these medians are not additive browser stages. The current source separately
+measures initial projection and canonical completion/read/projection to locate
+that serial tail without relaxing the budget or bypassing authorization.
+
+Browser lifecycle acceptance is also missing: the existing multi-tab browser
+test exercises the coordinator and BroadcastChannel handover, not an open
+IndexedDB database or shell recovery; the version-floor guard inspects source.
+A read-only Welsch observation on 2026-09-08 shows repeated closed-IDB hydrate
+failures in shell 0.1.46-beta.29. It is not a reproduction of the close trigger.
+Current storage emits a versionchange event when retiring a connection, but
+no consumer of that event was found. A controlled lifecycle reproduction must
+establish recovery and journal preservation before this gap is accepted.
+
+No tenant deployment is performed. The sections below retain historical
+results and failed attempts; use this status for the current acceptance scope.
 
 ## Current browser verification correction
 
