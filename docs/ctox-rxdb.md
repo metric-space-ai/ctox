@@ -136,6 +136,17 @@ start without a WebRTC-capable sync contract — `createSyncRuntime` throws
 
 **Any HTTP fallback for these records is a regression, not a feature.**
 
+Native policy callbacks also preserve the connection boundary. The transport
+captures the current peer generation and credential under its lifecycle lock,
+evaluates the application policy without holding that shared lock, then
+rechecks generation and credential before returning the result. A retired
+connection or changed token receives a denied result (including empty field
+visibility and a rejecting document filter). Slow SQLite-backed authorization
+must not prevent another peer's credential/lifecycle update. The native
+regression holds each of the seven policy hooks across unrelated-peer,
+same-peer token and same-peer generation changes; the full browser/native
+gates remain necessary to establish end-to-end behavior and performance.
+
 The shell readiness mapping applies the same rule. Obsolete
 `httpBridgeStatus`/`httpBridgePulledAt` fields cannot establish initial
 replication, streaming readiness or an advertised checkpoint epoch. Their
@@ -1331,7 +1342,7 @@ claims from the actual capability responses. These payloads are explicitly
 unverified diagnostic claims; tokens, signatures, email and device key material
 are excluded. Response-body reads are bounded and the diagnostic creates no
 new authorization request or grant. This tests managed bearer identity,
-not password-login/logout acceptance. Its separate actual warm-command fixture has
+not password-login/logout acceptance. The earlier a6fd70c06 warm-command fixture has
 30 complete samples with p50 369.5 ms and p95 525.95 ms, still failing the
 300 ms gate. All 21 collections complete in 34.951 / 42.754 / 17.497 s
 across reload/restart; this does not establish critical-boot p95 below 5 s.
