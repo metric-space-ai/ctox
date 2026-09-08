@@ -3999,6 +3999,65 @@ var ctoxIndexedDbStorageTestInternals = {
   storedRecordForWrite
 };
 
+// src/apps/business-os/rxdb/src/inbound-request-queue.mjs
+var InboundRequestQueue = class {
+  constructor({ maxCount, maxBytes, onError }) {
+    this.maxCount = maxCount;
+    this.maxBytes = maxBytes;
+    this.onError = onError;
+    this.count = 0;
+    this.bytes = 0;
+    this.owners = /* @__PURE__ */ new Map();
+  }
+  enqueue(owner, bytes, run) {
+    if (!owner || !Number.isFinite(bytes) || bytes < 0 || this.count >= this.maxCount || this.bytes + bytes > this.maxBytes) return false;
+    let queue = this.owners.get(owner);
+    if (!queue) {
+      queue = { owner, pending: [], active: false, cancelled: false, abort: new AbortController() };
+      this.owners.set(owner, queue);
+    }
+    if (queue.cancelled) return false;
+    queue.pending.push({ bytes, run });
+    this.count++;
+    this.bytes += bytes;
+    if (!queue.active) {
+      queue.active = true;
+      void this.drain(queue);
+    }
+    return true;
+  }
+  async drain(queue) {
+    while (!queue.cancelled && queue.pending.length) {
+      const entry = queue.pending.shift();
+      try {
+        await entry.run(queue.abort.signal);
+      } catch (error) {
+        if (!queue.cancelled) {
+          try {
+            this.onError?.(error);
+          } catch {
+          }
+        }
+      } finally {
+        this.count--;
+        this.bytes -= entry.bytes;
+      }
+    }
+    queue.active = false;
+    if (this.owners.get(queue.owner) === queue) this.owners.delete(queue.owner);
+  }
+  cancel(owner) {
+    const queue = this.owners.get(owner);
+    if (!queue) return;
+    queue.cancelled = true;
+    for (const entry of queue.pending.splice(0)) {
+      this.count--;
+      this.bytes -= entry.bytes;
+    }
+    queue.abort.abort();
+  }
+};
+
 // src/apps/business-os/rxdb/src/frame-contract.generated.mjs
 var CTOX_FRAME_PROTOCOL = "ctox-rxdb-frame-v1";
 var MAX_INLINE_FRAME_BYTES = 14336;
@@ -4025,6 +4084,7 @@ var FRAME_ACK_TIMEOUT_MS = 3e4;
 var STALLED_INCOMING_TRANSFER_TIMEOUT_MS = FRAME_ACK_TIMEOUT_MS * 3;
 var MAX_INCOMING_FRAME_TRANSFERS = 8;
 var MAX_INCOMING_FRAME_BUFFERED_BYTES = MAX_TRANSFER_BYTES * 4;
+var MAX_INBOUND_REQUESTS = 32;
 var FRAME_RESUME_TIMEOUT_MS = 1e3;
 var COMPLETED_FRAME_ACK_TTL_MS = 6e4;
 var RTC_HANDSHAKE_TIMEOUT_MS = 6e4;
@@ -4117,6 +4177,11 @@ var CtoxWebRtcNativePeer = class {
     this.socket = null;
     this.localSignalingPeerId = "";
     this.connections = /* @__PURE__ */ new Map();
+    this.inboundRequests = new InboundRequestQueue({
+      maxCount: MAX_INBOUND_REQUESTS,
+      maxBytes: MAX_INCOMING_FRAME_BUFFERED_BYTES,
+      onError: (error) => this.events.emit("error", serializeFrameError(error, "inbound-request"))
+    });
     this.auxChannelRegistrations = /* @__PURE__ */ new Map();
     this.peerMetadata = /* @__PURE__ */ new Map();
     this.pending = /* @__PURE__ */ new Map();
@@ -5068,10 +5133,14 @@ var CtoxWebRtcNativePeer = class {
       this.attachAuxChannel(connection, channel);
       return;
     }
+    this.inboundRequests.cancel(connection.inboundRequestOwner);
+    connection.inboundRequestOwner = {};
     connection.channel = channel;
     connection.inboundFrameGeneration = Number(connection.inboundFrameGeneration || 0) + 1;
     connection.inboundFrameChain = Promise.resolve();
+    const isCurrentChannel = () => !this.closed && this.connections.get(connection.remotePeerId) === connection && connection.channel === channel;
     channel.onopen = () => {
+      if (!isCurrentChannel()) return;
       if (connection.handshakeTimer) {
         clearTimeout(connection.handshakeTimer);
         connection.handshakeTimer = null;
@@ -5089,11 +5158,13 @@ var CtoxWebRtcNativePeer = class {
       this.enqueueInboundDataChannelFrame(connection, channel, payload);
     };
     channel.onerror = () => {
+      if (!isCurrentChannel()) return;
       connection.lastError = { code: "ctox_data_channel_error", peerId: connection.remotePeerId };
       this.recordConnectionEvent(connection, "datachannel-error", { readyState: channel.readyState || "" });
       this.events.emit("error", connection.lastError);
     };
     channel.onclose = () => {
+      if (!isCurrentChannel()) return;
       this.recordConnectionEvent(connection, "datachannel-close", { readyState: channel.readyState || "closed" });
       this.removeConnection(connection.remotePeerId, "channel-close");
     };
@@ -5156,23 +5227,36 @@ var CtoxWebRtcNativePeer = class {
       return;
     }
     if (payload?.id && payload.method) {
+      this.enqueueInboundRequest(peerId, payload);
+    }
+  }
+  enqueueInboundRequest(peerId, payload) {
+    const connection = this.connections.get(peerId);
+    if (!connection || this.closed) return;
+    const owner = connection.inboundRequestOwner ||= {};
+    const isCurrent = () => !this.closed && this.connections.get(peerId) === connection && connection.inboundRequestOwner === owner;
+    const respond = (result, error) => {
+      if (!isCurrent()) return;
+      const response = { id: payload.id, result, error };
+      if (payload.collection) response.collection = payload.collection;
+      this.send(peerId, response);
+    };
+    const admitted = this.inboundRequests.enqueue(owner, encodedSize(JSON.stringify(payload)), async (signal) => {
+      if (!isCurrent() || signal.aborted) return;
       try {
-        const result = await this.handleRequest(
-          peerId,
-          payload.method,
-          payload.params || [],
-          payload.collection || null
-        );
-        const response = { id: payload.id, result, error: null };
-        if (payload.collection) response.collection = payload.collection;
-        this.send(peerId, response);
+        const result = await this.handleRequest(peerId, payload.method, payload.params || [], payload.collection || null, signal);
+        respond(result, null);
       } catch (error) {
+        if (!isCurrent() || signal.aborted) return;
         const normalized = serializeFrameError(error, payload.method);
         this.events.emit("error", normalized);
-        const response = { id: payload.id, result: null, error: normalized };
-        if (payload.collection) response.collection = payload.collection;
-        this.send(peerId, response);
+        respond(null, normalized);
       }
+    });
+    if (!admitted) {
+      const error = { code: "ctox_webrtc_inbound_request_budget_exceeded", method: payload.method, retryable: true };
+      this.events.emit("error", error);
+      respond(null, error);
     }
   }
   async handleTransportFrame(peerId, payload) {
@@ -5416,17 +5500,17 @@ var CtoxWebRtcNativePeer = class {
       });
     }
   }
-  async handleRequest(peerId, method, params, collection = null) {
+  async handleRequest(peerId, method, params, collection = null, signal = null) {
     this.recordObservedRequest(peerId, method);
     if (method === "token") {
       return this.options.storageToken;
     }
     if (method === "ctoxProtocol") {
-      return this.protocolPayload(peerId, params, collection);
+      return this.protocolPayload(peerId, params, collection, signal);
     }
     const handler = this.options.requestHandlers?.[method];
     if (typeof handler === "function") {
-      return handler({ peerId, params, collection, peer: this });
+      return handler({ peerId, params, collection, peer: this, signal });
     }
     return {
       code: "ctox_unknown_webrtc_method",
@@ -5466,9 +5550,9 @@ var CtoxWebRtcNativePeer = class {
       this.requestWaiters.set(key, waiters);
     });
   }
-  async protocolPayload(peerId, params = [], collection = null) {
+  async protocolPayload(peerId, params = [], collection = null, signal = null) {
     if (typeof this.options.protocolPayload === "function") {
-      return this.options.protocolPayload({ peerId, params, collection, peer: this });
+      return this.options.protocolPayload({ peerId, params, collection, peer: this, signal });
     }
     return buildProtocolPayload({
       role: this.options.role,
@@ -5546,6 +5630,7 @@ var CtoxWebRtcNativePeer = class {
     }
     connection.auxChannels.set(label, channel);
     channel.onmessage = (event) => {
+      if (this.closed || this.connections.get(connection.remotePeerId) !== connection || connection.auxChannels?.get(label) !== channel) return;
       this.handleAuxiliaryChannelMessage(connection, label, event.data).catch((error) => {
         this.events.emit("error", { code: "ctox_aux_message_failed", label, error });
       });
@@ -5637,6 +5722,8 @@ var CtoxWebRtcNativePeer = class {
     const connection = this.connections.get(peerId);
     if (!connection) return;
     this.connections.delete(peerId);
+    this.inboundRequests.cancel(connection.inboundRequestOwner);
+    connection.inboundRequestOwner = null;
     connection.inboundFrameGeneration = Number(connection.inboundFrameGeneration || 0) + 1;
     connection.inboundFrameChain = null;
     if (connection.channel) connection.channel.onmessage = null;
@@ -6386,6 +6473,7 @@ var webrtcNativeTestInternals = Object.freeze({
   classifySendPriority,
   MAX_SERIALIZED_FRAME_BYTES,
   MAX_INCOMING_FRAME_TRANSFERS,
+  MAX_INBOUND_REQUESTS,
   MAX_INCOMING_FRAME_BUFFERED_BYTES
 });
 function jsonEscapedCharLen(ch) {

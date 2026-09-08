@@ -217,6 +217,24 @@ cannot revive a removed request. The existing 60-second peer-readiness wait
 remains bounded. Already dispatched requests retain their existing RPC,
 collector and retry behavior.
 
+Ordered transport ingestion must not await application/RPC handlers. Incoming
+RPCs, including reassembled requests, enter a separate queue that preserves
+request order for each connection generation. ACKs, correlated responses and
+transfer frames continue through the original ordered frame path. Admission
+counts running and queued handlers across the peer object: at most 32 requests
+and 32 MiB of serialized request envelopes. Excess requests receive a correlated,
+retryable budget error instead of creating an unbounded detached task.
+
+Replacing or removing a connection cancels its queued requests, signals its
+running adapter through AbortSignal, and suppresses old-generation replies and
+errors. An adapter that ignores cancellation retains its reservation until it
+actually settles; cancellation does not falsely report released capacity or
+undo an already performed application effect. These are transport lifecycle
+guarantees, not coding-executor fencing or proof of exactly-once external actions.
+The regression in `inbound-request-progress-smoke.mjs` covers inline/framed RPCs,
+independent ACK/reply/transfer progress, request ordering, capacity and generation
+replacement alongside the unchanged frame-ordering guards.
+
 `query-admission-readiness-smoke.mjs` exercises the built bundle with a simulated
 peer router: blocked handshakes beside a healthy peer, a full waiting queue,
 identical IDs on different transports, abort-before-authentication and loss of
