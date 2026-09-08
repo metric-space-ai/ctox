@@ -102,6 +102,7 @@ const os = require('os');
 const zlib = require('zlib');
 const { spawn, spawnSync } = require('child_process');
 const { forwardNativeLogLines } = require('./native_log_lines.js');
+const { startNativeCpuProfile } = require('./native_cpu_profile.js');
 const { runThreadsRightClickPeers } = require('./threads_rightclick_peers.js');
 const {
   businessOsProductionSmokeModes,
@@ -4154,6 +4155,12 @@ function startCtoxServer() {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
   }), 'ctox-business-os');
+  if (smokeProcessLifecyclePath) {
+    startNativeCpuProfile(child, {
+      outputPath: smokeProcessLifecyclePath.replace(/\.json$/, '') + '.native-cpu-' + child.pid + '.jsonl',
+      phase: () => smokeProcessLifecycle.startupPhase,
+    });
+  }
   let resolveListening;
   let rejectListening;
   let sawListening = false;

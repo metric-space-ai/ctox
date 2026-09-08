@@ -205,6 +205,22 @@ latency. This proves neither coding-harness execution nor exactly-once external
 effects. The existing Office restart scenarios are separate app acceptance;
 their recovery behavior is not used as evidence for this stricter Sync gate.
 
+When the smoke process ledger is enabled, Linux full-host scenarios also retain
+one `*.native-cpu-<pid>.jsonl` file per owned native process. The observer samples
+process and thread CPU once a second, recording monotonic interval lengths,
+process/thread start identities, lifecycle phase and its own elapsed overhead.
+CPU percent uses one core as 100%; the process total can exceed 100%. It does not
+include child processes, stacks or event-loss measurements. Newly seen threads
+have no fabricated interval delta. Vanished/unreadable threads, coverage beyond
+512 threads, the 900-sample limit and the final unsampled gap are explicit.
+The observer never discovers or signals unrelated processes and does not affect
+the existing command/boot budgets. Its read/write overhead is part of the run
+and must be considered when comparing results. Unsupported platforms or missing
+clock-tick information are unavailable, not zero CPU. Field meanings and units
+follow [Linux proc_pid_stat(5)](https://www.man7.org/linux/man-pages/man5/proc_pid_stat.5.html).
+The sampler has a live Linux child-process check in the canonical JS suite;
+a retained CPU profile still requires analysis and is not tenant acceptance.
+
 Browser demand-query admission also separates a pending handshake from an
 active native query stream. Unauthenticated/unavailable collection transports
 remain in the existing bounded queue (128 requests, 1 MiB of queued envelopes).
