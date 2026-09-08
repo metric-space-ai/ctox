@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { CREW_CREATURE_BASE_CSS } from './crew-renderer.js';
 
 import {
   __businessChatTestInternals,
@@ -9,7 +10,10 @@ import {
   renderChatAgentScopeHtml,
 } from './business-chat.js';
 
-const businessChatSource = readFileSync(new URL('./business-chat.js', import.meta.url), 'utf8');
+const rawBusinessChatSource = readFileSync(new URL('./business-chat.js', import.meta.url), 'utf8');
+assert.ok(rawBusinessChatSource.includes('${CREW_CREATURE_BASE_CSS}'), 'chat stylesheet must consume the shared creature rules');
+// Keep the existing motion guards on the stylesheet actually inserted by the chat.
+const businessChatSource = rawBusinessChatSource.replace('${CREW_CREATURE_BASE_CSS}', CREW_CREATURE_BASE_CSS);
 
 test('saved crew status messages use plain language without rewriting user instructions', () => {
   const previousDocument = globalThis.document;
