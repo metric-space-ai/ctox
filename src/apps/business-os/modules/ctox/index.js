@@ -1,6 +1,6 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260909-shell-v2-crew-compact-v356';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260909-shell-v2-crew-compact-v357';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
 
@@ -20,7 +20,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260909-shell-v2-crew-compact-v356';
+const CTOX_STYLE_BUILD = '20260909-shell-v2-crew-compact-v357';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -2325,6 +2325,9 @@ function taskStatusSteps(task, state) {
 function renderMain(state) {
   const t = labels[state.lang];
   const model = state.model;
+  // Locale readiness can arrive before the first data hydration. Keep the
+  // existing loading surface until the model is available.
+  if (!model) return;
   const timelineIndex = clampIndex(state.selectedStepIndex, model.timeline.length);
   const selectedTask = getSelectedTask(state);
   const taskStepView = selectedTask ? selectedTaskStepView(selectedTask, state) : null;
@@ -3536,7 +3539,7 @@ function taskDrawer(task, state, { editorOnly = false } = {}) {
         <label class="ctox-task-edit-field">
           <span class="ctox-field-label">${escapeHtml(t.priority)}</span>
           <select class="ctox-select" name="priority" ${canModifyCtoxApp(state) ? '' : 'disabled'}>
-            ${['urgent', 'high', 'normal', 'low'].map((priority) => `<option value="${priority}" ${String(task.priority || 'normal') === priority ? 'selected' : ''}>${escapeHtml(displayPriority(priority))}</option>`).join('')}
+            ${['urgent', 'high', 'normal', 'low'].map((priority) => `<option value="${priority}" ${String(task.priority || 'normal') === priority ? 'selected' : ''}>${escapeHtml(displayPriority(priority, state.lang))}</option>`).join('')}
           </select>
         </label>
       </div>
@@ -6631,9 +6634,11 @@ function displayPathLike(value) {
   return displayWorkSource(value);
 }
 
-function displayPriority(priority) {
-  const labelsByPriority = { urgent: 'Urgent', high: 'High', normal: 'Normal', low: 'Low' };
-  return labelsByPriority[priority] || displayStatus(priority, 'en');
+function displayPriority(priority, lang = 'de') {
+  const labelsByPriority = lang === 'en'
+    ? { urgent: 'Urgent', high: 'High', normal: 'Normal', low: 'Low' }
+    : { urgent: 'Dringend', high: 'Hoch', normal: 'Normal', low: 'Niedrig' };
+  return labelsByPriority[priority] || displayStatus(priority, lang);
 }
 
 const HOLD_REASON_KEYS = {

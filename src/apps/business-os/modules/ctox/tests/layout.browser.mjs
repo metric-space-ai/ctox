@@ -31,6 +31,7 @@ const model=hooks.buildHarnessModel(data,{ok:false},'de');
 const task=model.tasks.find(task=>task.id==='layout-task');
 const state={ctx:{host},model,lang:'de',flow:{ok:false},selectedTaskId:task.id,selectedStepIndex:0,selectedTaskStepIndex:2,selectedNodeId:'',zoom:1,taskSearch:'',taskViewMode:'cards',taskPrimaryView:'all',taskSourceFilter:'all',taskPinFilter:'all',taskSort:'updated',taskSortDirection:'desc',pinnedTaskIds:new Set(),webStackPanelOpen:false,webStack:{loading:false,data:null,error:''},dataLoaded:true,dataError:'',runtimeStatus:'ready',flowViewport:{left:0,top:0}};
 host.querySelector('[data-ctox-left]').innerHTML=hooks.taskColumnMarkup(model.tasks,state);
+hooks.renderMain({...state,model:null}); // Locale notification before hydration must not throw.
 hooks.renderMain(state);
 state.ctx.session = { user: { role: 'admin' } };
 window.crewFixture = { state, hooks };
@@ -88,6 +89,7 @@ try {
       });
       assert.ok(gap <= 16, `Unused bottom reserve: ${gap}px`);
       await page.locator('[data-job-toggle]').click();
+      assert.deepEqual(await page.locator('[data-job-panel] select[name="priority"] option').allTextContents(), ['Dringend', 'Hoch', 'Normal', 'Niedrig']);
       await page.locator('[data-job-panel] input[name="title"]').fill('Ungespeicherter Entwurf');
       await page.evaluate(() => window.crewFixture.hooks.renderMain(window.crewFixture.state));
       assert.equal(await page.locator('[data-job-panel] input[name="title"]').inputValue(), 'Ungespeicherter Entwurf');
