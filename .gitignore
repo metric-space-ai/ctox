@@ -73,6 +73,7 @@ tmp_intersolar_*.js
 !/docs/dev/crew-cockpit-brief-pr1-pr2.md
 !/docs/dev/crew-cockpit-vision.md
 !/docs/dev/crew-cockpit-brief-pr2b.md
+!/docs/dev/upgrade-service-cutover.md
 !/docs/dev/beweise/
 /docs/dev/beweise/*
 !/docs/dev/beweise/refactoring-kampagne-baseline.md

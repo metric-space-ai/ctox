@@ -12,6 +12,10 @@ on:
       - 'src/core/service/service_auth_assist_tests.rs'
       - 'src/core/mission/channels/outbound_review.rs'
       - '.github/workflows/crew-liveness.yml'
+      - 'install.sh'
+      - 'src/core/install/**'
+      - 'src/core/service/lifecycle_timeouts.rs'
+      - 'tests/install_rebuild_cutover_smoke.sh'
   workflow_dispatch:
 
 permissions:
@@ -70,6 +74,14 @@ jobs:
             "$CREW_TEST_BINARY" "$filter" --test-threads=1 || failed=1
           done
           exit "$failed"
+      - name: Installer release cutover regressions
+        if: ${{ always() && steps.compile.outcome == 'success' }}
+        run: |
+          export CARGO_MANIFEST_DIR="$GITHUB_WORKSPACE"
+          export LD_LIBRARY_PATH="$CARGO_TARGET_DIR/debug/deps:$(rustc --print target-libdir)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          "$CREW_TEST_BINARY" install:: --test-threads=1
+          "$CREW_TEST_BINARY" lifecycle_timeouts:: --test-threads=1
+          bash tests/install_rebuild_cutover_smoke.sh
       - name: Clippy
         if: ${{ always() && steps.compile.outcome == 'success' }}
         run: cargo clippy --locked --bin ctox --tests
@@ -87,12 +99,13 @@ jobs:
           npm --prefix src/apps/business-os exec -- playwright install --with-deps chromium
           node src/apps/business-os/rxdb/tests/run-all.mjs --require-wire-daemon
       - name: Measure existing regression filters on campaign base
-        if: ${{ always() && steps.compile.outcome == 'success' && (github.head_ref == 'codex/crew-open-items' || github.head_ref == 'codex/auth-assist-recovery') }}
+        if: ${{ always() && steps.compile.outcome == 'success' && (github.head_ref == 'codex/crew-open-items' || github.head_ref == 'codex/auth-assist-recovery' || github.head_ref == 'codex/upgrade-service-cutover') }}
         run: |
           CREW_TEST_HEAD=$(git rev-parse HEAD)
           trap 'git checkout --detach "$CREW_TEST_HEAD"' EXIT
           CREW_BASE=8e6f132a82549be9235dd433fc9bd28d5ae868e6
           if [ "$GITHUB_HEAD_REF" = 'codex/auth-assist-recovery' ]; then CREW_BASE=b56cd3b781e36bd7eff04e2891d55b41015839fd; fi
+          if [ "$GITHUB_HEAD_REF" = 'codex/upgrade-service-cutover' ]; then CREW_BASE=365927a3ce666927d3b9173626f567673f6f98cb; fi
           git fetch --no-tags origin "$CREW_BASE"
           git checkout --detach "$CREW_BASE"
           cargo test --locked --bin ctox --no-run --message-format=json-render-diagnostics > "$RUNNER_TEMP/crew-base-tests.jsonl"
@@ -106,7 +119,7 @@ jobs:
           export CARGO_MANIFEST_DIR="$GITHUB_WORKSPACE"
           export LD_LIBRARY_PATH="$CARGO_TARGET_DIR/debug/deps:$(rustc --print target-libdir)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           failed=0
-          for filter in crew:: queued_prompt adapter_reconciliation business_os::harness_cockpit::chat::tests sync_ticket_state sync_knowledge_tables; do
+          for filter in install:: crew:: queued_prompt adapter_reconciliation business_os::harness_cockpit::chat::tests sync_ticket_state sync_knowledge_tables; do
             status=0
             "$CREW_BASE_TEST_BINARY" "$filter" --test-threads=1 || status=$?
             echo "Baseline $CREW_BASE: $filter exit=$status"
