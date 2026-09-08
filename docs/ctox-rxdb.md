@@ -1216,7 +1216,12 @@ emits `command_intake_sample` with the command ID and measured authentication
 and identity-stamping milliseconds. Both phases precede the existing
 `native_dispatch_entered` mark. `command_intake_queue_sample` separately measures
 blocking-pool queue wait and the store execution duration for the same command.
-The full-host artifact retains those logs; these
+The same opt-in probe also emits `command_initial_projection_sample` for the
+first RxDB write and `command_terminal_sample` for canonical completion,
+canonical read, local projection and final RxDB projection. These phases expose
+work that can continue after the browser observes the first terminal projection;
+a visible terminal status alone does not establish the canonical completion
+barrier. The full-host artifact retains those logs. These
 subphase diagnostics never change the seven marks or the total latency budget,
 and contain no token, identity claims or command payload.
 The same built binary also runs the existing 21-collection reload fixture,

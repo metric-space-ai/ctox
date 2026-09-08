@@ -1981,7 +1981,16 @@ fn write_rxdb_control_command_state(
         attach_command_timing_to_result(&mut result);
         projection["result"] = result.clone();
     }
+    let projection_started = command_timing_probe_requested(command).then(std::time::Instant::now);
     upsert_rxdb_collection_record(root, "business_commands", command_id, now, projection)?;
+    if let Some(started) = projection_started {
+        let sample = serde_json::json!({
+            "command_id": command_id,
+            "initial_rxdb_projection_ms": started.elapsed().as_secs_f64() * 1_000.0,
+        })
+        .to_string();
+        eprintln!("command_initial_projection_sample={sample}");
+    }
     // Readers treat the canonical terminal transition as a completion barrier.
     // Publish it only after the chat and all local/RxDB projections are durable.
     if let Some(terminal_status) = canonical_terminal_status {
@@ -2025,6 +2034,9 @@ pub(super) fn complete_and_project_business_control_command(
     result: &Value,
     error_message: Option<&str>,
 ) -> anyhow::Result<()> {
+    let completion_started = COMMAND_TIMING_PROBE
+        .with(|slot| slot.borrow().is_some())
+        .then(std::time::Instant::now);
     let mut delay_ms = 10_u64;
     for attempt in 0..6 {
         match channels::complete_business_control_command(
@@ -2051,8 +2063,14 @@ pub(super) fn complete_and_project_business_control_command(
     // The core transition is the completion barrier. Mirror its canonical
     // lifecycle document synchronously afterwards so a transient outbox lag
     // cannot leave readers with status=completed but terminal_status=none.
+    let core_completed_ms =
+        completion_started.map(|started| started.elapsed().as_secs_f64() * 1_000.0);
     let canonical = channels::business_command_projection(root, command_id)?;
+    let canonical_read_ms =
+        completion_started.map(|started| started.elapsed().as_secs_f64() * 1_000.0);
     persist_business_command_lifecycle_projection(root, &canonical)?;
+    let local_projected_ms =
+        completion_started.map(|started| started.elapsed().as_secs_f64() * 1_000.0);
     let updated_at_ms = canonical
         .get("updated_at_ms")
         .and_then(Value::as_i64)
@@ -2063,7 +2081,26 @@ pub(super) fn complete_and_project_business_control_command(
         command_id,
         updated_at_ms,
         canonical,
-    )
+    )?;
+    if let Some((((started, core_ms), read_ms), local_ms)) = completion_started
+        .zip(core_completed_ms)
+        .zip(canonical_read_ms)
+        .zip(local_projected_ms)
+    {
+        // A browser can observe the first RxDB projection while this serial
+        // intake is still completing the canonical claim. Measure that tail
+        // separately; never subtract it from the end-to-end command budget.
+        let sample = serde_json::json!({
+            "command_id": command_id,
+            "core_completion_ms": core_ms,
+            "canonical_read_ms": read_ms - core_ms,
+            "local_projection_ms": local_ms - read_ms,
+            "rxdb_projection_ms": started.elapsed().as_secs_f64() * 1_000.0 - local_ms,
+        })
+        .to_string();
+        eprintln!("command_terminal_sample={sample}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
