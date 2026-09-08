@@ -263,6 +263,17 @@ jobs:
             SMOKE_PROCESS_LIFECYCLE_PATH="$RUNNER_TEMP/ctox-host-proof/context-chat-processes.json" \
             node src/core/rxdb/tools/browser_rust_smoke.js \
             | tee "$RUNNER_TEMP/ctox-host-proof/context-chat-browser.log"
+      - name: Retain context failure and CPU evidence before later gates
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ctox-native-context-proof
+          path: |
+            ${{ runner.temp }}/ctox-host-proof/context-chat*
+            ${{ runner.temp }}/ctox-host-proof/threads-*
+            ${{ runner.temp }}/ctox-host-proof/source-revision.txt
+            ${{ runner.temp }}/ctox-host-proof/binary.sha256
+          if-no-files-found: error
       - name: Measure warm Browser-WebRTC-CTOX command roundtrips
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         timeout-minutes: 10

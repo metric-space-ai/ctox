@@ -221,6 +221,19 @@ follow [Linux proc_pid_stat(5)](https://www.man7.org/linux/man-pages/man5/proc_p
 The sampler has a live Linux child-process check in the canonical JS suite;
 a retained CPU profile still requires analysis and is not tenant acceptance.
 
+The authenticated two-profile context fixture persists the exact requester
+command and reviewer result status snapshots before their assertions, outside
+the CI error line. On failure it separately reads each profile's already
+published Sync diagnostics and the fixture-owned native peer status file,
+including that file's modification time. Capture has a three-second deadline
+per source and never queries records, repairs a collection or relaxes the
+original workflow/teardown gates. Missing, failed or oversized diagnostics are
+explicit unavailable records, not reconstructed or truncated snapshots
+(four-MiB limit per artifact). The native-sync workflow uploads these files,
+context CPU profiles and source/binary provenance as
+`ctox-native-context-proof` before later acceptance gates; the final full-host
+artifact still retains the complete evidence directory.
+
 Browser demand-query admission also separates a pending handshake from an
 active native query stream. Unauthenticated/unavailable collection transports
 remain in the existing bounded queue (128 requests, 1 MiB of queued envelopes).

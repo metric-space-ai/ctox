@@ -1,11 +1,46 @@
 # CTOX Sync offensive: reported defects and acceptance register
 
-Updated 2026-09-08. This register tracks the user's reported failures separately
+Updated 2026-09-09. This register tracks the user's reported failures separately
 from the six-stage architecture completion criteria. An implemented patch,
 unit test or component fixture does not close a production incident.
 No row below constitutes tenant acceptance. Office application implementation
 belongs to task `01a06c90-1100-7903-892d-667764f7eb2f`; shell, sync and shared
 command delivery defects remain in this offensive.
+
+## Latest full-host evidence
+
+PR69 source `e00ecbeb131808797aafb04fad5862a8ea17aa4c`, run
+`34285060254`, full-host job `102258602196`: **FAIL overall**.
+Tested merge `009267a54000876af83aefb698530658f0d2df68`; binary SHA256
+`92bd80e6a533879406acde754df849f4c771562c2cfbefefddb1616d2ee302f7`.
+
+- Strict native outage passes: one dispatch, no resubmission or collection
+  repair, queued receipt in 7418.1 ms. Native command v2/task v3 and browser
+  task counts each equal one, with both cross-references matching. The
+  preceding canonical-schema run34284051848 independently passed in6830.6ms.
+  Neither run executes a coding harness or closes the interrupted batch incident.
+- Warm30-command p50 389ms / p95 472.55ms remains above the300ms p50 limit.
+  Critical30-reload p95 3105.37ms passes the5000ms gate. Context reaches its
+  final command status assertion but fails collection health. Ask first paint
+  is91.5ms for one sample; it does not establish native acceptance.
+- Context native CPU averages149.13% of one core over346.115 measured seconds.
+  Four long-lived RxDB-peer threads dominate sustained work; all measured
+  threads named business-os-rxd total496.410s CPU, versus0.290s in
+  cockpit-project. No thread-limit omissions/read errors; observer cost~0.52%.
+  This does not reproduce the customer's hot cockpit thread or prove a specific
+  function as the CPU cause. Warm-command profiling includes startup and
+  averages342.58% of one core; it is not a warm-only CPU measurement.
+- The advanced-status error JSON was truncated in the original CI log.
+  The fixture now retains complete bounded status artifacts separately,
+  marks unavailable captures explicitly, and uploads context proof early.
+  Eleven driver-contract checks pass, including large snapshots and blocked
+  capture/teardown. Full native acceptance of this capture change is pending.
+- The legacy migration-version mode still assumes obsolete commandv1/taskv0
+  tables. Replacing constants alone would not prove preserved-data migration;
+  populated historical fixtures, inventory comparison and recovery remain open.
+
+The following historical rows remain incident records; the measurements above
+supersede their older fixture observations without closing tenant acceptance.
 
 ## Reported defects
 

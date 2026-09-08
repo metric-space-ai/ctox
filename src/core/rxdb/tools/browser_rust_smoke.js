@@ -7660,6 +7660,17 @@ function ensureCtoxSmokeBinary() {
         chromium, launchOptions: chromiumLaunchOptions(), runtimeRoot, smokeUrl,
         capabilities: threadsRightClickCapabilities, smokeMode, threadsScaleSeed, browserDiagnostics,
         evidenceDir: smokeProcessLifecyclePath ? path.dirname(smokeProcessLifecyclePath) : runtimeRoot,
+        readNativeSyncState: async () => {
+          const filename = path.join(runtimeRoot, 'runtime/business-os-rxdb-peer.status.json');
+          const stat = await fs.promises.stat(filename);
+          if (stat.size > 4 * 1024 * 1024) {
+            return { available: false, reason: 'native-status-size-limit', bytes: stat.size };
+          }
+          return {
+            available: true, file: path.basename(filename), fileMtimeMs: stat.mtimeMs,
+            status: JSON.parse(await fs.promises.readFile(filename, 'utf8')),
+          };
+        },
         readNativeAuthorizationState: () => JSON.parse(sqlite(`
           SELECT json_group_array(json_object(
             'userId',user_id,'role',role,'active',active,'epoch',capability_epoch))

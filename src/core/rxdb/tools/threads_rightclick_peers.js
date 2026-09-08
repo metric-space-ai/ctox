@@ -19,7 +19,8 @@ async function withDeadline(work, timeoutMs, message) {
 async function runThreadsRightClickPeers({
   chromium, launchOptions, runtimeRoot, smokeUrl, capabilities,
   smokeMode, threadsScaleSeed, browserDiagnostics, evidenceDir, readNativeAuthorizationState,
-  workflowTimeoutMs = 300000, closeTimeoutMs = 5000,
+  readNativeSyncState,
+  workflowTimeoutMs = 300000, closeTimeoutMs = 5000, diagnosticTimeoutMs = 3000,
 }) {
   const origin = new URL(smokeUrl).origin;
   const contexts = [];
@@ -37,6 +38,26 @@ async function runThreadsRightClickPeers({
   let workflowError = null;
   let workflowFinished = false;
   let workflowPhase = 'opening-profiles';
+  const persistDiagnostic = (name, value) => {
+    if (!evidenceDir) return;
+    fs.mkdirSync(evidenceDir, { recursive: true });
+    const serialized = JSON.stringify(value ?? { available: false, reason: 'not-available' }, null, 2);
+    // Never turn an oversized/truncated value into a purported valid snapshot.
+    const output = Buffer.byteLength(serialized) <= 4 * 1024 * 1024 ? serialized
+      : JSON.stringify({ available: false, reason: 'diagnostic-size-limit', bytes: Buffer.byteLength(serialized) });
+    fs.writeFileSync(path.join(evidenceDir, name + '.json'), output + '\n');
+  };
+  const captureFailureDiagnostic = async (name, capture) => {
+    let evidence;
+    try {
+      evidence = await withDeadline(Promise.resolve().then(capture), diagnosticTimeoutMs,
+        () => name + ' capture deadline exceeded');
+    } catch (error) {
+      evidence = { available: false, reason: 'capture-failed', error: String(error?.message || error).slice(0, 240) };
+    }
+    try { persistDiagnostic(name, { atMs: Date.now(), workflowPhase, evidence }); }
+    catch { console.error('threads_diagnostic_write_failed=' + name); }
+  };
   const persistAuthorizationEvidence = () => {
     if (!evidenceDir) return;
     fs.mkdirSync(evidenceDir, { recursive: true });
@@ -150,6 +171,12 @@ async function runThreadsRightClickPeers({
       workflowPhase = phase;
       snapshotAuthorization('workflow:' + phase);
     });
+    await requester.exposeFunction('__ctoxRecordThreadsStatus', (status) => {
+      if (!workflowFinished) persistDiagnostic('threads-requester-command-status', status);
+    });
+    await reviewer.exposeFunction('__ctoxRecordThreadsStatus', (status) => {
+      if (!workflowFinished) persistDiagnostic('threads-reviewer-result-status', status);
+    });
     workflowPhase = 'requester-start';
     snapshotAuthorization('workflow:' + workflowPhase);
     // Playwright evaluate has no timeout. A blocked module/dispatch promise must
@@ -166,11 +193,19 @@ async function runThreadsRightClickPeers({
     workflowFinished = true;
     await Promise.allSettled([...pendingCapabilityReads]);
     snapshotAuthorization('workflow-failed');
+    if (evidenceDir) {
+      await captureFailureDiagnostic('threads-native-failure', () => readNativeSyncState
+        ? readNativeSyncState() : { available: false, reason: 'reader-not-configured' });
+    }
     for (let index = 0; index < contexts.length; index += 1) {
       const pages = contexts[index].pages();
       const page = pages[pages.length - 1];
       if (!page || page.isClosed()) continue;
       const actor = index === 0 ? 'threads-requester' : 'threads-reviewer';
+      if (evidenceDir) {
+        await captureFailureDiagnostic(actor + '-failure-state',
+          () => page.evaluate(readCachedThreadFailureState));
+      }
       let screenshot = '';
       if (evidenceDir) {
         fs.mkdirSync(evidenceDir, { recursive: true });
@@ -196,6 +231,19 @@ async function runThreadsRightClickPeers({
       if (!workflowError) throw new AggregateError(closeErrors, 'threads browser profile cleanup failed');
     }
   }
+}
+
+function readCachedThreadFailureState() {
+  const state = globalThis.CTOX_BUSINESS_OS_APP || globalThis.ctoxBusinessOsSmoke?.state;
+  // Read already-published diagnostics only. No query, repair or new status
+  // snapshot may perturb the failed transport while collecting its evidence.
+  return {
+    capturedAtMs: Date.now(),
+    actorId: state?.session?.user?.id || null,
+    role: state?.session?.user?.role || null,
+    sync: globalThis.ctoxBusinessOsSyncDiagnostics || null,
+    available: Boolean(globalThis.ctoxBusinessOsSyncDiagnostics),
+  };
 }
 
 function summarizeCapability(token) {
@@ -583,8 +631,9 @@ async function runRequesterInBrowser({ smokeMode, threadsScaleSeed }) {
     includeCounts: false,
     requiredCollections: ['business_commands', 'business_users'],
   });
+  await globalThis.__ctoxRecordThreadsStatus(commandStatus);
   if (commandStatus?.version !== 'business-os-advanced-status-v1' || commandStatus.ok !== true) {
-    throw new Error(`threads right-click command status unhealthy: ${JSON.stringify(commandStatus)}`);
+    throw new Error('threads right-click command status unhealthy; see threads-requester-command-status.json');
   }
   await globalThis.__ctoxReportThreadsPhase('reviewer-approval');
   const { projections, rendered, approvalDecision, status, authenticatedReviewer } =
@@ -876,8 +925,9 @@ async function runReviewerInBrowser({
       'ctox_task_approval_requests',
     ],
   });
+  await globalThis.__ctoxRecordThreadsStatus(status);
   if (status?.version !== 'business-os-advanced-status-v1') {
-    throw new Error(`threads right-click UI smoke lost advanced status evidence: ${JSON.stringify(status)}`);
+    throw new Error('threads right-click UI smoke lost advanced status evidence; see threads-reviewer-result-status.json');
   }
   const requiredInitialSyncEntries = Array.isArray(status?.sync?.initialSync?.entries)
     ? status.sync.initialSync.entries

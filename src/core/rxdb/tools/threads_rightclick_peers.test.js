@@ -68,7 +68,8 @@ test('context target rejects missing, background, failed, minimized or hidden ap
 
 // Driver-contract tests only: actual shell/WebRTC behavior is tested by the
 // full native smoke mode. These guard credential routing and teardown.
-function driver({ wrongSecondActor = false, failReview = false, deliveredToken = null, hangRequester = false, hangClose = false } = {}) {
+function driver({ wrongSecondActor = false, failReview = false, deliveredToken = null, hangRequester = false, hangClose = false,
+  cachedSync = null, requesterStatus = null, reviewerStatus = null, hangDiagnostic = false } = {}) {
   const contexts = [];
   const chromium = {
     async launchPersistentContext(profile) {
@@ -100,13 +101,21 @@ function driver({ wrongSecondActor = false, failReview = false, deliveredToken =
           this.calls.push(fn.name);
           if (fn.name === 'runRequesterInBrowser') {
             await this.bindings.__ctoxReportThreadsPhase('open-threads-module');
+            if (requesterStatus) await this.bindings.__ctoxRecordThreadsStatus(requesterStatus);
             if (hangRequester) return new Promise(() => {});
             return this.bindings.__ctoxReviewThreadsApproval({ reviewerId: 'threads-reviewer' });
           }
           if (fn.name === 'runReviewerInBrowser') {
+            if (reviewerStatus) await this.bindings.__ctoxRecordThreadsStatus(reviewerStatus);
             if (failReview) throw new Error('native review failed');
             assert.equal(args.reviewerId, actor);
             return { approvalDecision: 'approved' };
+          }
+          if (fn.name === 'readCachedThreadFailureState') {
+            if (hangDiagnostic) return new Promise(() => {});
+            return vm.runInNewContext('(' + fn.toString() + ')()', {
+              CTOX_BUSINESS_OS_APP: state, ctoxBusinessOsSyncDiagnostics: cachedSync, Date,
+            });
           }
           return { actorId: state.session.user.id, role, instanceId: 'same-instance' };
         },
@@ -146,6 +155,8 @@ async function run(options, assertions) {
     browserDiagnostics: { warnings: 0, errors: 0, requestFailures: 0, assetResponseErrors: 0 },
     evidenceDir: options.evidence ? path.join(runtimeRoot, 'evidence') : undefined,
     readNativeAuthorizationState: options.readNativeAuthorizationState,
+    readNativeSyncState: options.readNativeSyncState,
+    diagnosticTimeoutMs: options.diagnosticTimeoutMs,
     workflowTimeoutMs: options.workflowTimeoutMs,
     closeTimeoutMs: options.closeTimeoutMs,
   });
@@ -156,6 +167,59 @@ async function run(options, assertions) {
     fs.rmSync(runtimeRoot, { recursive: true, force: true });
   }
 }
+
+test('complete status artifacts survive an error larger than the CI log line limit', async () => {
+  const requesterStatus = { version: 'business-os-advanced-status-v1', ok: false, detail: 'x'.repeat(100000), tail: 'requester-end' };
+  const reviewerStatus = { version: 'business-os-advanced-status-v1', ok: false, tail: 'reviewer-end' };
+  const cachedSync = { phase: 'collection-sync', receivedFrames: 159, detail: 'y'.repeat(100000), tail: 'sync-end' };
+  let nativeReads = 0;
+  await run({
+    evidence: true, failReview: true, requesterStatus, reviewerStatus, cachedSync,
+    readNativeSyncState: () => { nativeReads++; return { available: true, fileMtimeMs: 123, status: { pendingAcks: 4 } }; },
+  }, async (result, contexts, runtimeRoot) => {
+    await assert.rejects(result, /native review failed/);
+    const read = name => JSON.parse(fs.readFileSync(path.join(runtimeRoot, 'evidence', name + '.json'), 'utf8'));
+    assert.deepEqual(read('threads-requester-command-status'), requesterStatus);
+    assert.deepEqual(read('threads-reviewer-result-status'), reviewerStatus);
+    assert.equal(nativeReads, 1);
+    assert.deepEqual(read('threads-native-failure').evidence, { available: true, fileMtimeMs: 123, status: { pendingAcks: 4 } });
+    for (const actor of ['threads-requester', 'threads-reviewer']) {
+      const snapshot = read(actor + '-failure-state').evidence;
+      assert.equal(snapshot.actorId, actor);
+      assert.deepEqual(snapshot.sync, cachedSync);
+    }
+    assert(contexts.every(context => context.closed));
+  });
+});
+
+test('stalled diagnostic reads preserve the original failure and bounded profile teardown', { timeout: 2000 }, async () => {
+  await run({
+    evidence: true, failReview: true, hangDiagnostic: true, diagnosticTimeoutMs: 15,
+    readNativeSyncState: () => new Promise(() => {}),
+  }, async (result, contexts, runtimeRoot) => {
+    await assert.rejects(result, /native review failed/);
+    for (const name of ['threads-native-failure', 'threads-requester-failure-state', 'threads-reviewer-failure-state']) {
+      const data = JSON.parse(fs.readFileSync(path.join(runtimeRoot, 'evidence', name + '.json'), 'utf8'));
+      assert.equal(data.evidence.available, false);
+      assert.equal(data.evidence.reason, 'capture-failed');
+      assert.match(data.evidence.error, /capture deadline exceeded/);
+    }
+    assert(contexts.every(context => context.closed));
+  });
+});
+
+test('oversized diagnostics are explicit unavailable records, not truncated JSON snapshots', async () => {
+  await run({
+    evidence: true, failReview: true, requesterStatus: { detail: 'x'.repeat(4 * 1024 * 1024 + 1) },
+  }, async (result, contexts, runtimeRoot) => {
+    await assert.rejects(result, /native review failed/);
+    const data = JSON.parse(fs.readFileSync(path.join(runtimeRoot, 'evidence/threads-requester-command-status.json'), 'utf8'));
+    assert.equal(data.available, false);
+    assert.equal(data.reason, 'diagnostic-size-limit');
+    assert(data.bytes > 4 * 1024 * 1024);
+    assert(contexts.every(context => context.closed));
+  });
+});
 
 test('distinct actor profiles route credentials only to their control origin and close', async () => {
   await run({}, async (result, contexts) => {
