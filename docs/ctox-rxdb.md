@@ -1292,8 +1292,25 @@ opening after initial hydration, not startup during a pending read. The
 explicit initial render fixes that dependency. Both opening fixtures now
 hold history, require zero completed reads at mount and first paint, release
 history after editing, and then verify preservation. Initial dock paint and
-chat opening each retain a 150 ms gate. These strengthened browser checks
-remain pending; the native command and full performance gates are unchanged.
+chat opening each retain a 150 ms gate. Run 34257231148 (source e1f5d4c5a,
+tested merge d64f809ded1ad8cd0e0ed8d7f67708a1be06dac3) passes all 42
+component scenarios. Initial dock paint is 21.8 / 18.4 ms; new/known opening
+is 28.5 / 29.5 ms. Started=1/completed=0 at mount and opening proves that
+history was pending. Held-history reuse, superseded lookup ownership and
+preservation after release pass. The native command and full performance
+gates remain separate.
+
+Full-host run 34252595863 (source a6fd70c06) fails the context scenario
+before any prompt paint is measured: a requester command is rejected at
+document admission because its actor differs from the existing WebRTC peer.
+The fixture switches session globals and command capabilities without
+replacing the authenticated peer. Do not weaken native same-actor checks
+or accept a missing failed-command projection as successful authorization
+testing. The role/peer setup must be corrected before this scenario can
+accept prompt performance. Its separate actual warm-command fixture has
+30 complete samples with p50 369.5 ms and p95 525.95 ms, still failing the
+300 ms gate. All 21 collections complete in 34.951 / 42.754 / 17.497 s
+across reload/restart; this does not establish critical-boot p95 below 5 s.
 
 ## 11. Test map
 

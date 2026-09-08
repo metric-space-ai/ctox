@@ -226,6 +226,28 @@ superseded-lookup and remote-history checks remain. Local 77 chat tests,
 static shell contract and syntax pass; browser execution is pending.
 No tenant deployment is performed.
 
+Run 34257231148 accepts the component correction on e1f5d4c5a: 42 Chromium
+scenarios pass with zero failures. Initial dock paint is 21.8 / 18.4 ms,
+new/known chat paint 28.5 / 29.5 ms, and held reads remain incomplete at both
+measurements. Remote-history reuse, competing lookup ownership and crew
+disposal during an actually pending read pass. Tested merge:
+`d64f809ded1ad8cd0e0ed8d7f67708a1be06dac3`.
+
+Full-host run 34252595863 accepts four-host and command transaction checks,
+but fails the real context test before reaching the prompt: requester
+capability switches only globals and command-token cache, leaving the
+previous actor's WebRTC peer. Document admission rejects the mismatched
+actor; the fixture waits in vain for a command-plane role-denial projection.
+This requires a correctly authenticated actor/peer fixture, not relaxed
+server authorization. The prompt first-paint gate is still unmeasured there.
+
+The same run has 30/30 complete warm commands with no timing issues:
+p50 369.5 ms, p95 525.95 ms (FAIL), min264/max543 ms. Parsed native
+subphase diagnostics have no parse errors. All 21 collections complete
+after reloads in 34.951 / 42.754 / 17.497 s, including revision1→23,
+36→19 leads, 3911 thread states and native restart. These measurements
+do not establish critical-boot p95 below five seconds.
+
 The bundle reproducibility guard previously exited successfully when npx,
 the pinned builder download or the build itself failed. The canonical suite
 captures successful output, so this internal SKIPPED was reported as PASS.
