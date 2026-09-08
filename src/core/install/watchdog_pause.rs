@@ -21,8 +21,8 @@ impl<F: FnMut(&[&str]) -> io::Result<String>> WatchdogPause<F> {
         if installed {
             let state = run(&["show", "--property=ActiveState", "--value", TIMER])?;
             resume_timer = matches!(state.trim(), "active" | "activating" | "reloading");
-            run(&["stop", TIMER])?;
-            if let Err(error) = run(&["stop", SERVICE]) {
+            let stopped = run(&["stop", TIMER]).and_then(|_| run(&["stop", SERVICE]));
+            if let Err(error) = stopped {
                 if resume_timer {
                     if let Err(recovery) = run(&["start", TIMER]) {
                         eprintln!("ctox watchdog timer recovery failed: {recovery}");
@@ -173,6 +173,30 @@ mod tests {
         );
         assert!(guard.is_err());
         assert_eq!(events.borrow().last().unwrap(), "start ctox-watchdog.timer");
+    }
+
+    #[test]
+    fn release_switch_restores_timer_after_uncertain_timer_stop() {
+        let events = RefCell::new(Vec::new());
+        let guard = WatchdogPause::acquire(
+            |args| {
+                events.borrow_mut().push(args.join(" "));
+                if args == ["stop", TIMER] {
+                    return Err(io::Error::new(io::ErrorKind::TimedOut, "stop timed out"));
+                }
+                Ok("active".to_owned())
+            },
+            true,
+        );
+        assert!(guard.is_err());
+        assert_eq!(
+            *events.borrow(),
+            [
+                "show --property=ActiveState --value ctox-watchdog.timer",
+                "stop ctox-watchdog.timer",
+                "start ctox-watchdog.timer"
+            ]
+        );
     }
 
     #[test]
