@@ -1225,6 +1225,39 @@ and the pending chat message by `shared/business-chat.test.mjs`.
 
 ## 11. Test map
 
+### Hidden-tab frame progress
+
+The send queue wakes its high-priority inline drain directly when an ACK or
+control frame is enqueued during a bulk transfer. It arms that wake before
+draining to avoid losing an enqueue during an asynchronous buffer wait. The
+old 50 ms polling loop could leave both directions waiting for each other's
+ACKs when page timers were throttled. ACK receipt and `bufferedamountlow`
+remain event-driven; timeout/retry bounds, frame sizes, ACK windows, queue
+budgets and the wire protocol are unchanged. No MessageChannel polling loop
+or production environment toggle is needed.
+
+`hidden-transfer-smoke.mjs` holds all page timers, transfers a 20-document
+1.84 MB pull concurrently with a 19 KB push, and exercises `masterWrite`
+response correlation. The same test fails on main `365927a3c` in the concurrent
+case; the one-way pull succeeds there. This is a deterministic reproduction
+of a timer dependency, not a claim that the complete thesen incident has been
+reproduced on the tenant.
+
+`hidden-transfer-browser-smoke.mjs` additionally uses real local RTCDataChannels
+in a fresh Chrome context with page timers clamped to 1000 ms. A 19 KB command
+behind simultaneous 1.84 MB document transfers times out on `365927a3c`; with
+the direct wake it completes without retries. This checks actual SCTP delivery
+and RPC correlation, but deliberately simulates the timer clamp rather than
+relying on a particular Chrome version's visibility exemptions.
+
+Frame-transport diagnostics include `pageHidden`, `lastPageTimerDelayMs`,
+`lastPageTimerSampleAtMs` and `throttled`. The existing status-emission timer
+supplies the sample: `throttled` means the page is hidden and a timer was at
+least 750 ms late within the last 30 seconds. It is evidence of delayed
+scheduling, which can also result from host load, not proof of browser policy.
+No extra diagnostic polling is introduced. Readiness and acceptance decisions
+do not depend on this diagnostic flag.
+
 ### 10.1 Browser suite (`src/apps/business-os/rxdb/tests/`)
 
 `run-all.mjs` is the canonical entry point: runs every `*-smoke.mjs` in its
