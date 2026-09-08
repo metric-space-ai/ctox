@@ -1258,8 +1258,18 @@ IndexedDB lifecycle.
 The component browser harness adds delayed-storage cases for immediate draft
 and known-chat presentation below 150 ms, preservation of edits after
 hydration, reuse of remote-only history, and superseded lookup ownership.
-These cases have not yet run. They do not establish cold tracked-chat opening,
-database lifecycle recovery, or critical-collection boot p95 below five seconds.
+The first Chromium run failed while waiting for a composer: its known-chat
+fixture was a running task, for which the UI intentionally shows progress
+without a composer. The missing failure snapshot leaves the timed-out loop
+iteration unconfirmed. The corrected cases start with a collapsed dock: a new
+draft must become visible/editable, while a known running chat must show its
+existing history and retain its task identity/status. Both still require
+first paint below 150 ms. Timeouts and failed assertions now retain the named
+scenario, visible text, screenshot and console report before teardown.
+
+The corrected cases have not passed yet. They do not establish cold
+tracked-chat opening, database lifecycle recovery, or critical-collection boot
+p95 below five seconds.
 
 ## 11. Test map
 

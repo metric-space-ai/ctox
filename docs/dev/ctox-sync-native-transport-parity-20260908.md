@@ -169,6 +169,28 @@ now cover teardown both while a read is pending and after subscription, with
 a wait spanning the first retry deadline; their execution is pending.
 This is crew-binding ownership, not complete shell/IndexedDB recovery.
 
+The first independent Chromium job, source `a6fd70c0612a1af2aad87a134e92859062547937`,
+[run 34252595863](https://github.com/metric-space-ai/ctox/actions/runs/34252595863)
+job `102150406942`, fails in the delayed-storage opening scenario while
+waiting for a composer. The fixture incorrectly requests an editable composer
+for a running tracked task; production rendering intentionally hides it.
+Because the timeout lost its failure snapshot, the failing loop iteration is
+not established. The invalid running-task assertion is independently evident
+from the fixture and renderer; this does not rule out another UI failure.
+The corrected fixture separately checks an editable new draft and a running
+chat's visible history, original identity and status, starting with the dock
+collapsed. The **150 ms** gate remains unchanged and is not yet satisfied by
+a successful run. The original timeout did not retain a chat report/failure
+screenshot; the harness now captures named failures, visible text, console
+events and a bounded screenshot before teardown, including ordinary assertion
+failures.
+
+That job's shell geometry step passes, but its inspected 720-pixel screenshot
+contains window chrome and an empty body. This is geometry evidence only,
+not evidence of visible CTOX data or complete application behavior.
+The tested merge is `76c4f53e4ddb3ab06a1e06861195c67fb268b77f`.
+No production source or timing budgets change in this test correction.
+
 ## Current browser verification correction
 
 The bundle reproducibility guard previously exited successfully when npx,

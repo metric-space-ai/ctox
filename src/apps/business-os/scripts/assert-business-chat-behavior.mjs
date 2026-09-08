@@ -557,26 +557,33 @@ try {
 
   for (const reuseKnown of [false, true]) {
     await scenario(page, reuseKnown ? 'known-chat-opens-before-storage' : 'new-draft-opens-before-storage', {
-      count: 1, groupedResearch: true, staticTracking: true, dbDelay: 1000,
+      count: 1, groupedResearch: true, messagesPerChat: 2, staticTracking: true, dockCollapsed: true, dbDelay: 1000,
     }, async () => {
       const opened = await page.evaluate(async (reuse) => {
         const start = performance.now();
         window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail: {
-          title: 'Immediate draft', draft: 'Prepared prompt', reuseActive: false,
-          ...(reuse ? { task_id: 'task_research_0' } : {}),
+          title: 'Immediate view', reuseActive: false,
+          ...(reuse ? { task_id: 'task_research_0' } : { draft: 'Prepared prompt' }),
         } }));
-        await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-active textarea')?.value === 'Prepared prompt');
+        await window.chatHarness.waitFor(() => {
+          const chat = document.querySelector('.ctox-chat-window.is-active');
+          if (!chat?.querySelector('.ctox-chat-title')?.getAttribute('aria-label')?.includes('Immediate view')) return false;
+          return reuse
+            ? chat.dataset.chatId === 'chat_0' && chat.textContent.includes('Testnachricht 0')
+            : chat.querySelector('textarea')?.value === 'Prepared prompt';
+        });
         await window.chatHarness.waitForPaint();
-        const input = document.querySelector('.ctox-chat-window.is-active textarea');
-        const rect = input.getBoundingClientRect();
-        return { firstPaintMs: performance.now() - start, visible: rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight, ...window.chatHarness.collect() };
+        const chat = document.querySelector('.ctox-chat-window.is-active');
+        const rect = chat.getBoundingClientRect();
+        const style = getComputedStyle(chat);
+        return { firstPaintMs: performance.now() - start, visible: rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) > 0, ...window.chatHarness.collect() };
       }, reuseKnown);
       results.push({ scenario: reuseKnown ? 'known-chat-first-paint' : 'new-draft-first-paint', metrics: opened });
-      expect(opened.visible, 'the prepared draft must be visible');
-      expect(opened.firstPaintMs < 150, `draft must paint before 1000 ms storage, got ${opened.firstPaintMs} ms`);
+      expect(opened.visible, 'the opened chat must be visible');
+      expect(opened.firstPaintMs < 150, `chat must paint before 1000 ms storage, got ${opened.firstPaintMs} ms`);
       expect(opened.storedChats === (reuseKnown ? 1 : 2), 'opening must preserve existing chats without duplicating a known task');
       if (reuseKnown) expect(opened.activeId === 'chat_0', 'known task must reuse its original chat ID');
-      await page.locator('.ctox-chat-window.is-active textarea').fill('Edited while storage is pending');
+      if (!reuseKnown) await page.locator('.ctox-chat-window.is-active textarea').fill('Edited while storage is pending');
       await page.evaluate(() => window.chatHarness.waitFor(() => window.chatHarness.chatReadStats.completed > 0));
       await page.evaluate(() => window.chatHarness.waitForPaint());
       const hydrated = await page.evaluate(() => ({
@@ -585,7 +592,12 @@ try {
       }));
       expect(hydrated.activeId === opened.activeId, 'late hydration must preserve the selected chat');
       expect(hydrated.storedChats === opened.storedChats, 'late hydration must not duplicate chats');
-      expect(hydrated.draft === 'Edited while storage is pending', 'late hydration must preserve user edits');
+      if (reuseKnown) {
+        expect(hydrated.activeTaskClass.includes('is-task-running'), 'opening a running chat must retain its active task state');
+        expect(hydrated.activeMessageText.includes('Testnachricht 0'), 'late hydration must preserve the running chat history');
+      } else {
+        expect(hydrated.draft === 'Edited while storage is pending', 'late hydration must preserve user edits');
+      }
     });
   }
 
@@ -695,26 +707,45 @@ try {
   writeReport();
   if (failures.length) {
     console.error(JSON.stringify({ ok: false, failures, reportPath, screenshotPath }, null, 2));
-    process.exit(1);
+    process.exitCode = 1;
+  } else {
+    console.log(JSON.stringify({ ok: true, reportPath, screenshotPath, scenarios: results.length }, null, 2));
   }
-  console.log(JSON.stringify({ ok: true, reportPath, screenshotPath, scenarios: results.length }, null, 2));
+} catch (error) {
+  failures.push(error?.stack || String(error));
+  writeReport();
+  throw error;
 } finally {
   await browser.close().catch(() => {});
   await new Promise((resolve) => server.close(resolve));
 }
 
 async function scenario(page, name, seedOptions, assertions) {
-  await page.goto(url, { waitUntil: 'load' });
-  // Page load, not an assertion: a busy host may need seconds to serve the module.
-  await page.waitForFunction(() => window.chatHarness?.seed, null, { timeout: 20000 });
-  await page.evaluate(async (options) => {
-    await window.chatHarness.seed(options);
-  }, seedOptions);
-  const metrics = await page.evaluate(() => window.chatHarness.collect());
-  results.push({ scenario: name, metrics });
-  const failuresBefore = failures.length;
-  await assertions(metrics);
-  if (failures.length === failuresBefore) results.push({ scenario: `${name}:pass` });
+  try {
+    await page.goto(url, { waitUntil: 'load' });
+    // Page load, not an assertion: a busy host may need seconds to serve the module.
+    await page.waitForFunction(() => window.chatHarness?.seed, null, { timeout: 20000 });
+    await page.evaluate(async (options) => {
+      await window.chatHarness.seed(options);
+    }, seedOptions);
+    const metrics = await page.evaluate(() => window.chatHarness.collect());
+    results.push({ scenario: name, metrics });
+    const failuresBefore = failures.length;
+    await assertions(metrics);
+    if (failures.length === failuresBefore) results.push({ scenario: `${name}:pass` });
+    else await captureScenarioFailure(page, name, failures.slice(failuresBefore).join('\n'));
+  } catch (error) {
+    await captureScenarioFailure(page, name, error);
+    throw error;
+  }
+}
+
+async function captureScenarioFailure(page, name, error) {
+  const failureScreenshotPath = path.join(outputDir, `${name}-failure.png`);
+  const visibleText = await page.locator('body').innerText({ timeout: 3000 }).catch((readError) => String(readError));
+  const screenshotError = await page.screenshot({ path: failureScreenshotPath, timeout: 5000 })
+    .then(() => null, (captureError) => String(captureError));
+  results.push({ scenario: `${name}:failure`, error: error?.stack || String(error), visibleText, failureScreenshotPath, screenshotError });
 }
 
 async function viewportScenario(page, name, viewport, seedOptions, assertions) {
