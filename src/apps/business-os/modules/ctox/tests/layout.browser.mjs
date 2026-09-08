@@ -103,6 +103,7 @@ try {
       assert.equal(await page.locator('.ctox-more-actions-body:popover-open').count(), 0);
       await page.evaluate(() => {
         window.crewFixture.state.ctx.openLeftDrawer = content => {
+          document.getElementById("fixture-task-drawer")?.remove();
           const panel = document.createElement("aside");
           panel.id = "fixture-task-drawer";
           panel.style.cssText = "position:fixed;inset:0 0 0 50%;overflow:auto;z-index:100";
