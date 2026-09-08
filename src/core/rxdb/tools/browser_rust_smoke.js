@@ -2645,6 +2645,16 @@ function pollSqliteFileAndChunk(id, ms = 30000) {
   throw new Error(`sqlite file/chunk rows not replicated for ${id}`);
 }
 
+function nativeCollectionTable(collectionName) {
+  const schemaPath = path.join(root, 'src/core/business_os/business_os_schema_contract.json');
+  const contract = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
+  const version = contract[collectionName]?.version;
+  if (!/^[a-z][a-z0-9_]*$/.test(collectionName) || !Number.isInteger(version) || version < 0) {
+    throw new Error('No canonical native collection schema for ' + collectionName);
+  }
+  return 'ctox_business_os__' + collectionName + '__v' + version;
+}
+
 function pollSqliteJson(tableName, id, ms = 30000) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
@@ -7482,8 +7492,8 @@ function ensureCtoxSmokeBinary() {
             queueCount: queueDocs.length,
           })}`);
         }, dispatched);
-        const commandTable = 'ctox_business_os__business_commands__v1';
-        const taskTable = 'ctox_business_os__ctox_queue_tasks__v0';
+        const commandTable = nativeCollectionTable('business_commands');
+        const taskTable = nativeCollectionTable('ctox_queue_tasks');
         const commandRow = pollSqliteJson(commandTable, result.id);
         const taskRow = pollSqliteJson(taskTable, result.taskId);
         if (commandRow.command_id !== result.id || taskRow.command_id !== result.id) {
@@ -17228,8 +17238,8 @@ function ensureCtoxSmokeBinary() {
       || result.mode === 'office-document-midflight-restart-browser-to-rust'
       || result.mode === 'office-spreadsheet-midflight-restart-browser-to-rust') {
       if (result.mode === 'command-midflight-restart-browser-to-rust') {
-        const commandTable = 'ctox_business_os__business_commands__v1';
-        const taskTable = 'ctox_business_os__ctox_queue_tasks__v0';
+        const commandTable = nativeCollectionTable('business_commands');
+        const taskTable = nativeCollectionTable('ctox_queue_tasks');
         const commandRow = pollSqliteJson(commandTable, result.id);
         const taskRow = pollSqliteJson(taskTable, result.taskId);
         const commandCount = sqliteRowCount(commandTable, `json_extract(data, '$.command_id')='${sqlString(result.id)}'`);

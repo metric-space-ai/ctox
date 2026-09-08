@@ -197,9 +197,9 @@ an accepted receipt within the original 60-second dispatch budget; it may not
 resubmit the command, resume tracking as a second attempt, or suspend/restart
 collections to repair delivery. Browser projections and native SQLite must
 agree on exactly one command-to-queue handoff. The retained report separates
-the current command schema table (`business_commands` v1) from the queue table
-(`ctox_queue_tasks` v0), and records both names alongside the row counts and
-cross-references. It also separates
+the command table from the queue table, resolving both versions from the canonical
+native schema contract. It records both names alongside row counts and
+cross-references, and separates
 process-stop, native-start and dispatch-to-receipt timings from warm command
 latency. This proves neither coding-harness execution nor exactly-once external
 effects. The existing Office restart scenarios are separate app acceptance;
