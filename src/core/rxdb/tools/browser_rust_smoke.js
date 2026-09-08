@@ -17228,7 +17228,7 @@ function ensureCtoxSmokeBinary() {
       || result.mode === 'office-document-midflight-restart-browser-to-rust'
       || result.mode === 'office-spreadsheet-midflight-restart-browser-to-rust') {
       if (result.mode === 'command-midflight-restart-browser-to-rust') {
-        const commandTable = 'ctox_business_os__business_commands__v0';
+        const commandTable = 'ctox_business_os__business_commands__v1';
         const taskTable = 'ctox_business_os__ctox_queue_tasks__v0';
         const commandRow = pollSqliteJson(commandTable, result.id);
         const taskRow = pollSqliteJson(taskTable, result.taskId);
@@ -17236,6 +17236,7 @@ function ensureCtoxSmokeBinary() {
         const taskCount = sqliteRowCount(taskTable, `json_extract(data, '$.command_id')='${sqlString(result.id)}'`);
         const evidence = {
           ...result.commandRestartEvidence,
+          commandTable, taskTable,
           commandId: result.id, taskId: result.taskId,
           nativeCommandCount: commandCount, nativeQueueTaskCount: taskCount,
           browserQueueTaskCount: result.taskCountForCommand,
