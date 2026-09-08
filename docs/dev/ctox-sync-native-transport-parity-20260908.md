@@ -1,7 +1,24 @@
 # Native transport validation parity — 2026-09-08
 
 Status: **production acceptance remains incomplete; PR #69 is a draft**.
-At source `79ee5a2a4b154d6e837c4a158ef2602d931c1a6c`,
+Latest completed full-host evidence is
+[run 34248368080](https://github.com/metric-space-ai/ctox/actions/runs/34248368080),
+source `3f518d7c7e09da27072ba079a53028eaa5c8b985`: 30/30 commands,
+no timing issues, **p50 442 ms, p95 580.5 ms**, so the 300 ms gate fails.
+All four native diagnostic groups now contain exactly one intact record for
+each measured command, without missing IDs, duplicate IDs or parse errors.
+Subphase medians are authentication 10.302 ms, identity stamping 6.601 ms,
+blocking-pool wait 0.067 ms, full store execution 150.863 ms, initial RxDB
+projection 44.999 ms, core completion 9.646 ms, canonical read 5.318 ms,
+local projection 5.576 ms and final RxDB projection 3.281 ms. These nested
+phases and their medians are not additive end-to-end stages. Full-host
+reloads complete all 21 collections in 35.025 / 41.232 / 19.698 seconds.
+Built merge `55299a120ca6c7eb0e0debd58351e4cf65b86744`; binary SHA256
+`c66cf687c6ee61a667a04006576dc97d94f48d99935cd35147474b832d47299c`.
+The native platform jobs and the subsequent shell/browser changes are not
+accepted by this full-host result.
+
+Earlier evidence at source `79ee5a2a4b154d6e837c4a158ef2602d931c1a6c`,
 [run 34244920380](https://github.com/metric-space-ai/ctox/actions/runs/34244920380)
 passes both native platforms, all 122 JavaScript/browser checks without skips,
 12 command-completion tests and six command transaction tests. Four actual
@@ -65,7 +82,7 @@ at `d7eea14a213bf1bc66ca38f6e70fd378a26d4f99` measured core completion
 These subphase reductions do not establish the required end-to-end p50 below
 300 ms or critical-boot p95 below five seconds.
 
-The latest run also exposes corrupt diagnostic framing in the browser harness:
+Run 34244920380 exposed corrupt diagnostic framing in the browser harness:
 it prefixes arbitrary stderr chunks, which can split a JSON key or command ID.
 Initial/final projection diagnostics have 30 intact samples; the older intake
 and queue diagnostic streams do not. Incomplete parses are not valid 30-sample
@@ -73,7 +90,8 @@ statistics. The harness now decodes and prefixes complete stdout/stderr lines,
 also recognizing a listening marker split across chunks. A focused stream
 regression passes for one-byte UTF-8/JSON chunks, multiple records per chunk,
 CRLF and a final line without a newline. Full browser verification of this
-harness change remains pending; the performance limit is unchanged.
+harness change is now confirmed by run 34248368080's 30 intact records per
+diagnostic group; the performance limit is unchanged and still fails.
 
 The preceding complete full-host run,
 [34237292653](https://github.com/metric-space-ai/ctox/actions/runs/34237292653)
@@ -131,6 +149,25 @@ this is workflow configuration validation, not another runtime pass.
 
 No tenant deployment is performed. The sections below retain historical
 results and failed attempts; use this status for the current acceptance scope.
+
+The next completed backend run, source `5513ea2dbd705e57e8e7671d005fc4c9db0c8d27`,
+[34247847447](https://github.com/metric-space-ai/ctox/actions/runs/34247847447),
+still fails the warm budget: 30/30 complete, no timing issues, p50 **396.5 ms**,
+p95 **514.6 ms**, minimum 314 ms, maximum 672 ms. Browser insertion p50 is
+31 ms and targeted push acknowledgement p50 is 114 ms. These measurements do
+not identify the entire remaining delay. Both native platform jobs pass.
+All 21 collections complete after reload in 32.263 / 42.342 / 16.604 seconds,
+including revision 23, 19 live leads and 3,911 thread states; 11,130,431 source
+bytes survive the native restart. Built merge
+`057507d6fcb14ed14054057dc1e2a8abe6998f34`, binary SHA256
+`61be6b31ac96464bb9d85713c7ce0d18acfeb62998a575ad69c5c66d5f295f1c`.
+
+The current crew lifecycle correction releases pool/readiness/window listeners
+and timers at chat teardown and ignores late crew reads or queued callbacks.
+The focused cleanup test passes as part of 77 local chat tests. Browser cases
+now cover teardown both while a read is pending and after subscription, with
+a wait spanning the first retry deadline; their execution is pending.
+This is crew-binding ownership, not complete shell/IndexedDB recovery.
 
 ## Current browser verification correction
 

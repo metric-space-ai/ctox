@@ -526,6 +526,35 @@ try {
     expect(chipLatency < 150, `chip selection must render before persistence delay, got ${chipLatency.toFixed(1)}ms`);
   });
 
+  for (const pendingRead of [false, true]) {
+    await scenario(page, pendingRead ? 'crew-cleanup-during-load' : 'crew-cleanup-after-load', {
+      count: 0, dbDelay: pendingRead ? 500 : 0,
+    }, async () => {
+      const stats = await page.evaluate(async (pending) => {
+        if (!pending) await window.chatHarness.waitFor(() => window.chatHarness.chatReadStats.crewSubscriptions === 2);
+        const root = document.querySelector('[data-ctox-chat-root]');
+        const dbStats = window.chatHarness.chatReadStats;
+        const readinessStats = window.chatHarness.readinessStats;
+        const busStats = window.chatHarness.eventBusStats;
+        root.__ctoxChatCleanup();
+        const atDispose = { ...dbStats };
+        window.chatHarness.emitCrew();
+        window.chatHarness.emitReadiness();
+        // Cover both an in-flight load and the first 2-second pool retry.
+        await new Promise((resolve) => setTimeout(resolve, 2300));
+        window.chatHarness.emitCrew();
+        window.chatHarness.emitReadiness();
+        await window.chatHarness.waitForPaint();
+        return { atDispose, after: { ...dbStats }, readinessSubscriptions: readinessStats.subscriptions, windowObservers: busStats.windowOpenedObservers };
+      }, pendingRead);
+      results.push({ scenario: pendingRead ? 'crew-late-load-cleanup' : 'crew-ready-cleanup', metrics: stats });
+      expect(stats.after.crewSubscriptions === 0, 'disposed crew pool must release its subscriptions and cannot subscribe after a late load');
+      expect(stats.readinessSubscriptions === 0, 'disposed crew views must release readiness listeners');
+      expect(stats.windowObservers === 0, 'disposed crew presence must release the real window event-bus token');
+      expect(stats.after.crewReads === stats.atDispose.crewReads, 'disposed crew views must not restart reads via notifications or retries');
+    });
+  }
+
   for (const reuseKnown of [false, true]) {
     await scenario(page, reuseKnown ? 'known-chat-opens-before-storage' : 'new-draft-opens-before-storage', {
       count: 1, groupedResearch: true, staticTracking: true, dbDelay: 1000,
@@ -828,6 +857,7 @@ function harnessHtml() {
 <body>
   <script type="module">
     import { initBusinessChat } from '/src/apps/business-os/shared/business-chat.js';
+    import { createEventBus } from '/src/apps/business-os/shared/event-bus.js';
 
     const CHAT_STATE_KEY = 'ctox.businessOs.chat.v1';
     const owner = 'test-user';
@@ -853,6 +883,24 @@ function harnessHtml() {
       sessionStorage.clear();
       chatCollectionSubscribers = new Set();
       window.chatHarness.lastCommand = null;
+      const eventBus = createEventBus();
+      const on = eventBus.on;
+      const off = eventBus.off;
+      const windowTokens = new Set();
+      const busStats = { windowOpenedObservers: 0 };
+      eventBus.on = (event, callback) => {
+        const token = on(event, callback);
+        if (event === 'window:opened') windowTokens.add(token);
+        busStats.windowOpenedObservers = windowTokens.size;
+        return token;
+      };
+      eventBus.off = (event, token) => {
+        off(event, token);
+        windowTokens.delete(token);
+        busStats.windowOpenedObservers = windowTokens.size;
+      };
+      window.CTOX_BUSINESS_OS_APP = { eventBus };
+      window.chatHarness.eventBusStats = busStats;
 
       const selectedDate = localDateString(addDays(new Date(), options.selectedOffset || 0));
       const chats = Array.from({ length: options.count || 0 }, (_, index) => makeChat({ index, selectedDate, options }));
@@ -876,6 +924,7 @@ function harnessHtml() {
       initBusinessChat({
         session: { authenticated: true, user: { id: owner, name: 'Harness User' } },
         commandBus: makeCommandBus(options),
+        sync: makeReadiness(),
         db: makeDb(chats, options.dbDelay || 0, Boolean(options.dbTransientError), Boolean(options.dbDeleteError), Number(options.crewMembers) || 0, Array.isArray(options.queueTasks) ? options.queueTasks : []),
         getActiveModule: () => ({ id: 'ctox', name: 'CTOX' }),
       });
@@ -991,6 +1040,22 @@ function harnessHtml() {
       await waitForPaint();
     }
 
+    function makeReadiness() {
+      const callbacks = new Set();
+      const stats = { subscriptions: 0 };
+      window.chatHarness.readinessStats = stats;
+      window.chatHarness.emitReadiness = () => { for (const token of [...callbacks]) token.callback({ state: 'ready' }); };
+      return {
+        subscribeCollectionReadiness: (_collection, callback) => {
+          const token = { callback };
+          callbacks.add(token);
+          stats.subscriptions = callbacks.size;
+          callback({ state: 'ready' });
+          return () => { callbacks.delete(token); stats.subscriptions = callbacks.size; };
+        },
+      };
+    }
+
     function makeCommandBus(options) {
       return {
         dispatch: async (command) => {
@@ -1020,7 +1085,9 @@ function harnessHtml() {
 
     function makeDb(chats, delayMs, transientError, deleteError, crewMemberCount = 0, queueTasks = []) {
       const store = new Map(chats.map((chat) => [chat.id, structuredClone(chat)]));
-      const readStats = { completed: 0 };
+      const readStats = { completed: 0, crewReads: 0, crewSubscriptions: 0 };
+      const crewSubscribers = new Set();
+      window.chatHarness.emitCrew = () => { for (const callback of [...crewSubscribers]) callback(); };
       window.chatHarness.chatReadStats = readStats;
       const crewMembers = makeCrewMembers(crewMemberCount);
       const delay = () => new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -1060,8 +1127,12 @@ function harnessHtml() {
             find: () => ({ exec: async () => { await maybeThrow(); return queueTasks.map((task) => ({ toJSON: () => structuredClone(task) })); } }),
           },
           ctox_crew_members: {
-            $: { subscribe: () => ({ unsubscribe() {} }) },
-            find: () => ({ exec: async () => { await maybeThrow(); return crewMembers.map((member) => ({ toJSON: () => structuredClone(member) })); } }),
+            $: { subscribe: (callback) => {
+              crewSubscribers.add(callback);
+              readStats.crewSubscriptions = crewSubscribers.size;
+              return { unsubscribe: () => { crewSubscribers.delete(callback); readStats.crewSubscriptions = crewSubscribers.size; } };
+            } },
+            find: () => ({ exec: async () => { readStats.crewReads += 1; await maybeThrow(); return crewMembers.map((member) => ({ toJSON: () => structuredClone(member) })); } }),
           },
         },
       };

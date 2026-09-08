@@ -1248,6 +1248,13 @@ An unresolved task/command identity still requires hydration before choosing
 a chat, to avoid duplicating remote history. An opening request superseded
 during that lookup cannot change the current focus or draft.
 
+Crew pool and app-presence observers belong to the mounted chat view.
+Teardown releases their RxDB/readiness subscriptions, retry/expression timers,
+desktop observer and window-event token. Disposed callbacks do not start more
+reads, and late crew results cannot render or rewire their old view. This
+ownership applies to the crew bindings; it does not prove the full shell or
+IndexedDB lifecycle.
+
 The component browser harness adds delayed-storage cases for immediate draft
 and known-chat presentation below 150 ms, preservation of edits after
 hydration, reuse of remote-only history, and superseded lookup ownership.

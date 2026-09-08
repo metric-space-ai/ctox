@@ -193,6 +193,7 @@ async function loadCrewAppTasks(db) {
 
 // Presence follows the queue, the crew, opened windows and the desktop grid.
 function wireCrewAppPresence({ state, db, syncFacade }) {
+  let disposed = false;
   let tasks = [];
   let reloadTimer = null;
   let expressionTimer = null;
@@ -200,7 +201,10 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
   let desktopObserver = null;
   let desktopObserverTarget = null;
   const subscriptions = [];
+  const readinessCleanups = [];
+  let windowBusCleanup = null;
   const apply = () => {
+    if (disposed) return;
     const members = state.crewMembers || [];
     applyCrewAppPresence(crewAppPresenceFromTasks(tasks, members));
     // Expressions decay (reading -> running, learning -> idle); re-draw when
@@ -213,17 +217,26 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
     expressionTimer = Number.isFinite(ttl) ? window.setTimeout(() => { expressionTimer = null; apply(); }, ttl + 50) : null;
     wireLate();
   };
-  const reload = () => loadCrewAppTasks(db).then((next) => { tasks = next; apply(); }).catch(() => {});
+  const reload = () => {
+    if (disposed) return Promise.resolve();
+    return loadCrewAppTasks(db).then((next) => {
+      if (disposed) return;
+      tasks = next;
+      apply();
+    }).catch(() => {});
+  };
   const scheduleReload = () => {
-    if (reloadTimer) return;
+    if (disposed || reloadTimer) return;
     reloadTimer = window.setTimeout(() => { reloadTimer = null; reload(); }, 400);
   };
   const wireLate = () => {
+    if (disposed) return;
     if (!busWired) {
       const bus = window.CTOX_BUSINESS_OS_APP?.eventBus;
-      if (bus && typeof bus.on === 'function') {
+      if (bus && typeof bus.on === 'function' && typeof bus.off === 'function') {
         busWired = true;
-        bus.on('window:opened', () => apply());
+        const token = bus.on('window:opened', apply);
+        windowBusCleanup = () => bus.off('window:opened', token);
       }
     }
     const container = document.querySelector('[data-desktop-icons]');
@@ -237,16 +250,21 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
   try { subscriptions.push(db?.raw?.ctox_queue_tasks?.$?.subscribe?.(scheduleReload) || null); } catch {}
   try {
     subscriptions.push(db?.raw?.ctox_crew_members?.$?.subscribe?.(() => {
+      if (disposed) return;
       loadCrewMembers({ state, db }).then(apply).catch(() => {});
     }) || null);
   } catch {}
   try {
-    syncFacade?.subscribeCollectionReadiness?.('ctox_queue_tasks', () => { reload(); });
-    syncFacade?.subscribeCollectionReadiness?.('ctox_crew_members', () => { reload(); });
+    readinessCleanups.push(syncFacade?.subscribeCollectionReadiness?.('ctox_queue_tasks', reload));
+    readinessCleanups.push(syncFacade?.subscribeCollectionReadiness?.('ctox_crew_members', reload));
   } catch {}
   reload();
   return () => {
+    if (disposed) return;
+    disposed = true;
     subscriptions.forEach((subscription) => subscription?.unsubscribe?.());
+    readinessCleanups.forEach((cleanup) => cleanup?.());
+    windowBusCleanup?.();
     if (reloadTimer) window.clearTimeout(reloadTimer);
     if (expressionTimer) window.clearTimeout(expressionTimer);
     desktopObserver?.disconnect?.();
@@ -524,27 +542,36 @@ export function initBusinessChat({
   // The pool follows the crew collection, however late it becomes ready: the
   // first load after readiness fills the bar, later changes re-render it.
   let crewChangeSubscription = null;
-  const refreshCrewPool = () => loadCrewMembers({ state, db }).then((changed) => {
-    if (!crewChangeSubscription) {
-      try {
-        crewChangeSubscription = db?.raw?.ctox_crew_members?.$?.subscribe?.(() => {
-          loadCrewMembers({ state, db }).then((next) => {
-            if (next) renderChatRoot({ root, state, commandBus, db, getActiveModule });
-          }).catch(() => {});
-        }) || null;
-      } catch {}
-    }
-    if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
-  }).catch(() => {});
+  let crewPoolDisposed = false;
+  let crewPoolRetryTimer = null;
+  let crewReadinessCleanup = null;
+  const refreshCrewPool = () => {
+    if (crewPoolDisposed) return Promise.resolve();
+    return loadCrewMembers({ state, db }).then((changed) => {
+      if (crewPoolDisposed) return;
+      if (!crewChangeSubscription) {
+        try {
+          crewChangeSubscription = db?.raw?.ctox_crew_members?.$?.subscribe?.(() => {
+            if (crewPoolDisposed) return;
+            loadCrewMembers({ state, db }).then((next) => {
+              if (next && !crewPoolDisposed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
+            }).catch(() => {});
+          }) || null;
+        } catch {}
+      }
+      if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
+    }).catch(() => {});
+  };
   try {
-    syncFacade?.subscribeCollectionReadiness?.('ctox_crew_members', () => { refreshCrewPool(); });
+    crewReadinessCleanup = syncFacade?.subscribeCollectionReadiness?.('ctox_crew_members', refreshCrewPool);
   } catch {}
   // Bounded start-up retries: the collection registers and fills after the
   // bar exists; a handful of widening attempts, then readiness/changes only.
   const crewPoolRetryDelays = [2000, 5000, 10000, 20000, 40000];
   const retryCrewPool = (attempt = 0) => {
-    if ((state.crewMembers || []).length || attempt >= crewPoolRetryDelays.length) return;
-    window.setTimeout(() => {
+    if (crewPoolDisposed || (state.crewMembers || []).length || attempt >= crewPoolRetryDelays.length) return;
+    crewPoolRetryTimer = window.setTimeout(() => {
+      crewPoolRetryTimer = null;
       refreshCrewPool().then(() => retryCrewPool(attempt + 1));
     }, crewPoolRetryDelays[attempt]);
   };
@@ -805,6 +832,10 @@ export function initBusinessChat({
   trackingWatch.refresh({ schedule: true });
 
   root.__ctoxChatCleanup = () => {
+    crewPoolDisposed = true;
+    if (crewPoolRetryTimer) window.clearTimeout(crewPoolRetryTimer);
+    crewChangeSubscription?.unsubscribe?.();
+    crewReadinessCleanup?.();
     root.__ctoxCrewAppPresenceCleanup?.();
     root.removeEventListener('click', handleRootClick, true);
     window.removeEventListener('ctox-business-os-chat-submit', handleExternalSubmit);
@@ -9067,6 +9098,7 @@ async function cancelScheduledChat(state, chat, db, root, commandBus, getActiveM
 
 export const __businessChatTestInternals = Object.freeze({
   crewMemberExpression,
+  wireCrewAppPresence,
   crewPoolSlotHtml,
   clearSchedulerLoop,
   chatAllowsAutoFocus,

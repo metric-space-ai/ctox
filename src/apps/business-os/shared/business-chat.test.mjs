@@ -1343,6 +1343,61 @@ test('business chat open resolves the already submitted task instead of creating
   assert.equal(state.chats.length, 3);
 });
 
+test('disposed crew presence releases observers and ignores queued callbacks and late reads', async () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  let finishRead;
+  const pending = new Promise((resolve) => { finishRead = resolve; });
+  let reads = 0;
+  let domReads = 0;
+  const observers = new Set();
+  const readiness = new Set();
+  const queuedCallbacks = [];
+  const timers = new Set();
+  const subscribe = (set, callback) => {
+    const token = { callback };
+    set.add(token);
+    queuedCallbacks.push(callback);
+    return () => set.delete(token);
+  };
+  const collection = {
+    find: () => ({ exec: () => { reads += 1; return pending; } }),
+    $: { subscribe: (callback) => ({ unsubscribe: subscribe(observers, callback) }) },
+  };
+  globalThis.window = {
+    setTimeout: (callback) => { timers.add(callback); return callback; },
+    clearTimeout: (callback) => timers.delete(callback),
+  };
+  globalThis.document = {
+    querySelector: () => { domReads += 1; return null; },
+    querySelectorAll: () => { domReads += 1; return []; },
+  };
+  try {
+    const dispose = __businessChatTestInternals.wireCrewAppPresence({
+      state: { crewMembers: [] },
+      db: { raw: { ctox_queue_tasks: collection, ctox_crew_members: collection } },
+      syncFacade: { subscribeCollectionReadiness: (_name, callback) => subscribe(readiness, callback) },
+    });
+    assert.equal(observers.size, 2);
+    assert.equal(readiness.size, 2);
+    assert.equal(reads, 1);
+    dispose();
+    dispose();
+    assert.equal(observers.size, 0);
+    assert.equal(readiness.size, 0);
+    for (const callback of queuedCallbacks) callback();
+    finishRead([]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(reads, 1, 'queued callbacks must not read after disposal');
+    assert.equal(domReads, 0, 'a late read must not render or rewire the disposed view');
+    assert.equal(timers.size, 0, 'a late completion must not rearm timers');
+  } finally {
+    finishRead?.([]);
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+  }
+});
+
 test('chat opening reads storage only to resolve a missing current tracking identity', () => {
   const { chatOpenNeedsHydration } = __businessChatTestInternals;
   const state = { chats: [{
