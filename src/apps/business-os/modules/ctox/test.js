@@ -100,6 +100,17 @@ test('Only configured communication accounts appear as inputs, never task-origin
   assert.doesNotMatch(empty, /ctox-flow-channel-edge/);
 });
 
+test('Task cards explain failures while original evidence remains inspectable', () => {
+  const task = { status: 'failed', failureAttemptCount: 4, statusNote: 'thread/start MCP handshake timeout <unsafe>' };
+  assert.equal(hooks.taskSummaryReason(task, { lang: 'de' }), 'Die Verbindung zu einem Werkzeug konnte nicht aufgebaut werden. · 4 Versuche');
+  assert.match(hooks.taskSummaryReason(task, { lang: 'en' }), /connection to a tool/);
+  const details = hooks.taskDiagnosticMarkup(task, { lang: 'de' });
+  assert.match(details, /<details class="ctox-task-diagnostics">/);
+  assert.match(details, /thread\/start MCP handshake timeout &lt;unsafe&gt;/);
+  assert.doesNotMatch(details, /<unsafe>|<details[^>]* open/);
+  assert.match(hooks.taskSummaryReason({ status: 'failed', statusNote: 'CTOX chat could not continue because the model API is temporarily unavailable. The task must stay open and retry after cooldown.' }, { lang: 'de' }), /^Der Modelldienst war nicht erreichbar\.$/);
+});
+
 test('crew labels describe work without exposing implementation terminology', () => {
   function check(value, path) {
     if (typeof value === 'string') {

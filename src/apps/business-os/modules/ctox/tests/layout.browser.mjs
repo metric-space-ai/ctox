@@ -69,7 +69,8 @@ try {
     assert.equal(measured.nodes,16);
     const reason=await page.locator('.ctox-task-reason').textContent();
     assert.match(reason,/4 Versuche/);
-    assert.match(reason,/thread\/start MCP handshake timeout/);
+    assert.match(reason,/Verbindung zu einem Werkzeug/);
+    assert.doesNotMatch(reason,/MCP|thread\/start/);
     assert.match(await page.locator('[data-pg-band="waiting"]').textContent(),/\(0\)/);
     assert.equal(await page.locator('.ctox-task-pipeline').getAttribute('aria-label'),'Fehler');
     assert.equal(await page.locator('[data-task-id="layout-task"][data-creature-node-id="model-failed"]').count(),1);

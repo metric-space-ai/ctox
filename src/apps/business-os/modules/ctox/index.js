@@ -1780,7 +1780,7 @@ function taskCardMarkup(task, state) {
   const status = displayStatus(task.routeStatus || task.status, state.lang);
   const changed = formatShortTimestamp(task.updatedAt || task.createdAt || task.timestamp);
   const problem = ['blocked', 'failed', 'cancelled'].includes(normalizeCommandStatus(task.routeStatus || task.status));
-  const reason = taskReasonText(task, state);
+  const reason = taskSummaryReason(task, state);
   // The card says who and how, not why: the member's creature carries the
   // state, the reason lives in the tooltip and the drawer (Owner 08.09.).
   // The one exception is a task that stopped — blocked, failed, cancelled —
@@ -1794,7 +1794,7 @@ function taskCardMarkup(task, state) {
   return `
     <article class="ctox-list-item ctox-task-card ${selected ? 'is-selected' : ''} ${pinned ? 'is-pinned' : ''} ${member ? 'has-member' : ''}"
       data-task-id="${escapeAttr(task.id)}" data-context-record-id="${escapeAttr(task.id)}" data-context-record-type="ctox_task" data-context-label="${escapeAttr(title)}">
-      <button type="button" class="ctox-task-selector" data-select-task-id="${escapeAttr(task.id)}" aria-label="${escapeAttr(`${t.openTaskDetail}: ${title}`)}" title="${escapeAttr(tooltip)}">
+      <button type="button" class="ctox-task-selector" data-select-task-id="${escapeAttr(task.id)}" aria-label="${escapeAttr(`${state.lang === 'de' ? 'Aufgabe auswählen' : 'Select task'}: ${title}`)}" title="${escapeAttr(tooltip)}">
         ${portrait}
         <strong>${escapeHtml(title)}</strong>
         <small class="ctox-task-meta">${status ? `<span class="ctox-task-meta-status ${problem ? 'is-problem' : ''}">${escapeHtml(status)}</span>` : ''}${changed ? `<span>${escapeHtml(changed)}</span>` : ''}</small>
@@ -2368,6 +2368,7 @@ function renderMain(state) {
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <h2 class="ctox-pane-title">${escapeHtml(selectedTask ? taskDisplayTitle(selectedTask, state) : t.doingNow)}</h2>
+          ${state.harnessStatus?.paused ? `<small class="ctox-paused-note">${escapeHtml(t.harnessPaused)}</small>` : ''}
         </div>
         <div class="ctox-pane-actions">
           ${selectedTask ? `<button type="button" class="ctox-button ctox-job-toggle" data-job-toggle aria-expanded="${Boolean(state.jobEditorOpen)}">${escapeHtml(t.editTask)}</button>` : ''}
@@ -2939,14 +2940,14 @@ function flowNodeSvg(node, selectedNode, traceStrength, lang = 'de', standortNod
   return `
     <g class="ctox-flow-node-g is-${escapeAttr(node.status)} ${isVisibleTrace ? 'is-observed is-trace' : 'is-possible'} ${isSelected ? 'is-current is-selected' : ''} ${standortNodeId && node.id === standortNodeId ? 'is-crew-hier' : ''}"
        data-node-id="${escapeAttr(node.id)}" data-context-record-id="${escapeAttr(node.id)}" data-context-record-type="ctox_flow_node" data-context-label="${escapeAttr(node.label)}" role="button" style="--trace-strength:${traceStrength}" tabindex="0" transform="translate(${node.x} ${node.y})">
-      <title>${escapeHtml(`${node.label} (${node.machinePhase || node.phase})\n${metricsLabel(node, lang)}\n${node.lines.join('\n')}`)}</title>
+      <title>${escapeHtml(node.label)}</title>
       ${ring}
       ${shape}
       <text class="ctox-flow-node-phase" x="${-NODE_WIDTH / 2 + 10}" y="${-NODE_HEIGHT / 2 + 16}">${escapeHtml(node.phase)}</text>
       <text class="ctox-flow-node-title" x="${-NODE_WIDTH / 2 + 10}" y="${-NODE_HEIGHT / 2 + 34}">
         ${wrapSvgText(node.label).map((line, index) => `<tspan x="${-NODE_WIDTH / 2 + 10}" dy="${index === 0 ? 0 : 15}">${escapeHtml(line)}</tspan>`).join('')}
       </text>
-      <text class="ctox-flow-node-metrics" x="${-NODE_WIDTH / 2 + 10}" y="${NODE_HEIGHT / 2 - 8}">${escapeHtml(metricsLabel(node, lang))}</text>
+      ${Number.isFinite(node.inputTokens) && Number.isFinite(node.outputTokens) ? `<text class="ctox-flow-node-metrics" x="${-NODE_WIDTH / 2 + 10}" y="${NODE_HEIGHT / 2 - 8}">${escapeHtml(metricsLabel(node, lang))}</text>` : ''}
     </g>
   `;
 }
@@ -3499,7 +3500,7 @@ function taskDrawer(task, state, { editorOnly = false } = {}) {
         <strong class="ctox-badge ${statusBadgeVariant(statusClass(task.routeStatus || task.status))}">${escapeHtml(displayStatus(task.routeStatus || task.status, state.lang))}</strong>
         ${target ? `<small>${escapeHtml(target)}</small>` : ''}
       </div>
-      ${taskReasonText(task, state) ? `<p class="ctox-task-reason-line">${escapeHtml(taskReasonText(task, state))}</p>` : ''}
+      ${taskSummaryReason(task, state) ? `<p class="ctox-task-reason-line">${escapeHtml(taskSummaryReason(task, state))}</p>` : ''}
       ${taskLeaseLineMarkup(task, state)}
       ${taskLiveStatusMarkup(task, state)}
       ${taskControlsMarkup(task, state)}
@@ -3540,6 +3541,7 @@ function taskDrawer(task, state, { editorOnly = false } = {}) {
       </footer>
     </form>
     </details>
+    ${taskDiagnosticMarkup(task, state)}
     ${showSummary ? `
       <section class="ctox-card">
         <header>${escapeHtml(t.summary)}</header>
@@ -6671,6 +6673,30 @@ function crewMemberName(state, memberId) {
 // One sentence of truth per task: why it waits, when it retries, how it
 // failed, who holds it. Built only from durable routing fields — never from
 // guesses — and empty when there is nothing worth saying.
+function taskSummaryReason(task, state) {
+  const note = String(task.statusNote || task.error || '').trim();
+  const de = state.lang !== 'en';
+  const rules = [
+    [/model API.*rate.limit/i, 'Der Modelldienst hat zu viele Anfragen erhalten.', 'The model service received too many requests.'],
+    [/model API|worker-runtime-api-failure/i, 'Der Modelldienst war nicht erreichbar.', 'The model service could not be reached.'],
+    [/completion review.*(?:verdict|finish|timeout)/i, 'Die Abschlussprüfung hat nicht rechtzeitig geantwortet.', 'The final review did not respond in time.'],
+    [/MCP.*handshake|thread\/start/i, 'Die Verbindung zu einem Werkzeug konnte nicht aufgebaut werden.', 'A connection to a tool could not be established.'],
+    [/app.*validation.*(?:failed|exhausted)/i, 'Die App-Prüfung ist fehlgeschlagen.', 'The app validation failed.'],
+    [/SQLITE|database is locked|queue:|\blease\b|worker error|technical:/i, 'Ein technischer Fehler hat die Bearbeitung unterbrochen.', 'A technical error interrupted the work.'],
+  ];
+  const rule = rules.find(([pattern]) => pattern.test(note));
+  if (!rule) return taskReasonText(task, state);
+  const count = Number(task.failureAttemptCount || 0);
+  const attempts = count > 1 ? ` · ${count} ${labels[state.lang].attemptMany}` : '';
+  return rule[de ? 1 : 2] + attempts;
+}
+
+function taskDiagnosticMarkup(task, state) {
+  const note = String(task.statusNote || task.error || '').trim();
+  if (!note) return '';
+  return `<details class="ctox-task-diagnostics"><summary>${state.lang === 'de' ? 'Technische Details' : 'Technical details'}</summary><pre>${escapeHtml(note)}</pre></details>`;
+}
+
 function taskReasonText(task, state) {
   const t = labels[state.lang];
   const status = normalizeCommandStatus(task.routeStatus || task.status);
@@ -6868,6 +6894,8 @@ export const __ctoxTestHooks = {
   safeTaskDisplayText,
   setFlowZoom,
   taskSteps,
+  taskSummaryReason,
+  taskDiagnosticMarkup,
   timelinePanel,
   observedDetailsFromFlow,
   webStackStateFromRefreshResult,

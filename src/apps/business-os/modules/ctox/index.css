@@ -93,12 +93,16 @@
 .ctox-drawer-edit-fold > summary { padding: var(--space-2) var(--space-3); cursor: pointer; font-size: var(--fs-meta); color: var(--muted); }
 .ctox-history-content { max-height: 32vh; overflow: auto; }
 .ctox-history-connection { float: right; margin-left: var(--space-3); }
+.ctox-paused-note { color: var(--muted); white-space: nowrap; font-size: var(--fs-meta); }
+.ctox-task-diagnostics { color: var(--muted); font-size: var(--fs-meta); }
+.ctox-task-diagnostics summary { cursor: pointer; padding: var(--space-2) 0; }
+.ctox-task-diagnostics pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 30vh; overflow: auto; }
 .ctox-history-fold > summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ctox-history-content .ctox-timeline-head { display: none; }
 .ctox-more-actions { position: relative; }
 .ctox-more-actions > summary { cursor: pointer; padding: var(--space-1) var(--space-2); list-style: none; color: var(--muted); }
 .ctox-more-actions > summary::-webkit-details-marker { display: none; }
-.ctox-more-actions-body { position: absolute; right: 0; top: 100%; z-index: 20; min-width: 220px; padding: var(--space-2); display: grid; gap: var(--space-2); background: var(--surface); border: 1px solid var(--line); border-radius: var(--panel-radius); box-shadow: var(--shadow-md); }
+.ctox-more-actions-body { position: absolute; right: 0; top: 100%; z-index: 20; min-width: 220px; padding: var(--space-2); display: grid; gap: var(--space-2); background: var(--surface); border: 1px solid var(--line); border-radius: var(--panel-radius); }
 .ctox-more-actions-body .ctox-button { text-align: left; }
 .ctox-more-actions-body[popover] { position: fixed; margin: 0; right: auto; width: 240px; box-sizing: border-box; max-height: min(420px, 65dvh); overflow: auto; color: var(--text); }
 .ctox-more-actions-body[popover]:not(:popover-open) { display: none; }
