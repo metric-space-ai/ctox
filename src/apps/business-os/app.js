@@ -620,6 +620,8 @@ function installAdvancedStatusInterface() {
   globalThis.workjetSessionControl = workjetSessionControl;
   globalThis.workjetSessionEvents = createWorkjetSessionEvents();
   state.openModule = (moduleId, options = {}) => openModule(moduleId, options);
+  // Navigation only; settings retain their own role and command-policy checks.
+  state.openSettingsDrawer = (options = {}) => openSettingsDrawer(options);
   // A crew member dropped from the chat bar onto an app opens the CTOX context
   // menu at that point with the member standing by (drag-and-drop handoff).
   state.openCrewContextMenu = ({ clientX, clientY, crew } = {}) => {

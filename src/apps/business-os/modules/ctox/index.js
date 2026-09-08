@@ -3214,7 +3214,7 @@ function buildInboundChannels(tasks, accounts = []) {
     if (!account?.channel || account._deleted === true || account.is_deleted === true || account.enabled === false) continue;
     const key = normalizeInboundChannel(account.channel);
     // Native accounts also contain internal scheduling routes; those are not
-    // communication adapters (see channels::configured_channel_summary).
+    // communication adapters, matching the native channel summary.
     if (['queue', 'cron', 'plan'].includes(key)) continue;
     // A task's module is provenance, not an installed communication adapter.
     if (!channels.has(key)) channels.set(key, { id: key, label: inboundChannelLabel(key), count: 0, active: false });
