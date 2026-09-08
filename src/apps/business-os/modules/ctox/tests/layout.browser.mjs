@@ -106,6 +106,23 @@ try {
         await page.locator('html').evaluate((element,theme)=>element.dataset.theme=theme,theme);
         await page.screenshot({path:path.join(out,`routing-failed-${theme}.png`)});
       }
+      await page.evaluate(() => {
+        const {state,hooks}=window.crewFixture;
+        state.selectedTaskId='';
+        state.model.tasks=[];
+        state.model.timeline=state.model.nodes.slice(0,2);
+        hooks.renderMain(state);
+      });
+      const history = page.locator('.ctox-history-fold');
+      assert.equal(await history.count(), 1, 'Actual history remains accessible');
+      assert.equal(await history.getAttribute('open'), null);
+      const closedHeight = await history.evaluate(e=>e.getBoundingClientRect().height);
+      assert.ok(closedHeight <= 40, 'Closed history uses one row');
+      await history.locator('summary').click();
+      assert.equal(await history.getAttribute('open'), '');
+      assert.ok(await history.evaluate(e=>e.getBoundingClientRect().height) > closedHeight);
+      await history.locator('summary').click();
+      assert.equal(await history.getAttribute('open'), null);
     }
     await page.close();
   }
