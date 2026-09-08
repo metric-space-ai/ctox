@@ -64,6 +64,11 @@ pub(crate) fn claim_business_command_with_queue(
                 )
                 .optional()?;
             if let Some(task_id) = task_id {
+                if super::auth_assist::preserve_request(&tx, &task_id, &claim.command_id)? {
+                    let task = load_queue_task_from_conn(&tx, &task_id)?
+                        .context("auth-assist task missing")?;
+                    refresh_queue_projection_tasks(root, &tx, std::slice::from_ref(&task))?;
+                }
                 let task = load_queue_task_from_conn(&tx, &task_id)?
                     .context("claimed queue command task link points to a missing task")?;
                 tx.commit()?;
@@ -225,6 +230,12 @@ pub(crate) fn claim_business_command_with_queue(
         }),
         now_ms,
     )?;
+    if claim.command_type == super::auth_assist::REQUEST_TYPE
+        && super::auth_assist::preserve_request(&tx, &task.message_key, &claim.command_id)?
+    {
+        task = load_queue_task_from_conn(&tx, &task.message_key)?
+            .context("auth-assist task missing")?;
+    }
     if let Some((command_id, task_id)) = superseded_by {
         let reason = format!("Adapterabgleich bereits offen: {task_id}");
         transition_business_command_for_task_in_transaction(

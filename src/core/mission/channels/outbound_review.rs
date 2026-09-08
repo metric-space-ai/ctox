@@ -3923,6 +3923,9 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_business_command_aggregates_state
             ON business_command_aggregates(execution_phase, updated_at_ms);
+        CREATE INDEX IF NOT EXISTS idx_business_command_open_type_id
+            ON business_command_aggregates(command_type, command_id)
+            WHERE execution_phase != 'terminal';
         CREATE INDEX IF NOT EXISTS idx_active_adapter_reconciliation
             ON business_command_aggregates(module, record_id,
                 json_extract(intent_json,'$.payload.configuration_digest'), created_at_ms, command_id)
