@@ -179,7 +179,7 @@ try {
     expect(m.chipCount <= 12, `thousand-chat dock must cap rendered chips, got ${m.chipCount}`);
     expect(m.windowCount <= 12, `thousand-chat dock must cap rendered windows, got ${m.windowCount}`);
     expect(m.overflowCount === 1, 'thousand-chat dock must expose one overflow chip');
-    expect(m.dateTriggerLabel.includes('1k Tasks'), `date hover hint should expose compact workload, got ${m.dateTriggerLabel}`);
+    expect(m.dateTriggerLabel.includes('1k Aufgaben'), `date hover hint should expose compact workload, got ${m.dateTriggerLabel}`);
     const open = await page.evaluate(async () => {
       document.querySelector('[data-chat-overflow-open]').click();
       await window.chatHarness.waitFor(() => document.querySelector('[data-chat-busy-panel]'));
@@ -298,7 +298,7 @@ try {
     expect(m.progressHeaderText === '', `window header must not duplicate progress copy, got ${m.progressHeaderText}`);
     expect(m.progressSegmentCount === 4, `three work steps plus review segment expected, got ${m.progressSegmentCount}`);
     expect(m.progressTooltip.includes('Daten prüfen'), `hover hint must expose the active step, got ${m.progressTooltip}`);
-    expect(m.progressTooltip.includes('30% · 4/7 Turns · Plan v2'), `hover hint must expose exact progress, got ${m.progressTooltip}`);
+    expect(m.progressTooltip.includes('30% · 4/7 Aktivitäten · Planstand 2'), `hover hint must expose exact progress, got ${m.progressTooltip}`);
     expect(m.progressTooltip.includes('→ Ergebnis schreiben'), `hover hint must expose the next step, got ${m.progressTooltip}`);
     expect(m.progressCurrentText === '' && m.progressNextText === '' && m.progressPlanText === '', 'progress labels must not be persistently visible');
     expect(m.progressInHeader === true, 'visual progress must live inside the window header');
@@ -544,13 +544,15 @@ try {
       input.value = 'Bitte als CTOX Task verarbeiten';
       input.dispatchEvent(new InputEvent('input', { bubbles: true }));
       document.querySelector('.ctox-chat-window.is-active [data-chat-send]').click();
-      await window.chatHarness.waitFor(() => /Warte auf die CTOX Queue-Projektion/.test(document.body.innerText || ''));
+      await window.chatHarness.waitFor(() => /Die Crew hat die Annahme noch nicht bestätigt/.test(document.body.innerText || ''));
       return window.chatHarness.collect();
     });
     results.push({ scenario: 'transient-command-timeout-after-send', metrics: after });
     expect(after.activeTaskClass.includes('is-task-queued'), `transient command timeout must keep chat queued, got ${after.activeTaskClass}`);
     expect(!after.activeTaskClass.includes('is-task-failed'), `transient command timeout must not mark failed, got ${after.activeTaskClass}`);
-    expect(after.activeMessageText.includes('Warte auf die CTOX Queue-Projektion'), 'transient command timeout must explain that tracking continues');
+    expect(after.activeMessageText.includes('Die Crew hat die Annahme noch nicht bestätigt'), 'transient command timeout must explain that tracking continues');
+    expect(!after.activeMessageText.includes('Task an CTOX übergeben'), 'an unconfirmed timeout must not claim native acceptance');
+    expect(!after.activeMessageText.includes('pending_sync'), 'pending receipt enum must not leak as visible text');
     expect(!after.activeMessageText.includes('queued'), `transient status must not leak as chrome text, got ${after.activeMessageText}`);
   });
 

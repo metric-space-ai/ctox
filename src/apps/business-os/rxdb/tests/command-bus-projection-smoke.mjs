@@ -26,6 +26,11 @@ globalThis.CTOX_BUSINESS_OS_SESSION = {
 
 function mockCollection(docsById, events = null, name = '') {
   return {
+    storageCollection: {
+      async findDocumentsById(ids) {
+        return Object.fromEntries(ids.filter((id) => docsById.has(id)).map((id) => [id, docsById.get(id)]));
+      },
+    },
     async insert(doc) {
       events?.push(`insert:${name}`);
       docsById.set(doc.id, doc);
@@ -341,6 +346,87 @@ const assert = (condition, message) => {
     String(thrown.message).includes('multi-tab command failover'),
     'multi-tab follower: failure describes the complete failover rather than only the stale leader',
   );
+}
+
+// Reconnect readiness must not invalidate a durable native receipt. Exercise
+// the complete dispatch path first: push succeeds, reconnect would fail, but
+// the native acknowledgement was already replicated before tracking starts.
+{
+  const db = makeDb({ commandAck: {
+    status: 'accepted', replication_phase: 'native_observed',
+    execution_phase: 'running', execution_task_id: 'queue:system::dispatch-receipt',
+  } });
+  let commandLeases = 0;
+  const events = [];
+  const sync = makeSync(events);
+  const originalLease = sync.leaseCollection;
+  sync.leaseCollection = async (name, reason) => {
+    if (name === 'business_commands' && ++commandLeases > 1) {
+      throw new Error('WebRTC native peer did not open for business_commands within 25000ms');
+    }
+    return originalLease(name, reason);
+  };
+  const receipt = await createCommandBus({ db, sync }).dispatch({ type: 'business_os.chat.task', module: 'ctox' });
+  assert(receipt.task_id === 'queue:system::dispatch-receipt', 'dispatch: preserves acknowledged queue task');
+  assert(commandLeases === 1, 'dispatch: does not reopen an already acknowledged command bridge');
+}
+
+// Exercise reconnect races independently through
+// the public tracker with a local storage read, not a network query fallback.
+for (const arrival of ['before', 'during', 'absent', 'deleted', 'wrong-id', 'failed', 'terminal-wait']) {
+  const id = `cmd-reconnect-${arrival}`;
+  const native = {
+    id, status: 'accepted', replication_phase: 'native_observed',
+    execution_phase: 'running', execution_task_id: 'queue:system::receipt',
+  };
+  let doc = arrival === 'during' || arrival === 'absent'
+    ? { id, status: 'pending', replication_phase: 'local_only' }
+    : { ...native };
+  if (arrival === 'deleted') doc._deleted = true;
+  if (arrival === 'wrong-id') doc.id = 'another-command';
+  if (arrival === 'failed') Object.assign(doc, {
+    execution_phase: 'terminal', terminal_status: 'failed',
+    error_code: 'permission_denied', error_message: 'native permission denied',
+  });
+  let readinessCalls = 0;
+  let localReads = 0;
+  const timeout = Object.assign(new Error('WebRTC native peer did not open for business_commands within 25000ms'), {
+    code: 'peer_connect_timeout',
+  });
+  const bus = createCommandBus({
+    db: { raw: { business_commands: {
+      storageCollection: { async findDocumentsById(ids) {
+        localReads++;
+        assert(ids.length === 1 && ids[0] === id, 'reconnect: reads only the tracked id');
+        return { [id]: doc };
+      } },
+    } } },
+    sync: { async leaseCollection() {
+      readinessCalls++;
+      if (arrival === 'during') doc = native;
+      throw timeout;
+    } },
+  });
+  let receipt;
+  let failure;
+  try {
+    receipt = arrival === 'terminal-wait'
+      ? await bus.waitForTerminal(id)
+      : await bus.waitForAccepted(id);
+  } catch (error) { failure = error; }
+  if (arrival === 'before' || arrival === 'during') {
+    assert(!failure && receipt?.task_id === native.execution_task_id,
+      `reconnect ${arrival}: real native acceptance survives readiness failure`);
+    assert(receipt.status === 'running', 'reconnect: native execution state is retained');
+  } else if (arrival === 'failed') {
+    assert(failure?.code === 'permission_denied', 'reconnect: native rejection is never hidden');
+    assert(failure?.message === 'native permission denied', 'reconnect: native failure reason is retained');
+  } else {
+    assert(!receipt && failure === timeout, `reconnect ${arrival}: no premature acceptance or terminal success`);
+  }
+  assert(readinessCalls === (['before', 'failed'].includes(arrival) ? 0 : 1),
+    `reconnect ${arrival}: already observed outcomes do not reopen the bridge`);
+  assert(localReads <= 2, 'reconnect: bounded cache reads');
 }
 
 console.log('ctox-rxdb command-bus projection smoke OK');

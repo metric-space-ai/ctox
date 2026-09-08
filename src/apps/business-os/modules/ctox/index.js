@@ -1,6 +1,6 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260908-shell-v2-crew-home-v352';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260908-shell-v2-crew-language-v354';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
 
@@ -20,7 +20,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260908-shell-v2-crew-home-v352';
+const CTOX_STYLE_BUILD = '20260908-shell-v2-crew-language-v354';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -29,30 +29,30 @@ const TASK_SOURCE_COLLECTIONS = ['ctox_queue_tasks', 'business_commands', 'ctox_
 const labels = {
   de: {
     now: 'Jetzt',
-    loadingRuntime: 'CTOX Runtime wird geladen',
-    loadingRuntimeDetail: 'Flow, Queue und Status werden aktualisiert.',
+    loadingRuntime: "Crew wird geladen",
+    loadingRuntimeDetail: "Aufgaben und Fortschritt werden aktualisiert.",
     live: 'Live',
-    tasks: 'Tasks',
+    tasks: "Aufgaben",
     newestFirst: 'neueste zuerst',
     taskSteps: 'Zwischenschritte',
-    selectedTask: 'Ausgewählter Task',
-    inboundChannels: 'Inbound-Kanäle',
+    selectedTask: "Ausgewählte Aufgabe",
+    inboundChannels: "Eingangskanäle",
     inboundItems: 'Eingänge',
-    inboundEndpoint: 'Task-Eingang',
-    outboundEndpoint: 'Task-Abschluss',
+    inboundEndpoint: "Aufgabeneingang",
+    outboundEndpoint: "Aufgabenabschluss",
     openOutcome: 'Abschluss offen',
     unprovenOutcome: 'Abschluss nicht belegt',
-    taskDetail: 'Task-Details',
-    editTask: 'Task bearbeiten',
+    taskDetail: "Aufgabendetails",
+    editTask: "Aufgabe bearbeiten",
     taskTitle: 'Titel',
-    taskPrompt: 'Prompt',
+    taskPrompt: "Auftrag",
     saveTask: 'Speichern',
     resumeTask: 'Als Folgeauftrag fortsetzen',
     deleteTask: 'Löschen',
-    deleteTaskConfirm: 'Diesen CTOX Task wirklich löschen?',
-    taskSaved: 'Task gespeichert.',
+    deleteTaskConfirm: "Diese Aufgabe wirklich löschen?",
+    taskSaved: "Aufgabe gespeichert.",
     taskResumed: 'Folgeauftrag angelegt.',
-    taskDeleted: 'Task gelöscht.',
+    taskDeleted: "Aufgabe gelöscht.",
     taskActionFailed: 'Aktion fehlgeschlagen.',
     memoryTitle: "Gedächtnis",
     knowledge: "Was es weiß",
@@ -61,7 +61,7 @@ const labels = {
     saveMemory: "Speichern",
     cancelEdit: "Abbrechen",
     confirmAnchor: "Bestätigen",
-    memoryConfirmed: "vom Owner bestätigt",
+    memoryConfirmed: "bestätigt",
     memoryHypothesis: "Hypothese",
     memoryEmpty: "Noch nichts. Entsteht mit den ersten Einsätzen.",
     noDomain: "noch ohne Fachgebiet",
@@ -77,7 +77,7 @@ const labels = {
     shape_square: "eckig",
     shape_triangle: "Dreieck",
     retryLoad: "Erneut laden",
-    syncDisconnected: "Sync nicht verbunden – Anzeige kann veraltet sein",
+    syncDisconnected: "Verbindung unterbrochen – die Anzeige kann veraltet sein",
     openInChat: "Im Chat öffnen",
     zoomOut: "Verkleinern",
     zoomIn: "Vergrößern",
@@ -85,9 +85,9 @@ const labels = {
     activityTimeline: "Aktivitätsverlauf",
     selectActivityEvent: "Ereignis wählen",
     noEventDetail: "Zu diesem Ereignis liegt noch kein Detail vor.",
-    flowDiagram: "CTOX-Arbeitsfluss",
-    laneCommunication: "Kommunikation mit dem Owner",
-    laneQueue: "Warteschlange und Ausführung",
+    flowDiagram: "Arbeitsablauf der Crew",
+    laneCommunication: "Abstimmung",
+    laneQueue: "Aufgaben und Bearbeitung",
     laneEvidence: "Nachweisprüfung",
     crewHome: "Crew zu Hause",
     atHome: "zu Hause",
@@ -96,7 +96,7 @@ const labels = {
     memoryLinePlaceholder: "Ein Satz je Zeile: was dieses Wesen sicher weiß.",
     outcomeExecutionError: "Fehler bei der Ausführung",
     outcomeCompleted: "erledigt",
-    outcomeReviewRejected: "Review abgelehnt",
+    outcomeReviewRejected: "Prüfung nicht bestanden",
     notPermittedForRole: "für deine Rolle nicht freigegeben",
     noLiveMetrics: "keine Live-Messwerte",
     noPlanYet: "noch kein Plan",
@@ -113,16 +113,16 @@ const labels = {
     sketch: "Skizze",
     specialties: "Spezialitäten",
     specialtiesHint: "kommagetrennt",
-    spec_modules: "Module",
-    spec_command_types: "Befehle",
+    spec_modules: "Apps",
+    spec_command_types: "Auftragsarten",
     spec_skills: "Fähigkeiten",
-    spec_tags: "Tags",
+    spec_tags: "Stichwörter",
     cv: "Lebenslauf",
     tasksTotal: "Einsätze",
     succeededCount: "gelungen",
     failedCount: "gescheitert",
-    reviewPassedCount: "Review bestanden",
-    reviewRejectedCount: "Review abgelehnt",
+    reviewPassedCount: "Prüfung bestanden",
+    reviewRejectedCount: "Prüfung nicht bestanden",
     avgElapsed: "Ø Dauer",
     lastActive: "zuletzt aktiv",
     timesheet: "Stundenzettel",
@@ -147,9 +147,9 @@ const labels = {
     retryTask: "Wiederholen",
     assignTask: "Zuweisen",
     assignChoose: "Mitglied wählen",
-    cancelReasonDefault: "Vom Owner abgebrochen",
-    blockReasonDefault: "Vom Owner blockiert",
-    pauseReasonDefault: "Vom Owner pausiert",
+    cancelReasonDefault: "Vom Nutzer abgebrochen",
+    blockReasonDefault: "Vom Nutzer blockiert",
+    pauseReasonDefault: "Vom Nutzer pausiert",
     controlApplied: "Übernommen.",
     harnessRunning: "Läuft",
     harnessPaused: "Pausiert",
@@ -159,14 +159,14 @@ const labels = {
     countWaiting: "warten",
     countWorking: "im Einsatz",
     countBlocked: "blockiert",
-    pressureActive: "Druck aktiv",
-    pauseHarness: "Queue pausieren",
-    resumeHarness: "Queue fortsetzen",
+    pressureActive: "Hohe Auslastung",
+    pauseHarness: "Crew pausieren",
+    resumeHarness: "Crew weiterarbeiten lassen",
     holdTechnical: "technischer Grund",
-    holdMissingReviewEvidence: "Review-Beleg fehlt",
-    holdMissingArtifact: "Artefakt fehlt",
-    holdWaitingExternal: "wartet auf extern",
-    holdAbortedByOwner: "vom Owner abgebrochen",
+    holdMissingReviewEvidence: "Prüfergebnis fehlt",
+    holdMissingArtifact: "Arbeitsergebnis fehlt",
+    holdWaitingExternal: "wartet auf eine Rückmeldung",
+    holdAbortedByOwner: "vom Nutzer abgebrochen",
     holdOther: "blockiert",
     failureRetryable: "wiederholbar",
     failureTerminal: "endgültig",
@@ -184,122 +184,122 @@ const labels = {
     leasedWord: "übernommen",
     assignedTo: "zugewiesen an",
     crewMember: "Crew-Mitglied",
-    leaseOwner: "Lease",
+    leaseOwner: "Übernommen von",
     until: "bis",
-    chefAdminOnly: 'Nur Chef oder Admin dürfen Tasks ändern.',
+    chefAdminOnly: "Nur Verantwortliche und Administratoren dürfen Aufgaben ändern.",
     currentStep: 'Aktuelle Station',
     source: 'Quelle',
     status: 'Status',
     created: 'Angelegt',
     summary: 'Zusammenfassung',
-    evidence: 'Evidenz',
+    evidence: "Nachweise",
     stationDetail: 'Stationsdetails',
     tools: 'Werkzeuge',
-    openTaskDetail: 'Details im Drawer anzeigen',
-    liveFlow: 'CTOX Live Flow',
-    doingNow: 'Was CTOX gerade tut',
+    openTaskDetail: "Details anzeigen",
+    liveFlow: "Crew im Einsatz",
+    doingNow: "Was die Crew gerade tut",
     measurements: 'Messung',
-    inputTokens: 'Input Tokens',
-    outputTokens: 'Output Tokens',
-    toolCalls: 'Tool Calls',
-    reasoningTurns: 'Reasoning',
+    inputTokens: "Gelesene Tokens",
+    outputTokens: "Erzeugte Tokens",
+    toolCalls: "Werkzeugeinsätze",
+    reasoningTurns: "Denkschritte",
     elapsed: 'Zeit',
     notCaptured: 'nicht erfasst',
     executionProgress: 'Fortschritt',
     step: 'Schritt',
-    activityTurnSingular: 'Turn',
-    activityTurnPlural: 'Turns',
+    activityTurnSingular: "Arbeitsschritt",
+    activityTurnPlural: "Arbeitsschritte",
     executionPhases: {
-      work: 'Modellarbeit',
-      working: 'Modellarbeit',
+      work: 'Bearbeitung',
+      working: 'Bearbeitung',
       plan: 'Planung',
       planning: 'Planung',
-      review: 'Review',
+      review: 'Prüfung',
       validation: 'Nachweis',
       validating: 'Nachweis',
       rework: 'Nacharbeit',
       completed: 'Abgeschlossen',
       done: 'Abgeschlossen',
     },
-    agentPreparing: 'Agent wird vorbereitet',
-    agentWorking: 'Agent arbeitet',
-    agentCompleted: 'Agent-Durchlauf abgeschlossen',
-    agentTimeout: 'Zeitlimit des Agenten erreicht',
-    modelUsageUpdated: 'Modellnutzung aktualisiert',
+    agentPreparing: "Crew bereitet sich vor",
+    agentWorking: "Crew arbeitet",
+    agentCompleted: "Arbeitsschritt abgeschlossen",
+    agentTimeout: "Zeitlimit für diesen Arbeitsschritt erreicht",
+    modelUsageUpdated: "Textverbrauch aktualisiert",
     toolStarted: 'Werkzeug gestartet',
     toolFinished: 'Werkzeug abgeschlossen',
     connected: 'verbunden',
     notLive: 'nicht live',
-    notLogged: 'Zeit nicht geloggt',
-    timeline: 'Timeline',
-    queue: 'Pipeline',
+    notLogged: "Zeit nicht erfasst",
+    timeline: "Verlauf",
+    queue: "Aufgabenliste",
     active: 'aktiv',
     tickets: 'Tickets',
     task: 'Neue Aufgabe',
-    instruction: 'CTOX Anweisung',
+    instruction: "Auftrag an die Crew",
     priority: 'Priorität',
     send: 'Senden',
     sending: 'Sendet...',
-    runtime: 'Runtime',
+    runtime: "Betrieb",
     model: 'Modell',
     mode: 'Modus',
     context: 'Kontext',
-    importTasks: 'Tasks importieren',
-    exportTasks: 'Tasks exportieren',
-    tasksImported: '{count} Tasks importiert.',
-    taskImportFailed: 'Import fehlgeschlagen — keine importierbaren Tasks in der Datei.',
+    importTasks: "Aufgaben importieren",
+    exportTasks: "Aufgaben exportieren",
+    tasksImported: "{count} Aufgaben importiert.",
+    taskImportFailed: "Import fehlgeschlagen – die Datei enthält keine lesbaren Aufgaben.",
     noWorkHere: 'Hier liegt gerade keine Arbeit.',
-    syncingTasks: 'Tasks werden synchronisiert.',
+    syncingTasks: "Aufgaben werden aktualisiert.",
     noRecentWork: 'Noch keine aktuelle Arbeit erfasst.',
-    noMetrics: 'keine Live-Tokenmetriken',
-    routing: 'Routing',
-    inbound: 'Inbound',
-    outbound: 'Outbound',
-    queued: 'Command angelegt',
-    webStack: 'Web Stack',
+    noMetrics: "noch keine Verbrauchsdaten",
+    routing: "Zuordnung",
+    inbound: "Eingang",
+    outbound: "Ausgang",
+    queued: "Auftrag angelegt",
+    webStack: "Internet-Zugänge",
     webStackSources: 'Quellen',
-    webStackCredentials: 'Credentials',
+    webStackCredentials: "Zugangsdaten",
     webStackMissing: 'fehlen',
     webStackConfigured: 'konfiguriert',
-    webStackSecret: 'Secret',
-    webStackCredentialValue: 'Credential-Wert',
+    webStackSecret: "Zugangsschlüssel",
+    webStackCredentialValue: "Zugangsschlüssel",
     webStackSaveCredential: 'Speichern',
     webStackVerifyCredential: 'Prüfen',
     webStackAuthAssist: 'Login im Browser',
-    webStackRxdbOnly: 'Browser-Stream über RxDB, Secrets im CTOX Secret Store.',
-    webStackLoading: 'Web Stack Projektion wird geladen…',
-    webStackConnecting: 'RxDB ist verbunden, die CTOX Web-Stack-Projektion fehlt noch.',
-    webStackUnavailable: 'Web Stack ist gerade nicht erreichbar.',
+    webStackRxdbOnly: "Zugangsdaten werden verschlüsselt gespeichert.",
+    webStackLoading: "Internet-Zugänge werden geladen…",
+    webStackConnecting: "Verbunden. Die Zugangsdaten werden noch geladen.",
+    webStackUnavailable: "Internet-Zugänge sind gerade nicht erreichbar.",
     webStackSyncRequired: 'Verbindung prüfen',
-    webStackCheckProjection: 'Web-Stack-Projektion neu einlesen',
-    webStackProjectionMissing: 'Der Web Stack ist gerade nicht vollständig verfügbar. Die reaktive Verbindung prüft weiter.',
-    webStackCredentialSaved: 'Credential gespeichert.',
+    webStackCheckProjection: "Zugänge neu laden",
+    webStackProjectionMissing: "Die Zugangsdaten sind noch nicht vollständig geladen.",
+    webStackCredentialSaved: "Zugangsdaten gespeichert.",
     webStackAuthQueued: 'Browser-Login angefordert.',
-    webStackRecentCaptures: 'Letzte Captures',
-    webStackNoCaptures: 'Noch keine Browser-Captures.',
-    webStackRecentExtracts: 'Letzte Extracts',
-    webStackNoExtracts: 'Noch keine Browser-Extracts.',
-    timelineUnavailable: 'Keine Timeline-Ereignisse verfügbar',
-    timelineUnavailableDetail: 'Der Regler ist deaktiviert, bis CTOX mehr als einen Schritt projiziert.',
-    flowProjectionMissing: 'RxDB verbunden, CTOX Flow-Projektion fehlt',
-    harnessHealth: 'Harness Health',
-    harnessCriticalTitle: 'CTOX Harness verarbeitet keine Queue',
-    harnessCriticalMessage: '{count} Aufgaben warten seit {age}; keine geleaste oder laufende Verarbeitung sichtbar.',
-    harnessCriticalProjection: '{count} Aufgaben warten seit {age}; RxDB ist verbunden, aber die CTOX Flow-Projektion fehlt.',
-    harnessWarningTitle: 'Queue wartet auf CTOX Harness',
-    harnessWarningMessage: '{count} Aufgaben warten; noch keine Lease sichtbar.',
-    harnessOpenTask: 'Task öffnen',
-    harnessHealthy: 'Harness verarbeitet Queue',
+    webStackRecentCaptures: "Letzte Aufnahmen",
+    webStackNoCaptures: "Noch keine Browser-Aufnahmen.",
+    webStackRecentExtracts: "Zuletzt gelesene Inhalte",
+    webStackNoExtracts: "Noch keine Inhalte gelesen.",
+    timelineUnavailable: "Noch kein Verlauf verfügbar",
+    timelineUnavailableDetail: "Der Verlauf wird mit dem nächsten Arbeitsschritt verfügbar.",
+    flowProjectionMissing: "Verbunden. Der Arbeitsstand wird noch geladen.",
+    harnessHealth: "Crew-Status",
+    harnessCriticalTitle: "Die Crew arbeitet gerade keine Aufgaben ab",
+    harnessCriticalMessage: "Offene Aufgaben: {count}. Längste Wartezeit: {age}.",
+    harnessCriticalProjection: "Offene Aufgaben: {count}. Längste Wartezeit: {age}. Der aktuelle Arbeitsstand ist noch nicht verfügbar.",
+    harnessWarningTitle: "Aufgaben warten auf die Crew",
+    harnessWarningMessage: "Offene Aufgaben: {count}. Noch kein Arbeitsbeginn sichtbar.",
+    harnessOpenTask: "Aufgabe öffnen",
+    harnessHealthy: "Die Crew bearbeitet die Aufgabenliste",
     auxShow: 'Status & Quellen',
     auxHide: 'Status & Quellen ausblenden',
-    harnessKicker: 'Harness',
-    taskSearch: 'Tasks suchen',
+    harnessKicker: "Crew",
+    taskSearch: "Aufgaben suchen",
     showAsList: 'Als Liste anzeigen',
     showAsCards: 'Als Karten anzeigen',
     filters: 'Filter',
     resetFilters: 'Filter zurücksetzen',
     allSources: 'Alle Quellen',
-    allTasks: 'Alle Tasks',
+    allTasks: "Alle Aufgaben",
     pinnedOnly: 'Nur Pins',
     sortUpdated: 'Aktualisiert',
     sortTitle: 'Titel',
@@ -311,19 +311,19 @@ const labels = {
     viewWaiting: 'Wartet',
     viewDone: 'Erledigt',
     entries: 'Einträge',
-    pinTask: 'Task anpinnen',
+    pinTask: "Aufgabe anpinnen",
     unpinTask: 'Pin lösen',
     pinned: 'Angepinnt',
-    pipelineQueued: 'Queue',
+    pipelineQueued: "Wartet",
     pipelineWorking: 'Arbeit',
-    pipelineReview: 'Review',
+    pipelineReview: "Prüfung",
     pipelineDone: 'Fertig',
-    flowFooterEmpty: 'Kein Task ausgewählt',
+    flowFooterEmpty: "Keine Aufgabe ausgewählt",
   },
   en: {
     now: 'Now',
-    loadingRuntime: 'Loading CTOX runtime',
-    loadingRuntimeDetail: 'Updating flow, queue, and status.',
+    loadingRuntime: "Loading the crew",
+    loadingRuntimeDetail: "Updating tasks and progress.",
     live: 'Live',
     tasks: 'Tasks',
     newestFirst: 'newest first',
@@ -342,7 +342,7 @@ const labels = {
     saveTask: 'Save',
     resumeTask: 'Continue as follow-up',
     deleteTask: 'Delete',
-    deleteTaskConfirm: 'Delete this CTOX task?',
+    deleteTaskConfirm: "Delete this task?",
     taskSaved: 'Task saved.',
     taskResumed: 'Follow-up task queued.',
     taskDeleted: 'Task deleted.',
@@ -370,7 +370,7 @@ const labels = {
     shape_square: "square",
     shape_triangle: "triangle",
     retryLoad: "Reload",
-    syncDisconnected: "Sync not connected – the view may be stale",
+    syncDisconnected: "Disconnected – the view may be out of date",
     openInChat: "Open in chat",
     zoomOut: "Zoom out",
     zoomIn: "Zoom in",
@@ -378,9 +378,9 @@ const labels = {
     activityTimeline: "Activity timeline",
     selectActivityEvent: "Select activity event",
     noEventDetail: "No detail is available for this event yet.",
-    flowDiagram: "CTOX work flow",
-    laneCommunication: "Owner communication",
-    laneQueue: "Queue and execution",
+    flowDiagram: "Crew workflow",
+    laneCommunication: "Coordination",
+    laneQueue: "Tasks and work",
     laneEvidence: "Evidence check",
     crewHome: "Crew at home",
     atHome: "at home",
@@ -452,12 +452,12 @@ const labels = {
     countWaiting: "waiting",
     countWorking: "on duty",
     countBlocked: "blocked",
-    pressureActive: "pressure active",
-    pauseHarness: "Pause queue",
-    resumeHarness: "Resume queue",
+    pressureActive: "High workload",
+    pauseHarness: "Pause the crew",
+    resumeHarness: "Resume the crew",
     holdTechnical: "technical reason",
     holdMissingReviewEvidence: "review evidence missing",
-    holdMissingArtifact: "artifact missing",
+    holdMissingArtifact: "work result missing",
     holdWaitingExternal: "waiting for external input",
     holdAbortedByOwner: "aborted by owner",
     holdOther: "blocked",
@@ -477,7 +477,7 @@ const labels = {
     leasedWord: "picked up",
     assignedTo: "assigned to",
     crewMember: "Crew member",
-    leaseOwner: "Lease",
+    leaseOwner: "Picked up by",
     until: "until",
     chefAdminOnly: 'Only chef or admin can change tasks.',
     currentStep: 'Current station',
@@ -488,9 +488,9 @@ const labels = {
     evidence: 'Evidence',
     stationDetail: 'Station details',
     tools: 'Tools',
-    openTaskDetail: 'Show details in drawer',
-    liveFlow: 'CTOX live flow',
-    doingNow: 'What CTOX is doing now',
+    openTaskDetail: "Show details",
+    liveFlow: "Crew at work",
+    doingNow: "What the crew is doing",
     measurements: 'Measurements',
     inputTokens: 'Input tokens',
     outputTokens: 'Output tokens',
@@ -514,10 +514,10 @@ const labels = {
       completed: 'Completed',
       done: 'Completed',
     },
-    agentPreparing: 'Preparing agent',
-    agentWorking: 'Agent is working',
-    agentCompleted: 'Agent turn completed',
-    agentTimeout: 'Agent turn timed out',
+    agentPreparing: "Crew is preparing",
+    agentWorking: "Crew is working",
+    agentCompleted: "Work step completed",
+    agentTimeout: "Time limit reached for this step",
     modelUsageUpdated: 'Model usage updated',
     toolStarted: 'Tool started',
     toolFinished: 'Tool finished',
@@ -525,15 +525,15 @@ const labels = {
     notLive: 'not live',
     notLogged: 'time not logged',
     timeline: 'Timeline',
-    queue: 'Pipeline',
+    queue: "Task list",
     active: 'active',
     tickets: 'Tickets',
     task: 'New task',
-    instruction: 'CTOX instruction',
+    instruction: "Instructions for the crew",
     priority: 'Priority',
     send: 'Send',
     sending: 'Sending...',
-    runtime: 'Runtime',
+    runtime: "Operation",
     model: 'Model',
     mode: 'Mode',
     context: 'Context',
@@ -545,11 +545,11 @@ const labels = {
     syncingTasks: 'Syncing tasks.',
     noRecentWork: 'No recent work recorded yet.',
     noMetrics: 'no live token metrics',
-    routing: 'Routing',
+    routing: "Assignment",
     inbound: 'Inbound',
     outbound: 'Outbound',
-    queued: 'Command queued',
-    webStack: 'Web Stack',
+    queued: "Task created",
+    webStack: "Online access",
     webStackSources: 'Sources',
     webStackCredentials: 'Credentials',
     webStackMissing: 'missing',
@@ -559,33 +559,33 @@ const labels = {
     webStackSaveCredential: 'Save',
     webStackVerifyCredential: 'Verify',
     webStackAuthAssist: 'Login in Browser',
-    webStackRxdbOnly: 'Browser stream over RxDB, secrets in CTOX Secret Store.',
-    webStackLoading: 'Loading Web Stack projection…',
-    webStackConnecting: 'RxDB is connected, but the CTOX Web Stack projection is still missing.',
-    webStackUnavailable: 'Web Stack is currently unreachable.',
+    webStackRxdbOnly: "Credentials are stored encrypted.",
+    webStackLoading: "Loading online access…",
+    webStackConnecting: "Connected. Access details are still loading.",
+    webStackUnavailable: "Online access is currently unavailable.",
     webStackSyncRequired: 'Check connection',
-    webStackCheckProjection: 'Reload Web Stack projection',
-    webStackProjectionMissing: 'The Web Stack is not fully available right now. The reactive connection keeps checking.',
+    webStackCheckProjection: "Reload access details",
+    webStackProjectionMissing: "Access details have not finished loading.",
     webStackCredentialSaved: 'Credential saved.',
     webStackAuthQueued: 'Browser login requested.',
-    webStackRecentCaptures: 'Recent captures',
-    webStackNoCaptures: 'No browser captures yet.',
-    webStackRecentExtracts: 'Recent extracts',
-    webStackNoExtracts: 'No browser extracts yet.',
+    webStackRecentCaptures: "Recent recordings",
+    webStackNoCaptures: "No browser recordings yet.",
+    webStackRecentExtracts: "Recently read content",
+    webStackNoExtracts: "No content read yet.",
     timelineUnavailable: 'No timeline events available',
-    timelineUnavailableDetail: 'The scrubber is disabled until CTOX projects more than one step.',
-    flowProjectionMissing: 'RxDB connected, CTOX flow projection missing',
-    harnessHealth: 'Harness health',
-    harnessCriticalTitle: 'CTOX harness is not processing the queue',
-    harnessCriticalMessage: '{count} tasks have been waiting for {age}; no leased or running work is visible.',
-    harnessCriticalProjection: '{count} tasks have been waiting for {age}; RxDB is connected, but the CTOX flow projection is missing.',
-    harnessWarningTitle: 'Queue is waiting for CTOX harness',
-    harnessWarningMessage: '{count} tasks are waiting; no lease is visible yet.',
+    timelineUnavailableDetail: "The timeline becomes available with the next step.",
+    flowProjectionMissing: "Connected. Work progress is still loading.",
+    harnessHealth: "Crew status",
+    harnessCriticalTitle: "The crew is not working on tasks right now",
+    harnessCriticalMessage: "Open tasks: {count}. Longest wait: {age}.",
+    harnessCriticalProjection: "Open tasks: {count}. Longest wait: {age}. Current progress is not available yet.",
+    harnessWarningTitle: "Tasks are waiting for the crew",
+    harnessWarningMessage: "Open tasks: {count}. No work has started yet.",
     harnessOpenTask: 'Open task',
-    harnessHealthy: 'Harness is processing queue',
+    harnessHealthy: "The crew is working through the task list",
     auxShow: 'Status & sources',
     auxHide: 'Hide status & sources',
-    harnessKicker: 'Harness',
+    harnessKicker: "Crew",
     taskSearch: 'Search tasks',
     showAsList: 'Show as list',
     showAsCards: 'Show as cards',
@@ -639,16 +639,16 @@ const STATE_MACHINE_NODES = [
 // names for tooltips and tests; what the screen shows comes from here.
 const FLOW_NODE_COPY = {
   de: {
-    queued: ['Warteschlange', 'Wartet in der Schlange'],
-    leased: ['Übernommen', 'Abgeholt'],
+    queued: ['Aufgabenliste', 'Wartet auf den Start'],
+    leased: ['Übernommen', 'Bereit zum Start'],
     running: ['Arbeit', 'Arbeitet'],
-    'awaiting-review': ['Review', 'Bereit fürs Review'],
-    'review-queued': ['Review', 'Review wartet'],
-    reviewing: ['Review', 'Im Review'],
-    'review-passed': ['Review', 'Review bestanden'],
-    'review-rejected': ['Review', 'Review abgelehnt'],
-    'review-unavailable': ['Review', 'Reviewer nicht erreichbar'],
-    'review-retry': ['Review', 'Review wiederholen'],
+    'awaiting-review': ['Prüfung', 'Bereit zur Prüfung'],
+    'review-queued': ['Prüfung', 'Prüfung steht aus'],
+    reviewing: ['Prüfung', 'Wird geprüft'],
+    'review-passed': ['Prüfung', 'Prüfung bestanden'],
+    'review-rejected': ['Prüfung', 'Prüfung nicht bestanden'],
+    'review-unavailable': ['Prüfung', 'Prüfung nicht verfügbar'],
+    'review-retry': ['Prüfung', 'Prüfung wiederholen'],
     'rework-required': ['Nacharbeit', 'Nacharbeit nötig'],
     'awaiting-validation': ['Nachweis', 'Nachweis nötig'],
     validating: ['Nachweis', 'Nachweis wird geprüft'],
@@ -657,8 +657,8 @@ const FLOW_NODE_COPY = {
     'infra-failed': ['Gescheitert', 'Dienst gescheitert'],
   },
   en: {
-    queued: ['Queue', 'Waiting in queue'],
-    leased: ['Leased', 'Picked up'],
+    queued: ['Task list', 'Waiting to start'],
+    leased: ['Picked up', 'Ready to start'],
     running: ['Work', 'Working'],
     'awaiting-review': ['Review', 'Ready for review'],
     'review-queued': ['Review', 'Review waiting'],
@@ -2722,7 +2722,7 @@ function inboundEndpointFlowSvg(model, selectedTask, state) {
   const queueApproachX = Math.max(nodeX + nodeWidth + 22, queueLeft - 26);
   const detail = endpoint.detail || (channels.length ? `${channels.reduce((sum, channel) => sum + channel.count, 0)} ${t.inboundItems}` : '');
   return `
-    <g class="ctox-flow-inbound" aria-label="Inbound channels feeding CTOX queue">
+    <g class="ctox-flow-inbound" aria-label="Eingänge für die Crew">
       <text class="ctox-flow-inbound-label" x="${nodeX}" y="${nodeY - 14}">${escapeHtml(t.inboundEndpoint)}</text>
       <path class="ctox-flow-channel-edge is-selected" d="M ${nodeX + nodeWidth} ${selectedEdgeY} L ${queueApproachX} ${selectedEdgeY} L ${queueApproachX} ${queued.y} L ${queueLeft} ${queued.y}"></path>
       <g class="ctox-flow-channel-node is-selected" transform="translate(${nodeX} ${nodeY})">
@@ -3055,7 +3055,7 @@ function applyHarnessFlowStatus(tasks, flowResult) {
     || [...observedIds].reverse().find((id) => ['passed', 'model-failed', 'infra-failed'].includes(id));
   if (!terminalNode) return tasks;
   const status = terminalNode === 'passed' ? 'completed' : 'failed';
-  const summary = terminalSummaryFromFlow(flowResult) || (terminalNode === 'passed' ? 'Completed by CTOX harness' : 'CTOX harness marked this queue item failed');
+  const summary = terminalSummaryFromFlow(flowResult) || (terminalNode === 'passed' ? 'Completed by the crew' : 'The crew could not complete this task');
   return tasks.map((task) => {
     if (!ids.has(task.id) && !ids.has(task.taskId) && !ids.has(task.commandId) && !ids.has(task.runId)) return task;
     if (authoritativeTaskStatus(task)) return task;
@@ -3117,7 +3117,7 @@ function buildTaskList(data) {
     ...ticket,
     id: `ticket-${ticket.id}`,
     ticketId: ticket.id,
-    title: ticket.title || ticket.summary || ticket.id || 'CTOX ticket',
+    title: ticket.title || ticket.summary || ticket.id || 'Ticket',
     status: normalizeCommandStatus(ticket.status || ticket.severity || 'open'),
     source: ticket.source || ticket.module || ticket.surface || 'ctox',
     channel: ticket.channel || inferInboundChannel(ticket),
@@ -3663,7 +3663,7 @@ async function deleteCtoxTaskFromDrawer(state, task, body) {
 
 async function dispatchCtoxTaskMutation(state, { commandType, payload, commandPath }) {
   if (!state.ctx?.commandBus?.dispatch) {
-    throw new Error('RxDB command bus is not available');
+    throw new Error('Die Verbindung zur Crew ist nicht verfügbar.');
   }
   const commandId = `cmd_${commandType.replace(/[^a-z0-9]+/gi, '_')}_${crypto.randomUUID()}`;
   return state.ctx.commandBus.dispatch({
@@ -4035,7 +4035,7 @@ function mergeBundleWithCommands(bundle, commands, queueTasks = [], bugReports =
     id: doc.id || doc.task_id || doc.command_id,
     taskId: doc.task_id || doc.id || '',
     commandId: doc.command_id || '',
-    title: doc.title || doc.command_type || doc.id || 'CTOX queue task',
+    title: doc.title || doc.command_type || doc.id || 'Aufgabe',
     prompt: doc.prompt || doc.payload?.prompt || doc.payload?.instruction || '',
     source: doc.source_module || doc.module || 'ctox',
     channel: inferInboundChannel(doc),
@@ -4082,7 +4082,7 @@ function mergeBundleWithCommands(bundle, commands, queueTasks = [], bugReports =
     .filter(Boolean);
   const tickets = bugReports.map((doc) => ({
     id: doc.id || doc.report_id,
-    title: doc.title || doc.surface || doc.id || 'CTOX ticket',
+    title: doc.title || doc.surface || doc.id || 'Ticket',
     status: normalizeCommandStatus(doc.status || doc.severity || 'open'),
     severity: doc.severity || '',
     module: doc.module || doc.module_id || 'ctox',
@@ -4281,7 +4281,7 @@ function inboundChannelLabel(channel) {
   const labelsById = {
     'business_os.llm.chat': 'LLM Chat',
     'business-os': 'Business OS',
-    ctox: 'CTOX',
+    ctox: 'Crew',
     documents: 'Documents',
     knowledge: 'Knowledge',
     'requirement-matching': 'Requirement Matching',
@@ -4503,8 +4503,8 @@ async function verifyWebStackCredential(state, sourceId, secretName) {
     loading: false,
     error: '',
     notice: configured
-      ? `${secretName || sourceId}: Credential ist im CTOX Secret Store vorhanden.`
-      : `${secretName || sourceId}: Credential fehlt im CTOX Secret Store. Hinterlegen bleibt aus Datenschutzgründen außerhalb von RxDB.`,
+      ? `${secretName || sourceId}: Zugangsdaten sind sicher gespeichert.`
+      : `${secretName || sourceId}: Zugangsdaten fehlen. Bitte hinterlegen.`,
   };
   renderMain(state);
 }
@@ -4512,7 +4512,7 @@ async function verifyWebStackCredential(state, sourceId, secretName) {
 async function requestWebStackAuthAssist(state, source) {
   const t = labels[state.lang];
   if (!state.ctx?.commandBus?.dispatch) {
-    state.webStack = { ...(state.webStack || {}), error: 'RxDB command bus is not available' };
+    state.webStack = { ...(state.webStack || {}), error: 'Die Verbindung zur Crew ist nicht verfügbar.' };
     renderMain(state);
     return;
   }
@@ -5720,7 +5720,7 @@ async function runTaskControl(state, task, control, body, extra = {}) {
   if (status) status.textContent = '';
   try {
     if (control === 'cancel') {
-      if (!state.ctx?.commandBus?.cancel) throw new Error('RxDB command bus is not available');
+      if (!state.ctx?.commandBus?.cancel) throw new Error('Die Verbindung zur Crew ist nicht verfügbar.');
       await state.ctx.commandBus.cancel(task.commandId, { reason: t.cancelReasonDefault, until: 'accepted' });
     } else if (control === 'block') {
       await dispatchCtoxTaskMutation(state, { commandType: 'ctox.queue.block', payload: { task_id: taskId, reason: t.blockReasonDefault }, commandPath: 'ctox_queue_block' });
@@ -6310,7 +6310,7 @@ function formatTokenCount(value) {
 }
 
 function displayFlowMode(mode) {
-  if (mode === 'ctox_cli' || mode === 'ctox_core') return 'CTOX core';
+  if (mode === 'ctox_cli' || mode === 'ctox_core') return 'Crew';
   return String(mode || 'unavailable').replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
@@ -6412,7 +6412,7 @@ function eventToNodeId(kind, title) {
 
 function taskDisplayTitle(task, state) {
   return safeTaskDisplayText(itemTitle(task), state.lang, {
-    fallback: nativeTaskId(task) || 'CTOX task',
+    fallback: nativeTaskId(task) || 'Aufgabe',
     max: 120,
   });
 }
@@ -6492,11 +6492,11 @@ function statusClass(status) {
 
 function displayWorkSource(source) {
   return String(source || 'ctox')
-    .replace(/^ctox[-_\s]*/i, 'CTOX ')
+    .replace(/^ctox[-_\s]*/i, 'Crew ')
     .trim()
     .split(/[/:]+/)
     .filter(Boolean)
-    .map((part) => part.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()).replace(/\bCtox\b/g, 'CTOX').replace(/\bOs\b/g, 'OS'))
+    .map((part) => part.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()).replace(/\bCtox\b/g, 'Crew').replace(/\bOs\b/g, 'OS'))
     .join(' / ');
 }
 
@@ -6534,6 +6534,7 @@ function displayFailureClass(failureClass, state) {
   if (!value) return '';
   if (value === 'retryable') return t.failureRetryable;
   if (value === 'terminal') return t.failureTerminal;
+  if (value === 'technical') return t.holdTechnical;
   return value.replace(/[_-]+/g, ' ');
 }
 
@@ -6593,7 +6594,7 @@ function displayStatus(status, lang = 'de') {
 
 function displayCommandTitle(doc) {
   const payload = doc.payload || {};
-  return payload.title || payload.instruction || doc.command_type || doc.command_id || 'CTOX command';
+  return payload.title || payload.instruction || doc.command_type || doc.command_id || 'Auftrag';
 }
 
 function resultSummary(result) {

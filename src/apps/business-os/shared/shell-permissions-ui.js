@@ -470,7 +470,7 @@ export function renderGlobalCtoxAgentScopeHtml(options = {}) {
   const view = options.view && typeof options.view === 'object'
     ? options.view
     : buildGlobalCtoxAgentScopeView(options);
-  const title = options.labels?.scopeTitle || 'CTOX Zugriff';
+  const title = options.labels?.scopeTitle || 'Crew-Zugriff';
   return `
     <section class="ctox-agent-scope" aria-label="${escapeAttr(title)}">
       <div class="ctox-agent-scope-title">${escapeHtml(title)}</div>
@@ -490,7 +490,7 @@ export function renderCompactGlobalCtoxAgentScopeHtml(options = {}) {
   const view = options.view && typeof options.view === 'object'
     ? options.view
     : buildGlobalCtoxAgentScopeView(options);
-  const title = options.labels?.scopeTitle || 'CTOX Zugriff';
+  const title = options.labels?.scopeTitle || 'Crew-Zugriff';
   return `
     <details class="ctox-agent-scope ctox-agent-scope--compact" aria-label="${escapeAttr(title)}">
       <summary class="ctox-agent-scope-title">${escapeHtml(title)}</summary>
@@ -639,7 +639,7 @@ function dataAreaLabel(collectionId) {
     .filter(Boolean)
     .map((word) => {
       const lower = word.toLowerCase();
-      if (lower === 'ctox') return 'CTOX';
+      if (lower === 'ctox') return 'Crew';
       if (lower === 'id') return 'ID';
       return lower.charAt(0).toUpperCase() + lower.slice(1);
     })
