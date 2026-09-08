@@ -15313,12 +15313,65 @@ function ensureCtoxSmokeBinary() {
           await waitForNativePeerOpen(appCommandReplicationState, 'business_commands');
           await waitForNativePeerOpen(appQueueReplicationState, 'ctox_queue_tasks');
         }
-        if (smokeMode === 'command-midflight-restart-browser-to-rust' || officeRestartSmokeMode) {
+        let commandRestartEvidence = null;
+        if (smokeMode === 'command-midflight-restart-browser-to-rust') {
+          const commandBus = globalThis.ctoxBusinessOsSmoke?.state?.commandBus;
+          if (!useAppDb || !commandBus?.dispatch
+            || !globalThis.__ctoxStopNativePeerForRestoreSmoke
+            || !globalThis.__ctoxStartNativePeerForRestoreSmoke) {
+            throw new Error('Mid-flight command acceptance requires the real shell and native process controls');
+          }
+          commandRestartEvidence = {
+            schema: 'ctox.command_restart_acceptance.v1',
+            dispatchCount: 0, resubmissionCount: 0, collectionRepairCount: 0,
+            nativeStoppedBeforeDispatch: false,
+            stopMs: null, nativeStartMs: null, dispatchToReceiptMs: null,
+            receiptStatus: null, codingHarnessVerified: false,
+          };
+          let deadlineTimer;
+          try {
+            const stopStartedAt = performance.now();
+            await globalThis.__ctoxStopNativePeerForRestoreSmoke();
+            commandRestartEvidence.stopMs = performance.now() - stopStartedAt;
+            commandRestartEvidence.nativeStoppedBeforeDispatch = true;
+            const dispatchStartedAt = performance.now();
+            commandRestartEvidence.dispatchCount++;
+            // Exactly one production dispatch while the native host is down.
+            // Keep every active collection running through the outage.
+            const dispatch = commandBus.dispatch({
+              id, module: 'ctox', type: 'business_os.smoke', record_id: '',
+              inbound_channel: 'ctox',
+              payload: { title: 'WebRTC command restart smoke', instruction: 'smoke test only' },
+              client_context: smokeClientContext({ source: 'rxdb-smoke', restart: 'midflight' }),
+            }, { until: 'accepted', timeoutMs: 60000 }).then(receipt => {
+              commandRestartEvidence.dispatchToReceiptMs = performance.now() - dispatchStartedAt;
+              commandRestartEvidence.receiptStatus = receipt?.status || null;
+              return receipt;
+            });
+            const nativeStartAt = performance.now();
+            const restart = globalThis.__ctoxStartNativePeerForRestoreSmoke().then(() => {
+              commandRestartEvidence.nativeStartMs = performance.now() - nativeStartAt;
+            });
+            const [, receipt] = await Promise.race([
+              Promise.all([restart, dispatch]),
+              new Promise((_, reject) => {
+                deadlineTimer = setTimeout(() => reject(new Error('Single command dispatch did not recover within 60000 ms')), 60000);
+              }),
+            ]);
+            if (!receipt?.ok || !receipt.status || ['pending_sync', 'error', 'failed', 'cancelled'].includes(receipt.status)
+              || commandRestartEvidence.dispatchToReceiptMs >= 60000) {
+              throw new Error('Native restart did not produce an accepted command receipt');
+            }
+          } finally {
+            clearTimeout(deadlineTimer);
+            console.log('command_restart_dispatch=' + JSON.stringify(commandRestartEvidence));
+          }
+        } else if (officeRestartSmokeMode) {
           const commandBus = globalThis.ctoxBusinessOsSmoke?.state?.commandBus;
           if (!commandBus?.dispatch) throw new Error('Business OS command bus is not available for mid-flight restart smoke');
           const restartPromise = globalThis.__ctoxRestartNativePeer?.();
           await delay(50);
-          const midflightCommand = officeRestartSmokeMode ? {
+          const midflightCommand = {
             id,
             module: officeRestartFixture.config.module,
             type: `office.${officeRestartFixture.kind}.commit`,
@@ -15336,14 +15389,6 @@ function ensureCtoxSmokeBinary() {
               reason: 'native-peer-restart-smoke',
             },
             client_context: { source: 'ctox-office-esm', surface: `business-os-${officeRestartFixture.config.module}`, transport: 'rxdb-webrtc' },
-          } : {
-            id,
-            module: 'ctox',
-            type: 'business_os.smoke',
-            record_id: '',
-            inbound_channel: 'ctox',
-            payload: { title: 'WebRTC command restart smoke', instruction: 'smoke test only' },
-            client_context: { source: 'rxdb-smoke', restart: 'midflight' },
           };
           const firstDispatch = commandBus.dispatch(midflightCommand).catch((error) => ({ error }));
           await restartPromise;
@@ -15471,6 +15516,7 @@ function ensureCtoxSmokeBinary() {
                 taskId,
                 taskStatus: command.task_status || task?.status || command.status || '',
                 taskCountForCommand: queueTasksForCommand.length,
+                commandRestartEvidence,
                 officeCommit,
               };
             }
@@ -17181,6 +17227,30 @@ function ensureCtoxSmokeBinary() {
       || result.mode === 'command-midflight-restart-browser-to-rust'
       || result.mode === 'office-document-midflight-restart-browser-to-rust'
       || result.mode === 'office-spreadsheet-midflight-restart-browser-to-rust') {
+      if (result.mode === 'command-midflight-restart-browser-to-rust') {
+        const commandTable = 'ctox_business_os__business_commands__v0';
+        const taskTable = 'ctox_business_os__ctox_queue_tasks__v0';
+        const commandRow = pollSqliteJson(commandTable, result.id);
+        const taskRow = pollSqliteJson(taskTable, result.taskId);
+        const commandCount = sqliteRowCount(commandTable, `json_extract(data, '$.command_id')='${sqlString(result.id)}'`);
+        const taskCount = sqliteRowCount(taskTable, `json_extract(data, '$.command_id')='${sqlString(result.id)}'`);
+        const evidence = {
+          ...result.commandRestartEvidence,
+          commandId: result.id, taskId: result.taskId,
+          nativeCommandCount: commandCount, nativeQueueTaskCount: taskCount,
+          browserQueueTaskCount: result.taskCountForCommand,
+          commandTaskMatches: commandRow.task_id === result.taskId,
+          taskCommandMatches: taskRow.command_id === result.id,
+        };
+        const reportDirectory = smokeProcessLifecyclePath ? path.dirname(smokeProcessLifecyclePath) : runtimeRoot;
+        fs.mkdirSync(reportDirectory, { recursive: true });
+        fs.writeFileSync(path.join(reportDirectory, 'command-restart.json'), JSON.stringify(evidence, null, 2) + '\n');
+        console.log('command_restart_native=' + JSON.stringify(evidence));
+        if (commandCount !== 1 || taskCount !== 1 || result.taskCountForCommand !== 1
+          || !evidence.commandTaskMatches || !evidence.taskCommandMatches) {
+          throw new Error('Native SQLite does not confirm exactly one durable command-to-queue handoff');
+        }
+      }
       if (result.mode === 'migration-version-browser-to-rust') {
         const commandTable = 'ctox_business_os__business_commands__v1';
         const staleCommandTable = 'ctox_business_os__business_commands__v0';

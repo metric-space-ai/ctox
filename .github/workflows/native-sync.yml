@@ -280,6 +280,18 @@ jobs:
           node src/apps/business-os/rxdb/tests/command-roundtrip-budget.mjs \
             --input "$RUNNER_TEMP/ctox-host-proof/command-marks.json" \
             | tee "$RUNNER_TEMP/ctox-host-proof/command-budget.json"
+      - name: Recover one browser command across a native outage without repair
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -o pipefail
+          CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox" \
+            SMOKE_MODE=command-midflight-restart-browser-to-rust \
+            SMOKE_PAGE_PATH=/index.html BUSINESS_PORT=8881 SIGNALING_PORT=18880 \
+            SMOKE_PROCESS_LIFECYCLE_PATH="$RUNNER_TEMP/ctox-host-proof/command-restart-processes.json" \
+            node src/core/rxdb/tools/browser_rust_smoke.js 2>&1 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/command-restart-browser.log"
       - name: Verify 21 collections across reload and native restart
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         timeout-minutes: 10

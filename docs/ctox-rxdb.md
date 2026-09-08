@@ -189,6 +189,19 @@ Registry, command and document lifecycle regressions run through
 `collection-lease-lifecycle-smoke.mjs`. These component tests do not replace
 the real browser/native command, reload and performance acceptance.
 
+The full-host CI also runs `command-midflight-restart-browser-to-rust` against
+the real shell and the built native binary. It stops the native process, starts
+one production command dispatch while that process is absent, and starts the
+same host again. All active collections keep running. The fixture must receive
+an accepted receipt within the original 60-second dispatch budget; it may not
+resubmit the command, resume tracking as a second attempt, or suspend/restart
+collections to repair delivery. Browser projections and native SQLite must
+agree on exactly one command-to-queue handoff. The retained report separates
+process-stop, native-start and dispatch-to-receipt timings from warm command
+latency. This proves neither coding-harness execution nor exactly-once external
+effects. The existing Office restart scenarios are separate app acceptance;
+their recovery behavior is not used as evidence for this stricter Sync gate.
+
 The shell readiness mapping applies the same rule. Obsolete
 `httpBridgeStatus`/`httpBridgePulledAt` fields cannot establish initial
 replication, streaming readiness or an advertised checkpoint epoch. Their
