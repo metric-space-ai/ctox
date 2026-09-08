@@ -221,6 +221,29 @@ follow [Linux proc_pid_stat(5)](https://www.man7.org/linux/man-pages/man5/proc_p
 The sampler has a live Linux child-process check in the canonical JS suite;
 a retained CPU profile still requires analysis and is not tenant acceptance.
 
+For source-symbol attribution, the full-host workflow runs a separate context
+reproduction **after** the unprofiled acceptance measurements. Its test-driver
+option `--native-symbol-perf=<executable>` attaches Linux perf only to the owned
+native child after 30 seconds and records user-space CPU samples at 49 Hz for
+at most 30 seconds. PID start identity is checked before attachment; child
+task inheritance and stack/memory capture are disabled. The profiler receives
+SIGINT at the limit (SIGKILL after three more seconds if needed); it never
+signals the native host. Host cleanup waits for bounded profiler finalization.
+The report subprocess has a five-second/two-MiB output bound. Permission errors,
+missing tools, zero samples and oversized recordings are explicit unavailable
+results, not successful profiles. See
+[perf-record(1)](https://man7.org/linux/man-pages/man1/perf-record.1.html).
+
+Artifacts under `ctox-host-proof/symbol-profile/` include tool version, fixture
+exit status, flat symbol report, recording and process identity metadata.
+The workflow requires a successful real Linux owned-child profiler check and
+a nonempty native sample. The original context fixture exit code is preserved.
+These diagnostic timings never replace the command/reload budgets, and a flat
+user-space profile is neither a call graph nor kernel-CPU or tenant acceptance.
+Local process-lifecycle tests cover PID reuse, permission failure, empty samples
+and bounded profiler cleanup; real Linux attribution remains unverified until
+the workflow produces a usable profile.
+
 The authenticated two-profile context fixture persists the exact requester
 command and reviewer result status snapshots before their assertions, outside
 the CI error line. On failure it separately reads each profile's already
