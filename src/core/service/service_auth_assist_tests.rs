@@ -15,11 +15,9 @@ fn auth_assist_recovery_keeps_ordinary_command_lease_guard() {
         "no owned lease",
     )
     .expect_err("ordinary commands still need their real worker lease");
-    assert!(
-        error
-            .to_string()
-            .contains("requires an owned, expiring queue lease before leased"),
-        "{error}"
+    assert_eq!(
+        error.to_string(),
+        "business command `ordinary-command` requires an owned, expiring queue lease before `leased`"
     );
     let task = channels::load_queue_task(root.path(), &task_id)
         .unwrap()
