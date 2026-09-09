@@ -6485,6 +6485,12 @@ pub fn record_command(
     )? {
         return Ok(completed);
     }
+    project_outbound_lead_queued(
+        root,
+        &command,
+        &command_id,
+        queue_task.as_ref().map(|task| task.message_key.as_str()),
+    )?;
     Ok(CommandAccepted {
         ok: true,
         command_id,
@@ -6496,6 +6502,47 @@ pub fn record_command(
         chat_id,
         ..CommandAccepted::default()
     })
+}
+
+/// A lead whose research has been accepted says "Wartet", and it says so
+/// because the daemon wrote it, not because a browser tab got around to it.
+///
+/// Measured on THESEN 09.09.2026: three research commands were accepted for
+/// Aeroxon, Beiersdorf and Carbosulf, and all three leads kept showing their
+/// previous state. The only writer of `queued` was an optimistic patch from
+/// the tab that pressed the button, and that write is lost whenever the tab is
+/// slow, throttled or closed. Then the screen contradicts the queue, and a
+/// user who believes the screen starts the same research twice.
+fn project_outbound_lead_queued(
+    root: &Path,
+    command: &BusinessCommand,
+    command_id: &str,
+    task_id: Option<&str>,
+) -> anyhow::Result<()> {
+    if command.module != "outbound-lead-generation"
+        || command.command_type != "business_os.chat.task"
+    {
+        return Ok(());
+    }
+    let record_id = command.record_id.as_deref().unwrap_or_default().trim();
+    if record_id.is_empty() {
+        return Ok(());
+    }
+    let Some(mut lead) =
+        load_rxdb_collection_record(root, "outbound_lead_generation_leads", record_id)?
+    else {
+        return Ok(());
+    };
+    lead["research_status"] = Value::String("queued".to_string());
+    lead["research_error"] = Value::String(String::new());
+    lead["command_id"] = Value::String(command_id.to_string());
+    if let Some(task_id) = task_id.map(str::trim).filter(|value| !value.is_empty()) {
+        lead["task_id"] = Value::String(task_id.to_string());
+    }
+    let now = now_ms() as i64;
+    lead["research_updated_at_ms"] = Value::from(now);
+    upsert_rxdb_collection_record(root, "outbound_lead_generation_leads", record_id, now, lead)?;
+    Ok(())
 }
 
 fn missing_business_command_dependencies(
