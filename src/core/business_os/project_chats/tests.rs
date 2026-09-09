@@ -611,3 +611,104 @@ fn private_threads_reject_foreign_human_mentions_and_admin_mutation() -> anyhow:
     assert!(command_access_check(root.path(), &message, "other-user").is_err());
     Ok(())
 }
+#[test]
+fn measures_real_mcp_and_replication_pages_with_repeated_execution_references() -> anyhow::Result<()>
+{
+    use crate::mission::channels;
+    use std::time::Instant;
+    let root = fixture()?;
+    let initial = add(root.path(), "add")?;
+    let chat = initial["first_chat_id"].as_str().unwrap();
+    let conn = open_store(root.path())?;
+    let mut task_ids = Vec::new();
+    for index in 0..4 {
+        let command_id = format!("page-command-{index}");
+        let mut payload = json!({"instruction":"Representative work"});
+        if index % 2 == 0 {
+            payload["thread_id"] = json!(chat);
+        }
+        let intent = command("business_os.chat.task", &command_id, payload);
+        let admitted = channels::claim_business_command_with_queue(
+            root.path(),
+            store::business_command_core_claim(&command_id, &intent)?,
+            channels::QueueTaskCreateRequest {
+                title: "Page measurement".into(),
+                prompt: "Representative work".into(),
+                thread_key: format!("page-thread-{index}"),
+                workspace_root: Some(root.path().display().to_string()),
+                priority: "normal".into(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(json!({"business_os_command_id":command_id})),
+            },
+        )?;
+        task_ids.push(admitted.task.message_key);
+    }
+    let mut projections = Vec::new();
+    let mut pages = Vec::new();
+    for collection in ["ctox_runs", "ctox_harness_events"] {
+        let page = (0..100)
+            .map(|index| {
+                json!({
+                    "id":format!("{collection}-page-{index:03}"),
+                    "task_id":task_ids[index % task_ids.len()],
+                    "title":"Representative result","updated_at_ms":index + 1,
+                })
+            })
+            .collect::<Vec<_>>();
+        for record in &page {
+            persist(
+                &conn,
+                collection,
+                record["id"].as_str().unwrap(),
+                record.clone(),
+                &mut projections,
+            )?;
+        }
+        pages.push((collection, page));
+    }
+    publish(root.path(), &projections)?;
+    let now = i64::try_from(store::now_ms())?;
+    let (other, _) = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        "page-other",
+        "Other user",
+        "admin",
+        now,
+    )?;
+    let db_path = crate::paths::core_db(root.path());
+    for (collection, page) in pages {
+        channels::reset_channel_db_open_count_for_tests(&db_path);
+        let started = Instant::now();
+        let queried = mcp_channel::query_records(
+            root.path(),
+            &mcp_context("page-other", "admin"),
+            collection,
+            Some(100),
+        )?;
+        let query_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let query_opens = channels::channel_db_open_count_for_tests(&db_path);
+        assert_eq!(
+            queried.count, 50,
+            "foreign admin must only receive the ordinary executions"
+        );
+
+        let filter = threads::replication_document_filter(root.path(), &other, collection);
+        channels::reset_channel_db_open_count_for_tests(&db_path);
+        let started = Instant::now();
+        let visible = page.iter().filter(|record| filter(record)).count();
+        let replication_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let replication_opens = channels::channel_db_open_count_for_tests(&db_path);
+        assert_eq!(visible, 50);
+        eprintln!(
+            "workjet_privacy_page_measurement {}",
+            json!({
+                "collection":collection,"rows":page.len(),"distinct_tasks":task_ids.len(),
+                "mcp_visible":queried.count,"mcp_core_opens":query_opens,"mcp_ms":query_ms,
+                "replication_visible":visible,"replication_core_opens":replication_opens,
+                "replication_ms":replication_ms,
+            })
+        );
+    }
+    Ok(())
+}

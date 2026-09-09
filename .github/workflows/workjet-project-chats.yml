@@ -106,4 +106,4 @@ jobs:
         run: |
           cargo test --locked --bin ctox -- \
             business_os::project_chats business_os::store_workjet_projects \
-            --test-threads=2
+            --test-threads=2 --show-output
