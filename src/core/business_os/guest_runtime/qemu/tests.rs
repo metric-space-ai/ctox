@@ -220,3 +220,25 @@ async fn monitor_rejects_a_peer_other_than_the_spawned_child() -> Result<()> {
     stopped?;
     Ok(())
 }
+
+#[tokio::test]
+async fn startup_exit_is_observed_without_waiting_for_monitor_timeout() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let mut input = config(root.path())?;
+    input.program = PathBuf::from("/bin/false");
+    let mut guest = QemuProcess::spawn_paused(&input)?;
+    let result = tokio::time::timeout(Duration::from_secs(2), guest.connect_monitor()).await;
+    let stopped = guest.stop().await;
+    ensure!(
+        result
+            .context("startup failure waited for monitor deadline")?
+            .is_err(),
+        "failed process appeared connected"
+    );
+    stopped?;
+    ensure!(
+        guest.child.try_wait()?.is_some(),
+        "failed startup child was not reaped"
+    );
+    Ok(())
+}

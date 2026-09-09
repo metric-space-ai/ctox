@@ -214,10 +214,13 @@ impl QemuProcess {
             .take()
             .context("QEMU monitor handshake is retired")?;
         let connected = tokio::time::timeout(CONNECT_TIMEOUT, async {
-            let (stream, _) = listener
-                .accept()
-                .await
-                .context("QEMU monitor accept failed")?;
+            let (stream, _) = tokio::select! {
+                accepted = listener.accept() => accepted.context("QEMU monitor accept failed")?,
+                exited = self.child.wait() => {
+                    exited.map_err(|_| anyhow!("QEMU exit could not be observed"))?;
+                    return Err(anyhow!("QEMU exited before its monitor became available"));
+                }
+            };
             ensure!(
                 stream.peer_cred()?.pid() == Some(self.pid as i32),
                 "QEMU monitor peer does not match the owned child"
