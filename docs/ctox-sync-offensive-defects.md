@@ -44,6 +44,23 @@ perform no rewrite. Full native regression execution for this change is pending.
 Its new CI gate includes the existing migration tests, correcting their obsolete
 queue-task target from v2 to the registered v3. This is not migration acceptance.
 
+A further source-level defect is confirmed in the old cleanup path: active
+schema metadata alone allowed it to drop a populated old table. The forced
+command-repair test seeded `cmd_stale` only in v0, then expected v0 deletion
+without checking that command in v2. Startup's copy pass did not cover every
+collection selected by cleanup; the CLI repair did not invoke that copy pass.
+
+The cleanup candidate now performs discovery, declared migration, row verification
+and trigger/table removal in one immediate SQLite transaction per collection.
+Forced repair retains a unique legacy command; missing rules and equal-clock
+tombstone conflicts reject cleanup, and rows written after an earlier copy are
+rechecked. The same copy implementation serves both paths. Cleanup failures now
+abort native bring-up instead of logging and publishing an incomplete peer.
+Added native regressions cover these boundaries; formatting, diff and workflow
+syntax checks pass, but execution of the new Rust cases and migration performance
+remain pending. This does not establish a tenant incident's cause, cross-store
+atomicity, immutable backup, complete migration balance or recovery acceptance.
+
 The following historical rows remain incident records; the measurements above
 supersede their older fixture observations without closing tenant acceptance.
 

@@ -294,6 +294,8 @@ jobs:
             business_os::rxdb_peer::tests::additive_thread_schema_migration \
             business_os::rxdb_peer::tests::runtime_migration \
             business_os::rxdb_peer::tests::runtime_installed_declarative_migration \
+            business_os::rxdb_peer::tests::runtime_empty_legacy_table \
+            business_os::rxdb_peer::tests::rxdb_schema_drift_repair \
             --test-threads=2 | tee "$RUNNER_TEMP/ctox-host-proof/schema-migration-tests.log"
       - name: Context prompt first paint and authorized native command
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
