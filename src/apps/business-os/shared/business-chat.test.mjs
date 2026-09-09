@@ -3235,3 +3235,20 @@ test('an answer the native projection already appended is not repeated by the ch
   const echo = { id: 'chat-echo', messages: [{ role: 'user', text: answer, commandId: 'cmd_5f2' }] };
   assert.equal(hooks.hasReplyAlready(echo, tracked, answer), false);
 });
+
+
+test('an inspection receipt marker does not suppress the later worker answer', () => {
+  const hooks = __businessChatTestInternals;
+  const tracked = { commandId: 'cmd-receipt', taskId: 'queue:system::receipt' };
+  for (const receipt of [
+    { text: 'Aufgabe in der CTOX Queue angelegt. Fortschritt und Antwort erscheinen hier.', replyFor: 'cmd-receipt' },
+    { text: 'Deine Aufgabe steht auf der Aufgabenliste.', replyFor: 'queue:system::receipt' },
+    { text: 'Accepted', kind: 'status', replyFor: 'cmd-receipt' },
+  ]) {
+    const chat = { messages: [{ role: 'ctox', ...receipt }] };
+    assert.equal(hooks.hasReplyAlready(chat, tracked, receipt.text), true, 'the same receipt must not repeat');
+    assert.equal(hooks.hasReplyAlready(chat, tracked, '12 minus 5 ergibt 7.'), false);
+    chat.messages.push({ role: 'ctox', text: '12 minus 5 ergibt 7.', replyFor: tracked.taskId });
+    assert.equal(hooks.hasReplyAlready(chat, tracked, '12 minus 5 ergibt 7.'), true);
+  }
+});

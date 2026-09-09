@@ -4464,11 +4464,15 @@ function isTerminalTrackingStatus(status) {
 // measured on welsch 09.09.2026, where every completed chat carried its reply
 // twice.
 export function hasReplyAlready(chat, message, outbound) {
-  if (hasTrackingMarker(chat, 'replyFor', message)) return true;
   const text = String(outbound || '').trim();
   if (!text) return false;
+  // Admission receipts from older clients also carry replyFor. They belong
+  // to inspection and must not silence the worker's later actual answer.
+  const replies = (chat?.messages || []).filter(item => item?.role === 'ctox'
+    && (!isChatInspectionMessage(item) || String(item.text || '').trim() === text));
+  if (hasTrackingMarker({ messages: replies }, 'replyFor', message)) return true;
   const keys = [message?.taskId, message?.commandId].map((value) => String(value || '').trim()).filter(Boolean);
-  return (chat?.messages || []).some((item) => {
+  return replies.some((item) => {
     if (item?.role !== 'ctox' || String(item?.text || '').trim() !== text) return false;
     const itemKeys = [item?.taskId, item?.commandId].map((value) => String(value || '').trim()).filter(Boolean);
     return !itemKeys.length || !keys.length || itemKeys.some((key) => keys.includes(key));
