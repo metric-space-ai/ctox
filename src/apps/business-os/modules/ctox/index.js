@@ -1,6 +1,6 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260909-shell-v2-crew-renderer-v363';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260909-shell-v2-native-profile-v364';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
 
@@ -20,7 +20,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260909-shell-v2-crew-renderer-v363';
+const CTOX_STYLE_BUILD = '20260909-shell-v2-native-profile-v364';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -3569,11 +3569,11 @@ function taskDrawer(task, state, { editorOnly = false } = {}) {
         </div>
       </section>
     ` : ''}
-    <section class="ctox-drawer-timeline">
-      <header>
+    <details class="ctox-drawer-timeline">
+      <summary>
         <h3>${escapeHtml(t.timeline)}</h3>
         <small>${escapeHtml(`${steps.length} ${t.taskSteps}`)}</small>
-      </header>
+      </summary>
       <div class="ctox-drawer-steps">
         ${steps.map((step, index) => `
           <button type="button" class="${index === selectedTaskStepIndex ? 'is-current' : ''}" data-drawer-task-step="${index}" data-context-record-id="${escapeAttr(`${task.id}:${step.id || index}`)}" data-context-record-type="ctox_task_step" data-context-label="${escapeAttr(step.label)}">
@@ -3584,7 +3584,7 @@ function taskDrawer(task, state, { editorOnly = false } = {}) {
           </button>
         `).join('')}
       </div>
-    </section>
+    </details>
   `;
   body.querySelector('[data-close-ctox-drawer]')?.addEventListener('click', () => closeDetailDrawer(state));
   body.querySelector('[data-ctox-task-edit]')?.addEventListener('submit', async (event) => {

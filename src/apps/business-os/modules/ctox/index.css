@@ -2131,25 +2131,25 @@
 
 /* custom: drawer step timeline header + stepper (no kit equivalent) */
 .ctox-drawer-timeline {
-  display: grid;
-  gap: var(--space-3);
+  display: block;
 }
 
-.ctox-drawer-timeline header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-3);
+.ctox-drawer-timeline summary {
+  cursor: pointer;
+  padding: var(--space-2) 0;
+  color: var(--muted);
 }
 
-.ctox-drawer-timeline header h3 {
+.ctox-drawer-timeline summary h3 {
+  display: inline;
   margin: 0;
   color: var(--text);
-  font-size: var(--fs-base);
-  font-weight: 700;
+  font-size: var(--fs-meta);
+  font-weight: 500;
 }
 
-.ctox-drawer-timeline header small {
+.ctox-drawer-timeline summary small {
+  margin-left: var(--space-3);
   color: var(--muted);
   font-size: var(--fs-meta);
 }
