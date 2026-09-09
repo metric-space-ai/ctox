@@ -43,6 +43,27 @@ test('inspection separates system history from real replies and keeps an input i
   }
 });
 
+test('a status-only projection retains this task plan without leaking it into the next task', () => {
+  const { executionProgressForChat } = __businessChatTestInternals;
+  const plan = { version: 1, revision: 2, phase: 'working', percent: 30,
+    current_step: 2, completed_steps: 1, total_steps: 3,
+    steps: [
+      { position: 1, label: 'Daten laden', status: 'completed' },
+      { position: 2, label: 'Daten prüfen', status: 'in_progress' },
+      { position: 3, label: 'Ergebnis schreiben', status: 'pending' },
+    ] };
+  const chat = { messages: [
+    { taskId: 'task-one', commandId: 'command-one', executionProgress: plan },
+    { taskId: 'task-one', commandId: 'command-one', kind: 'status', text: 'Werkzeug gestartet' },
+  ] };
+  assert.equal(executionProgressForChat(chat).steps.length, 3);
+  assert.equal(executionProgressForChat(chat).current_step, 2);
+  chat.messages.push({ commandId: 'command-two', status: 'pending_sync' });
+  assert.equal(executionProgressForChat(chat), null, 'unaccepted follow-up cannot inherit the preceding task plan');
+  chat.messages.push({ commandId: 'command-two', taskId: 'task-two', status: 'running' });
+  assert.equal(executionProgressForChat(chat), null, 'new task starts with no fabricated steps');
+});
+
 test('saved crew status messages use plain language without rewriting user instructions', () => {
   const previousDocument = globalThis.document;
   globalThis.document = { documentElement: { lang: 'de' } };

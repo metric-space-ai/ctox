@@ -2815,12 +2815,25 @@ function latestTrackingMessage(chat) {
 }
 
 function executionProgressForChat(chat) {
+  const latest = latestTrackingMessage(chat);
+  const taskId = trackingIdFromMessage(latest, 'task');
+  const commandId = trackingIdFromMessage(latest, 'command');
+  // Status and plan projections arrive independently. A new status without a
+  // plan must not hide the last plan for this task, nor inherit another task's
+  // plan when the conversation receives a follow-up command.
+  const previousPlan = [...(chat?.messages || [])].reverse().find(message => (
+    message.executionProgress && (taskId
+      ? trackingIdFromMessage(message, 'task') === taskId
+      : commandId && trackingIdFromMessage(message, 'command') === commandId)
+  ));
   return normalizeExecutionProgress(
     chat?.executionProgress
     || chat?.execution_progress
-    || latestTrackingMessage(chat)?.executionProgress,
+    || latest?.executionProgress
+    || previousPlan?.executionProgress,
   );
 }
+
 
 function executionProgressSignature(chat) {
   const progress = executionProgressForChat(chat);
