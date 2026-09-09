@@ -39,6 +39,27 @@ assembly/backpressure and preserve authority framing limits. No new endpoint or
 transport is introduced by the decoder. A completed page, native ready state or
 SnapshotEnd must not be fabricated from this shape validation.
 
+
+## Private host credential callback
+
+The same fixture now generates NativeBusinessDataHostFrame plus credential
+challenge/reply shapes. A challenge is bound to requestId, connectionId,
+targetId and the captured account sessionEpoch. Only the native owner may send
+it, after verifying NativeSessionTarget on that same live channel. Replies must
+match the pending request, connection and epoch; unsolicited or late replies
+must never supply credentials to another session. Missing capability is failure,
+not anonymous fallback. Nonce/public coordinates/signature retain the existing
+ctox-device-proof-v1 encoding. These are private host messages, never renderer
+IPC, collection records or network control endpoints.
+
+CredentialReply and its containing HostFrame omit Rust Debug through the
+existing sensitiveTypes generator option, now also respected for unions.
+No frame budget or Authority protocol changes are implied. Operational bounded
+framing/correlation, native dispatch and bootstrap are still outstanding.
+Workjet binds the generated callback to a host-owned credential lease and
+validates target/connection/epoch before reading or signing; this is not yet a
+running native service.
+
 ## Existing implementation and reuse boundary
 
 - `NativeSyncSession::start_data_client` selects a query-only consumer using
