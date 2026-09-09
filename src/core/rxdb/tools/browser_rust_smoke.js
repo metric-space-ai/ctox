@@ -7489,7 +7489,10 @@ function ensureCtoxSmokeBinary() {
               const taskDoc = await db.ctox_queue_tasks.findOne(taskId).exec();
               const task = taskDoc?.toJSON?.();
               if (task) {
-                const queueTasksForCommand = (await db.ctox_queue_tasks.find().exec())
+                const queueTasksForCommand = (await db.ctox_queue_tasks.find({
+                selector: { command_id: id },
+                requireRevision: `command-link:${id}`,
+              }).exec())
                   .map((doc) => doc.toJSON?.() || doc)
                   .filter((doc) => doc.command_id === id);
                 if (queueTasksForCommand.length !== 1) {
@@ -15227,7 +15230,10 @@ function ensureCtoxSmokeBinary() {
               const taskDoc = await db.ctox_queue_tasks.findOne(taskId).exec();
               const task = taskDoc?.toJSON?.();
               if (!task) continue;
-              const queueTasksForCommand = (await db.ctox_queue_tasks.find().exec())
+              const queueTasksForCommand = (await db.ctox_queue_tasks.find({
+                selector: { command_id: id },
+                requireRevision: `command-link:${id}`,
+              }).exec())
                 .map((doc) => doc.toJSON?.() || doc)
                 .filter((doc) => doc.command_id === id);
               if (queueTasksForCommand.length !== 1) {
@@ -15509,7 +15515,10 @@ function ensureCtoxSmokeBinary() {
             const taskDoc = taskId ? await db.ctox_queue_tasks.findOne(taskId).exec() : null;
             const task = taskDoc?.toJSON?.() || null;
             if (task || officeTerminal) {
-              const queueTasksForCommand = (await db.ctox_queue_tasks.find().exec())
+              const queueTasksForCommand = (await db.ctox_queue_tasks.find({
+                selector: { command_id: id },
+                requireRevision: `command-link:${id}`,
+              }).exec())
                 .map((doc) => doc.toJSON?.() || doc)
                 .filter((doc) => doc.command_id === id);
               const expectedQueueTasks = officeRestartSmokeMode ? 0 : 1;

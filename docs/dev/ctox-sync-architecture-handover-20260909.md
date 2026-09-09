@@ -2,6 +2,20 @@
 
 ## Nachprüfung nach der Übergabe — 9. September 2026
 
+Nachtrag zur Recovery-Prüfung: Die Fixture las die verknüpfte Queue-Task per ID,
+prüfte Eindeutigkeit danach aber über die allgemeine `find()`-Listenmitgliedschaft.
+Der Query-Loader darf bereits geladene Fenster zunächst stale liefern. Die drei
+Cardinality-Prüfungen für Reload, Burst und Restart verwenden nun eine serverseitige
+`command_id`-Selektion und `requireRevision: command-link:<id>`. Dieser vorhandene
+Caller-Token erzwingt einmalig eine abgeschlossene Aktualisierung, ist ausdrücklich
+keine Serverrevision. Anzahl, Deadline, Wiederherstellung ohne Reparatur und
+Wiederholungsverbot bleiben unverändert. Syntax-/Whitespace-Prüfung und bestehender
+In-Memory-requireRevision-Test bestehen. Echte Browser-/Native-Wiederherstellung
+bleibt bis zum neuen CI-Lauf offen; dies ist keine Behebung oder Freigabe der
+allgemeinen veralteten Listenansicht im Produkt. Der Download der älteren
+Recovery-Artefakte scheiterte zweimal am Azure-Blob-Netzwerk-Timeout; die zugehörigen
+Job-Logs wurden gelesen, fehlende Artefakte nicht als erfolgreiche Prüfung gewertet.
+
 Der damals noch offene Post-Merge-Lauf
 [34338432749](https://github.com/metric-space-ai/ctox/actions/runs/34338432749)
 ist **fehlgeschlagen**. Linux/macOS Native Sync, Chromium und der separate
