@@ -2291,6 +2291,9 @@ function makeTimerWindow(timers) {
     assert.equal(getTaskState(chatWith('stale_missing_native')), 'blocked');
     assert.equal(getTaskState(chatWith('failed')), 'failed');
     assert.equal(getTaskState(chatWith('completed')), 'success');
+    assert.equal(getTaskState(chatWith('leased')), 'running', 'native worker lease must appear active');
+    assert.equal(getTaskState(chatWith('retry_wait')), 'queued', 'retry wait must not appear idle');
+    assert.equal(getTaskState(chatWith('review_rework')), 'queued', 'rework remains queued');
   });
 }
 
@@ -2444,8 +2447,7 @@ function makeTimerWindow(timers) {
       );
 
       // Reader scrolled up: a later message rewrite must preserve that position.
-      // Keep the task state queued so the in-place path stays active (a terminal
-      // status would flip the composer signature and force a full rebuild).
+      // Exercise a nonterminal message update first, then completion below.
       const messages = root.querySelector('.ctox-chat-messages');
       messages.scrollTop = 12;
       messages.clientHeight = 200;
@@ -2480,6 +2482,33 @@ function makeTimerWindow(timers) {
       ));
       assert.equal(yanked, false, 'reader who scrolled up must keep their position');
       assert.equal(messages.scrollTop, 12, 'scrollTop stays where the reader left it');
+
+      // A terminal update must refresh the existing header ring as well as
+      // the title, without rebuilding the conversation or losing reader state.
+      const win = root.querySelectorAll('.ctox-chat-window')[0];
+      const originalQuery = win.querySelector.bind(win);
+      let terminalCard = '';
+      const oldCard = {
+        dataset: { progressSignature: 'old-review' },
+        querySelector() { return { dataset: { taskId: 'task-stable' } }; },
+        set outerHTML(value) { terminalCard = value; },
+      };
+      win.querySelector = selector => selector === '.ctox-chat-delegation-card'
+        ? oldCard : originalQuery(selector);
+      chat.messages.at(-1).status = 'completed';
+      chat.executionProgress = {
+        version: 1, revision: 4, phase: 'completed', percent: 100,
+        current_step: 1, completed_steps: 1, total_steps: 1,
+        steps: [{ position: 1, label: 'Antwort liefern', status: 'completed', activity_turns: 1 }],
+        review: { status: 'passed' },
+        activity_turns: { total: 1, thinking: 0, tools: 1, last_kind: 'tool' },
+        updated_at_ms: Date.now(),
+      };
+      renderChatRoot({ root, state, commandBus: null, db: null,
+        getActiveModule: () => ({ id: 'outbound', title: 'Outbound' }) });
+      assert.match(terminalCard, /100%/, 'terminal progress replaces the stale ring');
+      assert.match(terminalCard, /Planstand 4/);
+      assert.equal(messages.scrollTop, 12, 'terminal ring update preserves reader position');
     } finally {
       if (previousDocument === undefined) delete globalThis.document;
       else globalThis.document = previousDocument;

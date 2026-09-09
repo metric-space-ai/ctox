@@ -1542,7 +1542,10 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         inPlaceDomChanged = true;
       }
 
-      if (taskState === 'queued' || taskState === 'running' || taskState === 'blocked') {
+      // Existing progress remains visible after completion; update its final
+      // revision too, so the ring cannot contradict the completed title.
+      if (win.querySelector('.ctox-chat-delegation-card')
+        || taskState === 'queued' || taskState === 'running' || taskState === 'blocked') {
         const trackingMessage = latestTrackingMessage(chat);
         const taskId = trackingMessage?.taskId || '';
         const commandId = trackingMessage?.commandId || chat.lastTrackingId || '';
@@ -2238,7 +2241,7 @@ function getTaskState(chat) {
     (m.taskId && m.taskId === chat.lastTrackingId)
   );
   if (!trackingMsg) return 'idle';
-  const status = String(trackingMsg.status || '').toLowerCase();
+  const status = canonicalTrackingStatus(trackingMsg.status);
   if (status === 'scheduled') return 'scheduled';
   if (!status) return 'idle';
   if (status === 'success' || status === 'completed' || status === 'handled' || status === 'done' || status === 'erledigt') return 'success';

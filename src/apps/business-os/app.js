@@ -1,15 +1,15 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260909-shell-v2-crew-chat-guards-v370';
-import { CtoxResizer } from './shared/resizer.js?v=20260909-shell-v2-crew-chat-guards-v370';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260909-shell-v2-crew-chat-guards-v370';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260909-shell-v2-crew-chat-guards-v370';
-import { createAppActions } from './shared/app-actions.js?v=20260909-shell-v2-crew-chat-guards-v370';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260909-shell-v2-crew-public-navigation-v371';
+import { CtoxResizer } from './shared/resizer.js?v=20260909-shell-v2-crew-public-navigation-v371';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260909-shell-v2-crew-public-navigation-v371';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260909-shell-v2-crew-public-navigation-v371';
+import { createAppActions } from './shared/app-actions.js?v=20260909-shell-v2-crew-public-navigation-v371';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260909-shell-v2-crew-chat-guards-v370';
+} from './shared/app-lifecycle.js?v=20260909-shell-v2-crew-public-navigation-v371';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -17,20 +17,20 @@ import {
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260909-shell-v2-crew-chat-guards-v370';
+} from './shared/permissions.js?v=20260909-shell-v2-crew-public-navigation-v371';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260909-shell-v2-crew-chat-guards-v370';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260909-shell-v2-crew-chat-guards-v370';
+} from './shared/branding.js?v=20260909-shell-v2-crew-public-navigation-v371';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260909-shell-v2-crew-public-navigation-v371';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260909-shell-v2-crew-chat-guards-v370';
+} from './shared/presentation.js?v=20260909-shell-v2-crew-public-navigation-v371';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -41,9 +41,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260909-shell-v2-crew-chat-guards-v370';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260909-shell-v2-crew-chat-guards-v370';
-import { createDocumentsFacade } from './shared/documents.js?v=20260909-shell-v2-crew-chat-guards-v370';
+} from './shared/shell-permissions-ui.js?v=20260909-shell-v2-crew-public-navigation-v371';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260909-shell-v2-crew-public-navigation-v371';
+import { createDocumentsFacade } from './shared/documents.js?v=20260909-shell-v2-crew-public-navigation-v371';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -51,16 +51,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260909-shell-v2-crew-chat-guards-v370';
+} from './shared/maintenance-state.js?v=20260909-shell-v2-crew-public-navigation-v371';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260909-shell-v2-crew-chat-guards-v370';
+} from './shared/workspace-session.js?v=20260909-shell-v2-crew-public-navigation-v371';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260909-shell-v2-crew-chat-guards-v370';
+} from './shared/taskbar-pins.js?v=20260909-shell-v2-crew-public-navigation-v371';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -68,9 +68,9 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260909-shell-v2-crew-chat-guards-v370';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260909-shell-v2-crew-chat-guards-v370';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260909-shell-v2-crew-chat-guards-v370';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260909-shell-v2-crew-public-navigation-v371';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260909-shell-v2-crew-public-navigation-v371';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260909-shell-v2-crew-public-navigation-v371';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -85,7 +85,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260909-shell-v2-crew-chat-guards-v370';
+const APP_BUILD = '20260909-shell-v2-crew-public-navigation-v371';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -5805,6 +5805,14 @@ function renderModuleGroup(group, modulesById) {
   return wrap;
 }
 
+function replaceModuleHash(moduleId) {
+  // A shell-pack <base> is for assets, never for the public navigation URL.
+  // Resolve against the actual document so a reload stays on its entry route.
+  const next = new URL(location.href);
+  next.hash = moduleId;
+  history.replaceState(null, '', next.href);
+}
+
 async function openModule(moduleId, options = {}) {
   const rawModuleRef = String(moduleId || '');
   const parsedModuleRef = parseHashWithParams(rawModuleRef);
@@ -5812,7 +5820,7 @@ async function openModule(moduleId, options = {}) {
   const refArgs = parsedModuleRef.params ? searchParamsToObject(parsedModuleRef.params) : {};
   const requestedId = moduleAliases[moduleId] || moduleId;
   if (requestedId !== moduleId && currentHashModuleId() === moduleId) {
-    history.replaceState(null, '', `#${requestedId}`);
+    replaceModuleHash(requestedId);
   }
   let mod = state.modules.find((item) => item.id === requestedId);
   if (!mod && requestedId) {
@@ -5835,7 +5843,7 @@ async function openModule(moduleId, options = {}) {
     const fallbackId = visibleModuleFallbackId(mod.id);
     setStatus(`${moduleDisplayTitle(mod)} ist für diesen Account nicht sichtbar. ${lifecycle.reason || ''}`.trim());
     if (currentHashModuleId() === mod.id && fallbackId) {
-      history.replaceState(null, '', `#${fallbackId}`);
+      replaceModuleHash(fallbackId);
     }
     if (fallbackId && fallbackId !== mod.id) {
       await openModule(fallbackId, {
@@ -5857,10 +5865,10 @@ async function openModule(moduleId, options = {}) {
       ...(options.args || {}),
     };
     if (fallbackId && state.activeModule?.id !== fallbackId) {
-      if (currentHashModuleId() === mod.id) history.replaceState(null, '', `#${fallbackId}`);
+      if (currentHashModuleId() === mod.id) replaceModuleHash(fallbackId);
       await openModule(fallbackId, { isNavHistory: true });
     } else if (currentHashModuleId() === mod.id && fallbackId) {
-      history.replaceState(null, '', `#${fallbackId}`);
+      replaceModuleHash(fallbackId);
     }
     await openDesktopApp(mod.id, {
       title: moduleDisplayTitle(mod),
@@ -6136,7 +6144,9 @@ function collectForeignSchemaModules(mod) {
   const eigene = new Set(declared.filter((name) => String(name || '').startsWith(`${mod.id}_`)));
   const gesucht = declared
     .map((name) => String(name || '').trim())
-    .filter((name) => name && !eigene.has(name));
+    // Already registered shared schemas (e.g. business_commands) must not
+    // make every app that reads them a startup dependency of this module.
+    .filter((name) => name && !eigene.has(name) && !state.db?.raw?.[name]);
   if (!gesucht.length) return [];
   const besitzer = new Map();
   for (const other of state.modules) {

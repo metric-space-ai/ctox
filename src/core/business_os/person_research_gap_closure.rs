@@ -209,6 +209,77 @@ struct FieldStatus {
 /// a bare object and, on 07.09.2026, the whole list as a JSON string (three
 /// rejections in a row for one lead, "expected a sequence"). The meaning is
 /// unambiguous in all three shapes, so accept them instead of losing the run.
+/// The same XML-shaped carrier as [`unwrap_single_item_container`], but applied
+/// to the whole payload before anything is parsed. On the Aeroxon lead
+/// 09.09.2026 the carrier wrapped not only every field's `sources` but also
+/// `result.person_records` and `result.evidence`, so the contacts and the
+/// evidence list were dropped as well.
+///
+/// Only the names a real payload never uses as a field are treated as
+/// carriers, so a field object such as `{"value": "x"}` keeps its shape.
+pub(super) fn unwrap_item_carriers(value: Value) -> Value {
+    fn carrier_key(key: &str) -> bool {
+        matches!(
+            key.trim().to_ascii_lowercase().as_str(),
+            "item" | "items" | "entry" | "entries" | "element" | "elements" | "list"
+        )
+    }
+    match value {
+        Value::Object(map) => {
+            if map.len() == 1 {
+                if let Some((key, inner)) = map.iter().next() {
+                    if carrier_key(key) && (inner.is_array() || inner.is_object()) {
+                        let inner = inner.clone();
+                        return match unwrap_item_carriers(inner) {
+                            Value::Array(items) => Value::Array(items),
+                            single => Value::Array(vec![single]),
+                        };
+                    }
+                }
+            }
+            Value::Object(
+                map.into_iter()
+                    .map(|(key, entry)| (key, unwrap_item_carriers(entry)))
+                    .collect(),
+            )
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(unwrap_item_carriers).collect()),
+        other => other,
+    }
+}
+
+/// Workers that serialise a list through an XML-shaped intermediate wrap it in
+/// a single carrier key: `"sources": {"item": [ ... ]}` instead of
+/// `"sources": [ ... ]`. Measured on the Aeroxon lead 09.09.2026: a writeback
+/// delivered 16 verified fields, every one of them wrapped this way, and every
+/// one lost its evidence and fell back to `no_match`. The wrapper carries no
+/// meaning, so it is unwrapped rather than rejected.
+fn unwrap_single_item_container(value: &Value) -> Option<Value> {
+    let map = value.as_object()?;
+    if map.len() != 1 {
+        return None;
+    }
+    let (key, inner) = map.iter().next()?;
+    let carrier = matches!(
+        key.trim().to_ascii_lowercase().as_str(),
+        "item"
+            | "items"
+            | "entry"
+            | "entries"
+            | "element"
+            | "elements"
+            | "list"
+            | "source"
+            | "sources"
+            | "value"
+            | "values"
+    );
+    if !carrier || !(inner.is_array() || inner.is_object()) {
+        return None;
+    }
+    Some(inner.clone())
+}
+
 fn lenient_sources<'de, D>(deserializer: D) -> Result<Vec<FieldSource>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -221,9 +292,14 @@ where
                 .into_iter()
                 .map(|item| serde_json::from_value::<FieldSource>(item).map_err(E::custom))
                 .collect(),
-            Value::Object(_) => Ok(vec![
-                serde_json::from_value::<FieldSource>(value).map_err(E::custom)?
-            ]),
+            Value::Object(_) => {
+                if let Some(inner) = unwrap_single_item_container(&value) {
+                    return from_value(inner);
+                }
+                Ok(vec![
+                    serde_json::from_value::<FieldSource>(value).map_err(E::custom)?
+                ])
+            }
             Value::String(text) => {
                 let trimmed = text.trim();
                 if trimmed.is_empty() {
@@ -389,7 +465,12 @@ where
         match value {
             Value::Null => Ok(Vec::new()),
             Value::Array(items) => Ok(items),
-            Value::Object(_) => Ok(vec![value]),
+            Value::Object(_) => {
+                if let Some(inner) = unwrap_single_item_container(&value) {
+                    return from_value(inner);
+                }
+                Ok(vec![value])
+            }
             Value::String(text) => {
                 let trimmed = text.trim();
                 if trimmed.is_empty() {
@@ -526,7 +607,10 @@ Phase-A-Kommando: {research_command_id}
 - Schreibe JEDEN Versuch als JSON-Datei unter `gap_closure/attempts/<feld>/<n>.json` in diesem Workspace. Jeder Versuch enthält kind, query_or_url, result, artifact_path und at.
 - Halte den fortlaufenden Sammelstand nach jedem Versuch in `gap_closure/field_status.json` fest. Diese Datei ist der Checkpoint für einen Folgeturn.
 - Terminale Feldstatus sind ausschließlich `verified`, `no_match`, `unsupported` und `action_required`.
-- `verified` verlangt einen Wert und mindestens zwei unabhängige Belege von verschiedenen Hosts. Jeder Wert braucht source_id, URL und wörtlichen Belegtext.
+- `verified` verlangt einen Wert und Belege mit source_id, URL und wörtlichem Belegtext.
+- Zwei unabhängige Hosts sind Pflicht für Angaben, die Dritte prüfen können: Firmenname, Anschrift, PLZ, Ort, Land, Aktivitätsstatus, frühere Namen, Geschäftstätigkeit, Geschäftsführung, Prokura, WZ-Code, Umsatz, Mitarbeiter.
+- EIN Beleg genügt bei Selbstauskünften, für die es keine zweite unabhängige Quelle geben kann: firma_domain, firma_email, firma_telefon, firma_fax, firma_postfach, firma_besucheranschrift, firma_postanschrift, firma_homepage_fact_sheet sowie alle person_-Felder. Belege sie von der Unternehmensseite bzw. dem Profil selbst und trage den Wert ein, statt ihn als no_match zu verwerfen.
+- Listen sind reine JSON-Listen: `"sources": [ {{...}}, {{...}} ]`. NIEMALS ein Traegerobjekt wie `{{"item": [...]}}`, weder bei `sources` und `attempts` noch bei `result.person_records` und `result.evidence`.
 - Personenbezogene Ergebnisse und Belege tragen einen stabilen `person_key`.
 - Schreibe in `result.fields` nur strukturierte Feldobjekte, keine freien Texte.
 - `action_required` ist ausschließlich für Login/Freigabe zulässig und verweist auf einen Auth-Assist (source_id plus Task-/Command-ID) oder eine Quelle mit `requires_credential=true`.
@@ -580,7 +664,8 @@ pub(super) fn enqueue_gap_closure_if_needed(
                         .and_then(Value::as_str)
                         .is_some_and(|value| !value.trim().is_empty())
                 }));
-        if populated && independent >= 2 && person_evidence_complete {
+        let required = super::person_research_command::required_independent_sources(field);
+        if populated && independent >= required && person_evidence_complete {
             terminal_fields.insert(
                 field.clone(),
                 serde_json::json!({
@@ -930,10 +1015,12 @@ pub(super) fn handle_research_writeback(
     // The worker only ever sees this message. Without the serde detail it
     // resent the same malformed payload four times on 07.09.2026 (a stray
     // `firma_land` key nested inside another field's status object).
-    let request: ResearchWritebackRequest =
-        serde_json::from_value(hoist_top_level_field_entries(command.payload.clone())).map_err(
-            |error| anyhow::anyhow!("invalid outbound.lead.research_writeback payload: {error}"),
-        )?;
+    let request: ResearchWritebackRequest = serde_json::from_value(hoist_top_level_field_entries(
+        unwrap_item_carriers(command.payload.clone()),
+    ))
+    .map_err(|error| {
+        anyhow::anyhow!("invalid outbound.lead.research_writeback payload: {error}")
+    })?;
     anyhow::ensure!(
         request.module == "outbound-lead-generation" && command.module == request.module,
         "research writeback module must be outbound-lead-generation"
@@ -1118,7 +1205,7 @@ pub(super) fn handle_research_writeback(
         // Auftrag nachliefern statt die ganze Firma neu zu recherchieren.
         "rejections": rejections,
         "summary": format!(
-            "{} Feld(er) gespeichert, {} Beleg(e) verworfen, {} Feld(er) noch offen. Ein Feld gilt erst als beantwortet, wenn es verifiziert ist (zwei unabhaengige Quell-Hosts) oder als no_match belegt wurde. Offene Felder sind keine Ablehnung: hole die fehlende Zweitquelle bzw. den Wert und sende sie gesammelt in einem weiteren Aufruf; gespeicherte Felder nicht erneut senden.",
+            "{} Feld(er) gespeichert, {} Beleg(e) verworfen, {} Feld(er) noch offen. Ein Feld gilt erst als beantwortet, wenn es verifiziert ist (zwei unabhaengige Quell-Hosts; bei Selbstauskuenften wie Telefon, E-Mail, Domain und allen person_-Feldern genuegt ein Beleg von der Unternehmensseite bzw. dem Profil) oder als no_match belegt wurde. Offene Felder sind keine Ablehnung: hole die fehlende Zweitquelle bzw. den Wert und sende sie gesammelt in einem weiteren Aufruf; gespeicherte Felder nicht erneut senden.",
             accepted_count,
             rejections.len(),
             open_count
@@ -1464,11 +1551,12 @@ fn sanitize_research_writeback(
                     })
                 })
                 .collect::<BTreeSet<_>>();
-            if hosts.len() < 2 {
+            let benoetigt = super::person_research_command::required_independent_sources(field);
+            if hosts.len() < benoetigt {
                 demotieren.push((
                     field.clone(),
                     format!(
-                        "verified verlangt zwei unabhaengige Quell-Hosts, gefunden: {}",
+                        "verified verlangt {benoetigt} unabhaengige Quell-Hosts, gefunden: {}",
                         hosts.len()
                     ),
                 ));
@@ -1642,9 +1730,10 @@ fn validate_terminal_field(
                     );
                 }
             }
+            let required = super::person_research_command::required_independent_sources(field);
             anyhow::ensure!(
-                independent_research_evidence_count(&evidence, field) >= 2,
-                "verified field `{field}` requires at least 2 independent sources on different hosts"
+                independent_research_evidence_count(&evidence, field) >= required,
+                "verified field `{field}` requires at least {required} independent sources on different hosts"
             );
         }
         "no_match" => validate_no_match(field, status)?,
@@ -2894,8 +2983,7 @@ mod tests {
         let temp = tempfile::tempdir()?;
         let record_id = "lead-einzelquelle";
         let research_command_id = "research-einzelquelle";
-        let (_, task) =
-            create_gap_fixture(temp.path(), research_command_id, record_id, "firma_domain")?;
+        let (_, task) = create_gap_fixture(temp.path(), research_command_id, record_id, "umsatz")?;
         // The worker claims `verified` but documents a single source host —
         // exactly what the evidence gate rejects.
         let command = writeback_command(
@@ -2906,17 +2994,17 @@ mod tests {
                 "research_command_id": research_command_id,
                 "gap_task_id": task.message_key,
                 "field_status": {
-                    "firma_domain": {
+                    "umsatz": {
                         "status": "verified",
-                        "value": "beispiel.de",
+                        "value": "12,5 Mio. EUR",
                         "sources": [
-                            {"source_id": "northdata.de", "url": "https://www.northdata.de/a", "quote": "beispiel.de"},
-                            {"source_id": "northdata.de", "url": "https://www.northdata.de/b", "quote": "beispiel.de"}
+                            {"source_id": "northdata.de", "url": "https://www.northdata.de/a", "quote": "12,5 Mio. EUR"},
+                            {"source_id": "northdata.de", "url": "https://www.northdata.de/b", "quote": "12,5 Mio. EUR"}
                         ],
                         "attempts": []
                     }
                 },
-                "result": {"fields": {"firma_domain": {"value": "beispiel.de"}}, "person_records": [], "evidence": []}
+                "result": {"fields": {"umsatz": {"value": "12,5 Mio. EUR"}}, "person_records": [], "evidence": []}
             }),
         );
         let result = handle_research_writeback(temp.path(), &command)?;
@@ -2927,7 +3015,7 @@ mod tests {
         assert!(
             rejections.iter().any(|entry| entry
                 .as_str()
-                .is_some_and(|text| text.contains("zwei unabhaengige Quell-Hosts"))),
+                .is_some_and(|text| text.contains("unabhaengige Quell-Hosts"))),
             "the single-host claim must be rejected: {rejections:?}"
         );
         assert_eq!(
@@ -2937,7 +3025,7 @@ mod tests {
         );
         assert_eq!(
             result["open_fields"],
-            serde_json::json!(["firma_domain"]),
+            serde_json::json!(["umsatz"]),
             "a rejected field stays open so the worker fetches a second source"
         );
         assert!(result["summary"]
@@ -3176,8 +3264,7 @@ mod tests {
         let temp = tempfile::tempdir()?;
         let record_id = "lead-eine-quelle";
         let research_command_id = "research-eine-quelle";
-        let (_, task) =
-            create_gap_fixture(temp.path(), research_command_id, record_id, "firma_domain")?;
+        let (_, task) = create_gap_fixture(temp.path(), research_command_id, record_id, "umsatz")?;
         let command = writeback_command(
             record_id,
             serde_json::json!({
@@ -3186,19 +3273,19 @@ mod tests {
                 "research_command_id": research_command_id,
                 "gap_task_id": task.message_key,
                 "field_status": {
-                    "firma_domain": {
+                    "umsatz": {
                         "status": "verified",
-                        "value": "example.test",
+                        "value": "12,5 Mio. EUR",
                         // Zwei Belege, aber derselbe Host - das ist EINE Quelle.
                         "sources": [
-                            {"source_id": "seite-1", "url": "https://example.test/imprint", "quote": "Example AG"},
-                            {"source_id": "seite-2", "url": "https://example.test/kontakt", "quote": "example.test"}
+                            {"source_id": "seite-1", "url": "https://example.test/bilanz", "quote": "12,5 Mio. EUR"},
+                            {"source_id": "seite-2", "url": "https://example.test/kennzahlen", "quote": "12,5 Mio. EUR"}
                         ],
                         "attempts": []
                     }
                 },
                 "result": {
-                    "fields": {"firma_domain": {"value": "example.test"}},
+                    "fields": {"umsatz": {"value": "12,5 Mio. EUR"}},
                     "person_records": [],
                     "evidence": []
                 }
@@ -3209,7 +3296,7 @@ mod tests {
         let lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
             .context("lead missing after writeback")?;
         assert_eq!(
-            lead["field_status"]["firma_domain"]["status"], "unsupported",
+            lead["field_status"]["umsatz"]["status"], "unsupported",
             "ein einziger Quell-Host darf nicht als belegt durchgehen"
         );
         assert_eq!(result["research_status"], "needs_review");
@@ -3219,7 +3306,7 @@ mod tests {
         assert!(
             ablehnungen.iter().any(|entry| entry
                 .as_str()
-                .is_some_and(|text| text.contains("zwei unabhaengige Quell-Hosts"))),
+                .is_some_and(|text| text.contains("unabhaengige Quell-Hosts"))),
             "der Grund muss benannt sein: {ablehnungen:?}"
         );
         Ok(())
@@ -3498,18 +3585,131 @@ mod tests {
         };
         let temp = tempfile::tempdir().unwrap();
         assert!(validate_terminal_field(
-            "firma_domain",
+            "umsatz",
             &status("https://example.test/b"),
             temp.path(),
             &serde_json::json!({})
         )
         .is_err());
         assert!(validate_terminal_field(
-            "firma_domain",
+            "umsatz",
             &status("https://other.test/b"),
             temp.path(),
             &serde_json::json!({})
         )
         .is_ok());
+    }
+
+    #[test]
+    fn item_carriers_are_unwrapped_across_the_whole_payload() {
+        // Measured on the Aeroxon lead 09.09.2026: not only every field's
+        // sources, but also result.person_records and result.evidence arrived
+        // inside an {"item": [...]} carrier.
+        let payload = serde_json::json!({
+            "record_id": "lead-a",
+            "result": {
+                "person_records": {"item": [{"person_key": "p1", "person_nachname": "Updike"}]},
+                "evidence": {"item": [{"field_key": "firma_name", "source_id": "aeroxon.de"}]},
+                "fields": {"firma_name": {"value": "Aeroxon", "sources": {"item": [{"source_id": "a"}]}}}
+            }
+        });
+        let unwrapped = unwrap_item_carriers(payload);
+        assert_eq!(unwrapped["result"]["person_records"][0]["person_key"], "p1");
+        assert_eq!(
+            unwrapped["result"]["evidence"][0]["field_key"],
+            "firma_name"
+        );
+        assert_eq!(
+            unwrapped["result"]["fields"]["firma_name"]["sources"][0]["source_id"],
+            "a"
+        );
+        // A single wrapped object becomes a one-element list, not a lost value.
+        let single =
+            unwrap_item_carriers(serde_json::json!({"sources": {"item": {"source_id": "a"}}}));
+        assert_eq!(single["sources"][0]["source_id"], "a");
+        // A field object that merely has one key keeps its shape.
+        let field =
+            unwrap_item_carriers(serde_json::json!({"fields": {"firma_name": {"value": "x"}}}));
+        assert_eq!(field["fields"]["firma_name"]["value"], "x");
+    }
+
+    #[test]
+    fn sources_wrapped_in_an_item_carrier_are_still_sources() -> anyhow::Result<()> {
+        // Measured on the Aeroxon lead 09.09.2026: a writeback delivered 16
+        // verified fields whose evidence was wrapped as {"item": [...]}, and
+        // every one of them lost its sources and fell back to no_match.
+        let single: FieldStatus = serde_json::from_value(serde_json::json!({
+            "status": "verified",
+            "value": "www.aeroxon.de",
+            "sources": {"item": {"source_id": "aeroxon.de", "url": "https://www.aeroxon.de/impressum/", "quote": "Aeroxon Insect Control GmbH"}}
+        }))?;
+        assert_eq!(single.sources.len(), 1);
+        assert_eq!(single.sources[0].source_id, "aeroxon.de");
+        let many: FieldStatus = serde_json::from_value(serde_json::json!({
+            "status": "verified",
+            "value": "Aeroxon Insect Control GmbH",
+            "sources": {"item": [
+                {"source_id": "aeroxon.de", "url": "https://www.aeroxon.de/impressum/", "quote": "Aeroxon Insect Control GmbH"},
+                {"source_id": "northdata.com", "url": "https://www.northdata.com/AEROXON", "quote": "AEROXON INSECT CONTROL GmbH"}
+            ]}
+        }))?;
+        assert_eq!(many.sources.len(), 2);
+        // A real single source object is still a single source, not a carrier.
+        let plain: FieldStatus = serde_json::from_value(serde_json::json!({
+            "status": "verified",
+            "value": "x",
+            "sources": {"source_id": "a.test", "url": "https://a.test/", "quote": "x"}
+        }))?;
+        assert_eq!(plain.sources.len(), 1);
+        assert_eq!(plain.sources[0].source_id, "a.test");
+        Ok(())
+    }
+
+    #[test]
+    fn a_self_reported_field_is_verified_from_its_own_single_source() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let record_id = "lead-selbstauskunft";
+        let research_command_id = "research-selbstauskunft";
+        let (_, task) =
+            create_gap_fixture(temp.path(), research_command_id, record_id, "firma_telefon")?;
+        let command = writeback_command(
+            record_id,
+            serde_json::json!({
+                "record_id": record_id,
+                "module": "outbound-lead-generation",
+                "research_command_id": research_command_id,
+                "gap_task_id": task.message_key,
+                "field_status": {
+                    "firma_telefon": {
+                        "status": "verified",
+                        "value": "+49 2621 12-0",
+                        // Only the company's own site carries its switchboard number.
+                        "sources": [{
+                            "source_id": "unternehmensseite",
+                            "url": "https://beispiel.test/kontakt",
+                            "quote": "Telefon: +49 2621 12-0"
+                        }],
+                        "attempts": []
+                    }
+                },
+                "result": {
+                    "fields": {"firma_telefon": {"value": "+49 2621 12-0"}},
+                    "person_records": [],
+                    "evidence": []
+                }
+            }),
+        );
+        let result = handle_research_writeback(temp.path(), &command)?;
+        assert_eq!(result["ok"], true);
+        assert_eq!(
+            result["rejections"],
+            serde_json::json!([]),
+            "eine Selbstauskunft mit einem Beleg darf nicht abgelehnt werden"
+        );
+        let lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("lead missing after writeback")?;
+        assert_eq!(lead["field_status"]["firma_telefon"]["status"], "verified");
+        assert_eq!(lead["data"]["firma_telefon"], "+49 2621 12-0");
+        Ok(())
     }
 }
