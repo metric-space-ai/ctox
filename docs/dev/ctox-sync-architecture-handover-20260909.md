@@ -1,6 +1,26 @@
 # CTOX-Sync-Architektur: Handover vom 9. September 2026
 
 
+## Weiterarbeit: Desktop-Abnahme wieder erreichbar machen
+
+Der macOS-Desktop-Job `102481637846` scheitert nach Installation am npm-Audit:
+`js-yaml` ist ausdrücklich auf `4.3.1` gepinnt, betroffen von
+`GHSA-2883-xcg3-v3hh`. Der empfohlene Patch `4.3.2` liegt außerhalb dieses Pins.
+Manifest und Lockdatei sind deshalb gemeinsam auf exakt `4.3.2` aktualisiert.
+Tarball-URL, SHA-512 und Abhängigkeiten wurden gegen die npm-Registry geprüft;
+der heruntergeladene Tarball stimmt mit dem Integrity-Wert überein.
+`npm audit --package-lock-only --ignore-scripts --audit-level=high` meldet
+**0 vulnerabilities, exit 0**. Kein Audit-Override, kein Abschwächen der Grenze.
+Dies entfernt den belegten Dependency-Blocker, ersetzt aber weder Installation
+in CI noch die folgenden Electron-E2E-Prüfungen. Die JS-Test-Ursache bleibt offen.
+
+Native-Linux-Job `102481638511` zu Quellstand `5b583c3c2` ist inzwischen erfolgreich;
+macOS und vollständiger Host waren beim Nachtrag weiterhin laufend. Für den neuen
+Dependency-Stand ist die CI erneut erforderlich. Kein Merge oder Kunden-Release.
+Lokale schwere Prüfungen bleiben wegen tmp <20 GiB, Last über CPU-Anzahl und
+fremder aktiver Kompilierung gesperrt. Nur kleine Registry-/Lock-Prüfung und
+Audit ohne Installation liefen; Cache liegt auf `/Volumes/tmp`.
+
 ## Aktuelle Übergabe: Merge-Prüfung PR87
 
 Geprüfter Head: `5b583c3c2f512581fecdcf5db7bcc250c9db62e6`, Branch
