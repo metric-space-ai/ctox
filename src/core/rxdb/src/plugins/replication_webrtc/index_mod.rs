@@ -1509,8 +1509,7 @@ where
                                 room_payload.collection_schemas,
                                 room_payload.collection_checkpoints,
                                 Some(&storage_token),
-                                handler_task.local_peer_role(),
-                                handler_task.is_data_client(),
+                                handler_task.as_ref(),
                             )
                             .await;
                             let challenge = item.message.params.first()
@@ -1759,8 +1758,7 @@ where
                         local_room_payload.collection_schemas,
                         local_room_payload.collection_checkpoints,
                         Some(&storage_token),
-                        handler.local_peer_role(),
-                        handler.is_data_client(),
+                        handler.as_ref(),
                     )
                     .await;
                     let device_proof_nonce = fresh_device_proof_nonce();
@@ -2217,15 +2215,14 @@ async fn collection_checkpoints_payload(collections: &[Arc<RxCollection>]) -> Va
     Value::Object(map)
 }
 
-async fn ctox_protocol_response_with_flag(
+async fn ctox_protocol_response_with_flag<H: WebRTCConnectionHandler>(
     collection: Option<&Arc<RxCollection>>,
     peer_session_id: Option<&str>,
     query_demand_loading_enabled: bool,
     collection_schemas: Option<Value>,
     collection_checkpoints: Option<Value>,
     storage_generation: Option<&str>,
-    peer_role: NativePeerRole,
-    data_client: bool,
+    handler: &H,
 ) -> Value {
     let collection_payload = if let Some(collection) = collection {
         let checkpoint = collection
@@ -2252,9 +2249,9 @@ async fn ctox_protocol_response_with_flag(
         collection_schemas,
         collection_checkpoints,
         storage_generation,
-        peer_role,
+        handler.local_peer_role(),
     );
-    if data_client {
+    if handler.is_data_client() {
         // Reuse the canonical browser/replica role from the existing protocol.
         // No execution identity, membership or master authority is advertised.
         payload["peerSession"]["role"] = Value::String("browser".into());
