@@ -1,6 +1,21 @@
 # CTOX-Sync-Architektur: Handover vom 9. September 2026
 
 
+## Reports: gemeinsamen Shell-Vertrag umgesetzt, Browser-Abnahme offen
+
+Die Reports-Rail verwendet jetzt ctox-filterbar/filter-toggle/filter-tray/filter-row,
+ctox-select/sort-dir/view-switch/well/pane-footer. 54 Zeilen kopierte Basis-CSS
+wurden entfernt; gemeinsame Definitionen bleiben allein in shared/base.css.
+Reports-spezifische Grid-Zeilen, mobile Trefferflächen und Shell-V2-Abstände
+referenzieren die gemeinsamen Klassen. Der einzelne View-Aktionsknopf behält
+seine Datenattribute und flex-Breite; keine zweite Ansichtssteuerung eingeführt.
+
+Der unveränderte Test „rail chrome is shell grammar“ besteht isoliert gegen die
+tatsächlichen Dateien (ohne Bundle-Build, kein Browser). Vollständige Modul-Suite,
+reale Shell-Geometrie, Filter/Reset/Ansichtswechsel/Export und Reload sind noch
+abzunehmen. Kein Working-/Production-ready-Claim und kein Deployment daraus.
+Test-Assertions wurden nicht geändert. Mail-Inspector bleibt separat offen.
+
 ## App-Story-Fehler erstmals vollständig lesbar
 
 Job `102487411931` zu `eadcbc152` liefert dank Output-Flush den vollständigen
