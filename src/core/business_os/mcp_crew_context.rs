@@ -122,6 +122,13 @@ pub(super) fn read(
     );
     let task_id = current.task_id;
     let member_id = current.member_id;
+    if let Some(project_member) = crate::business_os::project_crew_member_for_task(root, &task_id)?
+    {
+        anyhow::ensure!(
+            project_member == member_id,
+            "project Crew binding changed during this attempt"
+        );
+    }
     enforce_module_policy(root, &module)?;
     let member = crate::crew::members(&tx)?
         .into_iter()

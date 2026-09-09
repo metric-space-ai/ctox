@@ -243,6 +243,23 @@ pub(crate) fn prepare_attempt(
         )
         .optional()?
         .context("crew attachment requires the held lease")?;
+    if let Some(member) = crate::business_os::project_crew_member_for_task(root, task_id)? {
+        anyhow::ensure!(
+            task_ids.len() == 1,
+            "private project Crew cannot share a batch attempt"
+        );
+        anyhow::ensure!(
+            task.manual_member
+                .as_ref()
+                .is_none_or(|assigned| assigned == &member),
+            "manual Crew assignment conflicts with the project worker"
+        );
+        anyhow::ensure!(
+            existing.as_ref().is_none_or(|assigned| assigned == &member),
+            "resumed Crew identity differs from the current project binding"
+        );
+        task.manual_member = Some(member);
+    }
     // A retry is scored again; its own previous selection is not a manual pin
     // or evidence of continuity with a different task in the conversation.
     task.continuity_member = conn

@@ -5126,17 +5126,45 @@ fn prepare_admitted_worker_attempt(root: &Path, job: &QueuedPrompt) -> Result<Pr
     };
     let judge: Option<&dyn crate::crew::RouterJudge> =
         if cfg!(test) { None } else { Some(&model_judge) };
-    let crew = crate::crew::prepare_attempt_or_continue(
-        root,
-        &job.leased_message_keys,
-        CHANNEL_ROUTER_LEASE_OWNER,
-        &attempt_id,
-        job.thread_key.as_deref(),
-        &job.queue_task_metadata,
-        job.suggested_skill.as_deref(),
-        &job.prompt,
-        judge,
-    );
+    // A private project worker is an explicit identity choice. Lookup failures
+    // and revoked bindings must not enter the optional-Crew fallback.
+    let mut project_crew_required = false;
+    for task_id in &job.leased_message_keys {
+        project_crew_required |=
+            crate::business_os::project_crew_member_for_task(root, task_id)?.is_some();
+    }
+    let crew = if project_crew_required {
+        anyhow::ensure!(
+            job.leased_message_keys.len() == 1,
+            "private project Crew cannot share a batch attempt"
+        );
+        Some(
+            crate::crew::prepare_attempt(
+                root,
+                &job.leased_message_keys,
+                CHANNEL_ROUTER_LEASE_OWNER,
+                &attempt_id,
+                job.thread_key.as_deref(),
+                &job.queue_task_metadata,
+                job.suggested_skill.as_deref(),
+                &job.prompt,
+                judge,
+            )?
+            .context("private project work requires its bound Crew identity")?,
+        )
+    } else {
+        crate::crew::prepare_attempt_or_continue(
+            root,
+            &job.leased_message_keys,
+            CHANNEL_ROUTER_LEASE_OWNER,
+            &attempt_id,
+            job.thread_key.as_deref(),
+            &job.queue_task_metadata,
+            job.suggested_skill.as_deref(),
+            &job.prompt,
+            judge,
+        )
+    };
     Ok(PreparedCrewAttempt {
         attempt_id,
         recoverable_attempt,

@@ -161,3 +161,38 @@ filter to check compatibility. These new tests are unverified.
 The fixture also covers native offer publication, real MCP
 claim/report, repeated claims/results, wrong executor/conflicting results and
 retention of native finalization ownership. It has not yet passed CI.
+
+
+## Existing private project chats and native Crew selection
+
+Private Workjet project tasks now resolve their Crew member from the canonical
+command/task link and the command's `payload.thread_id`. The reserved
+`workjet_private_` identity follows the existing project-chat contract. A missing
+or ambiguous relationship fails rather than selecting a member from prompt text.
+The resolver checks current command authorization, project ownership/activity,
+private chat/history, project membership, profile binding, assigned computer and
+an existing non-archived Crew member. It reads relationships in one read-only
+Business OS store snapshot; this is not a cross-store atomic transaction with
+Core admission.
+
+The queue service treats this explicit identity as mandatory. It propagates
+lookup/preparation failure instead of continuing without Crew. Native
+`prepare_attempt` uses the resolved member as the explicit selection, rejects
+conflicting manual assignments, batches and mismatched resumed identities, and
+retains its existing immutable-attempt/held-lease transaction. Crew context
+restoration rechecks the project binding, so removal or rebinding cannot silently
+expose another member's memory through an old session. Plan and result operations
+already pass through that context authorization.
+
+A new native project-chat fixture exercises actual authenticated command
+admission, queue lease and Crew preparation, repeat preparation, foreign-owner
+rejection, missing Crew mapping, manual-assignment conflict and membership
+revocation without rewriting the admitted member. This test is included in Crew
+CI and is not yet verified. A legacy profile without a Crew mapping must be
+explicitly mapped before it can run through this private native Crew path; the
+profile migration and its UI remain open.
+
+This is selection/authorization for already admitted private project-chat tasks.
+The Workjet general-project producer and external controller are still missing;
+this does not claim that the full Dev submission flow is available. Group-chat
+routing is not reduced to the first worker in its membership list.

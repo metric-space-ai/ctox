@@ -33,6 +33,8 @@ mod person_research_command;
 mod person_research_gap_closure;
 pub mod policy;
 mod project_chats;
+mod project_crew;
+pub(crate) use project_crew::project_crew_member_for_task;
 mod rxdb_peer;
 mod rxdb_peer_browser;
 mod rxdb_peer_business_data;
