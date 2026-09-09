@@ -74,7 +74,7 @@ jobs:
           export CARGO_MANIFEST_DIR="$GITHUB_WORKSPACE"
           export LD_LIBRARY_PATH="$CARGO_TARGET_DIR/debug/deps:$(rustc --print target-libdir)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           failed=0
-          for filter in auth_assist_recovery web_stack_auth_assist_reuses boot_releases_typed_command_lease queue_capacity_tests crew:: business_os::project_chats::tests::project_crew_ business_os::mcp_channel::crew_context:: business_os::mcp_channel::crew_execution::receipt_tests:: external_crew_job_without_writeback business_os_writeback_job_gets_a_scoped_mcp_session queued_prompt adapter_reconciliation business_os::harness_cockpit::chat::tests background_projection_releases_writer_between_pages sync_ticket_state sync_knowledge_tables; do
+          for filter in auth_assist_recovery web_stack_auth_assist_reuses boot_releases_typed_command_lease queue_capacity_tests crew:: business_os::project_chats::tests::project_crew_ business_os::mcp_channel::crew_context:: business_os::mcp_channel::crew_execution::receipt_tests:: external_crew_job_without_writeback business_os_writeback_job_gets_a_scoped_mcp_session command_writeback_tests queued_prompt adapter_reconciliation business_os::harness_cockpit::chat::tests background_projection_releases_writer_between_pages sync_ticket_state sync_knowledge_tables; do
             "$CREW_TEST_BINARY" "$filter" --test-threads=1 || failed=1
           done
           exit "$failed"

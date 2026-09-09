@@ -31701,6 +31701,10 @@ Business OS command:
                     "instruction": "Run the bounded action.",
                     "mode": "data",
                     "writeback_contract": {
+                        "mechanism": "business_command",
+                        "command_type": "outbound.lead.research_writeback",
+                        "collection": "outbound_lead_generation_leads",
+                        "record_ids": ["lead_1"],
                         "allowed_collections": ["outbound_lead_generation_leads"],
                         "allowed_actions": [{
                             "module_id": "outbound-lead-generation",
