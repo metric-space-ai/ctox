@@ -8788,7 +8788,7 @@ fn migrate_additive_native_rxdb_collection_versions(root: &Path) -> anyhow::Resu
     entries.retain(|entry| {
         !matches!(
             entry.name.as_str(),
-            "business_commands" | "ctox_queue_tasks" | "ctox_runs"
+            "business_commands" | "ctox_queue_tasks" | "ctox_runs" | "workjet_computers"
         )
     });
     // Packaged cockpit schema upgrades use the same copy/verify transaction as installed modules.
@@ -8796,7 +8796,12 @@ fn migrate_additive_native_rxdb_collection_versions(root: &Path) -> anyhow::Resu
     let packaged: Value = serde_json::from_str(include_str!(
         "../../apps/business-os/modules/ctox/collections.schema.json"
     ))?;
-    for name in ["business_commands", "ctox_queue_tasks", "ctox_runs"] {
+    for name in [
+        "business_commands",
+        "ctox_queue_tasks",
+        "ctox_runs",
+        "workjet_computers",
+    ] {
         let schema = schema_from_json(
             business_os_schema_contract()
                 .get(name)
@@ -11346,6 +11351,182 @@ pub(in crate::business_os) mod tests {
             &conn,
             &rxdb_collection_version_table_name(collection, 0)
         )?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn workjet_computer_schema_migration_reopens_the_deployed_v0_database(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = store::rxdb_store_path(root.path());
+        fs::create_dir_all(path.parent().unwrap())?;
+        let name = RXDB_SQLITE_DATABASE_NAME.to_string();
+        let creator = |schema| {
+            HashMap::from([(
+                "workjet_computers".to_string(),
+                RxCollectionCreator {
+                    schema,
+                    conflict_handler: None,
+                    options: HashMap::new(),
+                },
+            )])
+        };
+        let old_schema: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/workjet-computers-v0-67e44b11d.json"
+        ))?;
+        let legacy = json!({
+            "id": "retained-workstation", "display_name": "Existing workstation",
+            "hosting_mode": "workstation", "status": "assigned", "capabilities": ["coding"],
+            "self_hosted_colocation": false, "owner_user_id": "owner",
+            "created_at_ms": 100, "updated_at_ms": 100
+        });
+        let old = open_test_database_with_name(path.clone(), name.clone()).await?;
+        old.add_collections(creator(schema_from_json(old_schema)))
+            .await?;
+        old.collection("workjet_computers")
+            .unwrap()
+            .insert(legacy.clone())
+            .await?;
+        old.close().await?;
+        drop(old);
+
+        // Reproduce the deployed failure: changed fields at the original version.
+        let current_schema = business_os_schema("workjet_computers", "id");
+        let mut drifted = current_schema.clone();
+        drifted.version = 0;
+        let broken = open_test_database_with_name(path.clone(), name.clone()).await?;
+        let (_, failures) = broken.add_collections_tolerant(creator(drifted)).await?;
+        assert_eq!(failures.len(), 1);
+        assert!(failures
+            .iter()
+            .any(|(name, error)| name == "workjet_computers" && error.to_string().contains("DB6")));
+        assert!(broken.collection("workjet_computers").is_none());
+        broken.close().await?;
+        drop(broken);
+
+        let upgraded = open_test_database_with_name(path.clone(), name.clone()).await?;
+        register_collections_tolerant(&upgraded, creator(current_schema.clone())).await?;
+        let migration = migrate_additive_native_rxdb_collection_versions(root.path())?;
+        assert_eq!(migration["verified_rows"], 1);
+        repair_stale_rxdb_collection_schema_versions(root.path())?;
+        upgraded.close().await?;
+        drop(upgraded);
+
+        let reopened = open_test_database_with_name(path, name).await?;
+        register_collections_tolerant(&reopened, creator(current_schema)).await?;
+        let document = reopened
+            .collection("workjet_computers")
+            .unwrap()
+            .find_one(Some(MangoQuery {
+                selector: Some(json!({"id": {"$eq": "retained-workstation"}})),
+                ..Default::default()
+            }))?
+            .exec(false)
+            .await?;
+        assert_eq!(
+            document.get("display_name"),
+            Some(&json!("Existing workstation"))
+        );
+        assert_eq!(document.get("owner_user_id"), Some(&json!("owner")));
+        assert_eq!(document.get("device_binding_id"), Some(&json!("")));
+        assert_eq!(document.get("replication_up"), Some(&json!(false)));
+        reopened.close().await?;
+        Ok(())
+    }
+
+    #[test]
+    fn workjet_computer_schema_migration_preserves_rows_and_binding_authority() -> anyhow::Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        std::fs::create_dir_all(root.path().join("runtime"))?;
+        let collection = "workjet_computers";
+        let version = expected_rxdb_collection_version(collection);
+        assert_eq!(version, 1);
+        create_runtime_migration_source_table(root.path(), collection, 0)?;
+        let legacy = json!({
+            "id": "legacy-computer", "display_name": "Existing workstation",
+            "hosting_mode": "workstation", "status": "assigned", "capabilities": ["coding"],
+            "self_hosted_colocation": false, "owner_user_id": "owner",
+            "created_at_ms": 100, "updated_at_ms": 100
+        });
+        insert_runtime_migration_row(
+            root.path(),
+            collection,
+            0,
+            "legacy-computer",
+            100.0,
+            legacy.clone(),
+        )?;
+        let bound = json!({
+            "id": "bound-computer", "display_name": "Bound workstation",
+            "hosting_mode": "workstation", "status": "unassigned", "capabilities": ["coding"],
+            "self_hosted_colocation": false, "owner_user_id": "owner",
+            "created_at_ms": 100, "updated_at_ms": 200, "unassigned_at_ms": 200,
+            "device_binding_id": "existing-binding", "actor_epoch": 7,
+            "last_seen_at_ms": 190, "replication_up": true, "is_deleted": true
+        });
+        insert_runtime_migration_row(
+            root.path(),
+            collection,
+            0,
+            "bound-computer",
+            200.0,
+            bound.clone(),
+        )?;
+
+        // Bring-up must fail before cleanup when the destination was not registered.
+        let error = migrate_additive_native_rxdb_collection_versions(root.path()).unwrap_err();
+        assert!(format!("{error:#}").contains("was not registered"));
+        create_runtime_migration_source_table(root.path(), collection, version)?;
+        let migration = migrate_additive_native_rxdb_collection_versions(root.path())?;
+        assert_eq!(migration["verified_rows"], 2);
+        let target = rxdb_collection_version_table_name(collection, version);
+        let read = |id: &str| -> anyhow::Result<Value> {
+            // A fresh connection proves the committed copy survives reopening.
+            let conn = Connection::open(store::rxdb_store_path(root.path()))?;
+            let raw: String = conn.query_row(
+                &format!(
+                    "SELECT data FROM {} WHERE id = ?1",
+                    sqlite_quote_identifier(&target)
+                ),
+                params![id],
+                |row| row.get(0),
+            )?;
+            Ok(serde_json::from_str(&raw)?)
+        };
+        let migrated = read("legacy-computer")?;
+        for (key, value) in legacy.as_object().unwrap() {
+            assert_eq!(&migrated[key], value, "legacy field {key} is retained");
+        }
+        assert_eq!(migrated["device_binding_id"], "");
+        assert_eq!(migrated["actor_epoch"], 0);
+        assert_eq!(migrated["last_seen_at_ms"], 0);
+        assert_eq!(migrated["replication_up"], false);
+        assert_eq!(migrated["is_deleted"], false);
+        assert_eq!(read("bound-computer")?, bound);
+
+        // Replaying a retained source after a restart must not overwrite a newer destination.
+        let mut newer = migrated.clone();
+        newer["display_name"] = json!("Renamed after migration");
+        newer["updated_at_ms"] = json!(300);
+        let conn = Connection::open(store::rxdb_store_path(root.path()))?;
+        conn.execute(
+            &format!(
+                "UPDATE {} SET data = ?1, lastWriteTime = 300 WHERE id = 'legacy-computer'",
+                sqlite_quote_identifier(&target)
+            ),
+            params![newer.to_string()],
+        )?;
+        drop(conn);
+        let retry = migrate_additive_native_rxdb_collection_versions(root.path())?;
+        assert_eq!(retry["verified_rows"], 2);
+        assert_eq!(read("legacy-computer")?, newer);
+        assert_eq!(read("bound-computer")?, bound);
+        let conn = Connection::open(store::rxdb_store_path(root.path()))?;
+        assert_eq!(
+            sqlite_table_row_count(&conn, &rxdb_collection_version_table_name(collection, 0))?,
+            2
+        );
         Ok(())
     }
 

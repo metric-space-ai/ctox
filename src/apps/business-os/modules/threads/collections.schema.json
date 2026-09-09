@@ -156,6 +156,12 @@
         "status": {
           "type": "string"
         },
+        "ticket_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "title": {
           "type": "string"
         },
