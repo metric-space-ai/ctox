@@ -187,6 +187,24 @@ and clear operations are visible on the next read. Other platforms open a fresh
 read-only handle. Full-host command/boot budgets must be remeasured for changes
 at this boundary.
 
+`NativeSyncSession::query_page` consumes the existing `rxdb.query.fetch` wire
+exchange on an already admitted connection. It subscribes before sending,
+generates a unique request ID, and requires both acceptance and an ordered final
+chunk. Other queries or connection generations cannot satisfy that request.
+Partial data is discarded on sequence gaps, malformed/compressed data, timeout,
+disconnect or pool cancellation. Dropping an in-flight future schedules a
+generation-bound cancel through the pool's existing owned task lifecycle.
+
+The native page reader permits at most 200 documents per explicit window and
+2 MiB per page, with at most eight concurrent pages per pool (derived from the
+existing query wire limits). Decompression is capped before allocating beyond
+one chunk and requires a complete DEFLATE stream without trailing bytes. Larger
+results require pagination/projection or the existing file contract. The wire
+`authoritativeRevision` is returned as an opaque hint; the current query handler
+uses the query fingerprint there, so it must not be treated as a durable source
+checkpoint. This API does not provide live IPC subscriptions, Workjet UI wiring
+or authenticated target-instance resolution. Those remain host integration work.
+
 Native protocol negotiation has four reserved request permits, independent
 of the 32 data-request permits and eight interactive auxiliary permits.
 Only `ctoxProtocol` and `token` use the handshake reservation; reads, writes

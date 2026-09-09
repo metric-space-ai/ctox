@@ -210,6 +210,24 @@ impl NativeSyncSession {
             .expect("a started native session owns its pool")
     }
 
+    /// Read a bounded page through the already admitted data connection. The
+    /// host still owns target-instance authentication and credential selection.
+    pub async fn query_page(
+        &self,
+        connection: rxdb::plugins::replication_webrtc::WebRTCRsConnection,
+        request: rxdb::plugins::replication_webrtc::query_fetch_handler::QueryFetchRequest,
+    ) -> Result<
+        rxdb::plugins::replication_webrtc::query_fetch_client::QueryPage,
+        rxdb::rx_error::RxError,
+    > {
+        rxdb::plugins::replication_webrtc::query_fetch_client::fetch_query_page(
+            self.pool().clone(),
+            connection,
+            request,
+        )
+        .await
+    }
+
     fn ensure_attachable(&self) -> io::Result<()> {
         if self.resources.execution.is_some()
             || self

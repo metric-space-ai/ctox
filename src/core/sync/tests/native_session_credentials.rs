@@ -80,6 +80,13 @@ async fn exercise(wrong_key: bool, revoke_peer_only: bool) {
             .await
             .unwrap();
         let (policy_revoked, proof_counter) = (revoked.clone(), verified_proofs.clone());
+        // Enough data for the real query dispatcher to emit compressed chunks.
+        for n in 0..120 {
+            server_options.collections[0]
+                .insert(json!({"id":format!("z-query-{n:03}-{}", "x".repeat(40))}))
+                .await
+                .unwrap();
+        }
         let peer_gate = peer_allowed.clone();
         server_options.admission.peer = Arc::new(move |_| peer_gate.load(Ordering::SeqCst));
         server_options.admission.session = Arc::new(move |payload, challenge| {
@@ -223,6 +230,45 @@ async fn exercise(wrong_key: bool, revoke_peer_only: bool) {
             eprintln!(
                 "native_authenticated_read n=30 p50_us={} p95_us={}",
                 timings[14], timings[28]
+            );
+            let mut query_timings = Vec::new();
+            for _ in 0..30 {
+                let started = Instant::now();
+                let page = client
+                    .query_page(
+                        connection.clone(),
+                        rxdb::plugins::replication_webrtc::query_fetch_handler::QueryFetchRequest {
+                            request_id: "caller-id-is-replaced".into(),
+                            database_name: None,
+                            collection_name: "records".into(),
+                            schema_version: 0,
+                            query_fingerprint: "native-query-fixture".into(),
+                            query: json!({"selector":{"id":{"$gte":"z-query-"}}}),
+                            window: json!({"offset":10,"limit":100}),
+                            projection: Some(vec!["id".into()]),
+                        },
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(page.documents.len(), 100);
+                assert_eq!(
+                    page.documents[0]["id"],
+                    format!("z-query-010-{}", "x".repeat(40))
+                );
+                assert_eq!(
+                    page.documents[99]["id"],
+                    format!("z-query-109-{}", "x".repeat(40))
+                );
+                assert!(page
+                    .documents
+                    .iter()
+                    .all(|doc| doc.as_object().unwrap().len() == 1));
+                query_timings.push(started.elapsed().as_micros());
+            }
+            query_timings.sort_unstable();
+            eprintln!(
+                "native_query_page n=30 documents=100 p50_us={} p95_us={}",
+                query_timings[14], query_timings[28]
             );
             if revoke_peer_only {
                 // Keep the capability, proof and document policy valid: only

@@ -297,6 +297,8 @@ pub struct RxWebRTCReplicationPool<H: WebRTCConnectionHandler> {
     /// Protocol admission must remain runnable when data transfers back up.
     handshake_request_semaphore: Arc<Semaphore>,
     auxiliary_request_semaphore: Arc<Semaphore>,
+    pub(super) native_query_semaphore: Arc<Semaphore>,
+    query_cancelled: tokio::sync::Notify,
     /// Per-peer sub-tasks (the master-change relay tasks, one per collection).
     peer_states: Mutex<HashMap<H::Peer, PeerState>>,
     /// Fork replication states keyed by (collection, peer). One entry per
@@ -385,6 +387,10 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
                 MAX_CONCURRENT_AUXILIARY_REQUESTS,
             )),
             peer_states: Mutex::new(HashMap::new()),
+            native_query_semaphore: Arc::new(Semaphore::new(
+                protocol_contract_generated::CTOX_QUERY_MAX_IN_FLIGHT_STREAMS as usize,
+            )),
+            query_cancelled: tokio::sync::Notify::new(),
             fork_states: Mutex::new(HashMap::new()),
             fork_state_lifecycle: AsyncMutex::new(()),
             tasks: Mutex::new(Vec::new()),
@@ -626,7 +632,7 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
     /// workspace can occupy every ordinary request permit with collection
     /// pulls; queuing interactive work behind those pulls turns a healthy
     /// DataChannel into a deterministic 30-second UI timeout.
-    fn spawn_auxiliary_tracked<F>(self: &Arc<Self>, future: F)
+    pub(super) fn spawn_auxiliary_tracked<F>(self: &Arc<Self>, future: F)
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
@@ -722,6 +728,15 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         }
     }
 
+    pub(super) async fn query_cancellation(&self) {
+        let notified = self.query_cancelled.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !self.canceled.load(std::sync::atomic::Ordering::SeqCst) {
+            notified.await;
+        }
+    }
+
     pub async fn cancel(&self) {
         let _cancel_lifecycle = self.cancel_lifecycle.lock().await;
         if self
@@ -730,6 +745,9 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         {
             return;
         }
+
+        self.native_query_semaphore.close();
+        self.query_cancelled.notify_waiters();
 
         self.authenticated_peers.lock().clear();
         self.outbound_ready_peers.lock().clear();
@@ -3890,6 +3908,10 @@ mod tests {
 
     mod local_session_tests {
         include!("local_session_tests.rs");
+    }
+
+    mod query_fetch_client_tests {
+        include!("query_fetch_client_tests.rs");
     }
 
     #[tokio::test]
