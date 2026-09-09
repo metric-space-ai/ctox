@@ -117,12 +117,26 @@ Partial snapshots remain visibly incomplete. Cursors are opaque and bound to the
 session authorization, collection and query; clients cannot compare cursor text
 or infer a source revision from it.
 
-The implementation must capture the snapshot and its change boundary together.
-It must not read a checkpoint separately and claim it describes the streamed
-query. In the current SQLite implementation,
-`query_stream_on_dedicated_connection` opens its own read-only query cursor;
-`replication_checkpoint_status` separately computes diagnostic state. Combining
-those two calls does not establish a consistent snapshot plus resume boundary.
+The storage trait now exposes `query_snapshot_stream_into_blocking`. SQLite
+implements it with a dedicated read transaction: the first read pins the existing
+transactional collection change counter, then document batches use the same
+transaction. Internal Start/Documents/End events let cancellation or read failure
+finish without falsely completing a snapshot. The callback must run on a blocking
+worker with bounded delivery and byte/time budgets supplied by the data service.
+This primitive does not change the existing query-fetch wire or provide a watch.
+
+The counter is source-local and is NOT a durable resume token. Collection
+recreation, restored databases and a new source incarnation require a new epoch.
+The service must bind the counter to authenticated source/schema/query identity
+and still implement change retention, delivery and reset on unavailable history.
+The existing trigger counter records changes including physical deletion and
+writes with older timestamps, but it does not retain their document history.
+
+The older `query_stream_on_dedicated_connection` and
+`replication_checkpoint_status` remain separate reads. Combining those two calls
+does not establish a consistent snapshot plus resume boundary. Unsupported
+storage backends return no snapshot implementation; callers must reject the
+operation instead of manufacturing a boundary from those separate reads.
 
 The current query-fetch handler sets `authoritativeRevision` to the caller's
 `query_fingerprint`. This value describes the query, not source data. It must

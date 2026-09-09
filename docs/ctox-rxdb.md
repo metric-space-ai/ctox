@@ -61,6 +61,20 @@ The immutable address mechanism alone does not certify bootstrap performance,
 mobile suspend/resume, or full runtime compatibility across all hosts.
 
 
+## Native query snapshot boundary
+
+`RxStorageInstance::query_snapshot_stream_into_blocking` is an internal storage
+primitive for the native BusinessData service. SQLite reads its existing
+`__rxdb_changed_tables` counter and query pages in one dedicated read transaction.
+It emits Start/Documents/End; cancellation and read errors omit End. Concurrent
+WAL writers can commit while the reader keeps the original snapshot. Backends
+without this capability return None. The current query-fetch protocol is unchanged.
+
+This counter alone is not a resumable cursor or a cross-collection revision.
+Source incarnation, authorization and schema binding, retained changes, bounded
+transport delivery and consumer recovery still belong to the native service.
+See [the BusinessData integration contract](ctox-native-business-data-contract.md).
+
 ## 1. What CTOX Sync Engine is
 
 CTOX Sync Engine is a CTOX-owned data-plane runtime *derived from* RxDB concepts. It is
