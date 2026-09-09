@@ -18,6 +18,7 @@ use super::rxdb_peer_commands::{
     command_id_from_document, incremental_upsert_document_with_envelope,
     project_appsec_command_result, project_support_command_result, project_threads_command_result,
 };
+use super::rxdb_peer_domain_recovery;
 use super::rxdb_peer_intake_state::{
     business_command_document_is_terminal, is_pending_desktop_file_replication_error,
     resolve_business_command_intake_failure_history, PendingBusinessCommandIntakeOutcome,
@@ -105,7 +106,9 @@ pub(super) fn business_commands_table_stamp(
     }
     let conn = Connection::open_with_flags(
         &path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI,
     )
     .with_context(|| {
         format!(
@@ -130,9 +133,26 @@ pub(super) fn business_commands_table_stamp(
         "CAST(COALESCE(json_extract(data, '$._meta.lwt'), json_extract(data, '$.updated_at_ms'), 0) AS REAL)"
     };
     let stamp_sql = business_commands_table_stamp_sql(&quoted, deleted_expr, lwt_expr);
-    let (pending_count, latest_pending_lwt): (i64, f64) = conn
+    let (mut pending_count, mut latest_pending_lwt): (i64, f64) = conn
         .query_row(&stamp_sql, [], |row| Ok((row.get(0)?, row.get(1)?)))
         .with_context(|| format!("stamp pending business_commands rows in {table}"))?;
+    if let Some(predicate) = rxdb_peer_domain_recovery::retry_predicate(
+        &store::business_os_store_path(root),
+        &conn,
+        &quoted,
+        deleted_expr,
+    )? {
+        let (count, latest): (i64, f64) = conn.query_row(
+            &format!(
+                "SELECT COUNT(*), COALESCE(MAX({lwt_expr}), 0)
+                      FROM {quoted} WHERE {deleted_expr} = 0 AND {predicate}"
+            ),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        pending_count += count;
+        latest_pending_lwt = latest_pending_lwt.max(latest);
+    }
     Ok(BusinessCommandsTableStamp {
         table_name: Some(table),
         pending_count,
@@ -525,6 +545,17 @@ pub(super) async fn consume_pending_business_commands(
                     }
                 }
                 if exhausted {
+                    if persisted_failure
+                        .get("domain_effect_applied")
+                        .and_then(Value::as_bool)
+                        == Some(true)
+                    {
+                        // Keep the existing paced retry alive without projecting
+                        // a new accepted/failed document on every failed delivery.
+                        // Zero selects the existing one-second replication wait.
+                        accept_failures.insert(command_id.clone(), 0);
+                        continue;
+                    }
                     COMMAND_PLANE_METRICS
                         .exhausted_total
                         .fetch_add(1, Ordering::Relaxed);
@@ -607,7 +638,9 @@ pub(super) fn pending_business_command_documents_sync(
     }
     let conn = Connection::open_with_flags(
         &path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI,
     )
     .with_context(|| {
         format!(
@@ -632,6 +665,15 @@ pub(super) fn pending_business_command_documents_sync(
         "CAST(COALESCE(json_extract(data, '$._meta.lwt'), json_extract(data, '$.updated_at_ms'), 0) AS REAL)"
     };
     let oldest_limit = limit.saturating_add(1) / 2;
+    let retry_predicate = match rxdb_peer_domain_recovery::retry_predicate(
+        &store::business_os_store_path(root),
+        &conn,
+        &quoted,
+        deleted_expr,
+    )? {
+        Some(applied) => format!("({BUSINESS_COMMAND_RETRY_CANDIDATE_SQL} OR {applied})"),
+        None => BUSINESS_COMMAND_RETRY_CANDIDATE_SQL.to_owned(),
+    };
     let newest_limit = limit.saturating_sub(oldest_limit);
     let mut documents = Vec::new();
     let mut seen_ids = HashSet::new();
@@ -644,7 +686,7 @@ pub(super) fn pending_business_command_documents_sync(
                 "SELECT data
                  FROM {quoted}
                  WHERE {deleted_expr} = 0
-                   AND {BUSINESS_COMMAND_RETRY_CANDIDATE_SQL}
+                   AND {retry_predicate}
                  ORDER BY {lwt_expr} {direction}
                  LIMIT ?1"
             ))
@@ -758,6 +800,18 @@ pub(super) async fn accept_pending_business_command(
     database: &Arc<RxDatabase>,
     document: Value,
 ) -> anyhow::Result<PendingBusinessCommandIntakeOutcome> {
+    // Reconcile from durable evidence before interpreting browser-authored
+    // command type, age or payload. This branch cannot invoke a handler.
+    let recovery_root = root.to_path_buf();
+    let recovery_id = command_id_from_document(&document)?;
+    let recovered = tokio::task::spawn_blocking(move || {
+        super::command_plane::recover_applied_domain_effect_for_intake(&recovery_root, &recovery_id)
+    })
+    .await
+    .context("join applied domain effect recovery")??;
+    if recovered.is_some() {
+        return Ok(PendingBusinessCommandIntakeOutcome::Terminalized);
+    }
     // Verjaehrung VOR jeder Ausfuehrung — auch vor Browser-Kommandos.
     if let Some(created_at) = business_command_created_at_ms(&document) {
         let age = (now_ms() as u64).saturating_sub(created_at);

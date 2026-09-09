@@ -3,6 +3,69 @@
 
 use super::*;
 
+/// Native intake can reconcile an already-applied local effect without a
+/// retained browser bearer token. It uses only the durable receipt identity and
+/// Core intent, rechecks today's user/policy, and has no route to a mutation.
+pub(super) fn recover_applied_domain_effect_for_intake(
+    root: &Path,
+    command_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    let Some(identity) =
+        crate::business_os::store::domain_effect_identity_for_intake(root, command_id)?
+    else {
+        return Ok(None);
+    };
+    let canonical = channels::business_command_projection(root, command_id)?;
+    anyhow::ensure!(
+        canonical["execution_mode"] == "control"
+            && canonical["payload_hash"] == identity.payload_hash,
+        "domain receipt and Core intent disagree"
+    );
+    let command_type = canonical["command_type"]
+        .as_str()
+        .context("canonical command type missing")?;
+    anyhow::ensure!(
+        domain_effect::supports_command(command_type),
+        "domain command has no recovery adapter"
+    );
+    let command = BusinessCommand {
+        origin: CommandOrigin::TrustedLocal,
+        id: Some(command_id.to_owned()),
+        module: canonical["module"]
+            .as_str()
+            .context("canonical module missing")?
+            .to_owned(),
+        command_type: command_type.to_owned(),
+        record_id: canonical["record_id"].as_str().map(str::to_owned),
+        payload: canonical.get("payload").cloned().unwrap_or(Value::Null),
+        client_context: canonical
+            .get("client_context")
+            .cloned()
+            .unwrap_or(Value::Null),
+    };
+    let session =
+        crate::business_os::store::active_domain_recovery_session(root, &identity.actor_user_id)?;
+    let requirement = CentralCommandPolicyRequirement::for_command(&command)
+        .context("domain recovery has no central policy contract")?;
+    crate::business_os::store_policy::enforce_command_policy_with_session(
+        root,
+        &command,
+        &session,
+        |session| requirement.resolve(root, &command, session),
+        |_| {
+            recover_applied_domain_effect(
+                root,
+                &command,
+                &identity.payload_hash,
+                &identity.actor_user_id,
+            )?
+            .context("domain application receipt disappeared during recovery")
+        },
+    )?
+    .into_outcome()
+    .map(Some)
+}
+
 /// Invoked only behind the command's existing central authorization.
 pub(super) fn recover_applied_domain_effect(
     root: &Path,

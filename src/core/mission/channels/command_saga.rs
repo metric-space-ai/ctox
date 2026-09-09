@@ -2464,6 +2464,7 @@ fn record_business_command_intake_failure_inner(
         "exhausted": exhausted,
         "canonical_exists": canonical_exists,
         "canonical_failure_created": canonical_failure_created,
+        "domain_effect_applied": !allow_terminal_failure,
         "canonical_already_terminal": canonical_already_terminal,
         "idempotency_conflict": idempotency_conflict,
         "terminal_projection_ready": terminal_projection_ready,

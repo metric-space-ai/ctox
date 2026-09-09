@@ -1,8 +1,9 @@
 # Domain application receipts and command recovery
 
-Status: shared native boundary implemented; PR80 domain-handler integration and
-its complete user-flow fault tests are pending. This does not certify production
-readiness, browser delivery, portable sessions or tenant migration.
+Status: shared native boundary and automatic receipt-backed intake implemented.
+PR80 contains the domain-handler integration; it is not yet integrated into this
+base. Full native tests for the new automatic intake remain pending. This does
+not certify production readiness, portable sessions or tenant migration.
 
 ## Ownership
 
@@ -76,24 +77,52 @@ delivery error even after Core completion and can be repaired on same-ID replay.
 
 Native intake exhaustion uses Core's existing failure journal but cannot create
 a terminal mutation failure when the domain owner has a receipt. There is no new
-retry scheduler. Automatic retry availability across the full native intake
-lifecycle remains an integration gate.
+retry scheduler. The existing intake selects nonterminal accepted/completed/failed
+projections for the seven opted-in command types only when their domain receipt
+exists. It reads receipts through a read-only SQLite attachment, preserving the
+existing oldest/newest intake fairness. Missing stores or legacy schemas are
+neither created nor migrated by selection. Candidate discovery uses the existing
+command-type index; unrelated accepted history must not force a status-index scan.
+
+Before interpreting a candidate's browser-authored payload, type or age, native
+intake looks up its application identity by command ID. It reconstructs the
+command from Core's canonical intent, verifies the receipt hash, loads the still
+active native user bound to the receipt and applies the same central policy.
+This delivery-only path cannot enter a handler or create a new admission. It
+needs no retained browser bearer token. Normal browser requests still require
+their existing authentication. An inactive/unknown actor, revoked policy or
+identity conflict stops recovery without changing an applied effect to failure.
+
+Delivery exhaustion reuses the existing paced intake retry without repeatedly
+rewriting accepted projections. A receipt protects the command from terminal
+failure by ID, even if an incoming document has a falsified command type. Native
+selection, authorization and completion together still need the full-host gate.
 
 ## Evidence and remaining gates
 
 The actual standalone receipt module has six passing local Rust tests, including
 a child process exiting immediately after COMMIT, SQLite ABORT when writing the
 receipt, mutation rollback, actor/intent conflicts, immutable replay and concurrent
-application. These component tests do not execute the complete CTOX binary.
+application. Three additional selection tests pass: read-only attachment and
+nonterminal filtering, absent/legacy stores, and indexed selection with 20,001
+commands. In the local 30-sample selection-only comparison, corrected p50/p95
+were 33/81 microseconds versus 15,273/27,502 for the broad status-index query.
+This excludes connection setup and the complete ordered intake query; it is not
+a browser roundtrip benchmark. These tests do not execute the complete binary.
 
 The full-host CI now includes real command-plane tests for recovery after a
 projection ABORT, preserving a later domain title, missing result storage after
 Core completion, deleting obsolete projected fields, native tombstones, changed
-actor/payload, no-receipt uncertainty and intake exhaustion. Their execution
-results are required before declaring this boundary verified.
+actor/payload, no-receipt uncertainty and intake exhaustion. Those shared-boundary
+tests passed in full-host CI run 34305942733 at e80c66e2e8. New tests exercise
+automatic native intake of an old accepted command without a browser token,
+untrusted intake payload/actor, current source projection, terminal removal from
+the queue, inactive users and conflicting Core identity. They have not yet run
+in the complete binary for this change.
 
 PR80 additionally owns real post-commit handler fault injection, a fresh process
 through the full command path, profile/chat domain invariants, distinct create
 IDs and revoked membership. Browser/WebRTC E2E and measured command/boot budgets
-remain required; the existing failing context and warm-command gates are not
-waived by these tests. No production tenant was modified.
+remain required. Run 34305942733 passed its warm-command and critical-boot gates
+but failed the context-app workflow; an earlier run also missed the warm-command
+budget. These component results waive no gate. No production tenant was modified.

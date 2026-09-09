@@ -254,7 +254,7 @@ pub(super) fn reject_command_if_policy_denied(
         }
         return Ok(None);
     }
-    if super::domain_effect::supports_command(&command.command_type) {
+    {
         let conn = super::store::open_store(root)?;
         if super::domain_effect::contains(&conn, command.id.as_deref().unwrap_or_default())? {
             // A denied replay cannot fail an already committed effect.
@@ -332,21 +332,37 @@ where
     OnAllowed: FnOnce(&BusinessOsSession) -> anyhow::Result<Value>,
 {
     let session = rxdb_authenticated_session(root, command)?;
-    let decision = match resolve_requirement(&session)? {
+    enforce_command_policy_with_session(root, command, &session, resolve_requirement, on_allowed)
+}
+
+/// The native receipt-recovery caller supplies an active user read from its
+/// durable application identity. Network callers must use enforce_command_policy.
+pub(super) fn enforce_command_policy_with_session<Resolve, OnAllowed>(
+    root: &Path,
+    command: &BusinessCommand,
+    session: &BusinessOsSession,
+    resolve_requirement: Resolve,
+    on_allowed: OnAllowed,
+) -> anyhow::Result<EnforcedCommandOutcome>
+where
+    Resolve: FnOnce(&BusinessOsSession) -> anyhow::Result<CommandPolicyRequirement>,
+    OnAllowed: FnOnce(&BusinessOsSession) -> anyhow::Result<Value>,
+{
+    let decision = match resolve_requirement(session)? {
         CommandPolicyRequirement::Module {
             permission,
             module_id,
-        } => module_policy_decision(root, &session, permission, &module_id)?,
+        } => module_policy_decision(root, session, permission, &module_id)?,
         CommandPolicyRequirement::Workspace { permission } => {
-            workspace_policy_decision(root, &session, permission)?
+            workspace_policy_decision(root, session, permission)?
         }
         CommandPolicyRequirement::Scoped { permission, scope } => {
-            scoped_policy_decision(root, &session, permission, scope)?
+            scoped_policy_decision(root, session, permission, scope)?
         }
     };
     match reject_command_if_policy_denied(root, command, &decision) {
         Ok(Some(outcome)) => Ok(EnforcedCommandOutcome(Ok(outcome))),
-        Ok(None) => Ok(EnforcedCommandOutcome(on_allowed(&session))),
+        Ok(None) => Ok(EnforcedCommandOutcome(on_allowed(session))),
         Err(error) => Ok(EnforcedCommandOutcome(Err(error))),
     }
 }

@@ -42,17 +42,18 @@ pub(super) struct DomainEffectAdmission {
     actor_user_id: String,
 }
 
+pub(super) const COMMAND_TYPES: [&str; 7] = [
+    "ctox.workjet.project.upsert",
+    "ctox.workjet.project.chat.ensure",
+    "ctox.workjet.project.worker.add",
+    "ctox.workjet.project.worker.remove",
+    "ctox.workjet.project.chat.create",
+    "ctox.workjet.worker_profile.bind",
+    "ctox.workjet.worker_profile.unbind",
+];
+
 pub(super) fn supports_command(command_type: &str) -> bool {
-    matches!(
-        command_type,
-        "ctox.workjet.project.upsert"
-            | "ctox.workjet.project.chat.ensure"
-            | "ctox.workjet.project.worker.add"
-            | "ctox.workjet.project.worker.remove"
-            | "ctox.workjet.project.chat.create"
-            | "ctox.workjet.worker_profile.bind"
-            | "ctox.workjet.worker_profile.unbind"
-    )
+    COMMAND_TYPES.contains(&command_type)
 }
 
 impl DomainEffectAdmission {
@@ -114,6 +115,21 @@ impl DomainEffectAdmission {
         tx.commit()?;
         Ok(applied)
     }
+}
+
+pub(super) struct DomainEffectIdentity {
+    pub payload_hash: String,
+    pub actor_user_id: String,
+}
+
+pub(super) fn identity(
+    conn: &Connection,
+    command_id: &str,
+) -> anyhow::Result<Option<DomainEffectIdentity>> {
+    Ok(conn.query_row(
+        "SELECT payload_hash, actor_user_id FROM business_command_domain_effects WHERE command_id = ?1",
+        [command_id], |row| Ok(DomainEffectIdentity {payload_hash:row.get(0)?, actor_user_id:row.get(1)?}),
+    ).optional()?)
 }
 
 pub(super) fn contains(conn: &Connection, command_id: &str) -> anyhow::Result<bool> {

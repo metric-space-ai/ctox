@@ -1105,6 +1105,38 @@ pub(super) struct TemplateManifest {
     tags: Vec<String>,
 }
 
+/// Native reconciliation reads application identity from the domain owner's
+/// transaction, never from a browser-authored actor or replacement credential.
+pub(super) fn domain_effect_identity_for_intake(
+    root: &Path,
+    command_id: &str,
+) -> anyhow::Result<Option<super::domain_effect::DomainEffectIdentity>> {
+    with_store_connection(root, |conn| {
+        super::domain_effect::identity(conn, command_id)
+    })
+}
+
+pub(super) fn active_domain_recovery_session(
+    root: &Path,
+    actor_id: &str,
+) -> anyhow::Result<BusinessOsSession> {
+    let user = with_store_connection(root, |conn| active_business_user(conn, actor_id))?
+        .context("domain recovery actor is no longer active")?;
+    Ok(BusinessOsSession {
+        ok: true,
+        authenticated: true,
+        auth_required: false,
+        user: Some(BusinessOsSessionUser {
+            id: user.id,
+            display_name: user.display_name,
+            is_admin: role_can_manage(&user.role),
+            role: user.role,
+        }),
+        login_url: None,
+        reason: None,
+    })
+}
+
 pub fn open_store(root: &Path) -> anyhow::Result<Connection> {
     let path = business_os_store_path(root);
     let conn = open_store_connection(&path)?;
@@ -17032,8 +17064,7 @@ pub(crate) fn record_business_command_intake_failure(
             .cloned()
             .unwrap_or(Value::Null),
     };
-    let has_applied_effect = super::domain_effect::supports_command(&command.command_type)
-        && super::domain_effect::contains(&open_store(root)?, command_id)?;
+    let has_applied_effect = domain_effect_identity_for_intake(root, command_id)?.is_some();
     let record_failure = if has_applied_effect {
         channels::record_business_command_applied_effect_delivery_failure
     } else {

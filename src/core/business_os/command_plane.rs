@@ -48,6 +48,7 @@ use std::path::Path;
 #[path = "command_plane_domain_effect.rs"]
 mod domain_effect_recovery;
 use domain_effect_recovery::recover_applied_domain_effect;
+pub(super) use domain_effect_recovery::recover_applied_domain_effect_for_intake;
 
 #[cfg(test)]
 #[path = "command_plane_domain_effect_tests.rs"]
@@ -1926,10 +1927,7 @@ fn write_rxdb_control_command_state(
     terminal: bool,
 ) -> anyhow::Result<Value> {
     let command_id = command.id.as_deref().context("command id is required")?;
-    if terminal
-        && status != "completed"
-        && domain_effect::supports_command(&command.command_type)
-        && domain_effect::contains(&open_store(root)?, command_id)?
+    if terminal && status != "completed" && domain_effect::contains(&open_store(root)?, command_id)?
     {
         anyhow::bail!("applied domain effect cannot be terminalized as a failed mutation");
     }
