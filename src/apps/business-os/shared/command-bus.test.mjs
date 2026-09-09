@@ -32,6 +32,49 @@ test.afterEach(() => {
   resetBusinessOsCapabilityTokenCacheForTests();
 });
 
+test('dispatch receipt lifecycle reports elapsed time from the original dispatch', async (t) => {
+  let now = Date.now();
+  const startedAt = now;
+  t.mock.method(Date, 'now', () => now);
+  const events = [];
+  t.mock.method(console, 'info', (tag, payload) => {
+    if (tag === '[command-bus]') events.push(JSON.parse(payload));
+  });
+  let stored;
+  const commands = {
+    async insert(document) { stored = { ...document }; now = startedAt + 125; },
+    findOne() {
+      return {
+        $: { subscribe(listener) {
+          listener({ toJSON: () => ({ ...stored }) });
+          return { unsubscribe() {} };
+        } },
+        async exec() { return stored ? { toJSON: () => ({ ...stored }) } : null; },
+      };
+    },
+  };
+  const bus = createCommandBus({
+    db: { raw: { business_commands: commands } },
+    sync: { async startCollection() {
+      return { state: { async pushDocumentsToRemotePeers() {
+        now = startedAt + 900;
+        stored = { ...stored, status: 'queued', replication_phase: 'native_observed' };
+        return true;
+      } } };
+    } },
+  });
+  const receipt = await bus.dispatch({
+    id: 'cmd-lifecycle-elapsed', command_type: 'business_os.smoke', sync_queue_tasks: false,
+  }, { until: 'accepted' });
+  assert.equal(receipt.status, 'queued');
+  for (const phase of ['local_receipt', 'accepted']) {
+    const event = events.find((entry) => entry.phase === phase);
+    assert.ok(event, `missing ${phase} lifecycle event`);
+    assert.equal(event.command_id, 'cmd-lifecycle-elapsed');
+    assert.equal(event.elapsed_ms, 900, `${phase} must retain the dispatch start time`);
+  }
+});
+
 
 function leaseTestState(connected) {
   const listeners = new Set();

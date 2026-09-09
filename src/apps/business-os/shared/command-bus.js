@@ -209,7 +209,7 @@ export function createCommandBus({ db, sync = null, session = null } = {}) {
         command,
         dispatchStartedAt,
       });
-      emitCommandLifecycle(receipt.command_id, command.command_type || command.type, 'local_receipt');
+      emitCommandLifecycle(receipt.command_id, command.command_type || command.type, 'local_receipt', dispatchStartedAt);
       const until = options.until || command?.until || 'accepted';
       if (until === 'local') return receipt;
       if (until === 'terminal') {
@@ -222,7 +222,7 @@ export function createCommandBus({ db, sync = null, session = null } = {}) {
         });
       }
       const accepted = await receipt.tracking.waitForAccepted({ ...command, ...options });
-      emitCommandLifecycle(receipt.command_id, command.command_type || command.type, 'accepted');
+      emitCommandLifecycle(receipt.command_id, command.command_type || command.type, 'accepted', dispatchStartedAt);
       return accepted;
     },
   };
