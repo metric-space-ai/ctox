@@ -1,3 +1,18 @@
+## Ergänzung: ausführbarer Reports-Browser-Smoke
+
+`smoke-app-module.mjs reports --url <test-instance>` prüft jetzt am wirklich
+montierten Modul den Karten-/Listen-Rundlauf samt zugänglicher Beschriftung
+und den Filterleisten-Rundlauf samt sichtbarem CSS-Zustand. Er hält einzelne
+Click-to-State-Zeiten fest. Kein Mock der App und keine HTTP-Datenbrücke.
+
+Syntaxprüfung und diff-check bestanden. Browserausführung noch offen: lokale
+Admission scheitert aktuell an freiem Speicher und fremden laufenden Compilern.
+Diese Ergänzung ist KEINE bereits bestandene E2E-Abnahme und ersetzt weder
+gefüllte Daten-/Rechte-/Reload-Szenarien noch die Command-/Boot-Performance-Gates.
+
+Mail-Vertragsbefund bleibt ohne bestätigten Office-Owner; der Koordinator hat
+keinen autorisierten Empfänger dafür und übernimmt keine Office-Implementierung.
+
 # CTOX-Sync-Architektur: Handover vom 9. September 2026
 
 
