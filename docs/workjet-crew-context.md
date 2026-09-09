@@ -18,14 +18,21 @@ policy, collection and module restrictions still apply. A restricted signed
 collection scope must include `ctox_crew_members`. No new role grant is created.
 
 The response has schema `ctox.crew_context.v1`, command/task/attempt/module and
-member identifiers, member name, `persona`, optional `memory_block`, and an
+member identifiers, member name, `persona`, optional `memory_block`, the current
+`execution_plan` (or null if none is persisted for this task/command/attempt), and an
 opaque `context_version` hash over this content. The two text lanes use the
 same native renderers and byte limits (2,400 / 6,000) as native Crew execution.
 Clients must place persona in the identity instructions and memory in the
 runtime context as knowledge, without granting additional tool permissions.
 Reload on start, resume and compaction, retaining the explicit attempt binding.
 A changed version means that the rendered snapshot changed; it is not a new
-execution, lease renewal or evidence that learning occurred.
+execution, lease renewal or evidence that learning occurred. The plan carries its
+native revision, steps, phase, percent and review status. Completed model steps
+remain at 90 percent until native review passes; this reader does not infer
+completion. Plan JSON is limited to 64 KiB and oversized/corrupt plans fail the
+read instead of being silently omitted. Plan changes also change the context
+version. A plan from another task or command cannot be selected by attempt id
+alone.
 
 The read uses one read-only core-database transaction for binding, persona and
 LCM heads. Missing continuity documents mean no stored memory; an unavailable

@@ -90,6 +90,7 @@ pub(super) fn read(
         "member_name": member.name,
         "persona": crate::crew::render_persona(&member),
         "memory_block": crate::crew::render_memory_block(&member, &memory, &recent),
+        "execution_plan": read_execution_plan(&tx, &task_id, &command_id, &attempt_id)?,
     });
     response["context_version"] = Value::String(
         URL_SAFE_NO_PAD
@@ -99,8 +100,46 @@ pub(super) fn read(
     Ok(response)
 }
 
+fn read_execution_plan(
+    conn: &rusqlite::Connection,
+    task_id: &str,
+    command_id: &str,
+    attempt_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    let row: Option<(i64, String, i64, String, Option<String>)> = conn
+        .query_row(
+            "SELECT revision,phase,percent,review_status,
+         CASE WHEN length(CAST(steps_json AS BLOB))<=65536 THEN steps_json ELSE NULL END
+         FROM task_execution_plan_revisions
+         WHERE task_id=?1 AND command_id=?2 AND attempt_id=?3
+         ORDER BY revision DESC LIMIT 1",
+            params![task_id, command_id, attempt_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    row.map(|(revision, phase, percent, review_status, steps)| {
+        let steps: Value =
+            serde_json::from_str(&steps.context("crew execution plan exceeds the context limit")?)?;
+        anyhow::ensure!(steps.is_array(), "crew execution plan steps are invalid");
+        Ok(serde_json::json!({
+            "revision": revision, "phase": phase, "percent": percent,
+            "review_status": review_status, "steps": steps,
+        }))
+    })
+    .transpose()
+}
+
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     #[test]
@@ -195,7 +234,47 @@ mod tests {
                 authority,
             )
         };
+        assert!(call(args.clone(), Some(&trusted))?["execution_plan"].is_null());
+        let set_plan = |status: &str| -> anyhow::Result<()> {
+            crate::crew::open_engine(root)?.record_task_execution_plan(
+                crate::lcm::TaskExecutionPlanUpdate {
+                    work_key: "crew-context-plan",
+                    task_id: &task_id,
+                    command_id: "crew-parent",
+                    attempt_id: "crew-attempt",
+                    explanation: None,
+                    steps: &[crate::lcm::TaskExecutionPlanStepInput {
+                        label: "Inspect shared knowledge".into(),
+                        status: status.into(),
+                    }],
+                },
+            )?;
+            Ok(())
+        };
+        set_plan("in_progress")?;
+        crate::crew::open_engine(root)?.record_task_execution_plan(
+            crate::lcm::TaskExecutionPlanUpdate {
+                work_key: "foreign-plan",
+                task_id: "foreign-task",
+                command_id: "foreign-parent",
+                attempt_id: "crew-attempt",
+                explanation: None,
+                steps: &[crate::lcm::TaskExecutionPlanStepInput {
+                    label: "Foreign plan must stay excluded".into(),
+                    status: "in_progress".into(),
+                }],
+            },
+        )?;
         let first = call(args.clone(), Some(&trusted))?;
+        assert_eq!(first["execution_plan"]["percent"], 0);
+        assert_eq!(
+            first["execution_plan"]["steps"][0]["label"],
+            "Inspect shared knowledge"
+        );
+        assert!(!first
+            .to_string()
+            .contains("Foreign plan must stay excluded"));
+
         assert_eq!(first["member_id"], native.member_id);
         assert_eq!(first["persona"], native.persona);
         assert_eq!(
@@ -225,7 +304,23 @@ mod tests {
             .to_string()
             .contains("Foreign member knowledge must stay excluded"));
 
+        set_plan("completed")?;
+        let planned = call(args.clone(), Some(&trusted))?;
+        assert_eq!(planned["execution_plan"]["percent"], 90);
+        assert_eq!(planned["execution_plan"]["review_status"], "pending");
+        assert_ne!(planned["context_version"], refreshed["context_version"]);
+        assert_eq!(planned["memory_block"], refreshed["memory_block"]);
+        conn.execute(
+            "UPDATE task_execution_plan_revisions SET steps_json=?1 WHERE work_key='crew-context-plan'",
+            [serde_json::json!([{"label": "x".repeat(70_000), "status": "completed"}]).to_string()],
+        )?;
+        let oversized =
+            call(args.clone(), Some(&trusted)).expect_err("oversized plan must fail closed");
+        assert!(oversized.to_string().contains("context limit"));
+        set_plan("completed")?;
+
         assert!(call(args.clone(), None).is_err());
+
         assert!(call(args.clone(), Some(&session("foreign-parent")?)).is_err());
         assert!(call(
             serde_json::json!({"attempt_id":"crew-attempt", "member_id":"crew-nori"}),

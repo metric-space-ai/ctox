@@ -1104,7 +1104,7 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
     let mut tools = vec![
         read_tool(
             "business_os.get_crew_context",
-            "Restore the bounded persona and memory of an open crew attempt belonging to this signed command session. Requires private crew-read permission and a live native lease. Does not admit, renew, complete or learn from an execution.",
+            "Restore the bounded persona, memory and current execution plan of an open crew attempt belonging to this signed command session. Requires private crew-read permission and a live native lease. Does not admit, renew, complete or learn from an execution.",
             object_schema(vec![required_string("attempt_id")]),
         ),
         read_tool(
