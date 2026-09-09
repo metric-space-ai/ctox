@@ -5717,9 +5717,11 @@ async function withStartupTimeout(promise, timeoutMs, fallback, label) {
 }
 
 async function syncTaskbarPinsToDesktopLayout() {
-  const collection = state.db?.collection?.('desktop_layout');
+  const database = state.db;
+  const collection = database?.collection?.('desktop_layout');
   if (!collection) return;
   const existing = await collection.findOne('layout').exec();
+  if (state.db !== database) return;
   const existingLayout = existing?.toJSON?.() || null;
   const remoteUpdatedAtMs = Number(existingLayout?.updated_at_ms || 0);
   if (remoteUpdatedAtMs > Number(state.taskbarPinsUpdatedAtMs || 0)) {
