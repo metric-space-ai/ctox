@@ -217,7 +217,7 @@ struct FieldStatus {
 ///
 /// Only the names a real payload never uses as a field are treated as
 /// carriers, so a field object such as `{"value": "x"}` keeps its shape.
-fn unwrap_item_carriers(value: Value) -> Value {
+pub(super) fn unwrap_item_carriers(value: Value) -> Value {
     fn carrier_key(key: &str) -> bool {
         matches!(
             key.trim().to_ascii_lowercase().as_str(),

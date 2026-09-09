@@ -491,6 +491,12 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
     command_result: &Value,
     now: i64,
 ) -> Value {
+    // Phase A reads the tool result directly, and that result carries the same
+    // XML-shaped list carriers the writeback does: on the Aeroxon lead
+    // 09.09.2026 `person_records` and `evidence` arrived as {"item": [...]}
+    // and were read as an empty list, so the lead lost every contact.
+    let command_result =
+        &super::person_research_gap_closure::unwrap_item_carriers(command_result.clone());
     let outcome = command_result
         .get("result")
         .filter(|value| value.is_object())
