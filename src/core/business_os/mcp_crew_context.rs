@@ -137,7 +137,27 @@ mod tests {
             "UPDATE communication_routing_state SET crew_assigned_member_id='crew-pico' WHERE message_key=?1",
             [&task_id],
         )?;
+        let write_memory = |member: &str, id: &str, statement: &str| -> anyhow::Result<()> {
+            let engine = crate::crew::open_engine(root)?;
+            engine.continuity_apply_diff(
+                crate::crew::member_conversation_id(member),
+                crate::lcm::ContinuityKind::Anchors,
+                &format!("## Entries\n+ anchor_id: {id}\n+ anchor_type: hypothesis\n+ statement: {statement}\n+ learning_kind: insight\n+ source_class: crew_retrospective\n+ source_ref: context-test\n"),
+            )?;
+            Ok(())
+        };
+        write_memory(
+            "crew-pico",
+            "pico-first",
+            "Shared knowledge from the native LCM",
+        )?;
+        write_memory(
+            "crew-nori",
+            "nori-only",
+            "Foreign member knowledge must stay excluded",
+        )?;
         crate::mission::channels::lease_queue_task(root, &task_id, "crew-worker")?;
+
         let native = crate::crew::prepare_attempt(
             root,
             &[task_id.clone()],
@@ -183,6 +203,28 @@ mod tests {
             serde_json::to_value(native.memory_block)?
         );
         assert_eq!(first, call(args.clone(), Some(&trusted))?);
+        let initial_memory = first["memory_block"]
+            .as_str()
+            .context("seeded memory missing")?;
+        assert!(initial_memory.contains("Shared knowledge from the native LCM"));
+        assert!(!initial_memory.contains("Foreign member knowledge must stay excluded"));
+        write_memory(
+            "crew-pico",
+            "pico-second",
+            "Fresh knowledge after context restoration",
+        )?;
+        let refreshed = call(args.clone(), Some(&trusted))?;
+        assert_eq!(first["persona"], refreshed["persona"]);
+        assert_eq!(first["member_id"], refreshed["member_id"]);
+        assert_ne!(first["context_version"], refreshed["context_version"]);
+        assert!(refreshed["memory_block"]
+            .as_str()
+            .context("refreshed memory missing")?
+            .contains("Fresh knowledge after context restoration"));
+        assert!(!refreshed
+            .to_string()
+            .contains("Foreign member knowledge must stay excluded"));
+
         assert!(call(args.clone(), None).is_err());
         assert!(call(args.clone(), Some(&session("foreign-parent")?)).is_err());
         assert!(call(

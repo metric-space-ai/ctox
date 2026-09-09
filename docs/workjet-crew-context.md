@@ -42,7 +42,8 @@ be marked supported by deriving broader access from this read operation.
 
 Regression coverage lives in `mcp_crew_context.rs` and uses the MCP dispatcher,
 real command-session signing/verification, native command admission and Crew
-preparation. It checks native rendering parity, stable and changed versions,
+preparation. It checks native rendering parity with real LCM knowledge, excludes another
+member’s knowledge, observes newly persisted knowledge, and checks stable and changed versions,
 foreign-command and argument denial, channel collection restrictions, corrupt
 memory, expired lease and finalized attempt. The Crew liveness workflow includes
 the new test filter. Local Cargo verification is pending while the shared host
