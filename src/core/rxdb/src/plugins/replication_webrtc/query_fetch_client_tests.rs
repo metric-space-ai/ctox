@@ -67,7 +67,9 @@ async fn start() -> QueryFixture {
         crate::rx_collection::test_support::test_collection_named("query_client").await;
     let pool = RxWebRTCReplicationPool::new(collection, handler.clone());
     let peer = MockPeer("remote".into(), 1);
+    pool.mark_peer_admitted(&peer, false);
     pool.mark_peer_admitted(&peer, true);
+    assert!(pool.is_peer_ready_for_control(&peer));
     let mut frames = handler.sent_subject.subscribe();
     let task = tokio::spawn(fetch_query_page(pool.clone(), peer.clone(), request()));
     let frame = tokio::time::timeout(Duration::from_secs(3), frames.next())
@@ -234,6 +236,12 @@ async fn query_page_never_reads_before_admission_or_with_unbounded_window() {
         .unwrap_err();
     assert_eq!(error.parameters()["reason"], "peer_not_ready");
     pool.mark_peer_admitted(&peer, true);
+    let error = fetch_query_page(pool.clone(), peer.clone(), request())
+        .await
+        .unwrap_err();
+    assert_eq!(error.parameters()["reason"], "peer_not_ready");
+    pool.mark_peer_admitted(&peer, false);
+    assert!(pool.is_peer_ready_for_control(&peer));
     let mut unbounded = request();
     unbounded.window = json!({"limit":10000000});
     let error = fetch_query_page(pool.clone(), peer, unbounded)
