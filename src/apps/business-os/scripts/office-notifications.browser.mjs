@@ -14,7 +14,7 @@ assert(outputIndex >= 0, 'Pass --output-dir on the disposable development volume
 const output = path.resolve(process.argv[outputIndex + 1]);
 mkdirSync(output, { recursive: true });
 const sources = Object.fromEntries(['documents', 'spreadsheets'].map(app => [app,
-  readFileSync(path.join(root, 'modules', app, 'index.js'), 'utf8')]));
+  readFileSync(path.join(root, 'modules', app, 'index.js'), 'utf8').replace(/\r\n/g, '\n')]));
 const handlers = {
   spreadsheets: sources.spreadsheets.match(/  function onError\(error\) \{([\s\S]*?)\n  \}\n  state\.editorHandle = handle;/)?.[1],
   documents: sources.documents.match(/const removeErrorListener = editor\.on\('error', \(payload\) => \{([\s\S]*?)\n  \}\);/)?.[1],

@@ -14,6 +14,20 @@ The platform supplies:
 - a Command Bus for work that must be durable, delegated or executed outside
   the client.
 
+## Registered system app presentation
+
+The source inventory contains 39 modules, including 21 core apps. Creator,
+Explorer and File Viewer are registered core modules, in addition to the
+original 36-module / 18-core inventory. Registry, source manifests, system-app
+installation order and the standard bundle must agree.
+
+File Viewer retains the compact desktop preview contract from its promotion
+to a module: a 520 × 400 minimum window, `launch_kind: desktop-app` and
+`multi_instance: true`, so separate previews can coexist. Other modules retain
+the migration's 480-pixel minimum height and single-instance requirement.
+The inventory guard checks this explicit distinction and rejects drift; adding
+a new module does not automatically authorize another presentation exception.
+
 ## Product contract
 
 The intended developer experience is the same as installing a native desktop
