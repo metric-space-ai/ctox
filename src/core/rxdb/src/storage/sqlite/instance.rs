@@ -3536,6 +3536,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn snapshot_storage_latency_reports_bounded_batches_separately_from_transport() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("snapshot-latency.sqlite3"),
+        });
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+        let rows = (0..1000)
+            .map(|n| {
+                let mut document = doc(&format!("doc-{n:04}"), "1-a", n, false, n as f64);
+                document["content"] = json!("x".repeat(1024));
+                BulkWriteRow {
+                    previous: None,
+                    document,
+                }
+            })
+            .collect();
+        let written = instance
+            .bulk_write(rows, "snapshot-benchmark")
+            .await
+            .unwrap();
+        assert!(written.error.is_empty());
+        let prepared = snapshot_query(&schema);
+        let mut durations = Vec::new();
+        // One explicit warmup, followed by the 30 reported complete snapshots.
+        for sample in 0..31 {
+            let mut documents = 0;
+            let mut completed = false;
+            let started = Instant::now();
+            instance
+                .query_snapshot_stream_into_blocking(&prepared, 100, &mut |event| {
+                    match event {
+                        RxStorageSnapshotEvent::Start { change_counter } => {
+                            assert_eq!(change_counter, 1000)
+                        }
+                        RxStorageSnapshotEvent::Documents(batch) => {
+                            assert!(batch.len() <= 100);
+                            documents += batch.len();
+                        }
+                        RxStorageSnapshotEvent::End => completed = true,
+                    }
+                    Ok(true)
+                })
+                .unwrap()
+                .unwrap();
+            let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+            assert_eq!(documents, 1000);
+            assert!(completed);
+            if sample > 0 {
+                durations.push(elapsed);
+            }
+        }
+        durations.sort_by(f64::total_cmp);
+        println!(
+            "{}",
+            json!({
+                "scenario": "sqlite-consistent-snapshot", "samples": durations.len(),
+                "documents": 1000, "contentBytesPerDocument": 1024, "batchDocuments": 100,
+                "p50Ms": durations[14], "p95Ms": durations[28], "quantile": "nearest-rank",
+                "includesTransportOrUi": false,
+            })
+        );
+        instance.close().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn query_stream_compiled_sql_stops_without_materializing_remaining_rows() {
         let dir = tempfile::tempdir().unwrap();
         let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
