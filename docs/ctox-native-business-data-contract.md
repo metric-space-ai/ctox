@@ -81,10 +81,19 @@ principal. Invalid/revoked nonempty credentials fail rather than falling back to
 an anonymous principal. Current user, authorization epoch and device binding come
 from the existing verified-capability store path, never request fields.
 
+Proofs also bind the established DTLS channel: `channelBinding` is SHA-256 of
+`ctox.sync.dtls-channel.v1` plus NUL followed by the two lexicographically sorted
+32-byte certificate fingerprints from the current local and remote SDP. Both
+endpoints derive this locally after the DataChannel opens. SHA-256 fingerprints
+must be present and unambiguous; pending descriptions and caller-provided binding
+values are not accepted. A genuine signed nonce relayed over another channel must
+fail verification. The signature covers this binding along with the principal.
+
 The signature domain is `ctox.sync.business-data.identity.v1` followed by NUL,
 then UTF-8 JSON with recursively sorted object keys and the signature field
 omitted. `NativeSyncSession::peer_identity_proof` checks the current connection,
-fresh challenge, expected instance ID and independently pinned public identity.
+fresh challenge, locally derived channel binding, expected instance ID and
+independently pinned public identity.
 It bounds the exchange and response size and cancels with the native session.
 It does not create a ready BusinessData session or grant collection access.
 

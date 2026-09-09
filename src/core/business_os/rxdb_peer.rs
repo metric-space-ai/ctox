@@ -2957,16 +2957,26 @@ async fn run_native_peer(
                 );
                 let workjet_device_root = root.clone();
                 let business_data_root = root.clone();
+                let identity_transport = pool.connection_handler.clone();
                 pool.set_auxiliary_request_handler(
                     ctox_sync::business_data_contract::CTOX_BUSINESS_DATA_IDENTITY_METHOD,
-                    Arc::new(move |_peer_identity, capability_token, params| {
+                    Arc::new(move |peer_identity, capability_token, params| {
                         let root = business_data_root.clone();
+                        let transport = identity_transport.clone();
                         Box::pin(async move {
+                            let connection = transport
+                                .connection_for_peer(&peer_identity)
+                                .ok_or_else(|| "BusinessData connection retired".to_string())?;
+                            let channel_binding =
+                                transport.channel_binding(&connection).await.map_err(|_| {
+                                    "BusinessData channel binding unavailable".to_string()
+                                })?;
                             // Native key/store reads stay off the transport executor.
                             tokio::task::spawn_blocking(move || {
                                 super::rxdb_peer_business_data::identity_response(
                                     &root,
                                     &capability_token,
+                                    &channel_binding,
                                     params,
                                 )
                             })

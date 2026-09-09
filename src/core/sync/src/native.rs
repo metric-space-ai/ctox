@@ -251,6 +251,12 @@ impl NativeSyncSession {
             return Err(failure());
         }
         let challenge = fresh_challenge()?;
+        let channel_binding = self
+            .pool()
+            .connection_handler
+            .channel_binding(&connection)
+            .await
+            .map_err(|_| failure())?;
         let request = NativeBusinessDataIdentityRequest {
             version: CTOX_BUSINESS_DATA_PROTOCOL_VERSION,
             challenge: challenge.clone(),
@@ -279,7 +285,13 @@ impl NativeSyncSession {
             return Err(failure());
         }
         let proof = serde_json::from_value(response.result).map_err(|_| failure())?;
-        verify_peer_identity(&proof, expected_key, expected_instance, &challenge)?;
+        verify_peer_identity(
+            &proof,
+            expected_key,
+            expected_instance,
+            &challenge,
+            &channel_binding,
+        )?;
         Ok(proof)
     }
 

@@ -34,6 +34,7 @@ fn signing_bytes(identity: &PeerIdentity) -> io::Result<Vec<u8>> {
         return Err(invalid("invalid BusinessData identity"));
     }
     unhex::<32>(&identity.challenge)?;
+    unhex::<32>(&identity.channel_binding)?;
     public_key(&identity.public_identity)?;
     if let Some(principal) = &identity.principal {
         if !valid_id(&principal.user_id) || principal.authorization_epoch > 9_007_199_254_740_991 {
@@ -66,11 +67,13 @@ impl SigningIdentity {
         &self,
         instance_id: &str,
         challenge: &str,
+        channel_binding: &str,
         principal: Option<Principal>,
     ) -> io::Result<PeerIdentity> {
         let mut identity = PeerIdentity {
             version: CTOX_BUSINESS_DATA_PROTOCOL_VERSION,
             challenge: challenge.into(),
+            channel_binding: channel_binding.into(),
             instance_id: instance_id.into(),
             public_identity: self.public_identity(),
             principal,
@@ -91,10 +94,12 @@ pub fn verify_peer_identity(
     expected_key: &str,
     expected_instance: &str,
     challenge: &str,
+    expected_channel_binding: &str,
 ) -> io::Result<()> {
     if identity.public_identity != expected_key
         || identity.instance_id != expected_instance
         || identity.challenge != challenge
+        || identity.channel_binding != expected_channel_binding
     {
         return Err(invalid(
             "BusinessData identity does not match the pinned target and challenge",

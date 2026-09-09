@@ -142,18 +142,22 @@ async fn exercise(wrong_key: bool, revoke_peer_only: bool) {
         ).unwrap());
         let source_pin = source_key.public_identity();
         let identity_revoked = revoked.clone();
+        let identity_transport = server.pool().connection_handler.clone();
         server.pool().set_auxiliary_request_handler(
             ctox_sync::business_data_contract::CTOX_BUSINESS_DATA_IDENTITY_METHOD,
-            Arc::new(move |_, token, params| {
+            Arc::new(move |peer_id, token, params| {
                 let key = source_key.clone();
                 let revoked = identity_revoked.clone();
+                let transport = identity_transport.clone();
                 Box::pin(async move {
+                    let connection = transport.connection_for_peer(&peer_id).ok_or_else(|| "retired peer".to_string())?;
+                    let channel_binding = transport.channel_binding(&connection).await.map_err(|_| "invalid channel".to_string())?;
                     if token != "fixture-private-read" || revoked.load(Ordering::SeqCst) {
                         return Err("identity capability rejected".into());
                     }
                     let request: ctox_sync::business_data_contract::NativeBusinessDataIdentityRequest =
                         serde_json::from_value(params[0].clone()).map_err(|_| "invalid request".to_string())?;
-                    let proof = key.attest_business_data_identity("fixture-instance", &request.challenge,
+                    let proof = key.attest_business_data_identity("fixture-instance", &request.challenge, &channel_binding,
                         Some(ctox_sync::business_data_contract::NativeBusinessDataPrincipal {
                             user_id: "fixture-user".into(), authorization_epoch: 1, device: None,
                         })).map_err(|_| "invalid challenge".to_string())?;

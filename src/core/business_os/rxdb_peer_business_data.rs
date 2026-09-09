@@ -12,6 +12,7 @@ use std::path::Path;
 pub(super) fn identity_response(
     root: &Path,
     capability_token: &str,
+    channel_binding: &str,
     params: Vec<Value>,
 ) -> Result<Value, String> {
     if params.len() != 1 || serde_json::to_vec(&params).map_or(true, |bytes| bytes.len() > 4096) {
@@ -54,7 +55,7 @@ pub(super) fn identity_response(
         .map_err(|_| "native BusinessData instance identity is unavailable".to_string())?
         .instance_id;
     let reply = key
-        .attest_business_data_identity(&instance_id, &request.challenge, principal)
+        .attest_business_data_identity(&instance_id, &request.challenge, channel_binding, principal)
         .map_err(|_| "native BusinessData identity could not be attested".to_string())?;
     serde_json::to_value(reply)
         .map_err(|_| "native BusinessData identity encoding failed".to_string())
@@ -63,6 +64,11 @@ pub(super) fn identity_response(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    // Store-policy tests use a fixed channel fixture; real transport tests
+    // derive this value independently at both DTLS endpoints.
+    fn identity_response(root: &Path, token: &str, params: Vec<Value>) -> Result<Value, String> {
+        super::identity_response(root, token, &"a".repeat(64), params)
+    }
     use base64::Engine;
     use ctox_sync::{
         authority::auth::SigningIdentity,
@@ -95,7 +101,7 @@ mod tests {
             .instance_id;
         let response = identity_response(root.path(), "", vec![request]).unwrap();
         let proof = serde_json::from_value(response.clone()).unwrap();
-        verify_peer_identity(&proof, &pin, &instance, &challenge).unwrap();
+        verify_peer_identity(&proof, &pin, &instance, &challenge, &"a".repeat(64)).unwrap();
         assert!(response["principal"].is_null());
         assert_eq!(
             crate::sync_host::signing_identity(root.path())
@@ -124,7 +130,7 @@ mod tests {
         let instance = store::sync_connection_config(root.path())
             .unwrap()
             .instance_id;
-        verify_peer_identity(&proof, &pin, &instance, &challenge).unwrap();
+        verify_peer_identity(&proof, &pin, &instance, &challenge, &"a".repeat(64)).unwrap();
         assert_eq!(response["principal"]["userId"], "operator");
         assert!(identity_response(root.path(), "forged", vec![request.clone()]).is_err());
         store::open_store(root.path())

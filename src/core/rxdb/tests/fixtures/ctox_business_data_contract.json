@@ -17,7 +17,7 @@
     },
     "NativeBusinessDataPeerIdentity": {
       "version": "u32", "challenge": "string", "instanceId": "string", "publicIdentity": "string",
-      "principal": "optional:NativeBusinessDataPrincipal", "signature": "string"
+      "channelBinding": "string", "principal": "optional:NativeBusinessDataPrincipal", "signature": "string"
     },
     "NativeBusinessDataSessionRef": { "handle": "string", "generation": "u64" },
     "NativeBusinessDataBinding": { "targetId": "string", "instanceId": "string", "userId": "string" },

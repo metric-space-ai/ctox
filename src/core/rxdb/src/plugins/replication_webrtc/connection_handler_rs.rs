@@ -150,6 +150,80 @@ impl std::fmt::Display for WebRTCRsConnection {
     }
 }
 
+fn dtls_fingerprint(sdp: &str) -> RxResult<[u8; 32]> {
+    let invalid = || {
+        new_rx_error(
+            "RC_WEBRTC_PEER",
+            Some(serde_json::json!({
+                "message": "established DTLS SHA-256 fingerprint is unavailable or ambiguous"
+            })),
+        )
+    };
+    let mut fingerprint = None;
+    for line in sdp
+        .lines()
+        .filter_map(|line| line.strip_prefix("a=fingerprint:"))
+    {
+        let mut fields = line.split_whitespace();
+        if !fields
+            .next()
+            .is_some_and(|algorithm| algorithm.eq_ignore_ascii_case("sha-256"))
+        {
+            return Err(invalid());
+        }
+        let value = fields.next().ok_or_else(invalid)?;
+        if fields.next().is_some() {
+            return Err(invalid());
+        }
+        let parts = value.split(':').collect::<Vec<_>>();
+        if parts.len() != 32 {
+            return Err(invalid());
+        }
+        let mut bytes = [0; 32];
+        for (index, part) in parts.iter().enumerate() {
+            if part.len() != 2 || !part.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(invalid());
+            }
+            bytes[index] = u8::from_str_radix(part, 16).map_err(|_| invalid())?;
+        }
+        if fingerprint.is_some_and(|previous| previous != bytes) {
+            return Err(invalid());
+        }
+        fingerprint = Some(bytes);
+    }
+    fingerprint.ok_or_else(invalid)
+}
+
+#[cfg(test)]
+mod channel_binding_tests {
+    use super::dtls_fingerprint;
+    fn line(byte: &str) -> String {
+        format!("a=fingerprint:sha-256 {}\r\n", vec![byte; 32].join(":"))
+    }
+    #[test]
+    fn canonicalizes_repeated_bundle_fingerprints_and_rejects_ambiguity() {
+        let fingerprint = line("AB");
+        assert_eq!(
+            dtls_fingerprint(&format!(
+                "v=0\r\n{fingerprint}m=application\r\n{fingerprint}"
+            ))
+            .unwrap(),
+            [0xab; 32]
+        );
+        assert_eq!(dtls_fingerprint(&line("ab")).unwrap(), [0xab; 32]);
+        assert!(dtls_fingerprint(&format!("{}{}", line("ab"), line("cd"))).is_err());
+        for invalid in [
+            String::new(),
+            "a=fingerprint:sha-256 AA:BB".into(),
+            line("zz"),
+            line("ab").replace("sha-256", "sha-1"),
+            line("+1"),
+        ] {
+            assert!(dtls_fingerprint(&invalid).is_err());
+        }
+    }
+}
+
 impl WebRTCRsConnectionHandler {
     /// Resolve a routing hint to the currently open local connection.
     pub fn connection_for_peer(&self, peer_id: &str) -> Option<WebRTCRsConnection> {
@@ -161,6 +235,40 @@ impl WebRTCRsConnectionHandler {
             .get(peer_id)
             .filter(|entry| entry.data_channel_open)
             .map(|entry| WebRTCRsConnection::new(peer_id.to_owned(), entry.generation))
+    }
+
+    /// Bind an application identity proof to this established DTLS channel.
+    /// A nonce/signature alone can be relayed through another connection.
+    pub async fn channel_binding(&self, connection: &WebRTCRsConnection) -> RxResult<String> {
+        use sha2::{Digest, Sha256};
+        let pc = self
+            .peers
+            .lock()
+            .get(connection.peer_id())
+            .filter(|entry| entry.generation == connection.generation && entry.data_channel_open)
+            .map(|entry| entry.peer_connection.clone())
+            .ok_or_else(|| stale_connection_error(connection))?;
+        let local = pc
+            .current_local_description()
+            .await
+            .ok_or_else(|| stale_connection_error(connection))?;
+        let remote = pc
+            .current_remote_description()
+            .await
+            .ok_or_else(|| stale_connection_error(connection))?;
+        let mut fingerprints = [
+            dtls_fingerprint(&local.sdp)?,
+            dtls_fingerprint(&remote.sdp)?,
+        ];
+        fingerprints.sort();
+        if !self.is_current_connection(connection) {
+            return Err(stale_connection_error(connection));
+        }
+        let mut digest = Sha256::new();
+        digest.update(b"ctox.sync.dtls-channel.v1\0");
+        digest.update(fingerprints[0]);
+        digest.update(fingerprints[1]);
+        Ok(format!("{:x}", digest.finalize()))
     }
 
     fn is_current_connection(&self, connection: &WebRTCRsConnection) -> bool {
