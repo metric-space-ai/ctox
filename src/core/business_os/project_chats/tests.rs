@@ -442,38 +442,56 @@ fn webrtc_filter_rechecks_project_revocation_and_does_not_trust_snapshot_partici
 
 #[test]
 fn private_execution_results_follow_native_command_and_task_relationships() -> anyhow::Result<()> {
+    use crate::mission::channels;
     let root = fixture()?;
     let initial = add(root.path(), "add")?;
     let chat = initial["first_chat_id"].as_str().unwrap();
+    let intent = command(
+        "business_os.chat.task",
+        "private-intent",
+        json!({"thread_id":chat,"instruction":"Private work","title":"Private task"}),
+    );
+    // Use the real admission transaction used by create_ctox_queue_task.
+    // No command/queue mirror rows are seeded into business_records.
+    let admitted = channels::claim_business_command_with_queue(
+        root.path(),
+        store::business_command_core_claim("private-intent", &intent)?,
+        channels::QueueTaskCreateRequest {
+            title: "Private task".into(),
+            prompt: "Private work".into(),
+            thread_key: "private-command-thread".into(),
+            workspace_root: Some(root.path().display().to_string()),
+            priority: "normal".into(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: Some(
+                json!({"source":"business-os","business_os_command_id":"private-intent"}),
+            ),
+        },
+    )?;
+    let task_id = admitted.task.message_key;
+    assert!(channels::load_queue_task(root.path(), &task_id)?.is_some());
+    assert_eq!(
+        channels::business_command_projection(root.path(), "private-intent")?["payload"]
+            ["thread_id"],
+        chat
+    );
     let conn = open_store(root.path())?;
+    assert!(outbound_load_record(&conn, "business_commands", "private-intent")?.is_none());
+    assert!(outbound_load_record(&conn, "ctox_queue_tasks", &task_id)?.is_none());
     let records = [
-        (
-            "business_commands",
-            "private-intent",
-            json!({
-                "id":"private-intent","command_type":"threads.message.create",
-                "payload":{"thread_id":chat,"body":"Private work"},"updated_at_ms":1
-            }),
-        ),
-        (
-            "ctox_queue_tasks",
-            "private-task",
-            json!({
-                "id":"private-task","command_id":"private-intent","title":"Private task","updated_at_ms":1
-            }),
-        ),
         (
             "ctox_runs",
             "private-run",
             json!({
-                "id":"private-run","task_id":"private-task","retrospective":"Private result","updated_at_ms":1
+                "id":"private-run","task_id":task_id,"retrospective":"Private result","updated_at_ms":1
             }),
         ),
         (
             "ctox_harness_events",
             "private-event",
             json!({
-                "id":"private-event","task_id":"private-task","title":"Private tool result","updated_at_ms":1
+                "id":"private-event","task_id":task_id,"title":"Private tool result","updated_at_ms":1
             }),
         ),
     ];
@@ -487,33 +505,60 @@ fn private_execution_results_follow_native_command_and_task_relationships() -> a
             document_visible_to_actor(root.path(), collection, record, "owner"),
             Some(true)
         );
+        for role in ["user", "admin", "chef", "founder"] {
+            assert_eq!(
+                document_visible_to_actor(root.path(), collection, record, "other-user"),
+                Some(false)
+            );
+            let other = mcp_context("other-user", role);
+            assert!(mcp_channel::get_record(root.path(), &other, collection, id).is_err());
+            assert_eq!(
+                mcp_channel::query_records(root.path(), &other, collection, Some(100))?.count,
+                0
+            );
+        }
         assert_eq!(
-            document_visible_to_actor(root.path(), collection, record, "other-user"),
-            Some(false)
-        );
-        assert!(mcp_channel::get_record(
-            root.path(),
-            &mcp_context("other-user", "admin"),
-            collection,
-            id
-        )
-        .is_err());
-        assert_eq!(
-            mcp_channel::query_records(
-                root.path(),
-                &mcp_context("other-user", "admin"),
-                collection,
-                Some(100)
-            )?
-            .count,
-            0
+            mcp_channel::get_record(root.path(), &mcp_context("owner", "admin"), collection, id)?
+                .record
+                .data["id"],
+            *id
         );
     }
+    // An unresolved typed reference cannot establish that an execution is public.
     assert_eq!(
         document_visible_to_actor(
             root.path(),
             "ctox_runs",
-            &json!({"id":"legacy-run","task_id":"unrelated-legacy-task"}),
+            &json!({"id":"orphan-run","task_id":"missing-task"}),
+            "owner"
+        ),
+        Some(false)
+    );
+
+    let public = command(
+        "business_os.chat.task",
+        "public-intent",
+        json!({"instruction":"Ordinary work"}),
+    );
+    let public_task = channels::claim_business_command_with_queue(
+        root.path(),
+        store::business_command_core_claim("public-intent", &public)?,
+        channels::QueueTaskCreateRequest {
+            title: "Ordinary task".into(),
+            prompt: "Ordinary work".into(),
+            thread_key: "ordinary-command-thread".into(),
+            workspace_root: Some(root.path().display().to_string()),
+            priority: "normal".into(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: Some(json!({"business_os_command_id":"public-intent"})),
+        },
+    )?;
+    assert_eq!(
+        document_visible_to_actor(
+            root.path(),
+            "ctox_runs",
+            &json!({"id":"ordinary-run","task_id":public_task.task.message_key}),
             "owner"
         ),
         None

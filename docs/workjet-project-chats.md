@@ -53,8 +53,13 @@ The project, membership and first-chat records commit atomically in the existing
 SQLite business store. RxDB projections are published afterward using the
 existing writer. This is not a cross-store atomic commit or a new outbox.
 Projection recovery and real peer visibility still require acceptance evidence.
-New execution producers must retain their direct thread reference; an absent
-legacy relation is not proof of a new private execution's visibility.
+Indirect execution references resolve against Core command aggregates and the
+native queue; legacy commands use the dedicated command table. They do not rely
+on the business_records mirror being populated. Unresolved typed references fail
+closed. Ordinary modern commands without Workjet constraints return to existing
+policy before opening the Business OS relationship store. The regression uses
+real claim_business_command_with_queue admission before mirror delivery, with
+foreign User/Admin/Chef/Founder MCP reads; its execution still awaits CI.
 
 ## Integration and validation
 

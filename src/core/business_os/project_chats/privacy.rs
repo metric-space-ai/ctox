@@ -107,10 +107,71 @@ pub(in crate::business_os) fn document_visible_to_actor(
     if !has_restricted_reference(collection, document) {
         return None;
     }
+    // Resolve the existing Core command/queue authority before opening the
+    // Business OS relationship store. Ordinary executions have no Workjet
+    // constraints and retain their existing policy without that extra open.
+    let mut constraints = Vec::new();
+    if collect_constraints(root, collection, document, &mut constraints).is_err() {
+        return Some(false);
+    }
+    if constraints.is_empty() {
+        return None;
+    }
     let Ok(conn) = open_store(root) else {
         return Some(false);
     };
-    visible_in_store(&conn, collection, document, user_id)
+    Some(constraints.iter().all(|(collection, document)| {
+        visible_in_store(&conn, collection, document, user_id) == Some(true)
+    }))
+}
+
+fn collect_constraints(
+    root: &Path,
+    collection: &str,
+    document: &Value,
+    constraints: &mut Vec<(String, Value)>,
+) -> anyhow::Result<()> {
+    let mut ids = BTreeSet::new();
+    references(document, &mut ids);
+    if is_owned_collection(collection) || project_command(document) || !ids.is_empty() {
+        constraints.push((collection.to_owned(), document.clone()));
+    }
+    for (related_collection, id) in associations(collection, document) {
+        let related = canonical_association(root, related_collection, id)?;
+        collect_constraints(root, related_collection, &related, constraints)?;
+    }
+    Ok(())
+}
+
+fn canonical_association(root: &Path, collection: &str, id: &str) -> anyhow::Result<Value> {
+    use crate::mission::channels;
+    match collection {
+        "business_commands" => match channels::business_command_projection(root, id) {
+            Ok(command) => Ok(command),
+            Err(error)
+                if matches!(
+                    error.downcast_ref::<rusqlite::Error>(),
+                    Some(rusqlite::Error::QueryReturnedNoRows)
+                ) =>
+            {
+                // Commands predating the Core aggregate still have their
+                // canonical compatibility row. Do not trust a mirror alone.
+                let conn = open_store(root)?;
+                serde_json::to_value(crate::business_os::store::load_business_command(&conn, id)?)
+                    .map_err(Into::into)
+            }
+            Err(error) => Err(error),
+        },
+        "ctox_queue_tasks" => {
+            let task = channels::load_queue_task(root, id)?
+                .ok_or_else(|| anyhow::anyhow!("referenced native queue task is unavailable"))?;
+            Ok(serde_json::json!({
+                "id": task.message_key,
+                "command_id": task.metadata.get("business_os_command_id"),
+            }))
+        }
+        _ => anyhow::bail!("unsupported private execution association"),
+    }
 }
 
 pub(super) fn visible_in_store(
@@ -151,25 +212,9 @@ pub(super) fn visible_in_store(
             return Some(false);
         }
     }
-    let mut restricted = is_owned_collection(collection)
+    let restricted = is_owned_collection(collection)
         || project_command(document)
         || !references_to_check.is_empty();
-    for (related_collection, id) in associations(collection, document) {
-        match outbound_load_record(conn, related_collection, id) {
-            Ok(Some(related)) => {
-                match visible_in_store(conn, related_collection, &related, user_id) {
-                    Some(false) => return Some(false),
-                    Some(true) => restricted = true,
-                    None => {}
-                }
-            }
-            // Missing legacy references retain the existing policy. New chat
-            // producers must persist their direct thread identity as well;
-            // absence of a relation never grants access to a reserved chat ID.
-            Ok(None) => {}
-            Err(_) => return Some(false),
-        }
-    }
     for id in &references_to_check {
         let related_collection = if chat_id(id) {
             CHATS
