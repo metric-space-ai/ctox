@@ -7,6 +7,7 @@ on:
       - 'src/core/crew/**'
       - 'src/core/business_os/mcp_crew*.rs'
       - 'src/core/business_os/mcp_channel.rs'
+      - 'src/core/business_os/mcp_project_crew.rs'
       - 'src/core/business_os/project_crew.rs'
       - 'src/core/context/lcm/**'
       - 'src/core/business_os/harness_cockpit_chat*'

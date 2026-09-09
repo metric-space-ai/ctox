@@ -59,8 +59,27 @@ pub(crate) fn project_crew_member_for_task(
     )?;
     conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
     let tx = conn.transaction()?;
-    let member = member_for_chat(&tx, owner, chat_id)?;
+    let target = target_for_chat(&tx, owner, chat_id)?;
     tx.commit()?;
+    let member = target.member_id;
+    if let Some(expected) = command
+        .pointer("/payload/workjet_crew_member_id")
+        .and_then(Value::as_str)
+    {
+        ensure!(
+            expected == member,
+            "project Crew identity changed since submission"
+        );
+    }
+    if let Some(expected) = command
+        .pointer("/payload/external_executor/executor_id")
+        .and_then(Value::as_str)
+    {
+        ensure!(
+            expected == target.computer_id,
+            "project executor changed since submission"
+        );
+    }
     ensure!(
         crate::crew::members(&core)?
             .iter()
@@ -70,11 +89,25 @@ pub(crate) fn project_crew_member_for_task(
     Ok(Some(member))
 }
 
+pub(super) struct ProjectCrewTarget {
+    pub member_id: String,
+    pub computer_id: String,
+}
+
+#[cfg(test)]
 pub(super) fn member_for_chat(
     conn: &Connection,
     owner: &str,
     chat_id: &str,
 ) -> anyhow::Result<String> {
+    Ok(target_for_chat(conn, owner, chat_id)?.member_id)
+}
+
+pub(super) fn target_for_chat(
+    conn: &Connection,
+    owner: &str,
+    chat_id: &str,
+) -> anyhow::Result<ProjectCrewTarget> {
     let relation = store::outbound_load_record(conn, project_chats::CHATS, chat_id)?
         .context("private project chat is unavailable")?;
     ensure!(
@@ -106,5 +139,8 @@ pub(super) fn member_for_chat(
         "project chat history is unavailable"
     );
     let binding = worker_profile_bindings::require_active(conn, owner, profile)?;
-    Ok(project_chats::text(&binding, "crew_member_id")?.to_owned())
+    Ok(ProjectCrewTarget {
+        member_id: project_chats::text(&binding, "crew_member_id")?.to_owned(),
+        computer_id: project_chats::text(&binding, "computer_id")?.to_owned(),
+    })
 }

@@ -196,3 +196,31 @@ This is selection/authorization for already admitted private project-chat tasks.
 The Workjet general-project producer and external controller are still missing;
 this does not claim that the full Dev submission flow is available. Group-chat
 routing is not reduced to the first worker in its membership list.
+
+
+## MCP ingress for private project execution
+
+`business_os.start_crew_execution` accepts an existing private `thread_id`,
+`title`, `instruction`, a supported external `harness`, `timeout_seconds` and
+`idempotency_key`. It resolves the authenticated actor and checks the current
+native project, private chat, membership, profile, computer and Crew records.
+Callers cannot supply a Crew member, executor identity or session grant. The
+existing `ctox` system command namespace carries `business_os.chat.task`; no
+application module is invented for a repository project.
+
+The command ID derives from owner, private chat and retry key. A stored request
+fingerprint rejects a retry with changed text, harness or native target. The
+existing command plane owns queueing and receipts. The response contains command,
+chat, Crew and computer identifiers plus native status/task reference; it does
+not contain execution credentials. Native admission and later context access
+compare the pinned Crew member and executor with the current project binding.
+Command-scoped sessions cannot start independent project work, including when
+they are not marked Crew-only.
+
+The project regression now enters through the real MCP dispatcher, repeats the
+request, rejects changed intent and caller-supplied identity, checks the canonical
+command, then performs native queue leasing and Crew preparation. This is test
+source pending CI, not evidence of a running Workjet controller. The Workjet
+request ledger, submission client, offer consumer, secure session transport and
+harness context delivery remain to be connected. The general-project gap stated
+above is therefore narrowed on the native side only.

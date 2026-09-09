@@ -843,22 +843,44 @@ fn project_crew_admission_uses_native_chat_binding_and_rejects_revocation() -> a
         "owner",
     )?;
     assert!(super::super::project_crew::member_for_chat(&conn, "other-user", chat).is_err());
-    let (capability, _) = store::issue_business_os_capability_token_for_managed_user(
+    let (_capability, _) = store::issue_business_os_capability_token_for_managed_user(
         root.path(),
         "owner",
         "Owner",
         "admin",
         chrono::Utc::now().timestamp_millis(),
     )?;
-    let accepted = store::accept_rxdb_business_command_with_origin(
+    let request = json!({"thread_id":chat,"title":"Project task","instruction":"Work on the project",
+        "harness":"codex","timeout_seconds":10,"idempotency_key":"project-start-1",
+        "_context":{"actor":"owner","workspace":"project-test"}});
+    let start = |request: Value| {
+        mcp_channel::call_tool(root.path(), "business_os.start_crew_execution", request)
+    };
+    let accepted = start(request.clone())?;
+    let replay = start(request.clone())?;
+    assert_eq!(accepted["command_id"], replay["command_id"]);
+    assert_eq!(accepted["task_id"], replay["task_id"]);
+    assert_eq!(accepted["executor_id"], "computer");
+    assert_eq!(accepted["crew_member_id"], "project-crew");
+    let mut changed = request.clone();
+    changed["instruction"] = json!("Different intent");
+    assert!(start(changed).is_err());
+    let mut spoofed = request.clone();
+    spoofed["crew_member_id"] = json!("other-project-crew");
+    assert!(start(spoofed).is_err());
+    let mut foreign = request.clone();
+    foreign["_context"]["actor"] = json!("other-user");
+    assert!(start(foreign).is_err());
+    let canonical = channels::business_command_projection(
         root.path(),
-        json!({
-            "id":"project-crew-command", "module":"ctox", "command_type":"business_os.chat.task",
-            "payload":{"thread_id":chat,"instruction":"Work on the project","mode":"data"},
-            "client_context":{"capability_token":capability}
-        }),
-        CommandOrigin::ReplicatedPeer,
+        accepted["command_id"].as_str().unwrap(),
     )?;
+    assert_eq!(canonical["command_type"], "business_os.chat.task");
+    assert_eq!(canonical["payload"]["thread_id"], chat);
+    assert_eq!(
+        canonical["payload"]["external_executor"]["executor_id"],
+        "computer"
+    );
     let task_id = accepted["task_id"]
         .as_str()
         .context("project task missing")?;

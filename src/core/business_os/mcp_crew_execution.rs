@@ -15,32 +15,16 @@ fn open(root: &Path) -> anyhow::Result<rusqlite::Connection> {
     Ok(conn)
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Target {
+pub(super) struct Target {
     executor_id: String,
     harness: String,
     timeout_seconds: u64,
 }
 
-/// Called only after normal native admission, Crew selection and session setup.
-/// The caller retains its capacity reservation and lease heartbeat while waiting.
-pub(crate) fn run(
-    root: &Path,
-    command_id: &str,
-    prompt: &str,
-    token: Option<&str>,
-) -> anyhow::Result<Option<String>> {
-    let command = crate::mission::channels::business_command_projection(root, command_id)?;
-    let Some(target) = command.pointer("/payload/external_executor") else {
-        return Ok(None);
-    };
-    let target: Target =
-        serde_json::from_value(target.clone()).context("invalid external Crew executor")?;
-    anyhow::ensure!(
-        command["command_type"] == "business_os.chat.task",
-        "external Crew requires a business chat command"
-    );
+pub(super) fn validated_target(value: Value) -> anyhow::Result<Target> {
+    let target: Target = serde_json::from_value(value).context("invalid external Crew executor")?;
     anyhow::ensure!(
         !target.executor_id.trim().is_empty() && target.executor_id.len() <= 200,
         "invalid external Crew executor id"
@@ -55,6 +39,26 @@ pub(crate) fn run(
     anyhow::ensure!(
         (1..=600).contains(&target.timeout_seconds),
         "external Crew timeout must be 1 to 600 seconds"
+    );
+    Ok(target)
+}
+
+/// Called only after normal native admission, Crew selection and session setup.
+/// The caller retains its capacity reservation and lease heartbeat while waiting.
+pub(crate) fn run(
+    root: &Path,
+    command_id: &str,
+    prompt: &str,
+    token: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    let command = crate::mission::channels::business_command_projection(root, command_id)?;
+    let Some(target) = command.pointer("/payload/external_executor") else {
+        return Ok(None);
+    };
+    let target = validated_target(target.clone())?;
+    anyhow::ensure!(
+        command["command_type"] == "business_os.chat.task",
+        "external Crew requires a business chat command"
     );
     anyhow::ensure!(
         serde_json::to_vec(prompt)?.len() <= 64 * 1024,
