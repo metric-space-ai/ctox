@@ -1721,6 +1721,53 @@ mod tests {
     }
 
     #[test]
+    fn repeated_secret_reads_observe_late_legacy_key_conflicts_and_rotation() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        persistence::store_text_value(root.path(), "secret_reader_fixture", Some("present"))?;
+        put_secret(
+            root.path(),
+            "reader-fixture",
+            "token",
+            "before",
+            None,
+            json!({}),
+        )?;
+        for _ in 0..10 {
+            assert_eq!(
+                get_secret_value(root.path(), "reader-fixture", "token")?,
+                "before"
+            );
+        }
+        // The previous absent legacy value must not become a cached decision.
+        let conflicting = BASE64_STANDARD.encode([0u8; 32]);
+        persistence::store_text_value(root.path(), MASTER_KEY_STORAGE_KEY, Some(&conflicting))?;
+        let error = get_secret_value(root.path(), "reader-fixture", "token").unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("conflicts with the legacy runtime key"));
+        persistence::store_text_value(root.path(), MASTER_KEY_STORAGE_KEY, None)?;
+        assert_eq!(
+            get_secret_value(root.path(), "reader-fixture", "token")?,
+            "before"
+        );
+        put_secret(
+            root.path(),
+            "reader-fixture",
+            "token",
+            "after",
+            None,
+            json!({}),
+        )?;
+        assert_eq!(
+            get_secret_value(root.path(), "reader-fixture", "token")?,
+            "after"
+        );
+        delete_secret(root.path(), "reader-fixture", "token")?;
+        assert!(get_secret_value(root.path(), "reader-fixture", "token").is_err());
+        Ok(())
+    }
+
+    #[test]
     fn credential_tuple_delete_is_atomic_and_idempotent() -> Result<()> {
         let root = temp_root("tuple-delete");
         fs::create_dir_all(&root)?;

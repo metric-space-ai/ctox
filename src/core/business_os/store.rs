@@ -10808,6 +10808,50 @@ pub(super) struct RxdbProjectionWriterCache {
 }
 
 impl RxdbProjectionWriterCache {
+    /// Replace current source records, including removed fields and tombstones.
+    pub(super) fn replace_domain_record_required(
+        &mut self,
+        collection: &str,
+        record_id: &str,
+        updated_at_ms: i64,
+        payload: Value,
+        deleted: bool,
+    ) -> anyhow::Result<()> {
+        if !matches!(self.writers.get(collection), Some(Some(_))) {
+            let writer =
+                RxdbCollectionWriter::open(&self.root, collection)?.with_context(|| {
+                    format!("domain effect projection collection unavailable: {collection}")
+                })?;
+            self.writers.insert(collection.to_owned(), Some(writer));
+        }
+        let writer = self
+            .writers
+            .get_mut(collection)
+            .and_then(Option::as_mut)
+            .context("domain projection writer missing")?;
+        let result = writer.replace_source(record_id, updated_at_ms, payload, deleted);
+        if result.is_err() {
+            self.writers.remove(collection);
+        }
+        result
+    }
+
+    /// Recovery must distinguish absent storage from successful delivery.
+    pub(super) fn upsert_required(
+        &mut self,
+        collection: &str,
+        record_id: &str,
+        updated_at_ms: i64,
+        payload: Value,
+    ) -> anyhow::Result<()> {
+        self.upsert(collection, record_id, updated_at_ms, payload)?;
+        anyhow::ensure!(
+            matches!(self.writers.get(collection), Some(Some(_))),
+            "domain effect projection collection unavailable: {collection}"
+        );
+        Ok(())
+    }
+
     pub(super) fn new(root: &Path) -> Self {
         Self {
             root: root.to_path_buf(),
@@ -11026,6 +11070,7 @@ impl RxdbCollectionWriter {
             payload,
             self.demand_file_storage,
             false,
+            true,
         )?;
         self.notify_committed_change();
         Ok(())
@@ -11065,6 +11110,7 @@ impl RxdbCollectionWriter {
             payload,
             self.demand_file_storage,
             false,
+            true,
         )?;
         self.notify_committed_change();
         Ok(())
@@ -11092,6 +11138,32 @@ impl RxdbCollectionWriter {
             }),
             self.demand_file_storage,
             true,
+            true,
+        )?;
+        self.notify_committed_change();
+        Ok(())
+    }
+
+    fn replace_source(
+        &mut self,
+        record_id: &str,
+        updated_at_ms: i64,
+        payload: Value,
+        deleted: bool,
+    ) -> anyhow::Result<()> {
+        let now = now_ms().min(i64::MAX as u128) as i64;
+        self.last_replication_lwt = now.max(self.last_replication_lwt.saturating_add(1));
+        upsert_rxdb_collection_record_with_writer(
+            &self.conn,
+            &self.table,
+            &self.columns,
+            record_id,
+            updated_at_ms,
+            self.last_replication_lwt,
+            payload,
+            self.demand_file_storage,
+            deleted,
+            false,
         )?;
         self.notify_committed_change();
         Ok(())
@@ -11119,6 +11191,7 @@ fn upsert_rxdb_collection_record_with_writer(
     mut payload: Value,
     demand_file_storage: bool,
     deleted: bool,
+    merge_existing: bool,
 ) -> anyhow::Result<()> {
     let mut previous_revision = None;
     if let Some(existing_json) = conn
@@ -11134,8 +11207,10 @@ fn upsert_rxdb_collection_record_with_writer(
                 .get("_rev")
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            merge_json_object_values(&mut existing, &payload);
-            payload = existing;
+            if merge_existing {
+                merge_json_object_values(&mut existing, &payload);
+                payload = existing;
+            }
         }
     }
     let rev = next_direct_rxdb_revision(previous_revision.as_deref());
@@ -16957,7 +17032,14 @@ pub(crate) fn record_business_command_intake_failure(
             .cloned()
             .unwrap_or(Value::Null),
     };
-    let core_outcome = channels::record_business_command_intake_failure(
+    let has_applied_effect = super::domain_effect::supports_command(&command.command_type)
+        && super::domain_effect::contains(&open_store(root)?, command_id)?;
+    let record_failure = if has_applied_effect {
+        channels::record_business_command_applied_effect_delivery_failure
+    } else {
+        channels::record_business_command_intake_failure
+    };
+    let core_outcome = record_failure(
         root,
         business_command_core_claim(command_id, &command)?,
         error_message,
@@ -23329,6 +23411,7 @@ fn upsert_business_record_tombstone(
 }
 
 fn migrate(conn: &Connection) -> anyhow::Result<()> {
+    conn.execute_batch(super::domain_effect::SCHEMA)?;
     let schema = "
         CREATE TABLE IF NOT EXISTS business_records (
             collection TEXT NOT NULL,

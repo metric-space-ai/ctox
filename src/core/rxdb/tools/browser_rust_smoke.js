@@ -17296,23 +17296,39 @@ function ensureCtoxSmokeBinary() {
         }
       }
       if (result.mode === 'migration-version-browser-to-rust') {
-        const commandTable = 'ctox_business_os__business_commands__v1';
+        // This checks current-schema routing, not preservation of an old store.
+        // Both active tables follow the same checked-in native wire contract.
+        const commandTable = nativeCollectionTable('business_commands');
+        const taskTable = nativeCollectionTable('ctox_queue_tasks');
+        const schemaVersion = Number(commandTable.split('__v').at(-1));
         const staleCommandTable = 'ctox_business_os__business_commands__v0';
-        const taskTable = 'ctox_business_os__ctox_queue_tasks__v0';
         const commandRow = pollSqliteJson(commandTable, result.id);
         const taskRow = pollSqliteJson(taskTable, result.taskId);
+        const staleTables = Array.from({ length: schemaVersion }, (_, version) =>
+          'ctox_business_os__business_commands__v' + version).filter(sqliteTableExists);
+        if (staleTables.length) {
+          throw new Error('Obsolete command schema tables remain after native startup: ' + JSON.stringify(staleTables));
+        }
         const staleRows = sqliteRowCount(staleCommandTable, `id='${sqlString(result.id)}'`);
         if (staleRows !== 0) {
           throw new Error(`business_commands stale schema table received command rows: ${staleRows}`);
         }
-        if (commandRow.command_id !== result.id || taskRow.command_id !== result.id) {
+        const commandCount = sqliteRowCount(commandTable, `json_extract(data, '$.command_id')='${sqlString(result.id)}'`);
+        const taskCount = sqliteRowCount(taskTable, `json_extract(data, '$.command_id')='${sqlString(result.id)}'`);
+        if (commandRow.command_id !== result.id || taskRow.command_id !== result.id
+          || commandRow.task_id !== result.taskId || commandCount !== 1 || taskCount !== 1
+          || result.taskCountForCommand !== 1) {
           throw new Error(`migration-version command/task rows mismatch: ${JSON.stringify({ commandRow, taskRow })}`);
         }
         console.log(`schema_collection=business_commands`);
-        console.log(`schema_version=1`);
+        console.log(`schema_version=${schemaVersion}`);
         console.log(`schema_table=${commandTable}`);
         console.log(`stale_schema_table=${staleCommandTable}`);
         console.log(`stale_schema_table_rows=${staleRows}`);
+        console.log(`stale_schema_table_count=${staleTables.length}`);
+        console.log(`native_command_count=${commandCount}`);
+        console.log(`native_task_count=${taskCount}`);
+        console.log('command_task_link_verified=1');
         console.log(`task_table=${taskTable}`);
       }
       console.log(`command_id=${result.id}`);

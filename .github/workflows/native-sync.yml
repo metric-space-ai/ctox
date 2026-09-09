@@ -8,6 +8,8 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'src/core/business_os/**'
+      - 'src/core/persistence*.rs'
+      - 'src/core/secrets.rs'
       - 'src/core/mission/channels/**'
       - 'src/core/sync/**'
       - 'src/core/sync_host/**'
@@ -29,6 +31,8 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'src/core/business_os/**'
+      - 'src/core/persistence*.rs'
+      - 'src/core/secrets.rs'
       - 'src/core/mission/channels/**'
       - 'src/core/sync/**'
       - 'src/core/sync_host/**'
@@ -279,7 +283,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cargo test --locked --bin ctox business_os::command_plane::tests -- --test-threads=2 \
+          cargo test --locked --bin ctox business_os::command_plane:: -- --test-threads=2 \
             | tee "$RUNNER_TEMP/ctox-host-proof/command-completion-tests.log"
           cargo test --locked --bin ctox -- mission::channels::tests::business_command mission::channels::tests::business_control --test-threads=2 \
             | tee "$RUNNER_TEMP/ctox-host-proof/command-transaction-tests.log"
@@ -294,7 +298,17 @@ jobs:
             business_os::rxdb_peer::tests::additive_thread_schema_migration \
             business_os::rxdb_peer::tests::runtime_migration \
             business_os::rxdb_peer::tests::runtime_installed_declarative_migration \
+            business_os::rxdb_peer::tests::runtime_empty_legacy_table \
+            business_os::rxdb_peer::tests::rxdb_schema_drift_repair \
             --test-threads=2 | tee "$RUNNER_TEMP/ctox-host-proof/schema-migration-tests.log"
+      - name: Verify fresh secret reads and bounded Core reader reuse
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked --bin ctox -- persistence::tests secrets::tests business_os::domain_effect::tests \
+            --nocapture --test-threads=2 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/secret-reader-tests.log"
       - name: Context prompt first paint and authorized native command
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         timeout-minutes: 10
@@ -373,6 +387,18 @@ jobs:
             SMOKE_PROCESS_LIFECYCLE_PATH="$RUNNER_TEMP/ctox-host-proof/critical-reload-processes.json" \
             node src/core/rxdb/tools/browser_rust_smoke.js \
             | tee "$RUNNER_TEMP/ctox-host-proof/critical-browser-reload.log"
+      - name: Verify canonical schema routing and removal of obsolete command tables
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        timeout-minutes: 6
+        shell: bash
+        run: |
+          set -o pipefail
+          CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox" \
+            SMOKE_MODE=migration-version-browser-to-rust SMOKE_PAGE_PATH=/index.html \
+            BUSINESS_PORT=8883 SIGNALING_PORT=18882 \
+            SMOKE_PROCESS_LIFECYCLE_PATH="$RUNNER_TEMP/ctox-host-proof/schema-routing-processes.json" \
+            node src/core/rxdb/tools/browser_rust_smoke.js 2>&1 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/schema-routing-browser.log"
       # Profiling is a separate fixture after every acceptance measurement.
       # Its timings never replace the unprofiled command/reload budgets above.
       - name: Sample native CPU symbols in an isolated context reproduction
