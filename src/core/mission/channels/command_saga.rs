@@ -866,7 +866,6 @@ pub(crate) fn complete_business_control_command(
     );
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
-    attach_queue_projection_store(root, &conn)?;
     let tx = conn.transaction()?;
     let (phase, version, command_type) = tx.query_row(
         "SELECT execution_phase, projection_version, command_type
@@ -915,6 +914,10 @@ pub(crate) fn complete_business_control_command(
         )
         .optional()?
     {
+        // Only a linked queue task needs the attached projection stores.
+        // Keep this decision under the same transaction as the link lookup
+        // and queue settlement; unrelated control commands stay core-only.
+        attach_queue_projection_store(root, &tx)?;
         linked_task_id = Some(task_id.clone());
         let current_route =
             canonical_queue_route_status(&current_queue_route_status(&tx, &task_id)?)?;
@@ -1795,6 +1798,17 @@ pub(crate) fn pending_business_command_outbox(
 pub(crate) fn business_command_projection(root: &Path, command_id: &str) -> Result<Value> {
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
+    let mut command = business_command_projection_from_conn(&conn, command_id)?;
+    enrich_command_execution_progress(&db_path, &mut command)?;
+    Ok(command)
+}
+
+/// Canonical stored command snapshot. The path-based wrapper additionally
+/// enriches runtime progress, which is not part of reference authorization.
+pub(crate) fn business_command_projection_from_conn(
+    conn: &Connection,
+    command_id: &str,
+) -> Result<Value> {
     let (
         module,
         command_type,
@@ -1908,13 +1922,7 @@ pub(crate) fn business_command_projection(root: &Path, command_id: &str) -> Resu
         Value::String(task_id.clone()),
     );
     object.insert("task_id".to_string(), Value::String(task_id.clone()));
-    if !task_id.is_empty() {
-        if let Some(progress) =
-            crate::lcm::run_task_execution_progress_for_task(&db_path, &task_id)?
-        {
-            object.insert("execution_progress".to_string(), progress);
-        }
-    }
+
     if let Some((saga_id, saga_phase, saga_step, saga_total_steps, compensation_status)) = saga {
         object.insert("saga_id".to_string(), Value::String(saga_id));
         object.insert("saga_phase".to_string(), Value::String(saga_phase));
@@ -1986,6 +1994,28 @@ pub(crate) fn business_command_projection(root: &Path, command_id: &str) -> Resu
 pub(crate) fn inspect_business_command(root: &Path, command_id: &str) -> Result<Option<Value>> {
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
+    let mut context = inspect_business_command_from_conn(&conn, command_id)?;
+    if let Some(context) = context.as_mut() {
+        enrich_command_execution_progress(&db_path, &mut context["command"])?;
+        redact_command_secrets(&mut context["command"]);
+    }
+    Ok(context)
+}
+
+fn enrich_command_execution_progress(db_path: &Path, command: &mut Value) -> Result<()> {
+    if let Some(task_id) = command["task_id"].as_str().filter(|id| !id.is_empty()) {
+        if let Some(progress) = crate::lcm::run_task_execution_progress_for_task(db_path, task_id)?
+        {
+            command["execution_progress"] = progress;
+        }
+    }
+    Ok(())
+}
+
+fn inspect_business_command_from_conn(
+    conn: &Connection,
+    command_id: &str,
+) -> Result<Option<Value>> {
     let exists = conn
         .query_row(
             "SELECT 1 FROM business_command_aggregates WHERE command_id = ?1",
@@ -1997,7 +2027,7 @@ pub(crate) fn inspect_business_command(root: &Path, command_id: &str) -> Result<
     if !exists {
         return Ok(None);
     }
-    let mut command = business_command_projection(root, command_id)?;
+    let mut command = business_command_projection_from_conn(conn, command_id)?;
     redact_command_secrets(&mut command);
     let task_id = conn
         .query_row(
@@ -2052,6 +2082,18 @@ pub(crate) fn inspect_business_command_for_task(
 ) -> Result<Option<Value>> {
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
+    let mut context = inspect_business_command_for_task_from_conn(&conn, task_id)?;
+    if let Some(context) = context.as_mut() {
+        enrich_command_execution_progress(&db_path, &mut context["command"])?;
+        redact_command_secrets(&mut context["command"]);
+    }
+    Ok(context)
+}
+
+pub(crate) fn inspect_business_command_for_task_from_conn(
+    conn: &Connection,
+    task_id: &str,
+) -> Result<Option<Value>> {
     let command_id = conn
         .query_row(
             "SELECT command_id FROM business_command_task_links WHERE task_id = ?1",
@@ -2061,7 +2103,7 @@ pub(crate) fn inspect_business_command_for_task(
         .optional()?;
     command_id
         .as_deref()
-        .map(|command_id| inspect_business_command(root, command_id))
+        .map(|command_id| inspect_business_command_from_conn(conn, command_id))
         .transpose()
         .map(Option::flatten)
 }
@@ -2254,6 +2296,27 @@ pub(crate) fn record_business_command_intake_failure(
     error_message: &str,
     retry_budget: u32,
 ) -> Result<Value> {
+    record_business_command_intake_failure_inner(root, claim, error_message, retry_budget, true)
+}
+
+/// The domain owner has proved application in its own transaction. Delivery
+/// exhaustion is still journaled here, but cannot fail that committed effect.
+pub(crate) fn record_business_command_applied_effect_delivery_failure(
+    root: &Path,
+    claim: BusinessCommandClaimRequest,
+    error_message: &str,
+    retry_budget: u32,
+) -> Result<Value> {
+    record_business_command_intake_failure_inner(root, claim, error_message, retry_budget, false)
+}
+
+fn record_business_command_intake_failure_inner(
+    root: &Path,
+    claim: BusinessCommandClaimRequest,
+    error_message: &str,
+    retry_budget: u32,
+    allow_terminal_failure: bool,
+) -> Result<Value> {
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
     let tx = conn.transaction()?;
@@ -2333,7 +2396,7 @@ pub(crate) fn record_business_command_intake_failure(
     let mut canonical_failure_created = false;
     let mut next_projection_version = 1_i64;
     let mut prior_phase = "native_observed".to_string();
-    if exhausted && !idempotency_conflict && !canonical_already_terminal {
+    if allow_terminal_failure && exhausted && !idempotency_conflict && !canonical_already_terminal {
         let failure_result = json!({
             "ok": false,
             "error_code": "native_unavailable",
@@ -2415,8 +2478,12 @@ pub(crate) fn record_business_command_intake_failure(
     }
     tx.commit()?;
     let terminal_projection_ready = exhausted
-        && (canonical_failure_created || canonical_already_terminal || idempotency_conflict);
+        && (canonical_failure_created
+            || canonical_already_terminal
+            || (allow_terminal_failure && idempotency_conflict));
     let failure_document = if canonical_failure_created || canonical_already_terminal {
+        business_command_projection(root, &claim.command_id)?
+    } else if !allow_terminal_failure && canonical_exists {
         business_command_projection(root, &claim.command_id)?
     } else if idempotency_conflict {
         intake_failure_projection(
@@ -2436,6 +2503,7 @@ pub(crate) fn record_business_command_intake_failure(
         "exhausted": exhausted,
         "canonical_exists": canonical_exists,
         "canonical_failure_created": canonical_failure_created,
+        "domain_effect_applied": !allow_terminal_failure,
         "canonical_already_terminal": canonical_already_terminal,
         "idempotency_conflict": idempotency_conflict,
         "terminal_projection_ready": terminal_projection_ready,

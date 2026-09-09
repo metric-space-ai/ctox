@@ -17,8 +17,7 @@
 //     --outfile=src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs \
 //     "--banner:js=// CTOX Sync Engine app-local bundle. Generated from src/apps/business-os/rxdb/src/index.mjs."
 //
-// and bump the cache-buster (`ctox-rxdb-js.mjs?v=...`) in shared/db.js,
-// shared/sync.js and modules/matching/ui/businessOsDataSource.js.
+// and bump the sole bundle cache-buster in shared/rxdb-runtime.js.
 
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -48,12 +47,9 @@ try {
       timeout: 180_000,
     });
   } catch (error) {
-    // Offline / npx unavailable: skip LOUDLY (exit 0 so air-gapped dev works),
-    // but never skip silently — CI has network and will enforce this.
-    console.error('bundle-reproducible-smoke SKIPPED: could not run pinned esbuild via npx.');
-    console.error(String(error?.message || error).slice(0, 300));
-    console.log('ctox-rxdb bundle reproducibility guard SKIPPED (esbuild unavailable)');
-    process.exit(0);
+    // The suite treats exit 0 as PASS and does not display successful stderr.
+    // Missing tooling, download failures and build errors leave this unverified.
+    throw new Error('bundle reproducibility guard could not run pinned esbuild; verification is incomplete', { cause: error });
   }
 
   const rebuilt = readFileSync(outfile, 'utf8');
@@ -72,7 +68,7 @@ try {
     console.error(`  rebuild: ${String(rebuiltLines[firstDiff] ?? '<EOF>').slice(0, 160)}`);
     console.error('Either src was changed without rebuilding dist, or dist was patched directly.');
     console.error('Fix src and rebuild dist with the pinned command in this file’s header.');
-    process.exit(1);
+    throw new Error('bundle reproducibility guard failed: source/bundle drift');
   }
 } finally {
   rmSync(workDir, { recursive: true, force: true });

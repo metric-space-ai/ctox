@@ -1,6 +1,6 @@
 # Worker-Aufnahme: Vertrag zwischen Workjet-Host und CTOX Sync
 
-Stand 2026-09-06. Dies dokumentiert den aktuellen Quellvertrag und die noch
+Stand 2026-09-08. Dies dokumentiert den aktuellen Quellvertrag und die noch
 fehlenden Produktanschlüsse. Es ist keine Freigabe des SSH-/QR-Ablaufs.
 Die Abnahme und ihre Testergebnisse stehen in
 [ctox-sync-core-offensive.md](ctox-sync-core-offensive.md).
@@ -14,7 +14,7 @@ requestSyncAuthority(endpoint: string, input: SyncIpcRequest,
                      signal?: AbortSignal): Promise<SyncIpcResponse>
 ```
 
-Die Typen, Effect-Schemas und Konstanten stammen aus `@t3tools/contracts`.
+Die Typen, Effect-Schemas und Konstanten stammen aus `@t3tools/contracts/ctoxSync`.
 Quelle ist `src/core/rxdb/tests/fixtures/ctox_execution_contract.json` in CTOX;
 `src/core/sync/tools/generate-contracts.mjs` generiert beide Sprachen.
 Keine zweite Strukturdefinition im Host und keine HTTP-Mailbox einführen.
@@ -184,7 +184,12 @@ Ihre Request-ID wird nicht als Mutationsbeleg gespeichert: Eine wiederholte
 Abfrage darf einen inzwischen geänderten Zustand zurückgeben. Die native
 Kontrollversion steigt dafür auf 5; ältere Kontrollversionen werden abgelehnt.
 Rust, TypeScript und Effect-Schemas sind gemeinsam aus der Fixture generiert.
-Die drei gezielten nativen Worker-/Quorum-Tests bestehen (20,87 Sekunden),
+Die folgenden Zahlen sind historische Ergebnisse vor der Korrektur der
+Transport-Parität. Sie gelten nicht als aktuelle Freigabe. Die aktuelle native
+und vollständige Host-Abnahme mit Messwerten steht in
+[Native-Transport-Parität](ctox-sync-native-transport-parity-20260908.md).
+
+Historisch bestanden die drei gezielten nativen Worker-/Quorum-Tests (20,87 Sekunden),
 einschließlich historischem Aufnahmebeleg, aktuellem Widerruf, fremden Abfragen,
 Neustart, isoliertem alten Leader und Shutdown. Diese Tests verwenden signierte
 RPCs über den Test-Bus und direkten IPC-Dispatch. Anschließend besteht die vollständige vorhandene
@@ -233,6 +238,45 @@ Nachweise, unveränderten Instanz-Scope und sichtbare Ergebnisse nach jedem
 Schritt. Kritische UI-Abnahme folgt dem Workjet-UI-Testing-Vertrag mit
 maskierter Aufzeichnung und unabhängiger Prüfung. Die nativen Quorum-, IPC-
 und WebRTC-Tests bleiben separate Nachweise und ersetzen diese Stories nicht.
+
+## Verifizierte Produktgrenzen am 2026-09-08
+
+Workjets IPC-Client ist mit PR #32 auf main
+1a81eabec00fa262c36d72970376f2d09da6a48f enthalten. Seine Aufrufer in
+apps/packages sind weiterhin ausschließlich Tests. Der vollständige CTOX-Host
+besteht inzwischen die Vier-Prozess-Abnahme in Run 34204358510; die
+[Messwerte und Build-Identität](ctox-sync-native-transport-parity-20260908.md)
+sind erhalten. SSH-/QR-Aufnahme und echte Harness-Ausführung wurden dort nicht
+ausgeführt.
+
+Die Quellprüfung des sauberen Broker-main
+[1cebb53e0cf081fceeec7633f67e17223d31b31b](https://github.com/mkh-welsch/ctox-dev/blob/1cebb53e0cf081fceeec7633f67e17223d31b31b/cloudflare-signaling/src/index.js)
+zeigt drei konkrete Anschlusslücken; das ist kein Nachweis des aktuell
+ausgerollten Brokers:
+
+- KNOWN_ROLES enthält workjet_executor nicht. normalizeRole kann unbekannte
+  Rollen aus dem client-Label ableiten. Dieser Ersatz darf keine native
+  Ausführungsrolle oder deren Berechtigung begründen.
+- roleBoundAuthContext verlangt ctox-role-bound-v1 mit Browser-/Native-Hash.
+  Nur ctox_instance benutzt den Native-Hash; alle anderen Rollen benutzen den
+  Browser-Hash. Die bloße Ergänzung einer Worker-Rolle wäre deshalb kein
+  eigenständiger Ausführungsnetz-Vertrag. Der native HostTransport lehnt diese
+  Business-OS-Felder ausdrücklich ab.
+- instanceIdFromBusinessOsRoom bindet nur ctox-business-os-Räume an instance_id.
+  Für ctox-execution:scope liefert es keinen Scope; die vorhandene Join-Prüfung
+  überspringt dann diesen Abgleich. Ein eigener Vertrag muss Identität, Rolle
+  und Ausführungsnetz ausdrücklich binden, ohne Business-OS-Zulassung zu ändern.
+
+Auf Workjet-main führt DesktopComputerProvisioner.start die Installation
+weiterhin mit Effect.forkDetach aus und hält Operationen in einer lokalen Map.
+Nach einem Desktop-Prozessneustart existiert dieser Aufnahme-/Installationsstand
+nicht mehr. Ein get-not-found ist kein Abschlussbeleg und darf keine neue
+Mutation mit neuer Request-ID auslösen. Die anschließende Registry-Bindung
+verwendet Business-OS-Invites beziehungsweise addSshManagedInstance; sie führt
+kein admitWorker aus. Der gemeinsame produktive Aufnahmevorgang benötigt
+daher einen dauerhaften Besitzer samt identischer Wiederholungs-ID und die
+bestätigte native Entscheidung. Ein zusätzliches Bereitschafts-Bool im
+Computerkatalog würde diese Lücke nicht schließen.
 
 ## Verbindliche Arbeitsteilung und offene Abnahme
 

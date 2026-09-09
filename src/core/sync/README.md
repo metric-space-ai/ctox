@@ -64,8 +64,12 @@ deployable replacement daemon. Business records still replicate through RxDB.
   voting membership. Their public keys and never-reused node IDs persist in
   state-machine snapshots. Only configured voters can admit/revoke; additional
   workers may propose execution commands and validate their own ownership, but
-  cannot issue Raft RPCs. Validation rechecks active membership after the quorum
-  read. Native private IPC exposes these commands with distinct worker receipts;
+  cannot issue Raft RPCs. Pinned revoked workers can still request validation of
+  their own ownership. The quorum read precedes the active-membership check:
+  revocation returns a typed denial, while an isolated voter cannot claim a
+  confirmed decision from its cached tombstone. Unknown identities, validation
+  for another executor and proposals from revoked workers remain rejected at
+  admission. Native private IPC exposes these commands with distinct worker receipts;
   replayed admission cannot reactivate a revoked entry. Product invitation,
   administrator authorization and remote key-possession proof remain host work.
 - `authority/client.rs`: nonvoting `WorkerAuthorityClient` implements the same
@@ -117,6 +121,13 @@ deployable replacement daemon. Business records still replicate through RxDB.
   SignedTransport continues to verify the configured recipient key and nonce on
   every exchange, including newly opened channels. Loss of signaling alone does
   not revoke an otherwise quorum-confirmed execution.
+  Each transport generation captures the local signaling identity at creation.
+  A fresh offer addressed to a changed local identity replaces the old responder
+  even if its DataChannel remains open; it cannot renegotiate against the retired
+  connection. Removal is generation-bound, so delayed closes cannot erase the
+  replacement. The worker reconnect test keeps old channels open until all three
+  new routes are mutually admitted, then closes the retained old handles and
+  validates the same quorum-confirmed membership and job ownership over IPC.
   The real four-peer WebRTC/Unix-IPC test passes: admission, execution ownership,
   replay, revocation, denied business reads and retained-handle shutdown. The
   worker has the greatest signaling ID and opens no Raft store. This is a native
@@ -166,6 +177,17 @@ deployable replacement daemon. Business records still replicate through RxDB.
   and non-socket files are never replaced.
   Windows named-pipe hosting remains to be implemented. This crate does not open
   an HTTP or TCP execution endpoint.
+  `protectCheckpoint` now forwards signed durable-copy receipts to the existing
+  authority, and `takeOver` forwards the expected ownership and protected digest.
+  Both are generated additions to IPC version 1; older hosts reject unknown
+  operations. The native listener derives the actor and the takeover target from
+  its own identity. Callers cannot supply another owner. Consensus still enforces
+  two suitable verified copies, current generation and reconciled effects;
+  replayed requests return historical receipts without fresh execution authority.
+  The private-IPC/WebRTC partition test and actual Workjet client fixture cover
+  this path, including control latency measurements. They execute no VM/harness:
+  guest freeze, target restore verification and effect-boundary enforcement
+  remain adapter integration work.
 - `checkpoint.rs`: immutable content-addressed artifacts and manifests. Restore
   creates a fresh directory and checks all hashes, paths and pending effects.
 

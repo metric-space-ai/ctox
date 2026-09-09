@@ -5,7 +5,7 @@ use crate::{
         auth::SignedTransport,
         webrtc::{register_receiver, register_route_receiver, WebRtcControlChannel},
     },
-    local_host::LocalAuthorityHost,
+    local_host::LocalIpcHost,
 };
 use crate::{
     authority::{
@@ -192,7 +192,7 @@ impl<A: ExecutionAuthority + 'static> NativeExecutionHost<A> {
         discovery: RouteDiscovery,
     ) -> io::Result<()> {
         let group = self;
-        let mut host = LocalAuthorityHost::start(ipc_directory, group.node.clone()).await?;
+        let mut host = LocalIpcHost::start_authority(ipc_directory, group.node.clone()).await?;
         group.endpoint = host.endpoint().to_path_buf();
         let (stop, mut stopped) = oneshot::channel();
         *group.stop.get_mut() = Some(stop);

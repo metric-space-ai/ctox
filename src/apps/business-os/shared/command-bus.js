@@ -1341,17 +1341,28 @@ async function waitForCommandState({ db, sync, commandId, until, options = {} })
         }, COMMAND_TERMINAL_REVALIDATE_DELAYS_MS[index]);
       };
       for (const bridge of syncPlan?.afterCommand || []) {
-        const state = syncBridgeFromHandle(bridge)?.state;
-        if (cleanContextText(state?.collection?.name) !== 'business_commands') continue;
-        const masterChangeSubscription = state?.masterChange$?.subscribe?.((hint) => {
-          const hinted = commandFromMasterChangeHint(hint, commandId);
-          if (hinted.detailed) {
-            if (hinted.command) inspect(hinted.command);
-            return;
-          }
-          void bind({ authoritative: true });
-        });
-        if (masterChangeSubscription) masterChangeSubscriptions.push(masterChangeSubscription);
+        let masterChangeSubscription;
+        const bindMasterChanges = (currentBridge) => {
+          masterChangeSubscription?.unsubscribe?.();
+          masterChangeSubscription = null;
+          if (settled) return;
+          const state = currentBridge?.state;
+          if (cleanContextText(state?.collection?.name) !== 'business_commands') return;
+          masterChangeSubscription = state?.masterChange$?.subscribe?.((hint) => {
+            const hinted = commandFromMasterChangeHint(hint, commandId);
+            if (hinted.detailed) {
+              if (hinted.command) inspect(hinted.command);
+              return;
+            }
+            void bind({ authoritative: true });
+          });
+        };
+        if (typeof bridge?.subscribeBridge === 'function') {
+          masterChangeSubscriptions.push(bridge.subscribeBridge(bindMasterChanges));
+        } else {
+          bindMasterChanges(syncBridgeFromHandle(bridge));
+        }
+        masterChangeSubscriptions.push({ unsubscribe: () => masterChangeSubscription?.unsubscribe?.() });
       }
       scheduleTerminalRevalidation();
       progressTimer = setInterval(() => {
@@ -1562,6 +1573,10 @@ async function waitForSyncBridgeReady(bridge, timeoutMs) {
   const collection = cleanContextText(
     bridge?.collection || resolvedBridge?.collection || state?.collection?.name,
   ) || 'unknown';
+  if (typeof bridge?.subscribeBridge === 'function') {
+    await waitForConnectedSyncPeer(state, collection, timeoutMs, bridge);
+    return;
+  }
   if (!state) {
     if (resolvedBridge?.mode === 'pending' || resolvedBridge?.mode === 'paused') {
       throw commandError('', `CTOX Sync Engine collection "${collection}" is ${resolvedBridge.mode}.`, {
@@ -1598,26 +1613,56 @@ function syncBridgeHasPeerStatus(state) {
     || Boolean(state?.transportStatus$);
 }
 
-function waitForConnectedSyncPeer(state, collection, timeoutMs) {
+function waitForConnectedSyncPeer(state, collection, timeoutMs, lease = null) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let lastStatus = syncBridgeStatus(state);
+    let observedState;
+    let bridgeSubscription;
     const subscriptions = [];
+    const clearStateSubscriptions = () => {
+      for (const subscription of subscriptions.splice(0)) subscription?.unsubscribe?.();
+    };
     const finish = (handler, value) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       clearInterval(pollTimer);
-      subscriptions.forEach((subscription) => subscription?.unsubscribe?.());
+      clearStateSubscriptions();
+      bridgeSubscription?.unsubscribe?.();
       handler(value);
     };
     const inspect = () => {
       if (settled) return;
+      const bridge = lease ? syncBridgeFromHandle(lease) : { state };
+      state = bridge?.state;
+      if (observedState !== state) {
+        observedState = state;
+        clearStateSubscriptions();
+        for (const observable of [state?.peerStates$, state?.active$, state?.transportStatus$, state?.canceled$]) {
+          if (settled) break;
+          const subscription = observable?.subscribe?.(inspect);
+          if (!subscription) continue;
+          if (settled) subscription.unsubscribe?.();
+          else subscriptions.push(subscription);
+        }
+      }
+      if (settled) return;
       lastStatus = syncBridgeStatus(state);
+      if (['released', 'stopped', 'failed'].includes(bridge?.mode)) {
+        finish(reject, commandError('', `CTOX Sync Engine collection "${collection}" is ${bridge.mode}.`, {
+          code: 'sync_unavailable', retryable: bridge.mode === 'failed',
+        }));
+        return;
+      }
+      if (bridge?.mode === 'follower') { finish(resolve); return; }
+      if (!state) return;
       if (state.cancelled || state.canceled$?.getValue?.() === true) {
+        // Runtime-owned replacement may follow cancellation. Keep the same
+        // deadline and await the lease's next generation; never restart here.
+        if (lease) return;
         finish(reject, commandError('', `CTOX Sync Engine collection "${collection}" was cancelled.`, {
-          code: 'sync_unavailable',
-          retryable: true,
+          code: 'sync_unavailable', retryable: true,
         }));
         return;
       }
@@ -1632,12 +1677,9 @@ function waitForConnectedSyncPeer(state, collection, timeoutMs) {
       ));
     }, timeoutMs);
     const pollTimer = setInterval(inspect, 50);
-    for (const observable of [state.peerStates$, state.active$, state.transportStatus$, state.canceled$]) {
-      if (settled) break;
-      const subscription = observable?.subscribe?.(inspect);
-      if (!subscription) continue;
-      if (settled) subscription.unsubscribe?.();
-      else subscriptions.push(subscription);
+    if (lease) {
+      bridgeSubscription = lease.subscribeBridge(inspect);
+      if (settled) bridgeSubscription?.unsubscribe?.();
     }
     inspect();
   });

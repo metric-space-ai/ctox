@@ -578,6 +578,119 @@ try {
     expect(chipLatency < 150, `chip selection must render before persistence delay, got ${chipLatency.toFixed(1)}ms`);
   });
 
+  for (const pendingRead of [false, true]) {
+    await scenario(page, pendingRead ? 'crew-cleanup-during-load' : 'crew-cleanup-after-load', {
+      count: 0, dbDelay: pendingRead ? 500 : 0,
+    }, async () => {
+      const stats = await page.evaluate(async (pending) => {
+        if (!pending) await window.chatHarness.waitFor(() => window.chatHarness.chatReadStats.crewSubscriptions === 2);
+        const root = document.querySelector('[data-ctox-chat-root]');
+        const dbStats = window.chatHarness.chatReadStats;
+        const readinessStats = window.chatHarness.readinessStats;
+        const busStats = window.chatHarness.eventBusStats;
+        root.__ctoxChatCleanup();
+        const atDispose = { ...dbStats };
+        window.chatHarness.emitCrew();
+        window.chatHarness.emitReadiness();
+        // Cover both an in-flight load and the first 2-second pool retry.
+        await new Promise((resolve) => setTimeout(resolve, 2300));
+        window.chatHarness.emitCrew();
+        window.chatHarness.emitReadiness();
+        await window.chatHarness.waitForPaint();
+        return { atDispose, after: { ...dbStats }, readinessSubscriptions: readinessStats.subscriptions, windowObservers: busStats.windowOpenedObservers };
+      }, pendingRead);
+      results.push({ scenario: pendingRead ? 'crew-late-load-cleanup' : 'crew-ready-cleanup', metrics: stats });
+      expect(stats.after.crewSubscriptions === 0, 'disposed crew pool must release its subscriptions and cannot subscribe after a late load');
+      expect(stats.readinessSubscriptions === 0, 'disposed crew views must release readiness listeners');
+      expect(stats.windowObservers === 0, 'disposed crew presence must release the real window event-bus token');
+      expect(stats.after.crewReads === stats.atDispose.crewReads, 'disposed crew views must not restart reads via notifications or retries');
+    });
+  }
+
+  for (const reuseKnown of [false, true]) {
+    await scenario(page, reuseKnown ? 'known-chat-opens-before-storage' : 'new-draft-opens-before-storage', {
+      count: 1, groupedResearch: true, messagesPerChat: 2, staticTracking: true, dockCollapsed: true, dbDelay: 1000, holdChatReads: true,
+    }, async (initial) => {
+      expect(initial.chatReadStats.started > 0 && initial.chatReadStats.completed === 0, 'the initial dock must render while history is still pending');
+      expect(initial.initialPaintMs < 150, `the initial dock must paint before storage, got ${initial.initialPaintMs} ms`);
+      const opened = await page.evaluate(async (reuse) => {
+        const start = performance.now();
+        window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail: {
+          title: 'Immediate view', reuseActive: false,
+          ...(reuse ? { task_id: 'task_research_0' } : { draft: 'Prepared prompt' }),
+        } }));
+        await window.chatHarness.waitFor(() => {
+          const chat = document.querySelector('.ctox-chat-window.is-active');
+          if (!chat?.querySelector('.ctox-chat-title')?.getAttribute('aria-label')?.includes('Immediate view')) return false;
+          return reuse
+            ? chat.dataset.chatId === 'chat_0' && chat.textContent.includes('Testnachricht 0')
+            : chat.querySelector('textarea')?.value === 'Prepared prompt';
+        });
+        await window.chatHarness.waitForPaint();
+        const chat = document.querySelector('.ctox-chat-window.is-active');
+        const rect = chat.getBoundingClientRect();
+        const style = getComputedStyle(chat);
+        return { firstPaintMs: performance.now() - start, visible: rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) > 0, ...window.chatHarness.collect() };
+      }, reuseKnown);
+      results.push({ scenario: reuseKnown ? 'known-chat-first-paint' : 'new-draft-first-paint', metrics: opened });
+      expect(opened.visible, 'the opened chat must be visible');
+      expect(opened.chatReadStats.completed === 0, 'opening must not wait for the held history read');
+      expect(opened.firstPaintMs < 150, `chat must paint before 1000 ms storage, got ${opened.firstPaintMs} ms`);
+      expect(opened.storedChats === (reuseKnown ? 1 : 2), 'opening must preserve existing chats without duplicating a known task');
+      if (reuseKnown) expect(opened.activeId === 'chat_0', 'known task must reuse its original chat ID');
+      if (!reuseKnown) await page.locator('.ctox-chat-window.is-active textarea').fill('Edited while storage is pending');
+      await page.evaluate(() => window.chatHarness.releaseChatReads());
+      await page.evaluate(() => window.chatHarness.waitFor(() => window.chatHarness.chatReadStats.completed > 0));
+      await page.evaluate(() => window.chatHarness.waitForPaint());
+      const hydrated = await page.evaluate(() => ({
+        ...window.chatHarness.collect(),
+        draft: document.querySelector('.ctox-chat-window.is-active textarea')?.value,
+      }));
+      expect(hydrated.activeId === opened.activeId, 'late hydration must preserve the selected chat');
+      expect(hydrated.storedChats === opened.storedChats, 'late hydration must not duplicate chats');
+      if (reuseKnown) {
+        expect(hydrated.activeTaskClass.includes('is-task-running'), 'opening a running chat must retain its active task state');
+        expect(hydrated.activeMessageText.includes('Testnachricht 0'), 'late hydration must preserve the running chat history');
+      } else {
+        expect(hydrated.draft === 'Edited while storage is pending', 'late hydration must preserve user edits');
+      }
+    });
+  }
+
+  await scenario(page, 'unloaded-task-reuses-history-after-lookup', {
+    count: 1, groupedResearch: true, staticTracking: true, remoteOnly: true, dbDelay: 500, holdChatReads: true,
+  }, async () => {
+    const resolved = await page.evaluate(async () => {
+      window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail: { task_id: 'task_research_0' } }));
+      await window.chatHarness.waitFor(() => window.chatHarness.chatReadStats.started >= 2);
+      window.chatHarness.releaseChatReads();
+      await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-active')?.dataset.chatId === 'chat_0');
+      return window.chatHarness.collect();
+    });
+    expect(resolved.storedChats === 1, 'remote-only task must resolve its existing history without a placeholder duplicate');
+  });
+
+  await scenario(page, 'delayed-task-lookup-cannot-reopen-over-new-draft', {
+    count: 1, groupedResearch: true, staticTracking: true, remoteOnly: true, dbDelay: 500, holdChatReads: true,
+  }, async () => {
+    const after = await page.evaluate(async () => {
+      window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail: { task_id: 'task_research_0' } }));
+      // Keep the initial hydration and explicit lookup pending until the newer
+      // user intent is visible, independently of CI scheduling delays.
+      await window.chatHarness.waitFor(() => window.chatHarness.chatReadStats.started >= 2);
+      window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail: { draft: 'Newer user intent', reuseActive: false } }));
+      await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-active textarea')?.value === 'Newer user intent');
+      const activeId = window.chatHarness.collect().activeId;
+      window.chatHarness.releaseChatReads();
+      await window.chatHarness.waitFor(() => window.chatHarness.chatReadStats.completed >= 2);
+      await window.chatHarness.waitForPaint();
+      return { intendedId: activeId, ...window.chatHarness.collect(), draft: document.querySelector('.ctox-chat-window.is-active textarea')?.value };
+    });
+    expect(after.activeId === after.intendedId && after.activeId !== 'chat_0', 'late task lookup must not steal focus');
+    expect(after.draft === 'Newer user intent', 'late task lookup must not overwrite the newer draft');
+    expect(after.storedChats === 2, 'remote history and the explicit new draft must each remain once');
+  });
+
   await scenario(page, 'active-input-focus-and-type', { count: 1 }, async () => {
     await page.click('.ctox-chat-window.is-active textarea');
     await page.keyboard.type('Browser Test Aufgabe');
@@ -657,26 +770,45 @@ try {
   writeReport();
   if (failures.length) {
     console.error(JSON.stringify({ ok: false, failures, reportPath, screenshotPath }, null, 2));
-    process.exit(1);
+    process.exitCode = 1;
+  } else {
+    console.log(JSON.stringify({ ok: true, reportPath, screenshotPath, scenarios: results.length }, null, 2));
   }
-  console.log(JSON.stringify({ ok: true, reportPath, screenshotPath, scenarios: results.length }, null, 2));
+} catch (error) {
+  failures.push(error?.stack || String(error));
+  writeReport();
+  throw error;
 } finally {
   await browser.close().catch(() => {});
   await new Promise((resolve) => server.close(resolve));
 }
 
 async function scenario(page, name, seedOptions, assertions) {
-  await page.goto(url, { waitUntil: 'load' });
-  // Page load, not an assertion: a busy host may need seconds to serve the module.
-  await page.waitForFunction(() => window.chatHarness?.seed, null, { timeout: 20000 });
-  await page.evaluate(async (options) => {
-    await window.chatHarness.seed(options);
-  }, seedOptions);
-  const metrics = await page.evaluate(() => window.chatHarness.collect());
-  results.push({ scenario: name, metrics });
-  const failuresBefore = failures.length;
-  await assertions(metrics);
-  if (failures.length === failuresBefore) results.push({ scenario: `${name}:pass` });
+  try {
+    await page.goto(url, { waitUntil: 'load' });
+    // Page load, not an assertion: a busy host may need seconds to serve the module.
+    await page.waitForFunction(() => window.chatHarness?.seed, null, { timeout: 20000 });
+    await page.evaluate(async (options) => {
+      await window.chatHarness.seed(options);
+    }, seedOptions);
+    const metrics = await page.evaluate(() => window.chatHarness.collect());
+    results.push({ scenario: name, metrics });
+    const failuresBefore = failures.length;
+    await assertions(metrics);
+    if (failures.length === failuresBefore) results.push({ scenario: `${name}:pass` });
+    else await captureScenarioFailure(page, name, failures.slice(failuresBefore).join('\n'));
+  } catch (error) {
+    await captureScenarioFailure(page, name, error);
+    throw error;
+  }
+}
+
+async function captureScenarioFailure(page, name, error) {
+  const failureScreenshotPath = path.join(outputDir, `${name}-failure.png`);
+  const visibleText = await page.locator('body').innerText({ timeout: 3000 }).catch((readError) => String(readError));
+  const screenshotError = await page.screenshot({ path: failureScreenshotPath, timeout: 5000 })
+    .then(() => null, (captureError) => String(captureError));
+  results.push({ scenario: `${name}:failure`, error: error?.stack || String(error), visibleText, failureScreenshotPath, screenshotError });
 }
 
 async function viewportScenario(page, name, viewport, seedOptions, assertions) {
@@ -819,6 +951,7 @@ function harnessHtml() {
 <body>
   <script type="module">
     import { initBusinessChat } from '/src/apps/business-os/shared/business-chat.js';
+    import { createEventBus } from '/src/apps/business-os/shared/event-bus.js';
 
     const CHAT_STATE_KEY = 'ctox.businessOs.chat.v1';
     const owner = 'test-user';
@@ -844,6 +977,24 @@ function harnessHtml() {
       sessionStorage.clear();
       chatCollectionSubscribers = new Set();
       window.chatHarness.lastCommand = null;
+      const eventBus = createEventBus();
+      const on = eventBus.on;
+      const off = eventBus.off;
+      const windowTokens = new Set();
+      const busStats = { windowOpenedObservers: 0 };
+      eventBus.on = (event, callback) => {
+        const token = on(event, callback);
+        if (event === 'window:opened') windowTokens.add(token);
+        busStats.windowOpenedObservers = windowTokens.size;
+        return token;
+      };
+      eventBus.off = (event, token) => {
+        off(event, token);
+        windowTokens.delete(token);
+        busStats.windowOpenedObservers = windowTokens.size;
+      };
+      window.CTOX_BUSINESS_OS_APP = { eventBus };
+      window.chatHarness.eventBusStats = busStats;
 
       const selectedDate = localDateString(addDays(new Date(), options.selectedOffset || 0));
       const chats = Array.from({ length: options.count || 0 }, (_, index) => makeChat({ index, selectedDate, options }));
@@ -859,10 +1010,10 @@ function harnessHtml() {
       if (chats.length) chats[activeIndex].minimized = false;
       localStorage.setItem(CHAT_STATE_KEY, JSON.stringify({
         selectedDate,
-        activeChatId: options.activeChatId || chats[activeIndex]?.id || '',
+        activeChatId: options.remoteOnly ? '' : options.activeChatId || chats[activeIndex]?.id || '',
         dockCollapsed: Boolean(options.dockCollapsed),
         preCollapseExpandedChatIds: Array.isArray(options.preCollapseExpandedChatIds) ? options.preCollapseExpandedChatIds : [],
-        chats,
+        chats: options.remoteOnly ? [] : chats,
       }));
       // Progress fixtures represent a real, persisted queue task. Otherwise the
       // normal tracking refresh correctly treats these 06:00 messages as orphaned
@@ -873,15 +1024,18 @@ function harnessHtml() {
           .map(message => ({ id: message.taskId, command_id: message.commandId,
             status: message.status, execution_progress: message.executionProgress,
             ...(options.crewMembers ? { crew_member_id: 'member_0' } : {}) }))) : [];
+      const initStarted = performance.now();
       initBusinessChat({
 
         session: { authenticated: true, user: { id: owner, name: 'Harness User' } },
         commandBus: makeCommandBus(options),
-        db: makeDb(chats, options.dbDelay || 0, Boolean(options.dbTransientError), Boolean(options.dbDeleteError), Number(options.crewMembers) || 0, queueTasks),
+        sync: makeReadiness(),
+        db: makeDb(chats, options.dbDelay || 0, Boolean(options.dbTransientError), Boolean(options.dbDeleteError), Number(options.crewMembers) || 0, queueTasks, Boolean(options.holdChatReads)),
         getActiveModule: () => ({ id: 'ctox', name: 'CTOX' }),
       });
       await waitFor(() => document.querySelector('[data-chat-dock]'));
       await waitForPaint();
+      window.chatHarness.initialPaintMs = performance.now() - initStarted;
       return collect();
     }
 
@@ -993,6 +1147,22 @@ function harnessHtml() {
       await waitForPaint();
     }
 
+    function makeReadiness() {
+      const callbacks = new Set();
+      const stats = { subscriptions: 0 };
+      window.chatHarness.readinessStats = stats;
+      window.chatHarness.emitReadiness = () => { for (const token of [...callbacks]) token.callback({ state: 'ready' }); };
+      return {
+        subscribeCollectionReadiness: (_collection, callback) => {
+          const token = { callback };
+          callbacks.add(token);
+          stats.subscriptions = callbacks.size;
+          callback({ state: 'ready' });
+          return () => { callbacks.delete(token); stats.subscriptions = callbacks.size; };
+        },
+      };
+    }
+
     function makeCommandBus(options) {
       return {
         dispatch: async (command) => {
@@ -1020,8 +1190,16 @@ function harnessHtml() {
       }));
     }
 
-    function makeDb(chats, delayMs, transientError, deleteError, crewMemberCount = 0, queueTasks = []) {
+    function makeDb(chats, delayMs, transientError, deleteError, crewMemberCount = 0, queueTasks = [], holdChatReads = false) {
       const store = new Map(chats.map((chat) => [chat.id, structuredClone(chat)]));
+      const readStats = { started: 0, completed: 0, crewReads: 0, crewSubscriptions: 0 };
+      const chatReadGate = new Promise((resolve) => {
+        window.chatHarness.releaseChatReads = resolve;
+        if (!holdChatReads) resolve();
+      });
+      const crewSubscribers = new Set();
+      window.chatHarness.emitCrew = () => { for (const callback of [...crewSubscribers]) callback(); };
+      window.chatHarness.chatReadStats = readStats;
       window.chatHarness.publishMessage = async (chatId, message) => {
         const chat = store.get(chatId);
         chat.messages.push(message);
@@ -1056,7 +1234,7 @@ function harnessHtml() {
                 return { unsubscribe: () => chatCollectionSubscribers.delete(callback) };
               },
             },
-            find: () => ({ exec: async () => { await maybeThrow(); return Array.from(store.keys()).map(docFor).filter(Boolean); } }),
+            find: () => ({ exec: async () => { readStats.started += 1; await chatReadGate; await maybeThrow(); readStats.completed += 1; return Array.from(store.keys()).map(docFor).filter(Boolean); } }),
             findOne: (id) => ({ exec: async () => { await maybeThrow(); return docFor(id); } }),
             insert: async (doc) => { await maybeThrow(); store.set(doc.id, structuredClone(doc)); return docFor(doc.id); },
           },
@@ -1066,8 +1244,12 @@ function harnessHtml() {
             find: () => ({ exec: async () => { await maybeThrow(); return queueTasks.map((task) => ({ toJSON: () => structuredClone(task) })); } }),
           },
           ctox_crew_members: {
-            $: { subscribe: () => ({ unsubscribe() {} }) },
-            find: () => ({ exec: async () => { await maybeThrow(); return crewMembers.map((member) => ({ toJSON: () => structuredClone(member) })); } }),
+            $: { subscribe: (callback) => {
+              crewSubscribers.add(callback);
+              readStats.crewSubscriptions = crewSubscribers.size;
+              return { unsubscribe: () => { crewSubscribers.delete(callback); readStats.crewSubscriptions = crewSubscribers.size; } };
+            } },
+            find: () => ({ exec: async () => { readStats.crewReads += 1; await maybeThrow(); return crewMembers.map((member) => ({ toJSON: () => structuredClone(member) })); } }),
           },
         },
       };
@@ -1221,6 +1403,8 @@ function harnessHtml() {
         activeMessageText: document.querySelector('.ctox-chat-window.is-active .ctox-chat-messages')?.textContent?.trim() || '',
         activeInspectionText: document.querySelector('.ctox-chat-window.is-active .ctox-chat-inspection')?.textContent?.trim() || '',
         storedChats: Array.isArray(stored.chats) ? stored.chats.length : 0,
+        chatReadStats: { ...window.chatHarness.chatReadStats },
+        initialPaintMs: window.chatHarness.initialPaintMs,
         deletedChatTombstones: Object.keys(deletedChatIds).length,
       };
     }
@@ -1264,7 +1448,12 @@ function harnessHtml() {
       const [year, month, day] = dateStr.split('-').map(Number);
       const hour = 6 + (Math.floor(index / 4) % 18);
       const minute = (index % 4) * 10;
-      return new Date(year, month - 1, day, hour, minute, 0, 0).getTime();
+      const timestamp = new Date(year, month - 1, day, hour, minute, 0, 0).getTime();
+      // Today's existing chats must already exist, including before 06:00.
+      // A future creation stamp makes submitting a follow-up schedule it.
+      // Explicit future dates retain their real scheduling semantics.
+      return dateStr === localDateString(new Date())
+        ? Math.min(timestamp, Date.now() - 1) : timestamp;
     }
   </script>
 </body>

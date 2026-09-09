@@ -1,6 +1,8 @@
 // Origin: CTOX
 // License: Apache-2.0
 
+#[path = "store_peer_revocations.rs"]
+mod peer_revocations;
 #[path = "store_security_projections.rs"]
 mod security_projections;
 use super::app_runtime;
@@ -103,6 +105,7 @@ use crate::mission::channels;
 use anyhow::Context;
 use base64::Engine;
 use ctox_app_server_protocol::AuthMode as ApiAuthMode;
+pub use peer_revocations::is_business_peer_revoked;
 use ring::rand::{SecureRandom, SystemRandom};
 use rusqlite::params;
 use rusqlite::params_from_iter;
@@ -1103,6 +1106,38 @@ pub(super) struct TemplateManifest {
     pub(super) default_title: String,
     #[serde(default)]
     tags: Vec<String>,
+}
+
+/// Native reconciliation reads application identity from the domain owner's
+/// transaction, never from a browser-authored actor or replacement credential.
+pub(super) fn domain_effect_identity_for_intake(
+    root: &Path,
+    command_id: &str,
+) -> anyhow::Result<Option<super::domain_effect::DomainEffectIdentity>> {
+    with_store_connection(root, |conn| {
+        super::domain_effect::identity(conn, command_id)
+    })
+}
+
+pub(super) fn active_domain_recovery_session(
+    root: &Path,
+    actor_id: &str,
+) -> anyhow::Result<BusinessOsSession> {
+    let user = with_store_connection(root, |conn| active_business_user(conn, actor_id))?
+        .context("domain recovery actor is no longer active")?;
+    Ok(BusinessOsSession {
+        ok: true,
+        authenticated: true,
+        auth_required: false,
+        user: Some(BusinessOsSessionUser {
+            id: user.id,
+            display_name: user.display_name,
+            is_admin: role_can_manage(&user.role),
+            role: user.role,
+        }),
+        login_url: None,
+        reason: None,
+    })
 }
 
 pub fn open_store(root: &Path) -> anyhow::Result<Connection> {
@@ -6223,7 +6258,7 @@ fn hash_session_token(token: &str) -> String {
 }
 
 /// Revoke a sync-mesh peer by its signaling peer id. The native peer's
-/// `is_peer_valid` gate denies any revoked id at connect, so a revoked device is
+/// `is_peer_valid` gate denies any revoked id at connect and RPC admission, so a revoked device is
 /// dropped from the mesh server-side regardless of what the browser claims.
 pub fn revoke_business_peer(
     root: &Path,
@@ -6254,27 +6289,6 @@ pub fn clear_business_peer_revocation(root: &Path, peer_id: &str) -> anyhow::Res
         params![peer_id.trim()],
     )?;
     Ok(())
-}
-
-/// Hot-path revocation check used by the native peer's `is_peer_valid` gate.
-/// Fails open (returns `false`) on a store error so a transient DB hiccup cannot
-/// sever every peer; a genuine revocation persists and is re-checked per connect.
-pub fn is_business_peer_revoked(root: &Path, peer_id: &str) -> bool {
-    let peer_id = peer_id.trim();
-    if peer_id.is_empty() {
-        return false;
-    }
-    let Ok(conn) = open_store(root) else {
-        return false;
-    };
-    conn.query_row(
-        "SELECT 1 FROM business_peer_revocations WHERE peer_id = ?1",
-        params![peer_id],
-        |_| Ok(()),
-    )
-    .optional()
-    .map(|row| row.is_some())
-    .unwrap_or(false)
 }
 
 /// List currently-revoked peers (for an admin/control surface).
@@ -10808,6 +10822,50 @@ pub(super) struct RxdbProjectionWriterCache {
 }
 
 impl RxdbProjectionWriterCache {
+    /// Replace current source records, including removed fields and tombstones.
+    pub(super) fn replace_domain_record_required(
+        &mut self,
+        collection: &str,
+        record_id: &str,
+        updated_at_ms: i64,
+        payload: Value,
+        deleted: bool,
+    ) -> anyhow::Result<()> {
+        if !matches!(self.writers.get(collection), Some(Some(_))) {
+            let writer =
+                RxdbCollectionWriter::open(&self.root, collection)?.with_context(|| {
+                    format!("domain effect projection collection unavailable: {collection}")
+                })?;
+            self.writers.insert(collection.to_owned(), Some(writer));
+        }
+        let writer = self
+            .writers
+            .get_mut(collection)
+            .and_then(Option::as_mut)
+            .context("domain projection writer missing")?;
+        let result = writer.replace_source(record_id, updated_at_ms, payload, deleted);
+        if result.is_err() {
+            self.writers.remove(collection);
+        }
+        result
+    }
+
+    /// Recovery must distinguish absent storage from successful delivery.
+    pub(super) fn upsert_required(
+        &mut self,
+        collection: &str,
+        record_id: &str,
+        updated_at_ms: i64,
+        payload: Value,
+    ) -> anyhow::Result<()> {
+        self.upsert(collection, record_id, updated_at_ms, payload)?;
+        anyhow::ensure!(
+            matches!(self.writers.get(collection), Some(Some(_))),
+            "domain effect projection collection unavailable: {collection}"
+        );
+        Ok(())
+    }
+
     pub(super) fn new(root: &Path) -> Self {
         Self {
             root: root.to_path_buf(),
@@ -11026,6 +11084,7 @@ impl RxdbCollectionWriter {
             payload,
             self.demand_file_storage,
             false,
+            true,
         )?;
         self.notify_committed_change();
         Ok(())
@@ -11065,6 +11124,7 @@ impl RxdbCollectionWriter {
             payload,
             self.demand_file_storage,
             false,
+            true,
         )?;
         self.notify_committed_change();
         Ok(())
@@ -11092,6 +11152,32 @@ impl RxdbCollectionWriter {
             }),
             self.demand_file_storage,
             true,
+            true,
+        )?;
+        self.notify_committed_change();
+        Ok(())
+    }
+
+    fn replace_source(
+        &mut self,
+        record_id: &str,
+        updated_at_ms: i64,
+        payload: Value,
+        deleted: bool,
+    ) -> anyhow::Result<()> {
+        let now = now_ms().min(i64::MAX as u128) as i64;
+        self.last_replication_lwt = now.max(self.last_replication_lwt.saturating_add(1));
+        upsert_rxdb_collection_record_with_writer(
+            &self.conn,
+            &self.table,
+            &self.columns,
+            record_id,
+            updated_at_ms,
+            self.last_replication_lwt,
+            payload,
+            self.demand_file_storage,
+            deleted,
+            false,
         )?;
         self.notify_committed_change();
         Ok(())
@@ -11119,6 +11205,7 @@ fn upsert_rxdb_collection_record_with_writer(
     mut payload: Value,
     demand_file_storage: bool,
     deleted: bool,
+    merge_existing: bool,
 ) -> anyhow::Result<()> {
     let mut previous_revision = None;
     if let Some(existing_json) = conn
@@ -11134,8 +11221,10 @@ fn upsert_rxdb_collection_record_with_writer(
                 .get("_rev")
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            merge_json_object_values(&mut existing, &payload);
-            payload = existing;
+            if merge_existing {
+                merge_json_object_values(&mut existing, &payload);
+                payload = existing;
+            }
         }
     }
     let rev = next_direct_rxdb_revision(previous_revision.as_deref());
@@ -16957,7 +17046,13 @@ pub(crate) fn record_business_command_intake_failure(
             .cloned()
             .unwrap_or(Value::Null),
     };
-    let core_outcome = channels::record_business_command_intake_failure(
+    let has_applied_effect = domain_effect_identity_for_intake(root, command_id)?.is_some();
+    let record_failure = if has_applied_effect {
+        channels::record_business_command_applied_effect_delivery_failure
+    } else {
+        channels::record_business_command_intake_failure
+    };
+    let core_outcome = record_failure(
         root,
         business_command_core_claim(command_id, &command)?,
         error_message,
@@ -23329,6 +23424,7 @@ fn upsert_business_record_tombstone(
 }
 
 fn migrate(conn: &Connection) -> anyhow::Result<()> {
+    conn.execute_batch(super::domain_effect::SCHEMA)?;
     let schema = "
         CREATE TABLE IF NOT EXISTS business_records (
             collection TEXT NOT NULL,
@@ -25559,16 +25655,17 @@ pub(super) mod tests {
     fn peer_revocation_registry_round_trips() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
-        assert!(!is_business_peer_revoked(root, "peer-abc"));
+        drop(open_store(root)?);
+        assert!(!is_business_peer_revoked(root, "peer-abc")?);
         revoke_business_peer(root, "peer-abc", "admin-1", "stolen device")?;
-        assert!(is_business_peer_revoked(root, "peer-abc"));
-        assert!(!is_business_peer_revoked(root, "peer-xyz"));
+        assert!(is_business_peer_revoked(root, "peer-abc")?);
+        assert!(!is_business_peer_revoked(root, "peer-xyz")?);
         let listed = list_revoked_business_peers(root)?;
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0]["peer_id"], "peer-abc");
         assert_eq!(listed[0]["revoked_by"], "admin-1");
         clear_business_peer_revocation(root, "peer-abc")?;
-        assert!(!is_business_peer_revoked(root, "peer-abc"));
+        assert!(!is_business_peer_revoked(root, "peer-abc")?);
         assert!(list_revoked_business_peers(root)?.is_empty());
         Ok(())
     }

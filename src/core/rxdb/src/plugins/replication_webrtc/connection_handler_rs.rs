@@ -150,6 +150,80 @@ impl std::fmt::Display for WebRTCRsConnection {
     }
 }
 
+fn dtls_fingerprint(sdp: &str) -> RxResult<[u8; 32]> {
+    let invalid = || {
+        new_rx_error(
+            "RC_WEBRTC_PEER",
+            Some(serde_json::json!({
+                "message": "established DTLS SHA-256 fingerprint is unavailable or ambiguous"
+            })),
+        )
+    };
+    let mut fingerprint = None;
+    for line in sdp
+        .lines()
+        .filter_map(|line| line.strip_prefix("a=fingerprint:"))
+    {
+        let mut fields = line.split_whitespace();
+        if !fields
+            .next()
+            .is_some_and(|algorithm| algorithm.eq_ignore_ascii_case("sha-256"))
+        {
+            return Err(invalid());
+        }
+        let value = fields.next().ok_or_else(invalid)?;
+        if fields.next().is_some() {
+            return Err(invalid());
+        }
+        let parts = value.split(':').collect::<Vec<_>>();
+        if parts.len() != 32 {
+            return Err(invalid());
+        }
+        let mut bytes = [0; 32];
+        for (index, part) in parts.iter().enumerate() {
+            if part.len() != 2 || !part.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(invalid());
+            }
+            bytes[index] = u8::from_str_radix(part, 16).map_err(|_| invalid())?;
+        }
+        if fingerprint.is_some_and(|previous| previous != bytes) {
+            return Err(invalid());
+        }
+        fingerprint = Some(bytes);
+    }
+    fingerprint.ok_or_else(invalid)
+}
+
+#[cfg(test)]
+mod channel_binding_tests {
+    use super::dtls_fingerprint;
+    fn line(byte: &str) -> String {
+        format!("a=fingerprint:sha-256 {}\r\n", vec![byte; 32].join(":"))
+    }
+    #[test]
+    fn canonicalizes_repeated_bundle_fingerprints_and_rejects_ambiguity() {
+        let fingerprint = line("AB");
+        assert_eq!(
+            dtls_fingerprint(&format!(
+                "v=0\r\n{fingerprint}m=application\r\n{fingerprint}"
+            ))
+            .unwrap(),
+            [0xab; 32]
+        );
+        assert_eq!(dtls_fingerprint(&line("ab")).unwrap(), [0xab; 32]);
+        assert!(dtls_fingerprint(&format!("{}{}", line("ab"), line("cd"))).is_err());
+        for invalid in [
+            String::new(),
+            "a=fingerprint:sha-256 AA:BB".into(),
+            line("zz"),
+            line("ab").replace("sha-256", "sha-1"),
+            line("+1"),
+        ] {
+            assert!(dtls_fingerprint(&invalid).is_err());
+        }
+    }
+}
+
 impl WebRTCRsConnectionHandler {
     /// Resolve a routing hint to the currently open local connection.
     pub fn connection_for_peer(&self, peer_id: &str) -> Option<WebRTCRsConnection> {
@@ -163,6 +237,40 @@ impl WebRTCRsConnectionHandler {
             .map(|entry| WebRTCRsConnection::new(peer_id.to_owned(), entry.generation))
     }
 
+    /// Bind an application identity proof to this established DTLS channel.
+    /// A nonce/signature alone can be relayed through another connection.
+    pub async fn channel_binding(&self, connection: &WebRTCRsConnection) -> RxResult<String> {
+        use sha2::{Digest, Sha256};
+        let pc = self
+            .peers
+            .lock()
+            .get(connection.peer_id())
+            .filter(|entry| entry.generation == connection.generation && entry.data_channel_open)
+            .map(|entry| entry.peer_connection.clone())
+            .ok_or_else(|| stale_connection_error(connection))?;
+        let local = pc
+            .current_local_description()
+            .await
+            .ok_or_else(|| stale_connection_error(connection))?;
+        let remote = pc
+            .current_remote_description()
+            .await
+            .ok_or_else(|| stale_connection_error(connection))?;
+        let mut fingerprints = [
+            dtls_fingerprint(&local.sdp)?,
+            dtls_fingerprint(&remote.sdp)?,
+        ];
+        fingerprints.sort();
+        if !self.is_current_connection(connection) {
+            return Err(stale_connection_error(connection));
+        }
+        let mut digest = Sha256::new();
+        digest.update(b"ctox.sync.dtls-channel.v1\0");
+        digest.update(fingerprints[0]);
+        digest.update(fingerprints[1]);
+        Ok(format!("{:x}", digest.finalize()))
+    }
+
     fn is_current_connection(&self, connection: &WebRTCRsConnection) -> bool {
         if self.closed.load(Ordering::SeqCst) {
             return false;
@@ -173,6 +281,35 @@ impl WebRTCRsConnectionHandler {
             .is_some_and(|entry| {
                 entry.generation == connection.generation && entry.data_channel_open
             })
+    }
+
+    /// Policy hooks may perform blocking store work. Never hold the room-wide
+    /// lifecycle lock while invoking one. Revalidate both connection generation
+    /// and captured credential afterward so a late result cannot authorize a
+    /// replaced connection or a peer whose token changed during the lookup.
+    fn evaluate_current_peer_policy<T>(
+        &self,
+        peer: &WebRTCRsConnection,
+        evaluate: impl FnOnce(&str) -> T,
+    ) -> Option<T> {
+        let token = {
+            let _lifecycle = self.peer_lifecycle.lock();
+            if !self.is_current_connection(peer) {
+                return None;
+            }
+            self.peer_capability_tokens
+                .lock()
+                .get(&peer.peer_id)
+                .cloned()
+        };
+        let result = evaluate(token.as_deref().unwrap_or_default());
+        let _lifecycle = self.peer_lifecycle.lock();
+        if !self.is_current_connection(peer)
+            || self.peer_capability_tokens.lock().get(&peer.peer_id) != token.as_ref()
+        {
+            return None;
+        }
+        Some(result)
     }
 }
 
@@ -230,6 +367,9 @@ impl WebRTCRsConfig {
 
 struct PeerEntry {
     generation: u64,
+    // An offer addressed to a new local signaling identity belongs to a new
+    // connection, even while the old identity's DataChannel is still open.
+    local_peer_id: Option<PeerId>,
     peer_connection: Arc<dyn PeerConnection>,
     data_channel: Option<Arc<dyn DataChannel>>,
     data_channel_open: bool,
@@ -769,6 +909,7 @@ pub(crate) fn publish_best_effort_send_error(error_subject: &RxSubject<RxError>,
 /// WebRTC connection-handler implementation backed by `webrtc-rs`.
 pub struct WebRTCRsConnectionHandler {
     peer_role: super::NativePeerRole,
+    local_session_provider: Mutex<Option<super::LocalSessionProvider<WebRTCRsConnection>>>,
     connect_subject: RxSubject<WebRTCRsConnection>,
     disconnect_subject: RxSubject<WebRTCRsConnection>,
     message_subject: RxSubject<PeerWithMessage<WebRTCRsConnection>>,
@@ -946,6 +1087,7 @@ impl WebRTCRsConnectionHandler {
             message_subject: RxSubject::new(),
             response_subject: RxSubject::new(),
             error_subject: RxSubject::new(),
+            local_session_provider: Mutex::new(None),
             peers: Arc::new(Mutex::new(HashMap::new())),
             peer_lifecycle: Arc::new(Mutex::new(())),
             building: Arc::new(Mutex::new(HashMap::new())),
@@ -976,6 +1118,15 @@ impl WebRTCRsConnectionHandler {
             peer_capability_tokens: Arc::new(Mutex::new(HashMap::new())),
             tasks: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Install once before joining the room. Each handshake reads fresh host
+    /// credentials; the callback is never awaited under the provider lock.
+    pub fn set_local_session_provider(
+        &self,
+        provider: Option<super::LocalSessionProvider<WebRTCRsConnection>>,
+    ) {
+        *self.local_session_provider.lock() = provider;
     }
 
     /// #12c: install the per-collection read-authz hook. Set once right after
@@ -1518,6 +1669,7 @@ impl WebRTCRsConnectionHandler {
             )
         })?;
 
+        let local_peer_id = signaling.own_peer_id();
         let generation = self
             .peer_generation_counter
             .fetch_add(1, Ordering::SeqCst)
@@ -1535,6 +1687,7 @@ impl WebRTCRsConnectionHandler {
                 remote_peer_id.clone(),
                 PeerEntry {
                     generation,
+                    local_peer_id,
                     peer_connection: Arc::clone(&pc),
                     data_channel: None,
                     data_channel_open: false,
@@ -1578,7 +1731,7 @@ impl WebRTCRsConnectionHandler {
     async fn handle_signal(self: &Arc<Self>, remote_peer_id: PeerId, data: Value) -> RxResult<()> {
         let is_offer = data.get("type").and_then(Value::as_str) == Some("offer");
         if is_offer {
-            self.remove_unopened_peer_before_offer(&remote_peer_id);
+            self.remove_obsolete_peer_before_offer(&remote_peer_id);
         }
         let pc = self
             .ensure_peer_connection(remote_peer_id.clone(), false)
@@ -1633,27 +1786,28 @@ impl WebRTCRsConnectionHandler {
         Ok(())
     }
 
-    fn remove_unopened_peer_before_offer(self: &Arc<Self>, remote_peer_id: &str) {
-        let generation = {
+    fn remove_obsolete_peer_before_offer(self: &Arc<Self>, remote_peer_id: &str) {
+        let current_local_peer_id = self.signaling.as_ref().and_then(|s| s.own_peer_id());
+        let removal = {
             let peers = self.peers.lock();
             let Some(entry) = peers.get(remote_peer_id) else {
                 return;
             };
-            should_rebuild_peer_for_inbound_offer(true, entry.data_channel_open)
-                .then_some(entry.generation)
+            if current_local_peer_id.is_some() && entry.local_peer_id != current_local_peer_id {
+                Some(PeerRemoval::Generation(entry.generation))
+            } else if should_rebuild_peer_for_inbound_offer(true, entry.data_channel_open) {
+                Some(PeerRemoval::Unopened(entry.generation))
+            } else {
+                None
+            }
         };
-        if let Some(generation) = generation {
+        if let Some(removal) = removal {
             tracing::warn!(
                 target: "ctox_rxdb::webrtc_rs",
                 peer = %remote_peer_id,
-                "dropping unopened WebRTC responder before answering renewed browser offer"
+                "replacing obsolete WebRTC responder before answering renewed offer"
             );
-            remove_peer_inner(
-                self,
-                remote_peer_id,
-                PeerRemoval::Unopened(generation),
-                None,
-            );
+            remove_peer_inner(self, remote_peer_id, removal, None);
         }
     }
 }
@@ -1668,6 +1822,29 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
 
     fn local_peer_role(&self) -> super::NativePeerRole {
         self.peer_role
+    }
+
+    async fn local_session_credentials(
+        &self,
+        peer: &Self::Peer,
+        nonce: Option<String>,
+    ) -> Result<Option<super::LocalSessionCredentials>, RxError> {
+        let provider = self.local_session_provider.lock().clone();
+        match provider {
+            Some(provider) => {
+                let credentials = provider(peer.clone(), nonce).await?;
+                if !self
+                    .local_session_provider
+                    .lock()
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &provider))
+                {
+                    return Err(new_rx_error("RC_WEBRTC_PEER", None));
+                }
+                Ok(Some(credentials))
+            }
+            None => Ok(None),
+        }
     }
 
     fn connect_stream(&self) -> RxStream<Self::Peer> {
@@ -1842,24 +2019,12 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         peer: &Self::Peer,
         collection: &str,
     ) -> bool {
-        let _connection_lifecycle = self.peer_lifecycle.lock();
-        if !self.is_current_connection(peer) {
-            return false;
-        }
-        let peer = &peer.peer_id;
         let hook = self.collection_live_change.lock().clone();
-        match hook {
+        self.evaluate_current_peer_policy(peer, |token| match hook {
             None => false,
-            Some(check) => {
-                let token = self
-                    .peer_capability_tokens
-                    .lock()
-                    .get(peer)
-                    .cloned()
-                    .unwrap_or_default();
-                check(&token, collection)
-            }
-        }
+            Some(check) => check(token, collection),
+        })
+        .unwrap_or(false)
     }
 
     fn set_peer_capability_token(&self, peer: &Self::Peer, token: String) {
@@ -1886,24 +2051,12 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
     /// unchanged). When installed, an unknown peer maps to an empty token so the
     /// hook still decides (it treats an empty/invalid token as least privilege).
     fn is_collection_authorized_for_peer(&self, peer: &Self::Peer, collection: &str) -> bool {
-        let _connection_lifecycle = self.peer_lifecycle.lock();
-        if !self.is_current_connection(peer) {
-            return false;
-        }
-        let peer = &peer.peer_id;
         let hook = self.collection_authz.lock().clone();
-        match hook {
+        self.evaluate_current_peer_policy(peer, |token| match hook {
             None => true,
-            Some(check) => {
-                let token = self
-                    .peer_capability_tokens
-                    .lock()
-                    .get(peer)
-                    .cloned()
-                    .unwrap_or_default();
-                check(&token, collection)
-            }
-        }
+            Some(check) => check(token, collection),
+        })
+        .unwrap_or(false)
     }
 
     fn is_eager_collection_pull_authorized_for_peer(
@@ -1911,46 +2064,22 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         peer: &Self::Peer,
         collection: &str,
     ) -> bool {
-        let _connection_lifecycle = self.peer_lifecycle.lock();
-        if !self.is_current_connection(peer) {
-            return false;
-        }
-        let peer = &peer.peer_id;
         let hook = self.collection_eager_pull.lock().clone();
-        match hook {
+        self.evaluate_current_peer_policy(peer, |token| match hook {
             None => true,
-            Some(check) => {
-                let token = self
-                    .peer_capability_tokens
-                    .lock()
-                    .get(peer)
-                    .cloned()
-                    .unwrap_or_default();
-                check(&token, collection)
-            }
-        }
+            Some(check) => check(token, collection),
+        })
+        .unwrap_or(false)
     }
 
     /// Fail-open write authorization unless a caller installs a write hook.
     fn is_collection_write_authorized_for_peer(&self, peer: &Self::Peer, collection: &str) -> bool {
-        let _connection_lifecycle = self.peer_lifecycle.lock();
-        if !self.is_current_connection(peer) {
-            return false;
-        }
-        let peer = &peer.peer_id;
         let hook = self.collection_write_authz.lock().clone();
-        match hook {
+        self.evaluate_current_peer_policy(peer, |token| match hook {
             None => true,
-            Some(check) => {
-                let token = self
-                    .peer_capability_tokens
-                    .lock()
-                    .get(peer)
-                    .cloned()
-                    .unwrap_or_default();
-                check(&token, collection)
-            }
-        }
+            Some(check) => check(token, collection),
+        })
+        .unwrap_or(false)
     }
 
     fn document_filter_for_peer(
@@ -1958,35 +2087,19 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         peer: &Self::Peer,
         collection: &str,
     ) -> Option<Arc<dyn Fn(&Value) -> bool + Send + Sync>> {
-        let _connection_lifecycle = self.peer_lifecycle.lock();
-        if !self.is_current_connection(peer) {
-            return Some(Arc::new(|_| false));
-        }
-        let peer = &peer.peer_id;
-        let hook = self.document_read_authz.lock().clone()?;
-        let token = self
-            .peer_capability_tokens
-            .lock()
-            .get(peer)
-            .cloned()
-            .unwrap_or_default();
-        Some(hook(&token, collection).filter)
+        let hook = self.document_read_authz.lock().clone();
+        self.evaluate_current_peer_policy(peer, |token| {
+            hook.map(|read_policy| read_policy(token, collection).filter)
+        })
+        .unwrap_or_else(|| Some(Arc::new(|_| false)))
     }
 
     fn document_fields_for_peer(&self, peer: &Self::Peer, collection: &str) -> Option<Vec<String>> {
-        let _connection_lifecycle = self.peer_lifecycle.lock();
-        if !self.is_current_connection(peer) {
-            return Some(Vec::new());
-        }
-        let peer = &peer.peer_id;
-        let hook = self.document_read_authz.lock().clone()?;
-        let token = self
-            .peer_capability_tokens
-            .lock()
-            .get(peer)
-            .cloned()
-            .unwrap_or_default();
-        hook(&token, collection).fields
+        let hook = self.document_read_authz.lock().clone();
+        self.evaluate_current_peer_policy(peer, |token| {
+            hook.and_then(|read_policy| read_policy(token, collection).fields)
+        })
+        .unwrap_or_else(|| Some(Vec::new()))
     }
 
     fn are_documents_write_authorized_for_peer(
@@ -1995,28 +2108,20 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         collection: &str,
         params: &[Value],
     ) -> bool {
-        let _connection_lifecycle = self.peer_lifecycle.lock();
-        if !self.is_current_connection(peer) {
-            return false;
-        }
-        let peer = &peer.peer_id;
         let hook = self.document_write_authz.lock().clone();
-        let Some(check) = hook else { return true };
-        let token = self
-            .peer_capability_tokens
-            .lock()
-            .get(peer)
-            .cloned()
-            .unwrap_or_default();
-        params
-            .first()
-            .and_then(Value::as_array)
-            .is_some_and(|rows| {
-                rows.iter().all(|row| {
-                    row.get("newDocumentState")
-                        .is_some_and(|document| check(&token, collection, document))
+        self.evaluate_current_peer_policy(peer, |token| {
+            let Some(check) = hook else { return true };
+            params
+                .first()
+                .and_then(Value::as_array)
+                .is_some_and(|rows| {
+                    rows.iter().all(|row| {
+                        row.get("newDocumentState")
+                            .is_some_and(|document| check(token, collection, document))
+                    })
                 })
-            })
+        })
+        .unwrap_or(false)
     }
 
     fn filter_master_change_for_peer(
@@ -2200,7 +2305,7 @@ impl WebRTCRsConnectionHandler {
     /// Remove ONE peer's presence (channel close / peer removal). Returns
     /// whether it had visible entries, i.e. whether the remaining peers need
     /// a broadcast to drop its hints.
-    fn remove_peer_presence(&self, peer: &WebRTCRsPeer) -> bool {
+    fn remove_peer_presence(&self, peer: &str) -> bool {
         self.presence
             .lock()
             .remove(peer)
@@ -3364,6 +3469,18 @@ fn install_data_channel(
         let mut peers = handler.peers.lock();
         if let Some(entry) = peers.get_mut(&remote_peer_id) {
             if entry.generation == generation {
+                // A channel has exactly one event consumer per connection lifetime.
+                // webrtc 0.20.0-alpha.1 also announces a locally created channel
+                // through on_data_channel with a second, already-closed receiver.
+                // Keep the original handle: polling the duplicate would immediately
+                // retire this otherwise live connection on stream EOF.
+                if entry
+                    .data_channel
+                    .as_ref()
+                    .is_some_and(|installed| installed.id() == data_channel.id())
+                {
+                    return;
+                }
                 entry.data_channel = Some(Arc::clone(&data_channel));
             } else {
                 return;
@@ -3377,7 +3494,6 @@ fn install_data_channel(
     let message_subject = handler.message_subject.clone();
     let response_subject = handler.response_subject.clone();
     let connect_subject = handler.connect_subject.clone();
-    let disconnect_subject = handler.disconnect_subject.clone();
     let error_subject = handler.error_subject.clone();
     let handler_for_task = Arc::clone(&handler);
     let data_channel_for_task = Arc::clone(&data_channel);
@@ -3578,9 +3694,8 @@ fn install_data_channel(
                 _ => {}
             }
         }
-        // Channel ended: release any sender parked on backpressure and drop the
-        // per-peer signal so it cannot leak across reconnects.
-        backpressure_for_task.clear_high();
+        // Channel ended: retire the whole connection so discovery can build a
+        // fresh route instead of reusing a closed peer connection.
         if let Some(presence_changed) = finish_data_channel_generation(
             &handler_for_task,
             &peer_for_task,
@@ -3593,7 +3708,6 @@ fn install_data_channel(
                     handler_presence.broadcast_presence().await;
                 });
             }
-            disconnect_subject.next(WebRTCRsConnection::new(peer_for_task.clone(), generation));
         }
     });
 
@@ -3608,7 +3722,7 @@ fn install_data_channel(
     }
 }
 
-/// Retire local channel state atomically with connection replacement.
+/// Retire the connection atomically with connection replacement.
 /// Both OnClose and stream EOF use this path; retired tasks cannot clear successors.
 fn finish_data_channel_generation(
     handler: &WebRTCRsConnectionHandler,
@@ -3616,22 +3730,12 @@ fn finish_data_channel_generation(
     generation: u64,
     backpressure: &Arc<PeerBackpressure>,
 ) -> Option<bool> {
-    let _lifecycle = handler.peer_lifecycle.lock();
-    let mut peers = handler.peers.lock();
-    let entry = peers.get_mut(peer)?;
-    if entry.generation != generation {
+    // A retired task may still have senders waiting on its own signal.
+    backpressure.clear_high();
+    if !remove_peer_inner(handler, peer, PeerRemoval::Generation(generation), None) {
         return None;
     }
-    entry.data_channel_open = false;
-    let presence_changed = handler.remove_peer_presence(peer);
-    let mut signals = handler.backpressure.lock();
-    if signals
-        .get(peer)
-        .is_some_and(|current| Arc::ptr_eq(current, backpressure))
-    {
-        signals.remove(peer);
-    }
-    Some(presence_changed)
+    Some(handler.presence_dirty.load(Ordering::SeqCst))
 }
 
 fn superseded_send_queue_error(peer: &str) -> RxError {
@@ -3716,12 +3820,7 @@ fn remove_peer_inner(
         // register. Otherwise delayed teardown from the old connection can
         // erase the new generation's capability token or send state.
         handler.active_collections.lock().remove(peer);
-        if handler
-            .presence
-            .lock()
-            .remove(peer)
-            .is_some_and(|report| !report.entries.is_empty())
-        {
+        if handler.remove_peer_presence(peer) {
             handler.presence_dirty.store(true, Ordering::SeqCst);
         }
         handler.peer_capability_tokens.lock().remove(peer);
@@ -4157,6 +4256,7 @@ mod tests {
             .unwrap();
         let entry = PeerEntry {
             generation,
+            local_peer_id: None,
             peer_connection: Arc::new(pc),
             data_channel: None,
             data_channel_open: true,
@@ -4171,6 +4271,123 @@ mod tests {
         handler
             .connection_for_peer(route)
             .expect("fixture connection is current")
+    }
+
+    fn invoke_policy_probe(
+        handler: &WebRTCRsConnectionHandler,
+        peer: &WebRTCRsConnection,
+        probe: usize,
+    ) -> bool {
+        match probe {
+            0 => handler.is_collection_authorized_for_peer(peer, "records"),
+            1 => handler.is_collection_write_authorized_for_peer(peer, "records"),
+            2 => handler.is_eager_collection_pull_authorized_for_peer(peer, "records"),
+            3 => handler.is_inactive_live_change_authorized_for_peer(peer, "records"),
+            4 => handler.document_filter_for_peer(peer, "records").unwrap()(&Value::Null),
+            5 => {
+                handler.document_fields_for_peer(peer, "records").unwrap()
+                    == vec!["visible".to_owned()]
+            }
+            6 => handler.are_documents_write_authorized_for_peer(
+                peer,
+                "records",
+                &[serde_json::json!([{"newDocumentState": {"id": "record"}}])],
+            ),
+            _ => unreachable!(),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn slow_policy_hooks_release_lifecycle_and_fence_late_results() {
+        // Ordering, not a latency benchmark: maintenance must finish while
+        // the hook is deliberately held, and stale decisions must be denied.
+        for probe in 0..7 {
+            for change in 0..3 {
+                let handler = Arc::new(WebRTCRsConnectionHandler::new());
+                let peer = install_test_connection(&handler, "policy-peer", 1).await;
+                let other = install_test_connection(&handler, "other-peer", 1).await;
+                handler.set_peer_capability_token(&peer, "original".into());
+                let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+                let entered_tx = Mutex::new(Some(entered_tx));
+                let (release, proceed) = std::sync::mpsc::channel();
+                let proceed = Mutex::new(proceed);
+                let check: CollectionAuthzHook = Arc::new(move |token, _| {
+                    assert_eq!(token, "original");
+                    if let Some(entered) = entered_tx.lock().take() {
+                        let _ = entered.send(());
+                    }
+                    proceed.lock().recv_timeout(Duration::from_secs(5)).is_ok()
+                });
+                handler.set_collection_authz(Some(check.clone()));
+                handler.set_collection_write_authz(Some(check.clone()));
+                handler.set_collection_eager_pull(Some(check.clone()));
+                handler.set_collection_live_change(Some(check.clone()));
+                let read_check = check.clone();
+                handler.set_document_read_authz(Some(Arc::new(move |token, collection| {
+                    let allowed = read_check(token, collection);
+                    DocumentReadPolicy {
+                        filter: Arc::new(move |_| allowed),
+                        fields: Some(if allowed {
+                            vec!["visible".to_owned()]
+                        } else {
+                            vec![]
+                        }),
+                    }
+                })));
+                handler.set_document_write_authz(Some(Arc::new(move |token, collection, _| {
+                    check(token, collection)
+                })));
+                let lookup_handler = handler.clone();
+                let lookup_peer = peer.clone();
+                let lookup = tokio::task::spawn_blocking(move || {
+                    invoke_policy_probe(&lookup_handler, &lookup_peer, probe)
+                });
+                tokio::time::timeout(Duration::from_secs(2), entered_rx)
+                    .await
+                    .expect("policy hook must start")
+                    .unwrap();
+                let maintenance_handler = handler.clone();
+                let maintenance_peer = peer.clone();
+                let mut maintenance = tokio::task::spawn_blocking(move || match change {
+                    0 => maintenance_handler
+                        .set_peer_capability_token(&other, "other-updated".into()),
+                    1 => maintenance_handler
+                        .set_peer_capability_token(&maintenance_peer, "replacement".into()),
+                    2 => {
+                        // Advance the fixture connection generation while its
+                        // previous handle still owns the in-flight lookup.
+                        let _lifecycle = maintenance_handler.peer_lifecycle.lock();
+                        maintenance_handler
+                            .peers
+                            .lock()
+                            .get_mut(&maintenance_peer.peer_id)
+                            .unwrap()
+                            .generation += 1;
+                    }
+                    _ => unreachable!(),
+                });
+                let completed_while_held =
+                    tokio::time::timeout(Duration::from_secs(1), &mut maintenance).await;
+                let released_early = completed_while_held.is_ok();
+                let _ = release.send(());
+                if let Ok(result) = completed_while_held {
+                    result.unwrap();
+                } else {
+                    maintenance.await.unwrap();
+                }
+                let allowed = lookup.await.unwrap();
+                handler.close().await.unwrap();
+                assert!(
+                    released_early,
+                    "probe {probe}, change {change}: policy blocked peer lifecycle"
+                );
+                assert_eq!(
+                    allowed,
+                    change == 0,
+                    "probe {probe}, change {change}: stale token/generation decision escaped"
+                );
+            }
+        }
     }
 
     /// #12c: per-collection authz is fail-open until a hook is installed, then
@@ -4699,7 +4916,7 @@ mod tests {
                     Some("chunk") => {
                         let seq = frame["seq"].as_u64().unwrap() as usize;
                         let total = self.totals.lock()[id];
-                        if (seq + 1) % FRAME_ACK_WINDOW == 0 || seq + 1 == total {
+                        if (seq + 1).is_multiple_of(FRAME_ACK_WINDOW) || seq + 1 == total {
                             self.handler
                                 .handle_transport_frame(
                                     &self.peer,
@@ -5921,6 +6138,17 @@ mod tests {
         assert!(handler.connection_for_peer(&route).is_none());
         assert!(!handler.backpressure.lock().contains_key(&route));
         assert!(!handler.presence.lock().contains_key(&route));
+        assert!(
+            !handler.peers.lock().contains_key(&route),
+            "a terminated channel must not remain a cached native connection"
+        );
+        assert!(
+            handler
+                .ensure_peer_connection(route.clone(), true)
+                .await
+                .is_err(),
+            "without signaling, a fresh connection must fail instead of returning the closed peer"
+        );
         handler.close().await.unwrap();
     }
 

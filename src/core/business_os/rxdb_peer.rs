@@ -62,7 +62,7 @@ pub(super) use super::rxdb_peer_intake::{
     pending_business_command_documents, pending_business_command_documents_sync,
     refresh_business_commands_source_stamp, schedule_business_command_intake_retry,
     transient_business_command_retry_document, wait_for_business_command_wake,
-    BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET, BUSINESS_COMMAND_RETRY_CANDIDATE_SQL,
+    BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET,
 };
 pub(super) use super::rxdb_peer_projections::{
     bulk_upsert_business_record_projection_documents, find_projection_documents_by_id,
@@ -705,6 +705,10 @@ const NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS: u64 = 20;
 const OUTBOUND_SELLIFY_LOOKUP_WEBRTC_METHOD: &str = "ctox.outbound.sellify_lookup.v1";
 const DEVICE_PROOF_VERSION: &str = "ctox-device-proof-v1";
 
+#[cfg(test)]
+#[path = "rxdb_peer_admission_tests.rs"]
+mod peer_admission_tests;
+
 fn validate_device_bound_peer_session(
     root: &Path,
     protocol: &Value,
@@ -720,7 +724,7 @@ fn validate_device_bound_peer_session(
     else {
         return Reject;
     };
-    if store::is_business_peer_revoked(root, session_id) {
+    if !matches!(store::is_business_peer_revoked(root, session_id), Ok(false)) {
         return Reject;
     }
     let Some(token) = protocol
@@ -2730,9 +2734,11 @@ async fn run_native_peer(
             }
         }
         Err(err) => {
-            eprintln!(
-                "[business-os] stale RxDB schema table repair failed after verified migration: {err:#}"
-            );
+            return Err(release_database_after_failed_bring_up(
+                &database,
+                err.context("verify native RxDB migration before schema cleanup"),
+            )
+            .await);
         }
     }
     match compact_desktop_file_index_store(&root).await {
@@ -2789,7 +2795,10 @@ async fn run_native_peer(
         let signaling_revocation_root = root.clone();
         let is_peer_valid: std::sync::Arc<dyn Fn(&String) -> bool + Send + Sync> =
             std::sync::Arc::new(move |peer_id: &String| {
-                !store::is_business_peer_revoked(&signaling_revocation_root, peer_id)
+                matches!(
+                    store::is_business_peer_revoked(&signaling_revocation_root, peer_id),
+                    Ok(false)
+                )
             });
         let session_validation_root = root.clone();
         let is_peer_session_valid: WebRTCPeerSessionValidator =
@@ -2861,9 +2870,10 @@ async fn run_native_peer(
                 },
             ))
         };
-        let bringup =
-            ctox_sync::native::NativeSyncSession::start(ctox_sync::native::NativeSyncOptions {
+        let bringup = ctox_sync::native::NativeSyncSession::start_with_pool_setup(
+            ctox_sync::native::NativeSyncOptions {
                 peer_role: ctox_sync::native::NativePeerRole::CtoxInstance,
+                local_session_provider: None,
                 database: Arc::clone(&database),
                 collections: collection_list,
                 signaling_urls: multi_signaling_url_provider,
@@ -2881,22 +2891,8 @@ async fn run_native_peer(
                     live_change: collection_live_change,
                 },
                 bringup_timeout: Duration::from_secs(NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS),
-            });
-        // Bring-up failure is FATAL for this run: returning the error hands
-        // control to the supervision loop, which respawns with backoff. The
-        // previous behavior — log and keep running with an empty pool list —
-        // produced the canonical zombie: heartbeat "running", zero
-        // replication, no retry, until a manual daemon restart.
-        match bringup.await {
-            Ok(session) => {
-                let pool = session.pool();
-                if let Ok(mut breaker) = native_peer_circuit_breaker().lock() {
-                    breaker.record_success();
-                }
-                eprintln!(
-                    "[business-os] multiplexed WebRTC replication up for {collection_count} \
-                     collections on one connection (room `{sync_room}`)"
-                );
+            },
+            |pool| {
                 // Phase 4: register demand-fetch file SOURCES on the pool's file
                 // fetch registry so `rxdb.file.fetch` actually serves bytes for
                 // the file-bearing chunk collections (without a source the
@@ -2906,7 +2902,7 @@ async fn run_native_peer(
                 register_demand_file_sources(pool, &database, &root);
                 let browser_live_root = root.clone();
                 let browser_live_database = Arc::clone(&database);
-                pool.set_auxiliary_request_handler(
+                pool.register_auxiliary_request_handler(
                     BROWSER_LIVE_WEBRTC_METHOD,
                     Arc::new(move |_peer_identity, capability_token, params| {
                         let root = browser_live_root.clone();
@@ -2921,9 +2917,9 @@ async fn run_native_peer(
                             .await
                         })
                     }),
-                );
+                )?;
                 let outbound_lookup_root = root.clone();
-                pool.set_auxiliary_request_handler(
+                pool.register_auxiliary_request_handler(
                     OUTBOUND_SELLIFY_LOOKUP_WEBRTC_METHOD,
                     Arc::new(move |_peer_identity, capability_token, params| {
                         let root = outbound_lookup_root.clone();
@@ -2944,9 +2940,38 @@ async fn run_native_peer(
                                 .map_err(|error| error.to_string())
                         })
                     }),
-                );
+                )?;
                 let workjet_device_root = root.clone();
-                pool.set_auxiliary_request_handler(
+                let business_data_root = root.clone();
+                let identity_transport = pool.connection_handler.clone();
+                pool.register_identity_request_handler(
+                    ctox_sync::business_data_contract::CTOX_BUSINESS_DATA_IDENTITY_METHOD,
+                    Arc::new(move |peer_identity, capability_token, params| {
+                        let root = business_data_root.clone();
+                        let transport = identity_transport.clone();
+                        Box::pin(async move {
+                            let connection = transport
+                                .connection_for_peer(&peer_identity)
+                                .ok_or_else(|| "BusinessData connection retired".to_string())?;
+                            let channel_binding =
+                                transport.channel_binding(&connection).await.map_err(|_| {
+                                    "BusinessData channel binding unavailable".to_string()
+                                })?;
+                            // Native key/store reads stay off the transport executor.
+                            tokio::task::spawn_blocking(move || {
+                                super::rxdb_peer_business_data::identity_response(
+                                    &root,
+                                    &capability_token,
+                                    &channel_binding,
+                                    params,
+                                )
+                            })
+                            .await
+                            .map_err(|_| "BusinessData identity task failed".to_string())?
+                        })
+                    }),
+                )?;
+                pool.register_auxiliary_request_handler(
                     WORKJET_DEVICE_WEBRTC_METHOD,
                     Arc::new(move |_peer_identity, capability_token, params| {
                         let root = workjet_device_root.clone();
@@ -2955,6 +2980,23 @@ async fn run_native_peer(
                                 .await
                         })
                     }),
+                )?;
+                Ok(())
+            },
+        );
+        // Bring-up failure is FATAL for this run: returning the error hands
+        // control to the supervision loop, which respawns with backoff. The
+        // previous behavior — log and keep running with an empty pool list —
+        // produced the canonical zombie: heartbeat "running", zero
+        // replication, no retry, until a manual daemon restart.
+        match bringup.await {
+            Ok(session) => {
+                if let Ok(mut breaker) = native_peer_circuit_breaker().lock() {
+                    breaker.record_success();
+                }
+                eprintln!(
+                    "[business-os] multiplexed WebRTC replication up for {collection_count} \
+                     collections on one connection (room `{sync_room}`)"
                 );
                 pools.push(session);
             }
@@ -8784,6 +8826,55 @@ fn migrate_additive_native_rxdb_collection_versions(root: &Path) -> anyhow::Resu
     let mut migrated_tables = 0usize;
     let mut migrated_rows = 0usize;
     let mut verified_rows = 0usize;
+    let entries = native_rxdb_version_migration_entries(root)?;
+    for entry in entries {
+        let target_version = i64::from(entry.schema.version);
+        let target_table = rxdb_collection_version_table_name(&entry.name, target_version);
+        let version_tables = rxdb_collection_version_tables(&conn, &entry.name)?;
+        for (source_version, source_table) in version_tables {
+            if source_version == target_version {
+                continue;
+            }
+            let source_rows = sqlite_table_row_count(&conn, &source_table)?;
+            if source_rows == 0 {
+                continue;
+            }
+            let operation_steps = native_rxdb_version_migration_steps(
+                &entry.name,
+                source_version,
+                target_version,
+                Some(&entry.migration_strategies),
+            )?;
+            anyhow::ensure!(
+                sqlite_table_exists(&conn, &target_table)?,
+                "runtime migration fail-closed for collection `{}`: target version {} table `{}` was not registered while source version {} contains {} row(s)",
+                entry.name, target_version, target_table, source_version, source_rows
+            );
+            let copied = migrate_native_rxdb_version_table(
+                &mut conn,
+                &entry.name,
+                source_version,
+                &source_table,
+                target_version,
+                &target_table,
+                &operation_steps,
+            )?;
+            migrated_tables += 1;
+            migrated_rows += copied;
+            verified_rows += source_rows as usize;
+        }
+    }
+    Ok(json!({
+        "ok": true,
+        "migrated_tables": migrated_tables,
+        "migrated_rows": migrated_rows,
+        "verified_rows": verified_rows
+    }))
+}
+
+fn native_rxdb_version_migration_entries(
+    root: &Path,
+) -> anyhow::Result<Vec<RuntimeModuleCollectionEntry>> {
     let mut entries = runtime_module_collection_entries_for_root(root);
     entries.retain(|entry| {
         !matches!(
@@ -8818,77 +8909,31 @@ fn migrate_additive_native_rxdb_collection_versions(root: &Path) -> anyhow::Resu
             migration_strategies,
         });
     }
-    for entry in entries {
-        let target_version = i64::from(entry.schema.version);
-        let target_table = rxdb_collection_version_table_name(&entry.name, target_version);
-        let version_tables = rxdb_collection_version_tables(&conn, &entry.name)?;
-        for (source_version, source_table) in version_tables {
-            if source_version == target_version {
-                continue;
-            }
-            let source_rows = sqlite_table_row_count(&conn, &source_table)?;
-            if source_rows == 0 {
-                continue;
-            }
-            anyhow::ensure!(
-                source_version < target_version,
-                "runtime migration fail-closed for collection `{}`: source version {} has {} row(s), but registered target version {} cannot apply a reverse migration",
-                entry.name,
-                source_version,
-                source_rows,
-                target_version
-            );
-            anyhow::ensure!(
-                sqlite_table_exists(&conn, &target_table)?,
-                "runtime migration fail-closed for collection `{}`: target version {} table `{}` was not registered while source version {} contains {} row(s)",
-                entry.name,
-                target_version,
-                target_table,
-                source_version,
-                source_rows
-            );
+    Ok(entries)
+}
 
-            let mut operation_steps = Vec::new();
-            for step in (source_version + 1)..=target_version {
-                let spec = entry.migration_strategies.get(&step).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "runtime migration fail-closed for collection `{}` from version {} to {}: missing migration_strategies.{}.{}",
-                        entry.name,
-                        source_version,
-                        target_version,
-                        entry.name,
-                        step
-                    )
-                })?;
-                let operations = native_declarative_migration_operations(spec).with_context(|| {
-                    format!(
-                        "runtime migration fail-closed for collection `{}`: invalid migration_strategies.{}.{}",
-                        entry.name, entry.name, step
-                    )
-                })?;
-                operation_steps.push(operations);
-            }
-
-            let copied = migrate_native_rxdb_version_table(
-                &mut conn,
-                &entry.name,
-                source_version,
-                &source_table,
-                target_version,
-                &target_table,
-                &operation_steps,
-            )?;
-            migrated_tables += 1;
-            migrated_rows += copied;
-            verified_rows += source_rows as usize;
-        }
+fn native_rxdb_version_migration_steps(
+    collection: &str,
+    source_version: i64,
+    target_version: i64,
+    strategies: Option<&BTreeMap<i64, Value>>,
+) -> anyhow::Result<Vec<Vec<Value>>> {
+    anyhow::ensure!(
+        source_version < target_version,
+        "runtime migration fail-closed for collection `{collection}`: source version {source_version} contains rows, but target version {target_version} cannot apply a reverse migration"
+    );
+    let mut steps = Vec::new();
+    for step in (source_version + 1)..=target_version {
+        let spec = strategies.and_then(|map| map.get(&step)).ok_or_else(|| {
+            anyhow::anyhow!(
+                "runtime migration fail-closed for collection `{collection}` from version {source_version} to {target_version}: missing migration_strategies.{collection}.{step}"
+            )
+        })?;
+        steps.push(native_declarative_migration_operations(spec).with_context(|| {
+            format!("runtime migration fail-closed for collection `{collection}`: invalid migration_strategies.{collection}.{step}")
+        })?);
     }
-    Ok(json!({
-        "ok": true,
-        "migrated_tables": migrated_tables,
-        "migrated_rows": migrated_rows,
-        "verified_rows": verified_rows
-    }))
+    Ok(steps)
 }
 
 fn rxdb_collection_version_tables(
@@ -8923,6 +8968,32 @@ fn migrate_native_rxdb_version_table(
     target_table: &str,
     operation_steps: &[Vec<Value>],
 ) -> anyhow::Result<usize> {
+    let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let copied = copy_and_verify_native_rxdb_version_table(
+        &transaction,
+        collection,
+        source_version,
+        source_table,
+        target_version,
+        target_table,
+        operation_steps,
+    )?;
+    transaction.commit().with_context(|| {
+        format!("commit verified runtime migration for collection `{collection}` v{source_version}->v{target_version}")
+    })?;
+    Ok(copied)
+}
+
+fn copy_and_verify_native_rxdb_version_table(
+    transaction: &Connection,
+    collection: &str,
+    source_version: i64,
+    source_table: &str,
+    target_version: i64,
+    target_table: &str,
+    operation_steps: &[Vec<Value>],
+) -> anyhow::Result<usize> {
+    let conn = transaction;
     let source_revision = if sqlite_table_has_column(conn, source_table, "revision")? {
         "revision"
     } else {
@@ -8951,9 +9022,6 @@ fn migrate_native_rxdb_version_table(
         );
     }
 
-    let transaction = conn.transaction().with_context(|| {
-        format!("begin runtime migration for `{collection}` v{source_version}->v{target_version}")
-    })?;
     let source_sql = format!(
         "SELECT id, {source_revision}, {source_deleted}, {source_lwt}, data FROM {} ORDER BY id",
         sqlite_quote_identifier(source_table)
@@ -8967,8 +9035,12 @@ fn migrate_native_rxdb_version_table(
              deleted = excluded.deleted,
              lastWriteTime = excluded.lastWriteTime,
              data = excluded.data
-         WHERE COALESCE(excluded.lastWriteTime, 0) >= COALESCE({quoted_target_table}.lastWriteTime, 0)"
+         WHERE COALESCE(excluded.lastWriteTime, 0) > COALESCE({quoted_target_table}.lastWriteTime, 0)"
     );
+    let mut equal_time_target = transaction.prepare(&format!(
+        "SELECT revision, deleted, data FROM {quoted_target_table}
+         WHERE id = ?1 AND COALESCE(lastWriteTime, 0) = ?2"
+    ))?;
     let mut source_statement = transaction
         .prepare(&source_sql)
         .with_context(|| format!("prepare runtime migration source table `{source_table}`"))?;
@@ -8998,6 +9070,32 @@ fn migrate_native_rxdb_version_table(
             last_write_time: row.get(3)?,
             data: migrated,
         };
+        // Equal clocks do not establish which version owns the truth. Never
+        // resurrect a tombstone or erase a target update based on table age.
+        // Exact retries are safe; divergence rolls back this table and prevents
+        // the startup cleanup from deleting the remaining source evidence.
+        let existing = equal_time_target
+            .query_row(
+                params![migration_row.id, migration_row.last_write_time],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        if let Some((revision, deleted, data)) = existing {
+            let data: Value = serde_json::from_str(&data)?;
+            anyhow::ensure!(
+                revision == migration_row.revision
+                    && deleted == migration_row.deleted
+                    && data == migration_row.data,
+                "runtime migration conflict for collection `{collection}` document `{}` v{source_version}->v{target_version}: equal lastWriteTime with divergent revision, deletion marker or document; source retained, explicit reconciliation required",
+                migration_row.id
+            );
+        }
         copied += transaction.execute(
             &target_sql,
             params![
@@ -9011,6 +9109,7 @@ fn migrate_native_rxdb_version_table(
     }
     drop(source_rows);
     drop(source_statement);
+    drop(equal_time_target);
 
     let missing_or_older: i64 = transaction
         .query_row(
@@ -9035,11 +9134,6 @@ fn migrate_native_rxdb_version_table(
         missing_or_older == 0,
         "runtime migration verification failed for collection `{collection}` v{source_version}->v{target_version}: {missing_or_older} source id(s) are absent or older in `{target_table}`"
     );
-    transaction.commit().with_context(|| {
-        format!(
-            "commit verified runtime migration for collection `{collection}` v{source_version}->v{target_version}"
-        )
-    })?;
     Ok(copied)
 }
 
@@ -9256,6 +9350,7 @@ fn repair_stale_rxdb_collection_schema_versions(root: &Path) -> anyhow::Result<V
     let mut results = Vec::new();
     let mut repaired_tables = 0usize;
     let mut repaired_triggers = 0usize;
+    let migration_entries = native_rxdb_version_migration_entries(root)?;
     let mut collections = business_os_collections()
         .into_iter()
         .map(|(collection, _)| {
@@ -9274,6 +9369,10 @@ fn repair_stale_rxdb_collection_schema_versions(root: &Path) -> anyhow::Result<V
             expected_version,
             false,
             true,
+            migration_entries
+                .iter()
+                .find(|entry| entry.name == collection)
+                .map(|entry| &entry.migration_strategies),
         )?;
         repaired_tables += result
             .get("repaired_tables")
@@ -9337,6 +9436,7 @@ fn repair_rxdb_collection_schema_version_drift(
     repair_rxdb_collection_schema_version_drift_with_connection(
         &conn,
         &database_path,
+        root,
         collection,
         dry_run,
         force,
@@ -9346,10 +9446,12 @@ fn repair_rxdb_collection_schema_version_drift(
 fn repair_rxdb_collection_schema_version_drift_with_connection(
     conn: &Connection,
     database_path: &Path,
+    root: &Path,
     collection: &str,
     dry_run: bool,
     force: bool,
 ) -> anyhow::Result<Value> {
+    let entries = native_rxdb_version_migration_entries(root)?;
     repair_rxdb_collection_schema_version_drift_at_version_with_connection(
         conn,
         database_path,
@@ -9357,6 +9459,10 @@ fn repair_rxdb_collection_schema_version_drift_with_connection(
         expected_rxdb_collection_version(collection),
         dry_run,
         force,
+        entries
+            .iter()
+            .find(|entry| entry.name == collection)
+            .map(|entry| &entry.migration_strategies),
     )
 }
 
@@ -9367,7 +9473,16 @@ fn repair_rxdb_collection_schema_version_drift_at_version_with_connection(
     expected_version: i64,
     dry_run: bool,
     force: bool,
+    migration_strategies: Option<&BTreeMap<i64, Value>>,
 ) -> anyhow::Result<Value> {
+    // Discovery, copy, verification and DDL share the same write reservation.
+    // Neither startup nor the forced CLI repair may discard an unverified row.
+    let transaction = if dry_run {
+        conn.unchecked_transaction()?
+    } else {
+        rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?
+    };
+    let conn = &transaction;
     let active_version = active_rxdb_collection_version(conn, collection)?;
     let expected_table = rxdb_collection_version_table_name(collection, expected_version);
     let expected_table_exists = sqlite_table_exists(conn, &expected_table)?;
@@ -9385,7 +9500,32 @@ fn repair_rxdb_collection_schema_version_drift_at_version_with_connection(
         active_version,
         expected_table_exists,
     )?;
+    let mut migrated_rows = 0usize;
+    let mut verified_rows = 0usize;
     if !dry_run {
+        // A prior copy pass is not a receipt: another writer may have changed a
+        // source, or the operator may invoke repair directly after a crash.
+        for table in &stale_tables {
+            if table.row_count == 0 {
+                continue;
+            }
+            let operations = native_rxdb_version_migration_steps(
+                collection,
+                table.version,
+                expected_version,
+                migration_strategies,
+            )?;
+            migrated_rows += copy_and_verify_native_rxdb_version_table(
+                conn,
+                collection,
+                table.version,
+                &table.name,
+                expected_version,
+                &expected_table,
+                &operations,
+            )?;
+            verified_rows += table.row_count as usize;
+        }
         for trigger in &stale_triggers {
             conn.execute(
                 &format!(
@@ -9434,8 +9574,11 @@ fn repair_rxdb_collection_schema_version_drift_at_version_with_connection(
     } else if dry_run {
         "Dry-run only; stale versioned RxDB tables/triggers were detected but not dropped."
     } else {
-        "Dropped stale versioned RxDB tables/triggers for this collection."
+        "Copied and verified persisted source rows before dropping stale versioned RxDB tables/triggers in one transaction."
     };
+    transaction
+        .commit()
+        .context("commit verified RxDB schema cleanup")?;
     Ok(json!({
         "ok": true,
         "code": "ctox_optional_schema_drift",
@@ -9453,6 +9596,8 @@ fn repair_rxdb_collection_schema_version_drift_at_version_with_connection(
         "repaired": repaired,
         "repaired_tables": if dry_run { 0 } else { stale_tables.len() },
         "repaired_triggers": if dry_run { 0 } else { stale_triggers.len() },
+        "migrated_rows": migrated_rows,
+        "verified_rows": verified_rows,
         "message": message
     }))
 }
@@ -11321,6 +11466,11 @@ pub(in crate::business_os) mod tests {
             message.contains(&format!("migration_strategies.{collection}.1")),
             "error names missing step: {message}"
         );
+        let cleanup_error = repair_stale_rxdb_collection_schema_versions(root.path())
+            .expect_err("cleanup must independently reject a missing migration strategy");
+        assert!(
+            format!("{cleanup_error:#}").contains(&format!("migration_strategies.{collection}.1"))
+        );
         let conn = Connection::open(store::rxdb_store_path(root.path()))?;
         let source_table = rxdb_collection_version_table_name(collection, 0);
         assert!(sqlite_table_exists(&conn, &source_table)?);
@@ -11355,7 +11505,7 @@ pub(in crate::business_os) mod tests {
         std::fs::create_dir_all(root.path().join("runtime"))?;
         for (collection, old, new) in [
             ("business_commands", 1, 2),
-            ("ctox_queue_tasks", 1, 2),
+            ("ctox_queue_tasks", 1, 3),
             ("ctox_runs", 0, 1),
         ] {
             create_runtime_migration_source_table(root.path(), collection, old)?;
@@ -11373,7 +11523,7 @@ pub(in crate::business_os) mod tests {
         assert_eq!(migration["verified_rows"], 3);
         for (collection, version) in [
             ("business_commands", 2),
-            ("ctox_queue_tasks", 2),
+            ("ctox_queue_tasks", 3),
             ("ctox_runs", 1),
         ] {
             let conn = Connection::open(store::rxdb_store_path(root.path()))?;
@@ -11391,6 +11541,110 @@ pub(in crate::business_os) mod tests {
                 "Existing evidence"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn native_schema_migration_equal_clock_conflicts_preserve_both_stores() -> anyhow::Result<()> {
+        for (revision, deleted, target_data) in [
+            (
+                "23-target",
+                0,
+                json!({"id":"z-conflict", "title":"original"}),
+            ),
+            (
+                "1-source",
+                1,
+                json!({"id":"z-conflict", "title":"original"}),
+            ),
+            (
+                "1-source",
+                0,
+                json!({"id":"z-conflict", "title":"researched"}),
+            ),
+        ] {
+            let root = tempfile::tempdir()?;
+            std::fs::create_dir_all(root.path().join("runtime"))?;
+            let collection = "migration_conflict_probe";
+            for version in [0, 1] {
+                create_runtime_migration_source_table(root.path(), collection, version)?;
+            }
+            let source = rxdb_collection_version_table_name(collection, 0);
+            let target = rxdb_collection_version_table_name(collection, 1);
+            let mut conn = Connection::open(store::rxdb_store_path(root.path()))?;
+            for id in ["a-copy-before-conflict", "z-conflict"] {
+                conn.execute(
+                    &format!("INSERT INTO {source} VALUES (?1, '1-source', 0, 100, ?2)"),
+                    params![id, json!({"id":id,"title":"original"}).to_string()],
+                )?;
+            }
+            conn.execute(
+                &format!("INSERT INTO {target} VALUES ('z-conflict', ?1, ?2, 100, ?3)"),
+                params![revision, deleted, target_data.to_string()],
+            )?;
+            let error = migrate_native_rxdb_version_table(
+                &mut conn,
+                collection,
+                0,
+                &source,
+                1,
+                &target,
+                &[],
+            )
+            .expect_err("ambiguous equal-clock documents require reconciliation");
+            assert!(error.to_string().contains("equal lastWriteTime"));
+            assert_eq!(sqlite_table_row_count(&conn, &source)?, 2);
+            assert_eq!(
+                sqlite_table_row_count(&conn, &target)?,
+                1,
+                "earlier copies must roll back"
+            );
+            let retained: (String, i64, String) = conn.query_row(
+                &format!("SELECT revision, deleted, data FROM {target} WHERE id='z-conflict'"),
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            assert_eq!(retained.0, revision);
+            assert_eq!(retained.1, deleted);
+            assert_eq!(serde_json::from_str::<Value>(&retained.2)?, target_data);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn native_schema_migration_exact_retry_preserves_tombstones_without_rewrites(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        std::fs::create_dir_all(root.path().join("runtime"))?;
+        let collection = "migration_retry_probe";
+        for version in [0, 1] {
+            create_runtime_migration_source_table(root.path(), collection, version)?;
+        }
+        let source = rxdb_collection_version_table_name(collection, 0);
+        let target = rxdb_collection_version_table_name(collection, 1);
+        let mut conn = Connection::open(store::rxdb_store_path(root.path()))?;
+        let document = json!({"id":"deleted", "_deleted":true, "history":["kept"]});
+        conn.execute(
+            &format!("INSERT INTO {source} VALUES ('deleted', '23-source', 1, 100, ?1)"),
+            params![document.to_string()],
+        )?;
+        assert_eq!(
+            migrate_native_rxdb_version_table(&mut conn, collection, 0, &source, 1, &target, &[],)?,
+            1
+        );
+        assert_eq!(
+            migrate_native_rxdb_version_table(&mut conn, collection, 0, &source, 1, &target, &[],)?,
+            0
+        );
+        let retained: (String, i64, String) = conn.query_row(
+            &format!("SELECT revision, deleted, data FROM {target} WHERE id='deleted'"),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(retained.0, "23-source");
+        assert_eq!(retained.1, 1);
+        assert_eq!(serde_json::from_str::<Value>(&retained.2)?, document);
+        assert_eq!(sqlite_table_row_count(&conn, &source)?, 1);
         Ok(())
     }
 
@@ -12072,7 +12326,7 @@ pub(in crate::business_os) mod tests {
     }
 
     #[test]
-    fn rxdb_schema_drift_repair_drops_stale_version_table_after_active_meta_upgrade() {
+    fn rxdb_schema_drift_repair_preserves_source_rows_before_dropping_stale_tables() {
         let root = tempfile::tempdir().expect("temp root");
         std::fs::create_dir_all(root.path().join("runtime")).expect("runtime dir");
         let path = store::rxdb_store_path(root.path());
@@ -12097,7 +12351,10 @@ pub(in crate::business_os) mod tests {
         conn.execute(
             "CREATE TABLE ctox_business_os__business_commands__v2 (
                 id TEXT PRIMARY KEY,
-                data TEXT NOT NULL
+                data TEXT NOT NULL,
+                revision TEXT,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                lastWriteTime REAL NOT NULL DEFAULT 0
             )",
             [],
         )
@@ -12185,6 +12442,19 @@ pub(in crate::business_os) mod tests {
         assert!(!sqlite_table_exists(&conn, "ctox_business_os__business_commands__v0").unwrap());
         assert!(sqlite_table_exists(&conn, "ctox_business_os__business_commands__v2").unwrap());
         assert!(!sqlite_trigger_exists(&conn, "sync_commands_v2_to_v0_insert").unwrap());
+        // This row existed ONLY in v0. Active v2 metadata is no permission to
+        // discard it, even for the explicitly forced operator repair.
+        let retained: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__business_commands__v2 WHERE id = 'cmd_stale'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("forced repair must retain the unique legacy command");
+        let retained: Value = serde_json::from_str(&retained).unwrap();
+        assert_eq!(retained["id"], "cmd_stale");
+        assert_eq!(retained["status"], "accepted");
+        assert_eq!(retained["updated_at_ms"], 100);
         conn.execute(
             "INSERT INTO ctox_business_os__business_commands__v2 (id, data)
              VALUES ('cmd_after_repair', ?1)",
@@ -12194,6 +12464,156 @@ pub(in crate::business_os) mod tests {
             ],
         )
         .expect("active v2 write must not reference removed stale v0 table");
+    }
+
+    #[test]
+    fn native_schema_migration_cleanup_conflict_rolls_back_copy_and_preserves_source(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let collection = "runtime_cleanup_conflict_records";
+        write_runtime_migration_test_module(
+            root.path(),
+            collection,
+            1,
+            json!({(collection): {"1": {"operations": []}}}),
+        )?;
+        register_runtime_migration_test_collection(root.path())?;
+        create_runtime_migration_source_table(root.path(), collection, 0)?;
+        let history =
+            json!({"messages": ["retained history"], "attachment": {"sha256": "fixture-hash"}});
+        insert_runtime_migration_row(
+            root.path(),
+            collection,
+            0,
+            "a-copy",
+            100.0,
+            json!({"id": "a-copy", "title": "unique legacy row", "history": history, "updated_at_ms": 100}),
+        )?;
+        insert_runtime_migration_row(
+            root.path(),
+            collection,
+            0,
+            "z-conflict",
+            200.0,
+            json!({"id": "z-conflict", "title": "live source", "updated_at_ms": 200}),
+        )?;
+        insert_runtime_migration_row(
+            root.path(),
+            collection,
+            1,
+            "z-conflict",
+            200.0,
+            json!({"id": "z-conflict", "title": "target tombstone", "_deleted": true, "updated_at_ms": 200}),
+        )?;
+        let source = rxdb_collection_version_table_name(collection, 0);
+        let target = rxdb_collection_version_table_name(collection, 1);
+        let conn = Connection::open(store::rxdb_store_path(root.path()))?;
+        conn.execute(
+            &format!(
+                "UPDATE {} SET deleted = 1 WHERE id = 'z-conflict'",
+                sqlite_quote_identifier(&target)
+            ),
+            [],
+        )?;
+        conn.execute_batch(&format!(
+            "CREATE TRIGGER retain_legacy_reference AFTER UPDATE ON {}
+             BEGIN SELECT id FROM {} LIMIT 1; END;",
+            sqlite_quote_identifier(&target),
+            sqlite_quote_identifier(&source),
+        ))?;
+        drop(conn);
+
+        let error = repair_stale_rxdb_collection_schema_versions(root.path())
+            .expect_err("direct cleanup must not bypass an equal-clock tombstone conflict");
+        assert!(format!("{error:#}").contains("equal lastWriteTime"));
+        let conn = Connection::open(store::rxdb_store_path(root.path()))?;
+        assert!(sqlite_table_exists(&conn, &source)?);
+        assert_eq!(sqlite_table_row_count(&conn, &source)?, 2);
+        assert_eq!(
+            sqlite_table_row_count(&conn, &target)?,
+            1,
+            "earlier copy rolled back"
+        );
+        assert!(sqlite_trigger_exists(&conn, "retain_legacy_reference")?);
+        let (deleted, data): (i64, String) = conn.query_row(
+            &format!(
+                "SELECT deleted, data FROM {} WHERE id = 'z-conflict'",
+                sqlite_quote_identifier(&target)
+            ),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(deleted, 1);
+        assert_eq!(
+            serde_json::from_str::<Value>(&data)?["title"],
+            "target tombstone"
+        );
+        let data: String = conn.query_row(
+            &format!(
+                "SELECT data FROM {} WHERE id = 'a-copy'",
+                sqlite_quote_identifier(&source)
+            ),
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(serde_json::from_str::<Value>(&data)?["history"], history);
+        Ok(())
+    }
+
+    #[test]
+    fn native_schema_migration_cleanup_rechecks_rows_written_after_copy() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let collection = "runtime_cleanup_late_records";
+        write_runtime_migration_test_module(
+            root.path(),
+            collection,
+            1,
+            json!({(collection): {"1": {"operations": [{
+                "op": "set_from_first_truthy", "field": "inbound_channel",
+                "paths": ["inbound_channel", "module"], "default": ""
+            }]}}}),
+        )?;
+        register_runtime_migration_test_collection(root.path())?;
+        create_runtime_migration_source_table(root.path(), collection, 0)?;
+        insert_runtime_migration_row(
+            root.path(),
+            collection,
+            0,
+            "before",
+            100.0,
+            json!({"id": "before", "title": "before copy", "module": "fixture", "updated_at_ms": 100}),
+        )?;
+        let copied = migrate_additive_native_rxdb_collection_versions(root.path())?;
+        assert_eq!(copied["verified_rows"], 1);
+        insert_runtime_migration_row(
+            root.path(),
+            collection,
+            0,
+            "after",
+            200.0,
+            json!({"id": "after", "title": "after copy", "module": "fixture", "updated_at_ms": 200}),
+        )?;
+
+        repair_stale_rxdb_collection_schema_versions(root.path())?;
+        let conn = Connection::open(store::rxdb_store_path(root.path()))?;
+        assert!(!sqlite_table_exists(
+            &conn,
+            &rxdb_collection_version_table_name(collection, 0)
+        )?);
+        let target = rxdb_collection_version_table_name(collection, 1);
+        assert_eq!(sqlite_table_row_count(&conn, &target)?, 2);
+        let data: String = conn.query_row(
+            &format!(
+                "SELECT data FROM {} WHERE id = 'after'",
+                sqlite_quote_identifier(&target)
+            ),
+            [],
+            |row| row.get(0),
+        )?;
+        let data: Value = serde_json::from_str(&data)?;
+        assert_eq!(data["title"], "after copy");
+        assert_eq!(data["inbound_channel"], "fixture");
+        Ok(())
     }
 
     #[test]
@@ -13494,6 +13914,14 @@ pub(in crate::business_os) mod tests {
         )
         .expect("stream spreadsheet blob chunks");
         assert_eq!(String::from_utf8(spreadsheet_bytes).unwrap(), "sheet data");
+    }
+
+    /// Native projection writers address the production database namespace.
+    /// Use this on an isolated file when testing the writer + RxDB integration.
+    pub(in crate::business_os) async fn open_test_business_os_database(
+        database_path: PathBuf,
+    ) -> anyhow::Result<Arc<RxDatabase>> {
+        open_test_database_with_name(database_path, RXDB_SQLITE_DATABASE_NAME.to_string()).await
     }
 
     pub(in crate::business_os) async fn open_test_database(

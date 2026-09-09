@@ -1,0 +1,454 @@
+name: Native Sync
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/native-sync.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/core/business_os/**'
+      - 'src/core/persistence*.rs'
+      - 'src/core/secrets.rs'
+      - 'src/core/mission/channels/**'
+      - 'src/core/sync/**'
+      - 'src/core/sync_host/**'
+      - 'src/core/sync_host.rs'
+      - 'src/core/rxdb/**'
+      - 'src/apps/business-os/app.js'
+      - 'src/apps/business-os/index.html'
+      - 'src/apps/business-os/scripts/assert-business-chat-behavior.mjs'
+      - 'src/apps/business-os/scripts/assert-shell-v2-contract.mjs'
+      - 'src/apps/business-os/scripts/shell-v2-geometry-lab.mjs'
+      - 'src/apps/business-os/rxdb/**'
+      - 'src/apps/business-os/shared/**'
+      - 'src/apps/business-os/package.json'
+      - 'src/apps/business-os/package-lock.json'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/native-sync.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/core/business_os/**'
+      - 'src/core/persistence*.rs'
+      - 'src/core/secrets.rs'
+      - 'src/core/mission/channels/**'
+      - 'src/core/sync/**'
+      - 'src/core/sync_host/**'
+      - 'src/core/sync_host.rs'
+      - 'src/core/rxdb/**'
+      - 'src/apps/business-os/app.js'
+      - 'src/apps/business-os/index.html'
+      - 'src/apps/business-os/scripts/assert-business-chat-behavior.mjs'
+      - 'src/apps/business-os/scripts/assert-shell-v2-contract.mjs'
+      - 'src/apps/business-os/scripts/shell-v2-geometry-lab.mjs'
+      - 'src/apps/business-os/rxdb/**'
+      - 'src/apps/business-os/shared/**'
+      - 'src/apps/business-os/package.json'
+      - 'src/apps/business-os/package-lock.json'
+
+permissions:
+  contents: read
+
+jobs:
+  native-profiler:
+    name: Native CPU profiler (real Linux process)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.13.1'
+      - name: Validate owned-process recording before the full host build
+        shell: bash
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/ctox-profiler-proof"
+          sudo apt-get update
+          sudo apt-get install -y linux-tools-generic
+          perf_candidates=(/usr/lib/linux-tools/*/perf)
+          perf_executable="${perf_candidates[${#perf_candidates[@]}-1]}"
+          test -x "$perf_executable"
+          "$perf_executable" version > "$RUNNER_TEMP/ctox-profiler-proof/perf-version.txt"
+          sudo sysctl -w kernel.perf_event_paranoid=1
+          node src/core/rxdb/tools/native_symbol_profile.test.js --require-perf "$perf_executable" 2>&1 \
+            | tee "$RUNNER_TEMP/ctox-profiler-proof/tests.log"
+      - name: Retain real profiler validation
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ctox-native-profiler-proof
+          path: ${{ runner.temp }}/ctox-profiler-proof/
+          if-no-files-found: error
+
+  native-sync:
+    name: Native Sync (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: ctox
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Configure disposable build storage
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          printf 'CARGO_TARGET_DIR=%s/ctox-native-sync-target\nTMPDIR=%s\nPLAYWRIGHT_BROWSERS_PATH=%s/ctox-browser-chromium\nnpm_config_cache=%s/ctox-browser-npm\n' "$RUNNER_TEMP" "$RUNNER_TEMP" "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          path: ctox
+      - name: Checkout the actual Workjet IPC consumer
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: metric-space-ai/workjet
+          ref: 74c0fccf8515a0f4f8826321e507d6847aa0de64
+          path: workjet
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.13.1'
+      - name: Install the pinned Workjet workspace dependencies
+        working-directory: workjet
+        run: npm exec --yes --package=pnpm@11.10.0 -- pnpm install --frozen-lockfile --ignore-scripts
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: '1.93.0'
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+        with:
+          key: native-sync-production-transport
+          workspaces: |
+            ctox/src/core/sync -> ${{ runner.temp }}/ctox-native-sync-target
+            ctox/src/core/rxdb -> ${{ runner.temp }}/ctox-native-sync-target
+      - name: Require production transport versions and ICE patch
+        run: node src/apps/business-os/rxdb/tests/native-transport-parity-smoke.mjs
+      - name: Format
+        id: format
+        run: |
+          cargo fmt --check --manifest-path src/core/sync/Cargo.toml
+          cargo fmt --check --manifest-path src/core/rxdb/Cargo.toml
+      - name: Verify generated Rust and Workjet contracts
+        run: |
+          node src/core/sync/tools/generate-contracts.mjs --check --workjet-root ../workjet
+          node src/core/sync/tools/generate-contracts.mjs --business-data --check
+          node src/core/sync/tools/assert-host-contracts.mjs ../workjet
+      - name: Native authority, lifecycle and real WebRTC scenarios
+        # Contract drift remains a failing release gate. Still collect native
+        # scenario failures while a coordinated consumer pin is being updated.
+        if: ${{ !cancelled() && steps.format.outcome == 'success' }}
+        run: cargo test --locked --no-fail-fast --manifest-path src/core/sync/Cargo.toml --features webrtc -- --show-output
+      - name: Native RxDB tests with production ICE patch
+        if: ${{ !cancelled() && steps.format.outcome == 'success' }}
+        run: cargo test --locked --manifest-path src/core/rxdb/Cargo.toml -- --show-output
+      - name: Native Sync lint
+        if: ${{ !cancelled() && steps.format.outcome == 'success' }}
+        run: cargo clippy --locked --manifest-path src/core/sync/Cargo.toml --features webrtc --all-targets -- -D warnings
+      - name: Workjet native IPC framing and cancellation
+        if: ${{ !cancelled() && steps.format.outcome == 'success' }}
+        working-directory: workjet/apps/server
+        run: npm exec --yes --package=pnpm@11.10.0 -- pnpm exec vp test run src/workjet/sync/WorkjetSyncIpc.test.ts
+      - name: Install the pinned Business OS browser test runtime
+        id: browser-dependencies
+        if: ${{ !cancelled() && matrix.os == 'ubuntu-22.04' && steps.format.outcome == 'success' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+          npm --prefix src/apps/business-os ci
+          npm --prefix src/apps/business-os exec playwright install --with-deps chromium
+      - name: Build the native query and file wire fixture
+        id: wire-fixture
+        if: ${{ !cancelled() && steps.browser-dependencies.outcome == 'success' }}
+        run: |
+          cargo build --locked --manifest-path src/core/rxdb/Cargo.toml --example v15_wire_daemon
+          mkdir -p runtime/build "$RUNNER_TEMP/ctox-browser-proof"
+          ln -s "$CARGO_TARGET_DIR" runtime/build/cargo-target
+          git rev-parse HEAD > "$RUNNER_TEMP/ctox-browser-proof/source-revision.txt"
+          sha256sum "$CARGO_TARGET_DIR/debug/examples/v15_wire_daemon" > "$RUNNER_TEMP/ctox-browser-proof/wire-daemon.sha256"
+      - name: Complete JavaScript and browser contracts with native wire coverage
+        if: ${{ !cancelled() && steps.wire-fixture.outcome == 'success' }}
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -o pipefail
+          COMMAND_PLANE_BASELINE_PATH="$RUNNER_TEMP/ctox-browser-proof/command-plane-observability.json" \
+            node src/apps/business-os/rxdb/tests/run-all.mjs --require-wire-daemon \
+            | tee "$RUNNER_TEMP/ctox-browser-proof/suite.log"
+      - name: Retain browser contract evidence
+        if: ${{ !cancelled() && matrix.os == 'ubuntu-22.04' && steps.wire-fixture.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ctox-native-browser-contract-proof
+          path: ${{ runner.temp }}/ctox-browser-proof/
+          if-no-files-found: error
+
+  chat-presentation:
+    name: Chat presentation (Chromium)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Configure disposable browser evidence storage
+        shell: bash
+        run: |
+          printf 'TMPDIR=%s\nPLAYWRIGHT_BROWSERS_PATH=%s/ctox-chat-chromium\nnpm_config_cache=%s/ctox-chat-npm\n' "$RUNNER_TEMP" "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/ctox-chat-proof"
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.13.1'
+      - name: Install the pinned browser runtime
+        run: |
+          npm --prefix src/apps/business-os ci
+          npm --prefix src/apps/business-os exec playwright install --with-deps chromium
+      - name: Record tested source
+        run: git rev-parse HEAD > "$RUNNER_TEMP/ctox-chat-proof/source-revision.txt"
+      - name: Shell geometry contract
+        run: |
+          node src/apps/business-os/scripts/assert-shell-v2-contract.mjs
+          node src/apps/business-os/scripts/shell-v2-geometry-lab.mjs \
+            --apps ctox --widths 1180,1000,720 \
+            --output-dir "$RUNNER_TEMP/ctox-chat-proof/shell-geometry"
+      - name: Chat interaction and delayed storage presentation
+        if: ${{ !cancelled() }}
+        run: |
+          CONTEXT_MENU_PROOF_DIR="$RUNNER_TEMP/ctox-chat-proof/context-menu-lifecycle" \
+            node src/apps/business-os/scripts/assert-context-menu-lifecycle.mjs
+          BUSINESS_CHAT_BEHAVIOR_OUTPUT_DIR="$RUNNER_TEMP/ctox-chat-proof/chat-behavior" \
+            node src/apps/business-os/scripts/assert-business-chat-behavior.mjs
+      - name: Retain browser presentation evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ctox-chat-presentation-proof
+          path: ${{ runner.temp }}/ctox-chat-proof/
+          if-no-files-found: error
+
+  full-host-acceptance:
+    name: Full CTOX host acceptance (Linux)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+    steps:
+      - name: Configure disposable build and evidence storage
+        shell: bash
+        run: |
+          printf 'CARGO_TARGET_DIR=%s/ctox-full-host-target\nTMPDIR=%s\nPLAYWRIGHT_BROWSERS_PATH=%s/ctox-host-chromium\nnpm_config_cache=%s/ctox-host-npm\n' "$RUNNER_TEMP" "$RUNNER_TEMP" "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/ctox-host-proof" "$RUNNER_TEMP/ctox-host-fixtures"
+          df -h "$RUNNER_TEMP"
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: ./.github/actions/build-pi-sidecar
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.13.1'
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: '1.93.0'
+      - name: Install native host build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev sqlite3
+      - name: Install the pinned real-browser runtime
+        run: |
+          npm --prefix src/apps/business-os ci
+          npm --prefix src/apps/business-os exec playwright install --with-deps chromium
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+        with:
+          key: full-ctox-host-dev-no-debug
+          # Preserve compiled dependencies when a later acceptance gate fails.
+          # The full source build and every assertion still run on each revision.
+          cache-on-failure: true
+          workspaces: |
+            . -> ${{ runner.temp }}/ctox-full-host-target
+            src/core/sync -> ${{ runner.temp }}/ctox-full-host-target
+      - name: Build the complete CTOX binary from the checked-out source
+        id: native-binary
+        run: |
+          cargo build --locked --bin ctox
+          git rev-parse HEAD > "$RUNNER_TEMP/ctox-host-proof/source-revision.txt"
+          sha256sum "$CARGO_TARGET_DIR/debug/ctox" > "$RUNNER_TEMP/ctox-host-proof/binary.sha256"
+      - name: Four real host processes, recovery and control latency
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo run --locked --manifest-path src/core/sync/Cargo.toml --features webrtc --example host_cli_acceptance -- \
+            "$CARGO_TARGET_DIR/debug/ctox" "$RUNNER_TEMP/ctox-host-fixtures" \
+            | tee "$RUNNER_TEMP/ctox-host-proof/acceptance.json"
+      - name: Command completion and queue transaction regressions
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked --bin ctox -- business_os::command_plane:: \
+            business_os::project_chats business_os::store_workjet_projects --test-threads=2 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/command-completion-tests.log"
+          cargo test --locked --bin ctox -- mission::channels::tests::business_command mission::channels::tests::business_control --test-threads=2 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/command-transaction-tests.log"
+      - name: Preserve native schema migration history and deletion markers
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked --bin ctox -- \
+            business_os::rxdb_peer::tests::native_schema_migration \
+            business_os::rxdb_peer::tests::packaged_cockpit_schema_migration \
+            business_os::rxdb_peer::tests::additive_thread_schema_migration \
+            business_os::rxdb_peer::tests::runtime_migration \
+            business_os::rxdb_peer::tests::runtime_installed_declarative_migration \
+            business_os::rxdb_peer::tests::runtime_empty_legacy_table \
+            business_os::rxdb_peer::tests::rxdb_schema_drift_repair \
+            --test-threads=2 | tee "$RUNNER_TEMP/ctox-host-proof/schema-migration-tests.log"
+      - name: Verify fresh secret reads and bounded Core reader reuse
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked --bin ctox -- persistence::tests secrets::tests business_os::domain_effect::tests business_os::rxdb_peer_domain_recovery::tests business_os::rxdb_peer_intake::tests business_os::store::peer_revocations::tests business_os::store::tests::peer_revocation_registry_round_trips business_os::rxdb_peer::peer_admission_tests business_os::rxdb_peer_business_data::tests \
+            --nocapture --test-threads=2 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/secret-reader-tests.log"
+      - name: Context prompt first paint and authorized native command
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -o pipefail
+          node --test src/core/rxdb/tools/threads_rightclick_peers.test.js
+          CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox" \
+            SMOKE_MODE=business-os-threads-rightclick-ui SMOKE_PAGE_PATH=/index.html \
+            BUSINESS_PORT=8879 SIGNALING_PORT=18878 \
+            SMOKE_PROCESS_LIFECYCLE_PATH="$RUNNER_TEMP/ctox-host-proof/context-chat-processes.json" \
+            node src/core/rxdb/tools/browser_rust_smoke.js \
+            | tee "$RUNNER_TEMP/ctox-host-proof/context-chat-browser.log"
+      - name: Retain context failure and CPU evidence before later gates
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ctox-native-context-proof
+          path: |
+            ${{ runner.temp }}/ctox-host-proof/context-chat*
+            ${{ runner.temp }}/ctox-host-proof/threads-*
+            ${{ runner.temp }}/ctox-host-proof/source-revision.txt
+            ${{ runner.temp }}/ctox-host-proof/binary.sha256
+          if-no-files-found: error
+      - name: Measure warm Browser-WebRTC-CTOX command roundtrips
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -o pipefail
+          CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox" \
+            SMOKE_MODE=command-roundtrip-timing-browser-to-rust \
+            SMOKE_PAGE_PATH=/index.html \
+            SMOKE_COMMAND_TIMING_OUTPUT="$RUNNER_TEMP/ctox-host-proof/command-marks.json" \
+            SMOKE_COMMAND_TIMING_REPORT_OUTPUT="$RUNNER_TEMP/ctox-host-proof/command-stages.json" \
+            SMOKE_PROCESS_LIFECYCLE_PATH="$RUNNER_TEMP/ctox-host-proof/command-processes.json" \
+            node src/core/rxdb/tools/browser_rust_smoke.js \
+            | tee "$RUNNER_TEMP/ctox-host-proof/command-browser.log"
+          node src/apps/business-os/rxdb/tests/command-roundtrip-budget.mjs \
+            --input "$RUNNER_TEMP/ctox-host-proof/command-marks.json" \
+            | tee "$RUNNER_TEMP/ctox-host-proof/command-budget.json"
+      - name: Recover one browser command across a native outage without repair
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -o pipefail
+          CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox" \
+            SMOKE_MODE=command-midflight-restart-browser-to-rust \
+            SMOKE_PAGE_PATH=/index.html BUSINESS_PORT=8881 SIGNALING_PORT=18880 \
+            SMOKE_PROCESS_LIFECYCLE_PATH="$RUNNER_TEMP/ctox-host-proof/command-restart-processes.json" \
+            node src/core/rxdb/tools/browser_rust_smoke.js 2>&1 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/command-restart-browser.log"
+      - name: Verify 21 collections across reload and native restart
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -o pipefail
+          CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox" \
+            SMOKE_MODE=multiplex-reload-browser-to-rust \
+            SMOKE_PAGE_PATH=/index.html BUSINESS_PORT=8878 SIGNALING_PORT=18877 \
+            SMOKE_PROCESS_LIFECYCLE_PATH="$RUNNER_TEMP/ctox-host-proof/reload-processes.json" \
+            node src/core/rxdb/tools/browser_rust_smoke.js \
+            | tee "$RUNNER_TEMP/ctox-host-proof/multiplex-reload.log"
+      - name: Measure 30 critical browser reloads against the native host
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        timeout-minutes: 35
+        shell: bash
+        run: |
+          set -o pipefail
+          node --test src/core/rxdb/tools/critical_browser_reload_probe.test.js
+          CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox" \
+            SMOKE_MODE=critical-browser-reload-timing SMOKE_PAGE_PATH=/index.html \
+            BUSINESS_PORT=8880 SIGNALING_PORT=18879 \
+            SMOKE_PROCESS_LIFECYCLE_PATH="$RUNNER_TEMP/ctox-host-proof/critical-reload-processes.json" \
+            node src/core/rxdb/tools/browser_rust_smoke.js \
+            | tee "$RUNNER_TEMP/ctox-host-proof/critical-browser-reload.log"
+      - name: Verify canonical schema routing and removal of obsolete command tables
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        timeout-minutes: 6
+        shell: bash
+        run: |
+          set -o pipefail
+          CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox" \
+            SMOKE_MODE=migration-version-browser-to-rust SMOKE_PAGE_PATH=/index.html \
+            BUSINESS_PORT=8883 SIGNALING_PORT=18882 \
+            SMOKE_PROCESS_LIFECYCLE_PATH="$RUNNER_TEMP/ctox-host-proof/schema-routing-processes.json" \
+            node src/core/rxdb/tools/browser_rust_smoke.js 2>&1 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/schema-routing-browser.log"
+      # Profiling is a separate fixture after every acceptance measurement.
+      # Its timings never replace the unprofiled command/reload budgets above.
+      - name: Sample native CPU symbols in an isolated context reproduction
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/ctox-host-proof/symbol-profile"
+          sudo apt-get install -y linux-tools-generic
+          perf_candidates=(/usr/lib/linux-tools/*/perf)
+          perf_executable="${perf_candidates[${#perf_candidates[@]}-1]}"
+          test -x "$perf_executable"
+          "$perf_executable" version > "$RUNNER_TEMP/ctox-host-proof/symbol-profile/perf-version.txt"
+          # This disposable runner permits same-user process sampling only.
+          sudo sysctl -w kernel.perf_event_paranoid=1
+          node src/core/rxdb/tools/native_symbol_profile.test.js --require-perf "$perf_executable"
+          set +e
+          CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox" \
+            SMOKE_MODE=business-os-threads-rightclick-ui SMOKE_PAGE_PATH=/index.html \
+            BUSINESS_PORT=8882 SIGNALING_PORT=18881 \
+            SMOKE_PROCESS_LIFECYCLE_PATH="$RUNNER_TEMP/ctox-host-proof/symbol-profile/context-processes.json" \
+            node src/core/rxdb/tools/browser_rust_smoke.js "--native-symbol-perf=$perf_executable" 2>&1 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/symbol-profile/context-browser.log"
+          fixture_status=${PIPESTATUS[0]}
+          set -e
+          printf '%s\n' "$fixture_status" > "$RUNNER_TEMP/ctox-host-proof/symbol-profile/fixture-exit-code.txt"
+          node - "$RUNNER_TEMP/ctox-host-proof/symbol-profile" <<'NODE'
+          const fs = require('node:fs'), path = require('node:path');
+          const root = process.argv[2];
+          const profiles = fs.readdirSync(root).filter(name => /\.native-symbols-\d+\.json$/.test(name));
+          if (!profiles.length) throw new Error('No owned native symbol profile was produced');
+          for (const name of profiles) {
+            const profile = JSON.parse(fs.readFileSync(path.join(root, name), 'utf8'));
+            if (!profile.available || profile.reason !== 'sampled') throw new Error(JSON.stringify(profile));
+            console.log(JSON.stringify(profile));
+          }
+          NODE
+          exit "$fixture_status"
+      - name: Retain host proof and binary provenance
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ctox-native-full-host-proof
+          path: ${{ runner.temp }}/ctox-host-proof/
+          if-no-files-found: ignore

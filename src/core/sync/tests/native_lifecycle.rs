@@ -67,6 +67,7 @@ async fn options_with_records(
         HashMap::new()
     };
     let options = NativeSyncOptions {
+        local_session_provider: None,
         peer_role: ctox_sync::native::NativePeerRole::CtoxInstance,
         database: Arc::clone(&database),
         collections: collections.into_values().collect(),
@@ -263,6 +264,68 @@ async fn cancelled_bringup_closes_the_already_started_signaling_supervisor() {
         .is_cancelled());
     signal.assert_closed().await;
     database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn host_setup_finishes_before_room_admission() {
+    let mut signal = Signal::start(Admission::Accept).await;
+    let (_directory, database, options) = options(signal.url.clone()).await;
+    let session = NativeSyncSession::start_with_pool_setup(options, |pool| {
+        assert!(matches!(
+            signal.joined.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        pool.register_auxiliary_request_handler(
+            "fixture.host.v1",
+            Arc::new(|_, _, _| Box::pin(async { Ok(Value::Null) })),
+        )
+    })
+    .await
+    .unwrap();
+    signal.joined.try_recv().expect("room joined after setup");
+    session.shutdown().await;
+    signal.assert_closed().await;
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn failed_or_panicking_host_setup_never_advertises_and_closes_owned_transport() {
+    for panic_in_setup in [false, true] {
+        let mut signal = Signal::start(Admission::Accept).await;
+        let (_directory, database, options) = options(signal.url.clone()).await;
+        let mut captured_pool = None;
+        let error = NativeSyncSession::start_with_pool_setup(options, |pool| {
+            captured_pool = Some(pool.clone());
+            if panic_in_setup {
+                panic!("host registration panic fixture");
+            }
+            let handler = Arc::new(|_, _, _| {
+                Box::pin(async { Ok(Value::Null) })
+                    as futures::future::BoxFuture<'static, Result<Value, String>>
+            });
+            pool.register_auxiliary_request_handler("fixture.host.v1", handler.clone())?;
+            pool.register_auxiliary_request_handler("fixture.host.v1", handler)
+        })
+        .await
+        .err()
+        .expect("broken host setup must fail startup");
+        assert!(error.to_string().contains(if panic_in_setup {
+            "bring-up panicked"
+        } else {
+            "bring-up failed"
+        }));
+        signal.assert_closed().await;
+        assert!(matches!(
+            signal.joined.try_recv(),
+            Err(oneshot::error::TryRecvError::Closed)
+        ));
+        assert!(captured_pool
+            .unwrap()
+            .canceled
+            .load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!database.closed(), "host still owns persistence");
+        database.close().await.unwrap();
+    }
 }
 
 #[tokio::test]

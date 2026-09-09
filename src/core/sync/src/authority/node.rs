@@ -383,10 +383,13 @@ impl AuthorityNode {
             .get(&packet.from)
             .is_some_and(|peer| peer.identity == authenticated_identity);
         let execution_rpc = matches!(&packet.rpc, Rpc::Propose(_) | Rpc::Validate { .. });
-        // A revoked worker may learn its own tombstone, but gets no execution,
-        // directory-listing or voting rights from this read-only exception.
-        let own_membership_read = !voter
-            && matches!(&packet.rpc, Rpc::WorkerMembership { node_id } if *node_id == packet.from)
+        // Identity admits only an own-status read, never execution. In particular,
+        // a revoked worker's validation must reach local_validate's quorum read
+        // and membership check so its denial is typed and confirmed, not retried
+        // as an unknown transport outcome. Proposals remain blocked below.
+        let own_status_read = !voter
+            && (matches!(&packet.rpc, Rpc::WorkerMembership { node_id } if *node_id == packet.from)
+                || matches!(&packet.rpc, Rpc::Validate { ownership, .. } if ownership.node_id == packet.from))
             && self
                 .store
                 .worker(packet.from)
@@ -394,7 +397,7 @@ impl AuthorityNode {
                 .map_err(io::Error::other)?
                 .is_some_and(|worker| worker.identity == authenticated_identity);
         if !voter
-            && !own_membership_read
+            && !own_status_read
             && (!execution_rpc
                 || self
                     .execution_peer(packet.from)

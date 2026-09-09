@@ -12,7 +12,7 @@ use std::{
     io,
     path::{Path, PathBuf},
     process::Stdio,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
@@ -274,6 +274,7 @@ pub async fn run() -> Result<()> {
         data_replica: true,
         revoked: false,
     };
+    let provisioning_started = Instant::now();
     let mut hosts = Vec::new();
     for id in 1..=4 {
         let root = roots.path().join(id.to_string());
@@ -359,6 +360,7 @@ pub async fn run() -> Result<()> {
             }
         }
     })?;
+    let provisioning_ms = provisioning_started.elapsed().as_secs_f64() * 1000.0;
     let admission = ipc(
         &hosts[0].1,
         "admit",
@@ -400,6 +402,31 @@ pub async fn run() -> Result<()> {
         other => return Err(format!("job was not committed: {other:?}").into()),
     };
     assert_eq!(ownership.node_id, 4);
+    // These are control-plane quorum reads, not Business OS command latency.
+    // Keep every sample; a failed confirmation fails acceptance rather than
+    // disappearing from the performance distribution.
+    let mut validation_ms = Vec::with_capacity(20);
+    for sample in 0..20 {
+        let started = Instant::now();
+        let response = ipc(
+            &hosts[3].1,
+            &format!("warm-validate-{sample}"),
+            SyncIpcOperation::Validate {
+                job_id: "cli-job".into(),
+                ownership: ownership.clone(),
+            },
+        )
+        .await?;
+        assert!(
+            matches!(response, SyncIpcResult::Authorized { .. }),
+            "{response:?}"
+        );
+        validation_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    validation_ms.sort_by(f64::total_cmp);
+    let percentile =
+        |percent: usize| validation_ms[(validation_ms.len() * percent).div_ceil(100) - 1];
+    let reconnect_started = Instant::now();
     let rejoined = signal.disconnect_and_wait_for_rejoin("native000004").await;
     assert_eq!(rejoined, "native000005");
     let authorized = ipc(
@@ -415,6 +442,8 @@ pub async fn run() -> Result<()> {
         matches!(authorized, SyncIpcResult::Authorized { .. }),
         "{authorized:?}"
     );
+    let reconnect_ms = reconnect_started.elapsed().as_secs_f64() * 1000.0;
+    let restart_started = Instant::now();
     stop(&mut hosts[3].0).await?;
     assert_eq!(
         cli(&binary, &roots.path().join("4"), &["status"], None).await?["listener"],
@@ -434,6 +463,7 @@ pub async fn run() -> Result<()> {
         matches!(resumed, SyncIpcResult::Authorized { .. }),
         "{resumed:?}"
     );
+    let restart_ms = restart_started.elapsed().as_secs_f64() * 1000.0;
     let revocation = ipc(
         &hosts[0].1,
         "revoke",
@@ -468,7 +498,21 @@ pub async fn run() -> Result<()> {
         .all(|(sender, receiver)| sender < receiver));
     println!(
         "{}",
-        json!({"ok":true,"nativeProcesses":4,"legacySecretMigration":true,"importedWorkjetKey":true,"listenerStatus":true,"exclusiveHostLease":true,"confirmedMembership":true,"workerReconnect":true,"workerRestart":true,"revocation":true,"codingHarnessExecuted":false})
+        json!({"ok":true,"nativeProcesses":4,"legacySecretMigration":true,"importedWorkjetKey":true,"listenerStatus":true,"exclusiveHostLease":true,"confirmedMembership":true,"workerReconnect":true,"workerRestart":true,"revocation":true,"codingHarnessExecuted":false,
+        "measurements": {
+            "topology": "localhost-three-voters-one-worker",
+            "dataset": "control-stores-with-one-job",
+            "fourHostProvisioningMs": provisioning_ms,
+            "workerReconnectMs": reconnect_ms,
+            "workerRestartMs": restart_ms,
+            "warmAuthorityValidation": {
+                "sampleCount": validation_ms.len(),
+                "p50Ms": percentile(50),
+                "p95Ms": percentile(95),
+                "samplesMs": validation_ms,
+            },
+            "businessCommandBudgetEvaluated": false
+        }})
     );
     Ok(())
 }

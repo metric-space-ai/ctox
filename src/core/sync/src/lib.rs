@@ -1,6 +1,10 @@
 //! Shared native execution authority for CTOX Sync.
 //! Data replication and execution ownership are deliberately separate protocols.
 pub mod authority;
+pub mod business_data;
+pub use authority::auth::business_data_identity;
+#[path = "business-data.generated.rs"]
+pub mod business_data_contract;
 pub mod checkpoint;
 #[path = "contracts.generated.rs"]
 pub mod contracts;

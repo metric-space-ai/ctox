@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { CREW_CREATURE_BASE_CSS } from './crew-renderer.js';
 
 import {
   __businessChatTestInternals,
@@ -9,7 +10,10 @@ import {
   renderChatAgentScopeHtml,
 } from './business-chat.js';
 
-const businessChatSource = readFileSync(new URL('./business-chat.js', import.meta.url), 'utf8');
+const rawBusinessChatSource = readFileSync(new URL('./business-chat.js', import.meta.url), 'utf8');
+assert.ok(rawBusinessChatSource.includes('${CREW_CREATURE_BASE_CSS}'), 'chat stylesheet must consume the shared creature rules');
+// Keep the existing motion guards on the stylesheet actually inserted by the chat.
+const businessChatSource = rawBusinessChatSource.replace('${CREW_CREATURE_BASE_CSS}', CREW_CREATURE_BASE_CSS);
 
 test('inspection separates system history from real replies and keeps an input in every task state', () => {
   const previousDocument = globalThis.document;
@@ -1419,6 +1423,85 @@ test('business chat open resolves the already submitted task instead of creating
   );
   assert.notEqual(created, submitted);
   assert.equal(state.chats.length, 3);
+});
+
+test('disposed crew presence releases observers and ignores queued callbacks and late reads', async () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  let finishRead;
+  const pending = new Promise((resolve) => { finishRead = resolve; });
+  let reads = 0;
+  let domReads = 0;
+  const observers = new Set();
+  const readiness = new Set();
+  const queuedCallbacks = [];
+  const timers = new Set();
+  const subscribe = (set, callback) => {
+    const token = { callback };
+    set.add(token);
+    queuedCallbacks.push(callback);
+    return () => set.delete(token);
+  };
+  const collection = {
+    find: () => ({ exec: () => { reads += 1; return pending; } }),
+    $: { subscribe: (callback) => ({ unsubscribe: subscribe(observers, callback) }) },
+  };
+  globalThis.window = {
+    setTimeout: (callback) => { timers.add(callback); return callback; },
+    clearTimeout: (callback) => timers.delete(callback),
+  };
+  globalThis.document = {
+    querySelector: () => { domReads += 1; return null; },
+    querySelectorAll: () => { domReads += 1; return []; },
+  };
+  try {
+    const dispose = __businessChatTestInternals.wireCrewAppPresence({
+      state: { crewMembers: [] },
+      db: { raw: { ctox_queue_tasks: collection, ctox_crew_members: collection } },
+      syncFacade: { subscribeCollectionReadiness: (_name, callback) => subscribe(readiness, callback) },
+    });
+    assert.equal(observers.size, 2);
+    assert.equal(readiness.size, 2);
+    assert.equal(reads, 1);
+    dispose();
+    dispose();
+    assert.equal(observers.size, 0);
+    assert.equal(readiness.size, 0);
+    for (const callback of queuedCallbacks) callback();
+    finishRead([]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(reads, 1, 'queued callbacks must not read after disposal');
+    assert.equal(domReads, 0, 'a late read must not render or rewire the disposed view');
+    assert.equal(timers.size, 0, 'a late completion must not rearm timers');
+  } finally {
+    finishRead?.([]);
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+  }
+});
+
+test('chat opening reads storage only to resolve a missing current tracking identity', () => {
+  const { chatOpenNeedsHydration } = __businessChatTestInternals;
+  const state = { chats: [{
+    id: 'known',
+    createdAt: Date.now(),
+    lastTrackingId: 'task-known',
+    messages: [{ commandId: 'command-known' }],
+  }] };
+  for (const detail of [{ draft: 'new' }, { reuseActive: true }, { focus: {} }]) {
+    assert.equal(chatOpenNeedsHydration(state, detail), false);
+  }
+  for (const detail of [
+    { task_id: 'task-known' }, { taskId: 'task-known' },
+    { command_id: 'command-known' }, { commandId: 'command-known' },
+    { focus: { task_id: 'task-known' } }, { focus: { commandId: 'command-known' } },
+  ]) assert.equal(chatOpenNeedsHydration(state, detail), false);
+  for (const detail of [
+    { task_id: 'not-loaded' }, { command_id: 'not-loaded', reuseActive: true },
+    { focus: { taskId: 'not-loaded' } },
+  ]) assert.equal(chatOpenNeedsHydration(state, detail), true);
+  state.chats[0].createdAt = Date.now() - 86400000 * 2;
+  assert.equal(chatOpenNeedsHydration(state, { task_id: 'task-known' }), true);
 });
 
 test('first remote hydration keeps a newly submitted chat focused', async () => {

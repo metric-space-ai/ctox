@@ -249,9 +249,12 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   user_thread_states: "71e70b8a2e44bd2b851b24fde40a5b4cd42cd9e0b6158525055a9c04743de9eb",
   user_threads: "97a226600a64559f18c795e6a6c39b56e478d455bc5ce1485b714e1d13c2e5cb",
   workjet_computers: "ad5b7f32d8237ac93399904960c193e40de34e2f1b521306d8d1aeea590645b1",
+  workjet_project_chats: "f68e34d8702d58f1ffc430bd12edb61f01528b26a2e5197df3e46e393819bc2e",
+  workjet_project_workers: "f2c2dfcf7f722902e47a2d947b81f8afae740b6a642bb9b392a4260ce79d4892",
   workjet_projects: "16bf130df1fb7883a21198744dd3f5c2c0ecd621e39355b6f0d875d59cbe9a0e",
   workjet_session_transfers: "0bc267b792d828ae60c356a25301547ddaa97e47ac8809b0da204e2968b189fa",
   workjet_sessions: "82ad8222bb8453b67e6b512f1e114ced576fcff972ef56b67a42a668ddf59088",
+  workjet_worker_profile_bindings: "c59012d23dbe90dea21a33086dad073c837e8395d0f2973daed56453ef0733e4",
   workjet_working_copies: "a2e418eafc2ee8900b9d1422dbcfb68dfd4b542226ec022b26c2484837cf0e08"
 });
 function canonicalJson(value) {
@@ -3999,6 +4002,65 @@ var ctoxIndexedDbStorageTestInternals = {
   storedRecordForWrite
 };
 
+// src/apps/business-os/rxdb/src/inbound-request-queue.mjs
+var InboundRequestQueue = class {
+  constructor({ maxCount, maxBytes, onError }) {
+    this.maxCount = maxCount;
+    this.maxBytes = maxBytes;
+    this.onError = onError;
+    this.count = 0;
+    this.bytes = 0;
+    this.owners = /* @__PURE__ */ new Map();
+  }
+  enqueue(owner, bytes, run) {
+    if (!owner || !Number.isFinite(bytes) || bytes < 0 || this.count >= this.maxCount || this.bytes + bytes > this.maxBytes) return false;
+    let queue = this.owners.get(owner);
+    if (!queue) {
+      queue = { owner, pending: [], active: false, cancelled: false, abort: new AbortController() };
+      this.owners.set(owner, queue);
+    }
+    if (queue.cancelled) return false;
+    queue.pending.push({ bytes, run });
+    this.count++;
+    this.bytes += bytes;
+    if (!queue.active) {
+      queue.active = true;
+      void this.drain(queue);
+    }
+    return true;
+  }
+  async drain(queue) {
+    while (!queue.cancelled && queue.pending.length) {
+      const entry = queue.pending.shift();
+      try {
+        await entry.run(queue.abort.signal);
+      } catch (error) {
+        if (!queue.cancelled) {
+          try {
+            this.onError?.(error);
+          } catch {
+          }
+        }
+      } finally {
+        this.count--;
+        this.bytes -= entry.bytes;
+      }
+    }
+    queue.active = false;
+    if (this.owners.get(queue.owner) === queue) this.owners.delete(queue.owner);
+  }
+  cancel(owner) {
+    const queue = this.owners.get(owner);
+    if (!queue) return;
+    queue.cancelled = true;
+    for (const entry of queue.pending.splice(0)) {
+      this.count--;
+      this.bytes -= entry.bytes;
+    }
+    queue.abort.abort();
+  }
+};
+
 // src/apps/business-os/rxdb/src/frame-contract.generated.mjs
 var CTOX_FRAME_PROTOCOL = "ctox-rxdb-frame-v1";
 var MAX_INLINE_FRAME_BYTES = 14336;
@@ -4025,6 +4087,7 @@ var FRAME_ACK_TIMEOUT_MS = 3e4;
 var STALLED_INCOMING_TRANSFER_TIMEOUT_MS = FRAME_ACK_TIMEOUT_MS * 3;
 var MAX_INCOMING_FRAME_TRANSFERS = 8;
 var MAX_INCOMING_FRAME_BUFFERED_BYTES = MAX_TRANSFER_BYTES * 4;
+var MAX_INBOUND_REQUESTS = 32;
 var FRAME_RESUME_TIMEOUT_MS = 1e3;
 var COMPLETED_FRAME_ACK_TTL_MS = 6e4;
 var RTC_HANDSHAKE_TIMEOUT_MS = 6e4;
@@ -4117,6 +4180,11 @@ var CtoxWebRtcNativePeer = class {
     this.socket = null;
     this.localSignalingPeerId = "";
     this.connections = /* @__PURE__ */ new Map();
+    this.inboundRequests = new InboundRequestQueue({
+      maxCount: MAX_INBOUND_REQUESTS,
+      maxBytes: MAX_INCOMING_FRAME_BUFFERED_BYTES,
+      onError: (error) => this.events.emit("error", serializeFrameError(error, "inbound-request"))
+    });
     this.auxChannelRegistrations = /* @__PURE__ */ new Map();
     this.peerMetadata = /* @__PURE__ */ new Map();
     this.pending = /* @__PURE__ */ new Map();
@@ -5068,10 +5136,14 @@ var CtoxWebRtcNativePeer = class {
       this.attachAuxChannel(connection, channel);
       return;
     }
+    this.inboundRequests.cancel(connection.inboundRequestOwner);
+    connection.inboundRequestOwner = {};
     connection.channel = channel;
     connection.inboundFrameGeneration = Number(connection.inboundFrameGeneration || 0) + 1;
     connection.inboundFrameChain = Promise.resolve();
+    const isCurrentChannel = () => !this.closed && this.connections.get(connection.remotePeerId) === connection && connection.channel === channel;
     channel.onopen = () => {
+      if (!isCurrentChannel()) return;
       if (connection.handshakeTimer) {
         clearTimeout(connection.handshakeTimer);
         connection.handshakeTimer = null;
@@ -5089,11 +5161,13 @@ var CtoxWebRtcNativePeer = class {
       this.enqueueInboundDataChannelFrame(connection, channel, payload);
     };
     channel.onerror = () => {
+      if (!isCurrentChannel()) return;
       connection.lastError = { code: "ctox_data_channel_error", peerId: connection.remotePeerId };
       this.recordConnectionEvent(connection, "datachannel-error", { readyState: channel.readyState || "" });
       this.events.emit("error", connection.lastError);
     };
     channel.onclose = () => {
+      if (!isCurrentChannel()) return;
       this.recordConnectionEvent(connection, "datachannel-close", { readyState: channel.readyState || "closed" });
       this.removeConnection(connection.remotePeerId, "channel-close");
     };
@@ -5156,23 +5230,36 @@ var CtoxWebRtcNativePeer = class {
       return;
     }
     if (payload?.id && payload.method) {
+      this.enqueueInboundRequest(peerId, payload);
+    }
+  }
+  enqueueInboundRequest(peerId, payload) {
+    const connection = this.connections.get(peerId);
+    if (!connection || this.closed) return;
+    const owner = connection.inboundRequestOwner ||= {};
+    const isCurrent = () => !this.closed && this.connections.get(peerId) === connection && connection.inboundRequestOwner === owner;
+    const respond = (result, error) => {
+      if (!isCurrent()) return;
+      const response = { id: payload.id, result, error };
+      if (payload.collection) response.collection = payload.collection;
+      this.send(peerId, response);
+    };
+    const admitted = this.inboundRequests.enqueue(owner, encodedSize(JSON.stringify(payload)), async (signal) => {
+      if (!isCurrent() || signal.aborted) return;
       try {
-        const result = await this.handleRequest(
-          peerId,
-          payload.method,
-          payload.params || [],
-          payload.collection || null
-        );
-        const response = { id: payload.id, result, error: null };
-        if (payload.collection) response.collection = payload.collection;
-        this.send(peerId, response);
+        const result = await this.handleRequest(peerId, payload.method, payload.params || [], payload.collection || null, signal);
+        respond(result, null);
       } catch (error) {
+        if (!isCurrent() || signal.aborted) return;
         const normalized = serializeFrameError(error, payload.method);
         this.events.emit("error", normalized);
-        const response = { id: payload.id, result: null, error: normalized };
-        if (payload.collection) response.collection = payload.collection;
-        this.send(peerId, response);
+        respond(null, normalized);
       }
+    });
+    if (!admitted) {
+      const error = { code: "ctox_webrtc_inbound_request_budget_exceeded", method: payload.method, retryable: true };
+      this.events.emit("error", error);
+      respond(null, error);
     }
   }
   async handleTransportFrame(peerId, payload) {
@@ -5416,17 +5503,17 @@ var CtoxWebRtcNativePeer = class {
       });
     }
   }
-  async handleRequest(peerId, method, params, collection = null) {
+  async handleRequest(peerId, method, params, collection = null, signal = null) {
     this.recordObservedRequest(peerId, method);
     if (method === "token") {
       return this.options.storageToken;
     }
     if (method === "ctoxProtocol") {
-      return this.protocolPayload(peerId, params, collection);
+      return this.protocolPayload(peerId, params, collection, signal);
     }
     const handler = this.options.requestHandlers?.[method];
     if (typeof handler === "function") {
-      return handler({ peerId, params, collection, peer: this });
+      return handler({ peerId, params, collection, peer: this, signal });
     }
     return {
       code: "ctox_unknown_webrtc_method",
@@ -5466,9 +5553,9 @@ var CtoxWebRtcNativePeer = class {
       this.requestWaiters.set(key, waiters);
     });
   }
-  async protocolPayload(peerId, params = [], collection = null) {
+  async protocolPayload(peerId, params = [], collection = null, signal = null) {
     if (typeof this.options.protocolPayload === "function") {
-      return this.options.protocolPayload({ peerId, params, collection, peer: this });
+      return this.options.protocolPayload({ peerId, params, collection, peer: this, signal });
     }
     return buildProtocolPayload({
       role: this.options.role,
@@ -5546,6 +5633,7 @@ var CtoxWebRtcNativePeer = class {
     }
     connection.auxChannels.set(label, channel);
     channel.onmessage = (event) => {
+      if (this.closed || this.connections.get(connection.remotePeerId) !== connection || connection.auxChannels?.get(label) !== channel) return;
       this.handleAuxiliaryChannelMessage(connection, label, event.data).catch((error) => {
         this.events.emit("error", { code: "ctox_aux_message_failed", label, error });
       });
@@ -5637,6 +5725,8 @@ var CtoxWebRtcNativePeer = class {
     const connection = this.connections.get(peerId);
     if (!connection) return;
     this.connections.delete(peerId);
+    this.inboundRequests.cancel(connection.inboundRequestOwner);
+    connection.inboundRequestOwner = null;
     connection.inboundFrameGeneration = Number(connection.inboundFrameGeneration || 0) + 1;
     connection.inboundFrameChain = null;
     if (connection.channel) connection.channel.onmessage = null;
@@ -6386,6 +6476,7 @@ var webrtcNativeTestInternals = Object.freeze({
   classifySendPriority,
   MAX_SERIALIZED_FRAME_BYTES,
   MAX_INCOMING_FRAME_TRANSFERS,
+  MAX_INBOUND_REQUESTS,
   MAX_INCOMING_FRAME_BUFFERED_BYTES
 });
 function jsonEscapedCharLen(ch) {
@@ -6747,14 +6838,14 @@ function createDemandLoadingTransport({
         queryStreamState.active += 1;
         Promise.resolve().then(fn).then(resolve, reject).finally(() => {
           queryStreamState.active = Math.max(0, queryStreamState.active - 1);
-          const next = queryStreamState.queue.shift();
-          if (next) queueMicrotask(typeof next === "function" ? next : next.run);
+          drainReadyQueryRequests();
         });
       };
-      if (queryStreamState.active < CLIENT_QUERY_STREAM_LIMIT) run();
+      const ready = Boolean(resolvePeerId());
+      if (ready && queryStreamState.active < CLIENT_QUERY_STREAM_LIMIT) run();
       else {
         const queuedBytes = queryStreamState.queue.reduce(
-          (total, entry) => total + Math.max(0, Number(entry?.estimatedBytes) || 0),
+          (total, entry2) => total + Math.max(0, Number(entry2?.estimatedBytes) || 0),
           0
         );
         if (queryStreamState.queue.length >= CLIENT_QUERY_QUEUE_LIMIT || queuedBytes + estimatedBytes > CLIENT_QUERY_QUEUE_BUDGET_BYTES) {
@@ -6764,10 +6855,53 @@ function createDemandLoadingTransport({
           reject(error);
           return;
         }
-        queryStreamState.queue.push({ requestId, run, reject, owner: transportOwner, estimatedBytes });
+        const entry = {
+          requestId,
+          run,
+          reject,
+          owner: transportOwner,
+          estimatedBytes,
+          isReady: () => Boolean(resolvePeerId()),
+          waitingForPeer: false
+        };
+        queryStreamState.queue.push(entry);
         updatePeaks();
+        entry.waitForReady = () => {
+          if (entry.waitingForPeer) return;
+          entry.waitingForPeer = true;
+          waitForPeerId(AUTHORIZED_PEER_WAIT_TIMEOUT_MS, () => !queryStreamState.queue.includes(entry)).then((peerId) => {
+            entry.waitingForPeer = false;
+            const index = queryStreamState.queue.indexOf(entry);
+            if (index < 0) return;
+            if (!peerId) {
+              queryStreamState.queue.splice(index, 1);
+              reject(new Error("PEER_UNAVAILABLE"));
+            }
+            drainReadyQueryRequests();
+          }, (error) => {
+            entry.waitingForPeer = false;
+            const index = queryStreamState.queue.indexOf(entry);
+            if (index < 0) return;
+            queryStreamState.queue.splice(index, 1);
+            reject(error);
+            drainReadyQueryRequests();
+          });
+        };
+        if (!ready) entry.waitForReady();
       }
     });
+  }
+  function drainReadyQueryRequests() {
+    while (queryStreamState.active < CLIENT_QUERY_STREAM_LIMIT) {
+      const index = queryStreamState.queue.findIndex((entry2) => {
+        if (entry2.isReady()) return true;
+        entry2.waitForReady();
+        return false;
+      });
+      if (index < 0) return;
+      const [entry] = queryStreamState.queue.splice(index, 1);
+      entry.run();
+    }
   }
   async function requestQueryFetchWithRetry(envelope) {
     const baseRequestId = envelope?.requestId;
@@ -7000,7 +7134,7 @@ function createDemandLoadingTransport({
     const error = createQueryCancelError(reason);
     for (const entry of queryStreamState.queue) {
       const queuedRequestId = queuedQueryRequestId(entry);
-      if (queuedRequestId && (queuedRequestId === raw || queuedRequestId.startsWith(prefix))) {
+      if (entry.owner === transportOwner && queuedRequestId && (queuedRequestId === raw || queuedRequestId.startsWith(prefix))) {
         rejectedIds.push(queuedRequestId);
         metrics.queryCollectorsRejected += 1;
         entry.reject(error);
@@ -7131,12 +7265,14 @@ function createDemandLoadingTransport({
     const peerState = connection?.peer?.connectionState || connection?.peerConnectionState || connection?.connectionState || "";
     return channelState === "open" && !["closed", "failed", "disconnected"].includes(String(peerState));
   }
-  async function waitForPeerId(timeoutMs = AUTHORIZED_PEER_WAIT_TIMEOUT_MS) {
+  async function waitForPeerId(timeoutMs = AUTHORIZED_PEER_WAIT_TIMEOUT_MS, cancelled = () => false) {
     const immediate = resolvePeerId();
     if (immediate) return immediate;
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      if (cancelled()) return "";
       await delay4(QUERY_PEER_WAIT_POLL_MS);
+      if (cancelled()) return "";
       const peerId = resolvePeerId();
       if (peerId) return peerId;
     }

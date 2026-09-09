@@ -150,6 +150,8 @@
       "revokeWorker": { "nodeId": "u64" },
       "create": { "spec": "ExecutionSpec" },
       "validate": { "jobId": "string", "ownership": "ExecutionOwnership" },
+      "protectCheckpoint": { "jobId": "string", "ownership": "ExecutionOwnership", "receipts": "list:CheckpointCopyReceipt" },
+      "takeOver": { "jobId": "string", "expected": "ExecutionOwnership", "checkpointDigest": "string" },
       "beginEffect": { "jobId": "string", "ownership": "ExecutionOwnership", "effectId": "string" },
       "completeEffect": { "jobId": "string", "ownership": "ExecutionOwnership", "effectId": "string" },
       "stop": { "jobId": "string", "ownership": "ExecutionOwnership" }

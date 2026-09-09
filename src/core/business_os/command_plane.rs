@@ -3,6 +3,7 @@
 
 use super::app_runtime;
 use super::control_command_types::ActiveExternalSqlControlCommand;
+use super::domain_effect::{self, DomainEffectAdmission};
 use super::policy::{
     policy_actor_from_session, BusinessOsPermission, BusinessOsRole, BusinessOsScope,
     BusinessOsScopeType,
@@ -22,9 +23,9 @@ use super::store::{
     record_business_module_lifecycle_event, record_command, record_report_command,
     recoverable_background_control_claim_authorization, run_channel_command,
     rxdb_authenticated_session, rxdb_command_session, rxdb_verified_identity_email,
-    stored_rxdb_business_command_outcome, upsert_rxdb_collection_record,
-    write_rxdb_failed_control_command_outcome, BusinessCommand, BusinessOsReportMutation,
-    ChannelCommandRequest, CommandOrigin, APPSEC_MODULE_ID,
+    stored_rxdb_business_command_outcome, write_rxdb_failed_control_command_outcome,
+    BusinessCommand, BusinessOsReportMutation, ChannelCommandRequest, CommandOrigin,
+    RxdbProjectionWriterCache, APPSEC_MODULE_ID,
 };
 use super::store_appsec_commands::handle_appsec_business_command;
 use super::store_ats_commands::{handle_ats_active_command, handle_ats_mutating_command};
@@ -43,6 +44,15 @@ use serde::Serialize;
 use serde_json::Value;
 use std::cell::RefCell;
 use std::path::Path;
+
+#[path = "command_plane_domain_effect.rs"]
+mod domain_effect_recovery;
+use domain_effect_recovery::recover_applied_domain_effect;
+pub(super) use domain_effect_recovery::recover_applied_domain_effect_for_intake;
+
+#[cfg(test)]
+#[path = "command_plane_domain_effect_tests.rs"]
+mod domain_effect_tests;
 
 const BUSINESS_COMMAND_REPLAY_RECEIPT_CONTRACT: &str = "ctox-business-command-replay-receipt-v1";
 const COMMAND_TIMING_PROBE_FIELD: &str = "command_timing_probe";
@@ -273,7 +283,7 @@ mod crew_cockpit_tests;
 #[path = "crew_identity_command_tests.rs"]
 mod crew_identity_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 88] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 94] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -346,6 +356,12 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 88] = [
     "ctox.workjet.computer.list",
     "ctox.workjet.computer.unassign",
     "ctox.workjet.project.list",
+    "ctox.workjet.project.chat.ensure",
+    "ctox.workjet.project.chat.create",
+    "ctox.workjet.project.worker.add",
+    "ctox.workjet.project.worker.remove",
+    "ctox.workjet.worker_profile.bind",
+    "ctox.workjet.worker_profile.unbind",
     "ctox.workjet.project.upsert",
     "ctox.workjet.session.create",
     "ctox.workjet.session.delete",
@@ -634,23 +650,47 @@ pub fn accept_rxdb_business_command_with_origin(
             .unwrap_or(Value::Null),
     };
     if matches!(command.origin, CommandOrigin::ReplicatedPeer) {
+        let intake_started = command_timing_probe_requested(&command).then(std::time::Instant::now);
         let session = rxdb_authenticated_session(root, &command)?;
+        let authentication_ms =
+            intake_started.map(|started| started.elapsed().as_secs_f64() * 1_000.0);
         stamp_verified_session_identity(root, &mut command, &session);
+        if let Some((started, authentication_ms)) = intake_started.zip(authentication_ms) {
+            // This work precedes native_dispatch_entered in the existing
+            // roundtrip marks. Keep the budget unchanged and expose the two
+            // measured phases only for explicitly requested timing probes.
+            eprintln!(
+                "command_intake_sample={}",
+                serde_json::json!({
+                    "command_id": command_id,
+                    "authentication_ms": authentication_ms,
+                    "identity_stamping_ms":
+                        started.elapsed().as_secs_f64() * 1_000.0 - authentication_ms,
+                })
+            );
+        }
     }
     let _command_timing_probe = install_command_timing_probe(&command);
     let native_authorization = recoverable_background_control_claim_authorization(root, &command);
-    let control_claim = if is_rxdb_control_command_type(&command.command_type) {
-        Some(channels::claim_business_control_command(
-            root,
-            business_command_core_claim_with_authorization(
-                &command_id,
-                &command,
-                native_authorization.as_ref(),
-            )?,
+    let control_intent = if is_rxdb_control_command_type(&command.command_type) {
+        Some(business_command_core_claim_with_authorization(
+            &command_id,
+            &command,
+            native_authorization.as_ref(),
         )?)
     } else {
         None
     };
+    let domain_effect_hash = domain_effect::supports_command(&command.command_type)
+        .then(|| {
+            control_intent
+                .as_ref()
+                .map(|claim| claim.payload_hash.clone())
+        })
+        .flatten();
+    let control_claim = control_intent
+        .map(|claim| channels::claim_business_control_command(root, claim))
+        .transpose()?;
     let _external_sql_execution_guard =
         if super::external_sql_sync::is_external_sql_command(&command.command_type) {
             match ActiveExternalSqlControlCommand::try_acquire(&command_id) {
@@ -664,6 +704,10 @@ pub fn accept_rxdb_business_command_with_origin(
         .as_ref()
         .is_some_and(|claim| claim.disposition == "new");
     let conn = open_store(root)?;
+    // Only proof-bearing domain commands bypass the uncertain replay shortcut.
+    // Authentication and central policy still run before reading their result.
+    let resumes_domain_effect =
+        domain_effect_hash.is_some() && domain_effect::contains(&conn, &command_id)?;
     let existing_status: Option<String> = conn
         .query_row(
             "SELECT status FROM business_commands WHERE command_id = ?1",
@@ -677,6 +721,7 @@ pub fn accept_rxdb_business_command_with_origin(
         && existing_status.as_deref() == Some("accepted")
         && is_recoverable_background_control_command_type(&command.command_type);
     if !owns_new_control_claim
+        && !resumes_domain_effect
         && !resumes_recoverable_accepted_claim
         && existing_status.as_deref() != Some("waiting_dependencies")
         && existing_status.is_some()
@@ -759,6 +804,7 @@ pub fn accept_rxdb_business_command_with_origin(
         let claim = control_claim.context("business control command claim is missing")?;
         match claim.disposition {
             "new" => {}
+            _ if resumes_domain_effect => {}
             "terminal" => {
                 let terminal_status = claim.terminal_status.as_deref().unwrap_or("completed");
                 let result = claim.result.unwrap_or(Value::Null);
@@ -842,7 +888,9 @@ pub fn accept_rxdb_business_command_with_origin(
         );
     }
 
-    let prepared = PreparedBusinessCommand::from_command(&command)?;
+    let mut prepared = PreparedBusinessCommand::from_command(&command)?;
+    prepared.domain_effect_hash = domain_effect_hash;
+    prepared.owns_new_control_claim = owns_new_control_claim;
     match CommandAuthorizationStage::for_command(&command) {
         CommandAuthorizationStage::Policy(requirement) => {
             match enforce_command_policy(
@@ -1006,6 +1054,10 @@ impl CentralCommandPolicyRequirement {
             Some(CommandPolicyRequirement::workspace(
                 BusinessOsPermission::DataRead,
             ))
+        } else if super::project_chats::is_command(command_type) {
+            Some(CommandPolicyRequirement::workspace(
+                BusinessOsPermission::DataWrite,
+            ))
         } else if matches!(
             command_type,
             "ctox.workjet.project.upsert"
@@ -1160,6 +1212,9 @@ impl CentralCommandPolicyRequirement {
 struct PreparedBusinessCommand {
     channel_mutation: Option<ChannelCommandRequest>,
     report_mutation: Option<BusinessOsReportMutation>,
+    domain_effect_hash: Option<String>,
+    owns_new_control_claim: bool,
+    domain_effect_admission: Option<DomainEffectAdmission>,
 }
 
 impl PreparedBusinessCommand {
@@ -1227,13 +1282,38 @@ fn dispatch_business_command_with_outcome(
     root: &Path,
     command_id: &str,
     command: &BusinessCommand,
-    prepared: PreparedBusinessCommand,
+    mut prepared: PreparedBusinessCommand,
     authorized_session: Option<&BusinessOsSession>,
 ) -> anyhow::Result<Value> {
+    let domain_identity = if let Some(hash) = prepared.domain_effect_hash.as_ref() {
+        let actor = authorized_session
+            .and_then(session_user_id)
+            .context("domain effect recovery requires central authenticated identity")?;
+        if let Some(outcome) = recover_applied_domain_effect(root, command, hash, actor)? {
+            return Ok(outcome);
+        }
+        anyhow::ensure!(
+            prepared.owns_new_control_claim,
+            "uncertain domain command has no applied-effect receipt"
+        );
+        prepared.domain_effect_admission = Some(DomainEffectAdmission::newly_claimed(
+            command_id, hash, actor,
+        )?);
+        Some((hash.clone(), actor.to_owned()))
+    } else {
+        None
+    };
     let dispatched =
-        dispatch_business_command(root, command_id, command, prepared, authorized_session)?;
+        dispatch_business_command(root, command_id, command, prepared, authorized_session);
+    // A handler error after COMMIT must never become terminal failure. Recover
+    // the durable result first; publication errors leave the claim recoverable.
+    if let Some((hash, actor)) = domain_identity {
+        if let Some(outcome) = recover_applied_domain_effect(root, command, &hash, &actor)? {
+            return Ok(outcome);
+        }
+    }
     mark_command_timing_handler_completed();
-    write_business_command_dispatch_outcome(root, command, dispatched)
+    write_business_command_dispatch_outcome(root, command, dispatched?)
 }
 
 fn authorized_dispatch_session<'a>(
@@ -1376,6 +1456,32 @@ fn dispatch_business_command(
         | "ctox.business_os.why" => {
             handle_business_os_command(root, command).map(BusinessCommandDispatchOutcome::Returned)
         }
+        "ctox.workjet.project.chat.ensure"
+        | "ctox.workjet.project.chat.create"
+        | "ctox.workjet.project.worker.add"
+        | "ctox.workjet.project.worker.remove"
+        | "ctox.workjet.worker_profile.bind"
+        | "ctox.workjet.worker_profile.unbind" => {
+            let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
+            let owner = session_user_id(session)
+                .context("authorized Workjet chat command is missing a user identity")?;
+            match super::project_chats::handle_command(
+                root,
+                command,
+                owner,
+                prepared
+                    .domain_effect_admission
+                    .as_ref()
+                    .context("new Workjet chat mutation requires domain admission")?,
+            ) {
+                Ok(outcome) => Ok(BusinessCommandDispatchOutcome::completed(outcome, None)),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
+                    None,
+                    serde_json::json!({"ok": false, "error": error.to_string()}),
+                    error,
+                )),
+            }
+        }
         "ctox.workjet.project.list"
         | "ctox.workjet.project.upsert"
         | "ctox.workjet.working_copy.upsert" => {
@@ -1388,6 +1494,7 @@ fn dispatch_business_command(
                 command,
                 owner_user_id,
                 owner_email.as_deref(),
+                prepared.domain_effect_admission.as_ref(),
             ) {
                 Ok(outcome) => Ok(BusinessCommandDispatchOutcome::completed(outcome, None)),
                 Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
@@ -1857,6 +1964,10 @@ fn write_rxdb_control_command_state(
     terminal: bool,
 ) -> anyhow::Result<Value> {
     let command_id = command.id.as_deref().context("command id is required")?;
+    if terminal && status != "completed" && domain_effect::contains(&open_store(root)?, command_id)?
+    {
+        anyhow::bail!("applied domain effect cannot be terminalized as a failed mutation");
+    }
     mark_command_timing_handler_completed();
     let now = now_ms() as i64;
     let target_task_id = if command.command_type.starts_with("ctox.task.") {
@@ -1964,7 +2075,19 @@ fn write_rxdb_control_command_state(
         attach_command_timing_to_result(&mut result);
         projection["result"] = result.clone();
     }
-    upsert_rxdb_collection_record(root, "business_commands", command_id, now, projection)?;
+    // Both writes belong to this command. Retain its writer until canonical
+    // completion instead of reopening and inspecting the entire RxDB schema.
+    let mut projection_writers = RxdbProjectionWriterCache::new(root);
+    let projection_started = command_timing_probe_requested(command).then(std::time::Instant::now);
+    projection_writers.upsert("business_commands", command_id, now, projection)?;
+    if let Some(started) = projection_started {
+        let sample = serde_json::json!({
+            "command_id": command_id,
+            "initial_rxdb_projection_ms": started.elapsed().as_secs_f64() * 1_000.0,
+        })
+        .to_string();
+        eprintln!("command_initial_projection_sample={sample}");
+    }
     // Readers treat the canonical terminal transition as a completion barrier.
     // Publish it only after the chat and all local/RxDB projections are durable.
     if let Some(terminal_status) = canonical_terminal_status {
@@ -1981,6 +2104,7 @@ fn write_rxdb_control_command_state(
                         .and_then(Value::as_str)
                 })
                 .flatten(),
+            &mut projection_writers,
         )?;
     }
     Ok(serde_json::json!({
@@ -2007,7 +2131,11 @@ pub(super) fn complete_and_project_business_control_command(
     terminal_status: &str,
     result: &Value,
     error_message: Option<&str>,
+    projection_writers: &mut RxdbProjectionWriterCache,
 ) -> anyhow::Result<()> {
+    let completion_started = COMMAND_TIMING_PROBE
+        .with(|slot| slot.borrow().is_some())
+        .then(std::time::Instant::now);
     let mut delay_ms = 10_u64;
     for attempt in 0..6 {
         match channels::complete_business_control_command(
@@ -2034,19 +2162,38 @@ pub(super) fn complete_and_project_business_control_command(
     // The core transition is the completion barrier. Mirror its canonical
     // lifecycle document synchronously afterwards so a transient outbox lag
     // cannot leave readers with status=completed but terminal_status=none.
+    let core_completed_ms =
+        completion_started.map(|started| started.elapsed().as_secs_f64() * 1_000.0);
     let canonical = channels::business_command_projection(root, command_id)?;
+    let canonical_read_ms =
+        completion_started.map(|started| started.elapsed().as_secs_f64() * 1_000.0);
     persist_business_command_lifecycle_projection(root, &canonical)?;
+    let local_projected_ms =
+        completion_started.map(|started| started.elapsed().as_secs_f64() * 1_000.0);
     let updated_at_ms = canonical
         .get("updated_at_ms")
         .and_then(Value::as_i64)
         .unwrap_or_else(|| now_ms() as i64);
-    upsert_rxdb_collection_record(
-        root,
-        "business_commands",
-        command_id,
-        updated_at_ms,
-        canonical,
-    )
+    projection_writers.upsert("business_commands", command_id, updated_at_ms, canonical)?;
+    if let Some((((started, core_ms), read_ms), local_ms)) = completion_started
+        .zip(core_completed_ms)
+        .zip(canonical_read_ms)
+        .zip(local_projected_ms)
+    {
+        // A browser can observe the first RxDB projection while this serial
+        // intake is still completing the canonical claim. Measure that tail
+        // separately; never subtract it from the end-to-end command budget.
+        let sample = serde_json::json!({
+            "command_id": command_id,
+            "core_completion_ms": core_ms,
+            "canonical_read_ms": read_ms - core_ms,
+            "local_projection_ms": local_ms - read_ms,
+            "rxdb_projection_ms": started.elapsed().as_secs_f64() * 1_000.0 - local_ms,
+        })
+        .to_string();
+        eprintln!("command_terminal_sample={sample}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2780,15 +2927,19 @@ mod tests {
     ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        let business_store = open_store(root)?;
+        let rxdb = create_repair_rxdb_tables(root)?;
 
-        for (suffix, terminal_status, expected_route, error_message) in [
-            ("success", "completed", "handled", None),
+        for (suffix, terminal_status, expected_route, error_message, reject_projection) in [
+            ("success", "completed", "handled", None, false),
             (
                 "failure",
                 "failed",
                 "failed",
                 Some("synthetic terminal failure"),
+                false,
             ),
+            ("projection-rollback", "completed", "leased", None, true),
         ] {
             let command_id = format!("cmd_terminal_linked_queue_{suffix}");
             let command = BusinessCommand {
@@ -2828,7 +2979,31 @@ mod tests {
                 "test worker leased linked task",
             )?;
 
-            channels::complete_business_control_command(
+            let initial_projection = serde_json::json!({
+                "id": task_id,
+                "command_id": command_id,
+                "status": "running",
+                "route_status": "leased",
+            });
+            upsert_business_record(
+                &business_store,
+                "ctox_queue_tasks",
+                &task_id,
+                1,
+                initial_projection.clone(),
+            )?;
+            rxdb.execute(
+                "INSERT INTO ctox_business_os__ctox_queue_tasks__v0(id, data) VALUES(?1, ?2)",
+                params![task_id, serde_json::to_string(&initial_projection)?],
+            )?;
+            if reject_projection {
+                rxdb.execute_batch(
+                    "CREATE TRIGGER reject_linked_queue_projection
+                     BEFORE UPDATE ON ctox_business_os__ctox_queue_tasks__v0
+                     BEGIN SELECT RAISE(ABORT, 'injected linked queue projection failure'); END;",
+                )?;
+            }
+            let completion = channels::complete_business_control_command(
                 root,
                 &command_id,
                 terminal_status,
@@ -2837,7 +3012,16 @@ mod tests {
                     "status": terminal_status,
                 }),
                 error_message,
-            )?;
+            );
+            if reject_projection {
+                let error = completion.expect_err("a failed projection must abort completion");
+                assert!(format!("{error:#}").contains("injected linked queue projection failure"));
+                let canonical = channels::business_command_projection(root, &command_id)?;
+                assert_eq!(canonical["execution_phase"], "leased");
+                assert_eq!(canonical["terminal_status"], "none");
+            } else {
+                completion?;
+            }
 
             let task = channels::load_queue_task(root, &task_id)?
                 .context("linked queue task must remain loadable after terminalization")?;
@@ -2845,8 +3029,29 @@ mod tests {
                 task.route_status, expected_route,
                 "terminal command must settle its canonical queue task without repair"
             );
-            assert!(task.lease_owner.is_none());
-            assert!(task.leased_at.is_none());
+            if reject_projection {
+                assert_eq!(task.lease_owner.as_deref(), Some("ctox-test"));
+                assert!(task.leased_at.is_some());
+            } else {
+                assert!(task.lease_owner.is_none());
+                assert!(task.leased_at.is_none());
+            }
+            let local_projection: String = business_store.query_row(
+                "SELECT payload_json FROM business_records WHERE collection = 'ctox_queue_tasks' AND record_id = ?1",
+                [&task_id], |row| row.get(0),
+            )?;
+            let replicated_projection: String = rxdb.query_row(
+                "SELECT data FROM ctox_business_os__ctox_queue_tasks__v0 WHERE id = ?1",
+                [&task_id],
+                |row| row.get(0),
+            )?;
+            for raw in [local_projection, replicated_projection] {
+                let projection: Value = serde_json::from_str(&raw)?;
+                assert_eq!(projection["route_status"], expected_route);
+                if reject_projection {
+                    assert_eq!(projection["status"], "running");
+                }
+            }
         }
 
         Ok(())
@@ -2973,6 +3178,11 @@ mod tests {
     #[test]
     fn command_timing_probe_writes_ordered_native_marks() -> anyhow::Result<()> {
         let root = tempdir()?;
+        let rxdb = create_repair_rxdb_tables(root.path())?;
+        super::super::store::reset_rxdb_collection_writer_open_count(
+            root.path(),
+            "business_commands",
+        );
         let command_id = "cmd_timing_probe_on";
         let command = BusinessCommand {
             origin: CommandOrigin::TrustedLocal,
@@ -3013,6 +3223,63 @@ mod tests {
         assert!(committed >= completed);
         assert!(timing.get("capability_token").is_none());
         assert!(timing.get("payload").is_none());
+        assert_eq!(
+            super::super::store::rxdb_collection_writer_open_count(
+                root.path(),
+                "business_commands"
+            ),
+            1,
+            "one command must retain its projection writer through canonical completion",
+        );
+        let persisted: String = rxdb.query_row(
+            "SELECT data FROM ctox_business_os__business_commands__v1 WHERE id = ?1",
+            [command_id],
+            |row| row.get(0),
+        )?;
+        let persisted: Value = serde_json::from_str(&persisted)?;
+        assert_eq!(persisted["execution_phase"], "terminal");
+        assert_eq!(persisted["terminal_status"], "completed");
+        Ok(())
+    }
+
+    #[test]
+    fn control_completion_without_queue_link_does_not_open_queue_projections() -> anyhow::Result<()>
+    {
+        let root = tempdir()?;
+        drop(open_store(root.path())?); // Register the real projection hooks.
+        let command_id = "cmd_core_only_completion";
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some(command_id.into()),
+            module: "ctox".into(),
+            command_type: "ctox.provider_subscription.status".into(),
+            record_id: None,
+            payload: serde_json::json!({}),
+            client_context: serde_json::json!({}),
+        };
+        channels::claim_business_control_command(
+            root.path(),
+            business_command_core_claim(command_id, &command)?,
+        )?;
+        let projection_path = rxdb_store_path(root.path());
+        std::fs::create_dir_all(projection_path.parent().unwrap())?;
+        std::fs::write(&projection_path, b"unavailable queue projection database")?;
+        channels::complete_business_control_command(
+            root.path(),
+            command_id,
+            "completed",
+            &serde_json::json!({"ok": true}),
+            None,
+        )?;
+        let canonical = channels::business_command_projection(root.path(), command_id)?;
+        assert_eq!(canonical["terminal_status"], "completed");
+        // Completion stays durable/idempotent even when unrelated queue
+        // projection storage cannot be opened. Delivery still has its outbox.
+        let replay = channels::claim_business_control_command(
+            root.path(),
+            business_command_core_claim(command_id, &command)?,
+        )?;
+        assert_eq!(replay.disposition, "terminal");
         Ok(())
     }
 }

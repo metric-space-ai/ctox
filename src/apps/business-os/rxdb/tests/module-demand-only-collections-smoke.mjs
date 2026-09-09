@@ -309,17 +309,24 @@ function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null
 {
   const { runtime, starts, cancels } = createMockSyncRuntime();
   const lease = await runtime.leaseCollection('desktop_file_chunks', 'module-demand-only-restart-smoke');
-  await runtime.restartCollection('desktop_file_chunks');
+  const originalBridge = lease.bridge;
+  const replacementBridge = await runtime.restartCollection('desktop_file_chunks');
+  assert.notEqual(replacementBridge, originalBridge, 'runtime creates a replacement bridge');
+  assert.equal(lease.bridge === replacementBridge, true, 'retained lease must expose the current authoritative bridge after restart');
   assert.equal(starts.length, 2, 'restartCollection preserves the demand-only lease and restarts replication');
   assert.deepEqual(cancels, ['desktop_file_chunks']);
   await runtime.restartCollections(['desktop_file_chunks']);
+  assert.notEqual(lease.bridge, replacementBridge, 'the retained lease follows a batch restart too');
   assert.equal(starts.length, 3, 'restartCollections preserves the demand-only lease and restarts replication');
   assert.deepEqual(cancels, ['desktop_file_chunks', 'desktop_file_chunks']);
   await runtime.suspendCollections(['desktop_file_chunks'], 'module-demand-only-suspend-smoke');
+  assert.equal(lease.bridge.state, null, 'suspend cannot expose the retired replication state');
   assert.deepEqual(cancels, ['desktop_file_chunks', 'desktop_file_chunks', 'desktop_file_chunks']);
   await runtime.resumeCollections(['desktop_file_chunks']);
   assert.equal(starts.length, 4, 'resumeCollections preserves the demand-only lease after suspension');
+  assert.ok(lease.bridge.state, 'resume publishes the new state through the same lease');
   assert.equal(await lease.release(), true, 'lease release succeeds after restart/suspend/resume');
+  assert.equal(lease.bridge.mode, 'released', 'a released lease never returns a usable state');
   assert.deepEqual(
     cancels,
     ['desktop_file_chunks', 'desktop_file_chunks', 'desktop_file_chunks', 'desktop_file_chunks'],
@@ -341,6 +348,7 @@ function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null
     assert.equal(follower.isLeader(), false);
     lease = await runtime.leaseCollection('desktop_file_chunks', 'active-file-transfer');
     const direct = await runtime.startCollection('desktop_file_chunks', { forceDirect: true });
+    assert.equal(lease.bridge, direct, 'follower promotion updates the existing lease without app-side assignment');
     const acquired = await runtime.startCollection('desktop_file_chunks', { pin: false });
     assert.equal(acquired === direct, true, 'ordinary acquisition must retain the direct bridge serving an active transfer');
     assert.equal(await runtime.startCollection('desktop_file_chunks', { forceDirect: true }), direct);
