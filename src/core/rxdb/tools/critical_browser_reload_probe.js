@@ -37,7 +37,7 @@ function summarize(samples, requiredCollections) {
 }
 
 async function runCriticalBrowserReloads({ page, requiredCollections, waitForHealthyCompleteStatus,
-  assertHealthyAdvancedStatusContract, outputPath }) {
+  assertHealthyAdvancedStatusContract, readNativeLayout, outputPath }) {
   const samples = [];
   const url = page.url();
   const persist = () => {
@@ -91,7 +91,11 @@ async function runCriticalBrowserReloads({ page, requiredCollections, waitForHea
     sampleCount: report.sampleCount, p95Ms: report.p95Ms, limitP95Ms: report.limitP95Ms, issues: report.issues,
   })}`);
   if (!report.ok) throw new Error(report.issues.join('; '));
-  return { mode: 'critical-browser-reload-timing', report };
+  const pins = await require('./desktop_pin_reload_probe.js').runDesktopPinReload({
+    page, readNativeLayout,
+    outputPath: path.join(path.dirname(outputPath), 'desktop-pin-reload.json'),
+  });
+  return { mode: 'critical-browser-reload-timing', report, pins };
 }
 
 module.exports = { summarize, runCriticalBrowserReloads };

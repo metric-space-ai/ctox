@@ -7717,6 +7717,11 @@ function ensureCtoxSmokeBinary() {
       ? await require('./critical_browser_reload_probe.js').runCriticalBrowserReloads({
         page, requiredCollections: BUSINESS_OS_SHELL_STATUS_COLLECTIONS,
         waitForHealthyCompleteStatus, assertHealthyAdvancedStatusContract,
+        readNativeLayout: () => {
+          const table = nativeCollectionTable('desktop_layout');
+          const row = sqlite(`SELECT data FROM ${quoteSqlIdentifier(table)} WHERE id='layout' AND deleted=0 LIMIT 1;`).trim();
+          return row ? JSON.parse(row) : null;
+        },
         outputPath: path.join(smokeProcessLifecyclePath ? path.dirname(smokeProcessLifecyclePath) : runtimeRoot,
           'critical-browser-reload.json'),
       })
