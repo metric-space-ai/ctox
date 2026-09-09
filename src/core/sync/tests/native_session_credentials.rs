@@ -136,14 +136,14 @@ async fn exercise(wrong_key: bool, revoke_peer_only: bool) {
                 && !policy_revoked.load(Ordering::SeqCst)
         }));
         server_options.admission.eager_pull = Some(Arc::new(|_, _| true));
-        let server = NativeSyncSession::start(server_options).await.unwrap();
         let source_key = Arc::new(ctox_sync::authority::auth::SigningIdentity::from_pkcs8(
             &ctox_sync::authority::auth::SigningIdentity::generate_pkcs8().unwrap()
         ).unwrap());
         let source_pin = source_key.public_identity();
         let identity_revoked = revoked.clone();
-        let identity_transport = server.pool().connection_handler.clone();
-        server.pool().set_auxiliary_request_handler(
+        let server = NativeSyncSession::start_with_pool_setup(server_options, |pool| {
+        let identity_transport = pool.connection_handler.clone();
+        pool.register_auxiliary_request_handler(
             ctox_sync::business_data_contract::CTOX_BUSINESS_DATA_IDENTITY_METHOD,
             Arc::new(move |peer_id, token, params| {
                 let key = source_key.clone();
@@ -164,7 +164,8 @@ async fn exercise(wrong_key: bool, revoke_peer_only: bool) {
                     serde_json::to_value(proof).map_err(|_| "invalid identity".to_string())
                 })
             }),
-        );
+        )
+        }).await.unwrap();
         let mut server_errors = server.pool().error_subject.subscribe();
         let (client_root, client_db, mut client_options) = native_fixture::control_options(
             signaling.url.clone(),

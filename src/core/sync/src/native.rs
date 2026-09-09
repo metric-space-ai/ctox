@@ -126,6 +126,17 @@ impl Drop for Resources {
 
 impl NativeSyncSession {
     pub async fn start(options: NativeSyncOptions) -> io::Result<Self> {
+        Self::start_with_pool_setup(options, |_| Ok(())).await
+    }
+
+    /// Install host-owned request handlers and file sources before advertising
+    /// this peer. Setup runs once, inside the supervised bring-up boundary;
+    /// rejection or panic closes the transport without joining the room.
+    /// The callback must only register resources, never block or start workers.
+    pub async fn start_with_pool_setup<F>(options: NativeSyncOptions, setup: F) -> io::Result<Self>
+    where
+        F: FnOnce(&NativePool) -> Result<(), rxdb::rx_error::RxError> + Send,
+    {
         if options.room.trim().is_empty()
             || options.peer_session_id.trim().is_empty()
             || options.bringup_timeout.is_zero()
@@ -181,8 +192,9 @@ impl NativeSyncSession {
                     )
                     .await?,
                 );
+                setup(resources.pool.as_ref().expect("prepared native pool"))?;
                 // Only advertise this peer after every pool request/connect
-                // subscriber exists. Native peers may offer immediately on join.
+                // subscriber and host handler exists. Peers may offer on join.
                 signaling.join(options.room).await?;
                 Ok::<(), rxdb::rx_error::RxError>(())
             })
@@ -251,31 +263,38 @@ impl NativeSyncSession {
             return Err(failure());
         }
         let challenge = fresh_challenge()?;
-        let channel_binding = self
-            .pool()
-            .connection_handler
-            .channel_binding(&connection)
-            .await
-            .map_err(|_| failure())?;
         let request = NativeBusinessDataIdentityRequest {
             version: CTOX_BUSINESS_DATA_PROTOCOL_VERSION,
             challenge: challenge.clone(),
         };
-        let exchange = send_message_and_await_answer(
-            self.pool().connection_handler.clone(),
-            connection.clone(),
-            WebRTCMessage {
-                id: format!("business-identity-{challenge}"),
-                method: CTOX_BUSINESS_DATA_IDENTITY_METHOD.into(),
-                params: vec![serde_json::to_value(request).map_err(|_| failure())?],
-                collection: None,
-            },
-        );
-        let response = tokio::select! {
+        // SDP access can await transport locks too. Both channel lookup and
+        // wire exchange belong to one deadline and the pool cancellation scope.
+        let exchange = async {
+            let channel_binding = self
+                .pool()
+                .connection_handler
+                .channel_binding(&connection)
+                .await
+                .map_err(|_| failure())?;
+            let response = send_message_and_await_answer(
+                self.pool().connection_handler.clone(),
+                connection.clone(),
+                WebRTCMessage {
+                    id: format!("business-identity-{challenge}"),
+                    method: CTOX_BUSINESS_DATA_IDENTITY_METHOD.into(),
+                    params: vec![serde_json::to_value(request).map_err(|_| failure())?],
+                    collection: None,
+                },
+            )
+            .await
+            .map_err(|_| failure())?;
+            Ok::<_, io::Error>((response, channel_binding))
+        };
+        let (response, channel_binding) = tokio::select! {
             biased;
-            _ = self.pool().query_cancellation() => return Err(failure()),
+            _ = self.pool().cancelled() => return Err(failure()),
             response = tokio::time::timeout(Duration::from_secs(10), exchange) => {
-                response.map_err(|_| failure())?.map_err(|_| failure())?
+                response.map_err(|_| failure())??
             }
         };
         if !self.pool().is_peer_ready_for_control(&connection)

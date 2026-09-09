@@ -71,6 +71,14 @@ not depend permanently on `state.db` in a warm Business OS guest.
 
 ## Source proof and principal lookup
 
+`NativeSyncSession::start_with_pool_setup` installs host-owned handlers and file
+sources before joining the signaling room. Business OS uses this boundary for
+identity, browser-live, device and lookup requests plus demand file sources.
+Setup rejection or panic tears down the transport through the existing lifecycle;
+the peer must not advertise partial readiness. The callback only registers host
+resources and must not block or launch independent workers. This closes the
+post-join registration race; it does not bypass peer or session authorization.
+
 The generated contract now includes `NativeBusinessDataIdentityRequest` and
 `NativeBusinessDataPeerIdentity`, served by `ctox.business_data.identity.v1` on
 the existing RxDB/WebRTC auxiliary channel. The server signs the fresh 32-byte

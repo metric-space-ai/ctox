@@ -174,7 +174,7 @@ pub async fn fetch_query_page<H: WebRTCConnectionHandler + 'static>(
                 return Ok(page);
             }
             tokio::select! {
-                _ = pool.query_cancellation() => return Err(failure("query_pool_closed")),
+                _ = pool.cancelled() => return Err(failure("query_pool_closed")),
                 item = responses.next() => {
                     let item = item.ok_or_else(|| failure("response_stream_closed"))?;
                     if item.peer != peer || item.response.id != id { continue; }

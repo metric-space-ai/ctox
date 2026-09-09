@@ -2870,8 +2870,8 @@ async fn run_native_peer(
                 },
             ))
         };
-        let bringup =
-            ctox_sync::native::NativeSyncSession::start(ctox_sync::native::NativeSyncOptions {
+        let bringup = ctox_sync::native::NativeSyncSession::start_with_pool_setup(
+            ctox_sync::native::NativeSyncOptions {
                 peer_role: ctox_sync::native::NativePeerRole::CtoxInstance,
                 local_session_provider: None,
                 database: Arc::clone(&database),
@@ -2891,22 +2891,8 @@ async fn run_native_peer(
                     live_change: collection_live_change,
                 },
                 bringup_timeout: Duration::from_secs(NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS),
-            });
-        // Bring-up failure is FATAL for this run: returning the error hands
-        // control to the supervision loop, which respawns with backoff. The
-        // previous behavior — log and keep running with an empty pool list —
-        // produced the canonical zombie: heartbeat "running", zero
-        // replication, no retry, until a manual daemon restart.
-        match bringup.await {
-            Ok(session) => {
-                let pool = session.pool();
-                if let Ok(mut breaker) = native_peer_circuit_breaker().lock() {
-                    breaker.record_success();
-                }
-                eprintln!(
-                    "[business-os] multiplexed WebRTC replication up for {collection_count} \
-                     collections on one connection (room `{sync_room}`)"
-                );
+            },
+            |pool| {
                 // Phase 4: register demand-fetch file SOURCES on the pool's file
                 // fetch registry so `rxdb.file.fetch` actually serves bytes for
                 // the file-bearing chunk collections (without a source the
@@ -2916,7 +2902,7 @@ async fn run_native_peer(
                 register_demand_file_sources(pool, &database, &root);
                 let browser_live_root = root.clone();
                 let browser_live_database = Arc::clone(&database);
-                pool.set_auxiliary_request_handler(
+                pool.register_auxiliary_request_handler(
                     BROWSER_LIVE_WEBRTC_METHOD,
                     Arc::new(move |_peer_identity, capability_token, params| {
                         let root = browser_live_root.clone();
@@ -2931,9 +2917,9 @@ async fn run_native_peer(
                             .await
                         })
                     }),
-                );
+                )?;
                 let outbound_lookup_root = root.clone();
-                pool.set_auxiliary_request_handler(
+                pool.register_auxiliary_request_handler(
                     OUTBOUND_SELLIFY_LOOKUP_WEBRTC_METHOD,
                     Arc::new(move |_peer_identity, capability_token, params| {
                         let root = outbound_lookup_root.clone();
@@ -2954,11 +2940,11 @@ async fn run_native_peer(
                                 .map_err(|error| error.to_string())
                         })
                     }),
-                );
+                )?;
                 let workjet_device_root = root.clone();
                 let business_data_root = root.clone();
                 let identity_transport = pool.connection_handler.clone();
-                pool.set_auxiliary_request_handler(
+                pool.register_auxiliary_request_handler(
                     ctox_sync::business_data_contract::CTOX_BUSINESS_DATA_IDENTITY_METHOD,
                     Arc::new(move |peer_identity, capability_token, params| {
                         let root = business_data_root.clone();
@@ -2984,8 +2970,8 @@ async fn run_native_peer(
                             .map_err(|_| "BusinessData identity task failed".to_string())?
                         })
                     }),
-                );
-                pool.set_auxiliary_request_handler(
+                )?;
+                pool.register_auxiliary_request_handler(
                     WORKJET_DEVICE_WEBRTC_METHOD,
                     Arc::new(move |_peer_identity, capability_token, params| {
                         let root = workjet_device_root.clone();
@@ -2994,6 +2980,23 @@ async fn run_native_peer(
                                 .await
                         })
                     }),
+                )?;
+                Ok(())
+            },
+        );
+        // Bring-up failure is FATAL for this run: returning the error hands
+        // control to the supervision loop, which respawns with backoff. The
+        // previous behavior — log and keep running with an empty pool list —
+        // produced the canonical zombie: heartbeat "running", zero
+        // replication, no retry, until a manual daemon restart.
+        match bringup.await {
+            Ok(session) => {
+                if let Ok(mut breaker) = native_peer_circuit_breaker().lock() {
+                    breaker.record_success();
+                }
+                eprintln!(
+                    "[business-os] multiplexed WebRTC replication up for {collection_count} \
+                     collections on one connection (room `{sync_room}`)"
                 );
                 pools.push(session);
             }

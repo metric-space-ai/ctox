@@ -728,7 +728,9 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         }
     }
 
-    pub(super) async fn query_cancellation(&self) {
+    /// Wait for this pool's shutdown request without polling. Safe to await
+    /// before, during or after cancellation; this does not initiate shutdown.
+    pub async fn cancelled(&self) {
         let notified = self.query_cancelled.notified();
         tokio::pin!(notified);
         notified.as_mut().enable();
