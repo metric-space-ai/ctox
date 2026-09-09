@@ -215,6 +215,8 @@ jobs:
       - name: Chat interaction and delayed storage presentation
         if: ${{ !cancelled() }}
         run: |
+          CONTEXT_MENU_PROOF_DIR="$RUNNER_TEMP/ctox-chat-proof/context-menu-lifecycle" \
+            node src/apps/business-os/scripts/assert-context-menu-lifecycle.mjs
           BUSINESS_CHAT_BEHAVIOR_OUTPUT_DIR="$RUNNER_TEMP/ctox-chat-proof/chat-behavior" \
             node src/apps/business-os/scripts/assert-business-chat-behavior.mjs
       - name: Retain browser presentation evidence

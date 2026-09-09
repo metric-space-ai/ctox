@@ -1,14 +1,14 @@
-import { CtoxResizer } from './shared/resizer.js?v=20260909-shell-v2-native-profile-v364';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260909-shell-v2-native-profile-v364';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260909-shell-v2-native-profile-v364';
-import { createAppActions } from './shared/app-actions.js?v=20260909-shell-v2-native-profile-v364';
+import { CtoxResizer } from './shared/resizer.js?v=20260909-shell-v2-context-lifecycle-v365';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260909-shell-v2-context-lifecycle-v365';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260909-shell-v2-context-lifecycle-v365';
+import { createAppActions } from './shared/app-actions.js?v=20260909-shell-v2-context-lifecycle-v365';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260909-shell-v2-native-profile-v364';
+} from './shared/app-lifecycle.js?v=20260909-shell-v2-context-lifecycle-v365';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -16,20 +16,20 @@ import {
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260909-shell-v2-native-profile-v364';
+} from './shared/permissions.js?v=20260909-shell-v2-context-lifecycle-v365';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260909-shell-v2-native-profile-v364';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260909-shell-v2-native-profile-v364';
+} from './shared/branding.js?v=20260909-shell-v2-context-lifecycle-v365';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260909-shell-v2-context-lifecycle-v365';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260909-shell-v2-native-profile-v364';
+} from './shared/presentation.js?v=20260909-shell-v2-context-lifecycle-v365';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -40,9 +40,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260909-shell-v2-native-profile-v364';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260909-shell-v2-native-profile-v364';
-import { createDocumentsFacade } from './shared/documents.js?v=20260909-shell-v2-native-profile-v364';
+} from './shared/shell-permissions-ui.js?v=20260909-shell-v2-context-lifecycle-v365';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260909-shell-v2-context-lifecycle-v365';
+import { createDocumentsFacade } from './shared/documents.js?v=20260909-shell-v2-context-lifecycle-v365';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -50,16 +50,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260909-shell-v2-native-profile-v364';
+} from './shared/maintenance-state.js?v=20260909-shell-v2-context-lifecycle-v365';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260909-shell-v2-native-profile-v364';
+} from './shared/workspace-session.js?v=20260909-shell-v2-context-lifecycle-v365';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260909-shell-v2-native-profile-v364';
+} from './shared/taskbar-pins.js?v=20260909-shell-v2-context-lifecycle-v365';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -67,9 +67,9 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260909-shell-v2-native-profile-v364';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260909-shell-v2-native-profile-v364';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260909-shell-v2-native-profile-v364';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260909-shell-v2-context-lifecycle-v365';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260909-shell-v2-context-lifecycle-v365';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260909-shell-v2-context-lifecycle-v365';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -84,7 +84,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260909-shell-v2-native-profile-v364';
+const APP_BUILD = '20260909-shell-v2-context-lifecycle-v365';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -15106,6 +15106,13 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
   positionMenu();
 
   const form = globalCtoxContextMenuEl.querySelector('form');
+  // Submission may finish after this shared popover has been reopened. Only
+  // the form that started the request may close it; preserve a newer draft.
+  const hideSubmittedMenu = () => {
+    if (globalCtoxContextMenuEl?.querySelector('form') === form) {
+      hideGlobalCtoxContextMenu();
+    }
+  };
   const composer = globalCtoxContextMenuEl.querySelector('.ctox-context-composer');
   const textarea = globalCtoxContextMenuEl.querySelector('.ctox-context-textarea');
   const userRow = globalCtoxContextMenuEl.querySelector('.ctox-context-user-row');
@@ -15299,7 +15306,7 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
             record_id: context.record_id,
           },
         }, { until: 'local' });
-        hideGlobalCtoxContextMenu();
+        hideSubmittedMenu();
       } catch (error) {
         if (statusEl) statusEl.textContent = error?.message || chatNotReadyLabel;
       }
@@ -15329,7 +15336,7 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
     try {
       await createContextActionsFacade(mod).dispatch(mode, {
         openChat: true,
-        onPresented: hideGlobalCtoxContextMenu,
+        onPresented: hideSubmittedMenu,
         crew_identity: crew?.id ? { name: crew.name, shape: crew.shape, color: crew.color } : null,
         context,
         prompt: instruction,
@@ -15351,7 +15358,7 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
         visible_scope: agentScope,
         actor: agentScope.actor,
       });
-      hideGlobalCtoxContextMenu();
+      hideSubmittedMenu();
     } catch (error) {
       if (statusEl) statusEl.textContent = error?.message || chatNotReadyLabel;
     }
