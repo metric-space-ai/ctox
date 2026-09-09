@@ -458,7 +458,10 @@ test('global CTOX agent scope html uses business-facing labels and escapes value
     externalActions: 'approval_required',
   });
 
-  assert.match(html, /CTOX Zugriff/);
+  // The surface says "Crew", not "CTOX": the owner's wording rule replaced the
+  // system name with the crew everywhere the user reads it.
+  assert.match(html, /Crew-Zugriff/);
+  assert.doesNotMatch(html, /CTOX Zugriff/);
   assert.match(html, /Nutzer/);
   assert.match(html, /App/);
   assert.match(html, /Daten/);

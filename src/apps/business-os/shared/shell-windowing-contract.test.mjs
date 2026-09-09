@@ -274,8 +274,16 @@ test('all app launch routes converge on the shared window manager', () => {
   assert.match(appSource, /state\.windowManager\.create\(\{/);
   assert.match(appSource, /ownerId: `desktop-app:\$\{entry\.id\}`/);
   assert.match(appSource, /ownerId: `desktop-app:\$\{mod\.id\}`/);
-  for (const staticAppId of ['explorer', 'file-viewer']) {
-    assert.match(appSource, new RegExp(`id: '${staticAppId}'`));
+  // explorer and file-viewer used to be shell-owned static desktop apps; the
+  // module port (4ab89e374) turned them into real windowed modules, so they no
+  // longer appear as `id: '<app>'` literals in app.js. What must hold is that
+  // they still reach the desktop through the shared window manager: a windowed
+  // v2 manifest in the generated catalog, launched by `openWindowedModule`.
+  for (const portedAppId of ['explorer', 'file-viewer']) {
+    assert.match(appSource, new RegExp(`"id": "${portedAppId}"`), `${portedAppId} must stay in the generated offline catalog`);
+    const manifest = JSON.parse(readFileSync(new URL(`../modules/${portedAppId}/module.json`, import.meta.url), 'utf8'));
+    assert.equal(manifest?.layout?.shell, 'windowed', `${portedAppId} must launch as a window`);
+    assert.equal(manifest?.layout?.shell_contract, 'v2', `${portedAppId} must carry the v2 shell contract`);
   }
   assert.doesNotMatch(appSource, /id:\s*'code-editor',[\s\S]*?title:\s*'Source Editor'/);
   assert.match(appSource, /mountIntegratedModuleSource[\s\S]*?desktop-apps\/code-editor\/app\.js/);

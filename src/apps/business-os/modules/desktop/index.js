@@ -176,6 +176,7 @@ export async function mount(ctx) {
   const mountedAtMs = Date.now();
 
   // Wire up the live clock and date widget
+  let startClockTimer = null;
   const timeEl = refs.root.querySelector('[data-widget-time]');
   const dateEl = refs.root.querySelector('[data-widget-date]');
   if (refs.widgetStatus) refs.widgetStatus.textContent = t('platformActive', 'CTOX Plattform aktiv');
@@ -201,8 +202,13 @@ export async function mount(ctx) {
       }
     };
     updateClock();
-    const clockInterval = setInterval(updateClock, 1000);
-    cleanups.push(() => clearInterval(clockInterval));
+    // The timer starts only once the maintenance-sensitive icon persistence has
+    // succeeded: during maintenance `ensureIcons` can reject, and a desktop that
+    // never finished mounting must not keep a second-tick running behind it.
+    startClockTimer = () => {
+      const clockInterval = setInterval(updateClock, 1000);
+      cleanups.push(() => clearInterval(clockInterval));
+    };
   }
   wireSyncStatusWidget();
   const layoutCollection = ctx.db?.collection?.('desktop_layout');
@@ -213,6 +219,7 @@ export async function mount(ctx) {
   let iconPositionCache = readIconPositionCache();
   let iconsReadiness = readIconsReadiness();
   await ensureIcons(iconsCollection, launcher);
+  startClockTimer?.();
   await renderIcons();
 
   cleanups.push(subscribeIcons());

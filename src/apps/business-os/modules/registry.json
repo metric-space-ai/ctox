@@ -64,7 +64,12 @@
         "default_width": 1120,
         "default_height": 760,
         "min_width": 640,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/app-store.jpg",
+        "icon_asset_sha256": "b6e9bc5bfa8bb42b86748efc00e9b5e736c4a0b6809b6c763aa6e8e7164de108",
+        "icon_selection_sha256": "b6e9bc5bfa8bb42b86748efc00e9b5e736c4a0b6809b6c763aa6e8e7164de108",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Development",
       "version": "1.1.1",
@@ -136,7 +141,12 @@
         "default_width": 1280,
         "default_height": 820,
         "min_width": 640,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/appsec-pentest.jpg",
+        "icon_asset_sha256": "85fd7ee28a9d4f8a047569cbc376b63e5f26d16584272ccd0785fae638fb1a53",
+        "icon_selection_sha256": "85fd7ee28a9d4f8a047569cbc376b63e5f26d16584272ccd0785fae638fb1a53",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Security",
       "version": "0.2.0",
@@ -214,7 +224,11 @@
         "min_height": 480,
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-browser\"><defs><linearGradient id=\"grad-browser\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0ea5e9\" /><stop offset=\"100%\" stop-color=\"#22c55e\" /></linearGradient></defs><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"3\" fill=\"url(#grad-browser)\" fill-opacity=\"0.12\" stroke=\"url(#grad-browser)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><path d=\"M3 9h18\" stroke=\"url(#grad-browser)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><circle cx=\"7\" cy=\"6.5\" r=\"0.8\" fill=\"url(#grad-browser)\"></circle><circle cx=\"10\" cy=\"6.5\" r=\"0.8\" fill=\"url(#grad-browser)\"></circle><path d=\"M8 15h8M12 11v8\" stroke=\"url(#grad-browser)\" stroke-width=\"1.7\" stroke-linecap=\"round\"></path></svg>",
         "top": "browser tabs and address bar",
-        "center": "web page"
+        "center": "web page",
+        "icon_asset_sha256": "8fa94a7ae4b6db8885c0088a68cf736a23c0fd717a3711cd9b015c969f799a11",
+        "icon_selection_sha256": "8fa94a7ae4b6db8885c0088a68cf736a23c0fd717a3711cd9b015c969f799a11",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Workspace",
       "version": "0.3.0",
@@ -283,7 +297,12 @@
         "left": "Fibu-Navigationsstruktur & Kontenrahmen-Wähler",
         "center": "Aktiver Arbeitsbereich & Journale",
         "right": "Zugeordnete Belege, AI-Vorschläge & Begleitaktionen",
-        "third_pane_justification": "Belegvorschau, Kontierungshilfen und zugehörige Aktionen müssen bei breiten Finanzarbeitsplätzen neben Journal und Konten sichtbar bleiben; in kompakten Fenstern verschiebt die Shell sie in den gemeinsamen Drawer."
+        "third_pane_justification": "Belegvorschau, Kontierungshilfen und zugehörige Aktionen müssen bei breiten Finanzarbeitsplätzen neben Journal und Konten sichtbar bleiben; in kompakten Fenstern verschiebt die Shell sie in den gemeinsamen Drawer.",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/buchhaltung.jpg",
+        "icon_asset_sha256": "56b558dd0dbc5210bf6b0472ccef3df5602ce582b987ae04ee4c5f762d14eb0a",
+        "icon_selection_sha256": "56b558dd0dbc5210bf6b0472ccef3df5602ce582b987ae04ee4c5f762d14eb0a",
+        "icon_selection_candidate": "candidate-14",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Finance",
       "version": "1.0.2",
@@ -354,7 +373,12 @@
         "left": "Calendars and booking pages (grammar column)",
         "center": "EventCalendar surface with the Monat/Woche/Tag view band",
         "right": "Bookings and holds context for the selected booking page",
-        "third_pane_justification": "The bookings and holds auditing context belongs to a selected booking page and must stay beside the calendar grid in wide mode; it is hidden by default, auto-reveals on selection, and stacks below the grid in compact mode."
+        "third_pane_justification": "The bookings and holds auditing context belongs to a selected booking page and must stay beside the calendar grid in wide mode; it is hidden by default, auto-reveals on selection, and stacks below the grid in compact mode.",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/calendar.jpg",
+        "icon_asset_sha256": "c3de8ab4a29322bb08256ac953058904ac73d8d945df22f20df72ff988067f67",
+        "icon_selection_sha256": "c3de8ab4a29322bb08256ac953058904ac73d8d945df22f20df72ff988067f67",
+        "icon_selection_candidate": "candidate-05",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Productivity",
       "version": "1.0.2",
@@ -419,7 +443,12 @@
         "left": "Projects: Business OS apps the agent can work on",
         "center": "Chat with the pi agent (transcript + composer)",
         "right": "Live task artifact: free HTML the agent maintains about its run",
-        "third_pane_justification": "The agent's self-published progress artifact must stay visible while chatting — hiding it would blind the user to the running task."
+        "third_pane_justification": "The agent's self-published progress artifact must stay visible while chatting — hiding it would blind the user to the running task.",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/coding-agents.jpg",
+        "icon_asset_sha256": "1cf4cc4fd8e785f1b557be6dbbc3d0d8f02ab7462f9c16b17b163fc023c0bae3",
+        "icon_selection_sha256": "1cf4cc4fd8e785f1b557be6dbbc3d0d8f02ab7462f9c16b17b163fc023c0bae3",
+        "icon_selection_candidate": "candidate-09",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Development",
       "version": "0.2.6",
@@ -479,7 +508,12 @@
         "shell_contract": "v2",
         "shell_geometry_contract": "business-os-v2-global-1",
         "left": "Filter",
-        "center": "Einwilligungen"
+        "center": "Einwilligungen",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/consent.jpg",
+        "icon_asset_sha256": "a886247228318a5bf11d85a7e64ffd4f9e914454327718be8e1f451f9b032596",
+        "icon_selection_sha256": "a886247228318a5bf11d85a7e64ffd4f9e914454327718be8e1f451f9b032596",
+        "icon_selection_candidate": "candidate-13",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Operations",
       "version": "0.2.2",
@@ -547,7 +581,12 @@
         "left": "Conversation list filtered by channel and search",
         "center": "Selected conversation timeline with channel-aware messages",
         "right": "Contact card, related business records, and CTOX agent attribution",
-        "third_pane_justification": "The contact and linked-record inspector must stay visible beside long communication timelines in wide mode; compact mode moves it into the shared drawer."
+        "third_pane_justification": "The contact and linked-record inspector must stay visible beside long communication timelines in wide mode; compact mode moves it into the shared drawer.",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/conversations.jpg",
+        "icon_asset_sha256": "1656adf1e387e7db50c4b7f6ea99998de43ecd6373fc1bedeb760e3cd109941b",
+        "icon_selection_sha256": "1656adf1e387e7db50c4b7f6ea99998de43ecd6373fc1bedeb760e3cd109941b",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Collaboration",
       "version": "1.0.2",
@@ -673,7 +712,12 @@
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-credentials\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-credentials\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#14b8a6\" /><stop offset=\"100%\" stop-color=\"#6366f1\" /></linearGradient></defs><path d=\"M12 2l8 3v6c0 5-3.5 8-8 11-4.5-3-8-6-8-11V5l8-3z\" fill=\"url(#grad-credentials)\" fill-opacity=\"0.12\" stroke=\"url(#grad-credentials)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><circle cx=\"12\" cy=\"10\" r=\"2.4\" stroke=\"url(#grad-credentials)\" stroke-width=\"2\"></circle><path d=\"M12 12.4V16\" stroke=\"url(#grad-credentials)\" stroke-width=\"2\" stroke-linecap=\"round\"></path></svg>",
         "left": "Credential catalog and status",
         "center": "Set, rotate and remove credentials",
-        "right": "Security notes"
+        "right": "Security notes",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/credentials.jpg",
+        "icon_asset_sha256": "d796dc418c8f64faadc3f43e914a7bfb6ea6e6a4b54a7b6d643e6ff40b1f4e57",
+        "icon_selection_sha256": "d796dc418c8f64faadc3f43e914a7bfb6ea6e6a4b54a7b6d643e6ff40b1f4e57",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Security",
       "version": "0.1.2",
@@ -762,7 +806,12 @@
         "default_width": 1320,
         "default_height": 860,
         "min_width": 640,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/ctox.jpg",
+        "icon_asset_sha256": "595492dd0ab23f3db59a0ebe9a6ec8062b1b2a80cbc54f566ee32b0501bcf0ce",
+        "icon_selection_sha256": "595492dd0ab23f3db59a0ebe9a6ec8062b1b2a80cbc54f566ee32b0501bcf0ce",
+        "icon_selection_candidate": "candidate-02",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "System",
       "version": "1.1.2",
@@ -834,7 +883,12 @@
         "shell_geometry_contract": "business-os-v2-global-1",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-customers\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-customers\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\" /><stop offset=\"100%\" stop-color=\"#2563eb\" /></linearGradient></defs><path d=\"M4 20V7a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3v13\" fill=\"url(#grad-customers)\" fill-opacity=\"0.12\" stroke=\"url(#grad-customers)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M8 20v-5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v5\" stroke=\"url(#grad-customers)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M8 8h2M14 8h2M8 11h8\" stroke=\"url(#grad-customers)\" stroke-width=\"1.8\" stroke-linecap=\"round\"></path><circle cx=\"18\" cy=\"6\" r=\"3\" fill=\"#ffffff\" stroke=\"url(#grad-customers)\" stroke-width=\"1.5\"></circle><path d=\"M16.9 6h2.2M18 4.9v2.2\" stroke=\"url(#grad-customers)\" stroke-width=\"1.3\" stroke-linecap=\"round\"></path></svg>",
         "left": "Customer segments, saved views and review inbox",
-        "center": "Customer account list, opportunity pipeline and task workbench"
+        "center": "Customer account list, opportunity pipeline and task workbench",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/customers.jpg",
+        "icon_asset_sha256": "3a03210ceaa9ce7850ebd0409bff33e09e20e0c1850d9f84805682c307c4a5f9",
+        "icon_selection_sha256": "3a03210ceaa9ce7850ebd0409bff33e09e20e0c1850d9f84805682c307c4a5f9",
+        "icon_selection_candidate": "candidate-16",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Sales",
       "version": "1.0.1",
@@ -901,7 +955,12 @@
         "shell_geometry_contract": "business-os-v2-global-1",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-cv-print-builder\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-cv-print-builder\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\"/><stop offset=\"100%\" stop-color=\"#64748b\"/></linearGradient></defs><path d=\"M6 3h8l4 4v14H6z\" fill=\"url(#grad-cv-print-builder)\" fill-opacity=\"0.12\" stroke=\"url(#grad-cv-print-builder)\" stroke-width=\"2\" stroke-linejoin=\"round\"/><path d=\"M14 3v5h4\" stroke=\"url(#grad-cv-print-builder)\" stroke-width=\"2\" stroke-linejoin=\"round\"/><path d=\"M8.5 12h7M8.5 15h7M8.5 18h4\" stroke=\"url(#grad-cv-print-builder)\" stroke-width=\"1.8\" stroke-linecap=\"round\"/></svg>",
         "left": "Kandidatenliste und CV-Import",
-        "center": "Original-PDF, Split-Ansicht und Druckansicht"
+        "center": "Original-PDF, Split-Ansicht und Druckansicht",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/cv-print-builder.jpg",
+        "icon_asset_sha256": "bfda9b1a621037eb1d508614ddc3a9d4221abfe941976ddf326764d6b02c2b87",
+        "icon_selection_sha256": "bfda9b1a621037eb1d508614ddc3a9d4221abfe941976ddf326764d6b02c2b87",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Recruiting",
       "version": "0.1.2",
@@ -972,7 +1031,12 @@
         "drawers": {
           "left": "document metadata and import settings",
           "bottom": "diagnostics, export evidence, and selected document context"
-        }
+        },
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/documents.jpg",
+        "icon_asset_sha256": "31123bf173860e01f05eb6be2431f71925bab9f355241b2582d30a2d06aef216",
+        "icon_selection_sha256": "31123bf173860e01f05eb6be2431f71925bab9f355241b2582d30a2d06aef216",
+        "icon_selection_candidate": "candidate-05",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Knowledge",
       "version": "1.0.0",
@@ -1032,7 +1096,12 @@
         "shell_contract": "v2",
         "shell_geometry_contract": "business-os-v2-global-1",
         "left": "Filter",
-        "center": "E-Signatur"
+        "center": "E-Signatur",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/esign.jpg",
+        "icon_asset_sha256": "766c1175e036a870e4a28465ddc9e294bd0df22a9376e3acb8e125683026089f",
+        "icon_selection_sha256": "766c1175e036a870e4a28465ddc9e294bd0df22a9376e3acb8e125683026089f",
+        "icon_selection_candidate": "candidate-04",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Operations",
       "version": "0.2.1",
@@ -1161,7 +1230,7 @@
         "default_width": 760,
         "default_height": 560,
         "min_width": 520,
-        "min_height": 400
+        "min_height": 480
       },
       "category": "Workspace",
       "version": "1.0.0",
@@ -1197,9 +1266,9 @@
         },
         "minimum_size": {
           "width": 520,
-          "height": 400
+          "height": 480
         },
-        "multi_instance": true,
+        "multi_instance": false,
         "auto_restore": false
       },
       "source": "core",
@@ -1220,7 +1289,12 @@
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-importer\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-importer\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0ea5e9\" /><stop offset=\"100%\" stop-color=\"#6366f1\" /></linearGradient></defs><rect x=\"3\" y=\"9\" width=\"18\" height=\"12\" rx=\"2.5\" fill=\"url(#grad-importer)\" fill-opacity=\"0.12\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></rect><path d=\"M12 3v9\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M8.5 8.5 12 12l3.5-3.5\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path></svg>",
         "left": "Source: folder or GitHub",
         "center": "Durable porting and validation progress",
-        "right": "Live application evidence"
+        "right": "Live application evidence",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/importer.jpg",
+        "icon_asset_sha256": "13c493fc01ebc97db2fd6d098281ffde490761deadfbfc9963db7b8ecda60e61",
+        "icon_selection_sha256": "13c493fc01ebc97db2fd6d098281ffde490761deadfbfc9963db7b8ecda60e61",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "development",
       "version": "0.3.0",
@@ -1281,7 +1355,12 @@
         "shell_contract": "v2",
         "shell_geometry_contract": "business-os-v2-global-1",
         "left": "Filter",
-        "center": "Bewerbungseingang"
+        "center": "Bewerbungseingang",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/intake.jpg",
+        "icon_asset_sha256": "0a6d81e7d9c14b8526ab8d19f8344164d054db52fdc9b3856108f12729e532e7",
+        "icon_selection_sha256": "0a6d81e7d9c14b8526ab8d19f8344164d054db52fdc9b3856108f12729e532e7",
+        "icon_selection_candidate": "candidate-14",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Operations",
       "version": "0.2.1",
@@ -1340,7 +1419,12 @@
         "shell_contract": "v2",
         "shell_geometry_contract": "business-os-v2-global-1",
         "left": "Filter",
-        "center": "Interviews"
+        "center": "Interviews",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/interviews.jpg",
+        "icon_asset_sha256": "642cda9e3cb5c56c9ac63b46d731696087f980b48423501f2d8428bf5554f9d7",
+        "icon_selection_sha256": "642cda9e3cb5c56c9ac63b46d731696087f980b48423501f2d8428bf5554f9d7",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Recruiting",
       "version": "0.2.1",
@@ -1422,7 +1506,12 @@
         "left": "Rechnungs-Scopes, Status-Chips, Schnellfilter (ueberfaellig, Mahnstufe 1, offene Posten)",
         "center": "Editor und Detail mit Tabs (Stammdaten, Positionen, Steuern, Zahlungen, PDF, Verlauf)",
         "right": "Kunden-Inspector, offene Posten, AI-Aktionen (Mahnlauf, Skonto, Gutschrift)",
-        "third_pane_justification": "The financial inspector provides approval, open-item and customer context alongside the invoice editor; compact mode moves it into the shared drawer."
+        "third_pane_justification": "The financial inspector provides approval, open-item and customer context alongside the invoice editor; compact mode moves it into the shared drawer.",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/invoices.jpg",
+        "icon_asset_sha256": "1a0828f86f17d972434a30390e81f7d58fb8bff6e4fd4f9f5a7476088c36c52e",
+        "icon_selection_sha256": "1a0828f86f17d972434a30390e81f7d58fb8bff6e4fd4f9f5a7476088c36c52e",
+        "icon_selection_candidate": "candidate-04",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Finance",
       "version": "0.1.2",
@@ -1496,7 +1585,12 @@
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-iot\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-iot\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\" /><stop offset=\"100%\" stop-color=\"#2563eb\" /></linearGradient></defs><circle cx=\"12\" cy=\"12\" r=\"3\" fill=\"url(#grad-iot)\" fill-opacity=\"0.18\" stroke=\"url(#grad-iot)\" stroke-width=\"2\"></circle><path d=\"M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4\" stroke=\"url(#grad-iot)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14\" stroke=\"url(#grad-iot)\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-opacity=\"0.7\"></path></svg>",
         "left": "Realm scope, asset/signal tree; right-click a signal to create an order or a webhook source",
         "center": "Dashboards of automation widgets (the three CTOX-programmed parts: trigger logic, widget code, order prompt), Karten ⇄ Liste",
-        "right": ""
+        "right": "",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/iot.jpg",
+        "icon_asset_sha256": "47e1a59d94e34baa238268a4eb5ec8190b8211e885ac418e106bb0de25bd2e43",
+        "icon_selection_sha256": "47e1a59d94e34baa238268a4eb5ec8190b8211e885ac418e106bb0de25bd2e43",
+        "icon_selection_candidate": "candidate-14",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Operations",
       "version": "1.0.2",
@@ -1585,7 +1679,11 @@
         "default_width": 1200,
         "default_height": 720,
         "min_width": 360,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset_sha256": "257526ec6c932c287be864be47e7e7708f32d136d587ab2d17da6cc62629c220",
+        "icon_selection_sha256": "6aaaac3c849a444f1bc8af3e4f019eb4eded5ad64ac70ec85eee5c54cdb06e3b",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Knowledge",
       "version": "1.1.7",
@@ -1733,7 +1831,12 @@
         "left": "Operative Eingangs-, Ausgangs-, Freigabe-, Fehler- und Routing-Queues sowie Kampagnen",
         "center": "Paginierte Massenansicht mit Seitenauswahl, Filtern und Bulk-Aktionen",
         "right": "Nachrichtenkontext, Routing-Evidenz und Kampagnensteuerung",
-        "third_pane_justification": "Der Nachrichten- oder Kampagnenkontext bleibt beim Scannen der Mail-Liste sichtbar; in schmalen Fenstern stapelt die App die Bereiche."
+        "third_pane_justification": "Der Nachrichten- oder Kampagnenkontext bleibt beim Scannen der Mail-Liste sichtbar; in schmalen Fenstern stapelt die App die Bereiche.",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/mail.jpg",
+        "icon_asset_sha256": "dd943203a5729623a71df00b3c994f5a9085cf8d1373c6c7f440494409f3bcc4",
+        "icon_selection_sha256": "dd943203a5729623a71df00b3c994f5a9085cf8d1373c6c7f440494409f3bcc4",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Collaboration",
       "version": "1.0.0",
@@ -1802,7 +1905,12 @@
           "right": "Object pool configuration and selected record detail",
           "bottom": "Matching prompt, schema, task status, and evidence"
         },
-        "third_pane_justification": "Matching is an evidence app (IA-Karte): left = requirements, main = ranked match workbench; the third pane is the parsed CV/object evidence for the selected match — hidden by default, auto-reveals on selection."
+        "third_pane_justification": "Matching is an evidence app (IA-Karte): left = requirements, main = ranked match workbench; the third pane is the parsed CV/object evidence for the selected match — hidden by default, auto-reveals on selection.",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/matching.jpg",
+        "icon_asset_sha256": "3ececa42f99f1d63104468b920b6fea37fcc398186cae1f3b409de1647e2c3b7",
+        "icon_selection_sha256": "3ececa42f99f1d63104468b920b6fea37fcc398186cae1f3b409de1647e2c3b7",
+        "icon_selection_candidate": "candidate-02",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Operations",
       "version": "1.0.2",
@@ -1862,7 +1970,12 @@
         "shell_contract": "v2",
         "shell_geometry_contract": "business-os-v2-global-1",
         "left": "Subjekt- und Statusfilter",
-        "center": "Nachweise mit Ablauf und Verifikationsstatus"
+        "center": "Nachweise mit Ablauf und Verifikationsstatus",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/nachweise.jpg",
+        "icon_asset_sha256": "cd43c8c297a229317fab2d9cd399e889e7377a6dcf16025bf52a1ce325f6d76a",
+        "icon_selection_sha256": "cd43c8c297a229317fab2d9cd399e889e7377a6dcf16025bf52a1ce325f6d76a",
+        "icon_selection_candidate": "candidate-11",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Operations",
       "version": "0.2.1",
@@ -1925,7 +2038,12 @@
         "left": "Folders and note list",
         "center": "Markdown editor and rich text live preview",
         "right": "Command dashboard and formatting shortcuts",
-        "third_pane_justification": "Editor-type app (IA-Karte): left = books/tags nav + note list, main = rich-text editor; the third pane is the justified reference/metadata surface of the editor layout."
+        "third_pane_justification": "Editor-type app (IA-Karte): left = books/tags nav + note list, main = rich-text editor; the third pane is the justified reference/metadata surface of the editor layout.",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/notes.jpg",
+        "icon_asset_sha256": "aa1aafef932cb21d16611927780be82d4a5d68c9b474b70308aaeda83be5cf8b",
+        "icon_selection_sha256": "aa1aafef932cb21d16611927780be82d4a5d68c9b474b70308aaeda83be5cf8b",
+        "icon_selection_candidate": "candidate-06",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Productivity",
       "version": "1.0.2",
@@ -2001,7 +2119,12 @@
         "shell_geometry_contract": "business-os-v2-global-1",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-outbound\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-outbound\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#ec4899\" /><stop offset=\"100%\" stop-color=\"#f43f5e\" /></linearGradient></defs><line x1=\"22\" y1=\"2\" x2=\"11\" y2=\"13\" stroke=\"url(#grad-outbound)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><polygon points=\"22 2 15 22 11 13 2 9 22 2\" fill=\"url(#grad-outbound)\" fill-opacity=\"0.12\" stroke=\"url(#grad-outbound)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polygon><path d=\"M6 19c3-1 6-1 9-3\" stroke=\"url(#grad-outbound)\" stroke-width=\"1.5\" stroke-dasharray=\"2 2\" stroke-linecap=\"round\"></path></svg>",
         "left": "campaign and sequence selection",
-        "center": "campaign, sequence, qualification, and sending workbench"
+        "center": "campaign, sequence, qualification, and sending workbench",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/outbound.jpg",
+        "icon_asset_sha256": "a47a0a7e7e42acf918ae7e8a64304566b62ce94d31513a33894e163fda735c5a",
+        "icon_selection_sha256": "a47a0a7e7e42acf918ae7e8a64304566b62ce94d31513a33894e163fda735c5a",
+        "icon_selection_candidate": "candidate-05",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Sales",
       "version": "0.2.3",
@@ -2062,7 +2185,12 @@
         "shell_contract": "v2",
         "shell_geometry_contract": "business-os-v2-global-1",
         "left": "Filter",
-        "center": "Vermittlungen"
+        "center": "Vermittlungen",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/placements.jpg",
+        "icon_asset_sha256": "f5818b645ddd2f8c4ea3f54a90b34003c1fb3fa86228b2f44ac5c4c90703079c",
+        "icon_selection_sha256": "f5818b645ddd2f8c4ea3f54a90b34003c1fb3fa86228b2f44ac5c4c90703079c",
+        "icon_selection_candidate": "candidate-13",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Recruiting",
       "version": "0.2.1",
@@ -2132,7 +2260,12 @@
         "default_width": 1120,
         "default_height": 760,
         "min_width": 640,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/reports.jpg",
+        "icon_asset_sha256": "f83ec81f7954a899490a63d02af84fc4d145f49184b7884b97a749a8bd373275",
+        "icon_selection_sha256": "f83ec81f7954a899490a63d02af84fc4d145f49184b7884b97a749a8bd373275",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Governance",
       "version": "1.1.2",
@@ -2206,7 +2339,12 @@
         "drawers": {
           "right": "task setup, scoring model, and selected source detail",
           "bottom": "Knowledge table diagnostics and raw row evidence"
-        }
+        },
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/research.jpg",
+        "icon_asset_sha256": "a888d0b6ca2053cd15030286577951004fb449a97e79980df76ffaf643e796fb",
+        "icon_selection_sha256": "a888d0b6ca2053cd15030286577951004fb449a97e79980df76ffaf643e796fb",
+        "icon_selection_candidate": "candidate-14",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Research",
       "version": "1.0.16",
@@ -2276,7 +2414,12 @@
           "left": "Arbeitszeitmodelle und Einstellungen",
           "right": "Dienstplaner und Detail-Inspektor",
           "bottom": "Schnelleingabe & Massenaktionen"
-        }
+        },
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/shiftflow.jpg",
+        "icon_asset_sha256": "19b53504a0ce1129bc049039aa24c1e5f2baa64f70afe6cc23011420e5a81ef0",
+        "icon_selection_sha256": "19b53504a0ce1129bc049039aa24c1e5f2baa64f70afe6cc23011420e5a81ef0",
+        "icon_selection_candidate": "candidate-14",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Operations",
       "version": "1.0.2",
@@ -2344,7 +2487,12 @@
         "drawers": {
           "left": "spreadsheet metadata and import settings",
           "bottom": "diagnostics, export evidence, and selected spreadsheet context"
-        }
+        },
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/spreadsheets.jpg",
+        "icon_asset_sha256": "664b5a31fa43c3d1135b15979c8348e0397dc648c37dbd823e681f4da35db284",
+        "icon_selection_sha256": "664b5a31fa43c3d1135b15979c8348e0397dc648c37dbd823e681f4da35db284",
+        "icon_selection_candidate": "candidate-05",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Analytics",
       "version": "1.0.1",
@@ -2404,7 +2552,12 @@
         "shell_contract": "v2",
         "shell_geometry_contract": "business-os-v2-global-1",
         "left": "Filter",
-        "center": "Vorstellungen"
+        "center": "Vorstellungen",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/submissions.jpg",
+        "icon_asset_sha256": "8cbfd230fafe8eacc84752410f1e1321024378125bb17189b9fcb7b7b39bfc13",
+        "icon_selection_sha256": "8cbfd230fafe8eacc84752410f1e1321024378125bb17189b9fcb7b7b39bfc13",
+        "icon_selection_candidate": "candidate-08",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Recruiting",
       "version": "0.2.1",
@@ -2493,7 +2646,12 @@
         "left": "Support queue, saved views, and channel filters",
         "center": "Selected support conversation timeline and composer",
         "right": "Customer context, ticket links, SLA, macros, and CTOX Agent suggestions",
-        "third_pane_justification": "Support operators need customer identity, linked tickets, SLA state, and CTOX suggestions visible while reading and replying; moving this context into drawers would force repeated context switches during every conversation."
+        "third_pane_justification": "Support operators need customer identity, linked tickets, SLA state, and CTOX suggestions visible while reading and replying; moving this context into drawers would force repeated context switches during every conversation.",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/support.jpg",
+        "icon_asset_sha256": "d5058006ec868a0ea19378ea477e16f8ddb51bb92c7817c1c39c390291e26235",
+        "icon_selection_sha256": "d5058006ec868a0ea19378ea477e16f8ddb51bb92c7817c1c39c390291e26235",
+        "icon_selection_candidate": "candidate-02",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Operations",
       "version": "0.1.2",
@@ -2567,7 +2725,12 @@
         "default_width": 1120,
         "default_height": 760,
         "min_width": 640,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/threads.jpg",
+        "icon_asset_sha256": "b4cf784881d8c5463837688755795dffbd66b5082333bf1508357df3a10d28ed",
+        "icon_selection_sha256": "b4cf784881d8c5463837688755795dffbd66b5082333bf1508357df3a10d28ed",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "System",
       "version": "0.2.4",
@@ -2644,7 +2807,12 @@
         "default_width": 1180,
         "default_height": 780,
         "min_width": 640,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/tickets.jpg",
+        "icon_asset_sha256": "6d0cbd2138977725b6043fd582b1d2b65b7214c8c9153ad7977942c26ebc4675",
+        "icon_selection_sha256": "6d0cbd2138977725b6043fd582b1d2b65b7214c8c9153ad7977942c26ebc4675",
+        "icon_selection_candidate": "candidate-02",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Operations",
       "version": "1.0.2",

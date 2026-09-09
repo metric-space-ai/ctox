@@ -101,11 +101,33 @@ for (const id of moduleDirs) {
   }
 }
 
+// The operator-selected raster icons are owned by their own manifest, not by the
+// module manifests. Since the registry became generated (393ba88ce) the layout
+// lost `icon_asset*`/`icon_selection*`, which broke the hash binding the icon
+// contract asserts (found 09.09.2026 with 32 of 34 icons unbound). The
+// generator merges them back from that single source.
+const operatorIconManifestPath = resolve(root, 'shared/assets/workjet-icons/operator-selection-v1/manifest.json');
+const operatorIcons = new Map(
+  (existsSync(operatorIconManifestPath) ? readJson(operatorIconManifestPath).icons || [] : [])
+    .map((icon) => [icon.appId, icon]),
+);
+
 // --- projection -------------------------------------------------------------
 function registryEntry(manifest) {
   const entry = {};
   for (const key of REGISTRY_ENTRY_KEYS) {
     if (Object.prototype.hasOwnProperty.call(manifest, key)) entry[key] = manifest[key];
+  }
+  const icon = operatorIcons.get(manifest.id);
+  if (icon) {
+    entry.layout = {
+      ...(entry.layout && typeof entry.layout === 'object' ? entry.layout : {}),
+      icon_asset: icon.renderAsset,
+      icon_asset_sha256: icon.renderSha256,
+      icon_selection_sha256: icon.sha256,
+      icon_selection_candidate: icon.candidateId,
+      icon_asset_kind: 'raster-reference',
+    };
   }
   return entry;
 }
