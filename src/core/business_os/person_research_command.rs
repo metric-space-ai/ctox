@@ -564,10 +564,10 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
         if field_key.starts_with("person_") && !has_person_records {
             contact[field_key] = value.clone();
         } else if !field_key.starts_with("person_") {
-            data[field_key] = if field_key == "firma_land" {
-                normalize_country_to_iso2(value)
-            } else {
-                value.clone()
+            data[field_key] = match field_key.as_str() {
+                "firma_land" => normalize_country_to_iso2(value),
+                "firma_domain" => normalize_domain(value),
+                _ => value.clone(),
             };
         }
         for candidate in field
@@ -1112,6 +1112,34 @@ fn same_person_by_name(left: &Value, right: &Value) -> bool {
     }
     let (left_first, right_first) = (first_token(left), first_token(right));
     left_first.is_empty() || right_first.is_empty() || left_first == right_first
+}
+
+/// A domain is a host, not a URL. Measured 09.09.2026: Aeroxon was stored as
+/// "www.aeroxon.de" while Beiersdorf was "beiersdorf.de", and Sellify would
+/// have received two spellings of the same kind of value. Anything that is not
+/// recognisably a host is left untouched.
+fn normalize_domain(value: &Value) -> Value {
+    let Some(text) = value.as_str() else {
+        return value.clone();
+    };
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
+        return value.clone();
+    }
+    let host = url::Url::parse(trimmed)
+        .ok()
+        .or_else(|| url::Url::parse(&format!("https://{trimmed}")).ok())
+        .and_then(|url| url.host_str().map(str::to_string))
+        .unwrap_or_else(|| trimmed.to_string());
+    let host = host
+        .trim()
+        .trim_end_matches('.')
+        .trim_start_matches("www.")
+        .to_ascii_lowercase();
+    if host.is_empty() || !host.contains('.') {
+        return value.clone();
+    }
+    Value::String(host)
 }
 
 /// Der Importer verlangt einen zweistelligen ISO-Code, die Recherche lieferte
@@ -2682,6 +2710,27 @@ mod tests {
                 "person_xing"
             ])
         );
+    }
+
+    #[test]
+    fn a_domain_is_stored_as_a_bare_host() {
+        let d = |value: &str| normalize_domain(&serde_json::json!(value));
+        assert_eq!(d("www.aeroxon.de"), serde_json::json!("aeroxon.de"));
+        assert_eq!(
+            d("https://www.aeroxon.de/"),
+            serde_json::json!("aeroxon.de")
+        );
+        assert_eq!(
+            d("https://beiersdorf.de/impressum"),
+            serde_json::json!("beiersdorf.de")
+        );
+        assert_eq!(d("Beiersdorf.DE"), serde_json::json!("beiersdorf.de"));
+        // Nothing that fails to look like a host is rewritten.
+        assert_eq!(
+            d("keine Domain bekannt"),
+            serde_json::json!("keine Domain bekannt")
+        );
+        assert_eq!(d("intranet"), serde_json::json!("intranet"));
     }
 
     #[test]
