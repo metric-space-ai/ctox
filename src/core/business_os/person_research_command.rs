@@ -596,6 +596,11 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
         }
     }
 
+    let person_records = person_records
+        .into_iter()
+        .map(restore_german_spelling_in_person_record)
+        .collect::<Vec<_>>();
+
     for record in &person_records {
         for candidate in record
             .get("evidence")
@@ -1160,6 +1165,51 @@ pub(super) fn restore_german_spelling_from_quotes(value: &str, quotes: &[&str]) 
         }
     }
     None
+}
+
+/// A person record carries its own quotes, so a surname stored as "Mueller"
+/// can take back the "Müller" its evidence spells out. Same rule as for company
+/// fields: without a quote that carries the German form, nothing changes.
+fn restore_german_spelling_in_person_record(mut record: Value) -> Value {
+    let quotes = record
+        .get("evidence")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            entry
+                .get("quote")
+                .or_else(|| entry.get("note"))
+                .and_then(Value::as_str)
+        })
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if quotes.is_empty() {
+        return record;
+    }
+    let quotes = quotes.iter().map(String::as_str).collect::<Vec<_>>();
+    let Some(fields) = record.as_object_mut() else {
+        return record;
+    };
+    for (key, value) in fields.iter_mut() {
+        // Machine-readable values are never respelled.
+        if key == "evidence"
+            || key == "person_key"
+            || key.ends_with("_url")
+            || key.contains("email")
+            || key.contains("linkedin")
+            || key.contains("xing")
+            || key.contains("telefon")
+            || key.contains("phone")
+        {
+            continue;
+        }
+        let Some(text) = value.as_str() else { continue };
+        if let Some(restored) = restore_german_spelling_from_quotes(text, &quotes) {
+            *value = Value::String(restored);
+        }
+    }
+    record
 }
 
 /// Applies [`restore_german_spelling_from_quotes`] to a researched field value,
@@ -2626,6 +2676,27 @@ mod tests {
                 "person_xing"
             ])
         );
+    }
+
+    #[test]
+    fn a_person_record_takes_the_spelling_of_its_own_quotes() {
+        let record = serde_json::json!({
+            "person_key": "p1",
+            "person_vorname": "Juergen",
+            "person_nachname": "Mueller",
+            "person_funktion": "Geschaeftsfuehrer",
+            "person_email": "j.mueller@example.test",
+            "evidence": [
+                {"field": "person_nachname", "quote": "Geschäftsführer Jürgen Müller"}
+            ]
+        });
+        let restored = restore_german_spelling_in_person_record(record);
+        assert_eq!(restored["person_vorname"], "Jürgen");
+        assert_eq!(restored["person_nachname"], "Müller");
+        assert_eq!(restored["person_funktion"], "Geschäftsführer");
+        // An address is not a word to be respelled.
+        assert_eq!(restored["person_email"], "j.mueller@example.test");
+        assert_eq!(restored["person_key"], "p1");
     }
 
     #[test]
