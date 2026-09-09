@@ -82,3 +82,12 @@ compilation, Clippy, native RxDB and browser checks but failed the new Crew repl
 test with SQLite error 517 and two outbound reconciliation tests. Stage-specific
 context is added to the Crew fixture to locate that conflict. These failures are
 still open; they are not evidence that the new context/plan tests passed.
+
+Crew finalization now starts with an immediate write transaction before reading
+`finalized_at`. This prevents a concurrent writer from invalidating that read
+snapshot before finalization writes. The regression uses SQLite's existing
+authorizer hook to attempt a second-connection write exactly when finalization
+prepares its first UPDATE, after its SELECT. It requires that competing write to
+be denied, finalization to succeed, and replay to leave counts at one. This is a
+source-level fix for an identified race; it is not yet proof that the original
+CI error was at this location or that the new Rust test passes.
