@@ -2,6 +2,7 @@ use super::*;
 use crate::plugins::replication_webrtc::{LocalDeviceProof, LocalSessionCredentials};
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
+include!("peer_filter_tests.rs");
 
 fn credentials(token: &str, nonce: Option<String>) -> LocalSessionCredentials {
     LocalSessionCredentials {

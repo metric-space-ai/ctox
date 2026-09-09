@@ -44,15 +44,20 @@ fn key() -> Arc<EcdsaKeyPair> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_device_credentials_unlock_real_webrtc_reads_and_obey_current_revocation() {
-    exercise(false).await;
+    exercise(false, false).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_device_credentials_from_another_key_cannot_unlock_replication() {
-    exercise(true).await;
+    exercise(true, false).await;
 }
 
-async fn exercise(wrong_key: bool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn native_peer_filter_revocation_denies_real_webrtc_reads_with_valid_credentials() {
+    exercise(false, true).await;
+}
+
+async fn exercise(wrong_key: bool, revoke_peer_only: bool) {
     tokio::time::timeout(Duration::from_secs(35), async {
         let signaling =
             signaling_fixture::SignalingFixture::with_roles(["ctox_instance", "workjet_executor"])
@@ -65,6 +70,7 @@ async fn exercise(wrong_key: bool) {
         };
         let public_key = expected_key.public_key().as_ref().to_vec();
         let revoked = Arc::new(AtomicBool::new(false));
+        let peer_allowed = Arc::new(AtomicBool::new(true));
         let verified_proofs = Arc::new(AtomicUsize::new(0));
         let (server_root, server_db, mut server_options) =
             native_fixture::options(signaling.url.clone(), "credential-room", "server-session")
@@ -74,6 +80,8 @@ async fn exercise(wrong_key: bool) {
             .await
             .unwrap();
         let (policy_revoked, proof_counter) = (revoked.clone(), verified_proofs.clone());
+        let peer_gate = peer_allowed.clone();
+        server_options.admission.peer = Arc::new(move |_| peer_gate.load(Ordering::SeqCst));
         server_options.admission.session = Arc::new(move |payload, challenge| {
             use WebRTCPeerSessionValidation::{Accept, Defer, Reject};
             if policy_revoked.load(Ordering::SeqCst)
@@ -216,8 +224,14 @@ async fn exercise(wrong_key: bool) {
                 "native_authenticated_read n=30 p50_us={} p95_us={}",
                 timings[14], timings[28]
             );
-            revoked.store(true, Ordering::SeqCst);
-            let response = send_message_and_await_answer(
+            if revoke_peer_only {
+                // Keep the capability, proof and document policy valid: only
+                // the incoming peer filter can deny this read.
+                peer_allowed.store(false, Ordering::SeqCst);
+            } else {
+                revoked.store(true, Ordering::SeqCst);
+            }
+            let result = send_message_and_await_answer(
                 client.pool().connection_handler.clone(),
                 connection,
                 WebRTCMessage {
@@ -227,10 +241,32 @@ async fn exercise(wrong_key: bool) {
                     collection: Some("records".into()),
                 },
             )
-            .await
-            .unwrap();
-            assert_eq!(response.result["code"], "RC_WEBRTC_PEER");
-            assert!(response.result.get("documents").is_none());
+            .await;
+            if revoke_peer_only {
+                let error = server_errors.next().await.unwrap();
+                assert_eq!(error.parameters()["code"], "peer_not_allowed");
+                assert!(!signaling_fixture::route_ready(
+                    server.pool(),
+                    "native000002"
+                ));
+                match result {
+                    Ok(response) => {
+                        assert_eq!(response.error.as_deref(), Some("peer_not_allowed"));
+                        assert!(response.result.is_null());
+                    }
+                    // Closing the transport may overtake its final denial.
+                    // The server error above must still prove the exact gate.
+                    Err(error) => assert_eq!(
+                        error.parameters()["message"],
+                        "peer disconnected before an answer was received"
+                    ),
+                }
+                assert!(!revoked.load(Ordering::SeqCst));
+            } else {
+                let response = result.unwrap();
+                assert_eq!(response.result["code"], "RC_WEBRTC_PEER");
+                assert!(response.result.get("documents").is_none());
+            }
         }
         client.shutdown().await;
         server.shutdown().await;

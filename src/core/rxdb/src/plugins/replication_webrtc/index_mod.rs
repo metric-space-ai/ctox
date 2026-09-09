@@ -549,6 +549,42 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         self.spawn_limited(Arc::clone(&self.request_semaphore), future);
     }
 
+    /// Apply the host's peer filter on both directions, before any RPC handler
+    /// or credential provider. Closing only an outbound handshake leaves the
+    /// shared incoming stream reachable by the same excluded transport.
+    async fn enforce_peer_filter(
+        &self,
+        peer: &H::Peer,
+        validator: Option<&WebRTCPeerValidator<H::Peer>>,
+        request: Option<&WebRTCMessage>,
+    ) -> bool {
+        if validator.is_none_or(|check| check(peer)) {
+            return true;
+        }
+        self.authenticated_peers.lock().remove(peer);
+        self.outbound_ready_peers.lock().remove(peer);
+        self.error_subject.next(new_rx_error(
+            "RC_WEBRTC_PEER",
+            Some(serde_json::json!({"code": "peer_not_allowed"})),
+        ));
+        if let Some(request) = request {
+            let _ = self
+                .connection_handler
+                .send(
+                    peer,
+                    WebRTCWireFrame::Response(WebRTCResponse {
+                        id: request.id.clone(),
+                        result: Value::Null,
+                        error: Some("peer_not_allowed".into()),
+                        collection: request.collection.clone(),
+                    }),
+                )
+                .await;
+        }
+        self.connection_handler.close_peer(peer).await;
+        false
+    }
+
     fn spawn_replication_request<F>(self: &Arc<Self>, method: &str, future: F)
     where
         F: std::future::Future<Output = ()> + Send + 'static,
@@ -1147,6 +1183,7 @@ where
         let peer_session_id = peer_session_id.clone();
         let is_peer_session_valid = is_peer_session_valid.clone();
         let authenticated_peers = Arc::clone(&authenticated_peers);
+        let is_peer_valid = is_peer_valid.clone();
         let mut msg_stream = connection_handler.message_stream();
         let t = tokio::spawn(async move {
             while let Some(item) = msg_stream.next().await {
@@ -1155,6 +1192,12 @@ where
                     .load(std::sync::atomic::Ordering::SeqCst)
                 {
                     break;
+                }
+                if !pool_clone
+                    .enforce_peer_filter(&item.peer, is_peer_valid.as_ref(), Some(&item.message))
+                    .await
+                {
+                    continue;
                 }
                 if is_peer_session_valid.is_some()
                     && !matches!(item.message.method.as_str(), "ctoxProtocol" | "token")
@@ -1329,6 +1372,7 @@ where
                 let peer_session_id = peer_session_id.clone();
                 let is_peer_session_valid = is_peer_session_valid.clone();
                 let request_method = item.message.method.clone();
+                let is_peer_valid = is_peer_valid.clone();
                 pool_clone.spawn_replication_request(&request_method, async move {
                     if pool_task
                         .canceled
@@ -1398,6 +1442,7 @@ where
                                 .and_then(|p| p.pointer("/peerSession/deviceProofNonce"));
                             if let Err(error) = super::local_session::attach_local_session(
                                 handler_task.as_ref(), &item.peer, &mut protocol, challenge,
+                                is_peer_valid.as_ref(),
                             ).await {
                                 pool_task.error_subject.next(error);
                                 let _ = handler_task.send(&item.peer, WebRTCWireFrame::Response(WebRTCResponse {
@@ -1584,11 +1629,6 @@ where
                 {
                     break;
                 }
-                if let Some(check) = &is_peer_valid {
-                    if !check(&peer) {
-                        continue;
-                    }
-                }
                 // FIX 5: spawn the per-peer handshake + master/fork build in
                 // its own task. The handshake performs two full request/answer
                 // round-trips (`ctoxProtocol`, then `token`) plus the fork
@@ -1610,10 +1650,17 @@ where
                 let is_peer_session_valid = is_peer_session_valid.clone();
                 let tuning = tuning.clone();
                 let peer_for_tracking = peer.clone();
+                let is_peer_valid = is_peer_valid.clone();
                 let handshake_task = tokio::spawn(async move {
                     if pool_clone
                         .canceled
                         .load(std::sync::atomic::Ordering::SeqCst)
+                    {
+                        return;
+                    }
+                    if !pool_clone
+                        .enforce_peer_filter(&peer, is_peer_valid.as_ref(), None)
+                        .await
                     {
                         return;
                     }
@@ -1648,6 +1695,7 @@ where
                         &peer,
                         &mut local_protocol,
                         None,
+                        is_peer_valid.as_ref(),
                     )
                     .await
                     {
@@ -1681,6 +1729,12 @@ where
                             return;
                         }
                     };
+                    if !pool_clone
+                        .enforce_peer_filter(&peer, is_peer_valid.as_ref(), None)
+                        .await
+                    {
+                        return;
+                    }
                     if let Some(check) = &is_peer_session_valid {
                         if check(&protocol_response.result, Some(&device_proof_nonce))
                             != WebRTCPeerSessionValidation::Accept
@@ -1803,6 +1857,12 @@ where
                             return;
                         }
                     };
+                    if !pool_clone
+                        .enforce_peer_filter(&peer, is_peer_valid.as_ref(), None)
+                        .await
+                    {
+                        return;
+                    }
                     let peer_token = token_response
                         .result
                         .as_str()

@@ -169,6 +169,17 @@ credential preparation. The receiver still verifies its own capability, device
 binding, revocation and per-document policy. This does not implement Workjet's
 authenticated instance resolver, business-data IPC subscriptions or UI consumer.
 
+The native `is_peer_valid` predicate gates both outgoing connections and every
+incoming RPC family, including protocol/token negotiation, demand queries,
+files and auxiliary requests. An excluded peer receives `peer_not_allowed`,
+loses control readiness and is closed. This check is repeated around asynchronous
+local credential preparation and after each outbound handshake response; a
+revocation during key-store work must not publish credentials or admit the peer.
+The predicate remains a host policy check, not proof of the remote instance's
+identity. Collection and document authorization remain separate. The production
+predicate reads the SQLite revocation store, so full-host command/boot budgets
+must be remeasured for changes at this boundary.
+
 Native protocol negotiation has four reserved request permits, independent
 of the 32 data-request permits and eight interactive auxiliary permits.
 Only `ctoxProtocol` and `token` use the handshake reservation; reads, writes

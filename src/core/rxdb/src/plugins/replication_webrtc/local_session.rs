@@ -1,6 +1,6 @@
 //! Host-owned credentials for the existing ctoxProtocol device-proof exchange.
 //! No token/key cache, remote authorization decision or new wire protocol.
-use super::webrtc_types::WebRTCConnectionHandler;
+use super::webrtc_types::{WebRTCConnectionHandler, WebRTCPeerValidator};
 use crate::rx_error::{new_rx_error, RxError};
 use futures::future::BoxFuture;
 use serde_json::{json, Value};
@@ -53,13 +53,14 @@ pub(crate) async fn attach_local_session<H: WebRTCConnectionHandler>(
     peer: &H::Peer,
     payload: &mut Value,
     challenge: Option<&Value>,
+    is_peer_valid: Option<&WebRTCPeerValidator<H::Peer>>,
 ) -> Result<(), RxError> {
     let nonce = match challenge {
         None | Some(Value::Null) => None,
         Some(Value::String(value)) if base64url(value, 43) => Some(value.clone()),
         _ => return Err(credential_error()),
     };
-    if !handler.is_peer_current(peer) {
+    if !handler.is_peer_current(peer) || is_peer_valid.is_some_and(|check| !check(peer)) {
         return Err(credential_error());
     }
     let credentials = tokio::time::timeout(
@@ -69,7 +70,7 @@ pub(crate) async fn attach_local_session<H: WebRTCConnectionHandler>(
     .await
     .map_err(|_| credential_error())?
     .map_err(|_| credential_error())?;
-    if !handler.is_peer_current(peer) {
+    if !handler.is_peer_current(peer) || is_peer_valid.is_some_and(|check| !check(peer)) {
         return Err(credential_error());
     }
     let Some(credentials) = credentials else {

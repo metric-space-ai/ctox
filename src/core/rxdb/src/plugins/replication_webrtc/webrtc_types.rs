@@ -285,6 +285,9 @@ pub trait WebRTCConnectionHandler: Send + Sync {
 }
 
 /// Signaling-peer admission predicate shared by WebRTC replication options.
+/// Checked for incoming RPCs as well as outgoing handshakes, and rechecked
+/// around asynchronous credential acquisition. This does not authenticate a
+/// server identity: credential providers still authorize the target instance.
 pub type WebRTCPeerValidator<P> = Arc<dyn Fn(&P) -> bool + Send + Sync>;
 
 /// Result of validating a full `ctoxProtocol.peerSession` envelope.
