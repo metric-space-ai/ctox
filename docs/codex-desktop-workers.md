@@ -1,0 +1,44 @@
+# Codex Desktop worker delegation on Michael's Mac
+
+Analyzed, bounded implementation subtasks can run as separate Desktop tasks using
+Grok 4.6, GLM 5.3 Flash or Kimi K3 through the existing CLIProxyAPI. OpenAI tasks
+retain their direct provider. This is an operator-side Codex Desktop workflow,
+separate from the embedded CTOX harness and Business OS coding sidecar.
+
+Canonical instructions and helper:
+[`src/tools/codex-desktop-workers/SKILL.md`](../src/tools/codex-desktop-workers/SKILL.md).
+Install that directory as `~/.codex/skills/proxy-model-workers/` and append its
+`GLOBAL-INSTRUCTIONS.md` as a clearly marked section in `~/.codex/AGENTS.md`.
+Do not install from an expiring symlink into a tmp worktree: use durable copies.
+The shared instructions govern future tasks; explicitly include them when
+assigning or correcting a task that was already running.
+
+The helper prepares a saved task with an explicit model/provider and a validated
+existing tmp worktree, records it durably, then stops its temporary app-server.
+The parent dispatches the prompt with the Desktop `send_message_to_thread` tool.
+This keeps the normal Desktop process responsible for execution and subsequent
+corrections. The app's model menu alone is not a provider selector.
+
+Worker registry: `~/.codex/proxy-workers/jobs/<thread-id>.json` and corresponding
+private prompt files. Each worker is disposable and owns exactly one PR. It waits
+for the parent review and makes corrections in that same PR. Before merging,
+the parent records a retrospective for the exact reviewed PR head and checks
+the shared `~/.codex/proxy-workers/MODEL-EXPERIENCE.md`. After merging, the parent
+checks `worker.py ready-to-archive`, verifies the task is idle, archives through
+the app tool, and records success using `worker.py archived`. This is a
+required part of the parent's completion step, not a scheduled monitor. Do not
+infer merge from task prose, PR closure or a local branch. Workers may not merge.
+Do not force-remove worktrees or touch unrelated processes. Failed, dirty or
+running workers remain visible for intervention.
+
+Rate limits and subscription quotas are temporary availability observations,
+not evidence of poor model quality. Record a known reset timestamp, or defer
+selection for 24 hours when it is unknown. Expired deferrals become eligible
+automatically. A later unchanged review preserves earlier quality findings.
+
+The connection probe on Codex 0.153.4 exercised two turns and a function-tool
+round trip for each proxy model; an OpenAI control task made zero proxy requests.
+The probe used conservative 128k context metadata and did not establish each
+provider's maximum context or compatibility with every Desktop tool. Provider
+metadata and observed requests establish routing; model self-identification does
+not. Grok reasoning was changed to high and verified in its Desktop turn context.
