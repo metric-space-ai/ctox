@@ -3899,7 +3899,10 @@ function chatInspectionContent(chat) {
   const current = messages.at(-1);
   const progress = executionProgressForChat(chat);
   const de = chatUiIsGerman();
-  const title = current ? friendlyCrewMessage(current.text) : (de ? 'Noch kein Arbeitsstand' : 'No work status yet');
+  const state = getTaskState(chat);
+  const title = state === 'success' ? (de ? 'Aufgabe abgeschlossen' : 'Task completed')
+    : state === 'failed' ? (de ? 'Bearbeitung fehlgeschlagen' : 'Task failed')
+      : current ? friendlyCrewMessage(current.text) : (de ? 'Bereit' : 'Ready');
   const states = de ? { pending: 'Offen', in_progress: 'In Arbeit', completed: 'Erledigt', failed: 'Fehlgeschlagen', blocked: 'Wartet' }
     : { pending: 'Pending', in_progress: 'Working', completed: 'Done', failed: 'Failed', blocked: 'Waiting' };
   const steps = (progress?.steps || []).map(step => `<li><span>${escapeHtml(step.label)}</span><small>${escapeHtml(states[step.status] || (de ? 'Offen' : 'Pending'))}</small></li>`).join('');

@@ -28,6 +28,7 @@ test('inspection separates system history from real replies and keeps an input i
     const conversation = hooks.chatMessagesMarkup(chat.messages);
     for (const text of ['2 + 2 = 4.', 'Welche Einheit?', 'Hier ist die Antwort.']) assert.ok(conversation.includes(text));
     assert.match(hooks.chatInspectionMarkup(chat), /data-task-id="task-test"/);
+    assert.equal(hooks.chatInspectionContent(chat).title, 'Aufgabe abgeschlossen', 'final reply supersedes old receipt in current status');
     assert.doesNotMatch(hooks.chatInspectionMarkup(chat), /2 \+ 2 = 4/);
     for (const status of ['pending', 'running', 'blocked', 'failed', 'completed']) {
       chat.messages = [user, { ...receipt, status, taskId: 'task-test' }];

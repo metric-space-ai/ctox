@@ -328,7 +328,15 @@ try {
       taskId: 'task_research_0', commandId: 'task_research_0', status: 'running',
       text: 'Ein neuer Arbeitsschritt läuft.', createdAt: Date.now(),
     }));
-    await inspection.getByText('Ein neuer Arbeitsschritt läuft.', { exact: true }).first().waitFor();
+    await inspection.getByText('Ein neuer Arbeitsschritt läuft.', { exact: true }).first().waitFor().catch(async (error) => {
+      console.error('live-projection-diagnostics', await page.evaluate(() => ({
+        stored: JSON.parse(localStorage.getItem('ctox.businessOs.chat.v1') || '{}'),
+        inspection: document.querySelector('.ctox-chat-window.is-active .ctox-chat-inspection')?.outerHTML,
+        focused: document.activeElement?.tagName,
+      })));
+      throw error;
+    });
+
     expect(await inspection.getAttribute('open') === '', 'live projection must keep inspection open');
     expect(await input.inputValue() === 'Bitte anschließend kurz zusammenfassen.', 'live projection must preserve the draft');
     expect(await input.evaluate(e => e === document.activeElement), 'live projection must preserve typing focus');
