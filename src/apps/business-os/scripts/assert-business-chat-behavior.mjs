@@ -860,10 +860,19 @@ function harnessHtml() {
         preCollapseExpandedChatIds: Array.isArray(options.preCollapseExpandedChatIds) ? options.preCollapseExpandedChatIds : [],
         chats,
       }));
+      // Progress fixtures represent a real, persisted queue task. Otherwise the
+      // normal tracking refresh correctly treats these 06:00 messages as orphaned
+      // and clears progress because neither command nor task exists in the DB.
+      const queueTasks = Array.isArray(options.queueTasks) ? options.queueTasks
+        : options.progressTracking ? chats.flatMap(chat => chat.messages
+          .filter(message => message.taskId && message.executionProgress)
+          .map(message => ({ id: message.taskId, command_id: message.commandId,
+            status: message.status, execution_progress: message.executionProgress }))) : [];
       initBusinessChat({
+
         session: { authenticated: true, user: { id: owner, name: 'Harness User' } },
         commandBus: makeCommandBus(options),
-        db: makeDb(chats, options.dbDelay || 0, Boolean(options.dbTransientError), Boolean(options.dbDeleteError), Number(options.crewMembers) || 0, Array.isArray(options.queueTasks) ? options.queueTasks : []),
+        db: makeDb(chats, options.dbDelay || 0, Boolean(options.dbTransientError), Boolean(options.dbDeleteError), Number(options.crewMembers) || 0, queueTasks),
         getActiveModule: () => ({ id: 'ctox', name: 'CTOX' }),
       });
       await waitFor(() => document.querySelector('[data-chat-dock]'));
