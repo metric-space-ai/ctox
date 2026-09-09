@@ -1451,6 +1451,14 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
             object_schema(vec![
                 required_string("module_id"),
                 required_string("action_id"),
+                (
+                    "idempotency_key",
+                    serde_json::json!({
+                        "type": "string",
+                        "description": "For ctox.delegate_task: preserve this key when retrying the same logical task. Changed intent is rejected; retries return the existing task and its current status. web_stack.person_research retains its existing retry contract. Other actions do not accept this field."
+                    }),
+                    false,
+                ),
                 optional_string("record_id"),
                 optional_string("title"),
                 optional_string("objective"),
@@ -1870,9 +1878,9 @@ pub fn upsert_user(
     store::upsert_user(root, &session, mutation)
 }
 
-/// Scope client retry keys to the resolved actor and workspace, not to the
-/// per-transport request id. The queue atomically rejects changed intent for
-/// the resulting command id. No key preserves the legacy new-request behavior.
+/// Scope app and delegated-task retry keys to the resolved actor and workspace,
+/// not to the per-transport request id. The queue atomically rejects changed
+/// intent for the resulting command id. No key preserves legacy new requests.
 fn mcp_app_command_id(
     context: &McpChannelRequestContext,
     actor: &Value,
@@ -4754,6 +4762,16 @@ pub fn execute_action(
         "business_os.execute_action",
         &policy_arguments,
     )?;
+    // Only durable queue delegation uses this retry contract. Other actions
+    // have their own execution semantics and must not silently ignore a key.
+    if arguments.get("idempotency_key").is_some()
+        && !matches!(action_id, "ctox.delegate_task" | "web_stack.person_research")
+    {
+        return Err(anyhow::Error::new(BusinessOsMcpError::validation(
+            "idempotency_key",
+            "this action has no execute_action retry-key contract",
+        )));
+    }
     let proposal = propose_action(root, context, module_id, action_id, arguments)?;
     if proposal.confirmation_required
         && context.confirmation_state != McpConfirmationState::Approved
@@ -4859,7 +4877,11 @@ pub fn execute_action(
         root,
         store::BusinessCommand {
             origin: store::CommandOrigin::TrustedLocal,
-            id: None,
+            id: if action_id == "ctox.delegate_task" {
+                mcp_app_command_id(context, &client_context["actor"], arguments)?
+            } else {
+                None
+            },
             module: module_id.to_string(),
             command_type: proposal.command_type.clone(),
             record_id: proposal.record_id.clone(),
@@ -10510,6 +10532,57 @@ mod tests {
             error.to_string().contains("idempotency_conflict"),
             "{error:#}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_app_retry_delegation_keeps_native_task_and_failure() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_default_mcp_admin(root)?;
+        write_module(root, "mcp-delegate", "MCP Delegate", &["delegate_items"])?;
+        let mut arguments = serde_json::json!({
+            "module_id": "mcp-delegate",
+            "action_id": "ctox.delegate_task",
+            "title": "Inspect inventory",
+            "objective": "Review the inventory and propose the next steps.",
+            "idempotency_key": "workjet-native-turn",
+            "_context": { "actor": "chatgpt:test-user", "workspace": "test", "request_id": "http-1" }
+        });
+        let first = call_tool(root, "business_os.execute_action", arguments.clone())?;
+        let command_id = first["command_id"].as_str().context("command id")?;
+        let task_id = first["task_id"].as_str().context("task id")?;
+        assert_eq!(first["command_type"], "ctox.delegate_task");
+        assert!(crate::mission::channels::load_queue_task(root, task_id)?.is_some());
+        arguments["_context"]["request_id"] = serde_json::json!("http-2");
+        let retry = call_tool(root, "business_os.execute_action", arguments.clone())?;
+        assert_eq!(retry["command_id"], command_id);
+        assert_eq!(retry["task_id"], task_id);
+        store::mark_business_command_failed(root, command_id, "test failure", 42)?;
+        let before = crate::mission::channels::business_command_projection(root, command_id)?;
+        arguments["_context"]["request_id"] = serde_json::json!("http-3");
+        let retry = call_tool(root, "business_os.execute_action", arguments.clone())?;
+        assert_eq!(retry["status"], "failed");
+        assert_eq!(retry["ok"], false);
+        assert_eq!(retry["task_id"], task_id);
+        assert_eq!(
+            crate::mission::channels::business_command_projection(root, command_id)?,
+            before
+        );
+        arguments["objective"] = serde_json::json!("A different request.");
+        let error = call_tool(root, "business_os.execute_action", arguments.clone()).unwrap_err();
+        assert!(
+            error.to_string().contains("idempotency_conflict"),
+            "{error:#}"
+        );
+        // Legacy clients without a key still explicitly create new work.
+        arguments
+            .as_object_mut()
+            .context("arguments")?
+            .remove("idempotency_key");
+        let separate = call_tool(root, "business_os.execute_action", arguments)?;
+        assert_ne!(separate["command_id"], command_id);
+        assert_ne!(separate["task_id"], task_id);
         Ok(())
     }
 
