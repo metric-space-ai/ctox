@@ -810,3 +810,134 @@ fn measures_real_mcp_and_replication_pages_with_repeated_execution_references() 
     );
     Ok(())
 }
+
+#[test]
+fn project_crew_admission_uses_native_chat_binding_and_rejects_revocation() -> anyhow::Result<()> {
+    use crate::mission::channels;
+    let root = fixture()?;
+    let added = add(root.path(), "crew-project-add")?;
+    let chat = added["first_chat_id"].as_str().unwrap();
+    let conn = open_store(root.path())?;
+    // Existing legacy profiles have no Crew binding: never pick a random
+    // identity and claim it is the worker shown in this private chat.
+    assert!(super::super::project_crew::member_for_chat(&conn, "owner", chat).is_err());
+    let core = Connection::open(crate::paths::core_db(root.path()))?;
+    crate::crew::ensure_schema(&core)?;
+    let soul = json!({"gruendlichkeit_vs_tempo":50,"vorsicht_vs_mut":50,
+        "knapp_vs_ausfuehrlich":50,"regeltreu_vs_kreativ":50,"nachfragen_vs_annehmen":50,
+        "sketch":"Project identity","voice":"Concise"})
+    .to_string();
+    for member in ["project-crew", "other-project-crew"] {
+        core.execute("INSERT INTO crew_members
+            (id,name,shape,color,created_at,archived,soul_json,specialties_json,stats_json,updated_at)
+            VALUES (?1,?1,'round','#123456','2026-09-09',0,?2,'{}','{}','2026-09-09')",
+            rusqlite::params![member,soul])?;
+    }
+    handle_command(
+        root.path(),
+        &command(
+            "ctox.workjet.worker_profile.bind",
+            "bind-project-crew",
+            json!({"worker_profile_id":"profile-uuid","computer_id":"computer","crew_member_id":"project-crew"}),
+        ),
+        "owner",
+    )?;
+    assert!(super::super::project_crew::member_for_chat(&conn, "other-user", chat).is_err());
+    let (_capability, _) = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        "owner",
+        "Owner",
+        "admin",
+        chrono::Utc::now().timestamp_millis(),
+    )?;
+    let request = json!({"thread_id":chat,"title":"Project task","instruction":"Work on the project",
+        "harness":"codex","timeout_seconds":10,"idempotency_key":"project-start-1",
+        "_context":{"actor":"owner","workspace":"project-test"}});
+    let start = |request: Value| {
+        mcp_channel::call_tool(root.path(), "business_os.start_crew_execution", request)
+    };
+    let accepted = start(request.clone())?;
+    let replay = start(request.clone())?;
+    assert_eq!(accepted["command_id"], replay["command_id"]);
+    assert_eq!(accepted["task_id"], replay["task_id"]);
+    assert_eq!(accepted["executor_id"], "computer");
+    assert_eq!(accepted["crew_member_id"], "project-crew");
+    let mut changed = request.clone();
+    changed["instruction"] = json!("Different intent");
+    assert!(start(changed).is_err());
+    let mut spoofed = request.clone();
+    spoofed["crew_member_id"] = json!("other-project-crew");
+    assert!(start(spoofed).is_err());
+    let mut foreign = request.clone();
+    foreign["_context"]["actor"] = json!("other-user");
+    assert!(start(foreign).is_err());
+    let canonical = channels::business_command_projection(
+        root.path(),
+        accepted["command_id"].as_str().unwrap(),
+    )?;
+    assert_eq!(canonical["command_type"], "business_os.chat.task");
+    assert_eq!(canonical["payload"]["thread_id"], chat);
+    assert_eq!(
+        canonical["payload"]["external_executor"]["executor_id"],
+        "computer"
+    );
+    let task_id = accepted["task_id"]
+        .as_str()
+        .context("project task missing")?;
+    assert_eq!(
+        super::super::project_crew_member_for_task(root.path(), task_id)?,
+        Some("project-crew".into())
+    );
+    channels::lease_queue_task(root.path(), task_id, "project-worker")?;
+    let prepare = || {
+        crate::crew::prepare_attempt(
+            root.path(),
+            &[task_id.to_owned()],
+            "project-worker",
+            "project-attempt",
+            Some(chat),
+            &json!({}),
+            None,
+            "Work on the project",
+            None,
+        )
+    };
+    let selected = prepare()?.context("bound project Crew missing")?;
+    assert_eq!(selected.member_id, "project-crew");
+    assert_eq!(
+        prepare()?
+            .context("resumed project Crew missing")?
+            .member_id,
+        "project-crew"
+    );
+    core.execute("UPDATE communication_routing_state SET crew_assigned_member_id='other-project-crew' WHERE message_key=?1", [task_id])?;
+    assert!(prepare()
+        .unwrap_err()
+        .to_string()
+        .contains("conflicts with the project worker"));
+    core.execute(
+        "UPDATE communication_routing_state SET crew_assigned_member_id=NULL WHERE message_key=?1",
+        [task_id],
+    )?;
+    handle_command(
+        root.path(),
+        &command(
+            "ctox.workjet.project.worker.remove",
+            "remove-project-crew",
+            json!({"project_id":"project","worker_profile_id":"profile-uuid"}),
+        ),
+        "owner",
+    )?;
+    assert!(super::super::project_crew_member_for_task(root.path(), task_id).is_err());
+    assert!(prepare().is_err());
+    let stored: String = core.query_row(
+        "SELECT member_id FROM crew_attempts WHERE attempt_id='project-attempt'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(
+        stored, "project-crew",
+        "revocation must not retarget the existing attempt"
+    );
+    Ok(())
+}

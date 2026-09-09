@@ -35,7 +35,16 @@ use super::policy::{
 use super::store;
 #[path = "mcp_writeback.rs"]
 mod command_writeback;
+#[path = "mcp_crew_context.rs"]
+mod crew_context;
+#[path = "mcp_crew_execution.rs"]
+mod crew_execution;
+#[path = "mcp_crew_plan.rs"]
+mod crew_plan;
+#[path = "mcp_project_crew.rs"]
+mod project_crew_request;
 pub(crate) use command_writeback::supports_command_writeback;
+pub(crate) use crew_execution::run as run_external_crew_turn;
 
 const DEFAULT_LIMIT: usize = 25;
 const MAX_LIMIT: usize = 100;
@@ -506,6 +515,12 @@ struct BusinessOsMcpInternalSessionClaims {
     allowed_actions: Vec<BusinessOsMcpAllowedAction>,
     #[serde(default)]
     allowed_collections: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    crew_binding: Option<crew_context::SessionBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    crew_work_key: Option<String>,
+    #[serde(default)]
+    crew_only: bool,
     issued_at_ms: i64,
     expires_at_ms: i64,
 }
@@ -661,14 +676,74 @@ pub(crate) fn issue_internal_command_session_token(
         payload_hash: payload_hash.to_string(),
         allowed_actions: allowed_actions_from_writeback_contract(writeback_contract)?,
         allowed_collections: normalized_string_array(writeback_contract.get("allowed_collections")),
+        crew_binding: None,
+        crew_work_key: None,
+        crew_only: false,
         issued_at_ms,
         expires_at_ms: issued_at_ms.saturating_add(MCP_INTERNAL_SESSION_TTL_MS),
     };
-    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims)?);
+    sign_internal_command_session_claims(root, &claims)
+}
+
+fn sign_internal_command_session_claims(
+    root: &Path,
+    claims: &BusinessOsMcpInternalSessionClaims,
+) -> anyhow::Result<String> {
+    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims)?);
     let secret = mcp_internal_session_signing_secret(root)?;
     let key = hmac::Key::new(hmac::HMAC_SHA256, &secret);
     let signature = URL_SAFE_NO_PAD.encode(hmac::sign(&key, payload.as_bytes()).as_ref());
     Ok(format!("{payload}.{signature}"))
+}
+
+/// Narrow an existing command grant to Crew coordination only.
+/// This never adds app, data, shell, or writeback authority.
+pub(crate) fn restrict_internal_command_session_to_crew(
+    root: &Path,
+    token: &str,
+) -> anyhow::Result<String> {
+    verify_internal_command_session_token(root, token)?;
+    let mut claims = decode_internal_command_session_token(root, token)?;
+    claims.crew_only = true;
+    sign_internal_command_session_claims(root, &claims)
+}
+
+fn crew_only_session_allows_tool(tool_name: &str, context: Option<&Value>) -> bool {
+    let restricted = context.is_some_and(|context| {
+        string_field(context, "auth_source").as_deref() == Some(MCP_INTERNAL_SESSION_AUTH_SOURCE)
+            && context.get("crew_only").and_then(Value::as_bool) == Some(true)
+    });
+    !restricted
+        || matches!(
+            tool_name,
+            "business_os.get_crew_context"
+                | "business_os.update_crew_plan"
+                | "business_os.list_crew_executions"
+                | "business_os.claim_crew_execution"
+                | "business_os.report_crew_execution"
+        )
+}
+
+/// Bind a native command session to the explicitly admitted attempt and lease.
+pub(crate) fn bind_internal_command_session_to_crew_attempt(
+    root: &Path,
+    token: &str,
+    attempt_id: &str,
+    work_key: &str,
+) -> anyhow::Result<String> {
+    anyhow::ensure!(!work_key.trim().is_empty(), "crew work key is empty");
+    verify_internal_command_session_token(root, token)?;
+    let mut claims = decode_internal_command_session_token(root, token)?;
+    anyhow::ensure!(
+        claims.crew_binding.is_none(),
+        "crew session is already bound"
+    );
+    claims.crew_work_key = Some(work_key.to_owned());
+    let conn = crew_context::open_read_connection(root)?;
+    claims.crew_binding = Some(
+        crew_context::live_binding(&conn, &claims.command_id, &claims.payload_hash, attempt_id)?.0,
+    );
+    sign_internal_command_session_claims(root, &claims)
 }
 
 fn verify_internal_command_session_token(root: &Path, token: &str) -> anyhow::Result<Value> {
@@ -701,7 +776,23 @@ fn verify_internal_command_session_token(root: &Path, token: &str) -> anyhow::Re
                 == Some(claims.role.as_str()),
         "Business OS internal command authorization changed"
     );
+    if let Some(expected) = claims.crew_binding.as_ref() {
+        let conn = crew_context::open_read_connection(root)?;
+        let (current, _) = crew_context::live_binding(
+            &conn,
+            &claims.command_id,
+            &claims.payload_hash,
+            &expected.attempt_id,
+        )?;
+        anyhow::ensure!(
+            &current == expected,
+            "crew session lease or identity changed"
+        );
+    }
     Ok(serde_json::json!({
+        "crew_binding": claims.crew_binding,
+        "crew_work_key": claims.crew_work_key,
+        "crew_only": claims.crew_only,
         "auth_source": MCP_INTERNAL_SESSION_AUTH_SOURCE,
         "channel": "ctox_internal_business_command",
         "surface": "business_os_command_session",
@@ -1100,6 +1191,45 @@ fn gateway_json_rpc_error(
 
 pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
     let mut tools = vec![
+        project_crew_request::descriptor(),
+        read_tool(
+            "business_os.list_crew_executions",
+            "List current external Crew offers for an owned command and executor. Returns exact attempt identifiers and state, never credentials or prompts.",
+            object_schema(vec![required_string("command_id"), required_string("executor_id")]),
+        ),
+        write_tool(
+            "business_os.claim_crew_execution",
+            "Claim an external Crew execution offered by the native worker for this command and executor. Requires the command owner and private Crew access. Returns scoped execution authority; it does not admit new work.",
+            object_schema(vec![required_string("command_id"), required_string("executor_id"), required_string("attempt_id")]),
+        ),
+        write_tool(
+            "business_os.report_crew_execution",
+            "Report a reply or failure candidate for this signed external Crew execution. Native review decides completion. Repeating identical evidence is idempotent.",
+            serde_json::json!({"type":"object","additionalProperties":false,
+                "properties":{"reply":{"type":"string"},"error":{"type":"string"}},
+                "oneOf":[{"required":["reply"]},{"required":["error"]}]}),
+        ),
+        write_tool(
+            "business_os.update_crew_plan",
+            "Update steps for the exact Crew execution bound to this signed session. Native runtime owns progress and review; this does not complete the task or learn from it.",
+            serde_json::json!({
+                "type": "object", "additionalProperties": false, "required": ["steps"],
+                "properties": {
+                    "steps": {"type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "object", "additionalProperties": false,
+                            "required": ["label", "status"], "properties": {
+                                "label": {"type": "string", "minLength": 1},
+                                "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}
+                            }}},
+                    "explanation": {"type": "string"}
+                }
+            }),
+        ),
+        read_tool(
+            "business_os.get_crew_context",
+            "Restore the bounded persona, memory and current execution plan of an open crew attempt belonging to this signed command session. Requires private crew-read permission and a live native lease. Does not admit, renew, complete or learn from an execution.",
+            object_schema(vec![required_string("attempt_id")]),
+        ),
         read_tool(
             "business_os.status",
             "Use this when you need CTOX Business OS MCP channel and runtime status.",
@@ -2738,6 +2868,20 @@ fn call_tool_inner(
     enforce_argument_scope_policy(root, &context, tool_name, &arguments)?;
     enforce_rate_limit(root, &context)?;
     let result = match tool_name {
+        "business_os.start_crew_execution" => {
+            project_crew_request::start(root, &context, &arguments)?
+        }
+        "business_os.list_crew_executions" => crew_execution::list(root, &context, &arguments)?,
+        "business_os.claim_crew_execution" => crew_execution::claim(root, &context, &arguments)?,
+        "business_os.report_crew_execution" => {
+            crew_execution::report(root, &context, &arguments, trusted_gateway_context)?
+        }
+        "business_os.update_crew_plan" => {
+            crew_plan::update(root, &context, &arguments, trusted_gateway_context)?
+        }
+        "business_os.get_crew_context" => {
+            crew_context::read(root, &context, &arguments, trusted_gateway_context)?
+        }
         "business_os.execute_writeback" => {
             command_writeback::execute(root, &context, &arguments, trusted_gateway_context)?
         }
@@ -5109,7 +5253,9 @@ fn handle_json_rpc_with_gateway_context(
             }
         })),
         "tools/list" => Ok(serde_json::json!({
-            "tools": tool_descriptors()
+            "tools": tool_descriptors().into_iter()
+                .filter(|tool| crew_only_session_allows_tool(&tool.name, trusted_gateway_context))
+                .collect::<Vec<_>>()
         })),
         "tools/call" => {
             let params = body
@@ -6361,6 +6507,10 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         }
         "business_os.reject" | "business_os.request_changes" => McpToolPolicyClass::Approval,
         "web_browser_prepare"
+        | "business_os.start_crew_execution"
+        | "business_os.claim_crew_execution"
+        | "business_os.report_crew_execution"
+        | "business_os.update_crew_plan"
         | "business_os.execute_writeback"
         | "business_os.execute_action"
         | "appsec_assessment_create"
@@ -6651,6 +6801,10 @@ fn enforce_internal_command_session_scope(
     }) else {
         return Ok(());
     };
+    anyhow::ensure!(
+        crew_only_session_allows_tool(tool_name, Some(context)),
+        "tool is outside this Crew-only command session"
+    );
     let allowed_actions = context
         .get("allowed_actions")
         .and_then(Value::as_array)
@@ -6661,6 +6815,32 @@ fn enforce_internal_command_session_scope(
         .filter_map(|action| string_field(action, "module_id"))
         .collect::<BTreeSet<_>>();
     match tool_name {
+        "business_os.start_crew_execution" => {
+            anyhow::bail!("a command-scoped session cannot admit independent project work")
+        }
+        "business_os.list_crew_executions" | "business_os.claim_crew_execution" => {
+            anyhow::ensure!(
+                required_arg(arguments, "command_id")? == required_arg(context, "command_id")?,
+                "external Crew command is outside this signed session"
+            );
+            let collections = normalized_string_array(context.get("allowed_collections"));
+            anyhow::ensure!(
+                collections.is_empty()
+                    || collections.iter().any(|name| name == "ctox_crew_members"),
+                "external Crew is outside this signed collection scope"
+            );
+            if tool_name == "business_os.claim_crew_execution" {
+                if let Some(attempt) = context
+                    .pointer("/crew_binding/attempt_id")
+                    .and_then(Value::as_str)
+                {
+                    anyhow::ensure!(
+                        required_arg(arguments, "attempt_id")? == attempt,
+                        "external Crew attempt is outside this signed session"
+                    );
+                }
+            }
+        }
         "business_os.propose_action" | "business_os.execute_action" => {
             let module_id = required_arg(arguments, "module_id")?;
             let action_id = required_arg(arguments, "action_id")?;

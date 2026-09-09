@@ -4,9 +4,16 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - 'src/core/crew/**'
+      - 'src/core/business_os/mcp_crew*.rs'
+      - 'src/core/business_os/mcp_channel.rs'
+      - 'src/core/business_os/mcp_project_crew.rs'
+      - 'src/core/business_os/project_crew.rs'
+      - 'src/core/context/lcm/**'
       - 'src/core/business_os/harness_cockpit_chat*'
       - 'src/core/business_os/rxdb_peer*'
       - 'src/core/service/service_queue_capacity.rs'
+      - 'src/core/service/service.rs'
       - 'src/core/mission/channels/command_saga.rs'
       - 'src/core/mission/channels/auth_assist.rs'
       - 'src/core/service/service_auth_assist_tests.rs'
@@ -62,11 +69,12 @@ jobs:
           ' "$RUNNER_TEMP/crew-head-tests.jsonl")
           echo "CREW_TEST_BINARY=$CREW_TEST_BINARY" >> "$GITHUB_ENV"
       - name: Admission and projection regressions
+        id: regressions
         run: |
           export CARGO_MANIFEST_DIR="$GITHUB_WORKSPACE"
           export LD_LIBRARY_PATH="$CARGO_TARGET_DIR/debug/deps:$(rustc --print target-libdir)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           failed=0
-          for filter in auth_assist_recovery web_stack_auth_assist_reuses boot_releases_typed_command_lease queue_capacity_tests crew:: queued_prompt adapter_reconciliation business_os::harness_cockpit::chat::tests background_projection_releases_writer_between_pages sync_ticket_state sync_knowledge_tables; do
+          for filter in auth_assist_recovery web_stack_auth_assist_reuses boot_releases_typed_command_lease queue_capacity_tests crew:: business_os::project_chats::tests::project_crew_ business_os::mcp_channel::crew_context:: business_os::mcp_channel::crew_execution::receipt_tests:: external_crew_job_without_writeback business_os_writeback_job_gets_a_scoped_mcp_session command_writeback_tests queued_prompt adapter_reconciliation business_os::harness_cockpit::chat::tests background_projection_releases_writer_between_pages sync_ticket_state sync_knowledge_tables; do
             "$CREW_TEST_BINARY" "$filter" --test-threads=1 || failed=1
           done
           exit "$failed"
@@ -85,14 +93,19 @@ jobs:
           npm ci --ignore-scripts --prefix src/apps/business-os
           npm audit --audit-level=low --prefix src/apps/business-os
           npm --prefix src/apps/business-os exec -- playwright install --with-deps chromium
-          node src/apps/business-os/rxdb/tests/run-all.mjs --require-wire-daemon
+          if ! node src/apps/business-os/rxdb/tests/run-all.mjs --require-wire-daemon; then
+            # Preserve the suite failure and expose paths hidden by its short error tail.
+            node src/apps/business-os/rxdb/tests/customer-identifier-inventory-smoke.mjs || true
+            exit 1
+          fi
       - name: Measure existing regression filters on campaign base
-        if: ${{ always() && steps.compile.outcome == 'success' && (github.head_ref == 'codex/crew-open-items' || github.head_ref == 'codex/auth-assist-recovery') }}
+        if: ${{ always() && steps.compile.outcome == 'success' && (github.head_ref == 'codex/crew-open-items' || github.head_ref == 'codex/auth-assist-recovery' || (github.head_ref == 'codex/crew-attempt-binding' && steps.regressions.outcome == 'failure')) }}
         run: |
           CREW_TEST_HEAD=$(git rev-parse HEAD)
           trap 'git checkout --detach "$CREW_TEST_HEAD"' EXIT
           CREW_BASE=8e6f132a82549be9235dd433fc9bd28d5ae868e6
           if [ "$GITHUB_HEAD_REF" = 'codex/auth-assist-recovery' ]; then CREW_BASE=b56cd3b781e36bd7eff04e2891d55b41015839fd; fi
+          if [ "$GITHUB_HEAD_REF" = 'codex/crew-attempt-binding' ]; then CREW_BASE=dd2278071bacd8d1e6860e08852d819fc34c644c; fi
           git fetch --no-tags origin "$CREW_BASE"
           git checkout --detach "$CREW_BASE"
           cargo test --locked --bin ctox --no-run --message-format=json-render-diagnostics > "$RUNNER_TEMP/crew-base-tests.jsonl"
@@ -106,12 +119,17 @@ jobs:
           export CARGO_MANIFEST_DIR="$GITHUB_WORKSPACE"
           export LD_LIBRARY_PATH="$CARGO_TARGET_DIR/debug/deps:$(rustc --print target-libdir)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           failed=0
-          for filter in crew:: queued_prompt adapter_reconciliation business_os::harness_cockpit::chat::tests sync_ticket_state sync_knowledge_tables; do
+          filters=(crew:: queued_prompt adapter_reconciliation business_os::harness_cockpit::chat::tests sync_ticket_state sync_knowledge_tables)
+          # Only compare the pre-existing failing filter for this campaign.
+          # Its new Crew tests do not exist on the base and need head evidence.
+          if [ "$GITHUB_HEAD_REF" = 'codex/crew-attempt-binding' ]; then filters=(adapter_reconciliation); fi
+          for filter in "${filters[@]}"; do
             status=0
             "$CREW_BASE_TEST_BINARY" "$filter" --test-threads=1 || status=$?
             echo "Baseline $CREW_BASE: $filter exit=$status"
             if [ "$status" -ne 0 ]; then failed=1; fi
           done
+          if [ "$GITHUB_HEAD_REF" = 'codex/crew-attempt-binding' ]; then exit "$failed"; fi
           status=0
           node src/apps/business-os/rxdb/tests/run-all.mjs --require-wire-daemon || status=$?
           echo "Baseline $CREW_BASE: JS/wire exit=$status"
