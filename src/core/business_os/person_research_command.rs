@@ -1121,6 +1121,42 @@ fn same_person_by_name(left: &Value, right: &Value) -> bool {
     left_first.is_empty() || right_first.is_empty() || left_first == right_first
 }
 
+/// The personal e-mail the research has already found, for the targets that
+/// check one address. Without it experte.de and mailtester.com stop at
+/// `CTOX_SCRAPE_INPUT_JSON.email missing`, and `person_email_validation` falls
+/// to `no_match` although the check itself works. Measured on THESEN
+/// 09.09.2026: eleven of 25 leads carried a contact address, none carried a
+/// validated one, and the release gate demands one — so no lead could ever
+/// reach Sellify.
+fn candidate_person_email(result: &Value) -> Option<String> {
+    let looks_like_address = |value: &str| {
+        let value = value.trim();
+        value.contains('@') && value.contains('.') && !value.contains(char::is_whitespace)
+    };
+    if let Some(address) = result
+        .pointer("/fields/person_email/value")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| looks_like_address(value))
+    {
+        return Some(address.to_string());
+    }
+    result
+        .get("person_records")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|record| {
+            record
+                .get("person_email")
+                .or_else(|| record.get("email"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .find(|value| looks_like_address(value))
+        .map(str::to_string)
+}
+
 /// A domain is a host, not a URL. Measured 09.09.2026: Aeroxon was stored as
 /// "www.aeroxon.de" while Beiersdorf was "beiersdorf.de", and Sellify would
 /// have received two spellings of the same kind of value. Anything that is not
@@ -1988,6 +2024,7 @@ fn execute(
             company,
             country,
             owner_user_id,
+            candidate_person_email(&result).as_deref(),
         );
         ctox_web_stack::person_research::merge_runtime_scrape_result(
             &mut result,
