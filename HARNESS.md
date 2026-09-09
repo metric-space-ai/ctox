@@ -799,7 +799,9 @@ Aufgabe und Mitglied müssen übereinstimmen, und der Attempt darf noch nicht
 finalisiert sein. Ein Konflikt verbraucht keine manuelle Zuweisung und schreibt
 keine neue Auswahl. Ein neuer Versuch benötigt eine neue Attempt-ID. Diese
 Prüfung ist eine Voraussetzung für die externe Crew-Anbindung, noch keine
-externe Laufzulassungs- oder Memory-API. Die wörtliche Begründung steht im
+externe Laufzulassungs-API. Der separate [MCP-Kontextabruf](docs/workjet-crew-context.md)
+liefert nur den gebundenen Kontext eines bereits zugelassenen Versuchs unter
+bestehenden privaten Crew-Leserechten. Die wörtliche Begründung steht im
 Harness-Flow-Ereignis `crew_selected` (`selection_kind` routed/selected/
 assigned/continuity) und in dessen Cockpit-Projektion; das Lesen des
 Gedächtnisses erzeugt `crew.memory_read`. In Tests ist kein Router-Urteil

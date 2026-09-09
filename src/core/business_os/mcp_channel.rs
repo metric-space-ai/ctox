@@ -35,6 +35,8 @@ use super::policy::{
 use super::store;
 #[path = "mcp_writeback.rs"]
 mod command_writeback;
+#[path = "mcp_crew_context.rs"]
+mod crew_context;
 pub(crate) use command_writeback::supports_command_writeback;
 
 const DEFAULT_LIMIT: usize = 25;
@@ -1100,6 +1102,11 @@ fn gateway_json_rpc_error(
 
 pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
     let mut tools = vec![
+        read_tool(
+            "business_os.get_crew_context",
+            "Restore the bounded persona and memory of an open crew attempt belonging to this signed command session. Requires private crew-read permission and a live native lease. Does not admit, renew, complete or learn from an execution.",
+            object_schema(vec![required_string("attempt_id")]),
+        ),
         read_tool(
             "business_os.status",
             "Use this when you need CTOX Business OS MCP channel and runtime status.",
@@ -2738,6 +2745,9 @@ fn call_tool_inner(
     enforce_argument_scope_policy(root, &context, tool_name, &arguments)?;
     enforce_rate_limit(root, &context)?;
     let result = match tool_name {
+        "business_os.get_crew_context" => {
+            crew_context::read(root, &context, &arguments, trusted_gateway_context)?
+        }
         "business_os.execute_writeback" => {
             command_writeback::execute(root, &context, &arguments, trusted_gateway_context)?
         }
