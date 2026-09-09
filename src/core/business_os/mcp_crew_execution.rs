@@ -75,7 +75,7 @@ pub(crate) fn run(
         .saturating_add((target.timeout_seconds * 1000) as i64)
         .min(claims.expires_at_ms);
     claims.expires_at_ms = deadline;
-    let conn = open(root)?;
+    let mut conn = open(root)?;
     conn.execute(
         "INSERT INTO workjet_external_crew_attempts
         (attempt_id,command_id,executor_id,harness,claims_json,prompt,deadline_ms,state)
@@ -94,39 +94,96 @@ pub(crate) fn run(
         std::time::Instant::now() + std::time::Duration::from_secs(target.timeout_seconds);
     let result = (|| -> anyhow::Result<Option<String>> {
         loop {
-            anyhow::ensure!(
-                now_ms() < deadline && std::time::Instant::now() < wait_limit,
-                "external Crew execution timed out"
-            );
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let (current, _) = crew_context::live_binding(
-                &conn,
+                &tx,
                 command_id,
                 &claims.payload_hash,
                 &binding.attempt_id,
             )?;
             anyhow::ensure!(&current == binding, "external Crew lease changed");
-            let result: Option<String> = conn.query_row(
-                "SELECT result_json FROM workjet_external_crew_attempts WHERE attempt_id=?1 AND state='reported'",
-                [&binding.attempt_id], |row| row.get(0),
-            ).optional()?.flatten();
-            if let Some(result) = result {
-                let result: Value = serde_json::from_str(&result)?;
-                if let Some(error) = result.get("error").and_then(Value::as_str) {
-                    anyhow::bail!("external Crew execution failed: {error}");
+            // Reporting and timeout closure share the writer lock. A receipt
+            // accepted before its deadline wins even if this poll runs later.
+            let outcome = poll_receipt(
+                &tx,
+                &binding.attempt_id,
+                now_ms() >= deadline || std::time::Instant::now() >= wait_limit,
+            )?;
+            tx.commit()?;
+            match outcome {
+                ReceiptPoll::Waiting => std::thread::sleep(std::time::Duration::from_millis(250)),
+                ReceiptPoll::Reply(reply) => return Ok(Some(reply)),
+                ReceiptPoll::Failure(error) => {
+                    anyhow::bail!("external Crew execution failed: {error}")
                 }
-                return Ok(Some(required_arg(&result, "reply")?));
+                ReceiptPoll::TimedOut => anyhow::bail!("external Crew execution timed out"),
             }
-            std::thread::sleep(std::time::Duration::from_millis(250));
         }
     })();
-    conn.execute(
-        "UPDATE workjet_external_crew_attempts SET state=?2 WHERE attempt_id=?1",
-        params![
-            binding.attempt_id,
-            if result.is_ok() { "returned" } else { "closed" }
-        ],
-    )?;
+    if result.is_err() {
+        // Never overwrite accepted evidence, including an error receipt. The
+        // controller may still need to retry its acknowledgement after a lost response.
+        conn.execute(
+            "UPDATE workjet_external_crew_attempts SET state='closed'
+             WHERE attempt_id=?1 AND state IN ('offered','claimed')",
+            [&binding.attempt_id],
+        )?;
+    }
     result
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ReceiptPoll {
+    Waiting,
+    Reply(String),
+    Failure(String),
+    TimedOut,
+}
+
+/// The caller checks the live lease in this same write transaction first.
+fn poll_receipt(
+    tx: &rusqlite::Transaction<'_>,
+    attempt_id: &str,
+    expired: bool,
+) -> anyhow::Result<ReceiptPoll> {
+    let (state, result, hash): (String, Option<String>, Option<String>) = tx.query_row(
+        "SELECT state,result_json,result_hash FROM workjet_external_crew_attempts WHERE attempt_id=?1",
+        [attempt_id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
+    )?;
+    if matches!(state.as_str(), "reported" | "returned") {
+        let result = result.context("external Crew receipt is missing")?;
+        let actual =
+            URL_SAFE_NO_PAD.encode(digest::digest(&digest::SHA256, result.as_bytes()).as_ref());
+        anyhow::ensure!(
+            hash.as_deref() == Some(actual.as_str()),
+            "external Crew receipt hash differs"
+        );
+        let result: Value = serde_json::from_str(&result)?;
+        let reply = optional_string_arg(&result, "reply");
+        let error = optional_string_arg(&result, "error");
+        let outcome = match (reply, error) {
+            (Some(reply), None) => ReceiptPoll::Reply(reply),
+            (None, Some(error)) => ReceiptPoll::Failure(error),
+            _ => anyhow::bail!("external Crew receipt requires exactly one of reply or error"),
+        };
+        tx.execute(
+            "UPDATE workjet_external_crew_attempts SET state='returned' WHERE attempt_id=?1",
+            [attempt_id],
+        )?;
+        return Ok(outcome);
+    }
+    anyhow::ensure!(
+        matches!(state.as_str(), "offered" | "claimed"),
+        "external Crew offer is closed"
+    );
+    if expired {
+        tx.execute(
+            "UPDATE workjet_external_crew_attempts SET state='closed' WHERE attempt_id=?1",
+            [attempt_id],
+        )?;
+        return Ok(ReceiptPoll::TimedOut);
+    }
+    Ok(ReceiptPoll::Waiting)
 }
 
 fn authorize_owner(
@@ -348,4 +405,110 @@ pub(super) fn report(
     Ok(
         serde_json::json!({"accepted":true,"attempt_id":claims.attempt_id,"review_status":"pending"}),
     )
+}
+
+#[cfg(test)]
+mod receipt_tests {
+    use super::*;
+
+    fn fixture() -> anyhow::Result<(tempfile::TempDir, rusqlite::Connection)> {
+        let root = tempfile::tempdir()?;
+        let path = crate::paths::core_db(root.path());
+        std::fs::create_dir_all(path.parent().context("missing core database parent")?)?;
+        let conn = open(root.path())?;
+        Ok((root, conn))
+    }
+
+    fn insert_receipt(
+        conn: &rusqlite::Connection,
+        state: &str,
+        result: Option<Value>,
+    ) -> anyhow::Result<()> {
+        let result = result
+            .map(|value| serde_json::to_string(&value))
+            .transpose()?;
+        let hash = result.as_ref().map(|result| {
+            URL_SAFE_NO_PAD.encode(digest::digest(&digest::SHA256, result.as_bytes()).as_ref())
+        });
+        conn.execute("INSERT INTO workjet_external_crew_attempts
+            (attempt_id,command_id,executor_id,harness,claims_json,prompt,deadline_ms,state,result_json,result_hash)
+            VALUES('receipt-attempt','command','executor','codex','{}','prompt',1,?1,?2,?3)",
+            params![state,result,hash])?;
+        Ok(())
+    }
+
+    #[test]
+    fn accepted_reply_and_error_survive_deadline_and_can_be_read_again() -> anyhow::Result<()> {
+        for (receipt, expected) in [
+            (
+                serde_json::json!({"reply":"candidate","error":null}),
+                ReceiptPoll::Reply("candidate".into()),
+            ),
+            (
+                serde_json::json!({"reply":null,"error":"executor failed"}),
+                ReceiptPoll::Failure("executor failed".into()),
+            ),
+        ] {
+            let (_root, mut conn) = fixture()?;
+            insert_receipt(&conn, "reported", Some(receipt))?;
+            // Deterministic late consumer: the report has already committed,
+            // and the consumer's clock says the external deadline has elapsed.
+            for _ in 0..2 {
+                let tx =
+                    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                assert_eq!(poll_receipt(&tx, "receipt-attempt", true)?, expected);
+                tx.commit()?;
+                let state: String = conn.query_row("SELECT state FROM workjet_external_crew_attempts WHERE attempt_id='receipt-attempt'", [], |row|row.get(0))?;
+                assert_eq!(state, "returned");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn timeout_closes_only_an_attempt_without_accepted_evidence() -> anyhow::Result<()> {
+        let (_root, mut conn) = fixture()?;
+        insert_receipt(&conn, "claimed", None)?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        assert_eq!(
+            poll_receipt(&tx, "receipt-attempt", false)?,
+            ReceiptPoll::Waiting
+        );
+        assert_eq!(
+            poll_receipt(&tx, "receipt-attempt", true)?,
+            ReceiptPoll::TimedOut
+        );
+        tx.commit()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        assert!(poll_receipt(&tx, "receipt-attempt", false).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn corrupt_receipt_is_not_acknowledged_as_returned() -> anyhow::Result<()> {
+        let (_root, mut conn) = fixture()?;
+        insert_receipt(
+            &conn,
+            "reported",
+            Some(serde_json::json!({"reply":"candidate"})),
+        )?;
+        conn.execute(
+            "UPDATE workjet_external_crew_attempts SET result_json='{}'",
+            [],
+        )?;
+        {
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            assert!(poll_receipt(&tx, "receipt-attempt", true)
+                .unwrap_err()
+                .to_string()
+                .contains("hash differs"));
+        }
+        let state: String = conn.query_row(
+            "SELECT state FROM workjet_external_crew_attempts",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(state, "reported");
+        Ok(())
+    }
 }

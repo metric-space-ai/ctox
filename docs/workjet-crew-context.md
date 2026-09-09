@@ -124,8 +124,19 @@ authority. Claims recheck the lease inside the state-change transaction.
 that signed session. It checks the current lease in its write transaction and
 accepts identical repeated evidence while rejecting conflicts. The native worker
 returns the candidate into its existing finalization/review path. Reporting does
-not itself finalize the Crew attempt or mark a review passed. Expiry and lease
-changes close the offer; no external API acquires or renews an independent lease.
+not itself finalize the Crew attempt or mark a review passed. A result accepted
+before the external deadline is consumed even if the native poll happens later,
+provided the native lease still matches. Both reply and error receipts become
+`returned`, so an identical retry can still be acknowledged under a live session.
+Polling validates the stored receipt hash and checks the lease in the same write
+transaction used to decide receipt consumption or timeout closure. Timeout closes
+only offers without accepted evidence; cleanup never overwrites a reported or
+returned receipt. No external API acquires or renews an independent lease.
+
+Receipt regressions deterministically exercise a late poll, both success and
+error replay, timeout without a receipt and rejection of corrupted evidence.
+These cover receipt consumption, not full daemon restart recovery: re-entering
+`run` with an already stored attempt still needs an explicit resume contract.
 
 Remaining integration: Workjet submission, consumption of attempt discovery, controller
 claim and secure transport setup, harness execution and result reporting; native
