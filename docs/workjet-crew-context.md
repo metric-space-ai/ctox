@@ -5,7 +5,16 @@ Crew attempt. Its only domain argument is `attempt_id`; MCP transport context is
 not an authority supplied by the caller. This is the context-restoration part of
 Dev/Ops unification, not external execution admission.
 
-The request must carry an instance-signed Business OS command-session token.
+The request must carry an instance-signed Business OS command-session token
+with a native `crew_binding`: exact attempt, task, member, lease owner and
+`leased_at` generation. Generic command sessions cannot read Crew context.
+Native queue-worker session setup attaches this binding from its explicitly
+prepared worker attempt when a Crew persona is present. It preserves the existing
+command/writeback eligibility gates; it does not issue sessions for external
+workers or create external admission. Both token verification and the reader's
+transaction compare the binding with current durable state. Extending only lease
+expiry preserves access; a new owner or lease generation invalidates the old token,
+even when the same member and command remain assigned.
 The transport verifies that token, and the handler revalidates the command's
 current actor and role. The native command/task link, immutable payload hash,
 open Crew attempt and current queue lease bind the read. A raw local/operator
@@ -52,6 +61,7 @@ real command-session signing/verification, native command admission and Crew
 preparation. It checks native rendering parity with real LCM knowledge, excludes another
 member’s knowledge, observes newly persisted knowledge, and checks stable and changed versions,
 foreign-command and argument denial, channel collection restrictions, corrupt
-memory, expired lease and finalized attempt. The Crew liveness workflow includes
+memory, expired lease and finalized attempt. It also checks generic-token denial,
+lease renewal, same-owner re-leasing, changed owners and unknown-attempt binding. The Crew liveness workflow includes
 the new test filter. Local Cargo verification is pending while the shared host
 admission gate is closed; CI evidence is required before integration.

@@ -2,6 +2,59 @@
 //! command-session authority. This is not an external execution admission API.
 use super::*;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(super) struct SessionBinding {
+    pub(super) attempt_id: String,
+    task_id: String,
+    member_id: String,
+    lease_owner: String,
+    leased_at: String,
+}
+
+pub(super) fn open_read_connection(root: &Path) -> anyhow::Result<rusqlite::Connection> {
+    let conn = rusqlite::Connection::open_with_flags(
+        crate::paths::core_db(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    Ok(conn)
+}
+
+pub(super) fn live_binding(
+    conn: &rusqlite::Connection,
+    command_id: &str,
+    payload_hash: &str,
+    attempt_id: &str,
+) -> anyhow::Result<(SessionBinding, String)> {
+    conn.query_row(
+        "SELECT a.task_id,a.member_id,r.lease_owner,r.leased_at,c.module FROM crew_attempts a
+         JOIN business_command_task_links l ON l.task_id=a.task_id
+         JOIN business_command_aggregates c ON c.command_id=l.command_id
+         JOIN communication_routing_state r ON r.message_key=a.task_id
+         WHERE a.attempt_id=?1 AND c.command_id=?2 AND c.payload_hash=?3
+           AND a.finalized_at IS NULL AND a.started_at IS NOT NULL
+           AND c.execution_phase!='terminal' AND r.route_status='leased'
+           AND r.crew_member_id=a.member_id AND length(trim(r.lease_owner))>0
+           AND julianday(r.leased_at) IS NOT NULL
+           AND julianday(r.lease_expires_at)>julianday('now')",
+        params![attempt_id, command_id, payload_hash],
+        |row| {
+            Ok((
+                SessionBinding {
+                    attempt_id: attempt_id.to_owned(),
+                    task_id: row.get(0)?,
+                    member_id: row.get(1)?,
+                    lease_owner: row.get(2)?,
+                    leased_at: row.get(3)?,
+                },
+                row.get(4)?,
+            ))
+        },
+    )
+    .optional()?
+    .context("crew attempt is not active in this command session")
+}
+
 pub(super) fn read(
     root: &Path,
     context: &McpChannelRequestContext,
@@ -49,30 +102,26 @@ pub(super) fn read(
 
     // No schema initialization or writable LCM engine on this read path. Keep
     // attempt, native lease, persona and memory in a single core DB snapshot.
-    let mut conn = rusqlite::Connection::open_with_flags(
-        crate::paths::core_db(root),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )?;
-    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    let expected: SessionBinding = serde_json::from_value(
+        trusted
+            .get("crew_binding")
+            .cloned()
+            .context("crew session has no attempt binding")?,
+    )
+    .context("crew session has no valid attempt binding")?;
+    anyhow::ensure!(
+        expected.attempt_id == attempt_id,
+        "crew session belongs to another attempt"
+    );
+    let mut conn = open_read_connection(root)?;
     let tx = conn.transaction()?;
-    let binding: Option<(String, String, String)> = tx
-        .query_row(
-            "SELECT a.task_id,a.member_id,c.module FROM crew_attempts a
-         JOIN business_command_task_links l ON l.task_id=a.task_id
-         JOIN business_command_aggregates c ON c.command_id=l.command_id
-         JOIN communication_routing_state r ON r.message_key=a.task_id
-         WHERE a.attempt_id=?1 AND c.command_id=?2 AND c.payload_hash=?3
-           AND a.finalized_at IS NULL AND a.started_at IS NOT NULL
-           AND c.execution_phase!='terminal' AND r.route_status='leased'
-           AND r.crew_member_id=a.member_id AND length(trim(r.lease_owner))>0
-           AND julianday(r.leased_at) IS NOT NULL
-           AND julianday(r.lease_expires_at)>julianday('now')",
-            params![attempt_id, command_id, payload_hash],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .optional()?;
-    let (task_id, member_id, module) =
-        binding.context("crew attempt is not active in this command session")?;
+    let (current, module) = live_binding(&tx, &command_id, &payload_hash, &attempt_id)?;
+    anyhow::ensure!(
+        current == expected,
+        "crew session lease or identity changed"
+    );
+    let task_id = current.task_id;
+    let member_id = current.member_id;
     enforce_module_policy(root, &module)?;
     let member = crate::crew::members(&tx)?
         .into_iter()
@@ -222,6 +271,11 @@ mod tests {
                 "crew-workspace",
                 &serde_json::json!({}),
             )?;
+            let token = if command == "crew-parent" {
+                bind_internal_command_session_to_crew_attempt(root, &token, "crew-attempt")?
+            } else {
+                token
+            };
             verify_internal_command_session_token(root, &token)
         };
         let trusted = session("crew-parent")?;
@@ -364,6 +418,42 @@ mod tests {
                 (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339()
             ],
         )?;
+        // Renewal changes only expiry and must preserve the session. Re-leasing
+        // with even the same owner changes the generation and invalidates it.
+        assert!(call(args.clone(), Some(&trusted)).is_ok());
+        let mut claims = BusinessOsMcpInternalSessionClaims {
+            schema: "ctox.business_os.mcp_command_session.v1".to_owned(),
+            actor: "crew-operator".to_owned(),
+            role: "admin".to_owned(),
+            workspace: "crew-workspace".to_owned(),
+            command_id: "crew-parent".to_owned(),
+            payload_hash: trusted["payload_hash"].as_str().unwrap().to_owned(),
+            allowed_actions: vec![],
+            allowed_collections: vec![],
+            crew_binding: Some(serde_json::from_value(trusted["crew_binding"].clone())?),
+            issued_at_ms: now_ms(),
+            expires_at_ms: now_ms() + MCP_INTERNAL_SESSION_TTL_MS,
+        };
+        let old_token = sign_internal_command_session_claims(root, &claims)?;
+        assert!(verify_internal_command_session_token(root, &old_token).is_ok());
+        conn.execute("UPDATE communication_routing_state SET leased_at='2001-01-01T00:00:00Z' WHERE message_key=?1", [&task_id])?;
+        assert!(verify_internal_command_session_token(root, &old_token).is_err());
+        assert!(call(args.clone(), Some(&trusted)).is_err());
+        let renewed = session("crew-parent")?;
+        assert!(call(args.clone(), Some(&renewed)).is_ok());
+        claims.crew_binding = None;
+        let generic_token = sign_internal_command_session_claims(root, &claims)?;
+        let generic = verify_internal_command_session_token(root, &generic_token)?;
+        assert!(call(args.clone(), Some(&generic)).is_err());
+        assert!(bind_internal_command_session_to_crew_attempt(
+            root,
+            &generic_token,
+            "unknown-attempt"
+        )
+        .is_err());
+        conn.execute("UPDATE communication_routing_state SET lease_owner='another-worker' WHERE message_key=?1", [&task_id])?;
+        assert!(call(args.clone(), Some(&renewed)).is_err());
+        let final_authority = session("crew-parent")?;
         crate::crew::finalize_attempt(
             &conn,
             "crew-attempt",
@@ -374,7 +464,7 @@ mod tests {
             "Failed",
             None,
         )?;
-        assert!(call(args, Some(&trusted)).is_err());
+        assert!(call(args, Some(&final_authority)).is_err());
         assert!(tool_descriptors()
             .iter()
             .any(|tool| tool.name == "business_os.get_crew_context"));

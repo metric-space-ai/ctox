@@ -508,6 +508,8 @@ struct BusinessOsMcpInternalSessionClaims {
     allowed_actions: Vec<BusinessOsMcpAllowedAction>,
     #[serde(default)]
     allowed_collections: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    crew_binding: Option<crew_context::SessionBinding>,
     issued_at_ms: i64,
     expires_at_ms: i64,
 }
@@ -663,14 +665,41 @@ pub(crate) fn issue_internal_command_session_token(
         payload_hash: payload_hash.to_string(),
         allowed_actions: allowed_actions_from_writeback_contract(writeback_contract)?,
         allowed_collections: normalized_string_array(writeback_contract.get("allowed_collections")),
+        crew_binding: None,
         issued_at_ms,
         expires_at_ms: issued_at_ms.saturating_add(MCP_INTERNAL_SESSION_TTL_MS),
     };
-    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims)?);
+    sign_internal_command_session_claims(root, &claims)
+}
+
+fn sign_internal_command_session_claims(
+    root: &Path,
+    claims: &BusinessOsMcpInternalSessionClaims,
+) -> anyhow::Result<String> {
+    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims)?);
     let secret = mcp_internal_session_signing_secret(root)?;
     let key = hmac::Key::new(hmac::HMAC_SHA256, &secret);
     let signature = URL_SAFE_NO_PAD.encode(hmac::sign(&key, payload.as_bytes()).as_ref());
     Ok(format!("{payload}.{signature}"))
+}
+
+/// Bind a native command session to the explicitly admitted attempt and lease.
+pub(crate) fn bind_internal_command_session_to_crew_attempt(
+    root: &Path,
+    token: &str,
+    attempt_id: &str,
+) -> anyhow::Result<String> {
+    verify_internal_command_session_token(root, token)?;
+    let mut claims = decode_internal_command_session_token(root, token)?;
+    anyhow::ensure!(
+        claims.crew_binding.is_none(),
+        "crew session is already bound"
+    );
+    let conn = crew_context::open_read_connection(root)?;
+    claims.crew_binding = Some(
+        crew_context::live_binding(&conn, &claims.command_id, &claims.payload_hash, attempt_id)?.0,
+    );
+    sign_internal_command_session_claims(root, &claims)
 }
 
 fn verify_internal_command_session_token(root: &Path, token: &str) -> anyhow::Result<Value> {
@@ -703,7 +732,21 @@ fn verify_internal_command_session_token(root: &Path, token: &str) -> anyhow::Re
                 == Some(claims.role.as_str()),
         "Business OS internal command authorization changed"
     );
+    if let Some(expected) = claims.crew_binding.as_ref() {
+        let conn = crew_context::open_read_connection(root)?;
+        let (current, _) = crew_context::live_binding(
+            &conn,
+            &claims.command_id,
+            &claims.payload_hash,
+            &expected.attempt_id,
+        )?;
+        anyhow::ensure!(
+            &current == expected,
+            "crew session lease or identity changed"
+        );
+    }
     Ok(serde_json::json!({
+        "crew_binding": claims.crew_binding,
         "auth_source": MCP_INTERNAL_SESSION_AUTH_SOURCE,
         "channel": "ctox_internal_business_command",
         "surface": "business_os_command_session",
