@@ -7739,8 +7739,14 @@ async function submitBusinessChatTask(moduleLike, options = {}) {
         window.clearTimeout(timeoutId);
         callback(value);
       };
+      // Laeuft das Fenster ab, wissen wir NICHT, dass die Uebergabe scheiterte —
+      // wir wissen nur, dass die Bestaetigung ausblieb. thesen 09.09.2026: die
+      // Oberflaeche meldete "nicht uebergeben", waehrend der Befehl 123 Sekunden
+      // spaeter angenommen wurde und der Worker laengst lief. Wer der Meldung
+      // glaubt, startet ein zweites Mal und erzeugt Dubletten. Der Text sagt
+      // deshalb, was gilt: unbestaetigt, nicht gescheitert.
       const timeoutId = window.setTimeout(() => {
-        finish(reject, new Error('Die CTOX-Crew hat den Auftrag nicht rechtzeitig an die Queue übergeben.'));
+        finish(reject, new Error('Die Übergabe an die Queue wurde in 30 Sekunden nicht bestätigt. Der Auftrag kann trotzdem angenommen worden sein — bitte die Aufgabenliste prüfen, bevor du erneut startest.'));
       }, 30_000);
       window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
         detail: {
