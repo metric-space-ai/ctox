@@ -1221,7 +1221,7 @@ function ensureTaskTrackingDelegation(root) {
   root.__ctoxTaskTrackingDelegated = true;
   root.addEventListener('click', (event) => {
     const button = event.target?.closest?.('[data-track-task]');
-    if (!button || !root.contains(button)) return;
+    if (!button || !root.contains(button) || !button.dataset.taskId) return;
     event.preventDefault();
     event.stopPropagation();
     root.__ctoxBeforeTaskNavigation?.();
@@ -1498,7 +1498,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         const taskStatus = trackingMessage?.status || 'queued';
         const progressCard = win.querySelector('.ctox-chat-delegation-card');
         const nextSignature = executionProgressSignature(chat);
-        if (progressCard?.dataset.progressSignature !== nextSignature) {
+        if (progressCard?.dataset.progressSignature !== nextSignature || progressCard?.querySelector('[data-track-task]')?.dataset.taskId !== taskId) {
           const expectedCard = delegationProgressCardHtml(chat, { taskId, commandId, taskStatus });
           let cardUpdated = false;
           if (progressCard) {
@@ -2886,7 +2886,7 @@ function delegationProgressCardHtml(chat, { taskId = '', commandId = '', taskSta
       : (chatUiIsGerman() ? 'Noch kein Ausführungsplan' : 'No execution plan yet');
     return `
       <div class="ctox-chat-delegation-card ${isPlanning ? 'is-planning' : 'is-dormant'}" data-progress-signature="planning">
-        <button class="ctox-progress-visual ${isPlanning ? 'is-planning' : 'is-dormant'}" type="button" style="--ctox-progress-percent:0" data-track-task data-task-id="${escapeAttr(taskId)}" data-command-id="${escapeAttr(commandId)}" data-task-status="${escapeAttr(taskStatus)}" aria-label="${escapeAttr(tooltip)}" title="${escapeAttr(tooltip)}">
+        <button class="ctox-progress-visual ${isPlanning ? 'is-planning' : 'is-dormant'}" type="button" style="--ctox-progress-percent:0" data-track-task ${taskId ? '' : 'disabled'} data-task-id="${escapeAttr(taskId)}" data-command-id="${escapeAttr(commandId)}" data-task-status="${escapeAttr(taskStatus)}" aria-label="${escapeAttr(tooltip)}" title="${escapeAttr(tooltip)}">
           <span class="ctox-progress-activity" style="--ctox-turn-angle:0deg" aria-hidden="true"><i></i></span>
           <span class="ctox-progress-track">
             <span class="ctox-progress-work"><span class="ctox-progress-planning-line"></span></span>
@@ -2918,7 +2918,7 @@ function delegationProgressCardHtml(chat, { taskId = '', commandId = '', taskSta
 
   return `
     <div class="ctox-chat-delegation-card ${activityClass}" data-progress-signature="${escapeAttr(executionProgressSignature(chat))}">
-      <button class="ctox-progress-visual ${isReviewPhase ? 'is-reviewing' : ''}" type="button" style="--ctox-progress-percent:${Math.max(0, Math.min(100, Number(progress.percent) || 0))}" data-track-task data-task-id="${escapeAttr(taskId)}" data-command-id="${escapeAttr(commandId)}" data-task-status="${escapeAttr(taskStatus)}" aria-label="${escapeAttr(tooltip)}" title="${escapeAttr(tooltip)}">
+      <button class="ctox-progress-visual ${isReviewPhase ? 'is-reviewing' : ''}" type="button" style="--ctox-progress-percent:${Math.max(0, Math.min(100, Number(progress.percent) || 0))}" data-track-task ${taskId ? '' : 'disabled'} data-task-id="${escapeAttr(taskId)}" data-command-id="${escapeAttr(commandId)}" data-task-status="${escapeAttr(taskStatus)}" aria-label="${escapeAttr(tooltip)}" title="${escapeAttr(tooltip)}">
         <span class="ctox-progress-activity" style="--ctox-turn-angle:${turnAngle}deg" aria-hidden="true"><i></i></span>
         <span class="ctox-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress.percent}">
           <div class="ctox-progress-work">${workSegments}</div>
@@ -3020,7 +3020,8 @@ function chatWindow(chat, activeId, relation = 'center') {
 
   // Determine what to show at the bottom
   let bottomHtml = '';
-  let headerProgressHtml = delegationProgressCardHtml(chat, { taskStatus: taskState });
+  const tracking = chatTrackingSummary(chat);
+  const headerProgressHtml = delegationProgressCardHtml(chat, { taskId: tracking.tracking_task_id, commandId: tracking.tracking_command_id, taskStatus: taskState });
   if (taskState === 'scheduled') {
     const timeText = getFormattedDateTime(chat.createdAt);
     bottomHtml = `
@@ -3842,13 +3843,13 @@ function formatChatBodyHtml(rawText) {
     .join('');
 }
 
-function messageMarkup(message) {
+function messageMarkup(message, { conversation = false } = {}) {
   const trackId = message.taskId || message.commandId;
   const visibleTrackId = compactTrackingId(trackId);
   const tracking = message.trackable === false || !message.taskId ? '' : (message.commandId || message.taskId)
     ? `<button class="ctox-chat-track" type="button" data-track-task data-task-id="${escapeAttr(message.taskId || '')}" data-command-id="${escapeAttr(message.commandId || '')}" data-task-status="${escapeAttr(message.status || '')}" title="${escapeAttr(`${trackButtonLabel(message)} · ${trackId}`)}" aria-label="${escapeAttr(`${trackButtonLabel(message)} · ${trackId}`)}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3h7v7"></path><path d="M10 14 21 3"></path><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"></path></svg><code class="ctox-chat-track-id">${escapeHtml(visibleTrackId)}</code></button>`
     : '';
-  const rawText = message.role === 'user' ? String(message.text || '') : friendlyCrewMessage(message.text);
+  const rawText = conversation || message.role === 'user' ? String(message.text || '') : friendlyCrewMessage(message.text);
   const promptIsLong = message.role === 'user'
     && (rawText.length > 180 || rawText.split('\n').length > 2);
   const compactText = rawText.replace(/\s+/g, ' ').trim();
@@ -3889,7 +3890,7 @@ function isChatInspectionMessage(message) {
 }
 
 function chatMessagesMarkup(messages = []) {
-  return messages.filter(message => !isChatInspectionMessage(message)).map(message => messageMarkup(message)).join('');
+  return messages.filter(message => !isChatInspectionMessage(message)).map(message => messageMarkup(message, { conversation: true })).join('');
 }
 
 function chatInspectionContent(chat) {

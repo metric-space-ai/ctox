@@ -36,6 +36,7 @@ test('inspection separates system history from real replies and keeps an input i
       assert.equal(hooks.chatComposerSignature(chat), 'conversation', status);
     }
     assert.equal(hooks.isChatInspectionMessage({ ...receipt, kind: 'reply', text: 'Aufgabe wird morgen erledigt.' }), false);
+    assert.match(hooks.chatMessagesMarkup([{ role: 'ctox', kind: 'reply', text: 'CTOX konnte die Aufgabe nicht ausführen.' }]), /CTOX konnte die Aufgabe nicht ausführen\./);
   } finally {
     globalThis.document = previousDocument;
   }
