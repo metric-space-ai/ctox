@@ -267,19 +267,15 @@ async fn exercise(
             assert!(client.pool().connection_handler
                 .connect_native_execution_peer("native000001".into()).await.is_err());
         }
-        // Data clients offer themselves, including with the larger signaling ID.
-        // Existing native execution fixtures retain their lower-ID offer rule.
-        loop {
-            let connected = if data_client {
-                client.connect_data_peer("native000001".into()).await.is_ok()
-            } else {
-                server
+        // No manual offer for data clients: the owned discovery must establish
+        // the actual channel, including with the larger signaling ID.
+        while !data_client {
+            let connected = server
                 .pool()
                 .connection_handler
                 .connect_native_execution_peer("native000002".into())
                 .await
-                .is_ok()
-            };
+                .is_ok();
             if connected
             {
                 break;

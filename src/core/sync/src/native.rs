@@ -1,4 +1,6 @@
 //! Host-independent native RxDB/WebRTC lifecycle. Hosts supply data and policy.
+mod data_client;
+
 use futures_util::FutureExt;
 use rxdb::{
     plugins::replication_webrtc::{
@@ -80,6 +82,7 @@ pub struct NativeSyncSession {
 
 #[derive(Default)]
 struct Resources {
+    data_discovery: Option<data_client::DataClientDiscovery>,
     execution: Option<ExecutionAttachment>,
     signaling: Option<Arc<SignalingClient>>,
     handler: Option<Arc<WebRTCRsConnectionHandler>>,
@@ -99,6 +102,9 @@ impl ExecutionAttachment {
 }
 impl Resources {
     async fn close(&self) {
+        if let Some(discovery) = &self.data_discovery {
+            discovery.shutdown().await;
+        }
         if let Some(execution) = &self.execution {
             let _ = execution.shutdown().await;
         }
@@ -111,6 +117,7 @@ impl Resources {
         }
     }
     fn disarm(&mut self) {
+        self.data_discovery = None;
         self.execution = None;
         self.pool = None;
         self.handler = None;
@@ -126,10 +133,14 @@ impl Drop for Resources {
         let execution = self.execution.take();
         let handler = self.handler.take();
         let pool = self.pool.take();
+        let discovery = self.data_discovery.take();
         // Dropping outside a runtime cannot drive asynchronous IO. During a
         // runtime shutdown Tokio also destroys its tasks; no new runtime is made.
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
+                if let Some(discovery) = discovery {
+                    discovery.shutdown().await;
+                }
                 if let Some(execution) = execution {
                     let _ = execution.shutdown().await;
                 }
@@ -242,8 +253,19 @@ impl NativeSyncSession {
                     .await?,
                 );
                 let pool = resources.pool.as_ref().expect("prepared native pool");
-                install_target_provider(pool, options.local_session_provider, local_peer_gate);
+                install_target_provider(
+                    pool,
+                    options.local_session_provider,
+                    local_peer_gate.clone(),
+                );
                 setup(pool)?;
+                if data_client {
+                    resources.data_discovery = Some(data_client::DataClientDiscovery::start(
+                        pool,
+                        signaling.clone(),
+                        local_peer_gate,
+                    ));
+                }
                 // Only advertise this peer after every pool request/connect
                 // subscriber and host handler exists. Peers may offer on join.
                 signaling.join(options.room).await?;

@@ -52,10 +52,17 @@ SnapshotEnd must not be fabricated from this shape validation.
   and cannot attach an execution group or call the execution connector.
   Native servers retain passive browser behavior and execution peers retain
   their lower-ID offer rule. Target proof still precedes credential release.
-  The host must provide the existing browser-admitted data-room signaling
-  configuration, own bounded route discovery/retry, and await session shutdown.
-  Automatic saved-target discovery, actual signaling-service compatibility,
-  local BusinessData dispatch and Desktop bootstrap remain outstanding. Added
+  The host provides the existing browser-admitted data-room configuration and
+  awaits session shutdown. Data-client start installs owned discovery before
+  room join: at most eight advertised CTOX candidates and three connection
+  attempts per route/local signaling identity, with bounded calls and retry
+  delays. It has no idle timer once connected or exhausted, and shutdown aborts
+  and awaits its task before closing the pool. A terminal discovery failure
+  closes the transport. Source verification still belongs to NativeSessionTarget.
+  The checked signaling source includes each recipient in Joined peer summaries;
+  deployment compatibility still requires real-service verification.
+  Saved-target configuration, local BusinessData dispatch and Desktop bootstrap
+  remain outstanding. Added
   real WebRTC tests exercise client-initiated reads/revocation and wrong target
   pins; their CI result must be checked before treating this increment as accepted.
 
