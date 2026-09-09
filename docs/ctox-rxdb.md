@@ -177,8 +177,15 @@ local credential preparation and after each outbound handshake response; a
 revocation during key-store work must not publish credentials or admit the peer.
 The predicate remains a host policy check, not proof of the remote instance's
 identity. Collection and document authorization remain separate. The production
-predicate reads the SQLite revocation store, so full-host command/boot budgets
-must be remeasured for changes at this boundary.
+predicate and device-session validator admit only a successful, non-revoked
+lookup. Missing or corrupt stores, a missing policy table and empty identities
+are errors, not permission to connect. Policy reads never create a database or
+schema. Unix hosts retain one read-only connection per calling thread, validate
+canonical path/device/inode before and after each read, and discard it on errors
+or replacement. No policy value or transaction is cached; external revocations
+and clear operations are visible on the next read. Other platforms open a fresh
+read-only handle. Full-host command/boot budgets must be remeasured for changes
+at this boundary.
 
 Native protocol negotiation has four reserved request permits, independent
 of the 32 data-request permits and eight interactive auxiliary permits.

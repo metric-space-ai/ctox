@@ -309,7 +309,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cargo test --locked --bin ctox -- persistence::tests secrets::tests business_os::domain_effect::tests business_os::rxdb_peer_domain_recovery::tests business_os::rxdb_peer_intake::tests \
+          cargo test --locked --bin ctox -- persistence::tests secrets::tests business_os::domain_effect::tests business_os::rxdb_peer_domain_recovery::tests business_os::rxdb_peer_intake::tests business_os::store::peer_revocations::tests business_os::store::tests::peer_revocation_registry_round_trips business_os::rxdb_peer::peer_admission_tests \
             --nocapture --test-threads=2 \
             | tee "$RUNNER_TEMP/ctox-host-proof/secret-reader-tests.log"
       - name: Context prompt first paint and authorized native command

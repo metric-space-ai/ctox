@@ -1,6 +1,8 @@
 // Origin: CTOX
 // License: Apache-2.0
 
+#[path = "store_peer_revocations.rs"]
+mod peer_revocations;
 #[path = "store_security_projections.rs"]
 mod security_projections;
 use super::app_runtime;
@@ -103,6 +105,7 @@ use crate::mission::channels;
 use anyhow::Context;
 use base64::Engine;
 use ctox_app_server_protocol::AuthMode as ApiAuthMode;
+pub use peer_revocations::is_business_peer_revoked;
 use ring::rand::{SecureRandom, SystemRandom};
 use rusqlite::params;
 use rusqlite::params_from_iter;
@@ -6255,7 +6258,7 @@ fn hash_session_token(token: &str) -> String {
 }
 
 /// Revoke a sync-mesh peer by its signaling peer id. The native peer's
-/// `is_peer_valid` gate denies any revoked id at connect, so a revoked device is
+/// `is_peer_valid` gate denies any revoked id at connect and RPC admission, so a revoked device is
 /// dropped from the mesh server-side regardless of what the browser claims.
 pub fn revoke_business_peer(
     root: &Path,
@@ -6286,27 +6289,6 @@ pub fn clear_business_peer_revocation(root: &Path, peer_id: &str) -> anyhow::Res
         params![peer_id.trim()],
     )?;
     Ok(())
-}
-
-/// Hot-path revocation check used by the native peer's `is_peer_valid` gate.
-/// Fails open (returns `false`) on a store error so a transient DB hiccup cannot
-/// sever every peer; a genuine revocation persists and is re-checked per connect.
-pub fn is_business_peer_revoked(root: &Path, peer_id: &str) -> bool {
-    let peer_id = peer_id.trim();
-    if peer_id.is_empty() {
-        return false;
-    }
-    let Ok(conn) = open_store(root) else {
-        return false;
-    };
-    conn.query_row(
-        "SELECT 1 FROM business_peer_revocations WHERE peer_id = ?1",
-        params![peer_id],
-        |_| Ok(()),
-    )
-    .optional()
-    .map(|row| row.is_some())
-    .unwrap_or(false)
 }
 
 /// List currently-revoked peers (for an admin/control surface).
@@ -25673,16 +25655,17 @@ pub(super) mod tests {
     fn peer_revocation_registry_round_trips() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
-        assert!(!is_business_peer_revoked(root, "peer-abc"));
+        drop(open_store(root)?);
+        assert!(!is_business_peer_revoked(root, "peer-abc")?);
         revoke_business_peer(root, "peer-abc", "admin-1", "stolen device")?;
-        assert!(is_business_peer_revoked(root, "peer-abc"));
-        assert!(!is_business_peer_revoked(root, "peer-xyz"));
+        assert!(is_business_peer_revoked(root, "peer-abc")?);
+        assert!(!is_business_peer_revoked(root, "peer-xyz")?);
         let listed = list_revoked_business_peers(root)?;
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0]["peer_id"], "peer-abc");
         assert_eq!(listed[0]["revoked_by"], "admin-1");
         clear_business_peer_revocation(root, "peer-abc")?;
-        assert!(!is_business_peer_revoked(root, "peer-abc"));
+        assert!(!is_business_peer_revoked(root, "peer-abc")?);
         assert!(list_revoked_business_peers(root)?.is_empty());
         Ok(())
     }

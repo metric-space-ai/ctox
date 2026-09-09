@@ -705,6 +705,10 @@ const NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS: u64 = 20;
 const OUTBOUND_SELLIFY_LOOKUP_WEBRTC_METHOD: &str = "ctox.outbound.sellify_lookup.v1";
 const DEVICE_PROOF_VERSION: &str = "ctox-device-proof-v1";
 
+#[cfg(test)]
+#[path = "rxdb_peer_admission_tests.rs"]
+mod peer_admission_tests;
+
 fn validate_device_bound_peer_session(
     root: &Path,
     protocol: &Value,
@@ -720,7 +724,7 @@ fn validate_device_bound_peer_session(
     else {
         return Reject;
     };
-    if store::is_business_peer_revoked(root, session_id) {
+    if !matches!(store::is_business_peer_revoked(root, session_id), Ok(false)) {
         return Reject;
     }
     let Some(token) = protocol
@@ -2791,7 +2795,10 @@ async fn run_native_peer(
         let signaling_revocation_root = root.clone();
         let is_peer_valid: std::sync::Arc<dyn Fn(&String) -> bool + Send + Sync> =
             std::sync::Arc::new(move |peer_id: &String| {
-                !store::is_business_peer_revoked(&signaling_revocation_root, peer_id)
+                matches!(
+                    store::is_business_peer_revoked(&signaling_revocation_root, peer_id),
+                    Ok(false)
+                )
             });
         let session_validation_root = root.clone();
         let is_peer_session_valid: WebRTCPeerSessionValidator =
