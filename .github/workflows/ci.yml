@@ -378,6 +378,14 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo test --locked --bin ctox native_peer_consumes_pending_business_command
 
+      - name: Business OS MCP retry identity and terminal state
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        env:
+          CARGO_BUILD_JOBS: 2
+        run: |
+          cargo test --locked --bin ctox mcp_app_retry -- --test-threads=2
+          cargo test --locked --bin ctox business_command_queue_creation_is_idempotent_by_command_id -- --test-threads=2
+
       - name: Business OS schema hash parity
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo test --locked --bin ctox native_all_schema_hashes_match_browser_contract_fixture
