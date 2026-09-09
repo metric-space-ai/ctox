@@ -594,7 +594,18 @@ async function runRequesterInBrowser({ smokeMode, threadsScaleSeed }) {
     const serialized = JSON.stringify(command || {});
     return {
       ok: Boolean(command && command.status === 'failed' && serialized.includes('role_or_scope_denied')),
-      command,
+      // waitFor serializes its last result on timeout. Keep only the fields
+      // needed to diagnose admission; client_context contains a signed bearer.
+      command: command ? {
+        id: command.id,
+        command_id: command.command_id,
+        status: command.status,
+        command_type: command.command_type,
+        result: {
+          reason_code: command.result?.reason_code,
+          decision: { reason_code: command.result?.decision?.reason_code },
+        },
+      } : null,
       deniedDispatchError,
     };
   }, 30000, 'threads right-click direct native denial');
