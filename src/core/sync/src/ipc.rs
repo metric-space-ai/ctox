@@ -72,6 +72,25 @@ impl AuthorityIpc {
                 spec,
                 owner: self.node.node_id(),
             },
+            SyncIpcOperation::ProtectCheckpoint {
+                job_id,
+                ownership,
+                receipts,
+            } => Command::ProtectCheckpoint {
+                job_id,
+                ownership,
+                receipts,
+            },
+            SyncIpcOperation::TakeOver {
+                job_id,
+                expected,
+                checkpoint_digest,
+            } => Command::TakeOver {
+                job_id,
+                expected,
+                checkpoint_digest,
+                owner: self.node.node_id(),
+            },
             SyncIpcOperation::BeginEffect {
                 job_id,
                 ownership,
