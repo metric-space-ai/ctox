@@ -209,6 +209,45 @@ struct FieldStatus {
 /// a bare object and, on 07.09.2026, the whole list as a JSON string (three
 /// rejections in a row for one lead, "expected a sequence"). The meaning is
 /// unambiguous in all three shapes, so accept them instead of losing the run.
+/// The same XML-shaped carrier as [`unwrap_single_item_container`], but applied
+/// to the whole payload before anything is parsed. On the Aeroxon lead
+/// 09.09.2026 the carrier wrapped not only every field's `sources` but also
+/// `result.person_records` and `result.evidence`, so the contacts and the
+/// evidence list were dropped as well.
+///
+/// Only the names a real payload never uses as a field are treated as
+/// carriers, so a field object such as `{"value": "x"}` keeps its shape.
+fn unwrap_item_carriers(value: Value) -> Value {
+    fn carrier_key(key: &str) -> bool {
+        matches!(
+            key.trim().to_ascii_lowercase().as_str(),
+            "item" | "items" | "entry" | "entries" | "element" | "elements" | "list"
+        )
+    }
+    match value {
+        Value::Object(map) => {
+            if map.len() == 1 {
+                if let Some((key, inner)) = map.iter().next() {
+                    if carrier_key(key) && (inner.is_array() || inner.is_object()) {
+                        let inner = inner.clone();
+                        return match unwrap_item_carriers(inner) {
+                            Value::Array(items) => Value::Array(items),
+                            single => Value::Array(vec![single]),
+                        };
+                    }
+                }
+            }
+            Value::Object(
+                map.into_iter()
+                    .map(|(key, entry)| (key, unwrap_item_carriers(entry)))
+                    .collect(),
+            )
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(unwrap_item_carriers).collect()),
+        other => other,
+    }
+}
+
 /// Workers that serialise a list through an XML-shaped intermediate wrap it in
 /// a single carrier key: `"sources": {"item": [ ... ]}` instead of
 /// `"sources": [ ... ]`. Measured on the Aeroxon lead 09.09.2026: a writeback
@@ -975,10 +1014,12 @@ pub(super) fn handle_research_writeback(
     // The worker only ever sees this message. Without the serde detail it
     // resent the same malformed payload four times on 07.09.2026 (a stray
     // `firma_land` key nested inside another field's status object).
-    let request: ResearchWritebackRequest =
-        serde_json::from_value(hoist_top_level_field_entries(command.payload.clone())).map_err(
-            |error| anyhow::anyhow!("invalid outbound.lead.research_writeback payload: {error}"),
-        )?;
+    let request: ResearchWritebackRequest = serde_json::from_value(hoist_top_level_field_entries(
+        unwrap_item_carriers(command.payload.clone()),
+    ))
+    .map_err(|error| {
+        anyhow::anyhow!("invalid outbound.lead.research_writeback payload: {error}")
+    })?;
     anyhow::ensure!(
         request.module == "outbound-lead-generation" && command.module == request.module,
         "research writeback module must be outbound-lead-generation"
@@ -3556,6 +3597,39 @@ mod tests {
             &serde_json::json!({})
         )
         .is_ok());
+    }
+
+    #[test]
+    fn item_carriers_are_unwrapped_across_the_whole_payload() {
+        // Measured on the Aeroxon lead 09.09.2026: not only every field's
+        // sources, but also result.person_records and result.evidence arrived
+        // inside an {"item": [...]} carrier.
+        let payload = serde_json::json!({
+            "record_id": "lead-a",
+            "result": {
+                "person_records": {"item": [{"person_key": "p1", "person_nachname": "Updike"}]},
+                "evidence": {"item": [{"field_key": "firma_name", "source_id": "aeroxon.de"}]},
+                "fields": {"firma_name": {"value": "Aeroxon", "sources": {"item": [{"source_id": "a"}]}}}
+            }
+        });
+        let unwrapped = unwrap_item_carriers(payload);
+        assert_eq!(unwrapped["result"]["person_records"][0]["person_key"], "p1");
+        assert_eq!(
+            unwrapped["result"]["evidence"][0]["field_key"],
+            "firma_name"
+        );
+        assert_eq!(
+            unwrapped["result"]["fields"]["firma_name"]["sources"][0]["source_id"],
+            "a"
+        );
+        // A single wrapped object becomes a one-element list, not a lost value.
+        let single =
+            unwrap_item_carriers(serde_json::json!({"sources": {"item": {"source_id": "a"}}}));
+        assert_eq!(single["sources"][0]["source_id"], "a");
+        // A field object that merely has one key keeps its shape.
+        let field =
+            unwrap_item_carriers(serde_json::json!({"fields": {"firma_name": {"value": "x"}}}));
+        assert_eq!(field["fields"]["firma_name"]["value"], "x");
     }
 
     #[test]
