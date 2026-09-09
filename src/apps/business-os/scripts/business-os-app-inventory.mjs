@@ -41,11 +41,13 @@ export function loadBusinessOsAppInventory() {
   const coreApps = sourceApps.filter((app) => app.installScope === 'core');
   assertExactIds(systemAppIds, coreApps.map((app) => app.id), 'system-apps.json', 'core module manifests');
 
-  if (sourceApps.length !== 36) {
-    throw new Error(`Business OS source inventory must contain exactly 36 apps; found ${sourceApps.length}`);
+  // Creator, Explorer and File Viewer are now registered core modules.
+  // Keep exact counts in addition to the registry/source/core ID parity guards.
+  if (sourceApps.length !== 39) {
+    throw new Error(`Business OS source inventory must contain exactly 39 apps; found ${sourceApps.length}`);
   }
-  if (coreApps.length !== 18) {
-    throw new Error(`Business OS system inventory must contain exactly 18 apps; found ${coreApps.length}`);
+  if (coreApps.length !== 21) {
+    throw new Error(`Business OS system inventory must contain exactly 21 apps; found ${coreApps.length}`);
   }
 
   return Object.freeze({
