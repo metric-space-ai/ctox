@@ -42,19 +42,19 @@ fn key() -> Arc<EcdsaKeyPair> {
     )
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_device_credentials_unlock_real_webrtc_reads_and_obey_current_revocation() {
-    exercise(false, false, TargetFault::None).await;
+    exercise(false, false, TargetFault::None, false).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_device_credentials_from_another_key_cannot_unlock_replication() {
-    exercise(true, false, TargetFault::None).await;
+    exercise(true, false, TargetFault::None, false).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_peer_filter_revocation_denies_real_webrtc_reads_with_valid_credentials() {
-    exercise(false, true, TargetFault::None).await;
+    exercise(false, true, TargetFault::None, false).await;
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -64,17 +64,34 @@ enum TargetFault {
     Instance,
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wrong_source_pin_or_instance_never_requests_credentials_over_real_webrtc() {
     for fault in [TargetFault::Key, TargetFault::Instance] {
-        exercise(false, false, fault).await;
+        exercise(false, false, fault, false).await;
     }
 }
 
-async fn exercise(wrong_key: bool, revoke_peer_only: bool, target_fault: TargetFault) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn data_client_offers_to_passive_source_without_execution_membership() {
+    exercise(false, false, TargetFault::None, true).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn data_client_wrong_target_never_obtains_credentials() {
+    for fault in [TargetFault::Key, TargetFault::Instance] {
+        exercise(false, false, fault, true).await;
+    }
+}
+
+async fn exercise(
+    wrong_key: bool,
+    revoke_peer_only: bool,
+    target_fault: TargetFault,
+    data_client: bool,
+) {
     tokio::time::timeout(Duration::from_secs(35), async {
         let signaling =
-            signaling_fixture::SignalingFixture::with_roles(["ctox_instance", "workjet_executor"])
+            signaling_fixture::SignalingFixture::with_roles(["ctox_instance", if data_client { "browser" } else { "workjet_executor" }])
                 .await;
         let expected_key = key();
         let signer = if wrong_key {
@@ -108,6 +125,7 @@ async fn exercise(wrong_key: bool, revoke_peer_only: bool, target_fault: TargetF
         server_options.admission.session = Arc::new(move |payload, challenge| {
             use WebRTCPeerSessionValidation::{Accept, Defer, Reject};
             if policy_revoked.load(Ordering::SeqCst)
+                || payload["peerSession"]["role"] != if data_client { "browser" } else { "workjet_executor" }
                 || payload
                     .pointer("/peerSession/sessionId")
                     .and_then(Value::as_str)
@@ -237,16 +255,32 @@ async fn exercise(wrong_key: bool, revoke_peer_only: bool, target_fault: TargetF
                 })
             })
         }));
-        let client = NativeSyncSession::start(client_options).await.unwrap();
+        let client = if data_client {
+            NativeSyncSession::start_data_client(client_options).await.unwrap()
+        } else {
+            NativeSyncSession::start(client_options).await.unwrap()
+        };
         let mut client_errors = client.pool().error_subject.subscribe();
-        // Wait for role-bearing signaling membership; only the lower ID offers.
+        if data_client {
+            assert!(server.connect_data_peer("native000002".into()).await.is_err());
+            assert!(client.connect_data_peer("native000002".into()).await.is_err());
+            assert!(client.pool().connection_handler
+                .connect_native_execution_peer("native000001".into()).await.is_err());
+        }
+        // Data clients offer themselves, including with the larger signaling ID.
+        // Existing native execution fixtures retain their lower-ID offer rule.
         loop {
-            if server
+            let connected = if data_client {
+                client.connect_data_peer("native000001".into()).await.is_ok()
+            } else {
+                server
                 .pool()
                 .connection_handler
                 .connect_native_execution_peer("native000002".into())
                 .await
                 .is_ok()
+            };
+            if connected
             {
                 break;
             }

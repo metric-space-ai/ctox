@@ -1510,6 +1510,7 @@ where
                                 room_payload.collection_checkpoints,
                                 Some(&storage_token),
                                 handler_task.local_peer_role(),
+                                handler_task.is_data_client(),
                             )
                             .await;
                             let challenge = item.message.params.first()
@@ -1759,6 +1760,7 @@ where
                         local_room_payload.collection_checkpoints,
                         Some(&storage_token),
                         handler.local_peer_role(),
+                        handler.is_data_client(),
                     )
                     .await;
                     let device_proof_nonce = fresh_device_proof_nonce();
@@ -1960,7 +1962,9 @@ where
                     let hash_fn = Arc::clone(&database.hash_function);
                     let elected_master =
                         is_master_in_webrtc_replication(hash_fn, &storage_token, &peer_token).await;
-                    let is_master = if remote_peer_role == "browser" {
+                    let is_master = if handler.is_data_client() {
+                        false
+                    } else if remote_peer_role == "browser" {
                         true
                     } else {
                         elected_master
@@ -2221,6 +2225,7 @@ async fn ctox_protocol_response_with_flag(
     collection_checkpoints: Option<Value>,
     storage_generation: Option<&str>,
     peer_role: NativePeerRole,
+    data_client: bool,
 ) -> Value {
     let collection_payload = if let Some(collection) = collection {
         let checkpoint = collection
@@ -2240,7 +2245,7 @@ async fn ctox_protocol_response_with_flag(
     } else {
         Value::Null
     };
-    ctox_protocol_response_payload_with_flag(
+    let mut payload = ctox_protocol_response_payload_with_flag(
         collection_payload,
         peer_session_id,
         query_demand_loading_enabled,
@@ -2248,7 +2253,13 @@ async fn ctox_protocol_response_with_flag(
         collection_checkpoints,
         storage_generation,
         peer_role,
-    )
+    );
+    if data_client {
+        // Reuse the canonical browser/replica role from the existing protocol.
+        // No execution identity, membership or master authority is advertised.
+        payload["peerSession"]["role"] = Value::String("browser".into());
+    }
+    payload
 }
 
 #[cfg(test)]

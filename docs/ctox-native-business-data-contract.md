@@ -41,6 +41,24 @@ SnapshotEnd must not be fabricated from this shape validation.
 
 ## Existing implementation and reuse boundary
 
+- `NativeSyncSession::start_data_client` selects a query-only consumer using
+  the existing `browser`/replica wire role. It requires deferred credentials
+  and empty replicated collections. `connect_data_peer` offers from the client
+  to a currently advertised `ctox_instance`, even when its signaling ID sorts
+  after the server. The signaling descriptor must confirm this client's own
+  browser admission; absent or incompatible descriptors fail explicitly.
+  This reuses the existing offer and DataChannel implementation, not execution
+  membership or a second protocol. The client never becomes replication master
+  and cannot attach an execution group or call the execution connector.
+  Native servers retain passive browser behavior and execution peers retain
+  their lower-ID offer rule. Target proof still precedes credential release.
+  The host must provide the existing browser-admitted data-room signaling
+  configuration, own bounded route discovery/retry, and await session shutdown.
+  Automatic saved-target discovery, actual signaling-service compatibility,
+  local BusinessData dispatch and Desktop bootstrap remain outstanding. Added
+  real WebRTC tests exercise client-initiated reads/revocation and wrong target
+  pins; their CI result must be checked before treating this increment as accepted.
+
 - `src/core/sync/src/native.rs` owns the native transport session and now exposes
   `query_page`. `query_fetch_client.rs` in the RxDB crate consumes the existing
   `rxdb.query.fetch` acknowledgement/chunk/cancel protocol. It requires reciprocal

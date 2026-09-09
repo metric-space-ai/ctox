@@ -75,6 +75,7 @@ pub struct NativeSyncOptions {
 pub struct NativeSyncSession {
     resources: Resources,
     room: String,
+    data_client: bool,
 }
 
 #[derive(Default)]
@@ -149,11 +150,38 @@ impl NativeSyncSession {
         Self::start_with_pool_setup(options, |_| Ok(())).await
     }
 
+    /// Start a query-only consumer on an existing browser-admitted data room.
+    /// The caller retains the database and credential owner. No execution
+    /// attachment or replicated collection is installed by this mode.
+    pub async fn start_data_client(options: NativeSyncOptions) -> io::Result<Self> {
+        if options.local_session_provider.is_none()
+            || !options.collections.is_empty()
+            || !options.database.collections.lock().is_empty()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "data client requires deferred credentials and query-only storage",
+            ));
+        }
+        Self::start_mode(options, |_| Ok(()), true).await
+    }
+
     /// Install host-owned request handlers and file sources before advertising
     /// this peer. Setup runs once, inside the supervised bring-up boundary;
     /// rejection or panic closes the transport without joining the room.
     /// The callback must only register resources, never block or start workers.
     pub async fn start_with_pool_setup<F>(options: NativeSyncOptions, setup: F) -> io::Result<Self>
+    where
+        F: FnOnce(&NativePool) -> Result<(), rxdb::rx_error::RxError> + Send,
+    {
+        Self::start_mode(options, setup, false).await
+    }
+
+    async fn start_mode<F>(
+        options: NativeSyncOptions,
+        setup: F,
+        data_client: bool,
+    ) -> io::Result<Self>
     where
         F: FnOnce(&NativePool) -> Result<(), rxdb::rx_error::RxError> + Send,
     {
@@ -184,6 +212,7 @@ impl NativeSyncSession {
                 resources.signaling = Some(signaling.clone());
                 let mut config = WebRTCRsConfig::new(signaling.clone(), options.room.clone());
                 config.peer_role = options.peer_role;
+                config.data_client = data_client;
                 if !options.ice_servers.is_empty() {
                     config.ice_servers = options.ice_servers;
                 }
@@ -224,7 +253,13 @@ impl NativeSyncSession {
         )
         .await;
         let failure = match result {
-            Ok(Ok(Ok(()))) => return Ok(Self { resources, room }),
+            Ok(Ok(Ok(()))) => {
+                return Ok(Self {
+                    resources,
+                    room,
+                    data_client,
+                })
+            }
             Ok(Ok(Err(error))) => io::Error::other(format!("native sync bring-up failed: {error}")),
             Ok(Err(_)) => io::Error::other("native sync bring-up panicked"),
             Err(_) => io::Error::new(
@@ -242,6 +277,28 @@ impl NativeSyncSession {
             .pool
             .as_ref()
             .expect("a started native session owns its pool")
+    }
+
+    /// Offer to a current, browser-admitted data route using existing WebRTC.
+    /// This is transport setup only. It never issues a ready user-data handle.
+    /// The host owns bounded discovery/retry and must await session shutdown.
+    pub async fn connect_data_peer(&self, route: String) -> io::Result<()> {
+        if !self.data_client {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "data connections require a data-client session",
+            ));
+        }
+        self.pool()
+            .connection_handler
+            .connect_data_peer(route)
+            .await
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "data route is unavailable or has incompatible admission",
+                )
+            })
     }
 
     /// Read a bounded page through the already admitted data connection. The
@@ -283,7 +340,8 @@ impl NativeSyncSession {
     }
 
     fn ensure_attachable(&self) -> io::Result<()> {
-        if self.resources.execution.is_some()
+        if self.data_client
+            || self.resources.execution.is_some()
             || self
                 .pool()
                 .canceled
