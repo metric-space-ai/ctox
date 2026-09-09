@@ -22,7 +22,7 @@ fn command() -> BusinessCommand {
 }
 
 fn document(command: &BusinessCommand) -> Value {
-    json!({"id":command.id,"module":command.module,"command_type":command.command_type,
+    json!({"id":command.id,"command_id":command.id,"module":command.module,"command_type":command.command_type,
         "record_id":command.record_id,"payload":command.payload,"client_context":command.client_context})
 }
 

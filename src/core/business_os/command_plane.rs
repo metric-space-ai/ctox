@@ -1456,7 +1456,12 @@ fn dispatch_business_command(
         | "ctox.business_os.why" => {
             handle_business_os_command(root, command).map(BusinessCommandDispatchOutcome::Returned)
         }
-        kind if super::project_chats::is_command(kind) => {
+        "ctox.workjet.project.chat.ensure"
+        | "ctox.workjet.project.chat.create"
+        | "ctox.workjet.project.worker.add"
+        | "ctox.workjet.project.worker.remove"
+        | "ctox.workjet.worker_profile.bind"
+        | "ctox.workjet.worker_profile.unbind" => {
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
             let owner = session_user_id(session)
                 .context("authorized Workjet chat command is missing a user identity")?;

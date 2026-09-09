@@ -141,7 +141,7 @@ jobs:
           node src/core/sync/tools/generate-contracts.mjs --check --workjet-root ../workjet
           node src/core/sync/tools/assert-host-contracts.mjs ../workjet
       - name: Native authority, lifecycle and real WebRTC scenarios
-        run: cargo test --locked --no-fail-fast --manifest-path src/core/sync/Cargo.toml --features webrtc
+        run: cargo test --locked --no-fail-fast --manifest-path src/core/sync/Cargo.toml --features webrtc -- --show-output
       - name: Native RxDB tests with production ICE patch
         if: ${{ !cancelled() && steps.format.outcome == 'success' }}
         run: cargo test --locked --manifest-path src/core/rxdb/Cargo.toml
