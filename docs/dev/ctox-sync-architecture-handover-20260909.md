@@ -1,5 +1,48 @@
 # CTOX-Sync-Architektur: Handover vom 9. September 2026
 
+
+## Aktuelle Übergabe: Merge-Prüfung PR87
+
+Geprüfter Head: `5b583c3c2f512581fecdcf5db7bcc250c9db62e6`, Branch
+`codex/native-proof-error-correlation`, vollständig gepusht, sauberer Checkout:
+`/Users/michaelwelsch/Documents/ctox-sync-main.2ITnXD`.
+PR: https://github.com/metric-space-ai/ctox/pull/87 (offen, Draft).
+
+**Kein weiterer sicherer Merge festgestellt.** PR69 und das ursprüngliche
+Handover PR86 sind bereits auf main; PR86-Merge ist
+`4b7a7daeb4a5f732325806e40683842beb1befbe`. PR87 bleibt offen. Sein Umfang:
+Credential-Ablehnungen im Test dem richtigen Fehler zuordnen (`0066a5d1e`),
+Recovery-Kardinalität mit frischer Command-Abfrage prüfen (`1c21f8bd9`),
+begrenzte Profiler-stdout-Diagnostik erhalten (`5b583c3c2`). Keine dieser
+Änderungen ist ein Nachweis, dass Kunden-Sync oder Performance repariert sind.
+
+Aktuelle Checks für exakt diesen Head:
+- Native Sync: https://github.com/metric-space-ai/ctox/actions/runs/34356271860
+  Echter Linux-Profiler und Chromium-Präsentation erfolgreich; Linux/macOS
+  Native Sync und vollständige Host-Abnahme bei Prüfung noch laufend.
+- CI: https://github.com/metric-space-ai/ctox/actions/runs/34356271715
+  CLI-Checks und Desktop-E2E rot. Beim Linux-x86-CLI-Job scheitern die Schritte
+  `Business OS JS tests` und Evidence-Upload; beim macOS-Desktop-Job bereits
+  `Install dependencies`. Ursachen sind für diesen Head nicht abschließend
+  klassifiziert. Daher nicht pauschal als bekannte Baseline ignorieren.
+- Frühere grüne Native-Tests von `0066a5d1e` sind keine Freigabe dieses Heads.
+
+Nächste Schritte für die übernehmende Aufgabe:
+1. Laufende Abnahmen auslesen, ohne dieselben schweren Jobs erneut zu starten.
+2. Fehlgeschlagene JS-/Dependency-Schritte anhand ihrer konkreten Logs klären.
+3. Recovery muss ohne erneutes Absenden genau eine Queue-Task nachweisen;
+   vollständige Performance-Artefakte prüfen: warm p50 <300 ms, Boot p95 <5 s.
+4. Erst danach die Merge-Entscheidung für PR87 neu treffen. Kunden-Upgrade bleibt
+   eine separate operative Handlung; Thesen führt der Betreiber aus.
+5. Operative BusinessData-Dispatcher-/Bootstrap-Anbindung ist weiterhin offen.
+   Die zuständige Workjet-Aufgabe `01a08237-a9c4-77f3-9f20-f0fb3901a76d`
+   hat ihre Integration wieder aufgenommen und erhält diesen Schnittstellenstand;
+   deren Registry-/Account-/IdentityResolver-/Projektchat-Flächen nicht parallel ändern.
+
+Übergabe ohne Kunden-Deployment, Datenlöschung oder Änderung des schmutzigen
+kanonischen Checkouts. Keine eigenen Testserver, Browser oder schweren lokalen
+Jobs laufen; keine Ressourcen-Lease gehalten. Der bestehende durable Checkout
+bleibt für die offene PR erhalten. Keine Worktree-Bereinigung durchgeführt.
 ## Nachprüfung nach der Übergabe — 9. September 2026
 
 Weitere Nachprüfung: Commit `1c21f8bd96d81e4ba5148bef379e34ab7939794a` ist nach
