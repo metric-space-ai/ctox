@@ -265,8 +265,12 @@ pub async fn read_host_frame<R: tokio::io::AsyncRead + Unpin>(
     stream: &mut R,
 ) -> io::Result<crate::business_data_contract::NativeBusinessDataHostFrame> {
     use tokio::io::AsyncReadExt;
+    // Idle streams may wait for events indefinitely; only a started frame has a deadline.
+    let first = stream.read_u8().await?;
     tokio::time::timeout(DEADLINE, async {
-        let size = stream.read_u32().await? as usize;
+        let mut header = [first, 0, 0, 0];
+        stream.read_exact(&mut header[1..]).await?;
+        let size = u32::from_be_bytes(header) as usize;
         if size == 0 || size > crate::ipc::IPC_MAX_FRAME_BYTES {
             return Err(frame_error());
         }

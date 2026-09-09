@@ -59,8 +59,14 @@ provides connection-owned bounded correlation (two pending requests, twenty-seco
 deadline), owner-drop cancellation, strict response matching and bounded four-byte
 length-prefixed frame helpers. Serialization refuses oversized frames without
 allocating an unbounded output buffer; parse errors omit token-bearing input.
-These helpers still need binding into the owning IpcService and NativeSessionTarget
-provider. Native dispatch and bootstrap remain outstanding. Seven targeted tests
+business_data_ipc.rs now implements IpcService with a per-connection dispatcher
+factory, bounded inbound/event queues and four in-flight operations. Credential
+replies remain readable while dispatch waits; partial reads are not discarded
+when another event completes. All work is polled inside the service future, with
+no detached tasks, so closing/cancelling the stream drops pending work and its
+credential owner. Idle streams wait without a timeout; a started frame retains
+the twenty-second deadline. The concrete NativeSessionTarget provider, real
+BusinessData dispatcher and application bootstrap remain outstanding. Seven targeted tests
 cover framing, correlation, timeout and teardown; runtime results remain to verify.
 Workjet binds the generated callback to a host-owned credential lease and
 validates target/connection/epoch before reading or signing; this is not yet a
