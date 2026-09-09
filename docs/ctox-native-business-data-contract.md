@@ -4,6 +4,41 @@ Status: implementation boundary agreed with the Workjet consumer on 2026-09-09.
 This document specifies the remaining integration; it is not a declaration that
 an IPC client, target resolver or resumable subscription is available.
 
+## Generated host-consumer API
+
+The logical request/response/event contract is now defined once in
+`src/core/rxdb/tests/fixtures/ctox_business_data_contract.json`. Generate its Rust,
+TypeScript and Effect schemas with the existing generator:
+
+```sh
+node src/core/sync/tools/generate-contracts.mjs --business-data
+node src/core/sync/tools/generate-contracts.mjs --business-data --check
+node src/core/sync/tools/generate-contracts.mjs --business-data --workjet-root /absolute/workjet/checkout
+```
+
+Rust exports `business_data_contract`; TypeScript lives in
+`src/core/sync/contracts/ctox-business-data.generated.ts` and its schema sibling.
+The Workjet destinations are `ctoxBusinessData.generated.ts` and
+`ctoxBusinessData.schema.generated.ts` inside its existing contracts package.
+Authority generation and its consumer pin are unchanged by this option.
+
+`NativeBusinessDataRequest` covers saved-target open, status/close, scoped query,
+watch/unwatch, submitCommand and observeCommand. `NativeBusinessDataResponse`
+returns session state, bounded pages, subscription references or command state.
+`NativeBusinessDataEvent` binds every subscription event to a native handle,
+generation and sequence, with SnapshotStart/Page/End, recovery vs live deltas,
+CaughtUp, Reset, Revoked and command outcomes. JSON business payloads remain
+unknown at the TypeScript boundary and require their existing domain validation.
+
+The native `business_data::decode_request` checks input shape and budgets. It
+does not resolve a target, authenticate a session, authorize a selector, confirm
+a command or mint a cursor. The generated types are an integration contract;
+there is not yet an operational NativeBusinessDataClient or native data service.
+Their binding must reuse the native private IPC lifecycle, retain bounded frame
+assembly/backpressure and preserve authority framing limits. No new endpoint or
+transport is introduced by the decoder. A completed page, native ready state or
+SnapshotEnd must not be fabricated from this shape validation.
+
 ## Existing implementation and reuse boundary
 
 - `src/core/sync/src/native.rs` owns the native transport session and now exposes
@@ -58,11 +93,29 @@ need projects, working copies, computers, project chats, project workers, profil
 bindings, public crew projections, selected threads/messages, sessions/transfers
 and relevant command outcomes. They do not need whole-database renderer copies.
 
-A subscription emits an explicit initial snapshot, bounded pages, SnapshotEnd,
-then ordered upsert/remove events. Every event carries session generation,
-subscription ID and an opaque position. Partial snapshots remain visibly
-incomplete. Membership/chat data from independent collections must not be
-presented as one atomic snapshot without a shared source boundary.
+Subscription ordering is normative for the first consumer:
+
+- The subscribed response is delivered before any event for that subscription.
+- A fresh watch delivers snapshotStart, zero or more snapshotPage events,
+  snapshotEnd, then caughtUp. Only caughtUp enters live state; snapshotEnd alone
+  completes the snapshot payload and does not assert that recovery is complete.
+- A valid resume delivers zero or more upsert/remove events with recovery=true,
+  then caughtUp. New live upsert/remove events have recovery=false and follow it.
+- A reset invalidates the prior view and cursor, then starts a fresh snapshot on
+  the same subscription. Revoked and error are terminal for that subscription;
+  reconnect requires a newly authorized subscription.
+- Sequence starts at 1 and increases by exactly one across every event, including
+  reset, for the lifetime of a subscription. Gaps or reordered events invalidate
+  the local view and require recovery; a replacement subscription starts at 1.
+
+Every event carries the session handle/generation and subscription ID. Snapshot
+IDs identify one snapshot of one query in one collection. The first version does
+not provide a shared source boundary across collections. Project chats and their
+members therefore remain independently synchronized views; consumers must show
+incomplete reconciliation instead of presenting them as one atomic snapshot.
+Partial snapshots remain visibly incomplete. Cursors are opaque and bound to the
+session authorization, collection and query; clients cannot compare cursor text
+or infer a source revision from it.
 
 The implementation must capture the snapshot and its change boundary together.
 It must not read a checkpoint separately and claim it describes the streamed

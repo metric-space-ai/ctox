@@ -139,6 +139,7 @@ jobs:
       - name: Verify generated Rust and Workjet contracts
         run: |
           node src/core/sync/tools/generate-contracts.mjs --check --workjet-root ../workjet
+          node src/core/sync/tools/generate-contracts.mjs --business-data --check
           node src/core/sync/tools/assert-host-contracts.mjs ../workjet
       - name: Native authority, lifecycle and real WebRTC scenarios
         # Contract drift remains a failing release gate. Still collect native

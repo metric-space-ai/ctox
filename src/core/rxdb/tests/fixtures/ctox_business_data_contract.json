@@ -1,0 +1,93 @@
+{
+  "format": "ctox.sync.contract.v1",
+  "version": 1,
+  "constants": {
+    "CTOX_BUSINESS_DATA_PROTOCOL_VERSION": 1,
+    "CTOX_BUSINESS_DATA_MAX_PAGE_DOCUMENTS": 200,
+    "CTOX_BUSINESS_DATA_MAX_SNAPSHOT_BYTES": 2097152
+  },
+  "types": {
+    "NativeBusinessDataSessionRef": { "handle": "string", "generation": "u64" },
+    "NativeBusinessDataBinding": { "targetId": "string", "instanceId": "string", "userId": "string" },
+    "NativeBusinessDataQuery": {
+      "collection": "string", "scope": "NativeBusinessDataScope",
+      "query": "json", "pageSize": "u32"
+    },
+    "NativeBusinessDataRecord": { "documentId": "string", "document": "json" },
+    "NativeBusinessDataCommand": { "commandId": "string", "commandType": "string", "payload": "json" },
+    "NativeBusinessDataCommandState": {
+      "commandId": "string", "status": "NativeBusinessDataCommandStatus",
+      "result": "optional:json", "error": "optional:string"
+    },
+    "NativeBusinessDataRequest": {
+      "version": "u32", "requestId": "string", "operation": "NativeBusinessDataOperation"
+    },
+    "NativeBusinessDataResponse": {
+      "version": "u32", "requestId": "string", "result": "NativeBusinessDataResult"
+    },
+    "NativeBusinessDataEvent": {
+      "version": "u32", "session": "NativeBusinessDataSessionRef",
+      "subscriptionId": "string", "sequence": "u64", "payload": "NativeBusinessDataEventPayload"
+    }
+  },
+  "enums": {
+    "NativeBusinessDataCommandStatus": ["pending", "completed", "failed", "unknown"],
+    "NativeBusinessDataErrorCode": [
+      "invalidRequest", "unsupported", "unauthorized", "unknownSession", "staleGeneration",
+      "disconnected", "revoked", "schemaMismatch", "limitExceeded", "resetRequired", "internal"
+    ]
+  },
+  "unions": {
+    "NativeBusinessDataScope": {
+      "instance": {}, "project": { "projectId": "string" },
+      "thread": { "projectId": "string", "threadId": "string" }
+    },
+    "NativeBusinessDataSessionState": {
+      "resolving": { "session": "NativeBusinessDataSessionRef", "targetId": "string" },
+      "ready": { "session": "NativeBusinessDataSessionRef", "binding": "NativeBusinessDataBinding" },
+      "disconnected": { "session": "NativeBusinessDataSessionRef", "binding": "NativeBusinessDataBinding" },
+      "revoked": { "session": "NativeBusinessDataSessionRef", "reason": "string" }
+    },
+    "NativeBusinessDataOperation": {
+      "open": { "targetId": "string" },
+      "status": { "session": "NativeBusinessDataSessionRef" },
+      "close": { "session": "NativeBusinessDataSessionRef" },
+      "query": {
+        "session": "NativeBusinessDataSessionRef", "query": "NativeBusinessDataQuery",
+        "pageCursor": "optional:string"
+      },
+      "watch": {
+        "session": "NativeBusinessDataSessionRef", "query": "NativeBusinessDataQuery",
+        "resumeCursor": "optional:string"
+      },
+      "unwatch": { "session": "NativeBusinessDataSessionRef", "subscriptionId": "string" },
+      "submitCommand": { "session": "NativeBusinessDataSessionRef", "command": "NativeBusinessDataCommand" },
+      "observeCommand": { "session": "NativeBusinessDataSessionRef", "commandId": "string" }
+    },
+    "NativeBusinessDataResult": {
+      "session": { "state": "NativeBusinessDataSessionState" },
+      "page": {
+        "session": "NativeBusinessDataSessionRef", "snapshotId": "string",
+        "records": "list:NativeBusinessDataRecord", "nextPageCursor": "optional:string",
+        "snapshotComplete": "bool"
+      },
+      "subscribed": { "session": "NativeBusinessDataSessionRef", "subscriptionId": "string" },
+      "command": { "session": "NativeBusinessDataSessionRef", "state": "NativeBusinessDataCommandState" },
+      "closed": { "session": "NativeBusinessDataSessionRef" },
+      "unwatched": { "session": "NativeBusinessDataSessionRef", "subscriptionId": "string" },
+      "rejected": { "code": "NativeBusinessDataErrorCode", "message": "string", "retryable": "bool" }
+    },
+    "NativeBusinessDataEventPayload": {
+      "snapshotStart": { "snapshotId": "string" },
+      "snapshotPage": { "snapshotId": "string", "records": "list:NativeBusinessDataRecord" },
+      "snapshotEnd": { "snapshotId": "string", "cursor": "string" },
+      "upsert": { "cursor": "string", "record": "NativeBusinessDataRecord", "recovery": "bool" },
+      "remove": { "cursor": "string", "documentId": "string", "recovery": "bool" },
+      "caughtUp": { "cursor": "string" },
+      "reset": { "code": "NativeBusinessDataErrorCode" },
+      "revoked": { "message": "string" },
+      "command": { "state": "NativeBusinessDataCommandState" },
+      "error": { "code": "NativeBusinessDataErrorCode", "message": "string", "retryable": "bool" }
+    }
+  }
+}
