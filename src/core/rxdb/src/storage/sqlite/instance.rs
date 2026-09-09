@@ -49,7 +49,7 @@ use super::metrics::{
 };
 use super::sql::{
     compile_count_sql, compile_query_plan_candidate_sql, compile_query_sql,
-    count_with_compiled_sql, documents_by_ids, drop_table, for_each_document,
+    count_with_compiled_sql, decode_document_row, documents_by_ids, drop_table, for_each_document,
     for_each_document_with_compiled_sql, insert_document, query_documents_with_compiled_sql,
     quote_identifier, update_document, CompiledSqliteQuery,
 };
@@ -1081,7 +1081,7 @@ fn changed_documents_since(
     let _statement_timer = timed_sqlite_statement();
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT data, id, lastWriteTime FROM {} WHERE lastWriteTime > ? OR (lastWriteTime = ? AND id > ?) ORDER BY lastWriteTime ASC, id ASC LIMIT ?",
+            "SELECT data, id, lastWriteTime, revision, deleted FROM {} WHERE lastWriteTime > ? OR (lastWriteTime = ? AND id > ?) ORDER BY lastWriteTime ASC, id ASC LIMIT ?",
             quote_identifier(table_name)
         ))
         .map_err(sqlite_error)?;
@@ -1093,6 +1093,8 @@ fn changed_documents_since(
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, f64>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, i64>(4)?,
                 ))
             },
         )
@@ -1100,10 +1102,8 @@ fn changed_documents_since(
     let mut documents = Vec::new();
     let mut latest_checkpoint: Option<Value> = None;
     for row in rows {
-        let (data, id, lwt) = row.map_err(sqlite_error)?;
-        documents.push(serde_json::from_str::<Value>(&data).map_err(|err| {
-            new_rx_error("SQLITE_JSON", Some(json!({ "message": err.to_string() })))
-        })?);
+        let (data, id, lwt, revision, deleted) = row.map_err(sqlite_error)?;
+        documents.push(decode_document_row(revision, deleted != 0, lwt, &data)?);
         latest_checkpoint = Some(json!({ "id": id, "lwt": lwt }));
     }
     let checkpoint = latest_checkpoint
@@ -3537,6 +3537,94 @@ mod tests {
             .collect();
         assert_eq!(ids, vec!["b", "c"]);
         assert_eq!(changed.checkpoint, json!({ "id": "c", "lwt": 2.0 }));
+    }
+
+    #[tokio::test]
+    async fn native_projection_envelope_is_consistent_across_all_read_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+        let table = quote_identifier(&instance.table_name);
+        // Native projection writers own the row columns. Legacy JSON may
+        // omit the envelope or retain the previous revision and write clock.
+        {
+            let connection = storage.connection().unwrap();
+            let conn = connection.lock();
+            for (id, data, lwt) in [
+                ("a", json!({ "id": "a", "age": 1 }), 42.0),
+                (
+                    "b",
+                    json!({
+                        "id": "b", "age": 2, "_rev": "1-old", "_deleted": true,
+                        "_meta": { "lwt": 1.0, "custom": "preserved" }
+                    }),
+                    43.0,
+                ),
+            ] {
+                conn.execute(
+                    &format!(
+                        "INSERT INTO {table} (id, revision, deleted, lastWriteTime, data)
+                         VALUES (?1, '2-native', 0, ?2, ?3)"
+                    ),
+                    params![id, lwt, data.to_string()],
+                )
+                .unwrap();
+            }
+        }
+        let expected = instance
+            .find_documents_by_id(&["a".to_string(), "b".to_string()], false)
+            .await
+            .unwrap();
+        assert_eq!(expected.len(), 2);
+        for (document, lwt) in expected.iter().zip([42.0, 43.0]) {
+            assert_eq!(document["_rev"], "2-native");
+            assert_eq!(document["_deleted"], false);
+            assert_eq!(document["_meta"]["lwt"], lwt);
+        }
+        assert_eq!(expected[1]["_meta"]["custom"], "preserved");
+        let changed = instance
+            .get_changed_documents_since(10, None)
+            .await
+            .unwrap();
+        assert_eq!(changed.documents, expected);
+        assert_eq!(changed.checkpoint, json!({ "id": "b", "lwt": 43.0 }));
+
+        let prepared = prepare_query(
+            &schema,
+            normalize_mango_query(
+                &schema,
+                MangoQuery {
+                    selector: Some(json!({ "age": { "$gte": 0 } })),
+                    sort: Some(vec![HashMap::from([("id".to_string(), "asc".to_string())])]),
+                    index: None,
+                    limit: None,
+                    skip: Some(0),
+                },
+            ),
+        )
+        .unwrap();
+        assert_eq!(instance.query(&prepared).await.unwrap().documents, expected);
+        let mut streamed = Vec::new();
+        instance
+            .query_stream(&prepared, 1, |batch| {
+                streamed.extend(batch);
+                Ok(true)
+            })
+            .unwrap();
+        assert_eq!(streamed, expected);
+        let connection = storage.connection().unwrap();
+        let mut scanned = Vec::new();
+        for_each_document(&connection.lock(), &instance.table_name, |document| {
+            scanned.push(document);
+            Ok(true)
+        })
+        .unwrap();
+        assert_eq!(scanned, expected);
     }
 
     #[tokio::test]

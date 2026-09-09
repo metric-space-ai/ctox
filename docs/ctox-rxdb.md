@@ -406,6 +406,14 @@ persistence target. At boundary level that is the right message (data stays
 in CTOX's local SQLite, never an HTTP service); the precise file for RxDB
 documents is `runtime/business-os-rxdb.sqlite3` as above.
 
+Native SQLite row columns are authoritative for `_rev`, `_deleted` and
+`_meta.lwt`. Projection writers can leave a missing or older envelope in
+the JSON payload. Point reads, compiled queries, query streams, fallback
+scans and changed-since pulls must all reconstruct that envelope from the
+same row columns, preserving other metadata. The regression
+`native_projection_envelope_is_consistent_across_all_read_paths` covers
+both missing and stale JSON metadata.
+
 ---
 
 ## 5. Connection lifecycle (end to end)
