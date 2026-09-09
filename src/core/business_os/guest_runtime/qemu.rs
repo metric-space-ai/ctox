@@ -9,6 +9,7 @@
 use super::qmp::{QemuStatus, QmpClient};
 use anyhow::{anyhow, ensure, Context, Result};
 use serde_json::json;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
@@ -178,9 +179,10 @@ impl QemuProcess {
         );
         let runtime = tempfile::Builder::new()
             .prefix("qemu-")
+            .permissions(std::fs::Permissions::from_mode(0o700))
             .tempdir_in(&config.runtime_parent)
             .map_err(|_| anyhow!("private QEMU runtime directory is unavailable"))?;
-        // tempfile creates this directory with mode0700 on Unix.
+        // Restrict access at creation, before binding the monitor or spawning.
         let socket = runtime.path().join("qmp.sock");
         let mut command = prepare_command(config, &socket)?;
         let listener = UnixListener::bind(&socket)
