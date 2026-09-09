@@ -1539,7 +1539,7 @@ async function openBusinessDataPlane(syncConfig) {
     await openBusinessDbAndRegisterCoreCollections(dbName);
 
     setStartupProgress(62, shellText('bootDesktopLayout'));
-    await hydrateTaskbarPinsFromDesktopLayout();
+    // Paint cached pins without querying the data plane before Sync exists.
     renderTabs();
 
     setStartupProgress(66, shellText('bootSyncStart'));
@@ -1595,6 +1595,11 @@ async function openBusinessDataPlane(syncConfig) {
     // restored workspace bootstrap.
     await state.sync.startCollection('business_commands').catch((error) => {
       console.warn('[business-os] command transport warmup deferred', error);
+    });
+    // Reconcile only after transport registration. An unresolved native read
+    // must not become an empty layout or a fresh local write during startup.
+    void hydrateTaskbarPinsFromDesktopLayout().then(() => renderTabs()).catch((error) => {
+      console.warn('[business-os] taskbar pin hydration failed:', error);
     });
     startShellCtoxHealthMonitor();
     startWorkspaceBrandingMonitor();
@@ -5665,17 +5670,14 @@ function looksLikeLegacyAllPins(pins, valid) {
 }
 
 async function hydrateTaskbarPinsFromDesktopLayout() {
-  const collection = state.db?.collection?.('desktop_layout');
+  const database = state.db;
+  const collection = database?.collection?.('desktop_layout');
   if (!collection) {
     state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules);
     return;
   }
-  const doc = await withStartupTimeout(
-    collection.findOne('layout').exec(),
-    1500,
-    null,
-    'desktop_layout read',
-  );
+  const doc = await collection.findOne('layout').exec();
+  if (state.db !== database) return; // Do not apply a late read to another session.
   const layout = doc?.toJSON?.() || null;
   const local = decodeTaskbarPinCache(readScopedLocalStorage(TASKBAR_PINS_KEY));
   const resolved = resolveTaskbarPinState({
@@ -5694,7 +5696,7 @@ async function hydrateTaskbarPinsFromDesktopLayout() {
     TASKBAR_PINS_KEY,
     encodeTaskbarPinCache(state.taskbarPins, state.taskbarPinsUpdatedAtMs),
   );
-  await withStartupTimeout(syncTaskbarPinsToDesktopLayout(), 1500, null, 'desktop_layout write');
+  await syncTaskbarPinsToDesktopLayout();
 }
 
 async function withStartupTimeout(promise, timeoutMs, fallback, label) {

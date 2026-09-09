@@ -60,6 +60,17 @@ results, runtime projections and files continue through CTOX Sync/WebRTC.
 The immutable address mechanism alone does not certify bootstrap performance,
 mobile suspend/resume, or full runtime compatibility across all hosts.
 
+### Desktop pin hydration
+
+The shell renders its cached taskbar pins before starting Sync, but reconciles
+`desktop_layout` only after the command transport has been registered. This
+reconciliation does not block shell bootstrap. A pending native read is never
+converted into an absent layout: doing so could assign the fallback pins a new
+local timestamp and overwrite an older, valid remote layout. The actual read
+must settle before pin/cache reconciliation and any write-back. A response for
+a replaced database is discarded. Query failures remain failures; hydration
+does not add retry timers or a second data path.
+
 
 ## Native BusinessData source identity
 
