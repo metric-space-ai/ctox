@@ -949,7 +949,17 @@ fn is_filler_field_status(status: &Value) -> bool {
         .and_then(Value::as_array)
         .map(|attempts| attempts.is_empty())
         .unwrap_or(true);
-    unsupported && no_sources && no_attempts
+    let placeholder_reason = status
+        .get("reason")
+        .and_then(Value::as_str)
+        .map(|reason| reason.trim().to_ascii_lowercase())
+        .is_some_and(|reason| {
+            matches!(
+                reason.as_str(),
+                "test" | "testing" | "probe" | "dummy" | "n/a" | "na" | "-" | "tbd" | "todo"
+            )
+        });
+    (unsupported && no_sources && no_attempts) || placeholder_reason
 }
 
 /// Workers regularly send `field_status` alone and forget `result` (or send
@@ -1551,6 +1561,18 @@ fn sanitize_research_writeback(
                     })
                 })
                 .collect::<BTreeSet<_>>();
+            // A probe against the writeback contract is not evidence. One bad
+            // field is demoted; the other thirty-one survive.
+            if let Some(host) = hosts
+                .iter()
+                .find(|host| host_is_reserved_for_documentation(host))
+            {
+                demotieren.push((
+                    field.clone(),
+                    format!("Beleg vom Dokumentations-Host `{host}` beweist nichts"),
+                ));
+                continue;
+            }
             let benoetigt = super::person_research_command::required_independent_sources(field);
             if hosts.len() < benoetigt {
                 demotieren.push((
@@ -1763,6 +1785,31 @@ fn validate_source(field: &str, source: &FieldSource) -> anyhow::Result<()> {
         "verified field `{field}` source URL must be HTTP(S)"
     );
     Ok(())
+}
+
+/// Hosts RFC 2606 and RFC 6761 reserve for documentation and testing. A worker
+/// probing the writeback contract sends them; on the Aeroxon lead 09.09.2026
+/// one such probe claimed `firma_name` as verified from
+/// `https://example.com` with the quote "test", and its `no_match` siblings
+/// carried the reason "TEST" and overwrote a real result.
+fn host_is_reserved_for_documentation(host: &str) -> bool {
+    // `.test` stays allowed on purpose: the fixtures in this file use it as
+    // their stand-in domain, and a rule that rejects it would only be checking
+    // its own test data.
+    matches!(
+        host,
+        "example.com"
+            | "example.org"
+            | "example.net"
+            | "example.edu"
+            | "example"
+            | "localhost"
+            | "invalid"
+    ) || host.ends_with(".example")
+        || host.ends_with(".invalid")
+        || host.ends_with(".localhost")
+        || host.ends_with(".example.com")
+        || host.ends_with(".example.org")
 }
 
 fn validate_no_match(field: &str, status: &FieldStatus) -> anyhow::Result<()> {
@@ -3598,6 +3645,63 @@ mod tests {
             &serde_json::json!({})
         )
         .is_ok());
+    }
+
+    #[test]
+    fn a_probe_from_example_com_is_not_evidence() -> anyhow::Result<()> {
+        // Measured on the Aeroxon lead 09.09.2026: a worker probing the
+        // contract claimed firma_name as verified from https://example.com
+        // with the quote "test", and its no_match siblings carried the reason
+        // "TEST" and overwrote a real result.
+        let temp = tempfile::tempdir()?;
+        let record_id = "lead-probe";
+        let research_command_id = "research-probe";
+        let (_, task) =
+            create_gap_fixture(temp.path(), research_command_id, record_id, "firma_name")?;
+        let command = writeback_command(
+            record_id,
+            serde_json::json!({
+                "record_id": record_id,
+                "module": "outbound-lead-generation",
+                "research_command_id": research_command_id,
+                "gap_task_id": task.message_key,
+                "field_status": {
+                    "firma_name": {
+                        "status": "verified",
+                        "value": "Aeroxon Insect Control GmbH",
+                        "sources": [
+                            {"source_id": "test", "url": "https://example.com", "quote": "test"},
+                            {"source_id": "test2", "url": "https://example.org", "quote": "test"}
+                        ],
+                        "attempts": []
+                    }
+                },
+                "result": {"fields": {}, "person_records": [], "evidence": []}
+            }),
+        );
+        let result = handle_research_writeback(temp.path(), &command)?;
+        let rejections = result["rejections"].as_array().context("rejections")?;
+        assert!(
+            rejections.iter().any(|entry| entry
+                .as_str()
+                .is_some_and(|text| text.contains("example.com"))),
+            "the documentation host must be named: {rejections:?}"
+        );
+        assert_eq!(result["accepted_fields"], serde_json::json!([]));
+        Ok(())
+    }
+
+    #[test]
+    fn a_no_match_reason_of_test_does_not_overwrite_a_real_result() {
+        let earlier = serde_json::json!({
+            "firma_domain": {"status": "verified", "value": "aeroxon.de", "sources": [{"source_id": "a"}]}
+        });
+        let probe = serde_json::json!({
+            "firma_domain": {"status": "no_match", "reason": "TEST", "attempts": []}
+        });
+        let merged = merge_field_status(Some(&earlier), probe);
+        assert_eq!(merged["firma_domain"]["status"], "verified");
+        assert_eq!(merged["firma_domain"]["value"], "aeroxon.de");
     }
 
     #[test]
