@@ -375,6 +375,18 @@ jobs:
             SMOKE_PROCESS_LIFECYCLE_PATH="$RUNNER_TEMP/ctox-host-proof/critical-reload-processes.json" \
             node src/core/rxdb/tools/browser_rust_smoke.js \
             | tee "$RUNNER_TEMP/ctox-host-proof/critical-browser-reload.log"
+      - name: Verify canonical schema routing and removal of obsolete command tables
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        timeout-minutes: 6
+        shell: bash
+        run: |
+          set -o pipefail
+          CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox" \
+            SMOKE_MODE=migration-version-browser-to-rust SMOKE_PAGE_PATH=/index.html \
+            BUSINESS_PORT=8883 SIGNALING_PORT=18882 \
+            SMOKE_PROCESS_LIFECYCLE_PATH="$RUNNER_TEMP/ctox-host-proof/schema-routing-processes.json" \
+            node src/core/rxdb/tools/browser_rust_smoke.js 2>&1 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/schema-routing-browser.log"
       # Profiling is a separate fixture after every acceptance measurement.
       # Its timings never replace the unprofiled command/reload budgets above.
       - name: Sample native CPU symbols in an isolated context reproduction

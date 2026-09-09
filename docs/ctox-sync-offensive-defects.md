@@ -9,6 +9,26 @@ command delivery defects remain in this offensive.
 
 ## Latest full-host evidence
 
+Latest completed full-host cohort: source `cbabdb48d064d70aee2a9e84733cee05ba950a33`,
+[run34298240845](https://github.com/metric-space-ai/ctox/actions/runs/34298240845),
+tested merge `27c0caaf03ae4ffbd3f25393c9123e9fd9c1945d`, binary SHA256
+`3aefce45b2d80d86c9aa0699db344a95f956273a7570b7a083282da613b316a0`.
+Overall **FAIL**: context workflow remains red. Warm30 p50 268 ms / p95
+354.55 ms and critical30 boot p95 2737.793028 ms pass. All ten native migration
+regressions pass, including transactional cleanup and the forced-repair cases.
+The isolated profiler captured actual samples; its workflow step fails because
+the context fixture fails, not because symbol recording is unavailable.
+This cohort precedes the bounded-reader change and cannot prove its effect.
+
+Reader candidate `e5973c8c315172b2e71e6e677e72929f928e6e70`,
+[run34300623670](https://github.com/metric-space-ai/ctox/actions/runs/34300623670):
+native Linux/macOS, Chromium and real-process profiler checks pass. The Linux
+RxDB log explicitly passes both new bounded-reader/progress tests (400 crate
+tests passed). Its full-host context/performance acceptance is still running.
+These results do not close tenant incidents or full portability acceptance.
+
+### Earlier retained full-host and source-attribution cohort
+
 PR69 source `67de21dc96bcd7511a14304dbe2acd16f35ddb48`, run
 `34296338920`, full-host job `102293679231`: **FAIL overall**.
 Tested merge `de3d33afd51525ca273bee4d55b699e21f264546`; binary SHA256
@@ -57,10 +77,18 @@ Forced repair retains a unique legacy command; missing rules and equal-clock
 tombstone conflicts reject cleanup, and rows written after an earlier copy are
 rechecked. The same copy implementation serves both paths. Cleanup failures now
 abort native bring-up instead of logging and publishing an incomplete peer.
-Added native regressions cover these boundaries; formatting, diff and workflow
-syntax checks pass, but execution of the new Rust cases and migration performance
-remain pending. This does not establish a tenant incident's cause, cross-store
+All ten native migration regressions pass in run34298240845. Migration performance
+on realistic copied stores remains pending. This does not establish a tenant incident's cause, cross-store
 atomicity, immutable backup, complete migration balance or recovery acceptance.
+
+The older `migration-version-browser-to-rust` mode did not seed a legacy store;
+it only checked new command routing against hard-coded command-v1/task-v0 tables.
+It now derives active versions from the canonical contract, rejects every older
+command table and requires exactly one native command/task with matching links.
+The matrix follows the same schema contract and keeps zero-stale-row checks.
+The full-host workflow now runs this browser/native routing check separately.
+Its execution remains pending; even a pass proves current-schema routing and
+absence of old executable tables, not a copied-data migration or recovery rehearsal.
 
 The following historical rows remain incident records; the measurements above
 supersede their older fixture observations without closing tenant acceptance.
@@ -82,6 +110,7 @@ supersede their older fixture observations without closing tenant acceptance.
 | D11 | Slow bootstrap and repeated full bootstrap when switching views; mobile suspend is fragile. | Critical collection boot p95 <5 s over 30 runs; warm view switch preserves active session; mobile suspend resumes persisted state. Measure browser/profile/native cohorts separately. | Latest completed retained-profile cohort, run34279536313: critical reload p95 3515.43 ms, no report issues. Prior run34276484717: p95 3244.00 ms. Earlier run34261603857: 30 reloads, p95 3454.14 ms, all five critical collections complete/live with checkpoint epochs. These measurements do not certify fresh-profile, native cold setup or real mobile suspend/resume. |
 | D12 | Historically damaged data must be removed without losing valid histories, attachments or app records. | Identify exact corrupted records and cause; immutable backup, migration/reconciliation balance, repair/removal on copies, recovery rehearsal, then scoped authorized production repair. | Open; no blanket deletion or cache wipe counts as repair. |
 | D14 | Old HTTP-bridge diagnostics can make failed/offline WebRTC collections appear ready. | Reject obsolete receipts as proof of initial sync, streaming or checkpoint epoch; preserve healthy native state behavior. | Acceptance branches removed, regression demonstrated red before/green after removal. Full browser CI pending; no tenant deployment. |
+| D15 | Installed Workjet reports `masterWrite conflicts remained for desktop_layout` on two separate runs. | Reproduce on the exact installed release; verify eventual convergence and retained layouts across reload/reconnect without wiping storage. | Open field report from the UI task: app cc6e7e71, shell 0.1.46-beta.8 / 87daa431b1604bfcca364a1eb1a851e90da1874d, latest occurrence 2026-09-09T00:29:55.704Z. App remained usable; source of the conflict and convergence are unverified. Do not attribute this to uninstalled PR changes. |
 | D13 | Greppy defects/diagnostic problems prevent reliable use and were not consistently reported. | Reproduction and classification sent to the designated existing task; verify repair against the reproduction. | Report only to 01a07f6a-83e8-7901-851c-36521e4916b4, superseding the stale AGENTS target. Reporting does not imply the Greppy defect is fixed. |
 
 ## Architecture requirements that are not closed by the incident fixes
