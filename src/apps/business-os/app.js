@@ -1,3 +1,4 @@
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260909-shell-v2-crew-feedback-v359';
 import { CtoxResizer } from './shared/resizer.js?v=20260909-shell-v2-crew-feedback-v359';
 import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260909-shell-v2-crew-feedback-v359';
 import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260909-shell-v2-crew-feedback-v359';
@@ -10506,6 +10507,10 @@ function shellCtoxHealthProblem(status) {
     return [shellText('ctoxStatusUnavailable'), status?.error].filter(Boolean).join(' ');
   }
   const runtime = status.runtime_settings;
+  if (subscriptionModelUnavailable(runtime)) {
+    return state.lang === 'en' ? 'The selected model is not offered for this login. Choose an available model in Settings.'
+      : 'Das ausgewählte Modell wird für diesen Zugang nicht angeboten. Bitte in den Einstellungen ein verfügbares Modell auswählen.';
+  }
   if (runtime?.diagnostics?.auth_needs_attention === true) {
     return state.lang === 'en' ? 'The crew cannot work: model access is missing. Configure the provider in Settings.'
       : 'Die Crew kann nicht arbeiten: Der Modellzugang fehlt. Bitte den Anbieter in den Einstellungen einrichten.';

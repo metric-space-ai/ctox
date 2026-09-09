@@ -1,3 +1,4 @@
+import { subscriptionModelUnavailable } from './model-access-health.js?v=20260909-shell-v2-crew-feedback-v359';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import { appReleaseProjection } from './app-lifecycle.js?v=20260831-ctox-desktopapp-ports-v328';
 import {
@@ -1289,6 +1290,7 @@ function runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth
   const usesApiKey = providerLoaded && !isLocalProvider && !usesSubscription;
   const serviceNeedsAttention = Boolean(diagnostics.service_needs_attention);
   const authNeedsAttention = Boolean(diagnostics.auth_needs_attention);
+  const modelUnavailable = subscriptionModelUnavailable(runtimeSettings);
   const canManage = Boolean(isAdmin && runtimeSettings?.can_manage !== false);
   const providerChoices = [
     ['local', 'Local CTOX'],
@@ -1306,14 +1308,16 @@ function runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth
         <div><h3>Anbieter, Zugang und Modell</h3></div>
         <span>${escapeHtml(runtimeLoading ? 'Status wird geladen…' : diagnostics.service_message || 'Status unbekannt')}</span>
       </header>
-      <div class="runtime-healthline ${serviceNeedsAttention || authNeedsAttention ? 'is-danger' : 'is-ok'}">
+      <div class="runtime-healthline ${serviceNeedsAttention || authNeedsAttention || modelUnavailable ? 'is-danger' : 'is-ok'}">
         <span aria-hidden="true"></span>
         <strong>${escapeHtml(providerLoaded ? `${runtimeProviderLabel(provider)}${runtime.chat_model ? ` · ${runtime.chat_model}` : ''}` : 'Runtime nicht geladen')}</strong>
         <em>${escapeHtml(runtimeAuthSummary(provider, authMode, auth, runtimeSettings?.provider_subscriptions))}</em>
       </div>
-      ${!runtimeLoading && (serviceNeedsAttention || authNeedsAttention || (providerLoaded && !runtime.chat_model)) ? `
+      ${!runtimeLoading && (serviceNeedsAttention || authNeedsAttention || modelUnavailable || (providerLoaded && !runtime.chat_model)) ? `
         <p class="runtime-healthline is-danger" role="alert">${escapeHtml(authNeedsAttention
           ? 'Die Crew kann keine Aufgaben bearbeiten: Der Zugang zum Modellanbieter fehlt. Bitte anmelden oder einen API-Schlüssel hinterlegen.'
+          : modelUnavailable
+            ? 'Das ausgewählte Modell wird für diesen Zugang nicht angeboten. Bitte ein verfügbares Modell auswählen.'
           : !runtime.chat_model
             ? 'Die Crew kann keine Aufgaben bearbeiten: Bitte ein Modell auswählen.'
             : 'Die Crew meldet einen Betriebsfehler. Aufgaben können derzeit scheitern; prüfe den Zugang und den letzten Fehler.')}</p>` : ''}
