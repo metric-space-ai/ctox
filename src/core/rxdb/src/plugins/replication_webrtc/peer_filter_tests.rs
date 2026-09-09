@@ -36,7 +36,7 @@ async fn peer_filter_denies_incoming_rpc_families_before_credentials_or_dispatch
         "masterWrite",
         "rxdb.query.fetch",
         "rxdb.query.cancel",
-        "rxdb.file.read",
+        "rxdb.file.fetch",
         "auxiliary.fixture",
     ] {
         let handler = MockHandler::new();
