@@ -266,6 +266,26 @@ measured warm30 p50 404 ms / p95 577.45 ms (FAIL) and critical30 boot p95 3538.1
 (PASS). The new full native/browser run must measure the cache change against
 those gates; no performance improvement is claimed before that result.
 
+The next Core reader candidate addresses another repeated parser path:
+`verified_capability_claims -> capability_signing_secret -> get_secret_value ->
+ensure_secret_master_key -> load_legacy_master_key -> persistence::load_text_value`.
+The final reader previously opened the Core database for every check, including
+checks where no legacy key exists. Under Unix it now keeps one connection per
+calling thread, keyed by canonical path/device/inode. Every read still executes
+SQL; no key value, negative lookup, permission result or transaction is cached.
+Root/file changes discard the handle and read failures clear it. Other platforms
+retain the existing fresh-open behavior until file-identity reuse is certified.
+
+A local macOS fixture compiles the actual persistence module with pinned direct
+dependencies and 256 unrelated tables/triggers. Thirty reads use one cached
+connection versus thirty fresh opens: nearest-rank p50/p95 23/44 microseconds
+versus 1454/2250 microseconds. All three component tests pass, including live
+writes/deletions, root changes, symlink retargeting and corrupt replacement.
+These are component measurements, not a full CTOX or browser latency result.
+The actual secret conflict/rotation tests and full-host acceptance are in CI.
+The existing late-key conflict checks remain; this change does not skip migration
+or cache a successful authority decision.
+
 The authenticated two-profile context fixture persists the exact requester
 command and reviewer result status snapshots before their assertions, outside
 the CI error line. On failure it separately reads each profile's already

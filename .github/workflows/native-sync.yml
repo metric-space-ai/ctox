@@ -8,6 +8,8 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'src/core/business_os/**'
+      - 'src/core/persistence*.rs'
+      - 'src/core/secrets.rs'
       - 'src/core/mission/channels/**'
       - 'src/core/sync/**'
       - 'src/core/sync_host/**'
@@ -29,6 +31,8 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'src/core/business_os/**'
+      - 'src/core/persistence*.rs'
+      - 'src/core/secrets.rs'
       - 'src/core/mission/channels/**'
       - 'src/core/sync/**'
       - 'src/core/sync_host/**'
@@ -297,6 +301,14 @@ jobs:
             business_os::rxdb_peer::tests::runtime_empty_legacy_table \
             business_os::rxdb_peer::tests::rxdb_schema_drift_repair \
             --test-threads=2 | tee "$RUNNER_TEMP/ctox-host-proof/schema-migration-tests.log"
+      - name: Verify fresh secret reads and bounded Core reader reuse
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked --bin ctox -- persistence::tests secrets::tests \
+            --nocapture --test-threads=2 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/secret-reader-tests.log"
       - name: Context prompt first paint and authorized native command
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         timeout-minutes: 10

@@ -9,7 +9,7 @@ command delivery defects remain in this offensive.
 
 ## Latest full-host evidence
 
-Latest completed full-host cohort: source `cbabdb48d064d70aee2a9e84733cee05ba950a33`,
+Previous completed full-host cohort: source `cbabdb48d064d70aee2a9e84733cee05ba950a33`,
 [run34298240845](https://github.com/metric-space-ai/ctox/actions/runs/34298240845),
 tested merge `27c0caaf03ae4ffbd3f25393c9123e9fd9c1945d`, binary SHA256
 `3aefce45b2d80d86c9aa0699db344a95f956273a7570b7a083282da613b316a0`.
@@ -20,11 +20,27 @@ The isolated profiler captured actual samples; its workflow step fails because
 the context fixture fails, not because symbol recording is unavailable.
 This cohort precedes the bounded-reader change and cannot prove its effect.
 
-Reader candidate `e5973c8c315172b2e71e6e677e72929f928e6e70`,
+Latest completed reader candidate `e5973c8c315172b2e71e6e677e72929f928e6e70`,
 [run34300623670](https://github.com/metric-space-ai/ctox/actions/runs/34300623670):
-native Linux/macOS, Chromium and real-process profiler checks pass. The Linux
-RxDB log explicitly passes both new bounded-reader/progress tests (400 crate
-tests passed). Its full-host context/performance acceptance is still running.
+overall **FAIL**. Native Linux/macOS, Chromium, migration, four-host control,
+strict outage and 21-collection reload/restart pass. Linux RxDB passes 400 tests,
+including both new reader regressions. Warm30 p50 311.5 ms / p95 387.4 ms fails;
+critical30 boot p95 2707.798889 ms passes. Strict outage receives the queued
+command after 2590.2 ms, one native command/task, no repair or resubmission.
+Context fails at `context-data`, with concurrent masterChangesSince timeouts.
+Its shorter 167.41-second CPU cohort averages 108.13% of one core and is not a
+comparable successful workload. The separate actual CTOX profile captures 1336
+samples with zero lost; parser/trigger duplication, allocator and mutex symbols
+remain prominent. Its step preserves the failing context fixture's exit code.
+
+Tested merge `e500b2a6f27cb05b43fdc532ce21642b88413257`; binary SHA256
+`fbb82a1ec95cf10d2fc952995e2ccebfa0d86682c4933692b259b38bf48db6ea`.
+Source inspection identified a second repeated Core open in every secret
+master-key legacy check. The next candidate reuses the KV reader connection
+under Unix while rereading every value, including late conflicts and deletion.
+A local actual-module fixture passes three tests and measures 30 cached reads
+at p50/p95 23/44 microseconds versus 1454/2250 with fresh opens. Full native
+secret/authority semantics and browser performance of this candidate are pending.
 These results do not close tenant incidents or full portability acceptance.
 
 ### Earlier retained full-host and source-attribution cohort
