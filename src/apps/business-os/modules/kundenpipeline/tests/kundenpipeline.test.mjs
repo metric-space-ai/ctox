@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { collections } from '../schema.js';
+import { collections, migrationStrategies } from '../schema.js';
+import { collections as coreCollections } from '../../ctox/schema.js';
 import {
   __kundenpipelineTestHooks as hooks,
   decisionCommand,
@@ -49,7 +50,19 @@ test('Decision Hub declares the native projection collections', () => {
   assert.equal(collections.kundenpipeline_entscheidungen.primaryKey, 'id');
   assert.ok(collections.kundenpipeline_entscheidungen.indexes.includes('status'));
   assert.ok(collections.kundenpipeline_vorgaenge.indexes.includes('kunde_id'));
-  assert.equal(collections.business_commands.version, 1);
+  assert.deepEqual(collections.business_commands, coreCollections.business_commands);
+  const legacy = {
+    id: 'legacy-command', command_id: 'legacy-command', module: 'kundenpipeline',
+    command_type: 'kundenpipeline.decision.resolve', status: 'pending',
+    updated_at_ms: 1, payload: { decision_id: 'decision-1' },
+  };
+  let migrated = structuredClone(legacy);
+  for (let version = 1; version <= coreCollections.business_commands.version; version += 1) {
+    const migrate = migrationStrategies.business_commands[version];
+    assert.equal(typeof migrate, 'function', `missing command migration ${version}`);
+    migrated = migrate(migrated);
+  }
+  assert.deepEqual(migrated, { ...legacy, inbound_channel: 'kundenpipeline' });
 });
 
 test('decision cards filter open items and retain agent options', () => {

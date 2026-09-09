@@ -1,6 +1,24 @@
 # CTOX-Sync-Architektur: Handover vom 9. September 2026
 
 
+## App-Story-Fehler erstmals vollständig lesbar
+
+Job `102487411931` zu `eadcbc152` liefert dank Output-Flush den vollständigen
+Abschluss: 770 Tests, 765 bestanden, vier fehlgeschlagen, einer übersprungen.
+Fehler: Decision-Hub-Command-Schemaversion, Mail-Inspector (`mailActionIcon`),
+Reports-Rail-Grammatik (derselbe Guard über zwei Test-Einstiege).
+
+Decision Hub importiert bereits das kanonische Command-Schema v2 mit Migrationen
+1 und 2; der Test erwartete noch v1. Er prüft jetzt das vollständige Schema gegen
+die kanonische Deklaration, verlangt für jede Version eine Migration und bestätigt
+den Erhalt einer alten Command-ID, Payload und Status samt inbound_channel.
+Der gezielte Test besteht (1/1, 156 ms Gesamtlauf). Dies ist ein Vertrags-/Migrations-
+Fixture-Test, keine Abnahme realer Kundenmigrationen. Mail/Reports bleiben offen.
+
+Host-Job `102481638437` zu `5b583c3c2` bestätigt erfolgreiche Browser-Command-Recovery
+ohne Reparatur und läuft nun bei 21 Collections über Reload/Native-Neustart.
+Numerische Performance-Artefakte und vollständige Abnahme weiterhin ausstehend.
+
 ## CI-Matrix: Browser-Guard benötigt seinen installierten Browser
 
 Auf Head `eadcbc152` scheitert Job `102487411771` (macOS x86 CLI) am Import von
