@@ -1,6 +1,23 @@
 # CTOX-Sync-Architektur: Handover vom 9. September 2026
 
 
+## Fortsetzung: vollständige Fehlerdiagnostik statt abgeschnittener CI-Ausgabe
+
+CI `34357617934`, macOS-Job `102486187764`, bestätigt jetzt erfolgreiche
+Dependency-Installation einschließlich Audit. Der nächste Release-Config-Guard
+erwartete noch exakt js-yaml 4.3.1. Er verlangt jetzt exakt 4.3.2; lokaler
+statischer Release-Config-Check besteht. Keine Guard-Entfernung oder Lockerung.
+
+Der separate App-Story-Runner schrieb gepufferte stdout/stderr und rief danach
+`process.exit()` auf. Der alte JS-Job endete mitten in einem Data-URL-Stacktrace,
+ohne abschließende Fehlerdiagnose. Eine echte kleine Pipe-Reproduktion zeigt:
+2 MiB plus Fehlermarker geschrieben, bei `process.exit(1)` nur 65.536 Bytes und
+kein Marker empfangen; mit `process.exitCode=1` alle 2.097.175 Bytes und Marker,
+weiterhin Status 1. Der Runner setzt deshalb jetzt exitCode und dokumentiert
+zusätzlich Kindprozess-Exitcode, Signal und Startfehler im JSON-Bericht. Syntaxcheck
+besteht. Das behebt die abgeschnittene Diagnose, nicht den noch zu lokalisierenden
+fachlichen App-Story-Fehler. Vollständige JS-/E2E-/Performance-Abnahme bleibt offen.
+
 ## Weiterarbeit: Desktop-Abnahme wieder erreichbar machen
 
 Der macOS-Desktop-Job `102481637846` scheitert nach Installation am npm-Audit:
