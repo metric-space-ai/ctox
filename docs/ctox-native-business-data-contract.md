@@ -39,7 +39,70 @@ assembly/backpressure and preserve authority framing limits. No new endpoint or
 transport is introduced by the decoder. A completed page, native ready state or
 SnapshotEnd must not be fabricated from this shape validation.
 
+
+## Private host credential callback
+
+The same fixture now generates NativeBusinessDataHostFrame plus credential
+challenge/reply shapes. A challenge is bound to requestId, connectionId,
+targetId and the captured account sessionEpoch. Only the native owner may send
+it, after verifying NativeSessionTarget on that same live channel. Replies must
+match the pending request, connection and epoch; unsolicited or late replies
+must never supply credentials to another session. Missing capability is failure,
+not anonymous fallback. Nonce/public coordinates/signature retain the existing
+ctox-device-proof-v1 encoding. These are private host messages, never renderer
+IPC, collection records or network control endpoints.
+
+CredentialReply and its containing HostFrame omit Rust Debug through the
+existing sensitiveTypes generator option, now also respected for unions.
+No frame budget or Authority protocol changes are implied. credential_ipc.rs now
+provides connection-owned bounded correlation (two pending requests, twenty-second
+deadline), owner-drop cancellation, strict response matching and bounded four-byte
+length-prefixed frame helpers. Serialization refuses oversized frames without
+allocating an unbounded output buffer; parse errors omit token-bearing input.
+business_data_ipc.rs now implements IpcService with a per-connection dispatcher
+factory, bounded inbound/event queues and four in-flight operations. Credential
+replies remain readable while dispatch waits; partial reads are not discarded
+when another event completes. All work is polled inside the service future, with
+no detached tasks, so closing/cancelling the stream drops pending work and its
+credential owner. Idle streams wait without a timeout; a started frame retains
+the twenty-second deadline. NativeSessionTarget::with_ipc_credentials now binds
+the requester to one exact WebRTCRsConnection plus host-owned connection ID,
+saved target ID and account epoch. Existing source proof remains ahead of that
+callback. The real WebRTC credential tests use this correlated channel, including
+wrong source pin and revocation cases; their runtime result is still pending.
+The saved-target resolver, real BusinessData dispatcher and application bootstrap
+remain outstanding. Seven targeted tests
+cover framing, correlation, timeout and teardown; runtime results remain to verify.
+Workjet binds the generated callback to a host-owned credential lease and
+validates target/connection/epoch before reading or signing; this is not yet a
+running native service.
+
 ## Existing implementation and reuse boundary
+
+- `NativeSyncSession::start_data_client` selects a query-only consumer using
+  the existing `browser`/replica wire role. It requires deferred credentials
+  and empty replicated collections. `connect_data_peer` offers from the client
+  to a currently advertised `ctox_instance`, even when its signaling ID sorts
+  after the server. The signaling descriptor must confirm this client's own
+  browser admission; absent or incompatible descriptors fail explicitly.
+  This reuses the existing offer and DataChannel implementation, not execution
+  membership or a second protocol. The client never becomes replication master
+  and cannot attach an execution group or call the execution connector.
+  Native servers retain passive browser behavior and execution peers retain
+  their lower-ID offer rule. Target proof still precedes credential release.
+  The host provides the existing browser-admitted data-room configuration and
+  awaits session shutdown. Data-client start installs owned discovery before
+  room join: at most eight advertised CTOX candidates and three connection
+  attempts per route/local signaling identity, with bounded calls and retry
+  delays. It has no idle timer once connected or exhausted, and shutdown aborts
+  and awaits its task before closing the pool. A terminal discovery failure
+  closes the transport. Source verification still belongs to NativeSessionTarget.
+  The checked signaling source includes each recipient in Joined peer summaries;
+  deployment compatibility still requires real-service verification.
+  Saved-target configuration, local BusinessData dispatch and Desktop bootstrap
+  remain outstanding. Added
+  real WebRTC tests exercise client-initiated reads/revocation and wrong target
+  pins; their CI result must be checked before treating this increment as accepted.
 
 - `src/core/sync/src/native.rs` owns the native transport session and now exposes
   `query_page`. `query_fetch_client.rs` in the RxDB crate consumes the existing

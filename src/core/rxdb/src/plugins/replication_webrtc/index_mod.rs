@@ -1509,7 +1509,7 @@ where
                                 room_payload.collection_schemas,
                                 room_payload.collection_checkpoints,
                                 Some(&storage_token),
-                                handler_task.local_peer_role(),
+                                handler_task.as_ref(),
                             )
                             .await;
                             let challenge = item.message.params.first()
@@ -1758,7 +1758,7 @@ where
                         local_room_payload.collection_schemas,
                         local_room_payload.collection_checkpoints,
                         Some(&storage_token),
-                        handler.local_peer_role(),
+                        handler.as_ref(),
                     )
                     .await;
                     let device_proof_nonce = fresh_device_proof_nonce();
@@ -1960,7 +1960,9 @@ where
                     let hash_fn = Arc::clone(&database.hash_function);
                     let elected_master =
                         is_master_in_webrtc_replication(hash_fn, &storage_token, &peer_token).await;
-                    let is_master = if remote_peer_role == "browser" {
+                    let is_master = if handler.is_data_client() {
+                        false
+                    } else if remote_peer_role == "browser" {
                         true
                     } else {
                         elected_master
@@ -2213,14 +2215,14 @@ async fn collection_checkpoints_payload(collections: &[Arc<RxCollection>]) -> Va
     Value::Object(map)
 }
 
-async fn ctox_protocol_response_with_flag(
+async fn ctox_protocol_response_with_flag<H: WebRTCConnectionHandler>(
     collection: Option<&Arc<RxCollection>>,
     peer_session_id: Option<&str>,
     query_demand_loading_enabled: bool,
     collection_schemas: Option<Value>,
     collection_checkpoints: Option<Value>,
     storage_generation: Option<&str>,
-    peer_role: NativePeerRole,
+    handler: &H,
 ) -> Value {
     let collection_payload = if let Some(collection) = collection {
         let checkpoint = collection
@@ -2240,15 +2242,21 @@ async fn ctox_protocol_response_with_flag(
     } else {
         Value::Null
     };
-    ctox_protocol_response_payload_with_flag(
+    let mut payload = ctox_protocol_response_payload_with_flag(
         collection_payload,
         peer_session_id,
         query_demand_loading_enabled,
         collection_schemas,
         collection_checkpoints,
         storage_generation,
-        peer_role,
-    )
+        handler.local_peer_role(),
+    );
+    if handler.is_data_client() {
+        // Reuse the canonical browser/replica role from the existing protocol.
+        // No execution identity, membership or master authority is advertised.
+        payload["peerSession"]["role"] = Value::String("browser".into());
+    }
+    payload
 }
 
 #[cfg(test)]
@@ -3853,6 +3861,7 @@ mod tests {
     struct MockPeer(String, u64);
 
     struct MockHandler {
+        role: NativePeerRole,
         local_provider: PlMutex<Option<super::super::LocalSessionProvider<MockPeer>>>,
         retired: PlMutex<HashSet<MockPeer>>,
         connect: crate::rxjs_compat::RxSubject<MockPeer>,
@@ -3867,7 +3876,12 @@ mod tests {
 
     impl MockHandler {
         fn new() -> StdArc<Self> {
+            Self::with_role(NativePeerRole::CtoxInstance)
+        }
+
+        fn with_role(role: NativePeerRole) -> StdArc<Self> {
             StdArc::new(Self {
+                role,
                 local_provider: PlMutex::new(None),
                 retired: PlMutex::new(HashSet::new()),
                 connect: crate::rxjs_compat::RxSubject::new(),
@@ -3904,6 +3918,9 @@ mod tests {
 
     #[async_trait::async_trait]
     impl WebRTCConnectionHandler for MockHandler {
+        fn local_peer_role(&self) -> NativePeerRole {
+            self.role
+        }
         async fn local_session_credentials(
             &self,
             peer: &Self::Peer,
@@ -4298,7 +4315,7 @@ mod tests {
             payload.collection_schemas,
             payload.collection_checkpoints,
             Some("worker-storage"),
-            NativePeerRole::WorkjetExecutor,
+            MockHandler::with_role(NativePeerRole::WorkjetExecutor).as_ref(),
         )
         .await;
         assert_eq!(protocol["collection"], Value::Null);
@@ -4359,7 +4376,7 @@ mod tests {
                 Some(serde_json::json!({})),
                 Some(serde_json::json!({})),
                 Some(remote_token),
-                NativePeerRole::WorkjetExecutor,
+                MockHandler::with_role(NativePeerRole::WorkjetExecutor).as_ref(),
             )
             .await;
             let mut requests = handler.sent_subject.subscribe();
