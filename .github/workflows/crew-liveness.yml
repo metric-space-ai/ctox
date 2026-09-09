@@ -5,7 +5,9 @@ on:
     branches: [main]
     paths:
       - 'src/core/crew/**'
-      - 'src/core/business_os/mcp_crew_context.rs'
+      - 'src/core/business_os/mcp_crew*.rs'
+      - 'src/core/business_os/mcp_channel.rs'
+      - 'src/core/context/lcm/**'
       - 'src/core/business_os/harness_cockpit_chat*'
       - 'src/core/business_os/rxdb_peer*'
       - 'src/core/service/service_queue_capacity.rs'

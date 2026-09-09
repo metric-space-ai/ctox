@@ -11112,10 +11112,15 @@ fn configure_business_os_mcp_session_for_queue_job(
     options.disable_mcp_servers = false;
     options.enable_business_os_mcp = true;
     let token = if options.crew_persona.is_some() {
-        let attempt = options.worker_attempt.as_ref()
+        let attempt = options
+            .worker_attempt
+            .as_ref()
             .context("crew command session requires an admitted worker attempt")?;
         crate::business_os::mcp_channel::bind_internal_command_session_to_crew_attempt(
-            root, &token, &attempt.attempt_id,
+            root,
+            &token,
+            &attempt.attempt_id,
+            &attempt.work_key,
         )?
     } else {
         token

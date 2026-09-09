@@ -37,6 +37,8 @@ use super::store;
 mod command_writeback;
 #[path = "mcp_crew_context.rs"]
 mod crew_context;
+#[path = "mcp_crew_plan.rs"]
+mod crew_plan;
 pub(crate) use command_writeback::supports_command_writeback;
 
 const DEFAULT_LIMIT: usize = 25;
@@ -510,6 +512,8 @@ struct BusinessOsMcpInternalSessionClaims {
     allowed_collections: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     crew_binding: Option<crew_context::SessionBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    crew_work_key: Option<String>,
     issued_at_ms: i64,
     expires_at_ms: i64,
 }
@@ -666,6 +670,7 @@ pub(crate) fn issue_internal_command_session_token(
         allowed_actions: allowed_actions_from_writeback_contract(writeback_contract)?,
         allowed_collections: normalized_string_array(writeback_contract.get("allowed_collections")),
         crew_binding: None,
+        crew_work_key: None,
         issued_at_ms,
         expires_at_ms: issued_at_ms.saturating_add(MCP_INTERNAL_SESSION_TTL_MS),
     };
@@ -688,13 +693,16 @@ pub(crate) fn bind_internal_command_session_to_crew_attempt(
     root: &Path,
     token: &str,
     attempt_id: &str,
+    work_key: &str,
 ) -> anyhow::Result<String> {
+    anyhow::ensure!(!work_key.trim().is_empty(), "crew work key is empty");
     verify_internal_command_session_token(root, token)?;
     let mut claims = decode_internal_command_session_token(root, token)?;
     anyhow::ensure!(
         claims.crew_binding.is_none(),
         "crew session is already bound"
     );
+    claims.crew_work_key = Some(work_key.to_owned());
     let conn = crew_context::open_read_connection(root)?;
     claims.crew_binding = Some(
         crew_context::live_binding(&conn, &claims.command_id, &claims.payload_hash, attempt_id)?.0,
@@ -747,6 +755,7 @@ fn verify_internal_command_session_token(root: &Path, token: &str) -> anyhow::Re
     }
     Ok(serde_json::json!({
         "crew_binding": claims.crew_binding,
+        "crew_work_key": claims.crew_work_key,
         "auth_source": MCP_INTERNAL_SESSION_AUTH_SOURCE,
         "channel": "ctox_internal_business_command",
         "surface": "business_os_command_session",
@@ -1145,6 +1154,22 @@ fn gateway_json_rpc_error(
 
 pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
     let mut tools = vec![
+        write_tool(
+            "business_os.update_crew_plan",
+            "Update steps for the exact Crew execution bound to this signed session. Native runtime owns progress and review; this does not complete the task or learn from it.",
+            serde_json::json!({
+                "type": "object", "additionalProperties": false, "required": ["steps"],
+                "properties": {
+                    "steps": {"type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "object", "additionalProperties": false,
+                            "required": ["label", "status"], "properties": {
+                                "label": {"type": "string", "minLength": 1},
+                                "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}
+                            }}},
+                    "explanation": {"type": "string"}
+                }
+            }),
+        ),
         read_tool(
             "business_os.get_crew_context",
             "Restore the bounded persona, memory and current execution plan of an open crew attempt belonging to this signed command session. Requires private crew-read permission and a live native lease. Does not admit, renew, complete or learn from an execution.",
@@ -2788,6 +2813,9 @@ fn call_tool_inner(
     enforce_argument_scope_policy(root, &context, tool_name, &arguments)?;
     enforce_rate_limit(root, &context)?;
     let result = match tool_name {
+        "business_os.update_crew_plan" => {
+            crew_plan::update(root, &context, &arguments, trusted_gateway_context)?
+        }
         "business_os.get_crew_context" => {
             crew_context::read(root, &context, &arguments, trusted_gateway_context)?
         }
@@ -6414,6 +6442,7 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         }
         "business_os.reject" | "business_os.request_changes" => McpToolPolicyClass::Approval,
         "web_browser_prepare"
+        | "business_os.update_crew_plan"
         | "business_os.execute_writeback"
         | "business_os.execute_action"
         | "appsec_assessment_create"

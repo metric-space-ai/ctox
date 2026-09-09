@@ -272,7 +272,12 @@ mod tests {
                 &serde_json::json!({}),
             )?;
             let token = if command == "crew-parent" {
-                bind_internal_command_session_to_crew_attempt(root, &token, "crew-attempt")?
+                bind_internal_command_session_to_crew_attempt(
+                    root,
+                    &token,
+                    "crew-attempt",
+                    "crew-context-plan",
+                )?
             } else {
                 token
             };
@@ -289,6 +294,62 @@ mod tests {
             )
         };
         assert!(call(args.clone(), Some(&trusted))?["execution_plan"].is_null());
+        let update = |arguments: Value, authority: Option<&Value>| {
+            call_tool_with_trusted_gateway_context(
+                root,
+                "business_os.update_crew_plan",
+                arguments,
+                authority,
+            )
+        };
+        let plan_args = serde_json::json!({"steps":[{"label":"Inspect shared knowledge","status":"in_progress"}]});
+        assert!(update(plan_args.clone(), None).is_err());
+        let mut override_args = plan_args.clone();
+        override_args["work_key"] = serde_json::json!("foreign-plan");
+        assert!(update(override_args, Some(&trusted)).is_err());
+        assert!(update(serde_json::json!({"steps":[]}), Some(&trusted)).is_err());
+        assert!(update(
+            serde_json::json!({"steps":[{"label":"x", "status":"approved"}]}),
+            Some(&trusted)
+        )
+        .is_err());
+        assert!(update(
+            serde_json::json!({"steps":[{"label":"x".repeat(70_000), "status":"pending"}]}),
+            Some(&trusted)
+        )
+        .is_err());
+        update(plan_args.clone(), Some(&trusted))?;
+        assert_eq!(
+            call(args.clone(), Some(&trusted))?["execution_plan"]["percent"],
+            0
+        );
+        update(
+            serde_json::json!({"steps":[{"label":"Inspect shared knowledge", "status":"completed"}]}),
+            Some(&trusted),
+        )?;
+        let updated_plan = call(args.clone(), Some(&trusted))?;
+        assert_eq!(updated_plan["execution_plan"]["percent"], 90);
+        assert_eq!(updated_plan["execution_plan"]["review_status"], "pending");
+        let rejected = crate::crew::open_engine(root)?.record_task_execution_plan_guarded(
+            crate::lcm::TaskExecutionPlanUpdate {
+                work_key: "crew-context-plan", task_id: &task_id, command_id: "crew-parent",
+                attempt_id: "crew-attempt", explanation: None,
+                steps: &[crate::lcm::TaskExecutionPlanStepInput {label: "Must not persist".into(), status: "pending".into()}],
+            },
+            |transaction| {
+                transaction.execute("UPDATE communication_routing_state SET lease_owner='uncommitted-owner' WHERE message_key=?1", [&task_id])?;
+                anyhow::bail!("authority changed before write")
+            },
+        );
+        assert!(rejected.is_err());
+        assert_eq!(call(args.clone(), Some(&trusted))?, updated_plan);
+        let mut policy = mcp_policy(root);
+        policy.allow_writes = false;
+        save_mcp_policy(root, &policy)?;
+        assert!(update(plan_args.clone(), Some(&trusted)).is_err());
+        policy.allow_writes = true;
+        save_mcp_policy(root, &policy)?;
+
         let set_plan = |status: &str| -> anyhow::Result<()> {
             crate::crew::open_engine(root)?.record_task_execution_plan(
                 crate::lcm::TaskExecutionPlanUpdate {
@@ -431,6 +492,7 @@ mod tests {
             allowed_actions: vec![],
             allowed_collections: vec![],
             crew_binding: Some(serde_json::from_value(trusted["crew_binding"].clone())?),
+            crew_work_key: Some("crew-context-plan".to_owned()),
             issued_at_ms: now_ms(),
             expires_at_ms: now_ms() + MCP_INTERNAL_SESSION_TTL_MS,
         };
@@ -438,6 +500,7 @@ mod tests {
         assert!(verify_internal_command_session_token(root, &old_token).is_ok());
         conn.execute("UPDATE communication_routing_state SET leased_at='2001-01-01T00:00:00Z' WHERE message_key=?1", [&task_id])?;
         assert!(verify_internal_command_session_token(root, &old_token).is_err());
+        assert!(update(plan_args.clone(), Some(&trusted)).is_err());
         assert!(call(args.clone(), Some(&trusted)).is_err());
         let renewed = session("crew-parent")?;
         assert!(call(args.clone(), Some(&renewed)).is_ok());
@@ -448,7 +511,8 @@ mod tests {
         assert!(bind_internal_command_session_to_crew_attempt(
             root,
             &generic_token,
-            "unknown-attempt"
+            "unknown-attempt",
+            "crew-context-plan"
         )
         .is_err());
         conn.execute("UPDATE communication_routing_state SET lease_owner='another-worker' WHERE message_key=?1", [&task_id])?;
@@ -465,6 +529,7 @@ mod tests {
             None,
         )?;
         assert!(call(args, Some(&final_authority)).is_err());
+        assert!(update(plan_args, Some(&final_authority)).is_err());
         assert!(tool_descriptors()
             .iter()
             .any(|tool| tool.name == "business_os.get_crew_context"));

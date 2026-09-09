@@ -49,6 +49,17 @@ store or dangling head is an error. No memory schema, member or attempt is
 created by the reader. It does not finalize work, write learning candidates,
 renew leases, or retarget the selected member.
 
+`business_os.update_crew_plan` accepts only `steps` and optional `explanation`.
+Task, command, attempt and the native worker `work_key` come from the signed
+session, with the work key supplied by native session setup. The caller cannot
+choose another plan identity. The write respects channel write policy and the
+same private Crew permissions as restoration. Requests are bounded to 64 KiB
+and 1–100 steps, using the existing native step validator. The existing LCM
+plan implementation computes revisions, progress and review state. Its new
+guarded entry point rechecks the exact live binding after obtaining the write
+lock and before changing the plan. Rejected authority rolls back the transaction.
+A completed plan remains at 90 percent pending native review.
+
 Still required for external harness use: server-authorized external admission
 and bounded lease ownership, issuance of the appropriate scoped session,
 Workjet start/resume/compaction consumers, execution evidence and native review/
@@ -65,3 +76,9 @@ memory, expired lease and finalized attempt. It also checks generic-token denial
 lease renewal, same-owner re-leasing, changed owners and unknown-attempt binding. The Crew liveness workflow includes
 the new test filter. Local Cargo verification is pending while the shared host
 admission gate is closed; CI evidence is required before integration.
+
+The first campaign CI run (34361263572, before the MCP additions) passed Rust
+compilation, Clippy, native RxDB and browser checks but failed the new Crew replay
+test with SQLite error 517 and two outbound reconciliation tests. Stage-specific
+context is added to the Crew fixture to locate that conflict. These failures are
+still open; they are not evidence that the new context/plan tests passed.

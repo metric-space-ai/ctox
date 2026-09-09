@@ -1617,6 +1617,15 @@ impl LcmEngine {
         &self,
         input: TaskExecutionPlanUpdate<'_>,
     ) -> Result<serde_json::Value> {
+        self.record_task_execution_plan_guarded(input, |_| Ok(()))
+    }
+
+    /// Check execution authority under the same write lock as the update.
+    pub(crate) fn record_task_execution_plan_guarded(
+        &self,
+        input: TaskExecutionPlanUpdate<'_>,
+        authorize: impl FnOnce(&Connection) -> Result<()>,
+    ) -> Result<serde_json::Value> {
         let (steps, completed_steps) = validate_task_execution_steps(input.steps)?;
         let total_steps = i64::try_from(steps.len()).unwrap_or(i64::MAX);
         let signature = task_execution_plan_signature(&steps);
@@ -1627,6 +1636,7 @@ impl LcmEngine {
             rusqlite::TransactionBehavior::Immediate,
         )
         .context("failed to begin task execution plan transaction")?;
+        authorize(&tx)?;
         let latest = tx
             .query_row(
                 "SELECT revision, plan_signature, review_status, created_at_ms

@@ -520,8 +520,9 @@ mod tests {
                     },
                 )
             };
-            let original = create("original-thread")?;
-            let other = create("other-thread")?;
+            let original =
+                create("original-thread").context("create original Crew fixture task")?;
+            let other = create("other-thread").context("create competing Crew fixture task")?;
             let conn = Connection::open(crate::paths::core_db(root.path()))?;
             conn.execute(
                 "UPDATE communication_routing_state SET route_status='leased',
@@ -539,7 +540,8 @@ mod tests {
                 None,
                 "Code prüfen",
                 None,
-            )?
+            )
+            .context("prepare initial Crew fixture attempt")?
             .context("initial crew context missing")?;
             let target = if finalized { &original } else { &other };
             if finalized {
@@ -552,7 +554,8 @@ mod tests {
                     None,
                     "Attempt failed",
                     None,
-                )?;
+                )
+                .context("finalize original Crew fixture attempt")?;
             }
             conn.execute(
                 "UPDATE communication_routing_state SET crew_member_id=NULL,
