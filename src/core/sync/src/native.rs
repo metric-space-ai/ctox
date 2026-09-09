@@ -165,6 +165,19 @@ impl NativeSyncSession {
     /// The caller retains the database and credential owner. No execution
     /// attachment or replicated collection is installed by this mode.
     pub async fn start_data_client(options: NativeSyncOptions) -> io::Result<Self> {
+        Self::start_data_client_with_pool_setup(options, |_| Ok(())).await
+    }
+
+    /// Register host observers before automatic discovery can offer or reject
+    /// a source. As with native host setup, the callback must only register
+    /// resources; it must not block or start independent workers.
+    pub async fn start_data_client_with_pool_setup<F>(
+        options: NativeSyncOptions,
+        setup: F,
+    ) -> io::Result<Self>
+    where
+        F: FnOnce(&NativePool) -> Result<(), rxdb::rx_error::RxError> + Send,
+    {
         if options.local_session_provider.is_none()
             || !options.collections.is_empty()
             || !options.database.collections.lock().is_empty()
@@ -174,7 +187,7 @@ impl NativeSyncSession {
                 "data client requires deferred credentials and query-only storage",
             ));
         }
-        Self::start_mode(options, |_| Ok(()), true).await
+        Self::start_mode(options, setup, true).await
     }
 
     /// Install host-owned request handlers and file sources before advertising

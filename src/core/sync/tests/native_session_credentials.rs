@@ -255,12 +255,17 @@ async fn exercise(
                 })
             })
         }));
-        let client = if data_client {
-            NativeSyncSession::start_data_client(client_options).await.unwrap()
-        } else {
-            NativeSyncSession::start(client_options).await.unwrap()
+        let mut client_errors = None;
+        let setup = |pool: &ctox_sync::native::NativePool| {
+            client_errors = Some(pool.error_subject.subscribe());
+            Ok(())
         };
-        let mut client_errors = client.pool().error_subject.subscribe();
+        let client = if data_client {
+            NativeSyncSession::start_data_client_with_pool_setup(client_options, setup).await.unwrap()
+        } else {
+            NativeSyncSession::start_with_pool_setup(client_options, setup).await.unwrap()
+        };
+        let mut client_errors = client_errors.expect("observer installed before join");
         if data_client {
             assert!(server.connect_data_peer("native000002".into()).await.is_err());
             assert!(client.connect_data_peer("native000002".into()).await.is_err());
