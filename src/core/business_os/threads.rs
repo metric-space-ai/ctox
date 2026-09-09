@@ -308,14 +308,19 @@ pub(super) fn replication_document_filter(
     let collection_read_allowed = collection_read_allowed_for_actor(root, token, collection, &role);
     let root = root.to_path_buf();
     let collection = collection.to_string();
+    let visibility = std::sync::Mutex::new(super::project_chats::VisibilityReadContext::new(&root));
     Arc::new(move |document| {
-        actor_may_replicate_document(
+        let Ok(mut visibility) = visibility.lock() else {
+            return false;
+        };
+        actor_may_replicate_document_with_reader(
             &root,
             &collection,
             document,
             &user_id,
             &role,
             collection_read_allowed,
+            &mut visibility,
         )
     })
 }
@@ -351,9 +356,27 @@ fn actor_may_replicate_document(
     role: &str,
     collection_read_allowed: bool,
 ) -> bool {
-    if let Some(allowed) =
-        super::project_chats::document_visible_to_actor(root, collection, document, user_id)
-    {
+    actor_may_replicate_document_with_reader(
+        root,
+        collection,
+        document,
+        user_id,
+        role,
+        collection_read_allowed,
+        &mut super::project_chats::VisibilityReadContext::new(root),
+    )
+}
+
+fn actor_may_replicate_document_with_reader(
+    root: &Path,
+    collection: &str,
+    document: &Value,
+    user_id: &str,
+    role: &str,
+    collection_read_allowed: bool,
+    visibility: &mut super::project_chats::VisibilityReadContext,
+) -> bool {
+    if let Some(allowed) = visibility.visible(collection, document, user_id) {
         return allowed && collection_read_allowed;
     }
     if is_browser_collection(collection) {

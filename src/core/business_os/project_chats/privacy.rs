@@ -6,7 +6,7 @@ use anyhow::ensure;
 use rusqlite::Connection;
 use serde_json::Value;
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 fn chat_id(value: &str) -> bool {
     value.starts_with("workjet_private_") || value.starts_with("workjet_group_")
@@ -104,6 +104,51 @@ pub(in crate::business_os) fn document_visible_to_actor(
     document: &Value,
     user_id: &str,
 ) -> Option<bool> {
+    VisibilityReadContext::new(root).visible(collection, document, user_id)
+}
+
+/// Reuse open readers, never authorization decisions or a SQLite transaction.
+/// Every record reads current canonical references and project ownership.
+pub(in crate::business_os) struct VisibilityReadContext {
+    root: PathBuf,
+    core: Option<Connection>,
+    store: Option<Connection>,
+}
+
+impl VisibilityReadContext {
+    pub(in crate::business_os) fn new(root: &Path) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            core: None,
+            store: None,
+        }
+    }
+
+    pub(in crate::business_os) fn visible(
+        &mut self,
+        collection: &str,
+        document: &Value,
+        user_id: &str,
+    ) -> Option<bool> {
+        document_visible_with_readers(
+            &self.root,
+            collection,
+            document,
+            user_id,
+            &mut self.core,
+            &mut self.store,
+        )
+    }
+}
+
+fn document_visible_with_readers(
+    root: &Path,
+    collection: &str,
+    document: &Value,
+    user_id: &str,
+    core: &mut Option<Connection>,
+    store: &mut Option<Connection>,
+) -> Option<bool> {
     if !has_restricted_reference(collection, document) {
         return None;
     }
@@ -111,17 +156,21 @@ pub(in crate::business_os) fn document_visible_to_actor(
     // Business OS relationship store. Ordinary executions have no Workjet
     // constraints and retain their existing policy without that extra open.
     let mut constraints = Vec::new();
-    if collect_constraints(root, collection, document, &mut constraints).is_err() {
+    if collect_constraints(root, collection, document, &mut constraints, core).is_err() {
         return Some(false);
     }
     if constraints.is_empty() {
         return None;
     }
-    let Ok(conn) = open_store(root) else {
-        return Some(false);
-    };
+    if store.is_none() {
+        *store = match open_store(root) {
+            Ok(conn) => Some(conn),
+            Err(_) => return Some(false),
+        };
+    }
+    let conn = store.as_ref()?;
     Some(constraints.iter().all(|(collection, document)| {
-        visible_in_store(&conn, collection, document, user_id) == Some(true)
+        visible_in_store(conn, collection, document, user_id) == Some(true)
     }))
 }
 
@@ -130,6 +179,7 @@ fn collect_constraints(
     collection: &str,
     document: &Value,
     constraints: &mut Vec<(String, Value)>,
+    core: &mut Option<Connection>,
 ) -> anyhow::Result<()> {
     let mut ids = BTreeSet::new();
     references(document, &mut ids);
@@ -137,21 +187,32 @@ fn collect_constraints(
         constraints.push((collection.to_owned(), document.clone()));
     }
     for (related_collection, id) in associations(collection, document) {
-        let (related_collection, related) = canonical_association(root, related_collection, id)?;
-        collect_constraints(root, related_collection, &related, constraints)?;
+        if core.is_none() {
+            *core = Some(crate::mission::channels::open_channel_db(
+                &crate::paths::core_db(root),
+            )?);
+        }
+        let (related_collection, related) = canonical_association(
+            root,
+            core.as_ref().expect("reader opened above"),
+            related_collection,
+            id,
+        )?;
+        collect_constraints(root, related_collection, &related, constraints, core)?;
     }
     Ok(())
 }
 
 fn canonical_association(
     root: &Path,
+    conn: &Connection,
     collection: &str,
     id: &str,
 ) -> anyhow::Result<(&'static str, Value)> {
     use crate::mission::channels;
     match collection {
         "business_commands" => {
-            let command = match channels::business_command_projection(root, id) {
+            let command = match channels::business_command_projection_from_conn(conn, id) {
                 Ok(command) => command,
                 Err(error)
                     if matches!(
@@ -172,14 +233,14 @@ fn canonical_association(
             Ok(("business_commands", command))
         }
         "ctox_queue_tasks" => {
-            let task = channels::load_queue_task(root, id)?
+            let task = channels::load_queue_task_from_conn(conn, id)?
                 .ok_or_else(|| anyhow::anyhow!("referenced native queue task is unavailable"))?;
             if let Some(command_id) = task.metadata.get("business_os_command_id") {
                 let command_id = command_id
                     .as_str()
                     .filter(|id| !id.is_empty())
                     .ok_or_else(|| anyhow::anyhow!("native task command reference is invalid"))?;
-                let resolved = canonical_association(root, "business_commands", command_id)?;
+                let resolved = canonical_association(root, conn, "business_commands", command_id)?;
                 // A task's metadata cannot point at some other public command
                 // to conceal the private aggregate actually linked to it.
                 ensure!(
@@ -190,7 +251,8 @@ fn canonical_association(
             }
             // Rare legacy/missing-metadata case: consult the existing inverse
             // Core link. The normal path above does not enumerate transitions.
-            if let Some(context) = channels::inspect_business_command_for_task(root, id)? {
+            if let Some(context) = channels::inspect_business_command_for_task_from_conn(conn, id)?
+            {
                 let command = context
                     .get("command")
                     .filter(|value| value.is_object())

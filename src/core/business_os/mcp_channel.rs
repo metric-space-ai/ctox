@@ -1741,6 +1741,22 @@ fn workjet_record_visible(
     collection: &str,
     record: &Value,
 ) -> anyhow::Result<bool> {
+    workjet_record_visible_with_reader(
+        root,
+        context,
+        collection,
+        record,
+        &mut super::project_chats::VisibilityReadContext::new(root),
+    )
+}
+
+fn workjet_record_visible_with_reader(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    collection: &str,
+    record: &Value,
+    reader: &mut super::project_chats::VisibilityReadContext,
+) -> anyhow::Result<bool> {
     if !super::project_chats::has_restricted_reference(collection, record) {
         return Ok(true);
     }
@@ -1748,13 +1764,9 @@ fn workjet_record_visible(
     if actor["active"] != true {
         return Ok(false);
     }
-    Ok(super::project_chats::document_visible_to_actor(
-        root,
-        collection,
-        record,
-        actor["id"].as_str().unwrap_or_default(),
-    )
-    .unwrap_or(true))
+    Ok(reader
+        .visible(collection, record, actor["id"].as_str().unwrap_or_default())
+        .unwrap_or(true))
 }
 
 pub fn query_records(
@@ -1775,8 +1787,15 @@ pub fn query_records(
         .cloned()
         .unwrap_or_default();
     let mut records = Vec::new();
+    let mut workjet_reader = super::project_chats::VisibilityReadContext::new(root);
     for mut record in documents {
-        if !workjet_record_visible(root, context, collection, &record)? {
+        if !workjet_record_visible_with_reader(
+            root,
+            context,
+            collection,
+            &record,
+            &mut workjet_reader,
+        )? {
             continue;
         }
         if public_crew {

@@ -687,37 +687,99 @@ fn measures_real_mcp_and_replication_pages_with_repeated_execution_references() 
     )?;
     let db_path = crate::paths::core_db(root.path());
     for (collection, page) in pages {
-        channels::reset_channel_db_open_count_for_tests(&db_path);
-        let started = Instant::now();
-        let queried = mcp_channel::query_records(
-            root.path(),
-            &mcp_context("page-other", "admin"),
-            collection,
-            Some(100),
-        )?;
-        let query_ms = started.elapsed().as_secs_f64() * 1000.0;
-        let query_opens = channels::channel_db_open_count_for_tests(&db_path);
-        assert_eq!(
-            queried.count, 50,
-            "foreign admin must only receive the ordinary executions"
-        );
-
         let filter = threads::replication_document_filter(root.path(), &other, collection);
-        channels::reset_channel_db_open_count_for_tests(&db_path);
-        let started = Instant::now();
-        let visible = page.iter().filter(|record| filter(record)).count();
-        let replication_ms = started.elapsed().as_secs_f64() * 1000.0;
-        let replication_opens = channels::channel_db_open_count_for_tests(&db_path);
-        assert_eq!(visible, 50);
+        let mut query_samples = Vec::new();
+        let mut replication_samples = Vec::new();
+        for sample in 0..10 {
+            channels::reset_channel_db_open_count_for_tests(&db_path);
+            let started = Instant::now();
+            let queried = mcp_channel::query_records(
+                root.path(),
+                &mcp_context("page-other", "admin"),
+                collection,
+                Some(100),
+            )?;
+            let query_ms = started.elapsed().as_secs_f64() * 1000.0;
+            let query_opens = channels::channel_db_open_count_for_tests(&db_path);
+            assert_eq!(query_opens, 1, "one Core reader per bounded MCP page");
+            assert_eq!(
+                queried.count, 50,
+                "foreign admin must only receive the ordinary executions"
+            );
+
+            channels::reset_channel_db_open_count_for_tests(&db_path);
+            let started = Instant::now();
+            let visible = page.iter().filter(|record| filter(record)).count();
+            let replication_ms = started.elapsed().as_secs_f64() * 1000.0;
+            let replication_opens = channels::channel_db_open_count_for_tests(&db_path);
+            assert_eq!(
+                replication_opens,
+                usize::from(sample == 0),
+                "one reader per filter lifetime"
+            );
+            assert_eq!(visible, 50);
+            query_samples.push(query_ms);
+            replication_samples.push(replication_ms);
+            eprintln!(
+                "workjet_privacy_page_measurement {}",
+                json!({
+                    "collection":collection,"rows":page.len(),"distinct_tasks":task_ids.len(),"sample":sample,
+                    "mcp_visible":queried.count,"mcp_core_opens":query_opens,"mcp_ms":query_ms,
+                    "replication_visible":visible,"replication_core_opens":replication_opens,
+                    "replication_ms":replication_ms,
+                })
+            );
+        }
+        query_samples.sort_by(f64::total_cmp);
+        replication_samples.sort_by(f64::total_cmp);
         eprintln!(
-            "workjet_privacy_page_measurement {}",
+            "workjet_privacy_page_percentiles {}",
             json!({
-                "collection":collection,"rows":page.len(),"distinct_tasks":task_ids.len(),
-                "mcp_visible":queried.count,"mcp_core_opens":query_opens,"mcp_ms":query_ms,
-                "replication_visible":visible,"replication_core_opens":replication_opens,
-                "replication_ms":replication_ms,
+                "collection":collection,"samples":10,"rows":page.len(),
+                "mcp_p50_ms":query_samples[4],"mcp_p95_ms":query_samples[9],
+                "replication_p50_ms":replication_samples[4],"replication_p95_ms":replication_samples[9],
             })
         );
     }
+    // Even inside one page's reference reader, ownership is not cached.
+    let private_record = json!({"id":"revocation-run","task_id":task_ids[0]});
+    let mut reader = VisibilityReadContext::new(root.path());
+    assert_eq!(
+        reader.visible("ctox_runs", &private_record, "owner"),
+        Some(true)
+    );
+    let mut project = outbound_load_record(&conn, "workjet_projects", "project")?.unwrap();
+    project["owner_user_id"] = json!("new-owner");
+    store::upsert_business_record(&conn, "workjet_projects", "project", 2, project)?;
+    assert_eq!(
+        reader.visible("ctox_runs", &private_record, "owner"),
+        Some(false)
+    );
+
+    // Both a later page and the same live filter observe changed canonical
+    // metadata and fail closed instead of reusing a public result.
+    let filter = threads::replication_document_filter(root.path(), &other, "ctox_runs");
+    let public_record = json!({"id":"ordinary-run","task_id":task_ids[1]});
+    assert!(filter(&public_record));
+    channels::set_queue_task_metadata_value(
+        root.path(),
+        &task_ids[1],
+        "business_os_command_id",
+        json!("missing-command"),
+    )?;
+    assert!(
+        !filter(&public_record),
+        "live filter must reread canonical references"
+    );
+    assert_eq!(
+        mcp_channel::query_records(
+            root.path(),
+            &mcp_context("page-other", "admin"),
+            "ctox_runs",
+            Some(100),
+        )?
+        .count,
+        25
+    );
     Ok(())
 }

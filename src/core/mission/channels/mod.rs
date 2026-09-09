@@ -67,13 +67,14 @@ use command_saga::transition_business_command_for_task_in_transaction;
 mod route_status;
 pub(crate) use command_saga::{
     audit_and_migrate_business_command_storage, business_command_core_diagnostics,
-    business_command_projection, business_command_retention_maintenance,
-    business_command_saga_pending_compensation_steps, business_command_saga_status,
-    business_command_saga_step_evidence, claim_business_command_saga_step,
-    claim_business_command_waiting_dependencies, claim_business_command_with_queue,
-    claim_business_control_command, complete_business_command_saga_step,
-    complete_business_control_command, fail_business_command_saga_step, inspect_business_command,
-    inspect_business_command_for_task, mark_business_command_outbox_delivered,
+    business_command_projection, business_command_projection_from_conn,
+    business_command_retention_maintenance, business_command_saga_pending_compensation_steps,
+    business_command_saga_status, business_command_saga_step_evidence,
+    claim_business_command_saga_step, claim_business_command_waiting_dependencies,
+    claim_business_command_with_queue, claim_business_control_command,
+    complete_business_command_saga_step, complete_business_control_command,
+    fail_business_command_saga_step, inspect_business_command, inspect_business_command_for_task,
+    inspect_business_command_for_task_from_conn, mark_business_command_outbox_delivered,
     mark_business_command_outbox_failed, pending_business_command_outbox,
     persist_business_command_worker_result, progress_business_control_command,
     reconcile_business_command_invariants, record_business_command_intake_failure,
@@ -6363,7 +6364,7 @@ fn load_queue_message_from_conn(
     .map_err(anyhow::Error::from)
 }
 
-fn load_queue_task_from_conn(
+pub(crate) fn load_queue_task_from_conn(
     conn: &Connection,
     message_key: &str,
 ) -> Result<Option<QueueTaskView>> {

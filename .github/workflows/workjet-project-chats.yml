@@ -8,6 +8,7 @@ on:
     paths:
       - '.github/workflows/workjet-project-chats.yml'
       - 'src/core/business_os/**'
+      - 'src/core/mission/channels/**'
       - 'src/apps/business-os/modules/**'
       - 'src/apps/business-os/rxdb/**'
 
@@ -101,9 +102,13 @@ jobs:
             src/core/business_os/command_plane.rs \
             src/core/business_os/mcp_channel.rs \
             src/core/business_os/threads.rs \
-            src/core/business_os/mod.rs
+            src/core/business_os/mod.rs \
+            src/core/mission/channels/mod.rs \
+            src/core/mission/channels/command_saga.rs
       - name: Native project-chat and project-store regressions
         run: |
           cargo test --locked --bin ctox -- \
             business_os::project_chats business_os::store_workjet_projects \
+            mission::channels::tests::business_command \
+            mission::channels::tests::registered_saga \
             --test-threads=2 --show-output
