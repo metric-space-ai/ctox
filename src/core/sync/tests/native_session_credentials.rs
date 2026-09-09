@@ -278,18 +278,19 @@ async fn exercise(
         }
         // No manual offer for data clients: the owned discovery must establish
         // the actual channel, including with the larger signaling ID.
-        while !data_client {
-            let connected = server
-                .pool()
-                .connection_handler
-                .connect_native_execution_peer("native000002".into())
-                .await
-                .is_ok();
-            if connected
-            {
-                break;
+        if !data_client {
+            loop {
+                let connected = server
+                    .pool()
+                    .connection_handler
+                    .connect_native_execution_peer("native000002".into())
+                    .await
+                    .is_ok();
+                if connected {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
         }
         if target_fault != TargetFault::None {
             // Signaling/transport diagnostics share this stream. Only the
