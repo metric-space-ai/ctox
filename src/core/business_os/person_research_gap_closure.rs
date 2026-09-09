@@ -703,6 +703,22 @@ pub(super) fn enqueue_gap_closure_if_needed(
             ..Default::default()
         },
     )?;
+    // Solange eine Nachrecherche eingereiht ist, LAEUFT die Recherche. Ohne
+    // diese Zeile blieb der Lead auf `needs_review` stehen, waehrend der
+    // Lueckenschluss-Worker arbeitete, und die Liste zeigte "Pruefung noetig"
+    // fuer einen laufenden Vorgang (thesen 09.09.2026, Hoffmann und AKEMI).
+    if let Some(mut lead) = store::load_rxdb_collection_record(root, LEAD_COLLECTION, record_id)? {
+        lead["research_status"] = Value::String("running".to_string());
+        lead["research_phase"] = Value::String("gap_closure".to_string());
+        lead["gap_task_id"] = Value::String(task.message_key.clone());
+        store::upsert_rxdb_collection_record(
+            root,
+            LEAD_COLLECTION,
+            record_id,
+            super::person_research_command::now_ms(),
+            lead,
+        )?;
+    }
     phase_a_result["gap_closure"] = serde_json::json!({
         "required": true,
         "owner_command_id": command_id,

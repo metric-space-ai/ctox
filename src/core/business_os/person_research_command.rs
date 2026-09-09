@@ -556,7 +556,11 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
         if field_key.starts_with("person_") && !has_person_records {
             contact[field_key] = value.clone();
         } else if !field_key.starts_with("person_") {
-            data[field_key] = value.clone();
+            data[field_key] = if field_key == "firma_land" {
+                normalize_country_to_iso2(value)
+            } else {
+                value.clone()
+            };
         }
         for candidate in field
             .get("candidates")
@@ -718,11 +722,18 @@ fn merge_researched_person_records_with_context(
         else {
             continue;
         };
+        // Ein Platzhaltername ist kein Ansprechpartner. thesen 09.09.2026:
+        // Carbosulf trug neun Kontakte "test test" und "n/a n/a" aus einem
+        // Probelauf; sie standen in der Freigabeliste wie echte Personen.
+        if contact_name_is_placeholder(&normalized) {
+            continue;
+        }
         normalized = with_stable_contact_id(lead_id, normalized, index);
         let existing_index = contacts.iter().position(|existing| {
             existing.get("id").and_then(Value::as_str)
                 == normalized.get("id").and_then(Value::as_str)
                 || profiles_match(existing, &normalized)
+                || same_person_by_name(existing, &normalized)
                 || (existing.get("crm_known").and_then(Value::as_bool) == Some(true)
                     && contacts_match(existing, &normalized))
         });
@@ -940,6 +951,141 @@ fn normalized_phone(value: &str) -> String {
 
 fn normalized_profile(value: &str) -> String {
     value.trim().trim_end_matches('/').to_lowercase()
+}
+
+/// Ein Kontakt, dessen Name nur aus Platzhaltern besteht, ist ein Artefakt und
+/// kein Ansprechpartner — er darf nicht in die Freigabeliste geraten. Traegt der
+/// Datensatz eine echte E-Mail, Telefonnummer oder ein Profil, bleibt er: dann
+/// ist nur der Name unbrauchbar, nicht der Kontakt.
+fn contact_name_is_placeholder(contact: &Value) -> bool {
+    const PLACEHOLDERS: &[&str] = &[
+        "test",
+        "testtest",
+        "na",
+        "n/a",
+        "nn",
+        "xxx",
+        "xx",
+        "unbekannt",
+        "unknown",
+        "dummy",
+        "muster",
+        "beispiel",
+        "example",
+        "todo",
+        "tbd",
+        "keine",
+        "none",
+        "null",
+    ];
+    let first = contact_string(contact, &["person_vorname", "first_name"]);
+    let last = contact_string(contact, &["person_nachname", "last_name"]);
+    let combined = if first.is_empty() && last.is_empty() {
+        contact_string(contact, &["name"])
+    } else {
+        format!("{first} {last}")
+    };
+    let tokens = combined
+        .split_whitespace()
+        .map(|token| {
+            token
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '/')
+                .collect::<String>()
+                .to_lowercase()
+        })
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    if tokens.is_empty() {
+        return false;
+    }
+    if !tokens
+        .iter()
+        .all(|token| PLACEHOLDERS.contains(&token.as_str()))
+    {
+        return false;
+    }
+    // Ohne jede weitere Kennung ist nichts zu retten.
+    contact_string(contact, &["person_email", "email"]).is_empty()
+        && contact_string(contact, &["person_telefon", "phone"]).is_empty()
+        && contact_string(
+            contact,
+            &["person_linkedin", "person_xing", "linkedin", "xing"],
+        )
+        .is_empty()
+}
+
+/// Zwei Datensaetze beschreiben dieselbe Person, wenn der Nachname gleich ist
+/// und die Vornamen sich nicht widersprechen: einer fehlt, oder der erste
+/// Vorname stimmt ueberein. thesen 09.09.2026: "Bail" neben "Alena Bail",
+/// "Wild" neben "Jana Wild", "Moritz Schleyer" neben "Moritz Fabian Schleyer".
+/// Bewusst NICHT zusammengefuehrt werden verschiedene Vornamen zum selben
+/// Nachnamen ("Olivier" und "Philippe Blondeau" sind zwei Menschen).
+fn same_person_by_name(left: &Value, right: &Value) -> bool {
+    // Zwei verschiedene Profile oder E-Mails sind zwei Datensaetze, auch bei
+    // gleichem Namen: die Beiersdorf-Fixture haelt zwei "Frederic Heilmann"
+    // mit unterschiedlichen XING-Profilen bewusst getrennt.
+    let profile = |contact: &Value| {
+        normalized_profile(&contact_string(
+            contact,
+            &[
+                "person_linkedin",
+                "person_xing",
+                "linkedin",
+                "xing",
+                "source_url",
+            ],
+        ))
+    };
+    let (left_profile, right_profile) = (profile(left), profile(right));
+    if !left_profile.is_empty() && !right_profile.is_empty() && left_profile != right_profile {
+        return false;
+    }
+    let email =
+        |contact: &Value| normalized_email(&contact_string(contact, &["person_email", "email"]));
+    let (left_email, right_email) = (email(left), email(right));
+    if !left_email.is_empty() && !right_email.is_empty() && left_email != right_email {
+        return false;
+    }
+    let last = |contact: &Value| {
+        normalize_person_name_for_match(&contact_string(contact, &["person_nachname", "last_name"]))
+    };
+    let first_token = |contact: &Value| {
+        normalize_person_name_for_match(&contact_string(contact, &["person_vorname", "first_name"]))
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .to_string()
+    };
+    let (left_last, right_last) = (last(left), last(right));
+    if left_last.is_empty() || left_last != right_last {
+        return false;
+    }
+    let (left_first, right_first) = (first_token(left), first_token(right));
+    left_first.is_empty() || right_first.is_empty() || left_first == right_first
+}
+
+/// Der Importer verlangt einen zweistelligen ISO-Code, die Recherche lieferte
+/// "Deutschland" (Kreussler, 09.09.2026). Zwei Schreibweisen fuer dasselbe Land
+/// machen jede Auswertung nach Land unbrauchbar.
+fn normalize_country_to_iso2(value: &Value) -> Value {
+    let Some(text) = value.as_str() else {
+        return value.clone();
+    };
+    let key = text.trim().to_lowercase();
+    let code = match key.as_str() {
+        "de" | "deutschland" | "germany" | "bundesrepublik deutschland" => "DE",
+        "at" | "österreich" | "oesterreich" | "austria" => "AT",
+        "ch" | "schweiz" | "switzerland" | "suisse" | "svizzera" => "CH",
+        other => {
+            let trimmed = other.trim();
+            if trimmed.len() == 2 && trimmed.chars().all(|c| c.is_ascii_alphabetic()) {
+                return Value::String(trimmed.to_uppercase());
+            }
+            return value.clone();
+        }
+    };
+    Value::String(code.to_string())
 }
 
 fn normalized_contact_name(contact: &Value) -> String {
@@ -2405,6 +2551,84 @@ mod tests {
                 .iter()
                 .any(|contact| contact["name"] == "Heinz-Tristan Gund"
                     && contact["crm_known"] == true)
+        );
+    }
+
+    #[test]
+    fn placeholder_contacts_are_dropped_and_partial_names_merge() {
+        let mut contacts = Vec::new();
+        merge_researched_person_records(
+            "lead-x",
+            &mut contacts,
+            vec![
+                serde_json::json!({"person_vorname": "test", "person_nachname": "test", "person_funktion": "test"}),
+                serde_json::json!({"person_vorname": "n/a", "person_nachname": "n/a"}),
+                serde_json::json!({"person_nachname": "Bail", "person_funktion": "Prokura"}),
+                serde_json::json!({"person_vorname": "Alena", "person_nachname": "Bail", "person_funktion": "Prokura"}),
+                serde_json::json!({"person_vorname": "Olivier", "person_nachname": "Blondeau"}),
+                serde_json::json!({"person_vorname": "Philippe", "person_nachname": "Blondeau"}),
+            ],
+        );
+        let namen = contacts
+            .iter()
+            .map(|c| {
+                format!(
+                    "{} {}",
+                    c.get("person_vorname")
+                        .and_then(Value::as_str)
+                        .unwrap_or(""),
+                    c.get("person_nachname")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                )
+                .trim()
+                .to_string()
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !namen
+                .iter()
+                .any(|n| n.to_lowercase().contains("test") || n.contains("n/a")),
+            "Platzhalternamen duerfen keinen Kontakt erzeugen: {namen:?}"
+        );
+        assert_eq!(
+            namen.iter().filter(|n| n.contains("Bail")).count(),
+            1,
+            "`Bail` und `Alena Bail` sind eine Person: {namen:?}"
+        );
+        assert_eq!(
+            namen.iter().filter(|n| n.contains("Blondeau")).count(),
+            2,
+            "Olivier und Philippe Blondeau sind zwei Menschen: {namen:?}"
+        );
+    }
+
+    #[test]
+    fn country_is_stored_as_a_two_letter_code() {
+        assert_eq!(
+            normalize_country_to_iso2(&serde_json::json!("Deutschland")),
+            serde_json::json!("DE")
+        );
+        assert_eq!(
+            normalize_country_to_iso2(&serde_json::json!("germany")),
+            serde_json::json!("DE")
+        );
+        assert_eq!(
+            normalize_country_to_iso2(&serde_json::json!("Österreich")),
+            serde_json::json!("AT")
+        );
+        assert_eq!(
+            normalize_country_to_iso2(&serde_json::json!("ch")),
+            serde_json::json!("CH")
+        );
+        assert_eq!(
+            normalize_country_to_iso2(&serde_json::json!("DE")),
+            serde_json::json!("DE")
+        );
+        // Unbekanntes bleibt unveraendert statt falsch geraten zu werden.
+        assert_eq!(
+            normalize_country_to_iso2(&serde_json::json!("Vereinigtes Koenigreich")),
+            serde_json::json!("Vereinigtes Koenigreich")
         );
     }
 
