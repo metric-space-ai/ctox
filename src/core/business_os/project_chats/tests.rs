@@ -579,8 +579,17 @@ fn private_execution_results_follow_native_command_and_task_relationships() -> a
             priority: "normal".into(),
             suggested_skill: None,
             parent_message_key: None,
-            extra_metadata: Some(json!({"business_os_command_id":"public-intent"})),
+            extra_metadata: Some(json!({"business_os_command_id":"mismatched-intent"})),
         },
+    )?;
+    // Admit each command through its own finite spawn budget first. Then
+    // simulate corrupted metadata on an existing task; the privacy reader must
+    // reject its pointer to another command without relaxing admission guards.
+    channels::set_queue_task_metadata_value(
+        root.path(),
+        &mismatched_task.task.message_key,
+        "business_os_command_id",
+        json!("public-intent"),
     )?;
     assert_eq!(
         document_visible_to_actor(
