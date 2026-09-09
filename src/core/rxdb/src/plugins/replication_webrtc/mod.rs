@@ -34,6 +34,7 @@
 pub mod connection_handler_rs;
 pub mod file_fetch_handler;
 pub mod index_mod;
+pub mod local_session;
 pub(super) mod protocol_contract_generated;
 pub mod query_fetch_handler;
 pub mod signaling_client;
@@ -55,6 +56,7 @@ pub use index_mod::{
     replicate_web_rtc_rs_multi_with_url_provider, replicate_web_rtc_with_options,
     RxWebRTCReplicationPool, RxWebRTCReplicationState, SyncOptionsWebRTC, SyncOptionsWebRTCRs,
 };
+pub use local_session::{LocalDeviceProof, LocalSessionCredentials, LocalSessionProvider};
 pub use protocol_contract_generated::NativePeerRole;
 pub use signaling_client::SignalingClient;
 pub use signaling_protocol::{

@@ -705,6 +705,7 @@ name = "ctox-sync"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64",
  "ctox-rxdb",
  "fs2",
  "futures",

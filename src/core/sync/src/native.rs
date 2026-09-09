@@ -31,6 +31,12 @@ pub struct NativeAdmission {
 
 pub struct NativeSyncOptions {
     pub peer_role: NativePeerRole,
+    /// Host-owned authenticated data identity, independent of execution votes.
+    pub local_session_provider: Option<
+        rxdb::plugins::replication_webrtc::LocalSessionProvider<
+            rxdb::plugins::replication_webrtc::WebRTCRsConnection,
+        >,
+    >,
     /// Host-owned identity/persistence, independent from the replicated set.
     pub database: Arc<RxDatabase>,
     pub collections: Vec<Arc<RxCollection>>,
@@ -152,6 +158,7 @@ impl NativeSyncSession {
                 }
                 let handler = WebRTCRsConnectionHandler::prepare_with_signaling(config).await?;
                 resources.handler = Some(handler.clone());
+                handler.set_local_session_provider(options.local_session_provider);
                 let admission = options.admission;
                 handler.set_collection_authz(admission.collection_read);
                 handler.set_collection_write_authz(admission.collection_write);

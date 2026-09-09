@@ -67,6 +67,7 @@ async fn options_with_records(
         HashMap::new()
     };
     let options = NativeSyncOptions {
+        local_session_provider: None,
         peer_role: ctox_sync::native::NativePeerRole::CtoxInstance,
         database: Arc::clone(&database),
         collections: collections.into_values().collect(),

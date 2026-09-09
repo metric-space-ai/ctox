@@ -155,6 +155,22 @@ query on the replacement, and then reads allowed fields on that replacement
 with a per-connection capacity of one.
 
 Native protocol negotiation has four reserved request permits, independent
+of the data plane. Native hosts may supply a `NativeSyncOptions.local_session_provider`
+for the existing `peerSession.capabilityToken` / `deviceProof` exchange. The
+provider receives a connection lifetime and, for an incoming challenge, its
+43-character nonce. It must resolve the authenticated target instance before
+disclosing its current capability and matching public P-256 proof. A signaling
+route or execution vote does not establish that identity. Private keys stay in
+the host; the transport accepts only public coordinates and signature material.
+The provider is called on each handshake, outside lifecycle/provider locks.
+Retired connections, provider replacement, missing proof, malformed challenges,
+timeout and provider failure reject the exchange without an anonymous fallback;
+provider errors are redacted. Inbound data admission waits for successful local
+credential preparation. The receiver still verifies its own capability, device
+binding, revocation and per-document policy. This does not implement Workjet's
+authenticated instance resolver, business-data IPC subscriptions or UI consumer.
+
+Native protocol negotiation has four reserved request permits, independent
 of the 32 data-request permits and eight interactive auxiliary permits.
 Only `ctoxProtocol` and `token` use the handshake reservation; reads, writes
 and transfers retain the data limit and their existing policy checks.

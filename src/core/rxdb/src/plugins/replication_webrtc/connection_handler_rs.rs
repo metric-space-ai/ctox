@@ -801,6 +801,7 @@ pub(crate) fn publish_best_effort_send_error(error_subject: &RxSubject<RxError>,
 /// WebRTC connection-handler implementation backed by `webrtc-rs`.
 pub struct WebRTCRsConnectionHandler {
     peer_role: super::NativePeerRole,
+    local_session_provider: Mutex<Option<super::LocalSessionProvider<WebRTCRsConnection>>>,
     connect_subject: RxSubject<WebRTCRsConnection>,
     disconnect_subject: RxSubject<WebRTCRsConnection>,
     message_subject: RxSubject<PeerWithMessage<WebRTCRsConnection>>,
@@ -978,6 +979,7 @@ impl WebRTCRsConnectionHandler {
             message_subject: RxSubject::new(),
             response_subject: RxSubject::new(),
             error_subject: RxSubject::new(),
+            local_session_provider: Mutex::new(None),
             peers: Arc::new(Mutex::new(HashMap::new())),
             peer_lifecycle: Arc::new(Mutex::new(())),
             building: Arc::new(Mutex::new(HashMap::new())),
@@ -1008,6 +1010,15 @@ impl WebRTCRsConnectionHandler {
             peer_capability_tokens: Arc::new(Mutex::new(HashMap::new())),
             tasks: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Install once before joining the room. Each handshake reads fresh host
+    /// credentials; the callback is never awaited under the provider lock.
+    pub fn set_local_session_provider(
+        &self,
+        provider: Option<super::LocalSessionProvider<WebRTCRsConnection>>,
+    ) {
+        *self.local_session_provider.lock() = provider;
     }
 
     /// #12c: install the per-collection read-authz hook. Set once right after
@@ -1703,6 +1714,29 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
 
     fn local_peer_role(&self) -> super::NativePeerRole {
         self.peer_role
+    }
+
+    async fn local_session_credentials(
+        &self,
+        peer: &Self::Peer,
+        nonce: Option<String>,
+    ) -> Result<Option<super::LocalSessionCredentials>, RxError> {
+        let provider = self.local_session_provider.lock().clone();
+        match provider {
+            Some(provider) => {
+                let credentials = provider(peer.clone(), nonce).await?;
+                if !self
+                    .local_session_provider
+                    .lock()
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &provider))
+                {
+                    return Err(new_rx_error("RC_WEBRTC_PEER", None));
+                }
+                Ok(Some(credentials))
+            }
+            None => Ok(None),
+        }
     }
 
     fn connect_stream(&self) -> RxStream<Self::Peer> {

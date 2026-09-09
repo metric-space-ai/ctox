@@ -1337,8 +1337,9 @@ where
                         return;
                     }
                     let frame_collection = item.message.collection.clone();
+                    let mut may_capture_capability = false;
                     if item.message.method == "ctoxProtocol" {
-                        let mut may_capture_capability = true;
+                        may_capture_capability = true;
                         if let Some(check) = &is_peer_session_valid {
                             let remote_protocol = item
                                 .message
@@ -1346,9 +1347,7 @@ where
                                 .first()
                                 .unwrap_or(&Value::Null);
                             match check(remote_protocol, None) {
-                                WebRTCPeerSessionValidation::Accept => {
-                                    pool_task.mark_peer_admitted(&item.peer, false);
-                                }
+                                WebRTCPeerSessionValidation::Accept => {}
                                 WebRTCPeerSessionValidation::Defer => {
                                     may_capture_capability = false;
                                 }
@@ -1370,19 +1369,6 @@ where
                                 }
                             }
                         }
-                        if may_capture_capability {
-                            if let Some(token) = item
-                            .message
-                            .params
-                            .first()
-                            .and_then(|payload| payload.pointer("/peerSession/capabilityToken"))
-                            .and_then(Value::as_str)
-                            .map(str::trim)
-                            .filter(|token| !token.is_empty())
-                        {
-                            handler_task.set_peer_capability_token(&item.peer, token.to_string());
-                            }
-                        }
                     }
                     let result = match item.message.method.as_str() {
                         "token" => Value::String(storage_token),
@@ -1398,7 +1384,7 @@ where
                                 .and_then(|name| pool_task.collection_by_name(name))
                                 .or_else(|| representative_task.clone());
                             let room_payload = pool_task.protocol_room_payload().await;
-                            ctox_protocol_response_with_flag(
+                            let mut protocol = ctox_protocol_response_with_flag(
                                 target.as_ref(),
                                 peer_session_id.as_deref(),
                                 flag,
@@ -1407,7 +1393,36 @@ where
                                 Some(&storage_token),
                                 handler_task.local_peer_role(),
                             )
-                            .await
+                            .await;
+                            let challenge = item.message.params.first()
+                                .and_then(|p| p.pointer("/peerSession/deviceProofNonce"));
+                            if let Err(error) = super::local_session::attach_local_session(
+                                handler_task.as_ref(), &item.peer, &mut protocol, challenge,
+                            ).await {
+                                pool_task.error_subject.next(error);
+                                let _ = handler_task.send(&item.peer, WebRTCWireFrame::Response(WebRTCResponse {
+                                    id: item.message.id,
+                                    result: Value::Null,
+                                    error: Some("local_session_credentials_unavailable".into()),
+                                    collection: frame_collection,
+                                })).await;
+                                handler_task.close_peer(&item.peer).await;
+                                return;
+                            }
+                            // Do not grant data access while local credentials
+                            // are pending or after their provider failed.
+                            if may_capture_capability {
+                                if let Some(token) = item.message.params.first()
+                                    .and_then(|p| p.pointer("/peerSession/capabilityToken"))
+                                    .and_then(Value::as_str).map(str::trim)
+                                    .filter(|token| !token.is_empty()) {
+                                    handler_task.set_peer_capability_token(&item.peer, token.to_string());
+                                }
+                                if is_peer_session_valid.is_some() {
+                                    pool_task.mark_peer_admitted(&item.peer, false);
+                                }
+                            }
+                            protocol
                         }
                         // masterChangesSince | masterWrite — route to the
                         // frame's collection master handler. An unknown
@@ -1628,6 +1643,18 @@ where
                     let device_proof_nonce = fresh_device_proof_nonce();
                     local_protocol["peerSession"]["deviceProofNonce"] =
                         Value::String(device_proof_nonce.clone());
+                    if let Err(error) = super::local_session::attach_local_session(
+                        handler.as_ref(),
+                        &peer,
+                        &mut local_protocol,
+                        None,
+                    )
+                    .await
+                    {
+                        pool_clone.error_subject.next(error);
+                        handler.close_peer(&peer).await;
+                        return;
+                    }
                     let protocol_response = match send_message_and_await_answer(
                         Arc::clone(&handler),
                         peer.clone(),
@@ -3692,6 +3719,8 @@ mod tests {
     struct MockPeer(String, u64);
 
     struct MockHandler {
+        local_provider: PlMutex<Option<super::super::LocalSessionProvider<MockPeer>>>,
+        retired: PlMutex<HashSet<MockPeer>>,
         connect: crate::rxjs_compat::RxSubject<MockPeer>,
         disconnect: crate::rxjs_compat::RxSubject<MockPeer>,
         message: crate::rxjs_compat::RxSubject<PeerWithMessage<MockPeer>>,
@@ -3705,6 +3734,8 @@ mod tests {
     impl MockHandler {
         fn new() -> StdArc<Self> {
             StdArc::new(Self {
+                local_provider: PlMutex::new(None),
+                retired: PlMutex::new(HashSet::new()),
                 connect: crate::rxjs_compat::RxSubject::new(),
                 disconnect: crate::rxjs_compat::RxSubject::new(),
                 message: crate::rxjs_compat::RxSubject::new(),
@@ -3739,6 +3770,22 @@ mod tests {
 
     #[async_trait::async_trait]
     impl WebRTCConnectionHandler for MockHandler {
+        async fn local_session_credentials(
+            &self,
+            peer: &Self::Peer,
+            nonce: Option<String>,
+        ) -> Result<Option<super::super::LocalSessionCredentials>, RxError> {
+            let provider = self.local_provider.lock().clone();
+            match provider {
+                Some(provider) => provider(peer.clone(), nonce).await.map(Some),
+                None => Ok(None),
+            }
+        }
+
+        fn is_peer_current(&self, peer: &Self::Peer) -> bool {
+            !self.retired.lock().contains(peer)
+        }
+
         // This fixture has no private document fields.
         fn document_fields_for_peer(&self, _: &Self::Peer, _: &str) -> Option<Vec<String>> {
             None
@@ -3779,6 +3826,10 @@ mod tests {
         fn connection_identity(&self, peer: &MockPeer) -> String {
             format!("{}@{}", peer.0, peer.1)
         }
+    }
+
+    mod local_session_tests {
+        include!("local_session_tests.rs");
     }
 
     #[tokio::test]

@@ -129,6 +129,17 @@ pub trait WebRTCConnectionHandler: Send + Sync {
         super::NativePeerRole::CtoxInstance
     }
 
+    /// Fresh host credentials for this connection and optional remote challenge.
+    /// The host must authorize disclosure to this peer; room membership alone
+    /// is not authentication. No provider means the existing anonymous envelope.
+    async fn local_session_credentials(
+        &self,
+        _peer: &Self::Peer,
+        _nonce: Option<String>,
+    ) -> Result<Option<super::local_session::LocalSessionCredentials>, RxError> {
+        Ok(None)
+    }
+
     async fn send(&self, peer: &Self::Peer, frame: WebRTCWireFrame) -> Result<(), RxError>;
 
     async fn send_auxiliary(
