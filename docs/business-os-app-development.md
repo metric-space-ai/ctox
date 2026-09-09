@@ -16,6 +16,14 @@ The platform supplies:
 
 ## Registered system app presentation
 
+The registry generator projects module metadata from each source manifest and
+approved icon metadata from the frozen operator selection manifest. This keeps
+registry and offline fallback icons consistent with the shell's operator-icon
+resolver, including explicit render derivatives such as the Knowledge PNG.
+Run `node src/apps/business-os/scripts/generate-module-registry.mjs --check`
+to detect drift; regenerated app.js requires a new shell generation.
+
+
 The source inventory contains 39 modules, including 21 core apps. Creator,
 Explorer and File Viewer are registered core modules, in addition to the
 original 36-module / 18-core inventory. Registry, source manifests, system-app

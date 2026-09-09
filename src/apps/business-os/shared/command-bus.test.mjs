@@ -150,7 +150,7 @@ test('command bus scopes demand-only desktop chunk dependencies with leases', ()
 test('command bus reports missing queue projection as transient tracking state', () => {
   assert.match(source, /status:\s*'projection_pending'/);
   assert.match(source, /transient:\s*true/);
-  assert.match(source, /wartet noch auf die Rueckmeldung/);
+  assert.match(source, /Die Rückmeldung steht noch aus\. Du kannst den Vorgang weiter verfolgen\./);
   assert.doesNotMatch(source, /noch keinen echten Queue-Task/);
 });
 
@@ -1032,7 +1032,8 @@ test('terminal tracking falls back to the local store when demand queries are ov
   assert.equal(receipt.ok, true);
   assert.equal(receipt.status, 'completed');
   assert.equal(demandReads, 1);
-  assert.equal(localReads, 1);
+  // Read the durable receipt before bridge setup, then read again after overload.
+  assert.equal(localReads, 2);
 });
 
 test('sync push errors remain typed instead of becoming a command timeout', async () => {

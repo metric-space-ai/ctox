@@ -458,7 +458,7 @@ test('global CTOX agent scope html uses business-facing labels and escapes value
     externalActions: 'approval_required',
   });
 
-  assert.match(html, /CTOX Zugriff/);
+  assert.match(html, /Crew-Zugriff/);
   assert.match(html, /Nutzer/);
   assert.match(html, /App/);
   assert.match(html, /Daten/);
