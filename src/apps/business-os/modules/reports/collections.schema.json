@@ -604,6 +604,60 @@
       "type": "object",
       "version": 0
     },
+    "communication_accounts": {
+      "additionalProperties": true,
+      "primaryKey": "account_key",
+      "properties": {
+        "account_key": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "address": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "last_inbound_ok_at": {
+          "type": "string"
+        },
+        "last_outbound_ok_at": {
+          "type": "string"
+        },
+        "profile_json": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "account_key",
+        "channel",
+        "address",
+        "provider",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object",
+      "version": 0
+    },
     "ctox_bug_reports": {
       "additionalProperties": true,
       "primaryKey": "id",

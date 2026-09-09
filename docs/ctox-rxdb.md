@@ -19,6 +19,15 @@ and reads the retained computer through RxDB. A separate persisted-data test
 covers missing destination, replay and preservation of newer destination rows.
 These are release gates, not a claim that a deployed tenant has passed them.
 
+The Crew module also declares its channel-account dependency by reusing the
+canonical Conversations schema. This allows Crew to register the collection
+before Mail or Conversations has opened. Its generated module schema (and the
+Reports re-export) must include the same definition; no new collection version,
+permission grant, or independent channel store is introduced. The module
+conformance and DB-isolation inventory guards remain release gates. Inventory
+metadata tracks the current manifests, with newly inventoried modules explicitly
+marked as source-reviewed rather than newly certified for runtime isolation.
+
 Generate module JSON, the native contract and hashes together, rebuild the
 browser bundle, and advance the canonical shell/loader revision. Regeneration
 also reconciles pre-existing stale crew-memory and ticket-key fields in the
