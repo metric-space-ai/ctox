@@ -317,8 +317,9 @@ try {
   });
 
   await scenario(page, 'task-link-opens-unobstructed-flow', { count: 1, activeIndex: 0, groupedResearch: true }, async () => {
+    await page.locator('.ctox-chat-inspection > summary').click();
     const navigation = await page.evaluate(async () => {
-      const link = document.querySelector('.ctox-chat-track');
+      const link = document.querySelector('.ctox-chat-inspection [data-track-task]');
       if (!link) throw new Error('tracked message has no CTOX task link');
       link.click();
       await window.chatHarness.waitFor(() => location.hash.includes('task_id='));

@@ -409,7 +409,7 @@ test('ready subscription projection renders one consistent connected state', () 
     },
   });
   assert.match(html, /Subscription verbunden/);
-  assert.match(html, /ChatGPT \/ Codex ist verbunden und einsatzbereit/);
+  assert.match(html, /ChatGPT \/ Codex ist angemeldet\. Modellverfügbarkeit noch nicht geprüft/);
   assert.doesNotMatch(html, /Subscription nicht verbunden|CTOX-Harness zur Verfügung/);
 });
 

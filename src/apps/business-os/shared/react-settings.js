@@ -2676,7 +2676,7 @@ function subscriptionStatus(provider, projection, auth, canManage, subscriptionA
   if (auth.subscription_plan) lines.push(kv('Plan', auth.subscription_plan));
   return `
     <div class="runtime-access-detail ${configured ? 'is-ok' : ''}">
-      <div><strong>${escapeHtml(configured ? 'Verbunden' : 'Noch nicht verbunden')}</strong><span>${escapeHtml(configured ? `${profile.label} ist verbunden und einsatzbereit.` : `Mit ${profile.label} anmelden.`)}</span></div>
+      <div><strong>${escapeHtml(configured ? 'Verbunden' : 'Noch nicht verbunden')}</strong><span>${escapeHtml(configured ? `${profile.label} ist angemeldet. Modellverfügbarkeit noch nicht geprüft.` : `Mit ${profile.label} anmelden.`)}</span></div>
       ${pending ? `
         <div class="subscription-device-code is-pending">
           <span>Geräte-Code</span>

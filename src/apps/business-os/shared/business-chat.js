@@ -3903,7 +3903,7 @@ function chatInspectionContent(chat) {
   const steps = (progress?.steps || []).map(step => `<li><span>${escapeHtml(step.label)}</span><small>${escapeHtml(states[step.status] || (de ? 'Offen' : 'Pending'))}</small></li>`).join('');
   const history = messages.map(message => `<li><time>${escapeHtml(Number(message.createdAt) > 0 ? new Date(Number(message.createdAt)).toLocaleTimeString(de ? 'de-DE' : 'en-GB', { hour: '2-digit', minute: '2-digit' }) : '')}</time><span>${escapeHtml(friendlyCrewMessage(message.text))}</span></li>`).join('');
   const tracked = [...(chat.messages || [])].reverse().find(message => message.taskId && message.trackable !== false);
-  const link = tracked ? `<button type="button" class="ctox-button" data-track-task data-task-id="${escapeAttr(tracked.taskId)}" data-command-id="${escapeAttr(tracked.commandId || '')}" data-task-status="${escapeAttr(tracked.status || '')}">${de ? 'Aufgabe öffnen' : 'Open task'}</button>` : '';
+  const link = tracked ? `<button type="button" class="ctox-button" title="${escapeAttr(tracked.taskId)}" data-track-task data-task-id="${escapeAttr(tracked.taskId)}" data-command-id="${escapeAttr(tracked.commandId || '')}" data-task-status="${escapeAttr(tracked.status || '')}">${de ? 'Aufgabe öffnen' : 'Open task'}</button>` : '';
   return { title, body: `${steps ? `<ol class="ctox-chat-inspection-steps">${steps}</ol>` : ''}<ol class="ctox-chat-inspection-history">${history}</ol>${link}` };
 }
 
