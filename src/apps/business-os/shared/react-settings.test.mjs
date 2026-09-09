@@ -7,6 +7,27 @@ import { __reactSettingsTestHooks as hooks } from './react-settings.js';
 
 const reactSettingsSource = readFileSync(new URL('./react-settings.js', import.meta.url), 'utf8');
 
+test('runtime save button forwards command dependencies and missing access is a visible warning', () => {
+  const handler = reactSettingsSource.slice(
+    reactSettingsSource.indexOf("body.querySelector('[data-runtime-save]')"),
+    reactSettingsSource.indexOf("body.querySelector('[data-runtime-refresh]')"),
+  );
+  assert.match(handler, /saveRuntimeSettings\(\s*runtimePayload,\s*\{ commandBus, db, session, sync \}/);
+  const html = baseTemplate({
+    tab: 'runtime',
+    runtimeSettings: {
+      can_manage: true,
+      runtime: { provider: 'minimax', chat_model: 'MiniMax-M3' },
+      auth: { mode: 'api_key', api_key_configured: false, api_key_name: 'CTOX_SUBSCRIPTION_PROXY_NO_AUTH' },
+      diagnostics: { auth_needs_attention: true, service_needs_attention: false },
+    },
+  });
+  assert.match(html, /role="alert"/);
+  assert.match(html, /Die Crew kann keine Aufgaben bearbeiten/);
+  assert.match(html, /API-Schlüssel fehlt/);
+  assert.doesNotMatch(html, /CTOX_SUBSCRIPTION_PROXY_NO_AUTH/);
+});
+
 globalThis.document = {
   documentElement: {
     lang: 'de',

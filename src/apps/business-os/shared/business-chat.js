@@ -1295,6 +1295,10 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   const datePickerEl = root.querySelector('[data-chat-date-picker]');
   const matchesCurrentDate = datePickerEl && datePickerEl.value === selectedDate;
   const existingWindows = Array.from(root.querySelectorAll('.ctox-chat-window'));
+  for (const win of existingWindows) {
+    const chat = visibleWindowChats.find(item => item.id === win.dataset.chatId);
+    if (chat) chat.inspectionOpen = Boolean(win.querySelector('.ctox-chat-inspection')?.open);
+  }
   const hasBusyPanel = Boolean(root.querySelector('[data-chat-busy-panel]'));
   const hasDatePanel = Boolean(root.querySelector('[data-chat-date-workload-panel]'));
   const currentWindowIds = existingWindows.map(w => w.dataset.chatId);
@@ -1522,6 +1526,19 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         }
       }
 
+      const inspection = win.querySelector('.ctox-chat-inspection');
+      if (inspection) {
+        const content = chatInspectionContent(chat);
+        const summary = inspection.querySelector('summary');
+        const body = inspection.querySelector('.ctox-chat-inspection-body');
+        if (summary.textContent !== content.title) summary.textContent = content.title;
+        if (body.innerHTML !== content.body) {
+          const scrollTop = body.scrollTop;
+          body.innerHTML = content.body;
+          body.scrollTop = scrollTop;
+          inPlaceDomChanged = true;
+        }
+      }
       // Update messages container content if it changed
       const messagesContainer = win.querySelector('.ctox-chat-messages');
       if (messagesContainer) {
@@ -2038,7 +2055,7 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, sync, g
 
   chat.__submitting = true;
   chat.draft = '';
-  const isFollowUpSubmission = chat.showFollowUp === true;
+  const isFollowUpSubmission = chat.showFollowUp === true || Boolean(chat.lastTrackingId);
   chat.showFollowUp = false; // Reset follow-up container state
   if (input) input.value = '';
   try {
@@ -2343,19 +2360,8 @@ function attachmentSignature(chat) {
 }
 
 function chatComposerSignature(chat) {
-  // Encode the composer SHAPE, not the raw task state. queued/running/blocked
-  // all render the same delegation card; treating each as a new shape forced a
-  // full window rebuild on every status transition (and on every tick that
-  // flipped between queued and running), which is the "chat fenster baut sich
-  // alle 2 sekunden neu auf" failure.
-  const taskState = getTaskState(chat);
-  let shape = 'idle';
-  if (taskState === 'scheduled') shape = 'scheduled';
-  else if (taskState === 'queued' || taskState === 'running' || taskState === 'blocked') shape = 'active';
-  else if (taskState === 'success' || taskState === 'failed') {
-    shape = chat?.showFollowUp ? 'terminal-follow-up' : 'terminal';
-  }
-  return shape;
+  // Immediate conversations keep their input across every task transition.
+  return getTaskState(chat) === 'scheduled' ? 'scheduled' : 'conversation';
 }
 
 function windowTaskStateMatches(win, chat) {
@@ -3037,45 +3043,9 @@ function chatWindow(chat, activeId, relation = 'center') {
         </button>
       </div>
     `;
-  } else if (taskState === 'queued' || taskState === 'running' || taskState === 'blocked') {
-    // Active work keeps the composer hidden. Its progress lives in the header,
-    // so the content area remains exclusively for the conversation.
-    const trackingMsg = [...chat.messages].reverse().find(m => 
-      (m.commandId && m.commandId === chat.lastTrackingId) || 
-      (m.taskId && m.taskId === chat.lastTrackingId)
-    );
-    const taskId = trackingMsg?.taskId || '';
-    const commandId = trackingMsg?.commandId || chat.lastTrackingId || '';
-    const taskStatus = trackingMsg?.status || 'queued';
-    
-    headerProgressHtml = delegationProgressCardHtml(chat, { taskId, commandId, taskStatus });
-  } else if (taskState === 'success' || taskState === 'failed') {
-    if (chat.showFollowUp) {
-      bottomHtml = `
-        ${attachmentsHtml}
-        <form class="ctox-chat-form" data-chat-form>
-          <input type="file" multiple accept="image/*,application/pdf" style="display: none;" data-chat-file-input="${chat.id}" />
-          <button type="button" class="ctox-chat-clip-btn" data-chat-clip="${chat.id}" title="Datei hinzufügen">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
-          </button>
-          <textarea name="message" placeholder="${escapeAttr(chatUiIsGerman() ? `Nächste Aufgabe für ${crew.name}...` : `Next task for ${crew.name}...`)}" required>${escapeHtml(chat.draft || '')}</textarea>
-          <button type="submit" data-chat-send aria-label="Senden">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
-          </button>
-        </form>
-      `;
-    } else {
-      bottomHtml = `
-        <div class="ctox-followup-container">
-          <button class="ctox-followup-btn" type="button" data-chat-followup-trigger="${escapeAttr(chat.id)}">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-            <span>Folgeaufgabe eingeben</span>
-          </button>
-        </div>
-      `;
-    }
   } else {
-    // idle state
+    // Keep conversation input available while work waits, runs, or finishes.
+    // Follow-up submissions retain the chat thread and use the normal queue.
     bottomHtml = `
       ${attachmentsHtml}
       <form class="ctox-chat-form" data-chat-form>
@@ -3147,6 +3117,7 @@ function chatWindow(chat, activeId, relation = 'center') {
         <strong>Datei hier ablegen</strong>
       </div>
       ${schedulerBarHtml}
+      ${chatInspectionMarkup(chat)}
       <div class="ctox-chat-messages">
         ${agentScopeHtml}
         ${chat.messages.length ? chatMessagesMarkup(chat.messages) : `<div class="ctox-chat-empty">${escapeHtml(chatUiIsGerman() ? `Gib ${crew.name} eine Aufgabe.` : `Give ${crew.name} a task.`)}</div>`}
@@ -3792,6 +3763,9 @@ function trackButtonLabel(message) {
 function friendlyCrewMessage(text) {
   const value = String(text || '');
   const de = chatUiIsGerman();
+  const selection = value.match(/^(.{1,80} übernimmt):/);
+  if (selection) return selection[1];
+  if (/^Der Versuch wird wiederholt: CTOX chat could not continue because the model API/.test(value)) return de ? 'Der Modelldienst antwortet nicht. Die Crew versucht es erneut.' : 'The model service is not responding. The crew will retry.';
   if (value === 'Aufgabe in der CTOX Queue angelegt. Fortschritt und Antwort erscheinen hier.') {
     return de ? 'Die Crew hat deine Aufgabe erhalten. Fortschritt und Antwort erscheinen hier.'
       : 'The crew has received your task. Progress and the reply will appear here.';
@@ -3871,7 +3845,7 @@ function formatChatBodyHtml(rawText) {
 function messageMarkup(message) {
   const trackId = message.taskId || message.commandId;
   const visibleTrackId = compactTrackingId(trackId);
-  const tracking = message.trackable === false ? '' : (message.commandId || message.taskId)
+  const tracking = message.trackable === false || !message.taskId ? '' : (message.commandId || message.taskId)
     ? `<button class="ctox-chat-track" type="button" data-track-task data-task-id="${escapeAttr(message.taskId || '')}" data-command-id="${escapeAttr(message.commandId || '')}" data-task-status="${escapeAttr(message.status || '')}" title="${escapeAttr(`${trackButtonLabel(message)} · ${trackId}`)}" aria-label="${escapeAttr(`${trackButtonLabel(message)} · ${trackId}`)}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3h7v7"></path><path d="M10 14 21 3"></path><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"></path></svg><code class="ctox-chat-track-id">${escapeHtml(visibleTrackId)}</code></button>`
     : '';
   const rawText = message.role === 'user' ? String(message.text || '') : friendlyCrewMessage(message.text);
@@ -3904,8 +3878,38 @@ function compactTrackingId(value) {
   return `…${tail.slice(-12)}`;
 }
 
+function isChatInspectionMessage(message) {
+  if (message.role === 'user' || message.role === 'assistant') return false;
+  if (['reply', 'question', 'interim'].includes(message.kind)) return false;
+  if (message.kind === 'status' || message.takeoverFor || message.blockedFor || message.failureFor || String(message.id || '').startsWith('status_')) return true;
+  // Old clients copied queue receipts out of command.result into replyFor.
+  // Keep those receipts in inspection, without rewriting the stored conversation.
+  if (message.replyFor) return /^(?:Aufgabe (?:wird|in der)|Task angelegt|Deine Aufgabe steht|Die Crew hat deine Aufgabe erhalten|Die Bearbeitung hat begonnen|Der Versuch wird wiederholt|CTOX konnte die Aufgabe)/.test(String(message.text || ''));
+  return false;
+}
+
 function chatMessagesMarkup(messages = []) {
-  return messages.map((message) => messageMarkup(message)).join('');
+  return messages.filter(message => !isChatInspectionMessage(message)).map(message => messageMarkup(message)).join('');
+}
+
+function chatInspectionContent(chat) {
+  const messages = (chat.messages || []).filter(isChatInspectionMessage);
+  const current = messages.at(-1);
+  const progress = executionProgressForChat(chat);
+  const de = chatUiIsGerman();
+  const title = current ? friendlyCrewMessage(current.text) : (de ? 'Noch kein Arbeitsstand' : 'No work status yet');
+  const states = de ? { pending: 'Offen', in_progress: 'In Arbeit', completed: 'Erledigt', failed: 'Fehlgeschlagen', blocked: 'Wartet' }
+    : { pending: 'Pending', in_progress: 'Working', completed: 'Done', failed: 'Failed', blocked: 'Waiting' };
+  const steps = (progress?.steps || []).map(step => `<li><span>${escapeHtml(step.label)}</span><small>${escapeHtml(states[step.status] || (de ? 'Offen' : 'Pending'))}</small></li>`).join('');
+  const history = messages.map(message => `<li><time>${escapeHtml(Number(message.createdAt) > 0 ? new Date(Number(message.createdAt)).toLocaleTimeString(de ? 'de-DE' : 'en-GB', { hour: '2-digit', minute: '2-digit' }) : '')}</time><span>${escapeHtml(friendlyCrewMessage(message.text))}</span></li>`).join('');
+  const tracked = [...(chat.messages || [])].reverse().find(message => message.taskId && message.trackable !== false);
+  const link = tracked ? `<button type="button" class="ctox-button" data-track-task data-task-id="${escapeAttr(tracked.taskId)}" data-command-id="${escapeAttr(tracked.commandId || '')}" data-task-status="${escapeAttr(tracked.status || '')}">${de ? 'Aufgabe öffnen' : 'Open task'}</button>` : '';
+  return { title, body: `${steps ? `<ol class="ctox-chat-inspection-steps">${steps}</ol>` : ''}<ol class="ctox-chat-inspection-history">${history}</ol>${link}` };
+}
+
+function chatInspectionMarkup(chat) {
+  const content = chatInspectionContent(chat);
+  return `<details class="ctox-chat-inspection" ${chat.inspectionOpen ? 'open' : ''}><summary>${escapeHtml(content.title)}</summary><div class="ctox-chat-inspection-body">${content.body}</div></details>`;
 }
 
 async function submitChatMessage({
@@ -6684,6 +6688,12 @@ function installChatStyles() {
       box-sizing: border-box;
       overflow-wrap: anywhere;
     }
+    .ctox-chat-inspection { flex: 0 0 auto; border-bottom: 1px solid var(--line); }
+    .ctox-chat-inspection > summary { cursor: pointer; padding: 6px 14px; color: var(--muted); font-size: var(--fs-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ctox-chat-inspection-body { max-height: 260px; overflow: auto; padding: 0 14px 10px; font-size: var(--fs-meta); }
+    .ctox-chat-inspection-body ol { padding: 0; list-style: none; }
+    .ctox-chat-inspection-body li { display: flex; gap: 10px; margin: 8px 0; }
+    .ctox-chat-inspection-body time, .ctox-chat-inspection-body small { color: var(--muted); flex-shrink: 0; }
     .ctox-chat-messages .ctox-agent-scope {
       flex: 0 0 auto;
       display: grid;
@@ -9119,6 +9129,12 @@ export const __businessChatTestInternals = Object.freeze({
   executionProgressHeaderHtml,
   executionProgressSignature,
   messageMarkup,
+  isChatInspectionMessage,
+  chatInspectionContent,
+  chatInspectionMarkup,
+  chatMessagesMarkup,
+  chatWindow,
+  chatComposerSignature,
   mergeChatPair,
   mergeChatMessages,
   claimChatOpenOwnership,

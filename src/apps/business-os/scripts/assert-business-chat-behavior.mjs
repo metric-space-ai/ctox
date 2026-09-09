@@ -457,21 +457,17 @@ try {
     dbDelay: 500,
   }, async () => {
     const followUpResult = await page.evaluate(async () => {
-      // The window itself may still be painting under load; the measured
-      // latency is click -> composer, not seed -> trigger.
-      await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-active [data-chat-followup-trigger]'));
-      const start = performance.now();
-      document.querySelector('.ctox-chat-window.is-active [data-chat-followup-trigger]').click();
-      await window.chatHarness.waitForPaint();
+      // Failed work must leave its input usable without a reveal action,
+      // even while database writes are delayed.
+      await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-active textarea[name="message"]'));
       return {
-        latency: performance.now() - start,
         composerVisible: Boolean(document.querySelector('.ctox-chat-window.is-active textarea[name="message"]')),
         triggerVisible: Boolean(document.querySelector('.ctox-chat-window.is-active [data-chat-followup-trigger]')),
       };
     });
     results.push({ scenario: 'follow-up-control-result', followUpResult });
     expect(followUpResult.composerVisible, 'follow-up click must render the follow-up composer');
-    expect(followUpResult.latency < 150, `follow-up composer must render before persistence delay, got ${followUpResult.latency.toFixed(1)}ms`);
+    expect(!followUpResult.triggerVisible, 'conversation input must not require an extra reveal button');
     const followUpCommand = await page.evaluate(async () => {
       const textarea = document.querySelector('.ctox-chat-window.is-active textarea[name="message"]');
       textarea.value = 'Korrigierte Folgeaufgabe';

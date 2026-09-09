@@ -763,6 +763,17 @@ test('Task display copy is shown as written (no regex redaction, no underscore m
   assert.equal(safeTaskDisplayText('a'.repeat(400), 'en', { max: 20 }), `${'a'.repeat(19)}...`);
 });
 
+
+test('Paused crew explains waiting without a false critical stall alarm', () => {
+  const task = { id: 'paused-task', status: 'queued', routeStatus: 'pending', createdAt: new Date(Date.now() - 3600000).toISOString() };
+  const state = { lang: 'de', harnessStatus: { paused: true }, flow: { ok: true }, model: { tasks: [task] } };
+  const health = deriveHarnessHealth(state);
+  assert.equal(health.severity, 'ok');
+  assert.equal(health.reason, 'paused');
+  assert.match(hooks.taskSummaryReason(task, state), /Crew ist pausiert/);
+  state.harnessStatus.paused = false;
+  assert.equal(deriveHarnessHealth(state).severity, 'critical');
+});
 test('Queued work with missing flow projection is a critical harness health state', () => {
   const health = deriveHarnessHealth({
     lang: 'de',

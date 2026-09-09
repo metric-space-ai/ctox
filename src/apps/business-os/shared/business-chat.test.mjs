@@ -11,6 +11,36 @@ import {
 
 const businessChatSource = readFileSync(new URL('./business-chat.js', import.meta.url), 'utf8');
 
+test('inspection separates system history from real replies and keeps an input in every task state', () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = { documentElement: { lang: 'de' } };
+  try {
+    const hooks = __businessChatTestInternals;
+    const user = { role: 'user', text: 'Bitte rechne 2 + 2.' };
+    const receipt = { id: 'status_cmd-test', role: 'ctox', text: 'Aufgabe wird an die Crew gesendet.', commandId: 'cmd-test', status: 'pending_sync' };
+    const reply = { role: 'ctox', kind: 'reply', text: '2 + 2 = 4.', commandId: 'cmd-test', taskId: 'task-test', status: 'completed' };
+    const question = { role: 'ctox', kind: 'question', text: 'Welche Einheit?' };
+    const legacyReply = { role: 'ctox', replyFor: 'old-command', text: 'Hier ist die Antwort.' };
+    const chat = { id: 'chat-test', createdAt: 1, messages: [user, receipt], lastTrackingId: 'cmd-test' };
+    assert.doesNotMatch(hooks.chatMessagesMarkup(chat.messages), /Crew gesendet/);
+    assert.doesNotMatch(hooks.chatInspectionMarkup(chat), /data-track-task/);
+    chat.messages.push(reply, question, legacyReply);
+    const conversation = hooks.chatMessagesMarkup(chat.messages);
+    for (const text of ['2 + 2 = 4.', 'Welche Einheit?', 'Hier ist die Antwort.']) assert.ok(conversation.includes(text));
+    assert.match(hooks.chatInspectionMarkup(chat), /data-task-id="task-test"/);
+    assert.doesNotMatch(hooks.chatInspectionMarkup(chat), /2 \+ 2 = 4/);
+    for (const status of ['pending', 'running', 'blocked', 'failed', 'completed']) {
+      chat.messages = [user, { ...receipt, status, taskId: 'task-test' }];
+      const html = hooks.chatWindow(chat, chat.id);
+      assert.match(html, /<textarea name="message"/, status);
+      assert.equal(hooks.chatComposerSignature(chat), 'conversation', status);
+    }
+    assert.equal(hooks.isChatInspectionMessage({ ...receipt, kind: 'reply', text: 'Aufgabe wird morgen erledigt.' }), false);
+  } finally {
+    globalThis.document = previousDocument;
+  }
+});
+
 test('saved crew status messages use plain language without rewriting user instructions', () => {
   const previousDocument = globalThis.document;
   globalThis.document = { documentElement: { lang: 'de' } };
@@ -2475,7 +2505,7 @@ function makeChatRootFixture({ chat, mutations }) {
       chatId: chat.id,
       chatRel: 'center',
       chatAttachmentSignature: '',
-      chatComposerSignature: 'active',
+      chatComposerSignature: 'conversation',
     },
     classList: classListFor(['ctox-chat-window', 'is-active', 'is-task-queued']),
     style: {},

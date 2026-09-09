@@ -119,6 +119,24 @@ try {
       assert.ok(await taskHistory.evaluate(e => e.getBoundingClientRect().height) <= 40);
       await taskHistory.locator("summary").click();
       assert.equal(await taskHistory.locator(".ctox-drawer-steps").isVisible(), true);
+      await page.evaluate(() => {
+        const {state,hooks}=window.crewFixture;
+        hooks.syncDetailDrawer(state); // unchanged refresh must preserve the actual DOM
+        state.model.tasks[0].statusNote = 'A new persisted status arrived';
+        hooks.syncDetailDrawer(state); // changed facts must preserve disclosure state too
+      });
+      assert.equal(await taskHistory.getAttribute("open"), "");
+      assert.equal(await taskHistory.locator(".ctox-drawer-steps").isVisible(), true);
+      await page.locator(".ctox-drawer-edit-fold > summary").click();
+      const drawerTitle = page.locator("#fixture-task-drawer input[name=title]");
+      await drawerTitle.fill("Entwurf bleibt bei Live-Updates");
+      await page.evaluate(() => {
+        const {state,hooks}=window.crewFixture;
+        state.model.tasks[0].statusNote = 'Another update while typing';
+        hooks.syncDetailDrawer(state);
+      });
+      assert.equal(await drawerTitle.inputValue(), "Entwurf bleibt bei Live-Updates");
+      assert.equal(await drawerTitle.evaluate(e=>e === document.activeElement), true);
       await taskHistory.locator("summary").click();
       assert.equal(await taskHistory.locator(".ctox-drawer-steps").isVisible(), false);
       await page.locator("#fixture-task-drawer").evaluate(e => e.remove());

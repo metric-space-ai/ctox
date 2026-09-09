@@ -1152,12 +1152,13 @@ function deriveHarnessHealth(state) {
   const oldestWaitingAgeMs = waitingTasks.length && Number.isFinite(oldestWaitingAt)
     ? Math.max(0, now - oldestWaitingAt)
     : 0;
-  const stalled = waitingTasks.length > 0
+  const paused = state?.harnessStatus?.paused === true;
+  const stalled = !paused && waitingTasks.length > 0
     && activeTasks.length === 0
     && (flowProjectionMissing || oldestWaitingAgeMs >= HARNESS_STALL_GRACE_MS);
   const waitingWithoutLease = waitingTasks.length > 0 && activeTasks.length === 0;
-  const severity = stalled ? 'critical' : (waitingWithoutLease ? 'warning' : 'ok');
-  const reason = stalled
+  const severity = paused ? 'ok' : stalled ? 'critical' : (waitingWithoutLease ? 'warning' : 'ok');
+  const reason = paused ? 'paused' : stalled
     ? (flowProjectionMissing ? 'flow_projection_missing' : 'queue_stalled')
     : (waitingWithoutLease ? 'queue_waiting' : 'healthy');
   const focusTask = waitingTasks[0] || null;
@@ -1243,6 +1244,7 @@ function syncHarnessHealthUiState(state) {
 
 function harnessHealthTitle(state, health) {
   const t = labels[state.lang];
+  if (health?.reason === 'paused') return state.lang === 'de' ? 'Die Crew ist pausiert' : 'The crew is paused';
   if (health?.severity === 'critical') return t.harnessCriticalTitle;
   if (health?.severity === 'warning') return t.harnessWarningTitle;
   return t.harnessHealthy;
@@ -1250,6 +1252,7 @@ function harnessHealthTitle(state, health) {
 
 function harnessHealthMessage(state, health) {
   const t = labels[state.lang];
+  if (health?.reason === 'paused') return state.lang === 'de' ? 'Aufgaben starten, sobald du die Crew fortsetzt.' : 'Tasks start when you resume the crew';
   const values = {
     count: String(health?.waitingCount || 0),
     age: formatRelativeAge(health?.oldestWaitingAgeMs || 0, state.lang),
@@ -3420,7 +3423,29 @@ function syncDetailDrawer(state) {
   if (!state.detailDrawer) return;
   if (state.detailDrawer.type === 'task') {
     const task = state.model?.tasks?.find((item) => item.id === state.detailDrawer.taskId) || getSelectedTask(state);
-    if (task) state.ctx.openLeftDrawer(taskDrawer(task, state));
+    if (task) {
+      const previous = state.taskDrawerNode;
+      const sameTask = previous?.isConnected && previous.dataset.contextRecordId === task.id;
+      const active = document.activeElement;
+      // A live refresh must never replace a control while the owner edits it.
+      if (sameTask && previous.contains(active) && active.matches('input, textarea, select')) return;
+      const body = taskDrawer(task, state, { remember: false });
+      const markup = body.innerHTML;
+      if (sameTask && state.taskDrawerMarkup === markup) return;
+      const scroller = sameTask ? scrollParentOf(previous) : null;
+      const scrollTop = scroller?.scrollTop || 0;
+      const folds = sameTask ? new Map([...previous.querySelectorAll('details')].map(node => [node.className, node.open])) : new Map();
+      const focusedFold = sameTask && active?.matches('summary') && previous.contains(active) ? active.parentElement.className : null;
+      for (const node of body.querySelectorAll('details')) {
+        if (folds.has(node.className)) node.open = folds.get(node.className);
+      }
+      state.taskDrawerMarkup = markup;
+      state.taskDrawerNode = body;
+      state.ctx.openLeftDrawer(body);
+      const nextScroller = scrollParentOf(body);
+      if (nextScroller) nextScroller.scrollTop = scrollTop;
+      if (focusedFold) [...body.querySelectorAll('details')].find(node => node.className === focusedFold)?.querySelector('summary')?.focus({ preventScroll: true });
+    }
     return;
   }
   if (state.detailDrawer.type === 'webstack') {
@@ -3474,7 +3499,7 @@ function closeDetailDrawer(state) {
   if (wasWebStack && state.model) renderMain(state);
 }
 
-function taskDrawer(task, state, { editorOnly = false } = {}) {
+function taskDrawer(task, state, { editorOnly = false, remember = true } = {}) {
   const t = labels[state.lang];
   const steps = taskSteps(task, state);
   const selectedTaskStepIndex = clampMetric(state.selectedTaskStepIndex || 0, 0, Math.max(steps.length - 1, 0));
@@ -3513,8 +3538,8 @@ function taskDrawer(task, state, { editorOnly = false } = {}) {
       ${taskSummaryReason(task, state) ? `<p class="ctox-task-reason-line">${escapeHtml(taskSummaryReason(task, state))}</p>` : ''}
       ${taskLeaseLineMarkup(task, state)}
       ${taskLiveStatusMarkup(task, state)}
-      ${taskControlsMarkup(task, state)}
     </section>
+    ${taskControlsMarkup(task, state)}
     ${!editorOnly && promptField.text ? `<section class="ctox-task-description"><h3>${escapeHtml(t.taskPrompt)}</h3><p>${escapeHtml(promptField.text)}</p></section>` : ''}
     <details class="ctox-drawer-edit-fold" ${editorOnly ? 'open' : ''}>
     <summary>${escapeHtml(t.editTask)}</summary>
@@ -3593,7 +3618,7 @@ function taskDrawer(task, state, { editorOnly = false } = {}) {
   });
   if (editorOnly) {
     for (const child of [...body.children]) {
-      if (!child.matches('.ctox-drawer-edit-fold, .ctox-task-status-strip')) child.remove();
+      if (!child.matches('.ctox-drawer-edit-fold, .ctox-task-status-strip, .ctox-task-controls')) child.remove();
     }
   }
   const editForm = body.querySelector('[data-ctox-task-edit]');
@@ -3633,6 +3658,10 @@ function taskDrawer(task, state, { editorOnly = false } = {}) {
       setTaskTimelineStep(state, Number(button.dataset.drawerTaskStep), { center: true });
     });
   });
+  if (!editorOnly && remember) {
+    state.taskDrawerNode = body;
+    state.taskDrawerMarkup = body.innerHTML;
+  }
   return body;
 }
 
@@ -6686,6 +6715,7 @@ function crewMemberName(state, memberId) {
 // failed, who holds it. Built only from durable routing fields — never from
 // guesses — and empty when there is nothing worth saying.
 function taskSummaryReason(task, state) {
+  if (state.harnessStatus?.paused === true && taskIsHarnessWaiting(task)) return state.lang === 'en' ? 'The crew is paused. Resume it to start this task.' : 'Die Crew ist pausiert. Zum Starten die Crew fortsetzen.';
   const note = String(task.statusNote || task.error || '').trim();
   const de = state.lang !== 'en';
   const rules = [
@@ -6927,6 +6957,7 @@ export const __ctoxTestHooks = {
   taskListInner,
   renderTaskList,
   renderMain,
+  syncDetailDrawer,
   applyTaskSelection,
   webStackPanel,
   taskPipelineStage,

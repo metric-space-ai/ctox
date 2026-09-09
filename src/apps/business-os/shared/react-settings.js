@@ -502,7 +502,7 @@ export async function openReactSettings({
       try {
         settingsState.runtimeSettings = await saveRuntimeSettings(
           runtimePayload,
-          { db },
+          { commandBus, db, session, sync },
         );
         settingsState.commandStatus = 'Runtime/Auth gespeichert.';
       } catch (error) {
@@ -1311,6 +1311,12 @@ function runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth
         <strong>${escapeHtml(providerLoaded ? `${runtimeProviderLabel(provider)}${runtime.chat_model ? ` · ${runtime.chat_model}` : ''}` : 'Runtime nicht geladen')}</strong>
         <em>${escapeHtml(runtimeAuthSummary(provider, authMode, auth, runtimeSettings?.provider_subscriptions))}</em>
       </div>
+      ${!runtimeLoading && (serviceNeedsAttention || authNeedsAttention || (providerLoaded && !runtime.chat_model)) ? `
+        <p class="runtime-healthline is-danger" role="alert">${escapeHtml(authNeedsAttention
+          ? 'Die Crew kann keine Aufgaben bearbeiten: Der Zugang zum Modellanbieter fehlt. Bitte anmelden oder einen API-Schlüssel hinterlegen.'
+          : !runtime.chat_model
+            ? 'Die Crew kann keine Aufgaben bearbeiten: Bitte ein Modell auswählen.'
+            : 'Die Crew meldet einen Betriebsfehler. Aufgaben können derzeit scheitern; prüfe den Zugang und den letzten Fehler.')}</p>` : ''}
       <div class="runtime-flow">
         <div class="runtime-choice-section">
           <span class="runtime-section-label">Provider</span>
@@ -2471,8 +2477,8 @@ function runtimeAuthSummary(provider, authMode, auth, projection = null) {
     return 'Subscription nicht verbunden';
   }
   return auth.api_key_configured
-    ? `${auth.api_key_name || 'API Key'} gespeichert`
-    : `${auth.api_key_name || 'API Key'} fehlt`;
+    ? 'API-Schlüssel gespeichert'
+    : 'API-Schlüssel fehlt';
 }
 
 function runtimeRouteSummary(runtime, provider, auth = {}) {
