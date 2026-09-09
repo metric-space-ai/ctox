@@ -736,6 +736,13 @@ fn deduplicate_contacts(contacts: &mut Vec<Value>) {
     };
     let mut kept: Vec<Value> = Vec::with_capacity(contacts.len());
     for contact in std::mem::take(contacts) {
+        // Incoming placeholders are already refused; these are the ones that
+        // were stored before that rule existed. Carbosulf still carried
+        // "test test" and "n/a n/a" on 09.09.2026, and they stood in the
+        // release list like real people.
+        if contact_name_is_placeholder(&contact) {
+            continue;
+        }
         let id = identity(&contact, "id");
         let person_key = identity(&contact, "person_key");
         let duplicate_of = kept.iter().position(|existing| {
@@ -2782,6 +2789,15 @@ mod tests {
         deduplicate_contacts(&mut with_extra);
         assert_eq!(with_extra.len(), 1);
         assert_eq!(with_extra[0]["person_email"], "ada@example.test");
+        // A stored placeholder from an old probe is dropped on the next write.
+        let mut with_placeholder = vec![
+            serde_json::json!({"id": "c1", "name": "test test", "person_key": "test"}),
+            serde_json::json!({"id": "c2", "name": "n/a n/a", "person_key": "placeholder"}),
+            serde_json::json!({"id": "c3", "name": "Joppe Smit", "person_nachname": "Smit"}),
+        ];
+        deduplicate_contacts(&mut with_placeholder);
+        assert_eq!(with_placeholder.len(), 1);
+        assert_eq!(with_placeholder[0]["name"], "Joppe Smit");
     }
 
     #[test]
