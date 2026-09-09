@@ -25,6 +25,15 @@ The parent dispatches the prompt with the Desktop `send_message_to_thread` tool.
 This keeps the normal Desktop process responsible for execution and subsequent
 corrections. The app's model menu alone is not a provider selector.
 
+The helper also assigns the canonical parent project through `projectId`.
+The current built-in task listing filters to the global provider, so proxy
+workers are temporarily pinned for visibility and unpinned after archival.
+Their legacy UI project label can be empty despite the correct backend
+assignment. A raw `thread/list` inventory with `modelProviders: []` includes
+them. This limitation is documented rather than hidden behind a model alias.
+The supported `desktop.git-worktree-root` setting routes native managed
+worktrees to `/Volumes/tmp/worktrees`; existing system-disk worktrees are not moved.
+
 Worker registry: `~/.codex/proxy-workers/jobs/<thread-id>.json` and corresponding
 private prompt files. Each worker is disposable and owns exactly one PR. It waits
 for the parent review and makes corrections in that same PR. Before merging,

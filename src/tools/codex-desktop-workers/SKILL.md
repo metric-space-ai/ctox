@@ -71,6 +71,17 @@ rollout file, then stops its temporary app-server. Start implementation through 
 Desktop `send_message_to_thread` tool, so the existing app owns execution.
 The general model picker is not configured as a provider switcher.
 
+The current built-in `list_threads` sends `modelProviders: null`, which lists
+only the global provider. Pin each prepared proxy worker using
+`move_thread_to_sidebar_section` with `sectionId: "pinned"`; pinned task IDs
+are fetched individually and therefore remain visible. Remove this temporary
+pin after archive. The app's legacy project label may still be empty: retain
+and verify canonical `project_id` through the registry/app-server instead.
+For a complete raw app-server inventory use `thread/list` with
+`modelProviders: []`. This is a supported visibility workaround, not a repair
+of the app's ordinary project listing. Do not patch app internals or change
+provider metadata to disguise the limitation.
+
 Model self-identification is not routing evidence. Inspect saved settings and
 proxy requests. Grok's subscription backend has reported `grok-4.6-build`;
 `grok-4.6-exact` is the existing client alias. The catalog uses a conservative

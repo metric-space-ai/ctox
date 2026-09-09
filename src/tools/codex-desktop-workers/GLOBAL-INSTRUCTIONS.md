@@ -43,6 +43,16 @@ not change providers. `grok-4.6-exact` (high), `glm-5.3-flash` and `kimi-k3` use
 cli_proxy. OpenAI tasks retain openai and their existing settings. Never switch
 the global provider to the proxy as a delegation side effect.
 
+Current Desktop listing limitation: list_threads filters its ordinary results to
+the global provider. After preparing a proxy worker, pin it through
+move_thread_to_sidebar_section(sectionId="pinned") so it remains visible and can
+be fetched by ID. Keep its canonical project_id in the registry; the app's legacy
+project label can be empty even when app-server owns the correct assignment.
+Use the registry and wait_threads/read_thread for supervision; an omitted ordinary
+list result is not a failed worker. A complete app-server inventory uses
+thread/list with modelProviders: []. After archive, remove the temporary pin.
+Do not falsify provider metadata or patch app internals to hide this limitation.
+
 Worker titles start `[Worker1@Exact parent task title]: Summary`, numbered per
 parent. As soon as a PR exists, rename the task `#[PR123]: Summary` with its actual
 PR number. Keep task ID, parent ID/title, issue, repository, worktree, branch,
