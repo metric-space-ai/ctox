@@ -1334,9 +1334,10 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         ),
         write_tool(
             "business_os.create_app",
-            "Use this when a coding agent should ask CTOX Business OS to create and deploy a new runtime-installed app; returns command ids, app source paths, required skill resources, and validation commands.",
+            "Ask CTOX to create and deploy an app. Supply a stable idempotency_key for one logical request and reuse it with identical arguments after transport uncertainty; a changed intent with the same key is rejected. Returns durable command/task ids and development resources.",
             object_schema(vec![
                 required_string("instruction"),
+                optional_string("idempotency_key"),
                 optional_string("module_id"),
                 optional_string("title"),
                 optional_string("description"),
@@ -1346,10 +1347,11 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         ),
         write_tool(
             "business_os.modify_app",
-            "Use this when a coding agent should ask CTOX Business OS to modify and redeploy an existing app; returns command ids, app source paths, required skill resources, and validation commands.",
+            "Ask CTOX to modify and redeploy an app. Supply a stable idempotency_key for one logical request and reuse it with identical arguments after transport uncertainty; a changed intent with the same key is rejected. Returns durable command/task ids and development resources.",
             object_schema(vec![
                 required_string("module_id"),
                 required_string("instruction"),
+                optional_string("idempotency_key"),
                 optional_string("title"),
             ]),
         ),
@@ -1868,6 +1870,49 @@ pub fn upsert_user(
     store::upsert_user(root, &session, mutation)
 }
 
+/// Scope client retry keys to the resolved actor and workspace, not to the
+/// per-transport request id. The queue atomically rejects changed intent for
+/// the resulting command id. No key preserves the legacy new-request behavior.
+fn mcp_app_command_id(
+    context: &McpChannelRequestContext,
+    actor: &Value,
+    arguments: &Value,
+) -> anyhow::Result<Option<String>> {
+    let Some(value) = arguments.get("idempotency_key") else {
+        return Ok(None);
+    };
+    let key = value
+        .as_str()
+        .map(str::trim)
+        .filter(|key| {
+            !key.is_empty() && key.len() <= 256 && !key.chars().any(char::is_control)
+        })
+        .ok_or_else(|| {
+            BusinessOsMcpError::validation(
+                "idempotency_key",
+                "expected a non-empty string of at most 256 bytes without control characters",
+            )
+        })?;
+    let actor_id = actor
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .context("resolved MCP actor has no id")?;
+    let identity = serde_json::to_vec(&serde_json::json!([
+        "business-os-mcp-app-v1",
+        actor_id,
+        context.workspace.trim(),
+        key
+    ]))?;
+    let hash = digest::digest(&digest::SHA256, &identity);
+    let suffix = hash
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(Some(format!("cmd_mcp_{suffix}")))
+}
+
 pub fn create_app(
     root: &Path,
     context: &McpChannelRequestContext,
@@ -1911,7 +1956,7 @@ pub fn create_app(
         root,
         store::BusinessCommand {
             origin: store::CommandOrigin::TrustedLocal,
-            id: None,
+            id: mcp_app_command_id(context, &actor, arguments)?,
             module: "creator".to_string(),
             command_type: "ctox.business_os.app.create".to_string(),
             record_id: Some(module_id.clone()),
@@ -1991,7 +2036,7 @@ pub fn modify_app(
         root,
         store::BusinessCommand {
             origin: store::CommandOrigin::TrustedLocal,
-            id: None,
+            id: mcp_app_command_id(context, &actor, arguments)?,
             module: "creator".to_string(),
             command_type: "ctox.business_os.app.modify".to_string(),
             record_id: Some(module_id.clone()),
@@ -10375,6 +10420,115 @@ mod tests {
         assert!(task
             .prompt
             .contains("runtime/business-os/installed-modules/mcp-inventory"));
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_app_retry_keys_bind_actor_and_workspace_not_transport_request() -> anyhow::Result<()> {
+        let mut context = test_context("business_os.modify_app");
+        let actor = serde_json::json!({ "id": "member-a" });
+        let arguments = serde_json::json!({ "idempotency_key": "workjet-turn-1" });
+        let first = mcp_app_command_id(&context, &actor, &arguments)?;
+        assert!(first.is_some());
+        context.request_id = "another-http-request".into();
+        assert_eq!(first, mcp_app_command_id(&context, &actor, &arguments)?);
+        assert_ne!(
+            first,
+            mcp_app_command_id(&context, &serde_json::json!({ "id": "member-b" }), &arguments)?
+        );
+        context.workspace = "another-workspace".into();
+        assert_ne!(first, mcp_app_command_id(&context, &actor, &arguments)?);
+        assert_eq!(
+            None,
+            mcp_app_command_id(&context, &actor, &serde_json::json!({}))?
+        );
+        for key in [
+            Value::Null,
+            serde_json::json!(1),
+            serde_json::json!(" "),
+            serde_json::json!("a\nb"),
+            serde_json::json!("a".repeat(257)),
+        ] {
+            let error = mcp_app_command_id(
+                &context,
+                &actor,
+                &serde_json::json!({ "idempotency_key": key }),
+            )
+            .unwrap_err();
+            assert_eq!(
+                error
+                    .downcast_ref::<BusinessOsMcpError>()
+                    .and_then(|error| error.field.as_deref()),
+                Some("idempotency_key")
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_app_retry_keeps_task_and_terminal_outcome() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_default_mcp_admin(root)?;
+        write_module(root, "mcp-retry", "MCP Retry", &["retry_items"])?;
+        let mut arguments = serde_json::json!({
+            "module_id": "mcp-retry",
+            "instruction": "Add an inventory review action without changing existing data.",
+            "idempotency_key": "workjet-turn-retry",
+            "_context": { "actor": "chatgpt:test-user", "workspace": "test", "request_id": "http-1" }
+        });
+        let first = call_tool(root, "business_os.modify_app", arguments.clone())?;
+        let command_id = first["command_id"].as_str().context("command id")?;
+        let task_id = first["task_id"].as_str().context("task id")?;
+        arguments["_context"]["request_id"] = serde_json::json!("http-2");
+        let retry = call_tool(root, "business_os.modify_app", arguments.clone())?;
+        assert_eq!(retry["command_id"], first["command_id"]);
+        assert_eq!(retry["task_id"], first["task_id"]);
+        store::mark_business_command_failed(root, command_id, "test execution failure", 42)?;
+        let before = crate::mission::channels::business_command_projection(root, command_id)?;
+        arguments["_context"]["request_id"] = serde_json::json!("http-3");
+        let retry = call_tool(root, "business_os.modify_app", arguments.clone())?;
+        assert_eq!(retry["status"], "failed");
+        assert_eq!(retry["ok"], false);
+        assert_eq!(retry["task_id"], task_id);
+        assert_eq!(
+            crate::mission::channels::business_command_projection(root, command_id)?,
+            before
+        );
+        // This also checks the compatibility projection: the read path must
+        // not put the failed command back into the accepted state.
+        let conn = store::open_store(root)?;
+        let status: String = conn.query_row(
+            "SELECT status FROM business_commands WHERE command_id = ?1",
+            [command_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(status, "failed");
+        arguments["instruction"] = serde_json::json!("A different logical request.");
+        let error = call_tool(root, "business_os.modify_app", arguments).unwrap_err();
+        assert!(
+            error.to_string().contains("idempotency_conflict"),
+            "{error:#}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_app_retry_create_returns_the_same_native_task() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_default_mcp_admin(root)?;
+        let arguments = serde_json::json!({
+            "module_id": "mcp-create-retry",
+            "instruction": "Create an inventory app with reorder review.",
+            "idempotency_key": "create-request-1",
+            "_context": { "actor": "chatgpt:test-user", "workspace": "test" }
+        });
+        let first = call_tool(root, "business_os.create_app", arguments.clone())?;
+        let retry = call_tool(root, "business_os.create_app", arguments)?;
+        assert!(first["task_id"].as_str().is_some());
+        assert_eq!(retry["command_id"], first["command_id"]);
+        assert_eq!(retry["task_id"], first["task_id"]);
         Ok(())
     }
 

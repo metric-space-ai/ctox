@@ -6351,8 +6351,18 @@ pub fn record_command(
     )? {
         return Ok(completed);
     }
-    let queue_task =
+    let queue_claim =
         create_ctox_queue_task(root, &command_id, &command, native_authorization.as_ref())?;
+    if queue_claim
+        .as_ref()
+        .is_some_and(|claim| claim.already_claimed)
+    {
+        // The core claim checks the complete intent hash under its writer lock.
+        // A replay is a read of that durable execution, not a fresh acceptance:
+        // do not reset projections, reassign Crew, or rerun app materialization.
+        return replayed_queue_command(root, &conn, &command_id, &command);
+    }
+    let queue_task = queue_claim.map(|claim| claim.task);
     if let Some(task) = queue_task
         .as_ref()
         .filter(|task| task.route_status == "cancelled")
@@ -6481,6 +6491,59 @@ pub fn record_command(
         task_status: queue_task.map(|task| normalize_queue_status(&task.route_status).to_string()),
         chat_id,
         ..CommandAccepted::default()
+    })
+}
+
+fn replayed_queue_command(
+    root: &Path,
+    conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+) -> anyhow::Result<CommandAccepted> {
+    let projection = channels::business_command_projection(root, command_id)?;
+    let status = match projection.get("status").and_then(Value::as_str) {
+        Some("accepted") => "accepted",
+        Some("completed") => "completed",
+        Some("failed") => "failed",
+        Some("cancelled") => "cancelled",
+        Some("waiting_dependencies") => "waiting_dependencies",
+        status => anyhow::bail!("unsupported canonical command status: {status:?}"),
+    };
+    let cached: Option<String> = conn.query_row(
+        "SELECT payload_json FROM business_records WHERE collection = 'business_commands' AND record_id = ?1",
+        params![command_id],
+        |row| row.get(0),
+    )
+    .optional()?;
+    let cached: Value = cached
+        .map(|raw| serde_json::from_str(&raw))
+        .transpose()?
+        .unwrap_or(Value::Null);
+    let text = |field: &str| {
+        projection
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    Ok(CommandAccepted {
+        ok: !matches!(status, "failed"),
+        command_id: command_id.to_owned(),
+        status,
+        execution_mode: "queue",
+        execution_task_id: text("execution_task_id"),
+        task_id: text("task_id"),
+        task_status: text("task_status"),
+        target_task_id: text("target_task_id"),
+        target_record_id: command.record_id.clone(),
+        chat_id: cached
+            .get("chat_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        result: projection.get("result").cloned(),
+        outbound_text: text("outbound_text"),
+        response: text("response"),
+        answer: text("answer"),
     })
 }
 
@@ -22323,7 +22386,7 @@ fn create_ctox_queue_task(
     command_id: &str,
     command: &BusinessCommand,
     native_authorization: Option<&Value>,
-) -> anyhow::Result<Option<channels::QueueTaskView>> {
+) -> anyhow::Result<Option<channels::BusinessCommandQueueClaim>> {
     let attachments = materialize_business_chat_attachments(root, command_id, command)?;
     let prompt_enrichment = business_command_prompt_enrichment(root, command_id, command)?;
     let title = command_title(command);
@@ -22382,6 +22445,9 @@ fn create_ctox_queue_task(
             })),
         },
     )?;
+    if claimed.already_claimed {
+        return Ok(Some(claimed));
+    }
     // A member the owner dragged onto the record becomes the pre-lease
     // assignment; the router honours it ahead of its own judgment. Unknown or
     // archived members are ignored, never a reason to lose the task.
@@ -22410,7 +22476,7 @@ fn create_ctox_queue_task(
             );
         }
     }
-    Ok(Some(claimed.task))
+    Ok(Some(claimed))
 }
 
 fn business_os_command_workspace_root(root: &Path, command_id: &str) -> anyhow::Result<PathBuf> {
@@ -28273,11 +28339,13 @@ pub(super) mod tests {
         let second =
             create_ctox_queue_task(root, command_id, &command, None)?.expect("second queue task");
 
-        assert_eq!(first.message_key, second.message_key);
+        assert!(!first.already_claimed);
+        assert!(second.already_claimed);
+        assert_eq!(first.task.message_key, second.task.message_key);
         let conn = channels::open_channel_db(&crate::paths::core_db(root))?;
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM communication_messages WHERE message_key = ?1 AND json_extract(metadata_json, '$.business_os_command_id') = ?2 AND json_extract(metadata_json, '$.idempotency_key') = ?2",
-            params![first.message_key, command_id],
+            params![first.task.message_key, command_id],
             |row| row.get(0),
         )?;
         assert_eq!(count, 1);
