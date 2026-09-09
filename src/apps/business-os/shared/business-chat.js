@@ -4539,9 +4539,9 @@ function trackingMessageAgeMs(message) {
 }
 
 function isTransientCommandTrackingError(error) {
-  if (error?.code === 'peer_connect_timeout') return true;
+  if (error?.code === 'peer_connect_timeout' || error?.code === 'peer_unstable_after_open') return true;
   const text = String(error?.message || error || '');
-  return /WebRTC native peer did not open|Timed out waiting for WebRTC response|rxdb\.query\.fetch|masterWrite|masterChangesSince|IDBDatabase.*closing|database connection is closing|collection is closed|closed collection|RxDB Error-Code: COL21|wartet noch auf die Rueckmeldung|Die Rückmeldung steht noch aus/i.test(text);
+  return /WebRTC native peer did not open|opened and closed again within|Timed out waiting for WebRTC response|rxdb\.query\.fetch|masterWrite|masterChangesSince|IDBDatabase.*closing|database connection is closing|collection is closed|closed collection|RxDB Error-Code: COL21|wartet noch auf die Rueckmeldung|Die Rückmeldung steht noch aus/i.test(text);
 }
 
 function failureText(commandDoc, taskDoc) {

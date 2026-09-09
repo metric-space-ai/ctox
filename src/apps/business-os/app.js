@@ -666,7 +666,8 @@ function shouldRestartAdvancedStatusRequiredCollection(collection) {
   );
   const ageMs = Number.isFinite(startedAt) ? Date.now() - startedAt : 0;
   if (ageMs < 12000) return false;
-  if (diagnostics.lastLifecycleEvent?.code === 'peer_connect_timeout') return true;
+  if (['peer_connect_timeout', 'peer_unstable_after_open']
+    .includes(diagnostics.lastLifecycleEvent?.code)) return true;
   return ['connecting', 'running', 'reconnecting'].includes(status) && activePeerCount < 1;
 }
 
@@ -9907,7 +9908,15 @@ async function tryAcknowledgeMaintenanceReadiness() {
   if (missing.length) {
     if (els.maintenanceBanner) {
       const detail = els.maintenanceBanner.querySelector('[data-maintenance-detail]');
-      if (detail) detail.textContent = `${CTOX_MAINTENANCE_SYNC_MESSAGE} · ${missing.length} ausstehend`;
+      // Name the collection that is holding the instance read-only. "1
+      // ausstehend" forced a reach into window.ctoxBusinessOsSyncDiagnostics
+      // to find out which one, while every user waited out the grace period
+      // (thesen 09.09.2026, four upgrades in a row).
+      if (detail) {
+        const named = missing.slice(0, 3).join(', ');
+        const rest = missing.length > 3 ? ` und ${missing.length - 3} weitere` : '';
+        detail.textContent = `${CTOX_MAINTENANCE_SYNC_MESSAGE} · wartet auf ${named}${rest}`;
+      }
     }
     return;
   }

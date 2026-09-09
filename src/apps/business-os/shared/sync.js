@@ -1410,7 +1410,12 @@ async function waitForStableNativePeerOpenState(state, collection, timeoutMs, st
   await withTimeout(Promise.resolve(state?.awaitInSync?.()).catch(() => undefined), 3000);
   await delay(stableMs);
   if (hasOpenNativePeerState(state)) return true;
-  throw createNativePeerOpenTimeoutEvent(collection, stableMs);
+  // The peer DID open — it dropped again inside the stability window. Reporting
+  // that as "did not open within 1000ms" sends the reader after a deadline that
+  // is not the problem: measured on thesen 09.09.2026, the open timeout is 60 s
+  // and was never reached, while the message read "within 1000ms" and cost an
+  // afternoon of looking at the wrong number.
+  throw createNativePeerUnstableEvent(collection, stableMs);
 }
 
 function hasOpenNativePeerState(state) {
@@ -1428,6 +1433,20 @@ function hasOpenNativePeerState(state) {
     }
   }
   return false;
+}
+
+function createNativePeerUnstableEvent(collection, stableMs) {
+  return {
+    name: 'CtoxWebRtcPeerLifecycleEvent',
+    code: 'peer_unstable_after_open',
+    phase: 'peer-reconnect',
+    severity: 'recoverable',
+    retryable: true,
+    lifecycle: true,
+    collection,
+    stableMs,
+    message: `WebRTC native peer for ${collection} opened and closed again within ${stableMs}ms; reconnect repair is scheduled.`,
+  };
 }
 
 function createNativePeerOpenTimeoutEvent(collection, timeoutMs) {

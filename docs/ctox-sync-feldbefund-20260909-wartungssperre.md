@@ -40,30 +40,50 @@ Zwei weitere Collections standen dauerhaft auf „ausstehend“, ohne die
 Bestätigung zu blockieren: `user_thread_states` (kein Fehler) und
 `business_chats` (`pending`).
 
+## KORREKTUR der ersten Fassung dieses Befunds
+
+Die erste Fassung las die Meldung "within 1000ms" als zu knappe Frist fuer den
+Peer-Aufbau und schlug vor, sie zu erhoehen. **Das war falsch.** Die 1000 ms
+sind `NATIVE_PEER_RESTART_STABLE_MS`, also das Stabilitaetsfenster NACH dem
+Oeffnen. Die eigentliche Oeffnungsfrist ist
+`NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS = 60000` und wurde nie erreicht.
+
+`waitForStableNativePeerOpenState` oeffnet den Peer (60 s Budget), wartet dann
+eine Sekunde und prueft erneut. Ist er dann zu — und genau das war der Fall —
+wirft es denselben `peer_connect_timeout` mit `timeoutMs: 1000`. Der Peer ist
+also **geoeffnet und innerhalb einer Sekunde wieder weggebrochen**, nicht zu
+langsam gestartet. Eine hoehere Frist haette die Lage verschlechtert, nicht
+verbessert: sie haette dem Flattern nur mehr Gelegenheit gegeben.
+
 ## Bewertung
 
-Eine Sekunde ist für den ersten Peer-Aufbau nach einem Dienstneustart knapp.
-Reicht sie nicht, greift die Reparaturschleife, die Bestätigung bleibt aus, und
-die Kulanz von zehn Minuten wird zum Regelfall statt zur Ausnahme. Für den
-Kunden heißt das: nach jedem Upgrade zehn Minuten keine Schreibvorgänge, ohne
-dass irgendetwas kaputt wäre.
+Zwei getrennte Probleme:
 
-Zusatzmessung zur Einordnung der Umgebung: in einem eingeklappten Browserfenster
-brauchten zehn `setInterval(…, 50)`-Ticks **9,6 Sekunden** statt 0,5 (Faktor 16).
-Mit sichtbarem Fenster: 0,59 s. Eine 1000-ms-Frist ist unter dieser Drosselung
-strukturell nicht zu halten — und ein eingeklapptes Fenster ist beim Kunden ein
-Normalzustand, kein Sonderfall.
+1. **Diagnostik (behoben).** Ein Peer, der oeffnet und wieder wegbricht, meldete
+   sich mit derselben Kennung und demselben Text wie einer, der nie geoeffnet
+   hat. Das kostete einen Nachmittag an der falschen Zahl. Es gibt jetzt
+   `peer_unstable_after_open` mit dem Text "opened and closed again within
+   {stableMs}ms". Beide Kennungen werden ueberall gleich behandelt, wo bisher
+   nur `peer_connect_timeout` stand.
+2. **Ursache (offen, gehoert in die Sync-Engine).** Warum bricht der Peer fuer
+   `outbound_lead_generation_adapters` unmittelbar nach dem Oeffnen weg,
+   waehrend der native Peer gesund ist und 16 andere Collections stabil laufen?
+   Die Collection haelt 14 Datensaetze; an der Menge liegt es nicht.
+
+Zur Einordnung der Messumgebung: in einem eingeklappten Browserfenster brauchten
+zehn `setInterval(…, 50)`-Ticks **9,6 Sekunden** statt 0,5 (Faktor 16), mit
+sichtbarem Fenster 0,59 s. Ein Stabilitaetsfenster von einer Sekunde ist ein
+reiner `delay()` und dauert unter dieser Drosselung ein Vielfaches, waehrend der
+Peer in der Zwischenzeit regulaer rotieren kann. Das ist der erste Verdacht.
 
 ## Vorschlag
 
-1. Die Frist für den ERSTEN Peer-Aufbau nach einem Dienstneustart deutlich
-   erhöhen oder an die gemessene Timer-Auflösung koppeln, statt sie fest auf
-   1000 ms zu setzen.
-2. Die Wartungsbestätigung nicht an ALLE Collections binden, sondern an die,
+1. Ursache des Wegbrechens klaeren, nicht die Frist erhoehen.
+2. Die Wartungsbestaetigung nicht an ALLE Collections binden, sondern an die,
    die das offene Modul wirklich braucht — oder eine Collection, deren Peer
-   wiederholt scheitert, nach n Versuchen als „nicht blockierend“ führen und
-   das sichtbar machen.
-3. Die Anzeige sollte benennen, WELCHE Collection aussteht. „1 ausstehend“
-   zwingt zum Griff in `window.ctoxBusinessOsSyncDiagnostics`.
+   wiederholt recoverable scheitert, nach n Versuchen als "nicht blockierend"
+   fuehren und das sichtbar machen.
+3. ~~Die Anzeige sollte benennen, WELCHE Collection aussteht.~~ **Erledigt**:
+   der Wartungsbanner nennt jetzt die Namen statt "1 ausstehend".
 
 Gemessen am 09.09.2026 zwischen 13:38 und 15:55 UTC, viermal reproduziert.
