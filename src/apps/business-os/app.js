@@ -6144,7 +6144,9 @@ function collectForeignSchemaModules(mod) {
   const eigene = new Set(declared.filter((name) => String(name || '').startsWith(`${mod.id}_`)));
   const gesucht = declared
     .map((name) => String(name || '').trim())
-    .filter((name) => name && !eigene.has(name));
+    // Already registered shared schemas (e.g. business_commands) must not
+    // make every app that reads them a startup dependency of this module.
+    .filter((name) => name && !eigene.has(name) && !state.db?.raw?.[name]);
   if (!gesucht.length) return [];
   const besitzer = new Map();
   for (const other of state.modules) {
