@@ -196,7 +196,9 @@ fn domain_receipt_rejects_changed_actor_payload_and_missing_proof() -> anyhow::R
 #[tokio::test]
 async fn domain_receipt_intake_resumes_an_old_applied_command_with_verified_identity(
 ) -> anyhow::Result<()> {
-    use crate::business_os::rxdb_peer::{collection_creators, tests::open_test_database};
+    use crate::business_os::rxdb_peer::{
+        collection_creators, tests::open_test_business_os_database,
+    };
     use crate::business_os::rxdb_peer_intake::{
         business_commands_table_stamp, consume_pending_business_commands,
         pending_business_command_documents_sync,
@@ -248,7 +250,7 @@ async fn domain_receipt_intake_resumes_an_old_applied_command_with_verified_iden
     )?;
     drop(conn);
 
-    let database = open_test_database(rxdb_store_path(root.path())).await?;
+    let database = open_test_business_os_database(rxdb_store_path(root.path())).await?;
     let mut creators = collection_creators();
     creators.retain(|name, _| matches!(name.as_str(), "business_commands" | "workjet_projects"));
     database

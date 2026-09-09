@@ -13877,6 +13877,14 @@ pub(in crate::business_os) mod tests {
         assert_eq!(String::from_utf8(spreadsheet_bytes).unwrap(), "sheet data");
     }
 
+    /// Native projection writers address the production database namespace.
+    /// Use this on an isolated file when testing the writer + RxDB integration.
+    pub(in crate::business_os) async fn open_test_business_os_database(
+        database_path: PathBuf,
+    ) -> anyhow::Result<Arc<RxDatabase>> {
+        open_test_database_with_name(database_path, RXDB_SQLITE_DATABASE_NAME.to_string()).await
+    }
+
     pub(in crate::business_os) async fn open_test_database(
         database_path: PathBuf,
     ) -> anyhow::Result<Arc<RxDatabase>> {
