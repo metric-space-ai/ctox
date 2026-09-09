@@ -11,6 +11,74 @@ import {
 
 const businessChatSource = readFileSync(new URL('./business-chat.js', import.meta.url), 'utf8');
 
+test('inspection separates system history from real replies and keeps an input in every task state', () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = { documentElement: { lang: 'de' } };
+  try {
+    const hooks = __businessChatTestInternals;
+    const user = { role: 'user', text: 'Bitte rechne 2 + 2.' };
+    const receipt = { id: 'status_cmd-test', role: 'ctox', text: 'Aufgabe wird an die Crew gesendet.', commandId: 'cmd-test', status: 'pending_sync' };
+    const reply = { role: 'ctox', kind: 'reply', text: '2 + 2 = 4.', commandId: 'cmd-test', taskId: 'task-test', status: 'completed' };
+    const question = { role: 'ctox', kind: 'question', text: 'Welche Einheit?' };
+    const legacyReply = { role: 'ctox', replyFor: 'old-command', text: 'Hier ist die Antwort.' };
+    const chat = { id: 'chat-test', createdAt: 1, messages: [user, receipt], lastTrackingId: 'cmd-test' };
+    assert.doesNotMatch(hooks.chatMessagesMarkup(chat.messages), /Crew gesendet/);
+    assert.doesNotMatch(hooks.chatInspectionMarkup(chat), /data-track-task/);
+    chat.messages.push(reply, question, legacyReply);
+    const conversation = hooks.chatMessagesMarkup(chat.messages);
+    for (const text of ['2 + 2 = 4.', 'Welche Einheit?', 'Hier ist die Antwort.']) assert.ok(conversation.includes(text));
+    assert.match(hooks.chatInspectionMarkup(chat), /data-task-id="task-test"/);
+    assert.equal(hooks.chatInspectionContent(chat).title, 'Aufgabe abgeschlossen', 'final reply supersedes old receipt in current status');
+    assert.doesNotMatch(hooks.chatInspectionMarkup(chat), /2 \+ 2 = 4/);
+    for (const status of ['pending', 'running', 'blocked', 'failed', 'completed']) {
+      chat.messages = [user, { ...receipt, status, taskId: 'task-test' }];
+      const html = hooks.chatWindow(chat, chat.id);
+      assert.match(html, /<textarea name="message"/, status);
+      assert.equal(hooks.chatComposerSignature(chat), 'conversation', status);
+    }
+    assert.equal(hooks.isChatInspectionMessage({ ...receipt, kind: 'reply', text: 'Aufgabe wird morgen erledigt.' }), false);
+    assert.match(hooks.chatMessagesMarkup([{ role: 'ctox', kind: 'reply', text: 'CTOX konnte die Aufgabe nicht ausführen.' }]), /CTOX konnte die Aufgabe nicht ausführen\./);
+  } finally {
+    globalThis.document = previousDocument;
+  }
+});
+
+test('a status-only projection retains this task plan without leaking it into the next task', () => {
+  const { executionProgressForChat } = __businessChatTestInternals;
+  const plan = { version: 1, revision: 2, phase: 'working', percent: 30,
+    current_step: 2, completed_steps: 1, total_steps: 3,
+    steps: [
+      { position: 1, label: 'Daten laden', status: 'completed' },
+      { position: 2, label: 'Daten prüfen', status: 'in_progress' },
+      { position: 3, label: 'Ergebnis schreiben', status: 'pending' },
+    ] };
+  const chat = { messages: [
+    { taskId: 'task-one', commandId: 'command-one', executionProgress: plan },
+    { taskId: 'task-one', commandId: 'command-one', kind: 'status', text: 'Werkzeug gestartet' },
+  ] };
+  assert.equal(executionProgressForChat(chat).steps.length, 3);
+  assert.equal(executionProgressForChat(chat).current_step, 2);
+  chat.messages.push({ commandId: 'command-two', status: 'pending_sync' });
+  assert.equal(executionProgressForChat(chat), null, 'unaccepted follow-up cannot inherit the preceding task plan');
+  chat.messages.push({ commandId: 'command-two', taskId: 'task-two', status: 'running' });
+  assert.equal(executionProgressForChat(chat), null, 'new task starts with no fabricated steps');
+});
+
+test('chat hydration and reload retain the assigned member public appearance', () => {
+  const { mergeChatPair, crewIdentity } = __businessChatTestInternals;
+  const local = { id: 'chat-assigned', owner_user_id: 'owner', createdAt: 1, updated_at_ms: 1,
+    messages: [], crew_member_id: 'crew-milo',
+    crewIdentity: { name: 'Milo', color: '#0088ff', shape: 'round', soul: 'never cache this' } };
+  const remote = { id: local.id, owner_user_id: 'owner', createdAt: 1, updated_at_ms: 2, messages: [] };
+  const merged = mergeChatPair(local, remote, 'owner');
+  assert.equal(merged.crew_member_id, 'crew-milo');
+  assert.deepEqual(crewIdentity(merged), { name: 'Milo', color: '#0088ff', shape: 'round' });
+  assert.deepEqual(Object.keys(merged.crewIdentity).sort(), ['color', 'name', 'shape']);
+  const reloaded = mergeChatPair(null, JSON.parse(JSON.stringify(merged)), 'owner');
+  assert.deepEqual(crewIdentity(reloaded), crewIdentity(merged));
+  assert.equal(reloaded.crew_member_id, 'crew-milo');
+});
+
 test('saved crew status messages use plain language without rewriting user instructions', () => {
   const previousDocument = globalThis.document;
   globalThis.document = { documentElement: { lang: 'de' } };
@@ -2475,7 +2543,7 @@ function makeChatRootFixture({ chat, mutations }) {
       chatId: chat.id,
       chatRel: 'center',
       chatAttachmentSignature: '',
-      chatComposerSignature: 'active',
+      chatComposerSignature: 'conversation',
     },
     classList: classListFor(['ctox-chat-window', 'is-active', 'is-task-queued']),
     style: {},
@@ -2488,7 +2556,7 @@ function makeChatRootFixture({ chat, mutations }) {
       return null;
     },
     querySelectorAll(selector) {
-      if (selector === 'button, input, textarea, select, a') return interactiveNodes;
+      if (selector === 'button, input, textarea, select, a, summary') return interactiveNodes;
       return [];
     },
     getBoundingClientRect() {

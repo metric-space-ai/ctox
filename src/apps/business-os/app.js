@@ -1,14 +1,15 @@
-import { CtoxResizer } from './shared/resizer.js?v=20260909-shell-v2-workjet-computer-schema-v362';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260909-shell-v2-workjet-computer-schema-v362';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260909-shell-v2-workjet-computer-schema-v362';
-import { createAppActions } from './shared/app-actions.js?v=20260909-shell-v2-workjet-computer-schema-v362';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260909-shell-v2-workjet-computer-schema-v363';
+import { CtoxResizer } from './shared/resizer.js?v=20260909-shell-v2-workjet-computer-schema-v363';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260909-shell-v2-workjet-computer-schema-v363';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260909-shell-v2-workjet-computer-schema-v363';
+import { createAppActions } from './shared/app-actions.js?v=20260909-shell-v2-workjet-computer-schema-v363';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260909-shell-v2-workjet-computer-schema-v362';
+} from './shared/app-lifecycle.js?v=20260909-shell-v2-workjet-computer-schema-v363';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -16,20 +17,20 @@ import {
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260909-shell-v2-workjet-computer-schema-v362';
+} from './shared/permissions.js?v=20260909-shell-v2-workjet-computer-schema-v363';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260909-shell-v2-workjet-computer-schema-v362';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260909-shell-v2-workjet-computer-schema-v362';
+} from './shared/branding.js?v=20260909-shell-v2-workjet-computer-schema-v363';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260909-shell-v2-workjet-computer-schema-v363';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260909-shell-v2-workjet-computer-schema-v362';
+} from './shared/presentation.js?v=20260909-shell-v2-workjet-computer-schema-v363';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -40,9 +41,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260909-shell-v2-workjet-computer-schema-v362';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260909-shell-v2-workjet-computer-schema-v362';
-import { createDocumentsFacade } from './shared/documents.js?v=20260909-shell-v2-workjet-computer-schema-v362';
+} from './shared/shell-permissions-ui.js?v=20260909-shell-v2-workjet-computer-schema-v363';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260909-shell-v2-workjet-computer-schema-v363';
+import { createDocumentsFacade } from './shared/documents.js?v=20260909-shell-v2-workjet-computer-schema-v363';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -50,16 +51,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260909-shell-v2-workjet-computer-schema-v362';
+} from './shared/maintenance-state.js?v=20260909-shell-v2-workjet-computer-schema-v363';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260909-shell-v2-workjet-computer-schema-v362';
+} from './shared/workspace-session.js?v=20260909-shell-v2-workjet-computer-schema-v363';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260909-shell-v2-workjet-computer-schema-v362';
+} from './shared/taskbar-pins.js?v=20260909-shell-v2-workjet-computer-schema-v363';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -67,9 +68,9 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260909-shell-v2-workjet-computer-schema-v362';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260909-shell-v2-workjet-computer-schema-v362';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260909-shell-v2-workjet-computer-schema-v362';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260909-shell-v2-workjet-computer-schema-v363';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260909-shell-v2-workjet-computer-schema-v363';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260909-shell-v2-workjet-computer-schema-v363';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -84,7 +85,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260909-shell-v2-workjet-computer-schema-v362';
+const APP_BUILD = '20260909-shell-v2-workjet-computer-schema-v363';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -989,7 +990,7 @@ const shellMessages = {
     activity: 'Aktivität',
     agentContext: 'Agent-Kontext',
     webrtcSync: 'Datenabgleich',
-    ctoxNotWorking: 'CTOX Verbindung prüfen',
+    ctoxNotWorking: 'Die Crew braucht deine Hilfe',
     recoveryExport: 'Recovery exportieren',
     recoveryPassphrase: 'Passwort für den verschlüsselten Recovery-Export (mindestens 8 Zeichen)',
     recoveryExported: 'Recovery-Export wurde erstellt.',
@@ -1108,7 +1109,7 @@ const shellMessages = {
     activity: 'Activity',
     agentContext: 'Agent context',
     webrtcSync: 'Data sync',
-    ctoxNotWorking: 'Check CTOX connection',
+    ctoxNotWorking: 'The crew needs your attention',
     recoveryExport: 'Export recovery',
     recoveryPassphrase: 'Passphrase for the encrypted recovery export (at least 8 characters)',
     recoveryExported: 'Recovery export created.',
@@ -10517,6 +10518,19 @@ function shellCtoxHealthProblem(status) {
   }
   if (!status || status.ok === false) {
     return [shellText('ctoxStatusUnavailable'), status?.error].filter(Boolean).join(' ');
+  }
+  const runtime = status.runtime_settings;
+  if (subscriptionModelUnavailable(runtime)) {
+    return state.lang === 'en' ? 'The selected model is not offered for this login. Choose an available model in Settings.'
+      : 'Das ausgewählte Modell wird für diesen Zugang nicht angeboten. Bitte in den Einstellungen ein verfügbares Modell auswählen.';
+  }
+  if (runtime?.diagnostics?.auth_needs_attention === true) {
+    return state.lang === 'en' ? 'The crew cannot work: model access is missing. Configure the provider in Settings.'
+      : 'Die Crew kann nicht arbeiten: Der Modellzugang fehlt. Bitte den Anbieter in den Einstellungen einrichten.';
+  }
+  if (runtime?.runtime?.provider && !String(runtime.runtime.chat_model || '').trim()) {
+    return state.lang === 'en' ? 'The crew cannot work: no model selected. Choose a model in Settings.'
+      : 'Die Crew kann nicht arbeiten: Es ist kein Modell ausgewählt. Bitte in den Einstellungen auswählen.';
   }
   const service = status.ctox_service;
   if (!service) return shellText('ctoxStatusUnavailable');

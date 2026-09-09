@@ -119,6 +119,24 @@ try {
       assert.ok(await taskHistory.evaluate(e => e.getBoundingClientRect().height) <= 40);
       await taskHistory.locator("summary").click();
       assert.equal(await taskHistory.locator(".ctox-drawer-steps").isVisible(), true);
+      await page.evaluate(() => {
+        const {state,hooks}=window.crewFixture;
+        hooks.syncDetailDrawer(state); // unchanged refresh must preserve the actual DOM
+        state.model.tasks[0].statusNote = 'A new persisted status arrived';
+        hooks.syncDetailDrawer(state); // changed facts must preserve disclosure state too
+      });
+      assert.equal(await taskHistory.getAttribute("open"), "");
+      assert.equal(await taskHistory.locator(".ctox-drawer-steps").isVisible(), true);
+      await page.locator(".ctox-drawer-edit-fold > summary").click();
+      const drawerTitle = page.locator("#fixture-task-drawer input[name=title]");
+      await drawerTitle.fill("Entwurf bleibt bei Live-Updates");
+      await page.evaluate(() => {
+        const {state,hooks}=window.crewFixture;
+        state.model.tasks[0].statusNote = 'Another update while typing';
+        hooks.syncDetailDrawer(state);
+      });
+      assert.equal(await drawerTitle.inputValue(), "Entwurf bleibt bei Live-Updates");
+      assert.equal(await drawerTitle.evaluate(e=>e === document.activeElement), true);
       await taskHistory.locator("summary").click();
       assert.equal(await taskHistory.locator(".ctox-drawer-steps").isVisible(), false);
       await page.locator("#fixture-task-drawer").evaluate(e => e.remove());
@@ -144,6 +162,50 @@ try {
       assert.ok(await history.evaluate(e=>e.getBoundingClientRect().height) > closedHeight);
       await history.locator('summary').click();
       assert.equal(await history.getAttribute('open'), null);
+    }
+    if (width === 1280) {
+      await page.evaluate(async () => {
+        const { openReactSettings } = await import('/shared/react-settings.js');
+        const mount = document.createElement('aside');
+        mount.id = 'runtime-settings-fixture';
+        mount.style.cssText = 'position:fixed;inset:0;overflow:auto;z-index:1000;background:var(--bg)';
+        document.body.append(mount);
+        let projection = {
+          id: 'runtime-settings', updated_at_ms: 1, can_manage: true,
+          runtime: { provider: 'minimax', chat_model: 'MiniMax-M3', reasoning_effort: 'high' },
+          auth: { mode: 'api_key', api_key_configured: false },
+          diagnostics: { auth_needs_attention: true },
+        };
+        window.runtimeFixtureCommands = [];
+        await openReactSettings({
+          mount, modules: [], session: { user: { id: 'owner', role: 'admin', is_admin: true } },
+          sync: { startCollection: async () => {} },
+          db: { collection: name => name === 'business_commands' ? {} : name === 'ctox_runtime_settings' ? {
+            findOne: () => ({ exec: async () => ({ toJSON: () => projection }) }),
+          } : null },
+          commandBus: { dispatch: async command => {
+            window.runtimeFixtureCommands.push(command);
+            projection = { ...projection, updated_at_ms: Date.now(), runtime: { ...command.payload },
+              auth: { mode: command.payload.auth_mode, api_key_configured: true }, diagnostics: {} };
+            return { result: { ok: true }, status: 'accepted' };
+          } },
+        });
+      });
+      const settings = page.locator('#runtime-settings-fixture');
+      await settings.locator('[data-runtime-api-key]').fill('fixture-only-not-a-real-key');
+      await settings.locator('[data-runtime-save]').click();
+      await settings.getByText('Runtime/Auth gespeichert.', { exact: true }).waitFor();
+      const saved = await page.evaluate(() => window.runtimeFixtureCommands);
+      assert.equal(saved.length, 1);
+      assert.equal(saved[0].type, 'ctox.runtime_settings.save');
+      assert.equal(saved[0].payload.provider, 'minimax');
+      assert.equal(saved[0].payload.api_key, 'fixture-only-not-a-real-key');
+      assert.equal(saved[0].client_context.actor.id, 'owner');
+      await settings.locator('[data-runtime-refresh]').click();
+      await settings.getByPlaceholder('Gespeichert · leer lassen, um ihn zu behalten').waitFor();
+      assert.equal(await settings.locator('[role=alert]').count(), 0);
+      await page.screenshot({path:path.join(out,'runtime-save-reload.png')});
+      await settings.evaluate(e => e.remove());
     }
     await page.close();
   }

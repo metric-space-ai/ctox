@@ -1,3 +1,4 @@
+import { subscriptionModelUnavailable } from './model-access-health.js?v=20260909-shell-v2-crew-feedback-v359';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import { appReleaseProjection } from './app-lifecycle.js?v=20260831-ctox-desktopapp-ports-v328';
 import {
@@ -502,7 +503,7 @@ export async function openReactSettings({
       try {
         settingsState.runtimeSettings = await saveRuntimeSettings(
           runtimePayload,
-          { db },
+          { commandBus, db, session, sync },
         );
         settingsState.commandStatus = 'Runtime/Auth gespeichert.';
       } catch (error) {
@@ -1289,6 +1290,7 @@ function runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth
   const usesApiKey = providerLoaded && !isLocalProvider && !usesSubscription;
   const serviceNeedsAttention = Boolean(diagnostics.service_needs_attention);
   const authNeedsAttention = Boolean(diagnostics.auth_needs_attention);
+  const modelUnavailable = subscriptionModelUnavailable(runtimeSettings);
   const canManage = Boolean(isAdmin && runtimeSettings?.can_manage !== false);
   const providerChoices = [
     ['local', 'Local CTOX'],
@@ -1306,11 +1308,19 @@ function runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth
         <div><h3>Anbieter, Zugang und Modell</h3></div>
         <span>${escapeHtml(runtimeLoading ? 'Status wird geladen…' : diagnostics.service_message || 'Status unbekannt')}</span>
       </header>
-      <div class="runtime-healthline ${serviceNeedsAttention || authNeedsAttention ? 'is-danger' : 'is-ok'}">
+      <div class="runtime-healthline ${serviceNeedsAttention || authNeedsAttention || modelUnavailable ? 'is-danger' : 'is-ok'}">
         <span aria-hidden="true"></span>
         <strong>${escapeHtml(providerLoaded ? `${runtimeProviderLabel(provider)}${runtime.chat_model ? ` · ${runtime.chat_model}` : ''}` : 'Runtime nicht geladen')}</strong>
         <em>${escapeHtml(runtimeAuthSummary(provider, authMode, auth, runtimeSettings?.provider_subscriptions))}</em>
       </div>
+      ${!runtimeLoading && (serviceNeedsAttention || authNeedsAttention || modelUnavailable || (providerLoaded && !runtime.chat_model)) ? `
+        <p class="runtime-healthline is-danger" role="alert">${escapeHtml(authNeedsAttention
+          ? 'Die Crew kann keine Aufgaben bearbeiten: Der Zugang zum Modellanbieter fehlt. Bitte anmelden oder einen API-Schlüssel hinterlegen.'
+          : modelUnavailable
+            ? 'Das ausgewählte Modell wird für diesen Zugang nicht angeboten. Bitte ein verfügbares Modell auswählen.'
+          : !runtime.chat_model
+            ? 'Die Crew kann keine Aufgaben bearbeiten: Bitte ein Modell auswählen.'
+            : 'Die Crew meldet einen Betriebsfehler. Aufgaben können derzeit scheitern; prüfe den Zugang und den letzten Fehler.')}</p>` : ''}
       <div class="runtime-flow">
         <div class="runtime-choice-section">
           <span class="runtime-section-label">Provider</span>
@@ -2471,8 +2481,8 @@ function runtimeAuthSummary(provider, authMode, auth, projection = null) {
     return 'Subscription nicht verbunden';
   }
   return auth.api_key_configured
-    ? `${auth.api_key_name || 'API Key'} gespeichert`
-    : `${auth.api_key_name || 'API Key'} fehlt`;
+    ? 'API-Schlüssel gespeichert'
+    : 'API-Schlüssel fehlt';
 }
 
 function runtimeRouteSummary(runtime, provider, auth = {}) {
@@ -2670,7 +2680,7 @@ function subscriptionStatus(provider, projection, auth, canManage, subscriptionA
   if (auth.subscription_plan) lines.push(kv('Plan', auth.subscription_plan));
   return `
     <div class="runtime-access-detail ${configured ? 'is-ok' : ''}">
-      <div><strong>${escapeHtml(configured ? 'Verbunden' : 'Noch nicht verbunden')}</strong><span>${escapeHtml(configured ? `${profile.label} ist verbunden und einsatzbereit.` : `Mit ${profile.label} anmelden.`)}</span></div>
+      <div><strong>${escapeHtml(configured ? 'Verbunden' : 'Noch nicht verbunden')}</strong><span>${escapeHtml(configured ? `${profile.label} ist angemeldet. Modellverfügbarkeit noch nicht geprüft.` : `Mit ${profile.label} anmelden.`)}</span></div>
       ${pending ? `
         <div class="subscription-device-code is-pending">
           <span>Geräte-Code</span>

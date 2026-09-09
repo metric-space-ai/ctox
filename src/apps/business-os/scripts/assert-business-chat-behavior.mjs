@@ -316,9 +316,42 @@ try {
     await page.screenshot({ path: progressScreenshotPath, fullPage: true });
   });
 
+  await scenario(page, 'inspection-survives-live-projection-while-typing', {
+    count: 1, activeIndex: 0, groupedResearch: true, progressTracking: true, crewMembers: 4,
+  }, async () => {
+    await page.getByPlaceholder('Aufgabe für Pico...').waitFor();
+    const inspection = page.locator('.ctox-chat-window.is-active .ctox-chat-inspection');
+    await inspection.locator('summary').click();
+    const input = page.locator('.ctox-chat-window.is-active textarea');
+    await input.fill('Bitte anschließend kurz zusammenfassen.');
+    await page.evaluate(async () => window.chatHarness.publishMessage('chat_0', {
+      id: 'live-inspection-event', role: 'ctox', kind: 'status',
+      taskId: 'task_research_0', commandId: 'task_research_0', status: 'running',
+      text: 'Ein neuer Arbeitsschritt läuft.', createdAt: Date.now(),
+    }));
+    await inspection.getByText('Ein neuer Arbeitsschritt läuft.', { exact: true }).first().waitFor().catch(async (error) => {
+      console.error('live-projection-diagnostics', await page.evaluate(() => ({
+        stored: JSON.parse(localStorage.getItem('ctox.businessOs.chat.v1') || '{}'),
+        inspection: document.querySelector('.ctox-chat-window.is-active .ctox-chat-inspection')?.outerHTML,
+        focused: document.activeElement?.tagName,
+      })));
+      throw error;
+    });
+
+    expect(await inspection.getAttribute('open') === '', 'live projection must keep inspection open');
+    expect(await input.inputValue() === 'Bitte anschließend kurz zusammenfassen.', 'live projection must preserve the draft');
+    expect(await input.evaluate(e => e === document.activeElement), 'live projection must preserve typing focus');
+    expect(await input.getAttribute('placeholder') === 'Aufgabe für Pico...', 'live projection retains the assigned member');
+    expect((await page.locator('.ctox-chat-window.is-active [data-chat-title]').getAttribute('aria-label')).startsWith('Pico ·'), 'header identifies the actual assigned member');
+    expect(JSON.parse(await page.locator('.ctox-chat-window.is-active .ctox-crew-creature').getAttribute('data-crew-identity')).name === 'Pico', 'creature appearance follows the assigned member');
+    expect(await inspection.locator('.ctox-chat-inspection-steps li').count() === 3, 'inspection keeps the same plan steps');
+    expect(!(await page.locator('.ctox-chat-window.is-active .ctox-chat-messages').innerText()).includes('Ein neuer Arbeitsschritt läuft.'), 'work status must not appear as a crew reply');
+  });
+
   await scenario(page, 'task-link-opens-unobstructed-flow', { count: 1, activeIndex: 0, groupedResearch: true }, async () => {
+    await page.locator('.ctox-chat-inspection > summary').click();
     const navigation = await page.evaluate(async () => {
-      const link = document.querySelector('.ctox-chat-track');
+      const link = document.querySelector('.ctox-chat-inspection [data-track-task]');
       if (!link) throw new Error('tracked message has no CTOX task link');
       link.click();
       await window.chatHarness.waitFor(() => location.hash.includes('task_id='));
@@ -457,21 +490,17 @@ try {
     dbDelay: 500,
   }, async () => {
     const followUpResult = await page.evaluate(async () => {
-      // The window itself may still be painting under load; the measured
-      // latency is click -> composer, not seed -> trigger.
-      await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-active [data-chat-followup-trigger]'));
-      const start = performance.now();
-      document.querySelector('.ctox-chat-window.is-active [data-chat-followup-trigger]').click();
-      await window.chatHarness.waitForPaint();
+      // Failed work must leave its input usable without a reveal action,
+      // even while database writes are delayed.
+      await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-active textarea[name="message"]'));
       return {
-        latency: performance.now() - start,
         composerVisible: Boolean(document.querySelector('.ctox-chat-window.is-active textarea[name="message"]')),
         triggerVisible: Boolean(document.querySelector('.ctox-chat-window.is-active [data-chat-followup-trigger]')),
       };
     });
     results.push({ scenario: 'follow-up-control-result', followUpResult });
     expect(followUpResult.composerVisible, 'follow-up click must render the follow-up composer');
-    expect(followUpResult.latency < 150, `follow-up composer must render before persistence delay, got ${followUpResult.latency.toFixed(1)}ms`);
+    expect(!followUpResult.triggerVisible, 'conversation input must not require an extra reveal button');
     const followUpCommand = await page.evaluate(async () => {
       const textarea = document.querySelector('.ctox-chat-window.is-active textarea[name="message"]');
       textarea.value = 'Korrigierte Folgeaufgabe';
@@ -573,7 +602,8 @@ try {
     results.push({ scenario: 'transient-command-timeout-after-send', metrics: after });
     expect(after.activeTaskClass.includes('is-task-queued'), `transient command timeout must keep chat queued, got ${after.activeTaskClass}`);
     expect(!after.activeTaskClass.includes('is-task-failed'), `transient command timeout must not mark failed, got ${after.activeTaskClass}`);
-    expect(after.activeMessageText.includes('Die Crew hat die Annahme noch nicht bestätigt'), 'transient command timeout must explain that tracking continues');
+    expect(after.activeInspectionText.includes('Die Crew hat die Annahme noch nicht bestätigt'), 'inspection must explain an unconfirmed submission');
+    expect(!after.activeMessageText.includes('Die Crew hat die Annahme noch nicht bestätigt'), 'a transport receipt must not impersonate a crew reply');
     expect(!after.activeMessageText.includes('Task an CTOX übergeben'), 'an unconfirmed timeout must not claim native acceptance');
     expect(!after.activeMessageText.includes('pending_sync'), 'pending receipt enum must not leak as visible text');
     expect(!after.activeMessageText.includes('queued'), `transient status must not leak as chrome text, got ${after.activeMessageText}`);
@@ -834,10 +864,20 @@ function harnessHtml() {
         preCollapseExpandedChatIds: Array.isArray(options.preCollapseExpandedChatIds) ? options.preCollapseExpandedChatIds : [],
         chats,
       }));
+      // Progress fixtures represent a real, persisted queue task. Otherwise the
+      // normal tracking refresh correctly treats these 06:00 messages as orphaned
+      // and clears progress because neither command nor task exists in the DB.
+      const queueTasks = Array.isArray(options.queueTasks) ? options.queueTasks
+        : options.progressTracking ? chats.flatMap(chat => chat.messages
+          .filter(message => message.taskId && message.executionProgress)
+          .map(message => ({ id: message.taskId, command_id: message.commandId,
+            status: message.status, execution_progress: message.executionProgress,
+            ...(options.crewMembers ? { crew_member_id: 'member_0' } : {}) }))) : [];
       initBusinessChat({
+
         session: { authenticated: true, user: { id: owner, name: 'Harness User' } },
         commandBus: makeCommandBus(options),
-        db: makeDb(chats, options.dbDelay || 0, Boolean(options.dbTransientError), Boolean(options.dbDeleteError), Number(options.crewMembers) || 0, Array.isArray(options.queueTasks) ? options.queueTasks : []),
+        db: makeDb(chats, options.dbDelay || 0, Boolean(options.dbTransientError), Boolean(options.dbDeleteError), Number(options.crewMembers) || 0, queueTasks),
         getActiveModule: () => ({ id: 'ctox', name: 'CTOX' }),
       });
       await waitFor(() => document.querySelector('[data-chat-dock]'));
@@ -866,6 +906,7 @@ function harnessHtml() {
           ? 'task_failed_' + index
           : '';
       if (groupedResearch) {
+        messages.push({ id: 'request_' + index, role: 'user', text: 'Bitte recherchiere Auftrag ' + (index + 1), createdAt });
         const statuses = ['running', 'queued', 'success', 'success', 'success', 'failed'];
         const trackingMessage = {
           id: 'status_research_' + index,
@@ -981,6 +1022,12 @@ function harnessHtml() {
 
     function makeDb(chats, delayMs, transientError, deleteError, crewMemberCount = 0, queueTasks = []) {
       const store = new Map(chats.map((chat) => [chat.id, structuredClone(chat)]));
+      window.chatHarness.publishMessage = async (chatId, message) => {
+        const chat = store.get(chatId);
+        chat.messages.push(message);
+        chat.updated_at_ms = Date.now();
+        await emitChats();
+      };
       const crewMembers = makeCrewMembers(crewMemberCount);
       const delay = () => new Promise((resolve) => setTimeout(resolve, delayMs));
       const maybeThrow = async () => {
@@ -1172,6 +1219,7 @@ function harnessHtml() {
         activeTaskClass: activeWindow?.className || '',
         activeStatusText: document.querySelector('.ctox-chat-window.is-active .ctox-chat-status-badge')?.textContent?.trim() || '',
         activeMessageText: document.querySelector('.ctox-chat-window.is-active .ctox-chat-messages')?.textContent?.trim() || '',
+        activeInspectionText: document.querySelector('.ctox-chat-window.is-active .ctox-chat-inspection')?.textContent?.trim() || '',
         storedChats: Array.isArray(stored.chats) ? stored.chats.length : 0,
         deletedChatTombstones: Object.keys(deletedChatIds).length,
       };
