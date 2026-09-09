@@ -224,3 +224,10 @@ source pending CI, not evidence of a running Workjet controller. The Workjet
 request ledger, submission client, offer consumer, secure session transport and
 harness context delivery remain to be connected. The general-project gap stated
 above is therefore narrowed on the native side only.
+
+The ingress also compares the canonical fingerprint after command acceptance.
+This covers an intake race where another request wins after the preflight read
+and the command plane returns that request's existing receipt. The ingress must
+not acknowledge a competing intent as its own success. Current sequential retry
+coverage does not constitute a deterministic concurrent-intake regression; that
+additional runtime evidence remains outstanding.

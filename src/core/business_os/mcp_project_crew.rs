@@ -133,6 +133,17 @@ pub(super) fn start(
         "project Crew command was rejected: {}",
         accepted.get("status").unwrap_or(&Value::Null)
     );
+    // Another caller can win admission after the preflight lookup. The command
+    // plane may then return its existing receipt without comparing our payload.
+    // Only acknowledge the immutable canonical intent that actually won.
+    let canonical = crate::mission::channels::business_command_projection(root, &command_id)?;
+    anyhow::ensure!(
+        canonical
+            .pointer("/payload/workjet_request_fingerprint")
+            .and_then(Value::as_str)
+            == Some(fingerprint.as_str()),
+        "project request key conflicts with admitted intent"
+    );
     Ok(
         serde_json::json!({"schema":"ctox.project_crew_request.v1","command_id":command_id,
         "thread_id":request.thread_id,"crew_member_id":target.member_id,"executor_id":target.computer_id,
