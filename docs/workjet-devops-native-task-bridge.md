@@ -25,10 +25,10 @@ app starter materialization, or reassign the Crew member. Terminal failures rema
 failures. A deliberate new attempt is a new logical request and needs a new key.
 
 Clients must discover support in the tool's input schema before relying on this
-contract. Older daemons may silently ignore unknown arguments. Workjet's external
-capability does not yet expose retry keys, and the native CTOX adapter is still
-pending; neither may claim replay safety before wiring this negotiation and
-persisting its request key.
+contract. Older daemons may silently ignore unknown arguments. Workjet PR #54
+proposes keyed app delegation with explicit schema negotiation. The native CTOX
+adapter and its durable client request-key storage are still pending; that
+adapter may not claim replay safety before both are wired.
 
 ## Verification
 
