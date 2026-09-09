@@ -1,5 +1,58 @@
 # CTOX-Sync-Architektur: Handover vom 9. September 2026
 
+## Nachprüfung nach der Übergabe — 9. September 2026
+
+Der damals noch offene Post-Merge-Lauf
+[34338432749](https://github.com/metric-space-ai/ctox/actions/runs/34338432749)
+ist **fehlgeschlagen**. Linux/macOS Native Sync, Chromium und der separate
+Profiler-Job bestehen; die vollständige Host-Abnahme scheitert an Kontext-Command,
+Command-Budget und abschließender Profilaufnahme. Die grüne Kandidaten-Abnahme
+weiter unten bleibt historische Evidenz und ersetzt diese fehlende Freigabe nicht.
+Die gesicherten `command-stages.json` enthalten 30 vollständige Messungen ohne
+Stage-Issues: Gesamt-p50 301,5 ms, p95 364,7 ms. Die separate `command-budget.json`
+ist leer, nicht ein grüner Budget-Beleg. Der eingebettete perf-Aufruf endet mit
+Code 255, leerem stderr und `reason=perf-record-failed`; Ursache noch unbewiesen.
+
+Spätere main-Läufe 34342505863 und 34346965129 sind vollständig erfolgreich.
+Der folgende Lauf 34349242187 ist wieder rot: Command-Recovery nach Native-Ausfall
+meldet null statt einer Queue-Task; die Profilaufnahme scheitert ebenfalls.
+Damit ist eine dauerhaft robuste Abnahme nicht durch einen einzelnen grünen Lauf
+belegt. Der zuletzt geprüfte Lauf 34351747131 zu `3b8ff841a` hat einen roten macOS-
+Credential-Test; Full Host läuft bei dieser Nachprüfung noch. Keine dieser
+Beobachtungen allein beweist, welche Codeänderung oder Umgebungsbedingung die
+Abweichungen verursacht.
+
+Der macOS-Test `wrong_source_pin_or_instance_never_requests_credentials_over_real_webrtc`
+scheitert an `public proof traversed WebRTC`. Im Test wurde vorher jedes erste
+Event aus dem gemeinsamen Peer-Fehlerstream als erwartete Ablehnung behandelt.
+Die neue Testkorrektur wartet innerhalb derselben 35-Sekunden-Deadline ausdrücklich
+auf `local_session_credentials_unavailable`. Diese Zuordnung entspricht der
+Fehlerveröffentlichung in `attach_local_session`; die Assertions für echte
+Proof-Übertragung, null Credentials-/Signatur-Callbacks und fehlende Admission
+bleiben unverändert. Das ist eine zu verifizierende Korrektur der Testbeobachtung,
+noch kein Nachweis einer behobenen Produktionsursache. Die vier betroffenen
+Tokio-Test-Runtimes verwenden jeweils zwei statt vier Worker.
+
+Der inzwischen gelesene Remote-main ist `b1ccb1e64dd491c2097463f4e6ba309c3ca81161`.
+Er enthält zwischenzeitliche Korrekturen anderer Aufgaben, unter anderem an
+Crew-/App-Tests. Diese Änderungen nicht aus dem alten Checkout überschreiben.
+Der kanonische lokale CTOX-Checkout ist divergent und enthält fremde Änderungen;
+die Nachprüfung verändert ihn nicht. Rohbelege liegen dauerhaft unter
+`/Users/michaelwelsch/.codex/notes/ctox-sync/evidence/postmerge-34338432749/`.
+
+### Aktualisierte lokale Ressourcengrenzen
+
+Die neuen AGENTS-Regeln ersetzen die unten historisch genannte 2,5-GiB-Grenze:
+Vor schweren Jobs hostweiten Status prüfen und ausschließlich über
+`greppy bash-smart -- /usr/bin/python3 /Users/michaelwelsch/.codex/bin/dev-heavy-run.py --owner <thread-id> --project ctox --task <task> -- <command>`
+starten. Erforderlich sind mindestens 20 GiB frei auf System **und** tmp, höchstens
+8 GiB Swap, Last höchstens CPU-Anzahl, ein schwerer Job hostweit und höchstens zwei
+Worker. Bei Nachprüfung: System 27,42 GiB frei, tmp 5,47 GiB, Swap 4,48 GiB,
+Load 15,03 bei 10 CPUs, anderer Cargo-/rustc-Prozess aktiv. Daher keine lokale
+native Kompilierung oder schwere Testausführung; keinen fremden Prozess stoppen.
+Tmp ist nach spätestens vier Tagen weg. Source und PR während jeder Arbeitssitzung
+sichern; keine ausschließlich dort liegenden lokalen Commits übergeben.
+
 ## Auftrag und Grenzen
 
 Der Nutzer hat beauftragt, den sicher belegten Umfang nach `main` zu mergen und

@@ -42,17 +42,17 @@ fn key() -> Arc<EcdsaKeyPair> {
     )
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_device_credentials_unlock_real_webrtc_reads_and_obey_current_revocation() {
     exercise(false, false, TargetFault::None).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_device_credentials_from_another_key_cannot_unlock_replication() {
     exercise(true, false, TargetFault::None).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_peer_filter_revocation_denies_real_webrtc_reads_with_valid_credentials() {
     exercise(false, true, TargetFault::None).await;
 }
@@ -64,7 +64,7 @@ enum TargetFault {
     Instance,
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wrong_source_pin_or_instance_never_requests_credentials_over_real_webrtc() {
     for fault in [TargetFault::Key, TargetFault::Instance] {
         exercise(false, false, fault).await;
@@ -253,7 +253,17 @@ async fn exercise(wrong_key: bool, revoke_peer_only: bool, target_fault: TargetF
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         if target_fault != TargetFault::None {
-            assert!(client_errors.next().await.is_some(), "wrong target must fail the handshake");
+            // Signaling/transport diagnostics share this stream. Only the
+            // credential-admission rejection proves that the target check ran;
+            // an earlier unrelated event must not stand in for that boundary.
+            // The enclosing 35-second deadline still bounds this wait.
+            loop {
+                let error = client_errors.next().await
+                    .expect("peer error stream closed before credential-admission rejection");
+                if error.parameters()["code"] == "local_session_credentials_unavailable" {
+                    break;
+                }
+            }
             assert!(public_identity_seen.load(Ordering::SeqCst), "public proof traversed WebRTC");
             assert_eq!(credential_requests.load(Ordering::SeqCst), 0);
             assert_eq!(signed_challenges.load(Ordering::SeqCst), 0);
