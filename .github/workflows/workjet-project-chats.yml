@@ -2,9 +2,9 @@ name: Workjet project chats
 
 on:
   push:
-    branches: [codex/workjet-project-chats]
+    branches: [codex/workjet-project-chats, codex/worker-guest-adapter]
   pull_request:
-    branches: [main, codex/native-transport-parity]
+    branches: [main, codex/native-transport-parity, codex/workjet-project-chats]
     paths:
       - '.github/workflows/workjet-project-chats.yml'
       - 'src/core/business_os/**'
@@ -85,7 +85,7 @@ jobs:
       - name: Native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev sqlite3
+          sudo apt-get install -y bubblewrap libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev sqlite3 xvfb maim xdotool x11-utils qemu-system-x86 qemu-utils
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
         with:
           key: workjet-project-chats-no-debug
@@ -94,6 +94,15 @@ jobs:
       - name: Format touched native modules
         run: |
           rustfmt --check --edition 2021 --config skip_children=true \
+            src/core/business_os/guest_runtime.rs \
+            src/core/business_os/guest_runtime/x11.rs \
+            src/core/business_os/guest_runtime/qmp.rs \
+            src/core/business_os/guest_runtime/qmp/tests.rs \
+            src/core/business_os/guest_runtime/image.rs \
+            src/core/business_os/guest_runtime/image/tests.rs \
+            src/core/business_os/guest_runtime/qemu.rs \
+            src/core/business_os/guest_runtime/qemu/tests.rs \
+            src/core/business_os/guest_runtime/tests.rs \
             src/core/business_os/project_chats.rs \
             src/core/business_os/project_chats/privacy.rs \
             src/core/business_os/project_chats/tests.rs \
@@ -109,7 +118,7 @@ jobs:
       - name: Native project-chat and project-store regressions
         run: |
           cargo test --locked --bin ctox -- \
-            business_os::project_chats business_os::store_workjet_projects \
+            business_os::guest_runtime business_os::project_chats business_os::store_workjet_projects \
             business_os::domain_effect business_os::command_plane::domain_effect_tests \
             mission::channels::tests::business_command \
             mission::channels::tests::registered_saga \
