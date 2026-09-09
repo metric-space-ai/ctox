@@ -8967,8 +8967,12 @@ fn migrate_native_rxdb_version_table(
              deleted = excluded.deleted,
              lastWriteTime = excluded.lastWriteTime,
              data = excluded.data
-         WHERE COALESCE(excluded.lastWriteTime, 0) >= COALESCE({quoted_target_table}.lastWriteTime, 0)"
+         WHERE COALESCE(excluded.lastWriteTime, 0) > COALESCE({quoted_target_table}.lastWriteTime, 0)"
     );
+    let mut equal_time_target = transaction.prepare(&format!(
+        "SELECT revision, deleted, data FROM {quoted_target_table}
+         WHERE id = ?1 AND COALESCE(lastWriteTime, 0) = ?2"
+    ))?;
     let mut source_statement = transaction
         .prepare(&source_sql)
         .with_context(|| format!("prepare runtime migration source table `{source_table}`"))?;
@@ -8998,6 +9002,32 @@ fn migrate_native_rxdb_version_table(
             last_write_time: row.get(3)?,
             data: migrated,
         };
+        // Equal clocks do not establish which version owns the truth. Never
+        // resurrect a tombstone or erase a target update based on table age.
+        // Exact retries are safe; divergence rolls back this table and prevents
+        // the startup cleanup from deleting the remaining source evidence.
+        let existing = equal_time_target
+            .query_row(
+                params![migration_row.id, migration_row.last_write_time],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        if let Some((revision, deleted, data)) = existing {
+            let data: Value = serde_json::from_str(&data)?;
+            anyhow::ensure!(
+                revision == migration_row.revision
+                    && deleted == migration_row.deleted
+                    && data == migration_row.data,
+                "runtime migration conflict for collection `{collection}` document `{}` v{source_version}->v{target_version}: equal lastWriteTime with divergent revision, deletion marker or document; source retained, explicit reconciliation required",
+                migration_row.id
+            );
+        }
         copied += transaction.execute(
             &target_sql,
             params![
@@ -9011,6 +9041,7 @@ fn migrate_native_rxdb_version_table(
     }
     drop(source_rows);
     drop(source_statement);
+    drop(equal_time_target);
 
     let missing_or_older: i64 = transaction
         .query_row(
@@ -11355,7 +11386,7 @@ pub(in crate::business_os) mod tests {
         std::fs::create_dir_all(root.path().join("runtime"))?;
         for (collection, old, new) in [
             ("business_commands", 1, 2),
-            ("ctox_queue_tasks", 1, 2),
+            ("ctox_queue_tasks", 1, 3),
             ("ctox_runs", 0, 1),
         ] {
             create_runtime_migration_source_table(root.path(), collection, old)?;
@@ -11373,7 +11404,7 @@ pub(in crate::business_os) mod tests {
         assert_eq!(migration["verified_rows"], 3);
         for (collection, version) in [
             ("business_commands", 2),
-            ("ctox_queue_tasks", 2),
+            ("ctox_queue_tasks", 3),
             ("ctox_runs", 1),
         ] {
             let conn = Connection::open(store::rxdb_store_path(root.path()))?;
@@ -11391,6 +11422,110 @@ pub(in crate::business_os) mod tests {
                 "Existing evidence"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn native_schema_migration_equal_clock_conflicts_preserve_both_stores() -> anyhow::Result<()> {
+        for (revision, deleted, target_data) in [
+            (
+                "23-target",
+                0,
+                json!({"id":"z-conflict", "title":"original"}),
+            ),
+            (
+                "1-source",
+                1,
+                json!({"id":"z-conflict", "title":"original"}),
+            ),
+            (
+                "1-source",
+                0,
+                json!({"id":"z-conflict", "title":"researched"}),
+            ),
+        ] {
+            let root = tempfile::tempdir()?;
+            std::fs::create_dir_all(root.path().join("runtime"))?;
+            let collection = "migration_conflict_probe";
+            for version in [0, 1] {
+                create_runtime_migration_source_table(root.path(), collection, version)?;
+            }
+            let source = rxdb_collection_version_table_name(collection, 0);
+            let target = rxdb_collection_version_table_name(collection, 1);
+            let mut conn = Connection::open(store::rxdb_store_path(root.path()))?;
+            for id in ["a-copy-before-conflict", "z-conflict"] {
+                conn.execute(
+                    &format!("INSERT INTO {source} VALUES (?1, '1-source', 0, 100, ?2)"),
+                    params![id, json!({"id":id,"title":"original"}).to_string()],
+                )?;
+            }
+            conn.execute(
+                &format!("INSERT INTO {target} VALUES ('z-conflict', ?1, ?2, 100, ?3)"),
+                params![revision, deleted, target_data.to_string()],
+            )?;
+            let error = migrate_native_rxdb_version_table(
+                &mut conn,
+                collection,
+                0,
+                &source,
+                1,
+                &target,
+                &[],
+            )
+            .expect_err("ambiguous equal-clock documents require reconciliation");
+            assert!(error.to_string().contains("equal lastWriteTime"));
+            assert_eq!(sqlite_table_row_count(&conn, &source)?, 2);
+            assert_eq!(
+                sqlite_table_row_count(&conn, &target)?,
+                1,
+                "earlier copies must roll back"
+            );
+            let retained: (String, i64, String) = conn.query_row(
+                &format!("SELECT revision, deleted, data FROM {target} WHERE id='z-conflict'"),
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            assert_eq!(retained.0, revision);
+            assert_eq!(retained.1, deleted);
+            assert_eq!(serde_json::from_str::<Value>(&retained.2)?, target_data);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn native_schema_migration_exact_retry_preserves_tombstones_without_rewrites(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        std::fs::create_dir_all(root.path().join("runtime"))?;
+        let collection = "migration_retry_probe";
+        for version in [0, 1] {
+            create_runtime_migration_source_table(root.path(), collection, version)?;
+        }
+        let source = rxdb_collection_version_table_name(collection, 0);
+        let target = rxdb_collection_version_table_name(collection, 1);
+        let mut conn = Connection::open(store::rxdb_store_path(root.path()))?;
+        let document = json!({"id":"deleted", "_deleted":true, "history":["kept"]});
+        conn.execute(
+            &format!("INSERT INTO {source} VALUES ('deleted', '23-source', 1, 100, ?1)"),
+            params![document.to_string()],
+        )?;
+        assert_eq!(
+            migrate_native_rxdb_version_table(&mut conn, collection, 0, &source, 1, &target, &[],)?,
+            1
+        );
+        assert_eq!(
+            migrate_native_rxdb_version_table(&mut conn, collection, 0, &source, 1, &target, &[],)?,
+            0
+        );
+        let retained: (String, i64, String) = conn.query_row(
+            &format!("SELECT revision, deleted, data FROM {target} WHERE id='deleted'"),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(retained.0, "23-source");
+        assert_eq!(retained.1, 1);
+        assert_eq!(serde_json::from_str::<Value>(&retained.2)?, document);
+        assert_eq!(sqlite_table_row_count(&conn, &source)?, 1);
         Ok(())
     }
 

@@ -9,35 +9,40 @@ command delivery defects remain in this offensive.
 
 ## Latest full-host evidence
 
-PR69 source `e00ecbeb131808797aafb04fad5862a8ea17aa4c`, run
-`34285060254`, full-host job `102258602196`: **FAIL overall**.
-Tested merge `009267a54000876af83aefb698530658f0d2df68`; binary SHA256
-`92bd80e6a533879406acde754df849f4c771562c2cfbefefddb1616d2ee302f7`.
+PR69 source `7198613f567e3cef2094ac12eebc713c5b9306e4`, run
+`34290313600`, full-host job `102275164694`: **FAIL overall**.
+Tested merge `27e3f41f978807a0fb09a8e2985b5a2bb2d6d845`; binary SHA256
+`ba546cab058042b30ec8534b595da589479df0184e4ed5ae39ec13f84eb552de`.
 
 - Strict native outage passes: one dispatch, no resubmission or collection
-  repair, queued receipt in 7418.1 ms. Native command v2/task v3 and browser
+  repair, queued receipt in 8169.5 ms. Native command v2/task v3 and browser
   task counts each equal one, with both cross-references matching. The
-  preceding canonical-schema run34284051848 independently passed in6830.6ms.
+  preceding canonical-schema run34285060254 independently passed in7418.1ms.
   Neither run executes a coding harness or closes the interrupted batch incident.
-- Warm30-command p50 389ms / p95 472.55ms remains above the300ms p50 limit.
-  Critical30-reload p95 3105.37ms passes the5000ms gate. Context reaches its
-  final command status assertion but fails collection health. Ask first paint
-  is91.5ms for one sample; it does not establish native acceptance.
-- Context native CPU averages149.13% of one core over346.115 measured seconds.
-  Four long-lived RxDB-peer threads dominate sustained work; all measured
-  threads named business-os-rxd total496.410s CPU, versus0.290s in
-  cockpit-project. No thread-limit omissions/read errors; observer cost~0.52%.
-  This does not reproduce the customer's hot cockpit thread or prove a specific
-  function as the CPU cause. Warm-command profiling includes startup and
-  averages342.58% of one core; it is not a warm-only CPU measurement.
-- The advanced-status error JSON was truncated in the original CI log.
-  The fixture now retains complete bounded status artifacts separately,
-  marks unavailable captures explicitly, and uploads context proof early.
-  Eleven driver-contract checks pass, including large snapshots and blocked
-  capture/teardown. Full native acceptance of this capture change is pending.
+- Warm30-command p50 402ms / p95 537.3ms remains above the300ms p50 limit.
+  Critical30-reload p95 3284.88ms passes the5000ms gate. Context fails at
+  direct-denial with a browser command still pending_sync; no final canonical
+  denied-command row was retained. Browser metadata does not prove admission.
+- Context native CPU averages169.12% of one core over128.01 measured seconds.
+  No thread-limit omissions/read errors; observer cost~0.72%. RxDB thread names
+  identify load, not a source callsite. SQLite statement timers include visitor
+  and decoding time; projection timers include outer waits. The new bounded
+  owned-PID symbol profiler awaits actual Linux results and does not replace
+  unprofiled performance gates.
+- Complete bounded actor/native diagnostics were retained in this real failing
+  run. The native heartbeat was fresh and reported replicationUp while browser
+  queries and writes remained delayed. A fixture denial timeout exposed its
+  ephemeral capability; the diagnostic now returns selected command fields.
 - The legacy migration-version mode still assumes obsolete commandv1/taskv0
   tables. Replacing constants alone would not prove preserved-data migration;
   populated historical fixtures, inventory comparison and recovery remain open.
+
+Migration source audit reproduced an equal-clock legacy upsert overwriting a
+target deletion marker in real SQLite. The candidate now rejects divergent
+equal-clock rows, rolls back that table and retains the source; exact retries
+perform no rewrite. Full native regression execution for this change is pending.
+Its new CI gate includes the existing migration tests, correcting their obsolete
+queue-task target from v2 to the registered v3. This is not migration acceptance.
 
 The following historical rows remain incident records; the measurements above
 supersede their older fixture observations without closing tenant acceptance.

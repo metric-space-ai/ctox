@@ -250,6 +250,18 @@ jobs:
             | tee "$RUNNER_TEMP/ctox-host-proof/command-completion-tests.log"
           cargo test --locked --bin ctox -- mission::channels::tests::business_command mission::channels::tests::business_control --test-threads=2 \
             | tee "$RUNNER_TEMP/ctox-host-proof/command-transaction-tests.log"
+      - name: Preserve native schema migration history and deletion markers
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked --bin ctox -- \
+            business_os::rxdb_peer::tests::native_schema_migration \
+            business_os::rxdb_peer::tests::packaged_cockpit_schema_migration \
+            business_os::rxdb_peer::tests::additive_thread_schema_migration \
+            business_os::rxdb_peer::tests::runtime_migration \
+            business_os::rxdb_peer::tests::runtime_installed_declarative_migration \
+            --test-threads=2 | tee "$RUNNER_TEMP/ctox-host-proof/schema-migration-tests.log"
       - name: Context prompt first paint and authorized native command
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         timeout-minutes: 10
