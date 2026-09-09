@@ -1157,6 +1157,11 @@ fn gateway_json_rpc_error(
 
 pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
     let mut tools = vec![
+        read_tool(
+            "business_os.list_crew_executions",
+            "List current external Crew offers for an owned command and executor. Returns exact attempt identifiers and state, never credentials or prompts.",
+            object_schema(vec![required_string("command_id"), required_string("executor_id")]),
+        ),
         write_tool(
             "business_os.claim_crew_execution",
             "Claim an external Crew execution offered by the native worker for this command and executor. Requires the command owner and private Crew access. Returns scoped execution authority; it does not admit new work.",
@@ -2828,6 +2833,7 @@ fn call_tool_inner(
     enforce_argument_scope_policy(root, &context, tool_name, &arguments)?;
     enforce_rate_limit(root, &context)?;
     let result = match tool_name {
+        "business_os.list_crew_executions" => crew_execution::list(root, &context, &arguments)?,
         "business_os.claim_crew_execution" => crew_execution::claim(root, &context, &arguments)?,
         "business_os.report_crew_execution" => {
             crew_execution::report(root, &context, &arguments, trusted_gateway_context)?
@@ -6764,6 +6770,29 @@ fn enforce_internal_command_session_scope(
         .filter_map(|action| string_field(action, "module_id"))
         .collect::<BTreeSet<_>>();
     match tool_name {
+        "business_os.list_crew_executions" | "business_os.claim_crew_execution" => {
+            anyhow::ensure!(
+                required_arg(arguments, "command_id")? == required_arg(context, "command_id")?,
+                "external Crew command is outside this signed session"
+            );
+            let collections = normalized_string_array(context.get("allowed_collections"));
+            anyhow::ensure!(
+                collections.is_empty()
+                    || collections.iter().any(|name| name == "ctox_crew_members"),
+                "external Crew is outside this signed collection scope"
+            );
+            if tool_name == "business_os.claim_crew_execution" {
+                if let Some(attempt) = context
+                    .pointer("/crew_binding/attempt_id")
+                    .and_then(Value::as_str)
+                {
+                    anyhow::ensure!(
+                        required_arg(arguments, "attempt_id")? == attempt,
+                        "external Crew attempt is outside this signed session"
+                    );
+                }
+            }
+        }
         "business_os.propose_action" | "business_os.execute_action" => {
             let module_id = required_arg(arguments, "module_id")?;
             let action_id = required_arg(arguments, "action_id")?;

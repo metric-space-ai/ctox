@@ -10,7 +10,7 @@ fn open(root: &Path) -> anyhow::Result<rusqlite::Connection> {
         harness TEXT NOT NULL, claims_json TEXT NOT NULL, prompt TEXT NOT NULL,
         deadline_ms INTEGER NOT NULL, state TEXT NOT NULL,
         result_json TEXT, result_hash TEXT
-    );",
+    ); CREATE INDEX IF NOT EXISTS idx_workjet_external_crew_lookup ON workjet_external_crew_attempts(command_id,executor_id,state,deadline_ms);",
     )?;
     Ok(conn)
 }
@@ -62,7 +62,7 @@ pub(crate) fn run(
     );
     let token = token.context("external Crew requires an eligible native command session")?;
     verify_internal_command_session_token(root, token)?;
-    let claims = decode_internal_command_session_token(root, token)?;
+    let mut claims = decode_internal_command_session_token(root, token)?;
     anyhow::ensure!(
         claims.command_id == command_id,
         "external Crew command binding differs"
@@ -74,6 +74,7 @@ pub(crate) fn run(
     let deadline = now_ms()
         .saturating_add((target.timeout_seconds * 1000) as i64)
         .min(claims.expires_at_ms);
+    claims.expires_at_ms = deadline;
     let conn = open(root)?;
     conn.execute(
         "INSERT INTO workjet_external_crew_attempts
@@ -128,17 +129,14 @@ pub(crate) fn run(
     result
 }
 
-pub(super) fn claim(
+fn authorize_owner(
     root: &Path,
     context: &McpChannelRequestContext,
-    arguments: &Value,
-) -> anyhow::Result<Value> {
-    let command_id = required_arg(arguments, "command_id")?;
-    let executor_id = required_arg(arguments, "executor_id")?;
-    let requested_attempt = required_arg(arguments, "attempt_id")?;
+    command_id: &str,
+) -> anyhow::Result<McpChannelRequestContext> {
     let actor = resolved_mcp_actor_context(root, context)?;
     let authorization =
-        store::revalidate_business_command_execution_authorization(root, &command_id)?;
+        store::revalidate_business_command_execution_authorization(root, command_id)?;
     anyhow::ensure!(
         actor.get("id") == authorization.pointer("/actor/id")
             && actor.get("id").and_then(Value::as_str).is_some(),
@@ -156,6 +154,91 @@ pub(super) fn claim(
                     .map(normalize_role),
         "external Crew executor role differs from current command authority"
     );
+    let mut authorized = context.clone();
+    authorized.trusted_role = actor
+        .get("role")
+        .and_then(Value::as_str)
+        .map(normalize_role);
+    enforce_collection_policy(root, "ctox_crew_members")?;
+    anyhow::ensure!(
+        !crew_read_is_public(root, &authorized, "ctox_crew_members")?,
+        "external Crew requires private crew-read permission"
+    );
+    Ok(authorized)
+}
+
+pub(super) fn list(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    let command_id = required_arg(arguments, "command_id")?;
+    let executor_id = required_arg(arguments, "executor_id")?;
+    let context = authorize_owner(root, context, &command_id)?;
+    let conn = crew_context::open_read_connection(root)?;
+    let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='workjet_external_crew_attempts')", [], |row|row.get(0))?;
+    let mut offers = Vec::new();
+    if exists {
+        let mut statement = conn.prepare("SELECT attempt_id,harness,deadline_ms,state,claims_json FROM workjet_external_crew_attempts
+            WHERE command_id=?1 AND executor_id=?2 AND state IN ('offered','claimed','reported') AND deadline_ms>?3
+            ORDER BY attempt_id LIMIT 100")?;
+        let rows = statement
+            .query_map(params![command_id, executor_id, now_ms()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+        for (attempt_id, harness, deadline, state, claims) in rows {
+            let claims: BusinessOsMcpInternalSessionClaims = serde_json::from_str(&claims)?;
+            // Old offers can outlive their native lease after restart. They must
+            // never be advertised as runnable and listing must not rebind them.
+            let current =
+                crew_context::live_binding(&conn, &command_id, &claims.payload_hash, &attempt_id);
+            let (binding, module) = match current {
+                Ok(current) => current,
+                Err(error) if error.downcast_ref::<rusqlite::Error>().is_some() => {
+                    return Err(error)
+                }
+                Err(_) => continue,
+            };
+            if claims.crew_binding.as_ref() != Some(&binding) {
+                continue;
+            }
+            enforce_module_policy(root, &module)?;
+            let collections = &claims.allowed_collections;
+            anyhow::ensure!(
+                collections.is_empty()
+                    || collections.iter().any(|name| name == "ctox_crew_members"),
+                "external Crew is outside the signed collection scope"
+            );
+            anyhow::ensure!(
+                claims.actor == context.actor
+                    && Some(claims.role.as_str()) == context.trusted_role.as_deref(),
+                "external Crew owner changed"
+            );
+            offers.push(serde_json::json!({"attempt_id":attempt_id,"harness":harness,"deadline_ms":deadline,"state":state}));
+        }
+    }
+    Ok(
+        serde_json::json!({"schema":"ctox.external_crew_executions.v1","command_id":command_id,"executor_id":executor_id,"offers":offers}),
+    )
+}
+
+pub(super) fn claim(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    let command_id = required_arg(arguments, "command_id")?;
+    let executor_id = required_arg(arguments, "executor_id")?;
+    let requested_attempt = required_arg(arguments, "attempt_id")?;
+    let authorized_context = authorize_owner(root, context, &command_id)?;
     let mut conn = open(root)?;
     let row: Option<(String, String, String, String, i64)> = conn.query_row(
         "SELECT attempt_id,claims_json,prompt,harness,deadline_ms FROM workjet_external_crew_attempts
@@ -168,8 +251,6 @@ pub(super) fn claim(
     let claims: BusinessOsMcpInternalSessionClaims = serde_json::from_str(&claims)?;
     let token = sign_internal_command_session_claims(root, &claims)?;
     let trusted = verify_internal_command_session_token(root, &token)?;
-    let mut authorized_context = context.clone();
-    authorized_context.trusted_role = Some(claims.role.clone());
     let snapshot = crew_context::read(
         root,
         &authorized_context,

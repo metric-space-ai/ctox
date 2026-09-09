@@ -210,7 +210,7 @@ mod tests {
                     "id": command, "module": "outbound-lead-generation",
                     "command_type": "business_os.chat.task", "record_id": "lead-a",
                     "payload": {"instruction": "Inspect the assigned task", "mode": "data",
-                        "external_executor": {"executor_id":"test-codex", "harness":"codex", "timeout_seconds":5}},
+                        "external_executor": {"executor_id":"test-codex", "harness":"codex", "timeout_seconds":10}},
                     "client_context": {"capability_token": capability}
                 }),
                 store::CommandOrigin::ReplicatedPeer,
@@ -497,12 +497,28 @@ mod tests {
         let claim_args = serde_json::json!({"command_id":"crew-parent","executor_id":"test-codex","attempt_id":"crew-attempt"});
         let mut offer = Err(anyhow::anyhow!("external Crew offer was not published"));
         for _ in 0..20 {
-            offer = call_tool_with_trusted_gateway_context(
-                root,
-                "business_os.claim_crew_execution",
-                claim_args.clone(),
-                Some(&trusted),
-            );
+            offer = (|| -> anyhow::Result<Value> {
+                let listing = call_tool_with_trusted_gateway_context(
+                    root,
+                    "business_os.list_crew_executions",
+                    serde_json::json!({"command_id":"crew-parent","executor_id":"test-codex"}),
+                    Some(&trusted),
+                )?;
+                let first = listing["offers"]
+                    .as_array()
+                    .and_then(|offers| offers.first())
+                    .context("external Crew offer is not yet visible")?;
+                assert!(first.get("command_session").is_none());
+                assert!(first.get("prompt").is_none());
+                let mut discovered_claim = claim_args.clone();
+                discovered_claim["attempt_id"] = first["attempt_id"].clone();
+                call_tool_with_trusted_gateway_context(
+                    root,
+                    "business_os.claim_crew_execution",
+                    discovered_claim,
+                    Some(&trusted),
+                )
+            })();
             if offer.is_ok() {
                 break;
             }
@@ -516,6 +532,18 @@ mod tests {
             }
         };
         assert_eq!(offer["harness"], "codex");
+        let grant = decode_internal_command_session_token(
+            root,
+            offer["command_session"].as_str().context("missing grant")?,
+        )?;
+        assert_eq!(Some(grant.expires_at_ms), offer["deadline_ms"].as_i64());
+        let mut expired_grant = grant;
+        expired_grant.expires_at_ms = now_ms() - 1;
+        assert!(verify_internal_command_session_token(
+            root,
+            &sign_internal_command_session_claims(root, &expired_grant)?
+        )
+        .is_err());
         assert_eq!(offer["crew_context"]["member_id"], "crew-pico");
         let reclaimed = call_tool_with_trusted_gateway_context(
             root,
@@ -531,6 +559,15 @@ mod tests {
             Some(&trusted)
         )
         .is_err());
+        let foreign = session("foreign-parent")?;
+        for tool in [
+            "business_os.list_crew_executions",
+            "business_os.claim_crew_execution",
+        ] {
+            let error = call_tool_with_trusted_gateway_context(root, tool,
+                serde_json::json!({"command_id":"crew-parent","executor_id":"test-codex","attempt_id":"crew-attempt"}), Some(&foreign)).expect_err("same owner must not bypass a signed command scope");
+            assert!(error.to_string().contains("outside this signed session"));
+        }
         let execution_authority = verify_internal_command_session_token(
             root,
             offer["command_session"]

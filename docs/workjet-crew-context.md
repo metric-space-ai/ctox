@@ -103,6 +103,14 @@ worker persists an offer and waits under its existing capacity reservation and
 lease heartbeat. Absence of the field preserves native execution. Invalid or
 unserviceable explicit external requests fail; they never silently run natively.
 
+`business_os.list_crew_executions` discovers live offers for an owned command and
+executor using a read-only connection. It returns bounded metadata only, without
+prompts or session grants, and does not initialize the handoff store. Lost native
+leases are excluded; SQL failures are propagated rather than converted to empty
+results. Listing and claiming with a command-session token cannot escape that
+token's command or collection scope; an attempt-bound token cannot claim another
+attempt. A claimed grant expires no later than the external offer deadline.
+
 `business_os.claim_crew_execution` requires the exact command, executor and
 attempt identifiers, current command ownership and private Crew permissions. It
 returns a scoped command session, the original job prompt, native Crew context
@@ -118,7 +126,7 @@ returns the candidate into its existing finalization/review path. Reporting does
 not itself finalize the Crew attempt or mark a review passed. Expiry and lease
 changes close the offer; no external API acquires or renews an independent lease.
 
-Remaining integration: Workjet submission, exact attempt discovery, controller
+Remaining integration: Workjet submission, consumption of attempt discovery, controller
 claim and secure transport setup, harness execution and result reporting; native
 service restart/recovery and explicit cancellation verification; artifact and
 structured retrospective handling; token eligibility for general projects without
