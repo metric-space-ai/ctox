@@ -254,6 +254,14 @@ pub(super) fn reject_command_if_policy_denied(
         }
         return Ok(None);
     }
+    if super::domain_effect::supports_command(&command.command_type) {
+        let conn = super::store::open_store(root)?;
+        if super::domain_effect::contains(&conn, command.id.as_deref().unwrap_or_default())? {
+            // A denied replay cannot fail an already committed effect.
+            record_business_policy_decision_event(root, command, decision)?;
+            anyhow::bail!("policy denied domain effect recovery");
+        }
+    }
     Ok(Some(write_rxdb_policy_denied_command_outcome(
         root, command, decision,
     )?))

@@ -3,6 +3,7 @@
 
 use super::app_runtime;
 use super::control_command_types::ActiveExternalSqlControlCommand;
+use super::domain_effect::{self, DomainEffectAdmission};
 use super::policy::{
     policy_actor_from_session, BusinessOsPermission, BusinessOsRole, BusinessOsScope,
     BusinessOsScopeType,
@@ -43,6 +44,14 @@ use serde::Serialize;
 use serde_json::Value;
 use std::cell::RefCell;
 use std::path::Path;
+
+#[path = "command_plane_domain_effect.rs"]
+mod domain_effect_recovery;
+use domain_effect_recovery::recover_applied_domain_effect;
+
+#[cfg(test)]
+#[path = "command_plane_domain_effect_tests.rs"]
+mod domain_effect_tests;
 
 const BUSINESS_COMMAND_REPLAY_RECEIPT_CONTRACT: &str = "ctox-business-command-replay-receipt-v1";
 const COMMAND_TIMING_PROBE_FIELD: &str = "command_timing_probe";
@@ -662,18 +671,25 @@ pub fn accept_rxdb_business_command_with_origin(
     }
     let _command_timing_probe = install_command_timing_probe(&command);
     let native_authorization = recoverable_background_control_claim_authorization(root, &command);
-    let control_claim = if is_rxdb_control_command_type(&command.command_type) {
-        Some(channels::claim_business_control_command(
-            root,
-            business_command_core_claim_with_authorization(
-                &command_id,
-                &command,
-                native_authorization.as_ref(),
-            )?,
+    let control_intent = if is_rxdb_control_command_type(&command.command_type) {
+        Some(business_command_core_claim_with_authorization(
+            &command_id,
+            &command,
+            native_authorization.as_ref(),
         )?)
     } else {
         None
     };
+    let domain_effect_hash = domain_effect::supports_command(&command.command_type)
+        .then(|| {
+            control_intent
+                .as_ref()
+                .map(|claim| claim.payload_hash.clone())
+        })
+        .flatten();
+    let control_claim = control_intent
+        .map(|claim| channels::claim_business_control_command(root, claim))
+        .transpose()?;
     let _external_sql_execution_guard =
         if super::external_sql_sync::is_external_sql_command(&command.command_type) {
             match ActiveExternalSqlControlCommand::try_acquire(&command_id) {
@@ -687,6 +703,10 @@ pub fn accept_rxdb_business_command_with_origin(
         .as_ref()
         .is_some_and(|claim| claim.disposition == "new");
     let conn = open_store(root)?;
+    // Only proof-bearing domain commands bypass the uncertain replay shortcut.
+    // Authentication and central policy still run before reading their result.
+    let resumes_domain_effect =
+        domain_effect_hash.is_some() && domain_effect::contains(&conn, &command_id)?;
     let existing_status: Option<String> = conn
         .query_row(
             "SELECT status FROM business_commands WHERE command_id = ?1",
@@ -700,6 +720,7 @@ pub fn accept_rxdb_business_command_with_origin(
         && existing_status.as_deref() == Some("accepted")
         && is_recoverable_background_control_command_type(&command.command_type);
     if !owns_new_control_claim
+        && !resumes_domain_effect
         && !resumes_recoverable_accepted_claim
         && existing_status.as_deref() != Some("waiting_dependencies")
         && existing_status.is_some()
@@ -782,6 +803,7 @@ pub fn accept_rxdb_business_command_with_origin(
         let claim = control_claim.context("business control command claim is missing")?;
         match claim.disposition {
             "new" => {}
+            _ if resumes_domain_effect => {}
             "terminal" => {
                 let terminal_status = claim.terminal_status.as_deref().unwrap_or("completed");
                 let result = claim.result.unwrap_or(Value::Null);
@@ -865,7 +887,9 @@ pub fn accept_rxdb_business_command_with_origin(
         );
     }
 
-    let prepared = PreparedBusinessCommand::from_command(&command)?;
+    let mut prepared = PreparedBusinessCommand::from_command(&command)?;
+    prepared.domain_effect_hash = domain_effect_hash;
+    prepared.owns_new_control_claim = owns_new_control_claim;
     match CommandAuthorizationStage::for_command(&command) {
         CommandAuthorizationStage::Policy(requirement) => {
             match enforce_command_policy(
@@ -1187,6 +1211,9 @@ impl CentralCommandPolicyRequirement {
 struct PreparedBusinessCommand {
     channel_mutation: Option<ChannelCommandRequest>,
     report_mutation: Option<BusinessOsReportMutation>,
+    domain_effect_hash: Option<String>,
+    owns_new_control_claim: bool,
+    domain_effect_admission: Option<DomainEffectAdmission>,
 }
 
 impl PreparedBusinessCommand {
@@ -1254,13 +1281,38 @@ fn dispatch_business_command_with_outcome(
     root: &Path,
     command_id: &str,
     command: &BusinessCommand,
-    prepared: PreparedBusinessCommand,
+    mut prepared: PreparedBusinessCommand,
     authorized_session: Option<&BusinessOsSession>,
 ) -> anyhow::Result<Value> {
+    let domain_identity = if let Some(hash) = prepared.domain_effect_hash.as_ref() {
+        let actor = authorized_session
+            .and_then(session_user_id)
+            .context("domain effect recovery requires central authenticated identity")?;
+        if let Some(outcome) = recover_applied_domain_effect(root, command, hash, actor)? {
+            return Ok(outcome);
+        }
+        anyhow::ensure!(
+            prepared.owns_new_control_claim,
+            "uncertain domain command has no applied-effect receipt"
+        );
+        prepared.domain_effect_admission = Some(DomainEffectAdmission::newly_claimed(
+            command_id, hash, actor,
+        )?);
+        Some((hash.clone(), actor.to_owned()))
+    } else {
+        None
+    };
     let dispatched =
-        dispatch_business_command(root, command_id, command, prepared, authorized_session)?;
+        dispatch_business_command(root, command_id, command, prepared, authorized_session);
+    // A handler error after COMMIT must never become terminal failure. Recover
+    // the durable result first; publication errors leave the claim recoverable.
+    if let Some((hash, actor)) = domain_identity {
+        if let Some(outcome) = recover_applied_domain_effect(root, command, &hash, &actor)? {
+            return Ok(outcome);
+        }
+    }
     mark_command_timing_handler_completed();
-    write_business_command_dispatch_outcome(root, command, dispatched)
+    write_business_command_dispatch_outcome(root, command, dispatched?)
 }
 
 fn authorized_dispatch_session<'a>(
@@ -1407,7 +1459,15 @@ fn dispatch_business_command(
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
             let owner = session_user_id(session)
                 .context("authorized Workjet chat command is missing a user identity")?;
-            match super::project_chats::handle_command(root, command, owner) {
+            match super::project_chats::handle_command(
+                root,
+                command,
+                owner,
+                prepared
+                    .domain_effect_admission
+                    .as_ref()
+                    .context("new Workjet chat mutation requires domain admission")?,
+            ) {
                 Ok(outcome) => Ok(BusinessCommandDispatchOutcome::completed(outcome, None)),
                 Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
                     None,
@@ -1428,6 +1488,7 @@ fn dispatch_business_command(
                 command,
                 owner_user_id,
                 owner_email.as_deref(),
+                prepared.domain_effect_admission.as_ref(),
             ) {
                 Ok(outcome) => Ok(BusinessCommandDispatchOutcome::completed(outcome, None)),
                 Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
@@ -1897,6 +1958,13 @@ fn write_rxdb_control_command_state(
     terminal: bool,
 ) -> anyhow::Result<Value> {
     let command_id = command.id.as_deref().context("command id is required")?;
+    if terminal
+        && status != "completed"
+        && domain_effect::supports_command(&command.command_type)
+        && domain_effect::contains(&open_store(root)?, command_id)?
+    {
+        anyhow::bail!("applied domain effect cannot be terminalized as a failed mutation");
+    }
     mark_command_timing_handler_completed();
     let now = now_ms() as i64;
     let target_task_id = if command.command_type.starts_with("ctox.task.") {

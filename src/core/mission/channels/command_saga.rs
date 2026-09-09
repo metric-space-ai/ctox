@@ -2296,6 +2296,27 @@ pub(crate) fn record_business_command_intake_failure(
     error_message: &str,
     retry_budget: u32,
 ) -> Result<Value> {
+    record_business_command_intake_failure_inner(root, claim, error_message, retry_budget, true)
+}
+
+/// The domain owner has proved application in its own transaction. Delivery
+/// exhaustion is still journaled here, but cannot fail that committed effect.
+pub(crate) fn record_business_command_applied_effect_delivery_failure(
+    root: &Path,
+    claim: BusinessCommandClaimRequest,
+    error_message: &str,
+    retry_budget: u32,
+) -> Result<Value> {
+    record_business_command_intake_failure_inner(root, claim, error_message, retry_budget, false)
+}
+
+fn record_business_command_intake_failure_inner(
+    root: &Path,
+    claim: BusinessCommandClaimRequest,
+    error_message: &str,
+    retry_budget: u32,
+    allow_terminal_failure: bool,
+) -> Result<Value> {
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
     let tx = conn.transaction()?;
@@ -2375,7 +2396,7 @@ pub(crate) fn record_business_command_intake_failure(
     let mut canonical_failure_created = false;
     let mut next_projection_version = 1_i64;
     let mut prior_phase = "native_observed".to_string();
-    if exhausted && !idempotency_conflict && !canonical_already_terminal {
+    if allow_terminal_failure && exhausted && !idempotency_conflict && !canonical_already_terminal {
         let failure_result = json!({
             "ok": false,
             "error_code": "native_unavailable",
@@ -2457,8 +2478,12 @@ pub(crate) fn record_business_command_intake_failure(
     }
     tx.commit()?;
     let terminal_projection_ready = exhausted
-        && (canonical_failure_created || canonical_already_terminal || idempotency_conflict);
+        && (canonical_failure_created
+            || canonical_already_terminal
+            || (allow_terminal_failure && idempotency_conflict));
     let failure_document = if canonical_failure_created || canonical_already_terminal {
+        business_command_projection(root, &claim.command_id)?
+    } else if !allow_terminal_failure && canonical_exists {
         business_command_projection(root, &claim.command_id)?
     } else if idempotency_conflict {
         intake_failure_projection(

@@ -6,6 +6,8 @@ for engineers and coding agents, and every technical claim in it has been
 verified against the cited source file. When this document and the code
 disagree, the code wins — and this document should be fixed.
 
+[Domain application receipts and command recovery](domain-effect-recovery.md) define the native boundary for a committed domain mutation whose RxDB/result delivery failed. Core remains the lifecycle owner; domain receipts are atomic application evidence, not another outbox.
+
 ### Auth-assist command recovery
 
 `web_stack.auth_assist.request` represents an outstanding human login request.
@@ -238,8 +240,53 @@ a nonempty native sample. The original context fixture exit code is preserved.
 These diagnostic timings never replace the command/reload budgets, and a flat
 user-space profile is neither a call graph nor kernel-CPU or tenant acceptance.
 Local process-lifecycle tests cover PID reuse, permission failure, empty samples
-and bounded profiler cleanup; real Linux attribution remains unverified until
-the workflow produces a usable profile.
+and bounded profiler cleanup. The first usable CTOX profile and its limits are
+recorded below; they do not replace unprofiled acceptance timings.
+
+
+The SQLite reader cache belongs to the storage factory, not each collection.
+A native context reproduction at source `67de21dc9`
+([run34296338920](https://github.com/metric-space-ai/ctox/actions/runs/34296338920))
+retained 2,444 user-space samples with no lost samples. The flat report contains
+SQLite schema lookup/parser work and mutex operations; it does not identify
+a complete caller stack or prove which connection caused each sample.
+
+The reader-cache candidate shares four lazily opened point-read connections
+across collections of one storage factory, plus one separate change-feed reader.
+This replaces the previous per-collection read caches. Long query streams retain
+their dedicated readers, and the write connection remains separate. Opening
+a cached connection and taking its lock happens in `spawn_blocking`, so lazy
+initialization does not block a Tokio worker. Different storage factories never
+share a cache by filename; closing one collection does not close another's reader.
+The existing in-memory fallback and query-stream isolation remain unchanged.
+
+Native regressions exercise real reads/writes across 24 collections with identical
+document IDs, closing one collection while a neighbor reads, a separate database,
+and point-read progress while the change-feed reader is held. These checks do not
+establish command latency or production acceptance. The preceding unprofiled run
+measured warm30 p50 404 ms / p95 577.45 ms (FAIL) and critical30 boot p95 3538.10 ms
+(PASS). The new full native/browser run must measure the cache change against
+those gates; no performance improvement is claimed before that result.
+
+The next Core reader candidate addresses another repeated parser path:
+`verified_capability_claims -> capability_signing_secret -> get_secret_value ->
+ensure_secret_master_key -> load_legacy_master_key -> persistence::load_text_value`.
+The final reader previously opened the Core database for every check, including
+checks where no legacy key exists. Under Unix it now keeps one connection per
+calling thread, keyed by canonical path/device/inode. Every read still executes
+SQL; no key value, negative lookup, permission result or transaction is cached.
+Root/file changes discard the handle and read failures clear it. Other platforms
+retain the existing fresh-open behavior until file-identity reuse is certified.
+
+A local macOS fixture compiles the actual persistence module with pinned direct
+dependencies and 256 unrelated tables/triggers. Thirty reads use one cached
+connection versus thirty fresh opens: nearest-rank p50/p95 23/44 microseconds
+versus 1454/2250 microseconds. All three component tests pass, including live
+writes/deletions, root changes, symlink retargeting and corrupt replacement.
+These are component measurements, not a full CTOX or browser latency result.
+The actual secret conflict/rotation tests and full-host acceptance are in CI.
+The existing late-key conflict checks remain; this change does not skip migration
+or cache a successful authority decision.
 
 The authenticated two-profile context fixture persists the exact requester
 command and reviewer result status snapshots before their assertions, outside
@@ -984,7 +1031,7 @@ that fails on the pre-fix code.
 | **The desktop-file idle scan must not re-check every chunk of a verified generation.** Newly written or once-verified eager file docs carry `chunk_count` and `generation_verified_at_ms`; unchanged rescans use that marker instead of rebuilding the expected chunk-id list every 15 s. | Materialised large files stayed sticky `available`, but the idle scan still checked every expected chunk id on every pass. Large files therefore created periodic CPU spikes even when no file changed. | `rxdb_peer.rs::desktop_file_generation_verified_by_metadata` / `mark_desktop_file_chunk_generation_verified` | `materialized_large_file_survives_lazy_rescan`; targeted `rxdb_peer.rs` tests |
 | **Active-collection gating must never lose events permanently.** Three sub-rules: (a) a peer that has never reported an active set is fail-open (all relays delivered) until its first report; (b) applying a new active set pushes one resync master-change per re-activated collection (closes the send→apply transit window); (c) the browser runs one checkpoint pull per newly-activated collection on every registry change. | Relays for "inactive" collections are dropped and browser pulls are purely event-driven — each hole left a collection permanently stale (viewer-restart soak mode: the browser file doc stayed `lazy` forever while the native doc was `available`). | `connection_handler_rs.rs::is_collection_active_for_peer` / `apply_active_collections` (+ the resync push in its message loop); relay drop point in `index_mod.rs`; `replication-webrtc.mjs` registry subscription | gating tests in `connection_handler_rs.rs`; `active-collections-catchup-smoke` (browser); viewer-restart soak mode |
 | **The multiplex room handshake carries per-collection checkpoints** (`collectionCheckpoints`, mirroring `collectionSchemas`; key absent for single-collection rooms). | Collections deriving their protocol from the room handshake advertised the REPRESENTATIVE collection's checkpoint epoch — wrong-collection checkpoint evidence after every native restart. | `index_mod.rs::collection_checkpoints_payload`; consumed by `replication-webrtc.mjs::remoteProtocolForCollection` | `handshake_payload_omits_collection_schemas_when_none` |
-| **Native schema-version cleanup runs only after an additive migration copied and verified every source row.** Identity retries do not rewrite identical rows. A newer destination wins by `lastWriteTime`; equal clocks require equal revision, deletion marker and migrated document. Divergence rolls back that collection's transaction and aborts peer bring-up before cleanup, retaining source evidence for explicit reconciliation. Transactions cover one collection/version pair, not all stores. This guard alone does not provide a backup or recovery rehearsal. | Creating v1 metadata/table and crashing before the copy let the next startup delete the only complete thread history. An equal-clock legacy upsert could also overwrite a destination tombstone. | `rxdb_peer.rs::migrate_additive_native_rxdb_collection_versions`, called after collection registration and before `repair_stale_rxdb_collection_schema_versions` | `additive_thread_schema_migration_copies_and_verifies_before_cleanup`, `native_schema_migration_equal_clock_conflicts_preserve_both_stores`, `native_schema_migration_exact_retry_preserves_tombstones_without_rewrites` |
+| **Schema cleanup must itself preserve source rows.** Startup and the forced CLI repair use the same copy/verify implementation. Cleanup reserves a SQLite write transaction before discovering old tables, resolves every declared migration step, copies and verifies all populated sources, and only then drops their triggers/tables in that transaction. Active schema metadata and `--force` are not preservation receipts. Equal clocks require equal revision, deletion marker and migrated document; missing steps, reverse migrations and divergent equal-clock rows retain the source and roll back the cleanup. Startup rejects cleanup failure. The earlier copy pass remains idempotent; cleanup rechecks rows written after it. Transactions cover one collection's cleanup, not all collections or stores, and do not provide an immutable backup or recovery rehearsal. | Metadata-only cleanup could delete a unique old command; the former forced-repair regression even seeded such a row without asserting its preservation. A successful earlier copy also did not protect a subsequent source write. | `rxdb_peer.rs::copy_and_verify_native_rxdb_version_table`, `repair_rxdb_collection_schema_version_drift_at_version_with_connection` | `native_schema_migration_cleanup_conflict_rolls_back_copy_and_preserves_source`, `native_schema_migration_cleanup_rechecks_rows_written_after_copy`, `rxdb_schema_drift_repair_preserves_source_rows_before_dropping_stale_tables`, plus existing additive/identity/missing-strategy regressions. Native execution of the new cleanup cases remains pending. |
 | **Runtime app migrations are declared in JSON and enforced natively.** The browser side mirrors declarations (guarded for parity by `assert-declarative-migrations.mjs`) but execution is native-only. Every runtime collection with `version > 0` must provide every intermediate `migration_strategies.<collection>.<targetVersion>` entry. The native peer supports the same `set_from_first_truthy` and `set_boolean` operations as the browser plus identity migrations (`operations: []`). Missing strategies with persisted source rows abort before cleanup. | Browser-only `schema.js` functions left the native v0 store stranded or tempted operators into destructive same-version cleanup; schema changes made in place could also produce DB6 forever. | `shared/declarative-migrations.js`, `module_static_check.mjs`, `rxdb_peer.rs::migrate_additive_native_rxdb_collection_versions` | `runtime_installed_declarative_migration_is_discovered_and_copied`, `native_declarative_migration_matches_browser_operations`, `runtime_migration_without_strategy_retains_old_table_and_fails_closed` |
 | **A terminal `completed` command ack without `task_id` is success.** Control commands (`ctox.file.materialize`, `ctox.module.*`, …) are executed directly and intentionally never get a queue-task projection. | The command bus waited 45 s for a task that never comes — every control command dispatched through it failed. | `command-bus.js::waitForAuthoritativeQueueProjection` | `command-bus-projection-smoke` |
 | **The 410 data-plane gate has an explicit control-plane allowlist** (subscription auth, CTOX release check/apply, `sync/native-peer/restart`). Control routes carry no Business OS records; CTOX release actions are admin-gated and only read release metadata or launch the existing installer, and the peer-restart route additionally answers 403 unless `CTOX_BUSINESS_OS_ENABLE_SMOKE_CONTROLS` is set. This is NOT a precedent for HTTP data routes. | The blanket 410 also killed the peer-lifecycle hook the rollover soak mode uses. | `server.rs::is_business_os_control_plane_path` | rollover soak mode |

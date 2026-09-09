@@ -3,11 +3,12 @@
 
 //! Workjet project/chat relationships. Messages remain in the existing Threads
 //! store; these native-owned records carry identity and membership, not content.
+use super::domain_effect::{AppliedDomainEffect, DomainEffectAdmission, DomainRecordRef};
 use super::store::{
     open_store, outbound_load_record, upsert_rxdb_collection_record, BusinessCommand,
 };
 use anyhow::{ensure, Context};
-use rusqlite::{Connection, TransactionBehavior};
+use rusqlite::Connection;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -83,17 +84,30 @@ pub(super) fn handle_command(
     root: &Path,
     command: &BusinessCommand,
     authorized_owner: &str,
+    admission: &DomainEffectAdmission,
 ) -> anyhow::Result<Value> {
     let owner = required(authorized_owner, "authenticated user", 256)?;
-    // The same business_records transaction owns group, membership and first
-    // private chat. Projection happens afterward through the existing writer.
+    super::worker_profile_bindings::validate_crew_reference(root, command)?;
     let mut conn = open_store(root)?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let mut projections = Vec::new();
-    let result = apply_command(root, &tx, command, &owner, &mut projections)?;
-    tx.commit()?;
-    publish(root, &projections)?;
-    Ok(result)
+    let applied = admission.apply(&mut conn, |tx| {
+        let mut projections = Vec::new();
+        let result = apply_command(root, tx, command, &owner, &mut projections)?;
+        Ok(AppliedDomainEffect {
+            result,
+            projections: domain_references(projections),
+        })
+    })?;
+    Ok(applied.result)
+}
+
+pub(super) fn domain_references(projections: Vec<Projection>) -> Vec<DomainRecordRef> {
+    projections
+        .into_iter()
+        .map(|projection| DomainRecordRef {
+            collection: projection.collection.to_owned(),
+            id: projection.id,
+        })
+        .collect()
 }
 
 fn apply_command(

@@ -414,11 +414,13 @@ pub struct RxStorageInstanceSqlite {
 }
 
 impl RxStorageInstanceSqlite {
-    pub fn new(
+    pub(crate) fn new(
         connection: SharedSqliteConnection,
         params: RxStorageInstanceCreationParams,
         table_name: String,
         database_path: std::path::PathBuf,
+        read_connection: super::types::SqliteReaderCache,
+        change_feed_read_connection: super::types::SqliteReaderCache,
     ) -> Self {
         let primary_path = get_primary_field_of_primary_key(&params.schema.primary_key);
         let database_key = database_key_for_path(&database_path);
@@ -430,8 +432,6 @@ impl RxStorageInstanceSqlite {
             let conn = lock_sqlite_writer(&connection);
             latest_checkpoint(&conn, &table_name).unwrap_or_else(|| json!({ "id": "", "lwt": 0 }))
         }));
-        let read_connection = Arc::new(Mutex::new(None));
-
         let notifier = register_table_notifier(&database_key, &table_name);
         // One startup reconciliation closes the gap between the initial
         // checkpoint read and the database-wide data_version watcher baseline.
@@ -446,7 +446,7 @@ impl RxStorageInstanceSqlite {
             closed: Arc::clone(&closed),
             checkpoint: Arc::clone(&external_checkpoint),
             notifier: Arc::clone(&notifier),
-            read_connection: Arc::clone(&read_connection),
+            read_connection: change_feed_read_connection,
         });
         let external_notifier = notifier;
         Self {
@@ -496,41 +496,49 @@ impl RxStorageInstanceSqlite {
         T: Send + 'static,
         F: FnOnce(&rusqlite::Connection) -> RxResult<T> + Send + 'static,
     {
-        let connection = match self.open_read_only_connection() {
-            Ok(connection) => ReadConnection::ReadOnly(connection),
-            Err(_) => {
-                SQLITE_READ_ONLY_OPEN_FAILURES.fetch_add(1, Ordering::Relaxed);
-                SQLITE_WRITER_FALLBACKS.fetch_add(1, Ordering::Relaxed);
-                #[cfg(test)]
-                match operation {
-                    ReadOperation::FindDocumentsById => {
-                        FIND_DOCUMENTS_BY_ID_WRITER_FALLBACKS.fetch_add(1, Ordering::SeqCst);
-                    }
-                    ReadOperation::Query => {
-                        QUERY_WRITER_FALLBACKS.fetch_add(1, Ordering::SeqCst);
-                    }
-                    ReadOperation::ChangedDocumentsSince => {
-                        CHANGED_DOCUMENTS_SINCE_WRITER_FALLBACKS.fetch_add(1, Ordering::SeqCst);
-                    }
-                    ReadOperation::Count => {}
-                }
-                #[cfg(not(test))]
-                let _ = operation;
+        let database_path = self.database_path.clone();
+        let read_connection = Arc::clone(&self.read_connection);
+        let writer = Arc::clone(&self.connection);
+        tokio::task::spawn_blocking(move || {
+            let connection =
+                match cached_read_only_connection_for_path(&database_path, &read_connection) {
+                    Ok(connection) => ReadConnection::ReadOnly(connection),
+                    Err(_) => {
+                        SQLITE_READ_ONLY_OPEN_FAILURES.fetch_add(1, Ordering::Relaxed);
+                        SQLITE_WRITER_FALLBACKS.fetch_add(1, Ordering::Relaxed);
+                        #[cfg(test)]
+                        match operation {
+                            ReadOperation::FindDocumentsById => {
+                                FIND_DOCUMENTS_BY_ID_WRITER_FALLBACKS
+                                    .fetch_add(1, Ordering::SeqCst);
+                            }
+                            ReadOperation::Query => {
+                                QUERY_WRITER_FALLBACKS.fetch_add(1, Ordering::SeqCst);
+                            }
+                            ReadOperation::ChangedDocumentsSince => {
+                                CHANGED_DOCUMENTS_SINCE_WRITER_FALLBACKS
+                                    .fetch_add(1, Ordering::SeqCst);
+                            }
+                            ReadOperation::Count => {}
+                        }
+                        #[cfg(not(test))]
+                        let _ = operation;
 
-                // In-memory databases cannot be reopened as independent read-only
-                // connections. Preserve the legacy shared-writer fallback there and
-                // for read-only connection open failures.
-                ReadConnection::WriterFallback(Arc::clone(&self.connection))
-            }
-        };
-        tokio::task::spawn_blocking(move || match connection {
-            ReadConnection::ReadOnly(connection) => {
-                let conn = connection.lock();
-                read(&conn)
-            }
-            ReadConnection::WriterFallback(connection) => {
-                let conn = lock_sqlite_writer(&connection);
-                read(&conn)
+                        // In-memory databases cannot be reopened as independent read-only
+                        // connections. Preserve the legacy shared-writer fallback there and
+                        // for read-only connection open failures.
+                        ReadConnection::WriterFallback(writer)
+                    }
+                };
+            match connection {
+                ReadConnection::ReadOnly(connection) => {
+                    let conn = connection.lock();
+                    read(&conn)
+                }
+                ReadConnection::WriterFallback(connection) => {
+                    let conn = lock_sqlite_writer(&connection);
+                    read(&conn)
+                }
             }
         })
         .await
@@ -1692,6 +1700,7 @@ impl RxStorageInstanceSqlite {
         )
     }
 
+    #[cfg(test)]
     fn open_read_only_connection(&self) -> RxResult<SharedSqliteConnection> {
         let path = &self.database_path;
         // SQLite supports `:memory:` only for the connection that created
@@ -2207,7 +2216,7 @@ mod tests {
         let second = instance.open_read_only_connection().unwrap();
         assert!(
             std::sync::Arc::ptr_eq(&first, &second),
-            "file-backed storage must reuse one read-only connection per instance"
+            "a collection must retain its assigned cached read-only connection"
         );
 
         instance
@@ -2232,6 +2241,157 @@ mod tests {
             std::sync::Arc::ptr_eq(&first, &after_reads),
             "hot read paths must not reopen read-only SQLite connections"
         );
+    }
+
+    #[tokio::test]
+    async fn file_backed_collections_bound_readers_without_mixing_data_or_lifetimes() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("shared.sqlite3"),
+        });
+        let started = std::time::Instant::now();
+        let mut instances = Vec::new();
+        let mut readers = HashSet::new();
+        for index in 0..24 {
+            let mut creation = params(test_schema());
+            creation.collection_name = format!("collection_{index}");
+            let instance = create_storage_instance(&storage, creation).await.unwrap();
+            instance
+                .bulk_write(
+                    vec![BulkWriteRow {
+                        previous: None,
+                        document: doc("same-id", "1-seed", index, false, 100.0),
+                    }],
+                    "seed",
+                )
+                .await
+                .unwrap();
+            let rows = instance
+                .find_documents_by_id(&["same-id".to_owned()], false)
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(
+                rows[0]["age"], index,
+                "shared readers must retain table scope"
+            );
+            readers.insert(Arc::as_ptr(&instance.open_read_only_connection().unwrap()) as usize);
+            instances.push(instance);
+        }
+        let initial_ms = started.elapsed().as_secs_f64() * 1_000.0;
+        assert_eq!(
+            readers.len(),
+            super::super::types::SQLITE_POINT_READER_COUNT,
+            "opening more collections must not open an unbounded set of point readers"
+        );
+        instances[0].close().await.unwrap();
+        let rows = instances[4]
+            .find_documents_by_id(&["same-id".to_owned()], false)
+            .await
+            .unwrap();
+        assert_eq!(
+            rows[0]["age"], 4,
+            "closing one table must not close another's shared reader"
+        );
+        assert!(instances[0]
+            .find_documents_by_id(&["same-id".to_owned()], false)
+            .await
+            .is_err());
+
+        let other_storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("other.sqlite3"),
+        });
+        let mut creation = params(test_schema());
+        creation.collection_name = "collection_4".into();
+        let other = create_storage_instance(&other_storage, creation)
+            .await
+            .unwrap();
+        assert!(
+            other
+                .find_documents_by_id(&["same-id".to_owned()], false)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a second database must not reuse the first database's cached connection"
+        );
+        other
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: doc("same-id", "1-other", 999, false, 100.0),
+                }],
+                "seed-other",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            other
+                .find_documents_by_id(&["same-id".to_owned()], false)
+                .await
+                .unwrap()[0]["age"],
+            999
+        );
+        assert_eq!(
+            instances[4]
+                .find_documents_by_id(&["same-id".to_owned()], false)
+                .await
+                .unwrap()[0]["age"],
+            4
+        );
+        eprintln!(
+            "sqlite_reader_cache_fixture collections=24 readers={} initial_ms={initial_ms:.3}",
+            readers.len()
+        );
+        for instance in instances {
+            instance.close().await.unwrap();
+        }
+        other.close().await.unwrap();
+    }
+
+    // A held background cursor models a slow change-feed drain. Its guard
+    // stays on an OS thread; timeout/failure cannot strand test teardown.
+    #[tokio::test]
+    async fn file_backed_point_read_progresses_while_shared_change_feed_reader_is_busy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ctox.sqlite3");
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: path.clone(),
+        });
+        let instance = create_storage_instance(&storage, params(test_schema()))
+            .await
+            .unwrap();
+        instance
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: doc("point", "1-point", 7, false, 100.0),
+                }],
+                "seed",
+            )
+            .await
+            .unwrap();
+        let (_, background_cache) = storage.collection_readers();
+        let background = cached_read_only_connection_for_path(&path, &background_cache).unwrap();
+        let (held_tx, held_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _guard = background.lock();
+            let _ = held_tx.send(());
+            let _ = release_rx.recv_timeout(std::time::Duration::from_secs(5));
+        });
+        held_rx.await.unwrap();
+        let rows = tokio::time::timeout(
+            std::time::Duration::from_millis(750),
+            instance.find_documents_by_id(&["point".to_owned()], false),
+        )
+        .await;
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+        let rows = rows
+            .expect("background drains must not occupy a point-read connection")
+            .unwrap();
+        assert_eq!(rows[0]["age"], 7);
+        instance.close().await.unwrap();
     }
 
     #[tokio::test]

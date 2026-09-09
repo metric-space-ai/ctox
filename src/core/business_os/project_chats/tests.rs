@@ -6,6 +6,9 @@ use crate::business_os::{mcp_channel, store, threads, worker_profile_bindings};
 use std::sync::{Arc, Barrier};
 use tempfile::{tempdir, TempDir};
 
+#[path = "recovery_tests.rs"]
+mod recovery;
+
 fn command(kind: &str, id: &str, payload: Value) -> BusinessCommand {
     BusinessCommand {
         id: Some(id.to_owned()),
@@ -16,6 +19,30 @@ fn command(kind: &str, id: &str, payload: Value) -> BusinessCommand {
         client_context: json!({}),
         origin: CommandOrigin::TrustedLocal,
     }
+}
+
+// Component coverage retains the original direct-handler shape. The separate
+// recovery tests below enter through the real command plane and its Core claim.
+fn handle_command(root: &Path, command: &BusinessCommand, owner: &str) -> anyhow::Result<Value> {
+    let operation = command.id.as_deref().context("fixture command id")?;
+    let intent = format!("{}:{}:{}", command.command_type, owner, command.payload);
+    let admission = DomainEffectAdmission::newly_claimed(operation, &intent, owner)?;
+    let result = super::handle_command(root, command, owner, &admission)?;
+    let conn = open_store(root)?;
+    let effect = crate::business_os::domain_effect::load(&conn, operation, &intent, owner)?
+        .context("fixture receipt missing")?;
+    for reference in effect.projections {
+        let record = outbound_load_record(&conn, &reference.collection, &reference.id)?
+            .context("fixture source missing")?;
+        upsert_rxdb_collection_record(
+            root,
+            &reference.collection,
+            &reference.id,
+            record["updated_at_ms"].as_i64().unwrap_or(0),
+            record,
+        )?;
+    }
+    Ok(result)
 }
 
 fn fixture() -> anyhow::Result<TempDir> {

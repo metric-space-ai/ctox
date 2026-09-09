@@ -8,6 +8,8 @@
 //! computer and are opaque to CTOX: the backend must never interpret them as
 //! host paths.
 
+use super::domain_effect::{AppliedDomainEffect, DomainEffectAdmission};
+use super::project_chats::{domain_references, Projection};
 use super::store::{
     open_store, outbound_load_record, outbound_load_records_by_string_field,
     upsert_business_record, upsert_rxdb_collection_record, BusinessCommand,
@@ -66,15 +68,22 @@ pub(super) fn handle_workjet_project_store_command(
     command: &BusinessCommand,
     authorized_owner_user_id: &str,
     authorized_owner_email: Option<&str>,
+    admission: Option<&DomainEffectAdmission>,
 ) -> anyhow::Result<Value> {
-    migrate_signed_owner_alias(root, authorized_owner_user_id, authorized_owner_email)?;
+    if command.command_type != "ctox.workjet.project.upsert" {
+        migrate_signed_owner_alias(root, authorized_owner_user_id, authorized_owner_email)?;
+    }
     match command.command_type.as_str() {
         "ctox.workjet.project.list" => {
             handle_workjet_project_list_command(root, command, authorized_owner_user_id)
         }
-        "ctox.workjet.project.upsert" => {
-            handle_workjet_project_upsert_command(root, command, authorized_owner_user_id)
-        }
+        "ctox.workjet.project.upsert" => handle_workjet_project_upsert_command(
+            root,
+            command,
+            authorized_owner_user_id,
+            admission.context("new Workjet project mutation requires domain admission")?,
+            authorized_owner_email,
+        ),
         "ctox.workjet.working_copy.upsert" => {
             handle_workjet_working_copy_upsert_command(root, command, authorized_owner_user_id)
         }
@@ -86,6 +95,23 @@ fn migrate_signed_owner_alias(
     root: &Path,
     authorized_owner_user_id: &str,
     authorized_owner_email: Option<&str>,
+) -> anyhow::Result<()> {
+    let conn = open_store(root)?;
+    let mut projections = Vec::new();
+    apply_signed_owner_alias_migration(
+        &conn,
+        authorized_owner_user_id,
+        authorized_owner_email,
+        &mut projections,
+    )?;
+    super::project_chats::publish(root, &projections)
+}
+
+fn apply_signed_owner_alias_migration(
+    conn: &Connection,
+    authorized_owner_user_id: &str,
+    authorized_owner_email: Option<&str>,
+    projections: &mut Vec<Projection>,
 ) -> anyhow::Result<()> {
     let owner_user_id = bounded_required(authorized_owner_user_id, "owner_user_id", 256)?;
     let Some(owner_email) = authorized_owner_email else {
@@ -100,7 +126,6 @@ fn migrate_signed_owner_alias(
         return Ok(());
     }
 
-    let conn = open_store(root)?;
     let now = super::store::now_ms() as i64;
     for collection in [PROJECTS_COLLECTION, WORKING_COPIES_COLLECTION] {
         let records = outbound_load_records_by_string_field(
@@ -120,7 +145,11 @@ fn migrate_signed_owner_alias(
                 .to_owned();
             record["owner_user_id"] = Value::String(owner_user_id.clone());
             record["updated_at_ms"] = Value::from(now);
-            persist_and_project_idempotently(root, &conn, collection, &record_id, now, record)?;
+            persist_idempotently(conn, collection, &record_id, now, record)?;
+            projections.push(Projection {
+                collection,
+                id: record_id,
+            });
         }
     }
     Ok(())
@@ -168,6 +197,8 @@ pub(super) fn handle_workjet_project_upsert_command(
     root: &Path,
     command: &BusinessCommand,
     authorized_owner_user_id: &str,
+    admission: &DomainEffectAdmission,
+    authorized_owner_email: Option<&str>,
 ) -> anyhow::Result<Value> {
     let payload: ProjectUpsertPayload = serde_json::from_value(command.payload.clone())
         .context("invalid ctox.workjet.project.upsert payload")?;
@@ -181,66 +212,75 @@ pub(super) fn handle_workjet_project_upsert_command(
     let description = optional_bounded(payload.description, "description", 4096)?;
 
     let mut conn = open_store(root)?;
-    let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let now = super::store::now_ms() as i64;
-    let existing = outbound_load_record(&transaction, PROJECTS_COLLECTION, &project_id)?;
-    ensure_owned(existing.as_ref(), &owner_user_id, "project")?;
-    let created_at_ms = existing
-        .as_ref()
-        .and_then(|record| record.get("created_at_ms"))
-        .and_then(Value::as_i64)
-        .unwrap_or(now);
-    let status = if payload.archived {
-        "archived"
-    } else {
-        "active"
-    };
-    let archived_at_ms = if payload.archived {
-        existing
+    let applied = admission.apply(&mut conn, |transaction| {
+        let mut chat_projections = Vec::new();
+        apply_signed_owner_alias_migration(
+            transaction,
+            &owner_user_id,
+            authorized_owner_email,
+            &mut chat_projections,
+        )?;
+        let now = super::store::now_ms() as i64;
+        let existing = outbound_load_record(&transaction, PROJECTS_COLLECTION, &project_id)?;
+        ensure_owned(existing.as_ref(), &owner_user_id, "project")?;
+        let created_at_ms = existing
             .as_ref()
-            .filter(|record| record.get("status").and_then(Value::as_str) == Some("archived"))
-            .and_then(|record| record.get("archived_at_ms"))
+            .and_then(|record| record.get("created_at_ms"))
             .and_then(Value::as_i64)
-            .unwrap_or(now)
-    } else {
-        0
-    };
-    let mut project = serde_json::json!({
-        "id": project_id,
-        "name": name,
-        "status": status,
-        "owner_user_id": owner_user_id,
-        "created_at_ms": created_at_ms,
-        "updated_at_ms": now,
-        "is_deleted": false,
-    });
-    if let Some(description) = description {
-        project["description"] = Value::String(description);
-    }
-    if payload.archived {
-        project["archived_at_ms"] = Value::from(archived_at_ms);
-    }
+            .unwrap_or(now);
+        let status = if payload.archived {
+            "archived"
+        } else {
+            "active"
+        };
+        let archived_at_ms = if payload.archived {
+            existing
+                .as_ref()
+                .filter(|record| record.get("status").and_then(Value::as_str) == Some("archived"))
+                .and_then(|record| record.get("archived_at_ms"))
+                .and_then(Value::as_i64)
+                .unwrap_or(now)
+        } else {
+            0
+        };
+        let mut project = serde_json::json!({
+            "id": project_id,
+            "name": name,
+            "status": status,
+            "owner_user_id": owner_user_id,
+            "created_at_ms": created_at_ms,
+            "updated_at_ms": now,
+            "is_deleted": false,
+        });
+        if let Some(description) = description {
+            project["description"] = Value::String(description);
+        }
+        if payload.archived {
+            project["archived_at_ms"] = Value::from(archived_at_ms);
+        }
 
-    let project =
-        persist_idempotently(&transaction, PROJECTS_COLLECTION, &project_id, now, project)?;
-    let mut chat_projections = Vec::new();
-    let group_chat_id =
-        super::project_chats::ensure_default_group(&transaction, &project, &mut chat_projections)?;
-    transaction.commit()?;
-    upsert_rxdb_collection_record(
-        root,
-        PROJECTS_COLLECTION,
-        &project_id,
-        project["updated_at_ms"].as_i64().unwrap_or(now),
-        project.clone(),
-    )?;
-    super::project_chats::publish(root, &chat_projections)?;
-    Ok(serde_json::json!({
-        "ok": true,
-        "collection": PROJECTS_COLLECTION,
-        "project": project,
-        "group_chat_id": group_chat_id,
-    }))
+        let project =
+            persist_idempotently(&transaction, PROJECTS_COLLECTION, &project_id, now, project)?;
+        let group_chat_id = super::project_chats::ensure_default_group(
+            transaction,
+            &project,
+            &mut chat_projections,
+        )?;
+        chat_projections.push(Projection {
+            collection: PROJECTS_COLLECTION,
+            id: project_id.clone(),
+        });
+        Ok(AppliedDomainEffect {
+            result: serde_json::json!({
+                "ok": true,
+                "collection": PROJECTS_COLLECTION,
+                "project": project,
+                "group_chat_id": group_chat_id,
+            }),
+            projections: domain_references(chat_projections),
+        })
+    })?;
+    Ok(applied.result)
 }
 
 pub(super) fn handle_workjet_working_copy_upsert_command(
@@ -479,6 +519,39 @@ pub(crate) mod tests {
         }
     }
 
+    // Component fixtures exercise the domain adapter without claiming to test
+    // command admission. End-to-end recovery tests use the real command plane.
+    pub(crate) fn handle_workjet_project_upsert_command(
+        root: &Path,
+        command: &BusinessCommand,
+        owner: &str,
+    ) -> anyhow::Result<Value> {
+        let operation = format!(
+            "fixture-{:x}",
+            Sha256::digest(
+                format!("{}:{}:{}", command.command_type, owner, command.payload).as_bytes()
+            )
+        );
+        let admission = DomainEffectAdmission::newly_claimed(&operation, &operation, owner)?;
+        let result =
+            super::handle_workjet_project_upsert_command(root, command, owner, &admission, None)?;
+        let conn = open_store(root)?;
+        let effect = super::super::domain_effect::load(&conn, &operation, &operation, owner)?
+            .context("fixture receipt missing")?;
+        for reference in effect.projections {
+            let record = outbound_load_record(&conn, &reference.collection, &reference.id)?
+                .context("fixture source missing")?;
+            upsert_rxdb_collection_record(
+                root,
+                &reference.collection,
+                &reference.id,
+                record["updated_at_ms"].as_i64().unwrap_or(0),
+                record,
+            )?;
+        }
+        Ok(result)
+    }
+
     fn create_project(root: &Path) -> anyhow::Result<Value> {
         handle_workjet_project_upsert_command(
             root,
@@ -643,6 +716,7 @@ pub(crate) mod tests {
             &command("ctox.workjet.project.list", json!({"limit": 100})),
             stable_user_id,
             Some(email),
+            None,
         )?;
         assert_eq!(listed["count"], 1);
 
