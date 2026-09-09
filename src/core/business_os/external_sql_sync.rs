@@ -1653,6 +1653,13 @@ fn project_status(
         "app_writes_via": "external_sql.write",
         "sync_mode": sync_mode,
         "projections": stats_json(stats),
+        // Der Statusdatensatz wird gemerged, nicht ersetzt: ein einmal
+        // geschriebenes `counts` bleibt sonst ewig stehen. Auf thesen zeigte die
+        // Sellify-App am 09.09.2026 deshalb 17516 Firmen, waehrend die Quelle
+        // 18253 lieferte — die App liest `counts.companies` zuerst. Statt das
+        // Feld verschwinden zu lassen (Leser koennen sich darauf stuetzen),
+        // wird es bei jedem Lauf mit den aktuellen Zahlen ueberschrieben.
+        "counts": counts_json(stats),
         "complete": successful && stats.values().all(|stats| stats.complete),
         "truncated": stats.values().any(|stats| stats.truncated),
         "last_success_at_ms": last_success_at_ms,
@@ -1671,10 +1678,48 @@ fn project_status(
     )
 }
 
+/// Aggregierte und je Projektion aufgeschluesselte Zaehlerstaende in der Form,
+/// die Leser der Kundenapps erwarten (`counts.<projektion>.projected_count`).
+fn counts_json(stats: &BTreeMap<String, ProjectionStats>) -> Value {
+    let projected_of = |stats: &ProjectionStats| {
+        stats.inserted_count + stats.updated_count + stats.unchanged_count
+    };
+    let mut map = Map::new();
+    let mut source_total: usize = 0;
+    let mut projected_total: usize = 0;
+    let mut deleted_total: usize = 0;
+    for (id, stats) in stats {
+        let projected = projected_of(stats);
+        source_total += stats.source_count;
+        projected_total += projected;
+        deleted_total += stats.deleted_count;
+        map.insert(
+            id.clone(),
+            json!({
+                "source_count": stats.source_count,
+                "projected_count": projected,
+                "deleted_count": stats.deleted_count,
+                "complete": stats.complete,
+            }),
+        );
+    }
+    map.insert("source".to_string(), json!(source_total));
+    map.insert("projected".to_string(), json!(projected_total));
+    map.insert("deleted".to_string(), json!(deleted_total));
+    Value::Object(map)
+}
+
 fn stats_json(stats: &BTreeMap<String, ProjectionStats>) -> Value {
     Value::Object(stats.iter().map(|(id, stats)| (id.clone(), json!({
         "source_count": stats.source_count,
         "projected_count": stats.inserted_count + stats.updated_count + stats.unchanged_count,
+        // Dieselben Zahlen zusaetzlich genestet: Leser, die
+        // `projections.<id>.counts.projected_count` erwarten, finden sie hier
+        // statt auf einen veralteten Wert zurueckzufallen.
+        "counts": {
+            "source_count": stats.source_count,
+            "projected_count": stats.inserted_count + stats.updated_count + stats.unchanged_count,
+        },
         "inserted_count": stats.inserted_count,
         "updated_count": stats.updated_count,
         "unchanged_count": stats.unchanged_count,
@@ -2598,5 +2643,38 @@ mod tests {
 
         assert!(server_owned_projection_collections(root.path()).is_err());
         Ok(())
+    }
+
+    /// Der Statusdatensatz wird gemerged: ohne frische `counts` bleibt der Wert
+    /// des ersten Laufs stehen. Die Sellify-App liest `counts.companies` zuerst
+    /// und zeigte deshalb am 09.09.2026 dauerhaft 17516 statt 18253 Firmen.
+    #[test]
+    fn status_publishes_current_counts_where_the_app_reads_them() {
+        let stats = BTreeMap::from([(
+            "companies".to_string(),
+            ProjectionStats {
+                source_count: 18253,
+                inserted_count: 3,
+                updated_count: 7,
+                unchanged_count: 18243,
+                deleted_count: 2,
+                complete: true,
+                ..Default::default()
+            },
+        )]);
+
+        let counts = counts_json(&stats);
+        assert_eq!(counts["companies"]["source_count"], 18253);
+        assert_eq!(counts["companies"]["projected_count"], 18253);
+        assert_eq!(counts["companies"]["deleted_count"], 2);
+        assert_eq!(counts["source"], 18253);
+        assert_eq!(counts["projected"], 18253);
+        assert_eq!(counts["deleted"], 2);
+
+        // Dieselbe Zahl auch dort, wo ein Leser sie unter `projections` erwartet.
+        let projections = stats_json(&stats);
+        assert_eq!(projections["companies"]["counts"]["projected_count"], 18253);
+        assert_eq!(projections["companies"]["counts"]["source_count"], 18253);
+        assert_eq!(projections["companies"]["projected_count"], 18253);
     }
 }
