@@ -134,11 +134,10 @@ mod tests {
             |r| r.get(0),
         )?;
         conn.execute(
-            "UPDATE communication_routing_state SET route_status='leased',lease_owner='crew-worker',
-             leased_at=?2,lease_expires_at=?3,crew_assigned_member_id='crew-pico' WHERE message_key=?1",
-            params![task_id, chrono::Utc::now().to_rfc3339(),
-                (chrono::Utc::now()+chrono::Duration::minutes(15)).to_rfc3339()],
+            "UPDATE communication_routing_state SET crew_assigned_member_id='crew-pico' WHERE message_key=?1",
+            [&task_id],
         )?;
+        crate::mission::channels::lease_queue_task(root, &task_id, "crew-worker")?;
         let native = crate::crew::prepare_attempt(
             root,
             &[task_id.clone()],
