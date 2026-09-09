@@ -2291,6 +2291,9 @@ function makeTimerWindow(timers) {
     assert.equal(getTaskState(chatWith('stale_missing_native')), 'blocked');
     assert.equal(getTaskState(chatWith('failed')), 'failed');
     assert.equal(getTaskState(chatWith('completed')), 'success');
+    assert.equal(getTaskState(chatWith('leased')), 'running', 'native worker lease must appear active');
+    assert.equal(getTaskState(chatWith('retry_wait')), 'queued', 'retry wait must not appear idle');
+    assert.equal(getTaskState(chatWith('review_rework')), 'queued', 'rework remains queued');
   });
 }
 

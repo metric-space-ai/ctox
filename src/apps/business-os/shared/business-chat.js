@@ -2241,7 +2241,7 @@ function getTaskState(chat) {
     (m.taskId && m.taskId === chat.lastTrackingId)
   );
   if (!trackingMsg) return 'idle';
-  const status = String(trackingMsg.status || '').toLowerCase();
+  const status = canonicalTrackingStatus(trackingMsg.status);
   if (status === 'scheduled') return 'scheduled';
   if (!status) return 'idle';
   if (status === 'success' || status === 'completed' || status === 'handled' || status === 'done' || status === 'erledigt') return 'success';
