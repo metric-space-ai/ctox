@@ -65,8 +65,9 @@ provider. CLI examples: `codex -p grok-proxy`, `codex -p glm-proxy`,
 For Desktop tasks, `thread/start` accepts separate `model` and `modelProvider`
 fields. A saved task retains its provider on subsequent turns. The app's
 `create_thread` tool exposes a model override but no provider field: do not use
-that alone to create a non-OpenAI task. Use the helper below. It only prepares
-the task, then stops its temporary app-server. Start work through the normal
+that alone to create a non-OpenAI task. Use the helper below. It prepares
+the task with a bounded, no-tool READY-only model turn that materializes its
+rollout file, then stops its temporary app-server. Start implementation through the normal
 Desktop `send_message_to_thread` tool, so the existing app owns execution.
 The general model picker is not configured as a provider switcher.
 
@@ -105,8 +106,13 @@ proxy requests. Grok's subscription backend has reported `grok-4.6-build`;
    `[Worker1@Exact parent task title]: Bounded task title` (then Worker2, etc.).
    It validates the existing worktree and records its task ID, provider,
    branch, repository and prompt in `~/.codex/proxy-workers/jobs/`.
-   It neither creates a hidden worker process nor dispatches the coding turn.
-5. Read the returned `prompt_file` and send its full contents with
+   The initial READY-only turn consumes a model request and has a 90-second
+   deadline. It must complete successfully with a real rollout file before
+   `preparation_status` becomes `ready`. The assignment is not sent in this turn.
+   Failed preparations retain their task ID, error and recovery guidance in the
+   registry. Inspect that record and recover the same task before implementation;
+   rerunning create cannot silently replace a failed task on the same worktree.
+5. Require `preparation_status=ready`, then read the returned `prompt_file` and send its full contents with
    `send_message_to_thread`, using the returned thread ID and reasoning.
    Emit the created-task directive required by the app. Follow progress using
    bounded `wait_threads`; keep the existing model/provider settings.

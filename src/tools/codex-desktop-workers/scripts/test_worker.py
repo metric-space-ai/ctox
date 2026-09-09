@@ -2,11 +2,13 @@ import importlib.util
 import datetime as dt
 import json
 import os
+import shutil
 from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+from types import SimpleNamespace
 
 spec = importlib.util.spec_from_file_location('worker', Path(__file__).with_name('worker.py'))
 w = importlib.util.module_from_spec(spec)
@@ -14,6 +16,56 @@ spec.loader.exec_module(w)
 
 
 class WorkerGuards(unittest.TestCase):
+    def test_failed_preparation_retains_registry_and_stops_setup_process(self):
+        with tempfile.TemporaryDirectory(dir=os.environ['TMPDIR']) as directory:
+            root = Path(directory)
+            jobs = root / 'jobs'
+            output = Path('/Volumes/tmp/dev-artifacts') / root.name
+            self.addCleanup(shutil.rmtree, output)
+            thread = '00000000-0000-0000-0000-000000000001'
+            registry = jobs / (thread + '.json')
+            args = SimpleNamespace(model='kimi-k3', repo=root, worktree=root / 'worktree',
+                                   issue='https://github.com/owner/repo/issues/1',
+                                   parent_thread='parent', parent_title='Parent', title='Assignment',
+                                   prompt_file=root / 'assignment.md', reasoning='high')
+            client = Mock(turn_id='turn-1')
+            client.request.side_effect = [{}, {'model': 'kimi-k3', 'thread': {
+                'id': thread, 'modelProvider': 'cli_proxy', 'path': str(root / 'missing.jsonl')}}, {}]
+
+            def incomplete_turn(*_):
+                self.assertEqual(json.loads(registry.read_text())['preparation_status'], 'preparing')
+                raise TimeoutError('Task preparation deadline exceeded')
+
+            client.prepare.side_effect = incomplete_turn
+            process = Mock(pid=12345)
+            with patch.object(w, 'JOBS', jobs), patch.object(w, 'HOME', root), \
+                 patch.object(w, 'AVAILABILITY', root / 'missing-availability.json'), \
+                 patch.object(w, 'validate_worktree', return_value=(root, args.worktree, 'codex/prep', 'owner/repo')), \
+                 patch.object(w, 'read', side_effect=lambda p: '' if p.name == 'config.toml' else 'Bounded assignment'), \
+                 patch.object(w, 'run', return_value=json.dumps({'url': args.issue, 'state': 'OPEN'})), \
+                 patch.object(w.subprocess, 'Popen', return_value=process), \
+                 patch.object(w.selectors, 'DefaultSelector'), \
+                 patch.object(w.preparation, 'Client', return_value=client):
+                with self.assertRaisesRegex(RuntimeError, 'existing task retained'):
+                    w.create(args)
+            saved = json.loads(registry.read_text())
+            self.assertEqual(saved['preparation_status'], 'failed')
+            self.assertEqual(saved['thread_id'], thread)
+            self.assertEqual(saved['preparation_turn_id'], 'turn-1')
+            self.assertIn('Do not rerun create', saved['recovery'])
+            client.interrupt.assert_called_once_with(thread)
+            process.terminate.assert_called_once()
+            process.wait.assert_called_once_with(timeout=5)
+
+    def test_operator_experience_is_attributed_and_survives_review_refresh(self):
+        prior = {'kimi-k3': {'source': 'Operator', 'date': '2026-09-09',
+                  'use_for': 'UI review', 'observation': 'Strong design feedback',
+                  'review_focus': 'Verify actual UI behavior'}}
+        rendered = w.experience.render([], prior)
+        self.assertIn('Source: Operator', rendered)
+        self.assertIn('UI review', rendered)
+        self.assertIn('not a completed PR evaluation', rendered)
+
     def test_unchanged_confirmation_preserves_substantive_history(self):
         success = {key: 'detail' for key in w.experience.FIELDS}
         success.update(outcome='success', failure_cause='none', strengths='Verified boundary handling',

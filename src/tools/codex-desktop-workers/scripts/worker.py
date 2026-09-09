@@ -14,11 +14,13 @@ import time
 import uuid
 import experience
 import availability
+import preparation
 
 HOME = Path.home() / '.codex'
 JOBS = HOME / 'proxy-workers' / 'jobs'
 EXPERIENCE = HOME / 'proxy-workers' / 'MODEL-EXPERIENCE.md'
 AVAILABILITY = HOME / 'proxy-workers' / 'AVAILABILITY.json'
+OPERATOR_PRIOR = HOME / 'proxy-workers' / 'OPERATOR-EXPERIENCE.json'
 BINARY = Path('/Applications/ChatGPT.app/Contents/Resources/codex')
 PROXY_MODELS = {'grok-4.6-exact', 'glm-5.3-flash', 'kimi-k3'}
 
@@ -57,7 +59,8 @@ def refresh_experience():
     jobs = [json.loads(read(p)) for p in sorted(JOBS.glob('*.json'))]
     EXPERIENCE.parent.mkdir(parents=True, exist_ok=True)
     stage = EXPERIENCE.with_suffix('.writing')
-    stage.write_text(experience.render(jobs))
+    prior = json.loads(read(OPERATOR_PRIOR)) if OPERATOR_PRIOR.exists() else {}
+    stage.write_text(experience.render(jobs, prior))
     stage.chmod(0o600)
     os.replace(stage, EXPERIENCE)
 
@@ -137,7 +140,8 @@ def create(args):
         if job.get('parent_thread') == args.parent_thread:
             worker_number = max(worker_number, int(job.get('worker_number', 0)) + 1)
         if job.get('worktree') == str(worktree) and not job.get('archived_at'):
-            raise ValueError('An unarchived worker already owns this worktree')
+            raise ValueError('An unarchived worker already owns this worktree: ' + job['thread_id'] +
+                             '. Inspect ' + str(existing) + ' and recover that task; do not create a duplicate.')
     title = f'[Worker{worker_number}@{args.parent_title}]: {args.title}'
     prompt = read(args.prompt_file)
     if not prompt:
@@ -157,35 +161,17 @@ def create(args):
                                 cwd=worktree, env={**os.environ, 'TMPDIR': str(output)}, start_new_session=True)
         process_file = output / 'process.json'
         sel = None
+        job = None
+        path = None
+        client = None
         try:
             process_file = output / 'process.json'
             save(process_file, {'owner': args.parent_thread, 'pid': proc.pid,
-                               'purpose': 'prepare task without dispatching work', 'stop_condition': 'finally or 45 seconds'})
+                               'purpose': 'persist task through a READY-only preparation turn', 'stop_condition': 'finally; startup 30 seconds and preparation at most 90 seconds'})
             sel = selectors.DefaultSelector()
             sel.register(proc.stdout, selectors.EVENT_READ)
-            buffer = b''
-            deadline = time.monotonic() + 45
-            def send(value):
-                proc.stdin.write((json.dumps(value) + '\n').encode())
-                proc.stdin.flush()
-            def request(rid, method, params):
-                nonlocal buffer
-                send({'id': rid, 'method': method, 'params': params})
-                while time.monotonic() < deadline:
-                    while b'\n' in buffer:
-                        line, buffer = buffer.split(b'\n', 1)
-                        if not line:
-                            continue
-                        data = json.loads(line)
-                        if data.get('id') == rid:
-                            if 'error' in data:
-                                raise ValueError(json.dumps(data['error']))
-                            return data['result']
-                    if proc.poll() is not None:
-                        raise RuntimeError('Temporary app-server exited')
-                    if sel.select(1):
-                        buffer += os.read(proc.stdout.fileno(), 65536)
-                raise TimeoutError('Task preparation exceeded 45 seconds')
+            client = preparation.Client(proc, sel, time.monotonic() + 30)
+            request, send = client.request, client.send
             request(1, 'initialize', {'clientInfo': {'name': 'proxy_worker_setup', 'version': '1.0'},
                                       'capabilities': {'experimentalApi': True}})
             send({'method': 'initialized', 'params': {}})
@@ -193,8 +179,6 @@ def create(args):
                 'cwd': str(worktree), 'ephemeral': False,
                 'config': {'model_reasoning_effort': args.reasoning}})
             thread = result['thread']['id']
-            if result['thread']['modelProvider'] != provider or result.get('model') != args.model:
-                raise ValueError('App-server did not retain the requested model/provider')
             path = JOBS / (thread + '.json')
             prompt_path = JOBS / (thread + '.prompt.md')
             full_prompt = ('Issue: ' + issue['url'] + '\n\n' + prompt + '\n\nExecution contract: This is an analyzed, bounded implementation task. '
@@ -206,16 +190,40 @@ def create(args):
                 'Register the PR with worker.py bind-pr --thread ' + thread + ' --pr PR_URL. '
                 'Report the PR, pushed commit, validation, remaining processes and cleanup status. '
                 'If pushing is blocked, preserve source durably and report the blocker.\n')
-            prompt_path.write_text(full_prompt)
-            prompt_path.chmod(0o600)
             job = {'thread_id': thread, 'host_id': 'local', 'parent_thread': args.parent_thread,
                    'repository': repository, 'issue_url': issue['url'], 'repo': str(repo), 'worktree': str(worktree), 'branch': branch,
                    'model': args.model, 'provider': provider, 'reasoning': args.reasoning,
                    'title': title, 'summary': args.title, 'parent_title': args.parent_title, 'worker_number': worker_number,
-                   'prompt_file': str(prompt_path), 'created_at': timestamp(), 'pr_url': None}
+                   'prompt_file': str(prompt_path), 'created_at': timestamp(), 'pr_url': None,
+                   'rollout_path': result['thread'].get('path'), 'preparation_status': 'preparing'}
             save(path, job)
+            if result['thread']['modelProvider'] != provider or result.get('model') != args.model:
+                raise ValueError('App-server did not retain the requested model/provider')
+            prompt_path.write_text(full_prompt)
+            prompt_path.chmod(0o600)
             request(3, 'thread/name/set', {'threadId': thread, 'name': title})
+            client.deadline = time.monotonic() + 90
+            job['preparation_turn_id'] = client.prepare(thread, job['rollout_path'])
+            job.update(preparation_status='ready', prepared_at=timestamp())
+            save(path, job)
             print(json.dumps(job, indent=2))
+        except Exception as exc:
+            if job is not None:
+                if client is not None:
+                    client.interrupt(job['thread_id'])
+                job.update(preparation_status='failed', preparation_error=str(exc),
+                           preparation_failed_at=timestamp(),
+                           preparation_turn_id=client.turn_id if client else None,
+                           recovery='Do not rerun create or dispatch implementation. Inspect this registry and rollout_path; recover the same task through app-server, or have the parent explicitly retire the failed preparation before replacing it.')
+                try:
+                    save(path, job)
+                except OSError as save_error:
+                    raise RuntimeError('Preparation failed for task ' + job['thread_id'] +
+                                       '; registry write also failed: ' + str(save_error) +
+                                       '; original error: ' + str(exc)) from exc
+                raise RuntimeError('Preparation failed; existing task retained in ' + str(path) + '\n' +
+                                   json.dumps(job, indent=2)) from exc
+            raise
         finally:
             proc.terminate()
             try:

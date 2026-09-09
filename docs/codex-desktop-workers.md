@@ -14,7 +14,13 @@ The shared instructions govern future tasks; explicitly include them when
 assigning or correcting a task that was already running.
 
 The helper prepares a saved task with an explicit model/provider and a validated
-existing tmp worktree, records it durably, then stops its temporary app-server.
+existing tmp worktree and records the task ID durably before running a no-tool,
+READY-only preparation turn. This bounded model request (at most 90 seconds)
+materializes the rollout file, which `thread/start` alone creates lazily. Only a
+successful completed turn with a real rollout file marks preparation ready.
+Failures retain the existing task ID and recovery guidance; do not rerun create
+or dispatch implementation until that preparation is recovered. The helper always
+stops its temporary app-server.
 The parent dispatches the prompt with the Desktop `send_message_to_thread` tool.
 This keeps the normal Desktop process responsible for execution and subsequent
 corrections. The app's model menu alone is not a provider selector.
