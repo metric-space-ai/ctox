@@ -97,6 +97,7 @@ jobs:
             src/core/business_os/project_chats.rs \
             src/core/business_os/project_chats/privacy.rs \
             src/core/business_os/project_chats/tests.rs \
+            src/core/business_os/project_chats/recovery_tests.rs \
             src/core/business_os/worker_profile_bindings.rs \
             src/core/business_os/store_workjet_projects.rs \
             src/core/business_os/command_plane.rs \
@@ -109,6 +110,7 @@ jobs:
         run: |
           cargo test --locked --bin ctox -- \
             business_os::project_chats business_os::store_workjet_projects \
+            business_os::domain_effect business_os::command_plane::domain_effect_tests \
             mission::channels::tests::business_command \
             mission::channels::tests::registered_saga \
             --test-threads=2 --show-output

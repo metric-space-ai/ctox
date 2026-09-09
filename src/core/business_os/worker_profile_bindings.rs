@@ -33,6 +33,32 @@ struct UnbindPayload {
     _inbound_channel: Option<String>,
 }
 
+// Core identity lookup precedes the local domain transaction; no second
+// connection or external effect is opened from the admitted mutation closure.
+pub(super) fn validate_crew_reference(
+    root: &Path,
+    command: &BusinessCommand,
+) -> anyhow::Result<()> {
+    if command.command_type != "ctox.workjet.worker_profile.bind" {
+        return Ok(());
+    }
+    let payload: BindPayload = serde_json::from_value(command.payload.clone())?;
+    if let Some(member_id) = payload.crew_member_id {
+        let member_id = required(&member_id, "crew_member_id", 256)?;
+        let core = Connection::open_with_flags(
+            crate::paths::core_db(root),
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        ensure!(
+            crate::crew::members(&core)?
+                .iter()
+                .any(|member| member.id == member_id && !member.archived),
+            "Crew member is unavailable or archived"
+        );
+    }
+    Ok(())
+}
+
 pub(super) fn binding_id(owner: &str, worker_id: &str) -> String {
     stable_id("workjet_profile", &[owner, worker_id])
 }
@@ -56,7 +82,7 @@ pub(super) fn require_active(
 }
 
 pub(super) fn apply_command(
-    root: &Path,
+    _root: &Path,
     conn: &Connection,
     command: &BusinessCommand,
     owner: &str,
@@ -86,18 +112,6 @@ pub(super) fn apply_command(
         .crew_member_id
         .map(|id| required(&id, "crew_member_id", 256))
         .transpose()?;
-    if let Some(member_id) = &member_id {
-        // Read the existing Core authority, not a peer-supplied appearance
-        // record. Binding an identity never creates a Crew member or a run.
-        let core = Connection::open_with_flags(
-            crate::paths::core_db(root),
-            OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )?;
-        let available = crate::crew::members(&core)?
-            .iter()
-            .any(|member| member.id == *member_id && !member.archived);
-        ensure!(available, "Crew member is unavailable or archived");
-    }
     let id = binding_id(owner, &worker_id);
     let existing = outbound_load_record(conn, COLLECTION, &id)?;
     let mut binding = json!({

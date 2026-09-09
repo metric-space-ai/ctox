@@ -1459,7 +1459,15 @@ fn dispatch_business_command(
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
             let owner = session_user_id(session)
                 .context("authorized Workjet chat command is missing a user identity")?;
-            match super::project_chats::handle_command(root, command, owner) {
+            match super::project_chats::handle_command(
+                root,
+                command,
+                owner,
+                prepared
+                    .domain_effect_admission
+                    .as_ref()
+                    .context("new Workjet chat mutation requires domain admission")?,
+            ) {
                 Ok(outcome) => Ok(BusinessCommandDispatchOutcome::completed(outcome, None)),
                 Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
                     None,
@@ -1480,6 +1488,7 @@ fn dispatch_business_command(
                 command,
                 owner_user_id,
                 owner_email.as_deref(),
+                prepared.domain_effect_admission.as_ref(),
             ) {
                 Ok(outcome) => Ok(BusinessCommandDispatchOutcome::completed(outcome, None)),
                 Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
