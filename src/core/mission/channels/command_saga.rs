@@ -1798,6 +1798,17 @@ pub(crate) fn pending_business_command_outbox(
 pub(crate) fn business_command_projection(root: &Path, command_id: &str) -> Result<Value> {
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
+    let mut command = business_command_projection_from_conn(&conn, command_id)?;
+    enrich_command_execution_progress(&db_path, &mut command)?;
+    Ok(command)
+}
+
+/// Canonical stored command snapshot. The path-based wrapper additionally
+/// enriches runtime progress, which is not part of reference authorization.
+pub(crate) fn business_command_projection_from_conn(
+    conn: &Connection,
+    command_id: &str,
+) -> Result<Value> {
     let (
         module,
         command_type,
@@ -1911,13 +1922,7 @@ pub(crate) fn business_command_projection(root: &Path, command_id: &str) -> Resu
         Value::String(task_id.clone()),
     );
     object.insert("task_id".to_string(), Value::String(task_id.clone()));
-    if !task_id.is_empty() {
-        if let Some(progress) =
-            crate::lcm::run_task_execution_progress_for_task(&db_path, &task_id)?
-        {
-            object.insert("execution_progress".to_string(), progress);
-        }
-    }
+
     if let Some((saga_id, saga_phase, saga_step, saga_total_steps, compensation_status)) = saga {
         object.insert("saga_id".to_string(), Value::String(saga_id));
         object.insert("saga_phase".to_string(), Value::String(saga_phase));
@@ -1989,6 +1994,28 @@ pub(crate) fn business_command_projection(root: &Path, command_id: &str) -> Resu
 pub(crate) fn inspect_business_command(root: &Path, command_id: &str) -> Result<Option<Value>> {
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
+    let mut context = inspect_business_command_from_conn(&conn, command_id)?;
+    if let Some(context) = context.as_mut() {
+        enrich_command_execution_progress(&db_path, &mut context["command"])?;
+        redact_command_secrets(&mut context["command"]);
+    }
+    Ok(context)
+}
+
+fn enrich_command_execution_progress(db_path: &Path, command: &mut Value) -> Result<()> {
+    if let Some(task_id) = command["task_id"].as_str().filter(|id| !id.is_empty()) {
+        if let Some(progress) = crate::lcm::run_task_execution_progress_for_task(db_path, task_id)?
+        {
+            command["execution_progress"] = progress;
+        }
+    }
+    Ok(())
+}
+
+fn inspect_business_command_from_conn(
+    conn: &Connection,
+    command_id: &str,
+) -> Result<Option<Value>> {
     let exists = conn
         .query_row(
             "SELECT 1 FROM business_command_aggregates WHERE command_id = ?1",
@@ -2000,7 +2027,7 @@ pub(crate) fn inspect_business_command(root: &Path, command_id: &str) -> Result<
     if !exists {
         return Ok(None);
     }
-    let mut command = business_command_projection(root, command_id)?;
+    let mut command = business_command_projection_from_conn(conn, command_id)?;
     redact_command_secrets(&mut command);
     let task_id = conn
         .query_row(
@@ -2055,6 +2082,18 @@ pub(crate) fn inspect_business_command_for_task(
 ) -> Result<Option<Value>> {
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
+    let mut context = inspect_business_command_for_task_from_conn(&conn, task_id)?;
+    if let Some(context) = context.as_mut() {
+        enrich_command_execution_progress(&db_path, &mut context["command"])?;
+        redact_command_secrets(&mut context["command"]);
+    }
+    Ok(context)
+}
+
+pub(crate) fn inspect_business_command_for_task_from_conn(
+    conn: &Connection,
+    task_id: &str,
+) -> Result<Option<Value>> {
     let command_id = conn
         .query_row(
             "SELECT command_id FROM business_command_task_links WHERE task_id = ?1",
@@ -2064,7 +2103,7 @@ pub(crate) fn inspect_business_command_for_task(
         .optional()?;
     command_id
         .as_deref()
-        .map(|command_id| inspect_business_command(root, command_id))
+        .map(|command_id| inspect_business_command_from_conn(conn, command_id))
         .transpose()
         .map(Option::flatten)
 }

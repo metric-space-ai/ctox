@@ -6,7 +6,7 @@ use super::*;
 /// Native intake can reconcile an already-applied local effect without a
 /// retained browser bearer token. It uses only the durable receipt identity and
 /// Core intent, rechecks today's user/policy, and has no route to a mutation.
-pub(super) fn recover_applied_domain_effect_for_intake(
+pub(in crate::business_os) fn recover_applied_domain_effect_for_intake(
     root: &Path,
     command_id: &str,
 ) -> anyhow::Result<Option<Value>> {

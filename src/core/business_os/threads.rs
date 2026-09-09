@@ -198,7 +198,9 @@ pub(super) fn is_threads_owned_collection(collection: &str) -> bool {
 }
 
 pub(super) fn may_accept_peer_write(root: &Path, token: &str, collection: &str) -> bool {
-    if is_threads_owned_collection(collection) {
+    if is_threads_owned_collection(collection)
+        || super::project_chats::is_owned_collection(collection)
+    {
         return false;
     }
     if collection == "ctox_queue_tasks" {
@@ -306,14 +308,19 @@ pub(super) fn replication_document_filter(
     let collection_read_allowed = collection_read_allowed_for_actor(root, token, collection, &role);
     let root = root.to_path_buf();
     let collection = collection.to_string();
+    let visibility = std::sync::Mutex::new(super::project_chats::VisibilityReadContext::new(&root));
     Arc::new(move |document| {
-        actor_may_replicate_document(
+        let Ok(mut visibility) = visibility.lock() else {
+            return false;
+        };
+        actor_may_replicate_document_with_reader(
             &root,
             &collection,
             document,
             &user_id,
             &role,
             collection_read_allowed,
+            &mut visibility,
         )
     })
 }
@@ -349,6 +356,29 @@ fn actor_may_replicate_document(
     role: &str,
     collection_read_allowed: bool,
 ) -> bool {
+    actor_may_replicate_document_with_reader(
+        root,
+        collection,
+        document,
+        user_id,
+        role,
+        collection_read_allowed,
+        &mut super::project_chats::VisibilityReadContext::new(root),
+    )
+}
+
+fn actor_may_replicate_document_with_reader(
+    root: &Path,
+    collection: &str,
+    document: &Value,
+    user_id: &str,
+    role: &str,
+    collection_read_allowed: bool,
+    visibility: &mut super::project_chats::VisibilityReadContext,
+) -> bool {
+    if let Some(allowed) = visibility.visible(collection, document, user_id) {
+        return allowed && collection_read_allowed;
+    }
     if is_browser_collection(collection) {
         return browser_document_visible_to_actor(root, collection, document, user_id);
     }
@@ -803,6 +833,7 @@ pub(super) fn handle_business_command(
     session: &BusinessOsSession,
     command: &BusinessCommand,
 ) -> anyhow::Result<Value> {
+    super::project_chats::command_access_check(root, command, &actor_id(session))?;
     anyhow::ensure!(
         command.module == "threads",
         "threads commands require module=threads"

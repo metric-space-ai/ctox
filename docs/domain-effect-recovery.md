@@ -1,8 +1,8 @@
 # Domain application receipts and command recovery
 
 Status: shared native boundary and automatic receipt-backed intake implemented.
-PR80 contains the domain-handler integration; it is not yet integrated into this
-base. Full native tests for the new automatic intake remain pending. This does
+PR80's domain-handler integration is included in this base. Full native tests
+for the combined automatic intake and domain handlers remain pending. This does
 not certify production readiness, portable sessions or tenant migration.
 
 ## Ownership
@@ -48,10 +48,11 @@ RxDB writes and separately opened database connections are forbidden inside
 this local mutation closure.
 
 The initial opt-in is project upsert and the six project/chat/worker-binding
-commands under PR80. The existing project upsert handler has not yet switched
-to the transaction helper on this base; the PR80 owner integrates that change
-together with its domain transaction. Other command paths keep their existing
-behavior. Additional domains require an explicit opt-in and equivalent tests.
+commands integrated from PR80. Their dispatchers pass the new admission into
+the domain transaction; signed owner-alias migration for project upsert uses
+that same transaction. Their former post-commit publishers are removed.
+Other command paths keep their existing behavior. Additional domains require
+an explicit opt-in and equivalent tests.
 
 ## Recovery
 
@@ -120,9 +121,11 @@ untrusted intake payload/actor, current source projection, terminal removal from
 the queue, inactive users and conflicting Core identity. They have not yet run
 in the complete binary for this change.
 
-PR80 additionally owns real post-commit handler fault injection, a fresh process
-through the full command path, profile/chat domain invariants, distinct create
-IDs and revoked membership. Browser/WebRTC E2E and measured command/boot budgets
+PR80's native tests cover real post-commit handler fault injection, a fresh process
+through the command path, profile/chat domain invariants, distinct create IDs and
+revoked membership. Its independent run 34306615560 passed 45 tests, including
+those recovery cases. The combined branch must pass them again together with
+automatic intake. Browser/WebRTC E2E and measured command/boot budgets
 remain required. Run 34305942733 passed its warm-command and critical-boot gates
 but failed the context-app workflow; an earlier run also missed the warm-command
 budget. These component results waive no gate. No production tenant was modified.

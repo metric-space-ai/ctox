@@ -285,7 +285,8 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cargo test --locked --bin ctox business_os::command_plane:: -- --test-threads=2 \
+          cargo test --locked --bin ctox -- business_os::command_plane:: \
+            business_os::project_chats business_os::store_workjet_projects --test-threads=2 \
             | tee "$RUNNER_TEMP/ctox-host-proof/command-completion-tests.log"
           cargo test --locked --bin ctox -- mission::channels::tests::business_command mission::channels::tests::business_control --test-threads=2 \
             | tee "$RUNNER_TEMP/ctox-host-proof/command-transaction-tests.log"
