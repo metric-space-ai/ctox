@@ -9,6 +9,8 @@ use super::domain_effect;
 use rusqlite::Connection;
 use std::path::Path;
 
+// Previous combined predicate remains a test oracle for selection semantics.
+#[cfg(test)]
 pub(super) const BUSINESS_COMMAND_RETRY_CANDIDATE_SQL: &str = r#"(
   json_extract(data, '$.status') IN ('pending_sync', 'waiting_dependencies')
   OR (
@@ -37,14 +39,39 @@ pub(super) fn pending_query(
     direction: &str,
     receipt: Option<&str>,
 ) -> String {
-    let predicate = match receipt {
-        Some(applied) => format!("({BUSINESS_COMMAND_RETRY_CANDIDATE_SQL} OR {applied})"),
-        None => BUSINESS_COMMAND_RETRY_CANDIDATE_SQL.to_owned(),
-    };
-    format!(
-        "SELECT data FROM {table} WHERE {deleted} = 0 AND {predicate}
-             ORDER BY {lwt} {direction} LIMIT ?1"
-    )
+    // Separate disjoint candidate classes so SQLite can use the status index
+    // for pending commands and the type index for background/applied commands.
+    // Cap each ordered branch before the merge: at most three small pages sort.
+    let pending = "json_extract(data, '$.status') IN ('pending_sync', 'waiting_dependencies')";
+    let background = "(
+        +json_extract(data, '$.status') = 'accepted'
+        OR (+json_extract(data, '$.status') = 'failed'
+            AND COALESCE(json_extract(data, '$.terminal_status'), 'none') = 'none')
+      ) AND json_extract(data, '$.command_type') IN (
+        'external_sql.sync.refresh', 'external_sql.write',
+        'outbound.research_source.generate_adapter', 'outbound.research_source.test',
+        'outbound.research_source.auth_assist', 'web_stack.person_research')";
+    let mut branches = vec![("pending", pending), ("background", background)];
+    if let Some(receipt) = receipt {
+        branches.push(("applied", receipt));
+    }
+    let ctes = branches
+        .iter()
+        .map(|(name, predicate)| {
+            format!(
+                "{name} AS (SELECT data, {lwt} AS intake_lwt FROM {table}
+         WHERE {deleted} = 0 AND ({predicate})
+         ORDER BY intake_lwt {direction} LIMIT ?1)"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let union = branches
+        .iter()
+        .map(|(name, _)| format!("SELECT data, intake_lwt FROM {name}"))
+        .collect::<Vec<_>>()
+        .join(" UNION ALL ");
+    format!("WITH {ctes} SELECT data FROM ({union}) ORDER BY intake_lwt {direction} LIMIT ?1")
 }
 
 /// Return an additional, disjoint candidate predicate. The normal pending
@@ -242,6 +269,164 @@ mod tests {
             |r| r.get(0),
         )?;
         assert_eq!(count, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_intake_matches_original_predicate_across_lifecycle_states() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("states.sqlite3");
+        proof(&path, "schema-seed")?;
+        let receipts = Connection::open(&path)?;
+        let conn = commands()?;
+        let types = [
+            "ctox.normal",
+            "external_sql.sync.refresh",
+            "external_sql.write",
+            "outbound.research_source.generate_adapter",
+            "outbound.research_source.test",
+            "outbound.research_source.auth_assist",
+            "web_stack.person_research",
+        ]
+        .into_iter()
+        .chain(domain_effect::COMMAND_TYPES);
+        let mut sequence = 0;
+        for kind in types {
+            for status in [
+                json!("pending_sync"),
+                json!("waiting_dependencies"),
+                json!("accepted"),
+                json!("failed"),
+                json!("completed"),
+                json!("cancelled"),
+                Value::Null,
+            ] {
+                for terminal in [
+                    json!("none"),
+                    json!("completed"),
+                    json!("failed"),
+                    Value::Null,
+                ] {
+                    for phase in [json!("accepted"), json!("terminal"), Value::Null] {
+                        for deleted in [0, 1] {
+                            sequence += 1;
+                            let id = format!("candidate-{sequence}");
+                            let data = json!({"id":id,"command_type":kind,"status":status,
+                                "terminal_status":terminal,"execution_phase":phase});
+                            conn.execute(
+                                "INSERT INTO commands VALUES (?1,?2,?3,?4)",
+                                params![id, deleted, sequence, data.to_string()],
+                            )?;
+                            if sequence % 3 == 0 {
+                                receipts.execute("INSERT INTO business_command_domain_effects VALUES (?1,'hash','actor','{}')", [&id])?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        drop(receipts);
+        let receipt =
+            retry_predicate(&path, &conn, "commands", "deleted")?.context("receipt predicate")?;
+        for proof in [None, Some(receipt.as_str())] {
+            let predicate = match proof {
+                Some(applied) => format!("({BUSINESS_COMMAND_RETRY_CANDIDATE_SQL} OR {applied})"),
+                None => BUSINESS_COMMAND_RETRY_CANDIDATE_SQL.to_owned(),
+            };
+            for direction in ["ASC", "DESC"] {
+                let old = format!("SELECT data FROM commands WHERE deleted=0 AND {predicate} ORDER BY lastWriteTime {direction} LIMIT ?1");
+                let new = pending_query("commands", "deleted", "lastWriteTime", direction, proof);
+                for limit in [1, 2, 25, 5000] {
+                    let collect = |sql: &str| -> anyhow::Result<Vec<String>> {
+                        Ok(conn
+                            .prepare(sql)?
+                            .query_map([limit], |row| row.get::<_, String>(0))?
+                            .collect::<rusqlite::Result<Vec<_>>>()?)
+                    };
+                    assert_eq!(
+                        collect(&new)?,
+                        collect(&old)?,
+                        "receipt={} {direction} limit={limit}",
+                        proof.is_some()
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_intake_is_bounded_and_preserves_oldest_newest_selection() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("ordered-domain.sqlite3");
+        let conn = commands()?;
+        conn.execute_batch("WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM numbers WHERE n<20000)
+            INSERT INTO commands SELECT 'history-'||n,0,n,
+            json_object('id','history-'||n,'status','accepted','terminal_status','none','command_type','ctox.unrelated')
+            FROM numbers;")?;
+        for (id, status, kind, time) in [
+            ("pending-old", "pending_sync", "ctox.normal", 1),
+            (
+                "receipt-old",
+                "accepted",
+                domain_effect::COMMAND_TYPES[0],
+                2,
+            ),
+            ("background", "accepted", "external_sql.write", 3),
+            ("receipt-new", "failed", domain_effect::COMMAND_TYPES[0], 4),
+            ("pending-new", "waiting_dependencies", "ctox.normal", 5),
+        ] {
+            insert(&conn, id, status, "none", kind)?;
+            conn.execute(
+                "UPDATE commands SET lastWriteTime=?1 WHERE id=?2",
+                params![time, id],
+            )?;
+            if id.starts_with("receipt-") {
+                proof(&path, id)?;
+            }
+        }
+        let receipt =
+            retry_predicate(&path, &conn, "commands", "deleted")?.context("receipt predicate")?;
+        let mut maximum_steps = 0;
+        for (direction, expected) in [
+            ("ASC", ["pending-old", "receipt-old"]),
+            ("DESC", ["pending-new", "receipt-new"]),
+        ] {
+            let sql = pending_query(
+                "commands",
+                "deleted",
+                "COALESCE(lastWriteTime,0)",
+                direction,
+                Some(&receipt),
+            );
+            let mut elapsed = Vec::new();
+            for _ in 0..30 {
+                let started = std::time::Instant::now();
+                let mut stmt = conn.prepare(&sql)?;
+                let rows = stmt
+                    .query_map([2], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let ids = rows
+                    .iter()
+                    .map(|row| {
+                        serde_json::from_str::<Value>(row)
+                            .map(|value| value["id"].as_str().unwrap().to_owned())
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                assert_eq!(ids, expected);
+                maximum_steps =
+                    maximum_steps.max(stmt.get_status(rusqlite::StatementStatus::VmStep));
+                elapsed.push(started.elapsed().as_micros());
+            }
+            elapsed.sort_unstable();
+            eprintln!("ordered_native_intake direction={direction} rows=20005 samples=30 p50_us={} p95_us={} max_vm_steps={maximum_steps}", elapsed[14], elapsed[28]);
+        }
+        // Structural bound, not a machine-speed timing assertion: five actual
+        // candidates must not visit twenty thousand unrelated accepted records.
+        assert!(
+            maximum_steps < 10_000,
+            "unrelated history scanned: {maximum_steps} VM steps"
+        );
         Ok(())
     }
 

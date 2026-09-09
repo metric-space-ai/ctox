@@ -85,6 +85,12 @@ existing oldest/newest intake fairness. Missing stores or legacy schemas are
 neither created nor migrated by selection. Candidate discovery uses the existing
 command-type index; unrelated accepted history must not force a status-index scan.
 
+The complete ordered intake query separates pending, background and applied
+candidates into disjoint indexed branches. Each branch takes at most the requested
+oldest/newest page before the final merge. It preserves the existing two-ended
+fairness and command limit. The previous combined predicate is a test-only
+semantic oracle, not an alternative executable intake path.
+
 Before interpreting a candidate's browser-authored payload, type or age, native
 intake looks up its application identity by command ID. It reconstructs the
 command from Core's canonical intent, verifies the receipt hash, loads the still
@@ -110,6 +116,17 @@ commands. In the local 30-sample selection-only comparison, corrected p50/p95
 were 33/81 microseconds versus 15,273/27,502 for the broad status-index query.
 This excludes connection setup and the complete ordered intake query; it is not
 a browser roundtrip benchmark. These tests do not execute the complete binary.
+
+Two further tests cover the complete ordered query: the old combined OR query
+visited 1,000,305 SQLite VM steps for five candidates among 20,005 records. The
+bounded branches visit 454 steps. In the isolated 30-sample local comparison,
+ascending p50/p95 changed from 27,115/29,464 to 112/177 microseconds; descending
+from 27,645/34,407 to 108/130. The full 11-test component run under concurrent
+test load measured 296/698 and 291/452 microseconds respectively. Those query
+measurements include prepare/result decoding but exclude opening databases and
+network/runtime delivery. A separate 2,352-row state matrix checks exact results
+against the old predicate, with and without receipts, both directions and four
+limits. All eleven component tests pass; full-host performance remains separate.
 
 The full-host CI now includes real command-plane tests for recovery after a
 projection ABORT, preserving a later domain title, missing result storage after

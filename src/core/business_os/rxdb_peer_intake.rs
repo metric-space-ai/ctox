@@ -354,6 +354,7 @@ pub(super) async fn wait_for_business_command_wake(
 /// How often a single command may fail `accept_pending_business_command`
 /// before it is marked `failed` and dropped from the pending queue.
 pub(super) const BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET: u32 = 5;
+#[cfg(test)]
 pub(super) use super::rxdb_peer_domain_recovery::BUSINESS_COMMAND_RETRY_CANDIDATE_SQL;
 
 pub(super) async fn consume_pending_business_commands(
@@ -718,7 +719,7 @@ fn business_command_store_error_is_permanent(err: &anyhow::Error) -> bool {
 /// Die Felder, die einen Befehl endgueltig terminal machen.
 ///
 /// Es reicht NICHT, `status` auf "failed" zu setzen:
-/// [`BUSINESS_COMMAND_RETRY_CANDIDATE_SQL`] laesst ein `failed`-Dokument
+/// Die Intake-Abfrage laesst ein `failed`-Dokument
 /// weiterhin als Wiederholungskandidat gelten, solange `terminal_status` fehlt.
 /// Auf einer Produktivinstanz drehten deshalb zwei ueber 500 Stunden alte
 /// Befehle rund 20-mal pro Sekunde durch die Verjaehrung, und der Dienst
