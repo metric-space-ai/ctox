@@ -1,6 +1,17 @@
 # CTOX-Sync-Architektur: Handover vom 9. September 2026
 
 
+## CI-Matrix: Browser-Guard benötigt seinen installierten Browser
+
+Auf Head `eadcbc152` scheitert Job `102487411771` (macOS x86 CLI) am Import von
+Playwright im Office-Notification-Browser-Guard, bevor ein Szenario läuft.
+Die Workflow-Datei installiert JS-Abhängigkeiten und Chromium ausschließlich für
+`x86_64-unknown-linux-gnu`, der Guard hatte jedoch keine entsprechende Bedingung.
+Er läuft jetzt wie der benachbarte Browser-Height-Test und die JS-Suite im selben
+Linux-x86-Job mit installiertem Browser. Die Prüfung selbst bleibt unverändert
+und verpflichtend; keine Office-Implementierung geändert. Echte CI-Verifikation
+für diese Matrix-Korrektur steht noch aus.
+
 ## Fortsetzung: vollständige Fehlerdiagnostik statt abgeschnittener CI-Ausgabe
 
 CI `34357617934`, macOS-Job `102486187764`, bestätigt jetzt erfolgreiche
