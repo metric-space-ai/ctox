@@ -72,7 +72,7 @@ impl QmpClient<tokio::net::UnixStream> {
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin> QmpClient<S> {
-    async fn negotiate(stream: S, timeout: Duration) -> Result<Self, QmpError> {
+    pub(super) async fn negotiate(stream: S, timeout: Duration) -> Result<Self, QmpError> {
         let mut client = Self {
             stream: BufStream::new(stream),
             next_id: 1,

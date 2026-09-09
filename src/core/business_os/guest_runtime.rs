@@ -11,6 +11,8 @@ use anyhow::{ensure, Result};
 use serde::Deserialize;
 use std::future::Future;
 
+#[cfg(target_os = "linux")]
+mod qemu;
 mod qmp;
 mod x11;
 pub(super) use x11::{X11GuestConfig, X11GuestDriver};
