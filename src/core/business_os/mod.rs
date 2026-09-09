@@ -34,6 +34,7 @@ pub mod policy;
 mod project_chats;
 mod rxdb_peer;
 mod rxdb_peer_browser;
+mod rxdb_peer_business_data;
 mod rxdb_peer_commands;
 mod rxdb_peer_demand_files;
 mod rxdb_peer_desktop_files;

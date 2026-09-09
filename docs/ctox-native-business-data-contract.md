@@ -69,6 +69,35 @@ The existing Project/Computer guest bridge remains a removal candidate until
 native parity and real UI acceptance are proved. New Coding UI data access must
 not depend permanently on `state.db` in a warm Business OS guest.
 
+## Source proof and principal lookup
+
+The generated contract now includes `NativeBusinessDataIdentityRequest` and
+`NativeBusinessDataPeerIdentity`, served by `ctox.business_data.identity.v1` on
+the existing RxDB/WebRTC auxiliary channel. The server signs the fresh 32-byte
+hex challenge, its configured instance ID and optional current principal using
+the already provisioned native Sync Ed25519 identity. Missing keys fail explicitly;
+this read never creates or rotates a signing key. Anonymous requests receive no
+principal. Invalid/revoked nonempty credentials fail rather than falling back to
+an anonymous principal. Current user, authorization epoch and device binding come
+from the existing verified-capability store path, never request fields.
+
+The signature domain is `ctox.sync.business-data.identity.v1` followed by NUL,
+then UTF-8 JSON with recursively sorted object keys and the signature field
+omitted. `NativeSyncSession::peer_identity_proof` checks the current connection,
+fresh challenge, expected instance ID and independently pinned public identity.
+It bounds the exchange and response size and cancels with the native session.
+It does not create a ready BusinessData session or grant collection access.
+
+The public identity in the response is NOT a trust source. Workjet must obtain
+its pin through authenticated provisioning, confirmed enrollment or SSH, before
+releasing credentials. Its currently inspected saved targets contain logical
+instance IDs and signaling token hashes, not a proven source-key pin. Production
+pre-credential challenge integration, trusted key provisioning and current-account
+handle invalidation are still missing. The existing LocalSessionProvider contract
+requires trusted target authorization but does not supply that implementation.
+The standalone proof reader does not silently repair this gap or enable anonymous
+data reads. Native metadata proofs need revalidation on reconnect and grant change.
+
 ## Session and identity
 
 The host resolves and authenticates the target instance and current user before

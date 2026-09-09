@@ -61,6 +61,17 @@ The immutable address mechanism alone does not certify bootstrap performance,
 mobile suspend/resume, or full runtime compatibility across all hosts.
 
 
+## Native BusinessData source identity
+
+The existing native Sync Ed25519 key signs source-identity replies on the
+`ctox.business_data.identity.v1` WebRTC method. A fresh challenge and independently
+provisioned key/instance pin are required for client verification. An anonymous
+request has no user principal; a presented capability must pass the current
+native user/epoch/device checks. Missing keys or invalid credentials fail without
+key creation or anonymous fallback. Signing is domain-separated from execution
+and checkpoint receipts. This does not itself authorize collections or implement
+trusted Workjet key enrollment; see [the integration contract](ctox-native-business-data-contract.md).
+
 ## Native query snapshot boundary
 
 `RxStorageInstance::query_snapshot_stream_into_blocking` is an internal storage

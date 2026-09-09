@@ -228,6 +228,61 @@ impl NativeSyncSession {
         .await
     }
 
+    /// Read a nonce-bound source proof from a current admitted DataChannel.
+    /// The key and instance pin must come from trusted host enrollment, not
+    /// signaling or the reply. This does not install credentials, authenticate
+    /// a selected user, authorize a collection or issue a ready data session.
+    pub async fn peer_identity_proof(
+        &self,
+        connection: rxdb::plugins::replication_webrtc::WebRTCRsConnection,
+        expected_key: &str,
+        expected_instance: &str,
+    ) -> io::Result<crate::business_data_contract::NativeBusinessDataPeerIdentity> {
+        use crate::{business_data_contract::*, business_data_identity::*};
+        use rxdb::plugins::replication_webrtc::{send_message_and_await_answer, WebRTCMessage};
+        crate::authority::auth::public_key(expected_key)?;
+        let failure = || {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "BusinessData peer identity unavailable or invalid",
+            )
+        };
+        if !self.pool().is_peer_ready_for_control(&connection) {
+            return Err(failure());
+        }
+        let challenge = fresh_challenge()?;
+        let request = NativeBusinessDataIdentityRequest {
+            version: CTOX_BUSINESS_DATA_PROTOCOL_VERSION,
+            challenge: challenge.clone(),
+        };
+        let exchange = send_message_and_await_answer(
+            self.pool().connection_handler.clone(),
+            connection.clone(),
+            WebRTCMessage {
+                id: format!("business-identity-{challenge}"),
+                method: CTOX_BUSINESS_DATA_IDENTITY_METHOD.into(),
+                params: vec![serde_json::to_value(request).map_err(|_| failure())?],
+                collection: None,
+            },
+        );
+        let response = tokio::select! {
+            biased;
+            _ = self.pool().query_cancellation() => return Err(failure()),
+            response = tokio::time::timeout(Duration::from_secs(10), exchange) => {
+                response.map_err(|_| failure())?.map_err(|_| failure())?
+            }
+        };
+        if !self.pool().is_peer_ready_for_control(&connection)
+            || response.error.is_some()
+            || serde_json::to_vec(&response.result).map_or(true, |bytes| bytes.len() > 4096)
+        {
+            return Err(failure());
+        }
+        let proof = serde_json::from_value(response.result).map_err(|_| failure())?;
+        verify_peer_identity(&proof, expected_key, expected_instance, &challenge)?;
+        Ok(proof)
+    }
+
     fn ensure_attachable(&self) -> io::Result<()> {
         if self.resources.execution.is_some()
             || self

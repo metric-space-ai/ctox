@@ -47,9 +47,16 @@ let rust = header + 'use serde::{Deserialize, Serialize};\n';
 let ts = header + `export const ${businessData ? 'CTOX_BUSINESS_DATA_CONTRACT_VERSION' : 'CTOX_SYNC_CONTRACT_VERSION'} = 1 as const;\n`;
 let schemas = header + `import * as Schema from "effect/Schema";\nimport type * as Contract from "./${basename}.generated.ts";\n`;
 for (const [name, value] of Object.entries(fixture.constants ?? {})) {
-  if (!/^[A-Z][A-Z0-9_]+$/.test(name) || !Number.isSafeInteger(value) || value < 0 || value > 4294967295) throw new Error(`Invalid wire constant ${name}`);
-  rust += `pub const ${name}: u32 = ${value};\n`;
-  ts += `export const ${name} = ${value} as const;\n`;
+  if (!/^[A-Z][A-Z0-9_]+$/.test(name)) throw new Error(`Invalid wire constant ${name}`);
+  if (typeof value === 'string') {
+    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(value)) throw new Error(`Invalid wire string constant ${name}`);
+    rust += `pub const ${name}: &str = ${JSON.stringify(value)};\n`;
+    ts += `export const ${name} = ${JSON.stringify(value)} as const;\n`;
+  } else {
+    if (!Number.isSafeInteger(value) || value < 0 || value > 4294967295) throw new Error(`Invalid wire constant ${name}`);
+    rust += `pub const ${name}: u32 = ${value};\n`;
+    ts += `export const ${name} = ${value} as const;\n`;
+  }
 }
 const schemaOutputs = new Map();
 

@@ -4,9 +4,21 @@
   "constants": {
     "CTOX_BUSINESS_DATA_PROTOCOL_VERSION": 1,
     "CTOX_BUSINESS_DATA_MAX_PAGE_DOCUMENTS": 200,
-    "CTOX_BUSINESS_DATA_MAX_SNAPSHOT_BYTES": 2097152
+    "CTOX_BUSINESS_DATA_MAX_SNAPSHOT_BYTES": 2097152,
+    "CTOX_BUSINESS_DATA_IDENTITY_METHOD": "ctox.business_data.identity.v1"
   },
   "types": {
+    "NativeBusinessDataIdentityRequest": { "version": "u32", "challenge": "string" },
+    "NativeBusinessDataDeviceIdentity": {
+      "pairingId": "string", "deviceId": "string", "proofKeyThumbprint": "string"
+    },
+    "NativeBusinessDataPrincipal": {
+      "userId": "string", "authorizationEpoch": "u64", "device": "optional:NativeBusinessDataDeviceIdentity"
+    },
+    "NativeBusinessDataPeerIdentity": {
+      "version": "u32", "challenge": "string", "instanceId": "string", "publicIdentity": "string",
+      "principal": "optional:NativeBusinessDataPrincipal", "signature": "string"
+    },
     "NativeBusinessDataSessionRef": { "handle": "string", "generation": "u64" },
     "NativeBusinessDataBinding": { "targetId": "string", "instanceId": "string", "userId": "string" },
     "NativeBusinessDataQuery": {

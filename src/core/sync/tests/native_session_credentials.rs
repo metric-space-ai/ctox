@@ -137,6 +137,30 @@ async fn exercise(wrong_key: bool, revoke_peer_only: bool) {
         }));
         server_options.admission.eager_pull = Some(Arc::new(|_, _| true));
         let server = NativeSyncSession::start(server_options).await.unwrap();
+        let source_key = Arc::new(ctox_sync::authority::auth::SigningIdentity::from_pkcs8(
+            &ctox_sync::authority::auth::SigningIdentity::generate_pkcs8().unwrap()
+        ).unwrap());
+        let source_pin = source_key.public_identity();
+        let identity_revoked = revoked.clone();
+        server.pool().set_auxiliary_request_handler(
+            ctox_sync::business_data_contract::CTOX_BUSINESS_DATA_IDENTITY_METHOD,
+            Arc::new(move |_, token, params| {
+                let key = source_key.clone();
+                let revoked = identity_revoked.clone();
+                Box::pin(async move {
+                    if token != "fixture-private-read" || revoked.load(Ordering::SeqCst) {
+                        return Err("identity capability rejected".into());
+                    }
+                    let request: ctox_sync::business_data_contract::NativeBusinessDataIdentityRequest =
+                        serde_json::from_value(params[0].clone()).map_err(|_| "invalid request".to_string())?;
+                    let proof = key.attest_business_data_identity("fixture-instance", &request.challenge,
+                        Some(ctox_sync::business_data_contract::NativeBusinessDataPrincipal {
+                            user_id: "fixture-user".into(), authorization_epoch: 1, device: None,
+                        })).map_err(|_| "invalid challenge".to_string())?;
+                    serde_json::to_value(proof).map_err(|_| "invalid identity".to_string())
+                })
+            }),
+        );
         let mut server_errors = server.pool().error_subject.subscribe();
         let (client_root, client_db, mut client_options) = native_fixture::control_options(
             signaling.url.clone(),
@@ -205,6 +229,21 @@ async fn exercise(wrong_key: bool, revoke_peer_only: bool) {
                 .connection_handler
                 .connection_for_peer("native000001")
                 .unwrap();
+            // Actual nonce/signature exchanges over the established DataChannel.
+            // This fixture still does NOT certify production pre-token enrollment.
+            let mut identity_timings = Vec::new();
+            for _ in 0..30 {
+                let started = Instant::now();
+                let proof = client.peer_identity_proof(connection.clone(), &source_pin, "fixture-instance").await.unwrap();
+                assert_eq!(proof.principal.unwrap().user_id, "fixture-user");
+                identity_timings.push(started.elapsed().as_micros());
+            }
+            identity_timings.sort_unstable();
+            eprintln!("native_peer_identity n=30 p50_us={} p95_us={}", identity_timings[14], identity_timings[28]);
+            assert!(client.peer_identity_proof(connection.clone(), &source_pin, "wrong-instance").await.is_err());
+            let other_key = ctox_sync::authority::auth::SigningIdentity::from_pkcs8(
+                &ctox_sync::authority::auth::SigningIdentity::generate_pkcs8().unwrap()).unwrap();
+            assert!(client.peer_identity_proof(connection.clone(), &other_key.public_identity(), "fixture-instance").await.is_err());
             let mut timings = Vec::new();
             for n in 0..30 {
                 let started = Instant::now();

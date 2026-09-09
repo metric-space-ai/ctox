@@ -2956,6 +2956,25 @@ async fn run_native_peer(
                     }),
                 );
                 let workjet_device_root = root.clone();
+                let business_data_root = root.clone();
+                pool.set_auxiliary_request_handler(
+                    ctox_sync::business_data_contract::CTOX_BUSINESS_DATA_IDENTITY_METHOD,
+                    Arc::new(move |_peer_identity, capability_token, params| {
+                        let root = business_data_root.clone();
+                        Box::pin(async move {
+                            // Native key/store reads stay off the transport executor.
+                            tokio::task::spawn_blocking(move || {
+                                super::rxdb_peer_business_data::identity_response(
+                                    &root,
+                                    &capability_token,
+                                    params,
+                                )
+                            })
+                            .await
+                            .map_err(|_| "BusinessData identity task failed".to_string())?
+                        })
+                    }),
+                );
                 pool.set_auxiliary_request_handler(
                     WORKJET_DEVICE_WEBRTC_METHOD,
                     Arc::new(move |_peer_identity, capability_token, params| {
