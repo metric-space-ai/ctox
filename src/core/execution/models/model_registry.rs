@@ -17,7 +17,11 @@ pub const SUPPORTED_ANTHROPIC_API_CHAT_MODELS: &[&str] = &[
 // routed variant with the same weights.
 pub const SUPPORTED_MINIMAX_API_CHAT_MODELS: &[&str] =
     &["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"];
-pub const SUPPORTED_CTOX_PROXY_API_CHAT_MODELS: &[&str] = &["MiniMax-M3", "kimi-k3"];
+// Everything llm.ctox.dev actually serves. Verified against the gateway on
+// 09.09.2026: `GET /v1/models` returns MiniMax-M3 (minimax), glm-5.3-flash
+// (zai) and kimi-k3 (kimi), and each of them answers a Responses request.
+pub const SUPPORTED_CTOX_PROXY_API_CHAT_MODELS: &[&str] =
+    &["MiniMax-M3", "glm-5.3-flash", "kimi-k3"];
 pub const SUPPORTED_OPENROUTER_API_CHAT_MODELS: &[&str] = &[
     "openai/gpt-oss-120b",
     "anthropic/claude-opus-4.7",

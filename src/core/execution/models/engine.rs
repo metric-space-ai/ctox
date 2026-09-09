@@ -414,7 +414,11 @@ pub fn api_provider_supports_model(provider: &str, model: &str) -> bool {
 pub fn default_api_provider_for_model(model: &str) -> &'static str {
     if is_anthropic_api_chat_model(model) {
         "anthropic"
-    } else if model.trim().eq_ignore_ascii_case("kimi-k3") {
+    // Models the gateway is the only route to. MiniMax-M3 is served by both
+    // llm.ctox.dev and MiniMax' own API and keeps its direct provider below;
+    // kimi-k3 and glm-5.3-flash have no direct provider here, so naming only
+    // kimi-k3 sent glm-5.3-flash to "openai", where no such model exists.
+    } else if is_ctox_proxy_api_chat_model(model) && !is_minimax_api_chat_model(model) {
         "ctox_proxy"
     } else if is_minimax_api_chat_model(model) {
         "minimax"
@@ -1955,6 +1959,18 @@ mod tests {
         assert!(is_ctox_proxy_api_chat_model("kimi-k3"));
         assert!(is_api_chat_model("kimi-k3"));
         assert_eq!(default_api_provider_for_model("kimi-k3"), "ctox_proxy");
+        // The gateway serves three models; glm-5.3-flash was missing here, so it
+        // resolved through the unknown-model path instead of its own provider.
+        assert!(is_ctox_proxy_api_chat_model("glm-5.3-flash"));
+        assert!(is_api_chat_model("glm-5.3-flash"));
+        assert_eq!(
+            default_api_provider_for_model("glm-5.3-flash"),
+            "ctox_proxy"
+        );
+        // MiniMax-M3 is reachable through the gateway but keeps its own direct
+        // provider as the default.
+        assert!(is_ctox_proxy_api_chat_model("MiniMax-M3"));
+        assert_eq!(default_api_provider_for_model("MiniMax-M3"), "minimax");
         assert!(api_provider_supports_model("ctox_proxy", "kimi-k3"));
         assert!(
             api_provider_supports_model("ctox_proxy", "future-proxy-model"),
