@@ -27,14 +27,26 @@ accepted.
    `preparation_status: "ready"`. This means the bounded, no-tool first turn
    ended successfully with the exact `READY` reply and a real, nonempty
    persisted rollout file. `thread/start` returning a path alone is not ready.
-7. Record or verify the returned `thread_id`, requested `model`, `provider`,
-   `reasoning`, branch, worktree, issue URL, prompt path and `rollout_path`.
-8. Send the full prompt file as the first implementation turn through Desktop
+7. Record or verify the returned `thread_id`, `project_id`, requested `model`,
+   `provider`, `reasoning`, branch, worktree, issue URL, prompt path and
+   `rollout_path`.
+8. Verify project inheritance and visibility before dispatch. The helper must
+   inherit the parent's canonical project through `thread/read`, or resolve
+   exactly one project by the parent's exact root through `project/list`; it
+   must persist that `project_id`, pass it to `thread/start`, and observe the
+   same assignment on the created thread. Then call Desktop `list_threads` and
+   locate the worker under the corresponding project membership or sidebar
+   context, using the Desktop surface's legacy project identifier when that is
+   what the listing exposes. A successful `send_message_to_thread` or
+   `read_thread` call alone does not establish project/sidebar visibility. If
+   assignment or visible membership is missing or wrong, stop and return the
+   integration boundary to the parent.
+9. Send the full prompt file as the first implementation turn through Desktop
    `send_message_to_thread` on that existing task. Keep its saved model/provider
    and reasoning settings. Do not use the general model picker as a provider
    switcher; for proxy models, confirm actual proxy routing and for OpenAI
    confirm no proxy request is used.
-9. Follow progress with bounded `wait_threads`. Do not leave duplicate polling
+10. Follow progress with bounded `wait_threads`. Do not leave duplicate polling
    loops or unowned processes running.
 
 ## 2. Register the pushed PR
@@ -105,7 +117,8 @@ findings.
 
 ## Evidence to retain
 
-Retain the issue and PR URLs, task and parent IDs, bounded prompt file, requested
+Retain the issue and PR URLs, task and parent IDs, canonical project assignment,
+Desktop `list_threads` membership evidence, bounded prompt file, requested
 and observed provider/model/reasoning, branch, worktree, preparation status and
 rollout path (or failure record), pushed commit, PR head, diff and validation
 results, review requests, retrospective JSON and assessed head, merge evidence,
