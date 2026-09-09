@@ -165,9 +165,14 @@ assert.ok(
   'Desktop syncing shell must only gate the replicated-collection path, not transient launcher fallbacks'
 );
 
+// `normalizeDesktopAppItem` was the desktop-shaped normalizer; since the App
+// Store reads only the server projection (93228b38a) the item normalizers are
+// `normalizeItem`/`normalizeMarketplaceItem`. The contract is unchanged: the
+// adapter normalizes catalog items, dedupes them, decides launchability and
+// opens the app.
 for (const requiredSnippet of [
   'isLaunchableModule',
-  'normalizeDesktopAppItem',
+  'normalizeItem',
   'uniqueCatalogItems',
   'openDesktopApp',
 ]) {
