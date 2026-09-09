@@ -54,8 +54,14 @@ IPC, collection records or network control endpoints.
 
 CredentialReply and its containing HostFrame omit Rust Debug through the
 existing sensitiveTypes generator option, now also respected for unions.
-No frame budget or Authority protocol changes are implied. Operational bounded
-framing/correlation, native dispatch and bootstrap are still outstanding.
+No frame budget or Authority protocol changes are implied. credential_ipc.rs now
+provides connection-owned bounded correlation (two pending requests, twenty-second
+deadline), owner-drop cancellation, strict response matching and bounded four-byte
+length-prefixed frame helpers. Serialization refuses oversized frames without
+allocating an unbounded output buffer; parse errors omit token-bearing input.
+These helpers still need binding into the owning IpcService and NativeSessionTarget
+provider. Native dispatch and bootstrap remain outstanding. Seven targeted tests
+cover framing, correlation, timeout and teardown; runtime results remain to verify.
 Workjet binds the generated callback to a host-owned credential lease and
 validates target/connection/epoch before reading or signing; this is not yet a
 running native service.

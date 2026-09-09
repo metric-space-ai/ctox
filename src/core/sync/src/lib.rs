@@ -8,6 +8,7 @@ pub mod business_data_contract;
 pub mod checkpoint;
 #[path = "contracts.generated.rs"]
 pub mod contracts;
+pub mod credential_ipc;
 pub mod host_config;
 #[cfg(feature = "webrtc")]
 pub mod host_runtime;
