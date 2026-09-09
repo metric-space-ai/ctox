@@ -16,8 +16,7 @@ use ring::{
     signature::{self, EcdsaKeyPair, KeyPair},
 };
 use rxdb::plugins::replication_webrtc::{
-    send_message_and_await_answer, webrtc_types::WebRTCPeerSessionValidation, LocalDeviceProof,
-    LocalSessionCredentials, WebRTCMessage,
+    send_message_and_await_answer, webrtc_types::WebRTCPeerSessionValidation, WebRTCMessage,
 };
 use serde_json::{json, Value};
 use std::{
@@ -215,44 +214,49 @@ async fn exercise(
         let counter = signed_challenges.clone();
         let credential_counter = credential_requests.clone();
         let public_seen = public_identity_seen.clone();
-        let credentials: rxdb::plugins::replication_webrtc::LocalSessionProvider<
-            rxdb::plugins::replication_webrtc::WebRTCRsConnection,
-        > = Arc::new(move |_connection, nonce| {
-            assert!(public_seen.load(Ordering::SeqCst), "credentials accessed before source proof");
-            credential_counter.fetch_add(1, Ordering::SeqCst);
-            let signer = signer.clone();
-            let counter = counter.clone();
-            Box::pin(async move {
-                let device_proof = nonce.map(|nonce| {
+        let (mut credential_channel, requester) = ctox_sync::credential_ipc::credential_channel();
+        let mut credential_tasks = tokio::task::JoinSet::new();
+        credential_tasks.spawn(async move {
+            while let Some(challenge) = credential_channel.next_challenge().await {
+                assert!(public_seen.load(Ordering::SeqCst), "credentials accessed before source proof");
+                credential_counter.fetch_add(1, Ordering::SeqCst);
+                let device_proof = challenge.nonce.map(|nonce| {
                     counter.fetch_add(1, Ordering::SeqCst);
                     let signature = signer.sign(&SystemRandom::new(), nonce.as_bytes()).unwrap();
                     let public = signer.public_key().as_ref();
-                    LocalDeviceProof {
+                    ctox_sync::business_data_contract::NativeBusinessDataDeviceProof {
                         public_x: URL_SAFE_NO_PAD.encode(&public[1..33]),
                         public_y: URL_SAFE_NO_PAD.encode(&public[33..65]),
                         signature: URL_SAFE_NO_PAD.encode(signature.as_ref()),
                     }
                 });
-                Ok(LocalSessionCredentials {
-                    capability_token: "fixture-private-read".into(),
-                    device_proof,
-                })
-            })
+                credential_channel.accept_reply(ctox_sync::business_data_contract::NativeBusinessDataCredentialReply {
+                    version: 1, request_id: challenge.request_id, connection_id: challenge.connection_id,
+                    session_epoch: challenge.session_epoch,
+                    capability_token: Some("fixture-private-read".into()), device_proof,
+                }).unwrap();
+            }
         });
         let pinned_key = if target_fault == TargetFault::Key {
             ctox_sync::authority::auth::SigningIdentity::from_pkcs8(
                 &ctox_sync::authority::auth::SigningIdentity::generate_pkcs8().unwrap()
             ).unwrap().public_identity()
         } else { source_pin.clone() };
-        client_options.local_session_provider = Some(Arc::new(move |_connection| {
+        client_options.local_session_provider = Some(Arc::new(move |connection| {
             let public_identity = pinned_key.clone();
-            let credentials = credentials.clone();
+            let requester = requester.clone();
             Box::pin(async move {
-                Ok(ctox_sync::native::NativeSessionTarget {
+                let binding = ctox_sync::native::NativeCredentialBinding {
+                    target_id: "saved-fixture".into(),
+                    connection_id: format!("fixture-{}", connection.generation()),
+                    account_epoch: 1,
+                    connection,
+                };
+                Ok(ctox_sync::native::NativeSessionTarget::with_ipc_credentials(
                     public_identity,
-                    instance_id: if target_fault == TargetFault::Instance { "wrong-instance" } else { "fixture-instance" }.into(),
-                    credentials,
-                })
+                    if target_fault == TargetFault::Instance { "wrong-instance" } else { "fixture-instance" }.into(),
+                    binding, requester,
+                ))
             })
         }));
         let mut client_errors = None;
@@ -451,6 +455,10 @@ async fn exercise(
             }
         }
         client.shutdown().await;
+        credential_tasks.abort_all();
+        while let Some(result) = credential_tasks.join_next().await {
+            if let Err(error) = result { assert!(error.is_cancelled(), "credential fixture panicked: {error}"); }
+        }
         server.shutdown().await;
         client_db.close().await.unwrap();
         server_db.close().await.unwrap();

@@ -29,6 +29,70 @@ pub struct NativeSessionTarget {
     >,
 }
 
+impl NativeSessionTarget {
+    /// Attach the private host callback to this exact native connection.
+    /// Pins are supplied by saved-target enrollment; the existing install_target_provider
+    /// still verifies their channel proof before this callback can run.
+    pub fn with_ipc_credentials(
+        public_identity: String,
+        instance_id: String,
+        binding: NativeCredentialBinding,
+        requester: crate::credential_ipc::CredentialRequester,
+    ) -> Self {
+        let credentials: rxdb::plugins::replication_webrtc::LocalSessionProvider<
+            rxdb::plugins::replication_webrtc::WebRTCRsConnection,
+        > = Arc::new(move |connection, nonce| {
+            let requester = requester.clone();
+            let target_id = binding.target_id.clone();
+            let connection_id = binding.connection_id.clone();
+            let epoch = binding.account_epoch;
+            let same_connection = connection == binding.connection;
+            Box::pin(async move {
+                let unavailable = || {
+                    rxdb::rx_error::new_rx_error(
+                        "RC_WEBRTC_PEER",
+                        Some(
+                            serde_json::json!({"code":"local_session_credentials_unavailable",
+                        "message":"native host credentials unavailable"}),
+                        ),
+                    )
+                };
+                if !same_connection {
+                    return Err(unavailable());
+                }
+                let reply = requester
+                    .request(&target_id, &connection_id, epoch, nonce)
+                    .await
+                    .map_err(|_| unavailable())?;
+                Ok(rxdb::plugins::replication_webrtc::LocalSessionCredentials {
+                    capability_token: reply.capability_token.ok_or_else(unavailable)?,
+                    device_proof: reply.device_proof.map(|proof| {
+                        rxdb::plugins::replication_webrtc::LocalDeviceProof {
+                            public_x: proof.public_x,
+                            public_y: proof.public_y,
+                            signature: proof.signature,
+                        }
+                    }),
+                })
+            })
+        });
+        Self {
+            public_identity,
+            instance_id,
+            credentials,
+        }
+    }
+}
+
+/// Allocated by the private connection's dispatcher, never from signaling claims.
+/// A new WebRTC generation requires a new binding; Main retains its captured epoch.
+pub struct NativeCredentialBinding {
+    pub target_id: String,
+    pub connection_id: String,
+    pub account_epoch: u64,
+    pub connection: rxdb::plugins::replication_webrtc::WebRTCRsConnection,
+}
+
 /// Resolve public pins without reading a token or signing a remote nonce.
 /// The native lifecycle invokes credentials only after channel-bound proof.
 pub type NativeSessionTargetProvider = Arc<

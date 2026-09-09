@@ -65,8 +65,13 @@ replies remain readable while dispatch waits; partial reads are not discarded
 when another event completes. All work is polled inside the service future, with
 no detached tasks, so closing/cancelling the stream drops pending work and its
 credential owner. Idle streams wait without a timeout; a started frame retains
-the twenty-second deadline. The concrete NativeSessionTarget provider, real
-BusinessData dispatcher and application bootstrap remain outstanding. Seven targeted tests
+the twenty-second deadline. NativeSessionTarget::with_ipc_credentials now binds
+the requester to one exact WebRTCRsConnection plus host-owned connection ID,
+saved target ID and account epoch. Existing source proof remains ahead of that
+callback. The real WebRTC credential tests use this correlated channel, including
+wrong source pin and revocation cases; their runtime result is still pending.
+The saved-target resolver, real BusinessData dispatcher and application bootstrap
+remain outstanding. Seven targeted tests
 cover framing, correlation, timeout and teardown; runtime results remain to verify.
 Workjet binds the generated callback to a host-owned credential lease and
 validates target/connection/epoch before reading or signing; this is not yet a
