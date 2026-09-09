@@ -111,7 +111,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: metric-space-ai/workjet
-          ref: 1a81eabec00fa262c36d72970376f2d09da6a48f
+          ref: 74c0fccf8515a0f4f8826321e507d6847aa0de64
           path: workjet
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
@@ -141,6 +141,9 @@ jobs:
           node src/core/sync/tools/generate-contracts.mjs --check --workjet-root ../workjet
           node src/core/sync/tools/assert-host-contracts.mjs ../workjet
       - name: Native authority, lifecycle and real WebRTC scenarios
+        # Contract drift remains a failing release gate. Still collect native
+        # scenario failures while a coordinated consumer pin is being updated.
+        if: ${{ !cancelled() && steps.format.outcome == 'success' }}
         run: cargo test --locked --no-fail-fast --manifest-path src/core/sync/Cargo.toml --features webrtc -- --show-output
       - name: Native RxDB tests with production ICE patch
         if: ${{ !cancelled() && steps.format.outcome == 'success' }}
