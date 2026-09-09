@@ -58,16 +58,23 @@ legacy relation is not proof of a new private execution's visibility.
 
 ## Integration and validation
 
-The implementation is based on CTOX 7198613f567e3cef2094ac12eebc713c5b9306e4
-and targets codex/native-transport-parity. Architecture owns transport, lifecycle
+The implementation started on CTOX 7198613f567e3cef2094ac12eebc713c5b9306e4
+and now includes Architecture base 67de21dc96bcd7511a14304dbe2acd16f35ddb48.
+It targets codex/native-transport-parity. Architecture owns transport, lifecycle
 and shared integration. Shared diffs are limited to command registration,
 project upsert, scoped Threads/MCP guards, generated schemas and cache revision.
 
 Canonical module/schema/hash generators were run. Besides the new CTOX/reports
 schemas, the module generator repairs existing Threads ticket_key JSON drift
 already present in schema.js. No existing collection version was changed.
-The browser bundle must match the generated source; the focused CI retains its
-pinned-esbuild artifact and fails until the matching bundle is committed.
+The browser bundle was generated with pinned esbuild in CI 34296701878 from
+052e49ac20242a9fbabf4d7b5b61b3bf186c6fd7. Artifact 10083396640 ZIP SHA-256:
+637181542267e3c3b5fe57a4b486cacbb06189ad1705f46b3fc9b5aca126c3aa.
+Its source revision and digest were verified before import; the generated diff
+adds exactly the three schema hashes. The native/browser schema contracts,
+module registry and offline fallback are synchronized. The static data-plane
+guard passes with one cache revision, 20260909-workjet-project-chats-v365.
+CI still requires the committed bundle to reproduce from its checked-out source.
 
 Native regression source covers concurrent first-chat creation, explicit-chat
 replay, transaction rollback, history preservation, profile/computer ownership,
