@@ -279,8 +279,7 @@ jobs:
           node --check src/apps/business-os/scripts/assert-file-viewer-integrity.mjs
           node --check src/apps/business-os/scripts/assert-business-chat-layout.mjs
           node --check src/apps/business-os/scripts/assert-business-chat-behavior.mjs
-          # deferred until shell-chat composition files land on main:
-          # node --check src/apps/business-os/scripts/assert-shell-chat-composition.mjs
+          node --check src/apps/business-os/scripts/assert-shell-chat-composition.mjs
           node --check src/apps/business-os/scripts/assert-module-conformance.mjs
           node --check src/apps/business-os/scripts/assert-command-consumer-inventory.mjs
           node --check src/apps/business-os/scripts/assert-production-release-docs.mjs
@@ -299,8 +298,7 @@ jobs:
           node src/apps/business-os/scripts/assert-module-context-contract.mjs
           node src/apps/business-os/scripts/assert-file-viewer-integrity.mjs
           node src/apps/business-os/scripts/assert-business-chat-layout.mjs
-          # deferred until shell-chat composition files land on main:
-          # node --test src/apps/business-os/shared/shell-chat-composition.test.mjs
+          node --test src/apps/business-os/shared/shell-chat-composition.test.mjs
           node src/core/rxdb/tools/assert_rxdb_soak_workflow.js
           node src/core/rxdb/tools/assert_sync_production_readiness_95.js
           node src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js --self-test
@@ -406,8 +404,7 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           npm --prefix src/apps/business-os run qa:design-gates
-          # deferred until shell-chat composition files land on main:
-          # node src/apps/business-os/scripts/assert-shell-chat-composition.mjs
+          node src/apps/business-os/scripts/assert-shell-chat-composition.mjs
           cargo build --locked --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target
           SMOKE_MODES="$(node -e "const { businessOsProductionSmokeModes } = require('./src/core/rxdb/tools/business_os_production_smoke_registry'); process.stdout.write(businessOsProductionSmokeModes.join(','));")"
           SMOKE_MODES="$SMOKE_MODES" \

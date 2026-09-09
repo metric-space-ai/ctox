@@ -4219,7 +4219,12 @@ async function syncTrackedMessages({ state, db, sync = null }) {
         chatChanged = true;
       }
       const outbound = extractOutboundText(commandDoc) || extractOutboundText(taskDoc);
-      if (outbound && !chat.messages.some((item) => item.replyFor === (message.taskId || message.commandId))) {
+      // A tracked message starts with only its command id and gains its task id
+      // the moment the queue admits it. Matching the marker against the current
+      // identity alone therefore missed a reply that had been filed under the
+      // other one, and the same answer was appended a second time (measured on
+      // welsch 09.09.2026). Both identities are the same conversation turn.
+      if (outbound && !hasReplyAlready(chat, message, outbound)) {
         chat.messages.push({
           id: `reply_${crypto.randomUUID()}`,
           role: 'ctox',
@@ -4234,7 +4239,7 @@ async function syncTrackedMessages({ state, db, sync = null }) {
         chatChanged = true;
         shouldFocusChat = true;
       }
-      if (isBlockedTrackingStatus(nextStatus) && !chat.messages.some((item) => item.blockedFor === (message.taskId || message.commandId))) {
+      if (isBlockedTrackingStatus(nextStatus) && !hasTrackingMarker(chat, 'blockedFor', message)) {
         chat.messages.push({
           id: `blocked_${crypto.randomUUID()}`,
           role: 'ctox',
@@ -4248,7 +4253,7 @@ async function syncTrackedMessages({ state, db, sync = null }) {
         changed = true;
         chatChanged = true;
       }
-      if (isFailureStatus(nextStatus) && !chat.messages.some((item) => item.failureFor === (message.taskId || message.commandId))) {
+      if (isFailureStatus(nextStatus) && !hasTrackingMarker(chat, 'failureFor', message)) {
         chat.messages.push({
           id: `failure_${crypto.randomUUID()}`,
           role: 'ctox',
@@ -4448,6 +4453,35 @@ function canonicalTrackingStatus(status) {
 function isTerminalTrackingStatus(status) {
   const value = canonicalTrackingStatus(status);
   return ['completed', 'failed', 'cancelled', 'canceled', 'error'].includes(value);
+}
+
+// The answer reaches the chat document from two writers: the native projection
+// appends it without a marker, and this tracking pass appends it with
+// `replyFor`. Text plus the turn's identity is what makes them the same answer;
+// measured on welsch 09.09.2026, where every completed chat carried its reply
+// twice.
+export function hasReplyAlready(chat, message, outbound) {
+  if (hasTrackingMarker(chat, 'replyFor', message)) return true;
+  const text = String(outbound || '').trim();
+  if (!text) return false;
+  const keys = [message?.taskId, message?.commandId].map((value) => String(value || '').trim()).filter(Boolean);
+  return (chat?.messages || []).some((item) => {
+    if (item?.role !== 'ctox' || String(item?.text || '').trim() !== text) return false;
+    const itemKeys = [item?.taskId, item?.commandId].map((value) => String(value || '').trim()).filter(Boolean);
+    return !itemKeys.length || !keys.length || itemKeys.some((key) => keys.includes(key));
+  });
+}
+
+// One conversation turn is addressed by its command id before the queue admits
+// it and by its task id afterwards. A marker filed under either identity means
+// the chat already carries that message.
+export function hasTrackingMarker(chat, field, message) {
+  const keys = [message?.taskId, message?.commandId].map((value) => String(value || '').trim()).filter(Boolean);
+  if (!keys.length) return false;
+  return (chat?.messages || []).some((item) => {
+    const marker = String(item?.[field] || '').trim();
+    return marker && keys.includes(marker);
+  });
 }
 
 function extractOutboundText(doc) {
@@ -8934,6 +8968,8 @@ async function cancelScheduledChat(state, chat, db, root, commandBus, getActiveM
 }
 
 export const __businessChatTestInternals = Object.freeze({
+  hasTrackingMarker,
+  hasReplyAlready,
   crewMemberExpression,
   wireCrewAppPresence,
   crewPoolSlotHtml,

@@ -3159,3 +3159,50 @@ test('crew app presence maps active queue tasks to their app by member', () => {
   assert.equal(crewAppPresenceFromTasks([], members).size, 0);
   assert.equal(crewAppPresenceFromTasks(tasks, []).size, 0);
 });
+
+test('a reply filed under the command id is not appended again once the task id arrives', () => {
+  const hooks = __businessChatTestInternals;
+  // The chat tracks a turn by command id until the queue admits it; then the
+  // same turn carries a task id. Measured on welsch 09.09.2026: the answer was
+  // stored twice because the second pass looked only for the task id.
+  const chat = {
+    id: 'chat-dup',
+    messages: [
+      { role: 'user', text: 'Frage' },
+      { role: 'ctox', text: 'Antwort', replyFor: 'cmd-1' },
+    ],
+  };
+  const beforeAdmission = { commandId: 'cmd-1', taskId: '' };
+  const afterAdmission = { commandId: 'cmd-1', taskId: 'queue:system::abc' };
+  assert.equal(hooks.hasTrackingMarker(chat, 'replyFor', beforeAdmission), true);
+  assert.equal(hooks.hasTrackingMarker(chat, 'replyFor', afterAdmission), true, 'the task id must find the reply filed under its command id');
+  assert.equal(hooks.hasTrackingMarker(chat, 'replyFor', { commandId: 'cmd-2', taskId: 'queue:system::other' }), false);
+  assert.equal(hooks.hasTrackingMarker(chat, 'failureFor', afterAdmission), false);
+  assert.equal(hooks.hasTrackingMarker(chat, 'replyFor', { commandId: '', taskId: '' }), false);
+});
+
+test('an answer the native projection already appended is not repeated by the chat', () => {
+  const hooks = __businessChatTestInternals;
+  const answer = 'Die Hauptstadt von Norwegen ist Oslo.';
+  const tracked = { commandId: 'cmd_5f2', taskId: 'queue:system::a55d' };
+  // The projection writes the answer without a marker but with the turn's ids.
+  const projected = {
+    id: 'chat-native',
+    messages: [
+      { role: 'user', text: 'Frage' },
+      { role: 'ctox', text: answer, commandId: 'cmd_5f2', taskId: 'queue:system::a55d' },
+    ],
+  };
+  assert.equal(hooks.hasReplyAlready(projected, tracked, answer), true);
+  // A different answer in the same turn is a new message.
+  assert.equal(hooks.hasReplyAlready(projected, tracked, 'Etwas anderes.'), false);
+  // The same text belonging to another turn must not silence this one.
+  const foreign = { id: 'chat-foreign', messages: [{ role: 'ctox', text: answer, commandId: 'cmd_other', taskId: 'queue:system::other' }] };
+  assert.equal(hooks.hasReplyAlready(foreign, tracked, answer), false);
+  // The marker path still holds.
+  const marked = { id: 'chat-marked', messages: [{ role: 'ctox', text: 'anders formuliert', replyFor: 'cmd_5f2' }] };
+  assert.equal(hooks.hasReplyAlready(marked, tracked, answer), true);
+  // A user echo of the same sentence is not the crew's answer.
+  const echo = { id: 'chat-echo', messages: [{ role: 'user', text: answer, commandId: 'cmd_5f2' }] };
+  assert.equal(hooks.hasReplyAlready(echo, tracked, answer), false);
+});

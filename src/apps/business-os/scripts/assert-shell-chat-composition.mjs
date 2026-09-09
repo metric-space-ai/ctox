@@ -54,9 +54,19 @@ try {
 
   const topAppTab = page.locator('[data-top-app-tab]');
   expect(await topAppTab.count() === 1, 'top app tab locator must be unique');
-  const minimizeAction = page.locator('.shell-window-control--minimize');
-  expect(await minimizeAction.count() === 1, 'window minimize locator must be unique');
-  await minimizeAction.click();
+  // Shell-V2 windows carry a single title-bar control (close); minimizing comes
+  // from the window menu, which calls `wm.minimize(id)` (app.js:2227). Asserting
+  // a `.shell-window-control--minimize` button asserted the v1 chrome and left
+  // this guard red on main. The v2 chrome rule is checked instead, and the
+  // harness minimizes the way the shell does.
+  const titleBarControls = await page.evaluate(
+    () => [...document.querySelectorAll('.shell-window [data-window-control]')].map((node) => node.dataset.windowControl),
+  );
+  expect(
+    titleBarControls.length === 1 && titleBarControls[0] === 'close',
+    `Shell-V2 windows expose exactly one title-bar control: ${JSON.stringify(titleBarControls)}`,
+  );
+  await page.evaluate(() => window.shellHarness.minimize());
   await page.waitForFunction(() => getComputedStyle(document.querySelector('.shell-window')).display === 'none');
   await topAppTab.click();
   await page.waitForFunction(() => getComputedStyle(document.querySelector('.shell-window')).display !== 'none');
@@ -65,7 +75,7 @@ try {
   observations.push({ phase: 'expanded-restored-from-top-tab', ...restoredFromTopTab });
   expect(closeRect(restoredFromTopTab.window, restoredFromTopTab.baselineWindow), 'restoring from the top tab must preserve normal window geometry');
   expect(!restoredFromTopTab.chatSide, 'restoring an app must not move chat to the side');
-  await minimizeAction.click();
+  await page.evaluate(() => window.shellHarness.minimize());
   await page.waitForFunction(() => getComputedStyle(document.querySelector('.shell-window')).display === 'none');
   await topAppTab.focus();
   await topAppTab.press('Enter');
@@ -121,28 +131,42 @@ try {
     expect(chat.x >= 0 && chat.right <= 1200, `active chat must remain inside viewport: ${JSON.stringify(chat)}`);
   }
 
+  // Snapping is resolved from the dragged window's edges, not from the pointer:
+  // `resolveWindowLayout` makes a zone eligible when the window's edge lands
+  // within the mouse `enter` threshold (16px) of the work-area edge
+  // (window-layout-resolver.js). The old pointer-edge assertions belonged to an
+  // earlier model. The window is first made small enough that one edge can be
+  // near the work area at a time; at its normal size it touches top and bottom
+  // at once and every drag resolves to a corner.
   await page.evaluate(() => window.shellHarness.restoreNormal());
-  await dragWindowHeaderTo(page, 1, null);
+  await page.evaluate(() => window.shellHarness.setSize(420, 300));
+  const work = await page.evaluate(() => window.shellHarness.workArea());
+  const inset = 40;
+
+  await dragWindowToLayerPoint(page, work, { left: work.left + 120, top: work.top + inset });
+  const freelyMoved = await page.evaluate(() => window.shellHarness.collect());
+  observations.push({ phase: 'drag-free-move', ...freelyMoved, work });
+  expect(freelyMoved.snapZone === null, `moving a window inside the desktop must not force a snap, got ${freelyMoved.snapZone}`);
+
+  await dragWindowToLayerPoint(page, work, { left: work.left + 2, top: work.top + inset });
   const leftSnap = await page.evaluate(() => window.shellHarness.collect());
   observations.push({ phase: 'drag-snap-left', ...leftSnap });
-  expect(leftSnap.snapZone === 'left', `straight horizontal drag must snap left, got ${leftSnap.snapZone}`);
+  expect(leftSnap.snapZone === 'left', `a window parked on the left work edge must snap left, got ${leftSnap.snapZone}`);
 
   await page.evaluate(() => window.shellHarness.restoreNormal());
-  await dragWindowHeaderTo(page, 1199, null);
+  await page.evaluate(() => window.shellHarness.setSize(420, 300));
+  await dragWindowToLayerPoint(page, work, { left: work.left + work.width - 422, top: work.top + inset });
   const rightSnap = await page.evaluate(() => window.shellHarness.collect());
   observations.push({ phase: 'drag-snap-right', ...rightSnap });
-  expect(rightSnap.snapZone === 'right', `straight horizontal drag must snap right, got ${rightSnap.snapZone}`);
+  expect(rightSnap.snapZone === 'right', `a window parked on the right work edge must snap right, got ${rightSnap.snapZone}`);
 
   await page.evaluate(() => window.shellHarness.restoreNormal());
-  const surfaceTop = await page.locator('[data-surface]').evaluate((node) => node.getBoundingClientRect().top);
-  await dragWindowHeaderTo(page, 600, surfaceTop + 180);
-  const freelyMoved = await page.evaluate(() => window.shellHarness.collect());
-  observations.push({ phase: 'drag-free-move', ...freelyMoved });
-  expect(freelyMoved.snapZone === null, 'moving a window inside the desktop must not force a snap');
-  await dragWindowHeaderTo(page, null, surfaceTop + 1);
+  await page.evaluate(() => window.shellHarness.setSize(420, 300));
+  await dragWindowToLayerPoint(page, work, { left: work.left + 120, top: work.top + 2 });
   const topSnap = await page.evaluate(() => window.shellHarness.collect());
   observations.push({ phase: 'drag-snap-top', ...topSnap });
-  expect(topSnap.snapZone === 'top', `vertical drag must snap top, got ${topSnap.snapZone}`);
+  expect(topSnap.snapZone === 'top', `a window parked on the top work edge must snap top, got ${topSnap.snapZone}`);
+  await page.evaluate(() => window.shellHarness.restoreNormal());
 
   const fatalConsole = consoleEvents.filter((event) => ['pageerror', 'requestfailed', 'error'].includes(event.type));
   expect(fatalConsole.length === 0, `browser console/network must stay clean: ${JSON.stringify(fatalConsole)}`);
@@ -175,14 +199,70 @@ function closeRect(actual, expected, tolerance = 1) {
 }
 
 async function dragWindowHeaderTo(page, targetX, targetY) {
-  const header = page.locator('.shell-window [data-window-header]');
-  const box = await header.boundingBox();
-  if (!box) throw new Error('window header is not visible');
-  const startX = box.x + Math.min(box.width * 0.55, 420);
-  const startY = box.y + box.height / 2;
+  const grab = await windowDragGrabPoint(page);
+  const startX = grab.x;
+  const startY = grab.y;
   await page.mouse.move(startX, startY);
   await page.mouse.down();
   await page.mouse.move(targetX ?? startX, targetY ?? startY, { steps: 12 });
+  await page.mouse.up();
+  await page.waitForTimeout(80);
+}
+
+// The window manager refuses a drag that starts on a control
+// (`interactiveSelector` in window-manager.js), and the Shell-V2 header row
+// packs title, meta, actions and controls across its width — the old fixed
+// 55%-of-width grab point landed on a button, so every drag silently did
+// nothing and the snap assertions failed on an intact product. Grab the first
+// spot the shell itself would accept.
+async function windowDragGrabPoint(page) {
+  const point = await page.evaluate(() => {
+    const interactive = 'button, a, input, select, textarea, [contenteditable="true"],'
+      + ' [role="button"], [role="tab"], [data-window-controls], [data-window-actions],'
+      + ' [data-window-header-action], [data-resizer]';
+    // Every region the shell declares as draggable, icon block first: in
+    // Shell-V2 the header row is fully covered by title, actions and controls,
+    // so the icon block is the move affordance the product actually offers.
+    const regions = [...document.querySelectorAll('.shell-window [data-window-drag-region]')]
+      .sort((a, b) => Number(b.matches('.shell-window-v2-icon')) - Number(a.matches('.shell-window-v2-icon')));
+    for (const region of regions) {
+      const rect = region.getBoundingClientRect();
+      if (rect.width < 2 || rect.height < 2) continue;
+      const y = rect.y + rect.height / 2;
+      for (let ratio = 0.05; ratio <= 0.95; ratio += 0.02) {
+        const x = rect.x + rect.width * ratio;
+        const hit = document.elementFromPoint(x, y);
+        if (!hit || !region.contains(hit)) continue;
+        // The region itself may carry role="button"; only a control *inside* it
+        // blocks the drag.
+        const blocker = hit.closest(interactive);
+        if (blocker && blocker !== region && region.contains(blocker)) continue;
+        return { x, y };
+      }
+    }
+    return null;
+  });
+  if (!point) throw new Error('no draggable spot on the window header');
+  return point;
+}
+
+// Move the window so its top-left lands on the given work-area (layer)
+// coordinates; the pointer carries the window by delta, so the grab point moves
+// by the same amount. Layer coordinates become client coordinates through the
+// layer origin the window manager reports.
+async function dragWindowToLayerPoint(page, work, { left, top }) {
+  const grab = await windowDragGrabPoint(page);
+  const rect = await page.evaluate(() => {
+    const el = document.querySelector('.shell-window').getBoundingClientRect();
+    return { left: el.left, top: el.top };
+  });
+  await page.mouse.move(grab.x, grab.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    grab.x + (work.originLeft + left - rect.left),
+    grab.y + (work.originTop + top - rect.top),
+    { steps: 12 },
+  );
   await page.mouse.up();
   await page.waitForTimeout(80);
 }
@@ -331,6 +411,9 @@ function harnessHtml() {
       get windowClicks(){ return windowClicks; },
       get layoutEvents(){ return layoutEvents; },
       maximize(){ if (wm.describe(handle.id)?.state !== 'maximized') wm.toggleMaximize(handle.id); },
+      minimize(){ wm.minimize(handle.id); },
+      workArea(){ const vp = wm.getViewport(); return { originLeft: vp.originLeft, originTop: vp.originTop, left: vp.left, top: vp.top, width: Math.max(0, vp.w - vp.left - vp.right), height: Math.max(0, vp.h - vp.top - vp.bottom) }; },
+      setSize(width, height){ const el = document.querySelector('.shell-window'); el.style.width = width + 'px'; el.style.height = height + 'px'; },
       snapBottom(){ if (wm.describe(handle.id)?.state === 'maximized') wm.toggleMaximize(handle.id); wm.snapTo(handle.id, 'bottom'); },
       restoreNormal(){ const el=document.querySelector('.shell-window'); if(wm.describe(handle.id)?.state==='maximized'){ wm.toggleMaximize(handle.id); } else if(el?.classList.contains('is-snapped')){ wm.toggleMaximize(handle.id); wm.toggleMaximize(handle.id); } },
       collect,
