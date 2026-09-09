@@ -9,40 +9,41 @@ command delivery defects remain in this offensive.
 
 ## Latest full-host evidence
 
-PR69 source `7198613f567e3cef2094ac12eebc713c5b9306e4`, run
-`34290313600`, full-host job `102275164694`: **FAIL overall**.
-Tested merge `27e3f41f978807a0fb09a8e2985b5a2bb2d6d845`; binary SHA256
-`ba546cab058042b30ec8534b595da589479df0184e4ed5ae39ec13f84eb552de`.
+PR69 source `67de21dc96bcd7511a14304dbe2acd16f35ddb48`, run
+`34296338920`, full-host job `102293679231`: **FAIL overall**.
+Tested merge `de3d33afd51525ca273bee4d55b699e21f264546`; binary SHA256
+`f1299e4565fafef7cfeab47705284898c93da4b55d9d725058816bd8d15c1150`.
 
 - Strict native outage passes: one dispatch, no resubmission or collection
-  repair, queued receipt in 8169.5 ms. Native command v2/task v3 and browser
-  task counts each equal one, with both cross-references matching. The
-  preceding canonical-schema run34285060254 independently passed in7418.1ms.
-  Neither run executes a coding harness or closes the interrupted batch incident.
-- Warm30-command p50 402ms / p95 537.3ms remains above the300ms p50 limit.
-  Critical30-reload p95 3284.88ms passes the5000ms gate. Context fails at
-  direct-denial with a browser command still pending_sync; no final canonical
-  denied-command row was retained. Browser metadata does not prove admission.
-- Context native CPU averages169.12% of one core over128.01 measured seconds.
-  No thread-limit omissions/read errors; observer cost~0.72%. RxDB thread names
-  identify load, not a source callsite. SQLite statement timers include visitor
-  and decoding time; projection timers include outer waits. The new bounded
-  owned-PID symbol profiler awaits actual Linux results and does not replace
-  unprofiled performance gates.
-- Complete bounded actor/native diagnostics were retained in this real failing
-  run. The native heartbeat was fresh and reported replicationUp while browser
-  queries and writes remained delayed. A fixture denial timeout exposed its
-  ephemeral capability; the diagnostic now returns selected command fields.
+  repair, queued receipt in 8231 ms. Native command v2/task v3 and browser
+  task counts each equal one, with both cross-references matching.
+  This does not execute a coding harness or close the interrupted batch incident.
+- Warm30-command p50 404 ms / p95 577.45 ms FAILS the 300 ms p50 gate.
+  Critical30-reload p95 3538.10 ms PASSES the 5000 ms gate.
+  The 21-collection reload/restart check also passes.
+- Context fails in phase `context-app`, with concurrent masterChangesSince
+  timeouts. Its native process averages 149.98% of one core over 381.13 measured
+  seconds, observer cost ~0.65%, no thread-limit omissions/read errors.
+  The longer failure cohort is not directly comparable to earlier denial-stage
+  failures and does not demonstrate a CPU improvement.
+- A separate real CTOX user-space profile now succeeds: 2444 samples, zero lost
+  samples, 30 seconds at 49 Hz. The flat report contains SQLite schema lookup/
+  parser work and mutex operations; it is not a caller stack. Source inspection
+  found one cached reader per collection. The new candidate bounds point-read
+  caches at four per storage factory and separates the change-feed reader.
+  Native correctness and full-host performance of this change remain pending.
+- Four-host control acceptance, Linux/macOS native checks, Chromium and all six
+  earlier native migration regressions pass. Four-host authority validation
+  p50 10.39 ms measures control traffic, not business commands or harness execution.
 - The legacy migration-version mode still assumes obsolete commandv1/taskv0
-  tables. Replacing constants alone would not prove preserved-data migration;
-  populated historical fixtures, inventory comparison and recovery remain open.
+  tables. Realistic copied stores, inventory comparison and recovery remain open.
 
 Migration source audit reproduced an equal-clock legacy upsert overwriting a
 target deletion marker in real SQLite. The candidate now rejects divergent
 equal-clock rows, rolls back that table and retains the source; exact retries
-perform no rewrite. Full native regression execution for this change is pending.
-Its new CI gate includes the existing migration tests, correcting their obsolete
-queue-task target from v2 to the registered v3. This is not migration acceptance.
+perform no rewrite. All six native migration regressions pass on source67de21dc9,
+including the equal-clock and exact-retry cases. This is not full migration
+acceptance; copied realistic stores, inventory comparison and recovery remain open.
 
 A further source-level defect is confirmed in the old cleanup path: active
 schema metadata alone allowed it to drop a populated old table. The forced

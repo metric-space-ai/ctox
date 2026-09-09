@@ -238,8 +238,33 @@ a nonempty native sample. The original context fixture exit code is preserved.
 These diagnostic timings never replace the command/reload budgets, and a flat
 user-space profile is neither a call graph nor kernel-CPU or tenant acceptance.
 Local process-lifecycle tests cover PID reuse, permission failure, empty samples
-and bounded profiler cleanup; real Linux attribution remains unverified until
-the workflow produces a usable profile.
+and bounded profiler cleanup. The first usable CTOX profile and its limits are
+recorded below; they do not replace unprofiled acceptance timings.
+
+
+The SQLite reader cache belongs to the storage factory, not each collection.
+A native context reproduction at source `67de21dc9`
+([run34296338920](https://github.com/metric-space-ai/ctox/actions/runs/34296338920))
+retained 2,444 user-space samples with no lost samples. The flat report contains
+SQLite schema lookup/parser work and mutex operations; it does not identify
+a complete caller stack or prove which connection caused each sample.
+
+The reader-cache candidate shares four lazily opened point-read connections
+across collections of one storage factory, plus one separate change-feed reader.
+This replaces the previous per-collection read caches. Long query streams retain
+their dedicated readers, and the write connection remains separate. Opening
+a cached connection and taking its lock happens in `spawn_blocking`, so lazy
+initialization does not block a Tokio worker. Different storage factories never
+share a cache by filename; closing one collection does not close another's reader.
+The existing in-memory fallback and query-stream isolation remain unchanged.
+
+Native regressions exercise real reads/writes across 24 collections with identical
+document IDs, closing one collection while a neighbor reads, a separate database,
+and point-read progress while the change-feed reader is held. These checks do not
+establish command latency or production acceptance. The preceding unprofiled run
+measured warm30 p50 404 ms / p95 577.45 ms (FAIL) and critical30 boot p95 3538.10 ms
+(PASS). The new full native/browser run must measure the cache change against
+those gates; no performance improvement is claimed before that result.
 
 The authenticated two-profile context fixture persists the exact requester
 command and reviewer result status snapshots before their assertions, outside
