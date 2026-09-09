@@ -15,6 +15,7 @@ import uuid
 import experience
 import availability
 import preparation
+import context_config
 
 HOME = Path.home() / '.codex'
 JOBS = HOME / 'proxy-workers' / 'jobs'
@@ -176,6 +177,9 @@ def create(args):
     if not prompt:
         raise ValueError('Assignment must not be empty')
     provider = 'cli_proxy' if args.model in PROXY_MODELS else 'openai'
+    context_path = None
+    if provider == 'cli_proxy':
+        context_path = context_config.install(worktree, HOME / 'model-catalogs/cli-proxy.json', run)
     output = Path('/Volumes/tmp/dev-artifacts') / repo.name / ('worker-' + branch.replace('/', '-'))
     output.mkdir(parents=True, exist_ok=True)
     cmd = [str(BINARY), '-c', 'model_catalog_json=' + json.dumps(str(HOME / 'model-catalogs/cli-proxy.json'))]
@@ -196,7 +200,7 @@ def create(args):
         try:
             process_file = output / 'process.json'
             save(process_file, {'owner': args.parent_thread, 'pid': proc.pid,
-                               'purpose': 'persist task through a READY-only preparation turn', 'stop_condition': 'finally; startup 30 seconds and preparation at most 90 seconds'})
+                               'purpose': 'persist execution contract without inference', 'stop_condition': 'finally; startup and persistence each at most 30 seconds'})
             sel = selectors.DefaultSelector()
             sel.register(proc.stdout, selectors.EVENT_READ)
             client = preparation.Client(proc, sel, time.monotonic() + 30)
@@ -205,9 +209,15 @@ def create(args):
                                       'capabilities': {'experimentalApi': True}})
             send({'method': 'initialized', 'params': {}})
             project_id = resolve_parent_project(request, args.parent_thread)
+            if provider == 'cli_proxy':
+                context_config.verify(request, worktree)
             result = request(2, 'thread/start', {'model': args.model, 'modelProvider': provider,
                 'cwd': str(worktree), 'ephemeral': False, 'projectId': project_id,
-                'config': {'model_reasoning_effort': args.reasoning}})
+                'historyMode': 'paginated',
+                'config': {'model_reasoning_effort': args.reasoning,
+                           **({'model_context_window': 256000,
+                               'model_auto_compact_token_limit': 230400}
+                              if provider == 'cli_proxy' else {})}})
             thread = result['thread']['id']
             path = JOBS / (thread + '.json')
             prompt_path = JOBS / (thread + '.prompt.md')
@@ -215,15 +225,23 @@ def create(args):
                 'Read ~/.codex/skills/proxy-model-workers/SKILL.md before work. '
                 'Stay within the assigned scope; return unclear decisions to the parent. '
                 'Do not recursively delegate or merge. Use this tmp-volume worktree and the shared heavy-job gate. '
-                'Commit, push and open a PR before handoff (draft if unfinished). '
+                'Before first publication, send the exact diff, all new commits and proposed public text '
+                'to the parent for confidentiality review. Keep private handovers, runtime IDs and local '
+                'operator details out of public text and source. After review, commit, push and open '
+                'a PR before handoff (draft if unfinished). '
                 'After creating the PR, rename this task with set_thread_title to the required_title returned by bind-pr. '
                 'Register the PR with worker.py bind-pr --thread ' + thread + ' --pr PR_URL. '
-                'Report the PR, pushed commit, validation, remaining processes and cleanup status. '
+                'Actively report PR-ready, rework-ready or actionable blockers with send_message_to_thread '
+                'to parent ' + args.parent_thread + ', including pushed commit, validation gaps, '
+                'remaining processes and cleanup status. Do not rely on a final answer alone. '
                 'If pushing is blocked, preserve source durably and report the blocker.\n')
             job = {'thread_id': thread, 'host_id': 'local', 'parent_thread': args.parent_thread,
                    'project_id': project_id,
                    'repository': repository, 'issue_url': issue['url'], 'repo': str(repo), 'worktree': str(worktree), 'branch': branch,
                    'model': args.model, 'provider': provider, 'reasoning': args.reasoning,
+                   'context_config_path': context_path,
+                   'context_window': 256000 if provider == 'cli_proxy' else None,
+                   'auto_compact_token_limit': 230400 if provider == 'cli_proxy' else None,
                    'title': title, 'summary': args.title, 'parent_title': args.parent_title, 'worker_number': worker_number,
                    'prompt_file': str(prompt_path), 'created_at': timestamp(), 'pr_url': None,
                    'rollout_path': result['thread'].get('path'), 'preparation_status': 'preparing'}
@@ -235,9 +253,10 @@ def create(args):
             prompt_path.write_text(full_prompt)
             prompt_path.chmod(0o600)
             request(3, 'thread/name/set', {'threadId': thread, 'name': title})
-            client.deadline = time.monotonic() + 90
+            client.deadline = time.monotonic() + 30
             job['preparation_turn_id'] = client.prepare(thread, job['rollout_path'])
-            job.update(preparation_status='ready', prepared_at=timestamp())
+            job.update(preparation_status='ready', preparation_mode='contract_without_inference',
+                       prepared_at=timestamp())
             save(path, job)
             print(json.dumps(job, indent=2))
         except Exception as exc:

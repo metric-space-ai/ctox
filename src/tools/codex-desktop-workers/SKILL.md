@@ -66,8 +66,9 @@ For Desktop tasks, `thread/start` accepts separate `model` and `modelProvider`
 fields. A saved task retains its provider on subsequent turns. The app's
 `create_thread` tool exposes a model override but no provider field: do not use
 that alone to create a non-OpenAI task. Use the helper below. It prepares
-the task with a bounded, no-tool READY-only model turn that materializes its
-rollout file, then stops its temporary app-server. Start implementation through the normal
+the task by persisting its authorized developer execution contract with
+`thread/inject_items`, without a user message, model turn or initialization reply.
+It verifies the rollout and read-back, then stops its temporary app-server. Start implementation through the normal
 Desktop `send_message_to_thread` tool, so the existing app owns execution.
 The general model picker is not configured as a provider switcher.
 
@@ -85,7 +86,12 @@ provider metadata to disguise the limitation.
 Model self-identification is not routing evidence. Inspect saved settings and
 proxy requests. Grok's subscription backend has reported `grok-4.6-build`;
 `grok-4.6-exact` is the existing client alias. The catalog uses a conservative
-128k context budget for these integrations, not a claim of maximum capacity.
+256,000-token context budget for these integrations, with a 230,400-token
+auto-compaction threshold. This is configured capacity, not a measured provider maximum.
+The helper creates private, Git-ignored `.codex/config.toml` settings in each proxy
+worktree and verifies their effective values with `config/read` before dispatch.
+It refuses to overwrite existing/tracked configuration or silently ignore an
+untrusted project layer. OpenAI workers do not receive these overrides.
 
 ## Prepare and dispatch
 
@@ -121,9 +127,11 @@ proxy requests. Grok's subscription backend has reported `grok-4.6-build`;
    another repository. If the parent has no assignment, its working directory
    must match exactly one saved project's root; otherwise fix the parent's
    project assignment before retrying. The returned project assignment is verified.
-   The initial READY-only turn consumes a model request and has a 90-second
-   deadline. It must complete successfully with a real rollout file before
-   `preparation_status` becomes `ready`. The assignment is not sent in this turn.
+   Persistence has a 30-second deadline and makes no model request. A real rollout
+   and successful read-back are required before `preparation_status` becomes
+   `ready`; `preparation_turn_id` is null and `preparation_mode` is
+   `contract_without_inference`. The first user message and first inference turn
+   are the actual assignment delivered through Desktop.
    Failed preparations retain their task ID, error and recovery guidance in the
    registry. Inspect that record and recover the same task before implementation;
    rerunning create cannot silently replace a failed task on the same worktree.
@@ -131,6 +139,24 @@ proxy requests. Grok's subscription backend has reported `grok-4.6-build`;
    `send_message_to_thread`, using the returned thread ID and reasoning.
    Emit the created-task directive required by the app. Follow progress using
    bounded `wait_threads`; keep the existing model/provider settings.
+
+## Context continuity and publication
+
+Compaction is not completion. Keep a concise private checkpoint containing the
+active goal, completed work and evidence, outstanding checks, latest corrections,
+publication restrictions and next responsible task. Recover it after every
+compaction; do not revive superseded instructions or repeat finished work. Parent
+corrections must also update the durable handover/checkpoint, not only transient
+chat. Validate at least two consecutive real compactions with intervening changes
+to acceptance criteria before claiming long-running integration works. A unit
+test or successful short turn does not establish that behavior.
+
+Public issues contain sanitized technical summaries; private handovers, task IDs,
+operator paths and model notes stay outside the repository. Before first
+publication the parent reviews exact outgoing text, all new commits and the diff.
+Review generated logs/artifacts too. Secret scanning supplements this review; it
+does not detect every private business detail. Follow GLOBAL-INSTRUCTIONS.md for
+the complete confidentiality boundary and active parent/supervisor reporting.
 
 ## PR and merge lifecycle
 
