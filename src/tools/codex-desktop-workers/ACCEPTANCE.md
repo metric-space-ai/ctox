@@ -30,24 +30,30 @@ accepted.
 7. Record or verify the returned `thread_id`, `project_id`, requested `model`,
    `provider`, `reasoning`, branch, worktree, issue URL, prompt path and
    `rollout_path`.
-8. Verify project inheritance and visibility before dispatch. The helper must
-   inherit the parent's canonical project through `thread/read`, or resolve
-   exactly one project by the parent's exact root through `project/list`; it
-   must persist that `project_id`, pass it to `thread/start`, and observe the
-   same assignment on the created thread. Then call Desktop `list_threads` and
-   locate the worker under the corresponding project membership or sidebar
-   context, using the Desktop surface's legacy project identifier when that is
-   what the listing exposes. A successful `send_message_to_thread` or
-   `read_thread` call alone does not establish project/sidebar visibility. If
-   assignment or visible membership is missing or wrong, stop and return the
+8. Verify canonical project inheritance and provider-appropriate listing before
+   dispatch. The helper must inherit the parent's canonical project through
+   `thread/read`, or resolve exactly one project by the parent's exact root
+   through `project/list`; it must persist that `project_id`, pass it to
+   `thread/start`, and observe the same assignment on the created thread. The
+   canonical project ID remains authoritative in the app-server and registry
+   even when the legacy UI project label is null. Ordinary Desktop
+   `list_threads` filters to OpenAI (`modelProviders: null`), so absence of a
+   proxy worker from ordinary project listing is a documented app limitation,
+   not a failed worker. Raw `thread/list` with `modelProviders: []` lists all
+   providers. For a proxy worker, the parent pins it with
+   `move_thread_to_sidebar_section(sectionId='pinned')`, verifies it in
+   `pinnedThreads`, and records that membership evidence. A successful
+   `send_message_to_thread` or `read_thread` call alone does not establish
+   visibility. If canonical assignment is wrong, stop and return the
    integration boundary to the parent.
 9. Send the full prompt file as the first implementation turn through Desktop
    `send_message_to_thread` on that existing task. Keep its saved model/provider
    and reasoning settings. Do not use the general model picker as a provider
    switcher; for proxy models, confirm actual proxy routing and for OpenAI
    confirm no proxy request is used.
+
 10. Follow progress with bounded `wait_threads`. Do not leave duplicate polling
-   loops or unowned processes running.
+    loops or unowned processes running.
 
 ## 2. Register the pushed PR
 
@@ -88,7 +94,9 @@ Complete this sequence only after the implementation and rework are accepted:
    checked out, HEAD equal to the PR head, and the worktree clean.
 6. Archive the idle task with `set_thread_archived`, then record completion with
    `worker.py archived --thread THREAD_ID`. The registry record, not prose or a
-   closed PR alone, is the durable lifecycle evidence.
+   closed PR alone, is the durable lifecycle evidence. After archive, remove the
+   temporary proxy-worker pin with
+   `move_thread_to_sidebar_section(sectionId='threads')`.
 7. Remove a merged worktree only from a surviving checkout after it is clean,
    still on the recorded branch, and at the merged PR head. Never force-remove
    it or affect another task's worktree, processes or data.
@@ -118,7 +126,8 @@ findings.
 ## Evidence to retain
 
 Retain the issue and PR URLs, task and parent IDs, canonical project assignment,
-Desktop `list_threads` membership evidence, bounded prompt file, requested
+provider-appropriate Desktop listing evidence (`pinnedThreads` for proxy
+workers), pin-removal evidence, bounded prompt file, requested
 and observed provider/model/reasoning, branch, worktree, preparation status and
 rollout path (or failure record), pushed commit, PR head, diff and validation
 results, review requests, retrospective JSON and assessed head, merge evidence,
