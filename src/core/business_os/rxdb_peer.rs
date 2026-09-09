@@ -62,7 +62,7 @@ pub(super) use super::rxdb_peer_intake::{
     pending_business_command_documents, pending_business_command_documents_sync,
     refresh_business_commands_source_stamp, schedule_business_command_intake_retry,
     transient_business_command_retry_document, wait_for_business_command_wake,
-    BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET, BUSINESS_COMMAND_RETRY_CANDIDATE_SQL,
+    BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET,
 };
 pub(super) use super::rxdb_peer_projections::{
     bulk_upsert_business_record_projection_documents, find_projection_documents_by_id,

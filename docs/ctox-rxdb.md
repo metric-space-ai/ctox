@@ -154,8 +154,7 @@ regression retains an older generation's reservation, denies a hidden-field
 query on the replacement, and then reads allowed fields on that replacement
 with a per-connection capacity of one.
 
-Native protocol negotiation has four reserved request permits, independent
-of the data plane. Native hosts may supply a `NativeSyncOptions.local_session_provider`
+Native hosts may supply a `NativeSyncOptions.local_session_provider`
 for the existing `peerSession.capabilityToken` / `deviceProof` exchange. The
 provider receives a connection lifetime and, for an incoming challenge, its
 43-character nonce. It must resolve the authenticated target instance before
