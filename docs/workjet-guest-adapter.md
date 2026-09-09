@@ -37,3 +37,13 @@ Tests exercise pre-capture denial, revocation before publication, distinct obser
 That test is a local virtual-display driver test, not proof of VM isolation, provisioning, production authorization, human takeover races or two independent guest targets. The latter remain required before release.
 
 Next integration must describe a separate typed Guest dispatcher extension using the existing native auxiliary transport. It must not reinterpret ctox.browser.live.v1's current human-controller semantics. The agreed native authority supplies the GuestAuthorization implementation and the existing frame/delivery path; only then can Workjet advertise VM in its capability catalog and expose its surface when enabled.
+
+## QEMU monitor adapter
+
+The private qmp module adds a bounded local monitor client for an already-owned QEMU child. It negotiates capabilities, queries status, pauses/resumes CPU execution, requests guest powerdown and requests QEMU exit through the documented [QMP protocol](https://www.qemu.org/docs/master/interop/qmp-spec.html). Commands are fixed methods; no arbitrary command/argument or network endpoint is accepted. Unix connection paths must be absolute and selected by the native lifecycle owner.
+
+Responses are correlated by monotonically increasing IDs. Interleaved events and unrelated replies are bounded and never published as authoritative lifecycle state. Frames are limited to 64 KiB and each operation to five seconds. Dropping an in-flight future, timeout, malformed data or disconnect retires the connection and preserves an unknown outcome. Effects are never retried automatically. Explicit correlated errors expose fixed diagnostics rather than guest-supplied details.
+
+A powerdown acknowledgement does not prove guest shutdown; quit does not replace waiting for the owned process. Production integration still needs authorized child creation, protected monitor endpoint, image selection, readiness, resource limits and ongoing ownership fencing. This module starts no production VM and adds no scheduler, persistence or transport.
+
+Eight added tests cover packet fragmentation, correlation, events, malformed/oversized/incomplete responses, bounded timeout, cancellation after write, greeting rejection and a local Unix socket. The Linux test starts one QEMU process with one TCG vCPU, 32 MiB memory, no guest OS/disk/network/display and an initially paused CPU. It exercises actual monitor status, resume, pause, powerdown request and exit, then reaps its captured child on success, failure or a 15-second deadline. The test does not establish a usable guest desktop, hardware acceleration, startup latency, cross-platform provisioning or state migration.

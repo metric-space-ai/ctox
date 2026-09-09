@@ -11,6 +11,7 @@ use anyhow::{ensure, Result};
 use serde::Deserialize;
 use std::future::Future;
 
+mod qmp;
 mod x11;
 pub(super) use x11::{X11GuestConfig, X11GuestDriver};
 
