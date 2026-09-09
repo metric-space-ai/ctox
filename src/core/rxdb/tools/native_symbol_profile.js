@@ -36,6 +36,7 @@ function startNativeSymbolProfile(child, {
     acceptanceTiming: false, available: false, state: 'scheduled',
   };
   let timer, durationTimer, killTimer, recorder, finished = false, stopping = false;
+  let interruptRequested = false;
   let recordError = '', stderr = '', stderrTruncated = false, startTicks;
   let resolveCompletion;
   const completion = new Promise(resolve => { resolveCompletion = resolve; });
@@ -56,7 +57,7 @@ function startNativeSymbolProfile(child, {
     clearTimeout(timer); clearTimeout(durationTimer);
     if (!recorder) { finish(reason); return completion; }
     if (recorder.exitCode === null && recorder.signalCode === null) {
-      signalRecord(recorder, 'SIGINT', reason);
+      interruptRequested = signalRecord(recorder, 'SIGINT', reason) !== false;
       killTimer = setTimeout(() => {
         if (recorder.exitCode === null && recorder.signalCode === null) signalRecord(recorder, 'SIGKILL', 'interrupt-grace-expired');
       }, 3000);
@@ -98,7 +99,12 @@ function startNativeSymbolProfile(child, {
         metadata.recordCode = code; metadata.recordSignal = signal;
         metadata.recordStderr = stderr; metadata.recordStderrTruncated = stderrTruncated;
         metadata.recordStoppedAtMs = Date.now();
-        if (recordError || code !== 0) {
+        // Linux perf re-raises SIGINT after flushing a controlled recording.
+        // Accept only our requested interrupt, then still validate the data and
+        // require a successfully parsed report containing actual samples.
+        const controlledInterrupt = interruptRequested && code === null && signal === 'SIGINT';
+        metadata.controlledInterrupt = controlledInterrupt;
+        if (recordError || (code !== 0 && !controlledInterrupt)) {
           finish('perf-record-failed', { error: recordError || 'exit-' + code }); return;
         }
         try {

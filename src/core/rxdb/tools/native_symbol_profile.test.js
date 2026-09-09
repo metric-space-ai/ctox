@@ -18,15 +18,16 @@ function temporary(t) {
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   return path.join(directory, 'native');
 }
-function fakeRecorder(outputPath, { exitCode = 0, ignoreInterrupt = false } = {}) {
+function fakeRecorder(outputPath, { exitCode = 0, exitSignal = null, ignoreInterrupt = false } = {}) {
   const recorder = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null,
     stderr: new PassThrough(), signals: [] });
   recorder.kill = signal => {
     recorder.signals.push(signal);
     if (signal === 'SIGINT' && ignoreInterrupt) return true;
     fs.writeFileSync(outputPath, 'fixture-perf-data');
-    recorder.exitCode = exitCode;
-    setImmediate(() => recorder.emit('close', exitCode, null));
+    recorder.exitCode = exitSignal ? null : exitCode;
+    recorder.signalCode = exitSignal;
+    setImmediate(() => recorder.emit('close', recorder.exitCode, recorder.signalCode));
     return true;
   };
   return recorder;
@@ -100,6 +101,37 @@ test('bounded flat sampling targets only the supplied native PID without stack d
   assert.equal(native.listenerCount('exit'), 0);
 });
 
+test('requested SIGINT can finalize a valid Linux perf recording', async t => {
+  const outputPrefix = temporary(t);
+  const profile = startNativeSymbolProfile(child(), { outputPrefix, delayMs: 0, durationMs: 5 }, {
+    platform: 'linux', readStart: () => 10,
+    spawnRecord: () => fakeRecorder(outputPrefix + '.perf.data', { exitSignal: 'SIGINT' }),
+    runReport: async () => ({ stdout: '# Samples: 88 of event cpu-clock:u\nnode::work\n' }),
+  });
+  const result = await profile.completion;
+  assert.equal(result.recordCode, null);
+  assert.equal(result.recordSignal, 'SIGINT');
+  assert.equal(result.controlledInterrupt, true);
+  assert.equal(result.available, true);
+});
+
+test('an unsolicited SIGINT remains a failed recording', async t => {
+  const outputPrefix = temporary(t);
+  const profile = startNativeSymbolProfile(child(), { outputPrefix, delayMs: 0 }, {
+    platform: 'linux', readStart: () => 10,
+    spawnRecord() {
+      const recorder = fakeRecorder(outputPrefix + '.perf.data', { exitSignal: 'SIGINT' });
+      setImmediate(() => recorder.kill('SIGINT'));
+      return recorder;
+    },
+    runReport: async () => assert.fail('unsolicited interruption is not acceptance'),
+  });
+  const result = await profile.completion;
+  assert.equal(result.controlledInterrupt, false);
+  assert.equal(result.available, false);
+  assert.equal(result.reason, 'perf-record-failed');
+});
+
 test('native exit stops only its profiler and retains partial sample evidence', async t => {
   const native = child(), outputPrefix = temporary(t);
   let recorder;
@@ -142,7 +174,7 @@ test('empty sample reports are explicitly unavailable', async t => {
   const outputPrefix = temporary(t);
   const profile = startNativeSymbolProfile(child(), { outputPrefix, delayMs: 0, durationMs: 5 }, {
     platform: 'linux', readStart: () => 10,
-    spawnRecord: () => fakeRecorder(outputPrefix + '.perf.data'),
+    spawnRecord: () => fakeRecorder(outputPrefix + '.perf.data', { exitSignal: 'SIGINT' }),
     runReport: async () => ({ stdout: '# Samples: 0 of event cpu-clock:u\n' }),
   });
   assert.equal((await profile.completion).reason, 'no-samples');
