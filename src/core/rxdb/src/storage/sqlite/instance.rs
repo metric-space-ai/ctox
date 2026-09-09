@@ -3446,7 +3446,10 @@ mod tests {
         let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
             database_path: dir.path().join("cancel-snapshot.sqlite3"),
         });
-        let schema = test_schema();
+        let mut schema = test_schema();
+        // Inject corrupt storage below to exercise the reader error boundary.
+        // A JSON expression index would reject that injection at write time.
+        schema.indexes = vec![vec!["id".into()]];
         let instance = create_storage_instance(&storage, params(schema.clone()))
             .await
             .unwrap();
