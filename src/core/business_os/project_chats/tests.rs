@@ -391,7 +391,7 @@ fn webrtc_filter_rechecks_project_revocation_and_does_not_trust_snapshot_partici
     let chat = result["first_chat_id"].as_str().unwrap();
     let conn = open_store(root.path())?;
     let record = outbound_load_record(&conn, THREADS, chat)?.unwrap();
-    let now = store::now_ms();
+    let now = i64::try_from(store::now_ms())?;
     let (owner, _) = store::issue_business_os_capability_token_for_managed_user(
         root.path(),
         "owner",
@@ -562,6 +562,34 @@ fn private_execution_results_follow_native_command_and_task_relationships() -> a
             "owner"
         ),
         None
+    );
+    let mismatch = command(
+        "business_os.chat.task",
+        "mismatched-intent",
+        json!({"thread_id":chat,"instruction":"Private work"}),
+    );
+    let mismatched_task = channels::claim_business_command_with_queue(
+        root.path(),
+        store::business_command_core_claim("mismatched-intent", &mismatch)?,
+        channels::QueueTaskCreateRequest {
+            title: "Private task".into(),
+            prompt: "Private work".into(),
+            thread_key: "mismatched-command-thread".into(),
+            workspace_root: Some(root.path().display().to_string()),
+            priority: "normal".into(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: Some(json!({"business_os_command_id":"public-intent"})),
+        },
+    )?;
+    assert_eq!(
+        document_visible_to_actor(
+            root.path(),
+            "ctox_runs",
+            &json!({"id":"mismatched-run","task_id":mismatched_task.task.message_key}),
+            "other-user"
+        ),
+        Some(false)
     );
     Ok(())
 }

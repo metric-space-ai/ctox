@@ -137,38 +137,70 @@ fn collect_constraints(
         constraints.push((collection.to_owned(), document.clone()));
     }
     for (related_collection, id) in associations(collection, document) {
-        let related = canonical_association(root, related_collection, id)?;
+        let (related_collection, related) = canonical_association(root, related_collection, id)?;
         collect_constraints(root, related_collection, &related, constraints)?;
     }
     Ok(())
 }
 
-fn canonical_association(root: &Path, collection: &str, id: &str) -> anyhow::Result<Value> {
+fn canonical_association(
+    root: &Path,
+    collection: &str,
+    id: &str,
+) -> anyhow::Result<(&'static str, Value)> {
     use crate::mission::channels;
     match collection {
-        "business_commands" => match channels::business_command_projection(root, id) {
-            Ok(command) => Ok(command),
-            Err(error)
-                if matches!(
-                    error.downcast_ref::<rusqlite::Error>(),
-                    Some(rusqlite::Error::QueryReturnedNoRows)
-                ) =>
-            {
-                // Commands predating the Core aggregate still have their
-                // canonical compatibility row. Do not trust a mirror alone.
-                let conn = open_store(root)?;
-                serde_json::to_value(crate::business_os::store::load_business_command(&conn, id)?)
-                    .map_err(Into::into)
-            }
-            Err(error) => Err(error),
-        },
+        "business_commands" => {
+            let command = match channels::business_command_projection(root, id) {
+                Ok(command) => command,
+                Err(error)
+                    if matches!(
+                        error.downcast_ref::<rusqlite::Error>(),
+                        Some(rusqlite::Error::QueryReturnedNoRows)
+                    ) =>
+                {
+                    let conn = open_store(root)?;
+                    let command = crate::business_os::store::load_business_command(&conn, id)?;
+                    ensure!(
+                        command.payload.is_object(),
+                        "legacy command payload is unavailable"
+                    );
+                    serde_json::to_value(command)?
+                }
+                Err(error) => return Err(error),
+            };
+            Ok(("business_commands", command))
+        }
         "ctox_queue_tasks" => {
             let task = channels::load_queue_task(root, id)?
                 .ok_or_else(|| anyhow::anyhow!("referenced native queue task is unavailable"))?;
-            Ok(serde_json::json!({
-                "id": task.message_key,
-                "command_id": task.metadata.get("business_os_command_id"),
-            }))
+            if let Some(command_id) = task.metadata.get("business_os_command_id") {
+                let command_id = command_id
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| anyhow::anyhow!("native task command reference is invalid"))?;
+                let resolved = canonical_association(root, "business_commands", command_id)?;
+                // A task's metadata cannot point at some other public command
+                // to conceal the private aggregate actually linked to it.
+                ensure!(
+                    resolved.1["contract_version"] != 2 || resolved.1["task_id"] == id,
+                    "native command/task relationship is inconsistent"
+                );
+                return Ok(resolved);
+            }
+            // Rare legacy/missing-metadata case: consult the existing inverse
+            // Core link. The normal path above does not enumerate transitions.
+            if let Some(context) = channels::inspect_business_command_for_task(root, id)? {
+                let command = context
+                    .get("command")
+                    .filter(|value| value.is_object())
+                    .ok_or_else(|| anyhow::anyhow!("native command context is unavailable"))?;
+                return Ok(("business_commands", command.clone()));
+            }
+            Ok((
+                "ctox_queue_tasks",
+                serde_json::json!({"id": task.message_key}),
+            ))
         }
         _ => anyhow::bail!("unsupported private execution association"),
     }
