@@ -660,6 +660,7 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
             contacts.push(normalized);
         }
     }
+    deduplicate_contacts(&mut contacts);
     let contact_ids = contacts
         .iter()
         .filter_map(|contact| contact.get("id").and_then(Value::as_str))
@@ -706,6 +707,38 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
             "authenticated_source_capture_runs": outcome.get("authenticated_source_capture_runs").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
         }
     })
+}
+
+/// Collapse contact rows that are the same record. Measured on the AKEMI lead
+/// 09.09.2026: "Gunter-Torsten Hamann" stood six times in the contact list,
+/// five of them byte-identical down to the same `id` and `person_key`. Whoever
+/// appended them, a list that carries one person five times is wrong at the
+/// point it is stored, so the guard sits here rather than at each writer.
+fn deduplicate_contacts(contacts: &mut Vec<Value>) {
+    let identity = |contact: &Value, key: &str| {
+        contact
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_ascii_lowercase)
+    };
+    let mut kept: Vec<Value> = Vec::with_capacity(contacts.len());
+    for contact in std::mem::take(contacts) {
+        let id = identity(&contact, "id");
+        let person_key = identity(&contact, "person_key");
+        let duplicate_of = kept.iter().position(|existing| {
+            (id.is_some() && identity(existing, "id") == id)
+                || (person_key.is_some() && identity(existing, "person_key") == person_key)
+        });
+        if let Some(index) = duplicate_of {
+            // The later row may carry a field the first one lacked.
+            merge_json_object_values(&mut kept[index], &contact);
+            continue;
+        }
+        kept.push(contact);
+    }
+    *contacts = kept;
 }
 
 fn merge_researched_person_records(
@@ -2593,6 +2626,36 @@ mod tests {
                 "person_xing"
             ])
         );
+    }
+
+    #[test]
+    fn the_same_person_is_stored_once() {
+        // Measured on the AKEMI lead 09.09.2026: five byte-identical rows for
+        // one managing director, plus the CRM row for the same person_key.
+        let repeated = serde_json::json!({
+            "id": "contact_2ksd",
+            "person_key": "person_hamann_torsten",
+            "name": "Gunter-Torsten Hamann",
+            "person_nachname": "Hamann"
+        });
+        let mut contacts = vec![
+            serde_json::json!({"id": "contact_ka6iyb", "person_key": "sellify-person-59812", "name": "Gunter-Torsten Hamann", "person_email": "t.hamann@akemi.de"}),
+            repeated.clone(),
+            repeated.clone(),
+            repeated.clone(),
+            serde_json::json!({"id": "contact_cj1rmz", "person_key": "sellify-person-59813", "name": "Dirk C. Hamann"}),
+        ];
+        deduplicate_contacts(&mut contacts);
+        assert_eq!(contacts.len(), 3);
+        assert_eq!(contacts[1]["id"], "contact_2ksd");
+        // A later row still contributes what the first one was missing.
+        let mut with_extra = vec![
+            serde_json::json!({"id": "c1", "name": "Ada Lovelace"}),
+            serde_json::json!({"id": "c1", "name": "Ada Lovelace", "person_email": "ada@example.test"}),
+        ];
+        deduplicate_contacts(&mut with_extra);
+        assert_eq!(with_extra.len(), 1);
+        assert_eq!(with_extra[0]["person_email"], "ada@example.test");
     }
 
     #[test]
