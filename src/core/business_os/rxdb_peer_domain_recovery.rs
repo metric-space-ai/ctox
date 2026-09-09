@@ -9,6 +9,44 @@ use super::domain_effect;
 use rusqlite::Connection;
 use std::path::Path;
 
+pub(super) const BUSINESS_COMMAND_RETRY_CANDIDATE_SQL: &str = r#"(
+  json_extract(data, '$.status') IN ('pending_sync', 'waiting_dependencies')
+  OR (
+    (
+      json_extract(data, '$.status') = 'accepted'
+      OR (
+        json_extract(data, '$.status') = 'failed'
+        AND COALESCE(json_extract(data, '$.terminal_status'), 'none') = 'none'
+      )
+    )
+    AND json_extract(data, '$.command_type') IN (
+      'external_sql.sync.refresh',
+      'external_sql.write',
+      'outbound.research_source.generate_adapter',
+      'outbound.research_source.test',
+      'outbound.research_source.auth_assist',
+      'web_stack.person_research'
+    )
+  )
+)"#;
+
+pub(super) fn pending_query(
+    table: &str,
+    deleted: &str,
+    lwt: &str,
+    direction: &str,
+    receipt: Option<&str>,
+) -> String {
+    let predicate = match receipt {
+        Some(applied) => format!("({BUSINESS_COMMAND_RETRY_CANDIDATE_SQL} OR {applied})"),
+        None => BUSINESS_COMMAND_RETRY_CANDIDATE_SQL.to_owned(),
+    };
+    format!(
+        "SELECT data FROM {table} WHERE {deleted} = 0 AND {predicate}
+             ORDER BY {lwt} {direction} LIMIT ?1"
+    )
+}
+
 /// Return an additional, disjoint candidate predicate. The normal pending
 /// states and old background commands remain owned by their existing query.
 pub(super) fn retry_predicate(

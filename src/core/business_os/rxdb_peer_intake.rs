@@ -354,26 +354,7 @@ pub(super) async fn wait_for_business_command_wake(
 /// How often a single command may fail `accept_pending_business_command`
 /// before it is marked `failed` and dropped from the pending queue.
 pub(super) const BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET: u32 = 5;
-pub(super) const BUSINESS_COMMAND_RETRY_CANDIDATE_SQL: &str = r#"(
-  json_extract(data, '$.status') IN ('pending_sync', 'waiting_dependencies')
-  OR (
-    (
-      json_extract(data, '$.status') = 'accepted'
-      OR (
-        json_extract(data, '$.status') = 'failed'
-        AND COALESCE(json_extract(data, '$.terminal_status'), 'none') = 'none'
-      )
-    )
-    AND json_extract(data, '$.command_type') IN (
-      'external_sql.sync.refresh',
-      'external_sql.write',
-      'outbound.research_source.generate_adapter',
-      'outbound.research_source.test',
-      'outbound.research_source.auth_assist',
-      'web_stack.person_research'
-    )
-  )
-)"#;
+pub(super) use super::rxdb_peer_domain_recovery::BUSINESS_COMMAND_RETRY_CANDIDATE_SQL;
 
 pub(super) async fn consume_pending_business_commands(
     root: &Path,
@@ -665,15 +646,12 @@ pub(super) fn pending_business_command_documents_sync(
         "CAST(COALESCE(json_extract(data, '$._meta.lwt'), json_extract(data, '$.updated_at_ms'), 0) AS REAL)"
     };
     let oldest_limit = limit.saturating_add(1) / 2;
-    let retry_predicate = match rxdb_peer_domain_recovery::retry_predicate(
+    let receipt_predicate = rxdb_peer_domain_recovery::retry_predicate(
         &store::business_os_store_path(root),
         &conn,
         &quoted,
         deleted_expr,
-    )? {
-        Some(applied) => format!("({BUSINESS_COMMAND_RETRY_CANDIDATE_SQL} OR {applied})"),
-        None => BUSINESS_COMMAND_RETRY_CANDIDATE_SQL.to_owned(),
-    };
+    )?;
     let newest_limit = limit.saturating_sub(oldest_limit);
     let mut documents = Vec::new();
     let mut seen_ids = HashSet::new();
@@ -682,13 +660,12 @@ pub(super) fn pending_business_command_documents_sync(
             continue;
         }
         let mut stmt = conn
-            .prepare(&format!(
-                "SELECT data
-                 FROM {quoted}
-                 WHERE {deleted_expr} = 0
-                   AND {retry_predicate}
-                 ORDER BY {lwt_expr} {direction}
-                 LIMIT ?1"
+            .prepare(&rxdb_peer_domain_recovery::pending_query(
+                &quoted,
+                deleted_expr,
+                lwt_expr,
+                direction,
+                receipt_predicate.as_deref(),
             ))
             .with_context(|| {
                 format!("prepare pending business_commands {direction} scan in {table}")
