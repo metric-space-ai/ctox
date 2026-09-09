@@ -4508,6 +4508,7 @@ function ensureCtoxSmokeBinary() {
     page.on('framenavigated', (frame) => {
       if (frame === page.mainFrame()) console.log(`[browser:navigation] ${frame.url()}`);
     });
+    let recoveryConsoleMarks = 0;
     page.on('console', (msg) => {
       const type = msg.type();
       const text = msg.text();
@@ -4532,7 +4533,22 @@ function ensureCtoxSmokeBinary() {
           browserDiagnostics.errors += 1;
         }
       }
+      // Keep existing log records byte-for-byte; the preceding bounded mark
+      // timestamps their observation on the same host clock as process events.
+      // No polling, extra query, receipt write, or production timeout change.
+      if (smokeMode === 'command-midflight-restart-browser-to-rust') {
+        if (recoveryConsoleMarks < 500) {
+          console.log('command_restart_console_mark=' + JSON.stringify({
+            index: recoveryConsoleMarks++, atMs: Date.now(), type,
+            clock: 'node-console-observed',
+          }));
+        } else if (recoveryConsoleMarks === 500) {
+          recoveryConsoleMarks++;
+          console.log('command_restart_console_marks_truncated=true');
+        }
+      }
       console.log(`[browser:${type}] ${text}`);
+
     });
     page.on('pageerror', (err) => {
       if (smokeMode === 'business-os-ui-regression' && isExpectedBusinessOsPermissionConsole(err?.stack || err?.message || '')) {
