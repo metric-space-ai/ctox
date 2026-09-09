@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260909-sync-main-integration-v367';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260909-crew-card-status-v368';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',

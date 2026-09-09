@@ -1249,3 +1249,28 @@ test('Field of work is derived, and the takeover sentence reads the router event
   state.selectedLive.events[1].title = 'assigned: Manuelle Zuordnung vor dem Lease: Nori (crew:nori)';
   assert.equal(taskSelectionSentence(task, state), 'Nori: Manuelle Zuordnung vor dem Lease');
 });
+
+// A task that ran, passed review and committed its command keeps `handled` as
+// its routing fact. Measured live on 09.09.2026: the card rendered
+// "Ohne Review-Beleg" while the same task sat in the "Erledigt" bucket, so the
+// reader saw a successful task labelled like a defect. Card and bucket read the
+// same authoritative status now.
+{
+  const reviewed = {
+    id: 'queue:system::8e455fd1191fd6feb1e0c7df',
+    title: 'Nenne in genau einem Satz auf Deutsch d...',
+    routeStatus: 'handled',
+    status: 'completed',
+    executionProgress: hooks.normalizeExecutionProgress({ version: 1, phase: 'completed', percent: 100 }),
+    updatedAt: '2026-09-09T10:19:44Z',
+  };
+  const state = { lang: 'de', selectedTaskId: '', pinnedTaskIds: new Set(), crewMembers: [] };
+  assert.equal(hooks.authoritativeTaskStatus(reviewed), 'completed');
+  const card = hooks.taskCardMarkup(reviewed, state);
+  assert.match(card, /Erledigt/);
+  assert.doesNotMatch(card, /Ohne Review-Beleg/);
+  // A genuinely stopped task keeps its problem label.
+  const failed = { ...reviewed, routeStatus: 'failed', status: 'failed', executionProgress: null };
+  assert.match(hooks.taskCardMarkup(failed, state), /Fehler/);
+  console.log('ok - reviewed task reads as done on the card, not as missing review proof');
+}

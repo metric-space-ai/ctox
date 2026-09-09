@@ -1,6 +1,6 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260909-sync-main-integration-v367';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260909-crew-card-status-v368';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
 
@@ -20,7 +20,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260909-sync-main-integration-v367';
+const CTOX_STYLE_BUILD = '20260909-crew-card-status-v368';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -1780,7 +1780,12 @@ function taskCardMarkup(task, state) {
   const pinned = state.pinnedTaskIds.has(task.id);
   const title = taskDisplayTitle(task, state);
   const source = task.channelLabel || displayWorkSource(task.channel || task.source || task.moduleId || 'ctox');
-  const status = displayStatus(task.routeStatus || task.status, state.lang);
+  // The queue's `handled` is a routing fact, not an outcome: a task that ran,
+  // passed review and committed its command reads as "Ohne Review-Beleg" when
+  // the card prefers it. The authoritative status is what the filter buckets
+  // already count, so card and bucket must not disagree (measured 09.09.2026:
+  // two reviewed tasks sat in "Erledigt" while their cards said the opposite).
+  const status = displayStatus(authoritativeTaskStatus(task) || task.routeStatus || task.status, state.lang);
   const changed = formatShortTimestamp(task.updatedAt || task.createdAt || task.timestamp);
   const problem = ['blocked', 'failed', 'cancelled'].includes(normalizeCommandStatus(task.routeStatus || task.status));
   const reason = taskSummaryReason(task, state);
@@ -3532,7 +3537,7 @@ function taskDrawer(task, state, { editorOnly = false, remember = true } = {}) {
     </header>
     <section class="ctox-callout ${['blocked', 'failed'].includes(normalizeCommandStatus(task.routeStatus || task.status)) ? 'is-danger' : 'is-info'} ctox-task-status-strip">
       <div>
-        <strong class="ctox-badge ${statusBadgeVariant(statusClass(task.routeStatus || task.status))}">${escapeHtml(displayStatus(task.routeStatus || task.status, state.lang))}</strong>
+        <strong class="ctox-badge ${statusBadgeVariant(statusClass(authoritativeTaskStatus(task) || task.routeStatus || task.status))}">${escapeHtml(displayStatus(authoritativeTaskStatus(task) || task.routeStatus || task.status, state.lang))}</strong>
 
       </div>
       ${taskSummaryReason(task, state) ? `<p class="ctox-task-reason-line">${escapeHtml(taskSummaryReason(task, state))}</p>` : ''}
@@ -6896,6 +6901,8 @@ function escapeAttr(value) {
 }
 
 export const __ctoxTestHooks = {
+  taskCardMarkup,
+  displayStatus,
   taskLeaseLineMarkup,
   taskPromptDisplay,
   aggregateFlowMetrics,
