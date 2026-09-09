@@ -816,6 +816,21 @@ fn merge_field_status(existing: Option<&Value>, incoming: Value) -> Value {
     Value::Object(merged)
 }
 
+/// A research field is answered when the lead carries a verified value for it
+/// or a documented `no_match`. `unsupported` and `action_required` mean the
+/// question is still open, whether the worker never delivered the field or the
+/// evidence gate rejected what it delivered.
+fn research_field_is_answered(status: &Value) -> bool {
+    matches!(
+        status
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim(),
+        "verified" | "no_match"
+    )
+}
+
 fn is_filler_field_status(status: &Value) -> bool {
     let unsupported = status
         .get("status")
@@ -1015,13 +1030,29 @@ pub(super) fn handle_research_writeback(
         serde_json::to_value(&request.field_status)?,
     );
     lead["field_status"] = merged_field_status;
+    // A field is answered only when the lead now carries a verified value or a
+    // documented `no_match`. Everything else stays open — including a field the
+    // evidence gate downgraded from `verified` because it carried a single
+    // source host. Reporting those as answered told the worker there was
+    // nothing left to do and ended the run with 3 of 32 fields stored while 10
+    // verified answers had been dropped (thesen, Sasol Germany, 09.09.2026).
     let open_fields = requested_fields
         .iter()
         .filter(|field| {
             lead["field_status"]
                 .get(field.as_str())
-                .map(is_filler_field_status)
+                .map(|status| !research_field_is_answered(status))
                 .unwrap_or(true)
+        })
+        .cloned()
+        .collect::<Vec<String>>();
+    let accepted_fields = requested_fields
+        .iter()
+        .filter(|field| {
+            lead["field_status"]
+                .get(field.as_str())
+                .map(research_field_is_answered)
+                .unwrap_or(false)
         })
         .cloned()
         .collect::<Vec<String>>();
@@ -1032,6 +1063,8 @@ pub(super) fn handle_research_writeback(
     // Ein verworfenes oder fehlendes Feld ist ein Grund zur Pruefung durch einen
     // Menschen - sonst haette die Rettung "abgeschlossen" gemeldet, obwohl
     // Felder fehlen.
+    let accepted_count = accepted_fields.len();
+    let open_count = open_fields.len();
     let needs_review = !rejections.is_empty()
         || !open_fields.is_empty()
         || request
@@ -1062,16 +1095,17 @@ pub(super) fn handle_research_writeback(
             .iter()
             .filter(|(key, _)| delivered_fields.contains(key.as_str()))
             .collect::<BTreeMap<_, _>>(),
-        "accepted_fields": delivered_fields.iter().cloned().collect::<Vec<String>>(),
+        "accepted_fields": accepted_fields,
+        "delivered_fields": delivered_fields.iter().cloned().collect::<Vec<String>>(),
         "open_fields": open_fields,
         // Der Agent erfaehrt genau, was verworfen wurde, und kann im selben
         // Auftrag nachliefern statt die ganze Firma neu zu recherchieren.
         "rejections": rejections,
         "summary": format!(
-            "{} Feld(er) übernommen, {} Beleg(e) verworfen, {} Feld(er) noch offen. Nicht gelieferte Felder sind keine Ablehnung: recherchiere sie und sende sie gesammelt in einem weiteren Aufruf; übernommene Felder nicht erneut senden.",
-            delivered_fields.len(),
+            "{} Feld(er) gespeichert, {} Beleg(e) verworfen, {} Feld(er) noch offen. Ein Feld gilt erst als beantwortet, wenn es verifiziert ist (zwei unabhaengige Quell-Hosts) oder als no_match belegt wurde. Offene Felder sind keine Ablehnung: hole die fehlende Zweitquelle bzw. den Wert und sende sie gesammelt in einem weiteren Aufruf; gespeicherte Felder nicht erneut senden.",
+            accepted_count,
             rejections.len(),
-            open_fields.len()
+            open_count
         ),
     }))
 }
@@ -2840,6 +2874,65 @@ mod tests {
     }
 
     #[test]
+    fn a_field_rejected_for_a_single_source_stays_open() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let record_id = "lead-einzelquelle";
+        let research_command_id = "research-einzelquelle";
+        let (_, task) =
+            create_gap_fixture(temp.path(), research_command_id, record_id, "firma_domain")?;
+        // The worker claims `verified` but documents a single source host —
+        // exactly what the evidence gate rejects.
+        let command = writeback_command(
+            record_id,
+            serde_json::json!({
+                "record_id": record_id,
+                "module": "outbound-lead-generation",
+                "research_command_id": research_command_id,
+                "gap_task_id": task.message_key,
+                "field_status": {
+                    "firma_domain": {
+                        "status": "verified",
+                        "value": "beispiel.de",
+                        "sources": [
+                            {"source_id": "northdata.de", "url": "https://www.northdata.de/a", "quote": "beispiel.de"},
+                            {"source_id": "northdata.de", "url": "https://www.northdata.de/b", "quote": "beispiel.de"}
+                        ],
+                        "attempts": []
+                    }
+                },
+                "result": {"fields": {"firma_domain": {"value": "beispiel.de"}}, "person_records": [], "evidence": []}
+            }),
+        );
+        let result = handle_research_writeback(temp.path(), &command)?;
+        assert_eq!(result["ok"], true);
+        let rejections = result["rejections"]
+            .as_array()
+            .context("rejections fehlen")?;
+        assert!(
+            rejections.iter().any(|entry| entry
+                .as_str()
+                .is_some_and(|text| text.contains("zwei unabhaengige Quell-Hosts"))),
+            "the single-host claim must be rejected: {rejections:?}"
+        );
+        assert_eq!(
+            result["accepted_fields"],
+            serde_json::json!([]),
+            "a rejected field was never stored, so it is not accepted"
+        );
+        assert_eq!(
+            result["open_fields"],
+            serde_json::json!(["firma_domain"]),
+            "a rejected field stays open so the worker fetches a second source"
+        );
+        assert!(result["summary"]
+            .as_str()
+            .is_some_and(|text| text.contains("0 Feld(er) gespeichert")
+                && text.contains("1 Feld(er) noch offen")));
+        assert_eq!(result["research_status"], "needs_review");
+        Ok(())
+    }
+
+    #[test]
     fn writeback_response_separates_open_fields_from_rejections() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let record_id = "lead-offene-felder";
@@ -2885,7 +2978,7 @@ mod tests {
         );
         assert!(result["summary"]
             .as_str()
-            .is_some_and(|text| text.contains("1 Feld(er) übernommen")));
+            .is_some_and(|text| text.contains("1 Feld(er) gespeichert")));
         assert_eq!(
             result["field_status"].as_object().map(|map| map.len()),
             Some(1)
