@@ -4508,6 +4508,7 @@ function ensureCtoxSmokeBinary() {
     page.on('framenavigated', (frame) => {
       if (frame === page.mainFrame()) console.log(`[browser:navigation] ${frame.url()}`);
     });
+    let recoveryConsoleMarks = 0;
     page.on('console', (msg) => {
       const type = msg.type();
       const text = msg.text();
@@ -4532,7 +4533,22 @@ function ensureCtoxSmokeBinary() {
           browserDiagnostics.errors += 1;
         }
       }
+      // Keep existing log records byte-for-byte; the preceding bounded mark
+      // timestamps their observation on the same host clock as process events.
+      // No polling, extra query, receipt write, or production timeout change.
+      if (smokeMode === 'command-midflight-restart-browser-to-rust') {
+        if (recoveryConsoleMarks < 500) {
+          console.log('command_restart_console_mark=' + JSON.stringify({
+            index: recoveryConsoleMarks++, atMs: Date.now(), type,
+            clock: 'node-console-observed',
+          }));
+        } else if (recoveryConsoleMarks === 500) {
+          recoveryConsoleMarks++;
+          console.log('command_restart_console_marks_truncated=true');
+        }
+      }
       console.log(`[browser:${type}] ${text}`);
+
     });
     page.on('pageerror', (err) => {
       if (smokeMode === 'business-os-ui-regression' && isExpectedBusinessOsPermissionConsole(err?.stack || err?.message || '')) {
@@ -7489,7 +7505,10 @@ function ensureCtoxSmokeBinary() {
               const taskDoc = await db.ctox_queue_tasks.findOne(taskId).exec();
               const task = taskDoc?.toJSON?.();
               if (task) {
-                const queueTasksForCommand = (await db.ctox_queue_tasks.find().exec())
+                const queueTasksForCommand = (await db.ctox_queue_tasks.find({
+                selector: { command_id: id },
+                requireRevision: `command-link:${id}`,
+              }).exec())
                   .map((doc) => doc.toJSON?.() || doc)
                   .filter((doc) => doc.command_id === id);
                 if (queueTasksForCommand.length !== 1) {
@@ -7698,6 +7717,11 @@ function ensureCtoxSmokeBinary() {
       ? await require('./critical_browser_reload_probe.js').runCriticalBrowserReloads({
         page, requiredCollections: BUSINESS_OS_SHELL_STATUS_COLLECTIONS,
         waitForHealthyCompleteStatus, assertHealthyAdvancedStatusContract,
+        readNativeLayout: () => {
+          const table = nativeCollectionTable('desktop_layout');
+          const row = sqlite(`SELECT data FROM ${quoteSqlIdentifier(table)} WHERE id='layout' AND deleted=0 LIMIT 1;`).trim();
+          return row ? JSON.parse(row) : null;
+        },
         outputPath: path.join(smokeProcessLifecyclePath ? path.dirname(smokeProcessLifecyclePath) : runtimeRoot,
           'critical-browser-reload.json'),
       })
@@ -9154,24 +9178,46 @@ function ensureCtoxSmokeBinary() {
             await delay(100);
             evidence.actions.push('notes-nav-filter');
           } else if (moduleId === 'reports') {
-            const kind = document.querySelector('[data-report-kind]');
-            const status = document.querySelector('[data-report-status]');
-            if (!kind || !status) throw new Error('Reports filter controls are missing');
-            kind.value = 'bug';
-            kind.dispatchEvent(new Event('change', { bubbles: true }));
+            const root = document.querySelector('[data-reports-root]');
+            const kind = root?.querySelector('[data-pg-band="bug"]');
+            const all = root?.querySelector('[data-pg-band="all"]');
+            const status = root?.querySelector('[data-pg-filter][data-pg-name="status"]');
+            const trayToggle = root?.querySelector('[data-pg-tray-toggle]');
+            const tray = root?.querySelector('[data-pg-tray]');
+            const reset = root?.querySelector('[data-pg-reset]');
+            if (!kind || !all || !status || !trayToggle || !tray || !reset) {
+              throw new Error('Reports shell filter controls are missing');
+            }
+            kind.click();
             await waitFor(() => ({
-              ok: document.querySelector('[data-report-kind]')?.value === 'bug',
-              kind: document.querySelector('[data-report-kind]')?.value || '',
-            }), 5000, 'reports kind filter');
+              ok: kind.getAttribute('aria-selected') === 'true'
+                && all.getAttribute('aria-selected') === 'false',
+            }), 5000, 'reports bug band selected');
+            if (tray.hidden) trayToggle.click();
+            await waitFor(() => ({
+              ok: !tray.hidden && trayToggle.getAttribute('aria-expanded') === 'true'
+                && status.getBoundingClientRect().height > 0,
+            }), 5000, 'reports status filter visible');
             status.value = 'open';
             status.dispatchEvent(new Event('change', { bubbles: true }));
-            kind.value = 'all';
-            kind.dispatchEvent(new Event('change', { bubbles: true }));
-            status.value = 'all';
-            status.dispatchEvent(new Event('change', { bubbles: true }));
-            evidence.actions.push('reports-filter-controls');
+            reset.click();
+            await waitFor(() => ({
+              ok: status.value === 'all',
+              status: status.value,
+            }), 5000, 'reports status filter reset by shell');
+            all.click();
+            await waitFor(() => ({
+              ok: all.getAttribute('aria-selected') === 'true'
+                && kind.getAttribute('aria-selected') === 'false',
+            }), 5000, 'reports all band restored');
+            trayToggle.click();
+            await waitFor(() => ({
+              ok: tray.hidden && trayToggle.getAttribute('aria-expanded') === 'false',
+            }), 5000, 'reports filter tray closed');
+            evidence.actions.push('reports-shell-filter-controls');
           } else if (moduleId === 'spreadsheets') {
             const search = document.querySelector('[data-spreadsheets-search]');
+
             if (!search) throw new Error('Spreadsheets search control is missing');
             search.value = 'regression-smoke';
             search.dispatchEvent(new Event('input', { bubbles: true }));
@@ -15227,7 +15273,10 @@ function ensureCtoxSmokeBinary() {
               const taskDoc = await db.ctox_queue_tasks.findOne(taskId).exec();
               const task = taskDoc?.toJSON?.();
               if (!task) continue;
-              const queueTasksForCommand = (await db.ctox_queue_tasks.find().exec())
+              const queueTasksForCommand = (await db.ctox_queue_tasks.find({
+                selector: { command_id: id },
+                requireRevision: `command-link:${id}`,
+              }).exec())
                 .map((doc) => doc.toJSON?.() || doc)
                 .filter((doc) => doc.command_id === id);
               if (queueTasksForCommand.length !== 1) {
@@ -15509,7 +15558,10 @@ function ensureCtoxSmokeBinary() {
             const taskDoc = taskId ? await db.ctox_queue_tasks.findOne(taskId).exec() : null;
             const task = taskDoc?.toJSON?.() || null;
             if (task || officeTerminal) {
-              const queueTasksForCommand = (await db.ctox_queue_tasks.find().exec())
+              const queueTasksForCommand = (await db.ctox_queue_tasks.find({
+                selector: { command_id: id },
+                requireRevision: `command-link:${id}`,
+              }).exec())
                 .map((doc) => doc.toJSON?.() || doc)
                 .filter((doc) => doc.command_id === id);
               const expectedQueueTasks = officeRestartSmokeMode ? 0 : 1;

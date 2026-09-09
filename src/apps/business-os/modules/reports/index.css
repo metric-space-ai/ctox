@@ -227,11 +227,11 @@
     min-height: 44px;
   }
 
-  .reports-module .reports-select {
+  .reports-module .ctox-filter-row .ctox-select {
     height: 44px;
   }
 
-  .reports-module .reports-sort-dir {
+  .reports-module .ctox-sort-dir {
     width: 44px;
     height: 44px;
   }
@@ -245,68 +245,16 @@
    Canonical grammar rows (filterbar, tray, counted band, well, footers) +
    coding-agent delegation status. Same vocabulary as knowledge/threads.
    ========================================================================== */
-.reports-filterbar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 12px 8px;
-}
-.reports-filterbar .ctox-pane-search { flex: 1 1 auto; min-width: 0; }
-/* One control, not two (Betreiber-Direktive 31.08.2026): the view switch is an
-   action button, so it carries no pressed state and needs no group chrome. */
-.reports-view-toggle { flex: 0 0 auto; }
-.reports-filter-toggle { position: relative; flex: 0 0 auto; }
-.reports-filter-toggle.has-active-filters::after {
-  content: '';
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-}
-.reports-filter-advanced { padding: 0 12px 8px; }
-.reports-filter-advanced[hidden] { display: none !important; }
-.reports-filter-row { display: flex; align-items: center; gap: 6px; }
-.reports-select { flex: 1 1 auto; min-width: 0; height: 28px; font-size: 12px; }
-.reports-sort-dir {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  background: var(--surface);
-  color: var(--muted);
-  cursor: pointer;
-}
-.reports-sort-dir:hover { color: var(--text); background: var(--surface-2); }
-.reports-sort-dir svg { width: 14px; height: 14px; }
-.reports-view-switch { padding: 0 12px 8px; border-bottom: 1px solid var(--line); }
-.reports-view-switch .view-count { color: var(--muted); font-weight: 500; }
-.reports-well {
-  min-height: 0;
-  overflow-y: auto;
-  background: color-mix(in srgb, var(--text) 6%, var(--surface));
-}
-.reports-footer {
-  padding: 6px 12px;
-  border-top: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 10px;
-}
+/* The single view-action button keeps its width beside the shared search. */
+.reports-module [data-reports-view-toggle] { flex: 0 0 auto; }
 /* Explizite Grammatik-Zeilen: Titel · Filter · optionale Filterablage ·
    gezaehltes Band · Well (fuellt) · Footer. Band, Well und Footer sind fest
    platziert, damit die ausgeblendete Filterablage die Spuren nicht verschiebt
    (ein [hidden] Kind ist kein Grid-Item mehr). */
 .reports-rail { grid-template-rows: auto auto auto auto minmax(0, 1fr) auto; }
-.reports-rail > .reports-view-switch { grid-row: 4; }
-.reports-rail > .reports-well { grid-row: 5; }
-.reports-rail > .reports-footer { grid-row: 6; }
+.reports-rail > .ctox-view-switch { grid-row: 4; }
+.reports-rail > .ctox-well { grid-row: 5; }
+.reports-rail > .ctox-pane-footer { grid-row: 6; }
 .reports-detail { grid-template-rows: auto minmax(0, 1fr) auto; }
 /* LIST rendering — exactly one dense line per entry: title plus a single short
    meta on the right. Tight line-height, small type, no badges; the deliberate
@@ -359,7 +307,7 @@
    Rahmen) und wird deshalb gleich behandelt.
    ========================================================================== */
 .shell-window[data-shell-contract="v2"] .reports-module .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .reports-module .reports-filterbar {
+.shell-window[data-shell-contract="v2"] .reports-module .ctox-filterbar {
   box-sizing: border-box;
   min-height: var(--shell-v2-header-row-size, 37px);
   height: var(--shell-v2-header-row-size, 37px);
@@ -393,7 +341,7 @@
 
 /* Linke Spalte: Icon-Zone (80px) freihalten — Titelzeile UND Filterzeile. */
 .shell-window[data-shell-contract="v2"] .reports-module .reports-rail > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .reports-module .reports-rail > .reports-filterbar {
+.shell-window[data-shell-contract="v2"] .reports-module .reports-rail > .ctox-filterbar {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
   padding-right: 14px;
 }
@@ -423,7 +371,7 @@
      Die Filterzeile liegt noch in der Icon-Zone (2 x 37px = 74px), aber nicht
      mehr unter der Steuerung — sie behaelt ihren rechten Regelabstand. */
   .shell-window[data-shell-contract="v2"] .reports-module .reports-rail > .ctox-pane-header,
-  .shell-window[data-shell-contract="v2"] .reports-module .reports-rail > .reports-filterbar {
+  .shell-window[data-shell-contract="v2"] .reports-module .reports-rail > .ctox-filterbar {
     padding-right: 70px;
   }
 

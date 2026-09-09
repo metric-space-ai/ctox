@@ -271,7 +271,58 @@ async function openModule(page, moduleId, url, timeoutMs) {
   return rootSelector;
 }
 
+// Exercise the mounted module and shell pane grammar together. This deliberately
+// does not stand in for populated-data, authorization, or native-sync acceptance.
+async function verifyReportsChrome(page, rootSelector, timeoutMs) {
+  const root = page.locator(rootSelector);
+  const toggle = root.locator('[data-reports-view-toggle]');
+  const trayToggle = root.locator('[data-pg-tray-toggle]');
+  const tray = root.locator('[data-pg-tray]');
+  const originalView = await toggle.getAttribute('data-pg-view');
+  const originalLabel = await toggle.getAttribute('aria-label');
+  if (!['cards', 'list'].includes(originalView) || !originalLabel) {
+    throw new Error('Reports view toggle has no valid initial state or accessible label');
+  }
+  const timings = [];
+  for (const expected of [originalView === 'cards' ? 'list' : 'cards', originalView]) {
+    const start = performance.now();
+    await toggle.click({ timeout: timeoutMs });
+    await page.waitForFunction(({ selector, expectedView }) => {
+      const button = document.querySelector(selector)?.querySelector('[data-reports-view-toggle]');
+      return button?.getAttribute('data-pg-view') === expectedView;
+    }, { selector: rootSelector, expectedView: expected }, { timeout: timeoutMs });
+    const label = await toggle.getAttribute('aria-label');
+    if (!label || (expected !== originalView && label === originalLabel)) {
+      throw new Error('Reports view toggle did not update its accessible action label');
+    }
+    if (await toggle.getAttribute('aria-pressed') !== null) {
+      throw new Error('Reports single-action view toggle unexpectedly exposes aria-pressed');
+    }
+    timings.push({ view: expected, click_to_state_ms: performance.now() - start });
+  }
+  const wasExpanded = await trayToggle.getAttribute('aria-expanded') === 'true';
+  for (const expanded of [!wasExpanded, wasExpanded]) {
+    await trayToggle.click({ timeout: timeoutMs });
+    await page.waitForFunction(({ selector, expectedExpanded }) => {
+      const host = document.querySelector(selector);
+      const button = host?.querySelector('[data-pg-tray-toggle]');
+      const panel = host?.querySelector('[data-pg-tray]');
+      return button?.getAttribute('aria-expanded') === String(expectedExpanded)
+        && panel?.hidden === !expectedExpanded;
+    }, { selector: rootSelector, expectedExpanded: expanded }, { timeout: timeoutMs });
+    if (await tray.isVisible() !== expanded) {
+      throw new Error('Reports filter tray CSS visibility disagrees with shell grammar state');
+    }
+  }
+  if (await toggle.getAttribute('data-pg-view') !== originalView) {
+    throw new Error('Reports filter tray changed the selected view');
+  }
+  return { passed: true, view_round_trip: true, tray_round_trip: true,
+    timings, scope: 'mounted-shell-chrome; no data, permissions, or sync acceptance' };
+}
+
 async function runSmoke(options) {
+
   const result = {
     ok: false,
     module_id: options.moduleId,
@@ -347,6 +398,10 @@ async function runSmoke(options) {
     if (!result.evidence.mount.visible) {
       result.failures.push('module root mounted but is not visible');
       return result;
+    }
+
+    if (options.moduleId === "reports") {
+      result.evidence.reports_chrome = await verifyReportsChrome(page, rootSelector, options.timeoutMs);
     }
 
     const action = options.createAction || await waitForPrimaryCreateAction(page, options.moduleId, options.timeoutMs);

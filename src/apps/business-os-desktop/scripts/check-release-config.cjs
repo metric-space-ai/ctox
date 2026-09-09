@@ -17,7 +17,7 @@ function main() {
   assert.equal(packageJson.dependencies?.["electron-updater"], "^6.8.3");
   assert.equal(packageJson.devDependencies?.electron, "43.4.1");
   assert.equal(packageJson.devDependencies?.["electron-builder"], "^26.8.1");
-  assert.equal(packageJson.devDependencies?.["js-yaml"], "4.3.1");
+  assert.equal(packageJson.devDependencies?.["js-yaml"], "4.3.2");
   for (const script of [
     "dist",
     "pack:dir",

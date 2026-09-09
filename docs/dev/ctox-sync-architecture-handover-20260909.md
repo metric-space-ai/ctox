@@ -1,4 +1,234 @@
+## Reports: CI-Geometrie und veralteter nativer Regressionstest
+
+Die vorhandene Chromium-Geometrieprüfung umfasst jetzt zusätzlich Reports bei
+1180,1000 und720Pixeln. Ihre Screenshots und Geometrieergebnisse werden im
+bestehenden CI-Artefakt aufbewahrt; kein neuer lokaler Browser gestartet.
+
+Der native Modus `business-os-ui-regression` verwendete für Reports zwei nicht
+mehr vorhandene Selectoren. Er prüft nun die tatsächlichen Shell-Band-Buttons,
+Sichtbarkeit der Statusleiste, Reset und Rückkehr zur Alle-Ansicht. Der Modus
+ist aktuell nicht direkt in einem Workflow aufgerufen: diese Korrektur ist
+noch keine laufende oder bestandene native Reports-Abnahme. Node-Syntax und
+diff-check bestanden; Browserausführung sowie Rust-/RxDB-Gesamtsuiten für diesen
+Stand nicht lokal ausgeführt (Admission weiterhin gesperrt).
+
+## Ergänzung: ausführbarer Reports-Browser-Smoke
+
+`smoke-app-module.mjs reports --url <test-instance>` prüft jetzt am wirklich
+montierten Modul den Karten-/Listen-Rundlauf samt zugänglicher Beschriftung
+und den Filterleisten-Rundlauf samt sichtbarem CSS-Zustand. Er hält einzelne
+Click-to-State-Zeiten fest. Kein Mock der App und keine HTTP-Datenbrücke.
+
+Syntaxprüfung und diff-check bestanden. Browserausführung noch offen: lokale
+Admission scheitert aktuell an freiem Speicher und fremden laufenden Compilern.
+Diese Ergänzung ist KEINE bereits bestandene E2E-Abnahme und ersetzt weder
+gefüllte Daten-/Rechte-/Reload-Szenarien noch die Command-/Boot-Performance-Gates.
+
+Mail-Vertragsbefund bleibt ohne bestätigten Office-Owner; der Koordinator hat
+keinen autorisierten Empfänger dafür und übernimmt keine Office-Implementierung.
+
 # CTOX-Sync-Architektur: Handover vom 9. September 2026
+
+
+## Reports: gemeinsamen Shell-Vertrag umgesetzt, Browser-Abnahme offen
+
+Die Reports-Rail verwendet jetzt ctox-filterbar/filter-toggle/filter-tray/filter-row,
+ctox-select/sort-dir/view-switch/well/pane-footer. 54 Zeilen kopierte Basis-CSS
+wurden entfernt; gemeinsame Definitionen bleiben allein in shared/base.css.
+Reports-spezifische Grid-Zeilen, mobile Trefferflächen und Shell-V2-Abstände
+referenzieren die gemeinsamen Klassen. Der einzelne View-Aktionsknopf behält
+seine Datenattribute und flex-Breite; keine zweite Ansichtssteuerung eingeführt.
+
+Der unveränderte Test „rail chrome is shell grammar“ besteht isoliert gegen die
+tatsächlichen Dateien (ohne Bundle-Build, kein Browser). Vollständige Modul-Suite,
+reale Shell-Geometrie, Filter/Reset/Ansichtswechsel/Export und Reload sind noch
+abzunehmen. Kein Working-/Production-ready-Claim und kein Deployment daraus.
+Test-Assertions wurden nicht geändert. Mail-Inspector bleibt separat offen.
+
+## App-Story-Fehler erstmals vollständig lesbar
+
+Job `102487411931` zu `eadcbc152` liefert dank Output-Flush den vollständigen
+Abschluss: 770 Tests, 765 bestanden, vier fehlgeschlagen, einer übersprungen.
+Fehler: Decision-Hub-Command-Schemaversion, Mail-Inspector (`mailActionIcon`),
+Reports-Rail-Grammatik (derselbe Guard über zwei Test-Einstiege).
+
+Decision Hub importiert bereits das kanonische Command-Schema v2 mit Migrationen
+1 und 2; der Test erwartete noch v1. Er prüft jetzt das vollständige Schema gegen
+die kanonische Deklaration, verlangt für jede Version eine Migration und bestätigt
+den Erhalt einer alten Command-ID, Payload und Status samt inbound_channel.
+Der gezielte Test besteht (1/1, 156 ms Gesamtlauf). Dies ist ein Vertrags-/Migrations-
+Fixture-Test, keine Abnahme realer Kundenmigrationen. Mail/Reports bleiben offen.
+
+Host-Job `102481638437` zu `5b583c3c2` bestätigt erfolgreiche Browser-Command-Recovery
+ohne Reparatur und läuft nun bei 21 Collections über Reload/Native-Neustart.
+Numerische Performance-Artefakte und vollständige Abnahme weiterhin ausstehend.
+
+## CI-Matrix: Browser-Guard benötigt seinen installierten Browser
+
+Auf Head `eadcbc152` scheitert Job `102487411771` (macOS x86 CLI) am Import von
+Playwright im Office-Notification-Browser-Guard, bevor ein Szenario läuft.
+Die Workflow-Datei installiert JS-Abhängigkeiten und Chromium ausschließlich für
+`x86_64-unknown-linux-gnu`, der Guard hatte jedoch keine entsprechende Bedingung.
+Er läuft jetzt wie der benachbarte Browser-Height-Test und die JS-Suite im selben
+Linux-x86-Job mit installiertem Browser. Die Prüfung selbst bleibt unverändert
+und verpflichtend; keine Office-Implementierung geändert. Echte CI-Verifikation
+für diese Matrix-Korrektur steht noch aus.
+
+## Fortsetzung: vollständige Fehlerdiagnostik statt abgeschnittener CI-Ausgabe
+
+CI `34357617934`, macOS-Job `102486187764`, bestätigt jetzt erfolgreiche
+Dependency-Installation einschließlich Audit. Der nächste Release-Config-Guard
+erwartete noch exakt js-yaml 4.3.1. Er verlangt jetzt exakt 4.3.2; lokaler
+statischer Release-Config-Check besteht. Keine Guard-Entfernung oder Lockerung.
+
+Der separate App-Story-Runner schrieb gepufferte stdout/stderr und rief danach
+`process.exit()` auf. Der alte JS-Job endete mitten in einem Data-URL-Stacktrace,
+ohne abschließende Fehlerdiagnose. Eine echte kleine Pipe-Reproduktion zeigt:
+2 MiB plus Fehlermarker geschrieben, bei `process.exit(1)` nur 65.536 Bytes und
+kein Marker empfangen; mit `process.exitCode=1` alle 2.097.175 Bytes und Marker,
+weiterhin Status 1. Der Runner setzt deshalb jetzt exitCode und dokumentiert
+zusätzlich Kindprozess-Exitcode, Signal und Startfehler im JSON-Bericht. Syntaxcheck
+besteht. Das behebt die abgeschnittene Diagnose, nicht den noch zu lokalisierenden
+fachlichen App-Story-Fehler. Vollständige JS-/E2E-/Performance-Abnahme bleibt offen.
+
+## Weiterarbeit: Desktop-Abnahme wieder erreichbar machen
+
+Der macOS-Desktop-Job `102481637846` scheitert nach Installation am npm-Audit:
+`js-yaml` ist ausdrücklich auf `4.3.1` gepinnt, betroffen von
+`GHSA-2883-xcg3-v3hh`. Der empfohlene Patch `4.3.2` liegt außerhalb dieses Pins.
+Manifest und Lockdatei sind deshalb gemeinsam auf exakt `4.3.2` aktualisiert.
+Tarball-URL, SHA-512 und Abhängigkeiten wurden gegen die npm-Registry geprüft;
+der heruntergeladene Tarball stimmt mit dem Integrity-Wert überein.
+`npm audit --package-lock-only --ignore-scripts --audit-level=high` meldet
+**0 vulnerabilities, exit 0**. Kein Audit-Override, kein Abschwächen der Grenze.
+Dies entfernt den belegten Dependency-Blocker, ersetzt aber weder Installation
+in CI noch die folgenden Electron-E2E-Prüfungen. Die JS-Test-Ursache bleibt offen.
+
+Native-Linux-Job `102481638511` zu Quellstand `5b583c3c2` ist inzwischen erfolgreich;
+macOS und vollständiger Host waren beim Nachtrag weiterhin laufend. Für den neuen
+Dependency-Stand ist die CI erneut erforderlich. Kein Merge oder Kunden-Release.
+Lokale schwere Prüfungen bleiben wegen tmp <20 GiB, Last über CPU-Anzahl und
+fremder aktiver Kompilierung gesperrt. Nur kleine Registry-/Lock-Prüfung und
+Audit ohne Installation liefen; Cache liegt auf `/Volumes/tmp`.
+
+## Aktuelle Übergabe: Merge-Prüfung PR87
+
+Geprüfter Head: `5b583c3c2f512581fecdcf5db7bcc250c9db62e6`, Branch
+`codex/native-proof-error-correlation`, vollständig gepusht, sauberer Checkout:
+`/Users/michaelwelsch/Documents/ctox-sync-main.2ITnXD`.
+PR: https://github.com/metric-space-ai/ctox/pull/87 (offen, Draft).
+
+**Kein weiterer sicherer Merge festgestellt.** PR69 und das ursprüngliche
+Handover PR86 sind bereits auf main; PR86-Merge ist
+`4b7a7daeb4a5f732325806e40683842beb1befbe`. PR87 bleibt offen. Sein Umfang:
+Credential-Ablehnungen im Test dem richtigen Fehler zuordnen (`0066a5d1e`),
+Recovery-Kardinalität mit frischer Command-Abfrage prüfen (`1c21f8bd9`),
+begrenzte Profiler-stdout-Diagnostik erhalten (`5b583c3c2`). Keine dieser
+Änderungen ist ein Nachweis, dass Kunden-Sync oder Performance repariert sind.
+
+Aktuelle Checks für exakt diesen Head:
+- Native Sync: https://github.com/metric-space-ai/ctox/actions/runs/34356271860
+  Echter Linux-Profiler und Chromium-Präsentation erfolgreich; Linux/macOS
+  Native Sync und vollständige Host-Abnahme bei Prüfung noch laufend.
+- CI: https://github.com/metric-space-ai/ctox/actions/runs/34356271715
+  CLI-Checks und Desktop-E2E rot. Beim Linux-x86-CLI-Job scheitern die Schritte
+  `Business OS JS tests` und Evidence-Upload; beim macOS-Desktop-Job bereits
+  `Install dependencies`. Ursachen sind für diesen Head nicht abschließend
+  klassifiziert. Daher nicht pauschal als bekannte Baseline ignorieren.
+- Frühere grüne Native-Tests von `0066a5d1e` sind keine Freigabe dieses Heads.
+
+Nächste Schritte für die übernehmende Aufgabe:
+1. Laufende Abnahmen auslesen, ohne dieselben schweren Jobs erneut zu starten.
+2. Fehlgeschlagene JS-/Dependency-Schritte anhand ihrer konkreten Logs klären.
+3. Recovery muss ohne erneutes Absenden genau eine Queue-Task nachweisen;
+   vollständige Performance-Artefakte prüfen: warm p50 <300 ms, Boot p95 <5 s.
+4. Erst danach die Merge-Entscheidung für PR87 neu treffen. Kunden-Upgrade bleibt
+   eine separate operative Handlung; Thesen führt der Betreiber aus.
+5. Operative BusinessData-Dispatcher-/Bootstrap-Anbindung ist weiterhin offen.
+   Die zuständige Workjet-Aufgabe `01a08237-a9c4-77f3-9f20-f0fb3901a76d`
+   hat ihre Integration wieder aufgenommen und erhält diesen Schnittstellenstand;
+   deren Registry-/Account-/IdentityResolver-/Projektchat-Flächen nicht parallel ändern.
+
+Übergabe ohne Kunden-Deployment, Datenlöschung oder Änderung des schmutzigen
+kanonischen Checkouts. Keine eigenen Testserver, Browser oder schweren lokalen
+Jobs laufen; keine Ressourcen-Lease gehalten. Der bestehende durable Checkout
+bleibt für die offene PR erhalten. Keine Worktree-Bereinigung durchgeführt.
+## Nachprüfung nach der Übergabe — 9. September 2026
+
+Weitere Nachprüfung: Commit `1c21f8bd96d81e4ba5148bef379e34ab7939794a` ist nach
+Wiederherstellung der SSH-Verbindung in PR87 gepusht; die zuvor dokumentierte
+lokale Push-Sperre ist damit aufgehoben. Die neue Profiler-Diagnostik hält sowohl
+stdout als auch stderr mit jeweils höchstens 16.384 Zeichen plus Truncation-Flag
+fest. Zuvor wurde stdout verworfen, obwohl Exit-255-Aufnahmen ohne stderr auftraten.
+Dies beweist nicht deren Ursache. Exit-/Signal-/Dateigrößen-/Sample-Guards bleiben
+unverändert. Drei gezielte Tests mit simuliertem Recorder bestehen (begrenzte
+Aufnahme, Permission-Fehler, begrenzte Ausgabe auf beiden Kanälen). Kein echtes
+Linux-perf oder vollständiger Browser-/Native-Lauf wurde dadurch ersetzt.
+
+Nachtrag zur Recovery-Prüfung: Die Fixture las die verknüpfte Queue-Task per ID,
+prüfte Eindeutigkeit danach aber über die allgemeine `find()`-Listenmitgliedschaft.
+Der Query-Loader darf bereits geladene Fenster zunächst stale liefern. Die drei
+Cardinality-Prüfungen für Reload, Burst und Restart verwenden nun eine serverseitige
+`command_id`-Selektion und `requireRevision: command-link:<id>`. Dieser vorhandene
+Caller-Token erzwingt einmalig eine abgeschlossene Aktualisierung, ist ausdrücklich
+keine Serverrevision. Anzahl, Deadline, Wiederherstellung ohne Reparatur und
+Wiederholungsverbot bleiben unverändert. Syntax-/Whitespace-Prüfung und bestehender
+In-Memory-requireRevision-Test bestehen. Echte Browser-/Native-Wiederherstellung
+bleibt bis zum neuen CI-Lauf offen; dies ist keine Behebung oder Freigabe der
+allgemeinen veralteten Listenansicht im Produkt. Der Download der älteren
+Recovery-Artefakte scheiterte zweimal am Azure-Blob-Netzwerk-Timeout; die zugehörigen
+Job-Logs wurden gelesen, fehlende Artefakte nicht als erfolgreiche Prüfung gewertet.
+
+Der damals noch offene Post-Merge-Lauf
+[34338432749](https://github.com/metric-space-ai/ctox/actions/runs/34338432749)
+ist **fehlgeschlagen**. Linux/macOS Native Sync, Chromium und der separate
+Profiler-Job bestehen; die vollständige Host-Abnahme scheitert an Kontext-Command,
+Command-Budget und abschließender Profilaufnahme. Die grüne Kandidaten-Abnahme
+weiter unten bleibt historische Evidenz und ersetzt diese fehlende Freigabe nicht.
+Die gesicherten `command-stages.json` enthalten 30 vollständige Messungen ohne
+Stage-Issues: Gesamt-p50 301,5 ms, p95 364,7 ms. Die separate `command-budget.json`
+ist leer, nicht ein grüner Budget-Beleg. Der eingebettete perf-Aufruf endet mit
+Code 255, leerem stderr und `reason=perf-record-failed`; Ursache noch unbewiesen.
+
+Spätere main-Läufe 34342505863 und 34346965129 sind vollständig erfolgreich.
+Der folgende Lauf 34349242187 ist wieder rot: Command-Recovery nach Native-Ausfall
+meldet null statt einer Queue-Task; die Profilaufnahme scheitert ebenfalls.
+Damit ist eine dauerhaft robuste Abnahme nicht durch einen einzelnen grünen Lauf
+belegt. Der zuletzt geprüfte Lauf 34351747131 zu `3b8ff841a` hat einen roten macOS-
+Credential-Test; Full Host läuft bei dieser Nachprüfung noch. Keine dieser
+Beobachtungen allein beweist, welche Codeänderung oder Umgebungsbedingung die
+Abweichungen verursacht.
+
+Der macOS-Test `wrong_source_pin_or_instance_never_requests_credentials_over_real_webrtc`
+scheitert an `public proof traversed WebRTC`. Im Test wurde vorher jedes erste
+Event aus dem gemeinsamen Peer-Fehlerstream als erwartete Ablehnung behandelt.
+Die neue Testkorrektur wartet innerhalb derselben 35-Sekunden-Deadline ausdrücklich
+auf `local_session_credentials_unavailable`. Diese Zuordnung entspricht der
+Fehlerveröffentlichung in `attach_local_session`; die Assertions für echte
+Proof-Übertragung, null Credentials-/Signatur-Callbacks und fehlende Admission
+bleiben unverändert. Das ist eine zu verifizierende Korrektur der Testbeobachtung,
+noch kein Nachweis einer behobenen Produktionsursache. Die vier betroffenen
+Tokio-Test-Runtimes verwenden jeweils zwei statt vier Worker.
+
+Der inzwischen gelesene Remote-main ist `b1ccb1e64dd491c2097463f4e6ba309c3ca81161`.
+Er enthält zwischenzeitliche Korrekturen anderer Aufgaben, unter anderem an
+Crew-/App-Tests. Diese Änderungen nicht aus dem alten Checkout überschreiben.
+Der kanonische lokale CTOX-Checkout ist divergent und enthält fremde Änderungen;
+die Nachprüfung verändert ihn nicht. Rohbelege liegen dauerhaft unter
+`/Users/michaelwelsch/.codex/notes/ctox-sync/evidence/postmerge-34338432749/`.
+
+### Aktualisierte lokale Ressourcengrenzen
+
+Die neuen AGENTS-Regeln ersetzen die unten historisch genannte 2,5-GiB-Grenze:
+Vor schweren Jobs hostweiten Status prüfen und ausschließlich über
+`greppy bash-smart -- /usr/bin/python3 /Users/michaelwelsch/.codex/bin/dev-heavy-run.py --owner <thread-id> --project ctox --task <task> -- <command>`
+starten. Erforderlich sind mindestens 20 GiB frei auf System **und** tmp, höchstens
+8 GiB Swap, Last höchstens CPU-Anzahl, ein schwerer Job hostweit und höchstens zwei
+Worker. Bei Nachprüfung: System 27,42 GiB frei, tmp 5,47 GiB, Swap 4,48 GiB,
+Load 15,03 bei 10 CPUs, anderer Cargo-/rustc-Prozess aktiv. Daher keine lokale
+native Kompilierung oder schwere Testausführung; keinen fremden Prozess stoppen.
+Tmp ist nach spätestens vier Tagen weg. Source und PR während jeder Arbeitssitzung
+sichern; keine ausschließlich dort liegenden lokalen Commits übergeben.
 
 ## Auftrag und Grenzen
 
