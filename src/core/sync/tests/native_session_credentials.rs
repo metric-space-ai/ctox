@@ -17,7 +17,7 @@ use ring::{
 };
 use rxdb::plugins::replication_webrtc::{
     send_message_and_await_answer, webrtc_types::WebRTCPeerSessionValidation, LocalDeviceProof,
-    LocalSessionCredentials, WebRTCConnectionHandler, WebRTCMessage,
+    LocalSessionCredentials, WebRTCMessage,
 };
 use serde_json::{json, Value};
 use std::{
