@@ -3861,6 +3861,7 @@ mod tests {
     struct MockPeer(String, u64);
 
     struct MockHandler {
+        role: NativePeerRole,
         local_provider: PlMutex<Option<super::super::LocalSessionProvider<MockPeer>>>,
         retired: PlMutex<HashSet<MockPeer>>,
         connect: crate::rxjs_compat::RxSubject<MockPeer>,
@@ -3875,7 +3876,12 @@ mod tests {
 
     impl MockHandler {
         fn new() -> StdArc<Self> {
+            Self::with_role(NativePeerRole::CtoxInstance)
+        }
+
+        fn with_role(role: NativePeerRole) -> StdArc<Self> {
             StdArc::new(Self {
+                role,
                 local_provider: PlMutex::new(None),
                 retired: PlMutex::new(HashSet::new()),
                 connect: crate::rxjs_compat::RxSubject::new(),
@@ -3912,6 +3918,9 @@ mod tests {
 
     #[async_trait::async_trait]
     impl WebRTCConnectionHandler for MockHandler {
+        fn local_peer_role(&self) -> NativePeerRole {
+            self.role
+        }
         async fn local_session_credentials(
             &self,
             peer: &Self::Peer,
@@ -4306,7 +4315,7 @@ mod tests {
             payload.collection_schemas,
             payload.collection_checkpoints,
             Some("worker-storage"),
-            NativePeerRole::WorkjetExecutor,
+            MockHandler::with_role(NativePeerRole::WorkjetExecutor).as_ref(),
         )
         .await;
         assert_eq!(protocol["collection"], Value::Null);
@@ -4367,7 +4376,7 @@ mod tests {
                 Some(serde_json::json!({})),
                 Some(serde_json::json!({})),
                 Some(remote_token),
-                NativePeerRole::WorkjetExecutor,
+                MockHandler::with_role(NativePeerRole::WorkjetExecutor).as_ref(),
             )
             .await;
             let mut requests = handler.sent_subject.subscribe();

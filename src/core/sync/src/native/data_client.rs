@@ -2,8 +2,8 @@
 //! Signaling narrows routes; NativeSessionTarget alone verifies the source.
 use super::NativePool;
 use futures_util::{FutureExt, StreamExt};
-use parking_lot::Mutex;
 use rxdb::plugins::replication_webrtc::{SignalingClient, WebRTCConnectionHandler};
+use std::sync::Mutex;
 use std::{
     collections::{BTreeMap, BTreeSet},
     panic::AssertUnwindSafe,
@@ -117,7 +117,11 @@ impl DataClientDiscovery {
     }
 
     pub(super) async fn shutdown(&self) {
-        let task = self.task.lock().take();
+        let task = self
+            .task
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
         if let Some(task) = task {
             task.abort();
             let _ = task.await;
@@ -127,7 +131,12 @@ impl DataClientDiscovery {
 
 impl Drop for DataClientDiscovery {
     fn drop(&mut self) {
-        if let Some(task) = self.task.get_mut().take() {
+        if let Some(task) = self
+            .task
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
             task.abort();
         }
     }
