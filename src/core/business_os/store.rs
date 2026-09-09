@@ -6507,7 +6507,7 @@ pub fn record_command(
 /// A lead whose research has been accepted says "Wartet", and it says so
 /// because the daemon wrote it, not because a browser tab got around to it.
 ///
-/// Measured on THESEN 09.09.2026: three research commands were accepted for
+/// Measured on a customer instance on 09.09.2026: three research commands were accepted for
 /// Aeroxon, Beiersdorf and Carbosulf, and all three leads kept showing their
 /// previous state. The only writer of `queued` was an optimistic patch from
 /// the tab that pressed the button, and that write is lost whenever the tab is
