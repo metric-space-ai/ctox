@@ -11072,16 +11072,22 @@ fn configure_business_os_mcp_session_for_queue_job(
     if command.get("command_type").and_then(Value::as_str) != Some("business_os.chat.task") {
         return Ok(false);
     }
-    let Some(writeback_contract) = command.pointer("/payload/writeback_contract") else {
-        return Ok(false);
-    };
-    validate_command_writeback_contract(&command, writeback_contract)?;
-    if !crate::business_os::mcp_channel::supports_command_writeback(writeback_contract)
-        && !writeback_contract
-            .get("allowed_actions")
-            .and_then(Value::as_array)
-            .is_some_and(|actions| !actions.is_empty())
-    {
+    let empty_contract = serde_json::json!({});
+    let writeback_contract = command.pointer("/payload/writeback_contract");
+    if let Some(contract) = writeback_contract {
+        validate_command_writeback_contract(&command, contract)?;
+    }
+    let writeback_contract = writeback_contract.unwrap_or(&empty_contract);
+    let has_writeback =
+        crate::business_os::mcp_channel::supports_command_writeback(writeback_contract)
+            || writeback_contract
+                .get("allowed_actions")
+                .and_then(Value::as_array)
+                .is_some_and(|actions| !actions.is_empty());
+    let crew_only = !has_writeback
+        && command.pointer("/payload/external_executor").is_some()
+        && options.crew_persona.is_some();
+    if !has_writeback && !crew_only {
         return Ok(false);
     }
     let payload_hash = command
@@ -11117,8 +11123,11 @@ fn configure_business_os_mcp_session_for_queue_job(
         &workspace,
         &writeback_contract,
     )?;
-    options.disable_mcp_servers = false;
-    options.enable_business_os_mcp = true;
+    let token = if crew_only {
+        crate::business_os::mcp_channel::restrict_internal_command_session_to_crew(root, &token)?
+    } else {
+        token
+    };
     let token = if options.crew_persona.is_some() {
         let attempt = options
             .worker_attempt
@@ -11133,6 +11142,8 @@ fn configure_business_os_mcp_session_for_queue_job(
     } else {
         token
     };
+    options.disable_mcp_servers = false;
+    options.enable_business_os_mcp = true;
     options.business_os_mcp_command_session = Some(token);
     options.force_isolated_session = true;
     Ok(true)
@@ -31550,6 +31561,91 @@ Business OS command:
         let options = chat_turn_session_options_for_queue_job(&job);
         assert!(!options.force_isolated_session);
         assert!(queue_job_reuses_persistent_session(&options));
+    }
+
+    #[test]
+    fn external_crew_job_without_writeback_gets_only_a_bound_crew_session() -> anyhow::Result<()> {
+        use base64::Engine as _;
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let command_id = "external_crew_without_writeback";
+        let (capability, _) =
+            crate::business_os::store::issue_business_os_capability_token_for_managed_user(
+                root,
+                "operator",
+                "Operator",
+                "admin",
+                chrono::Utc::now().timestamp_millis(),
+            )?;
+        let accepted = crate::business_os::store::accept_rxdb_business_command_with_origin(
+            root,
+            serde_json::json!({
+                "id": command_id, "module": "outbound-lead-generation",
+                "command_type": "business_os.chat.task", "record_id": "lead-a",
+                "payload": {"instruction": "Inspect the project", "mode": "data",
+                    "external_executor": {"executor_id":"test-codex", "harness":"codex", "timeout_seconds":10}},
+                "client_context": {"capability_token": capability}
+            }),
+            crate::business_os::store::CommandOrigin::ReplicatedPeer,
+        )?;
+        let key = accepted["task_id"].as_str().context("missing task")?;
+        let task = channels::load_queue_task(root, key)?.context("missing queued task")?;
+        let job = queued_prompt_from_queue_task(task);
+        let mut options = chat_turn_session_options_for_queue_job(&job);
+        // Merely selecting an external executor does not admit a Crew attempt.
+        assert!(!configure_business_os_mcp_session_for_queue_job(
+            root,
+            &job,
+            &mut options
+        )?);
+        assert!(options.business_os_mcp_command_session.is_none());
+        channels::lease_queue_task(root, key, "crew-session-worker")?;
+        let crew = crate::crew::prepare_attempt(
+            root,
+            &[key.to_owned()],
+            "crew-session-worker",
+            "crew-session-attempt",
+            Some("crew-session-thread"),
+            &serde_json::json!({}),
+            None,
+            "Inspect the project",
+            None,
+        )?
+        .context("missing admitted Crew")?;
+        options.crew_persona = Some(crew.persona);
+        assert!(configure_business_os_mcp_session_for_queue_job(root, &job, &mut options).is_err());
+        assert!(options.business_os_mcp_command_session.is_none());
+        options.worker_attempt = Some(turn_loop::WorkerAttemptContext {
+            attempt_id: "crew-session-attempt".to_owned(),
+            work_key: worker_attempt_work_key(&job),
+            source_label: job.source_label.clone(),
+            progress_error: Arc::new(Mutex::new(None::<String>)),
+        });
+        assert!(configure_business_os_mcp_session_for_queue_job(
+            root,
+            &job,
+            &mut options
+        )?);
+        assert!(options.enable_business_os_mcp && !options.disable_mcp_servers);
+        assert!(options.force_isolated_session);
+        let token = options
+            .business_os_mcp_command_session
+            .as_deref()
+            .context("missing session")?;
+        let (payload, _) = token.split_once('.').context("malformed session")?;
+        let claims: Value =
+            serde_json::from_slice(&base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload)?)?;
+        assert_eq!(claims["crew_only"], true);
+        assert_eq!(claims["command_id"], command_id);
+        assert_eq!(claims["crew_binding"]["attempt_id"], "crew-session-attempt");
+        assert_eq!(claims["crew_binding"]["task_id"], key);
+        assert_eq!(claims["crew_work_key"], worker_attempt_work_key(&job));
+        assert_eq!(claims["allowed_actions"], serde_json::json!([]));
+        // Expired admission cannot mint another session at the service entry.
+        let conn = rusqlite::Connection::open(crate::paths::core_db(root))?;
+        conn.execute("UPDATE communication_routing_state SET lease_expires_at='2001-01-01T00:00:00Z' WHERE message_key=?1", [key])?;
+        assert!(configure_business_os_mcp_session_for_queue_job(root, &job, &mut options).is_err());
+        Ok(())
     }
 
     #[test]

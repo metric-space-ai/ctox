@@ -479,12 +479,44 @@ mod tests {
             "crew-workspace",
             &serde_json::json!({}),
         )?;
+        let execution_token = restrict_internal_command_session_to_crew(root, &execution_token)?;
         let execution_token = bind_internal_command_session_to_crew_attempt(
             root,
             &execution_token,
             "crew-attempt",
             "crew-context-plan",
         )?;
+        let restricted = verify_internal_command_session_token(root, &execution_token)?;
+        assert_eq!(restricted["crew_only"], true);
+        assert!(call(args.clone(), Some(&restricted)).is_ok());
+        assert!(update(plan_args.clone(), Some(&restricted)).is_ok());
+        let listing = handle_json_rpc_with_gateway_context(
+            root,
+            serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+            Some(&restricted),
+        );
+        let listed = listing["result"]["tools"]
+            .as_array()
+            .context("missing tools")?;
+        assert_eq!(listed.len(), 5);
+        for tool in tool_descriptors() {
+            let name = tool.name;
+            if listed.iter().any(|entry| entry["name"] == name) {
+                continue;
+            }
+            let denied = handle_json_rpc_with_gateway_context(
+                root,
+                serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call",
+                    "params":{"name":name,"arguments":{"_context":{"crew_only":false}}}}),
+                Some(&restricted),
+            );
+            assert!(
+                denied["error"]["message"].as_str().is_some_and(
+                    |message| message.contains("outside this Crew-only command session")
+                ),
+                "wrong rejection for restricted tool {name}: {denied}"
+            );
+        }
         let worker_root = root.to_path_buf();
         let worker = std::thread::spawn(move || {
             crew_execution::run(
@@ -632,6 +664,7 @@ mod tests {
             allowed_collections: vec![],
             crew_binding: Some(serde_json::from_value(trusted["crew_binding"].clone())?),
             crew_work_key: Some("crew-context-plan".to_owned()),
+            crew_only: false,
             issued_at_ms: now_ms(),
             expires_at_ms: now_ms() + MCP_INTERNAL_SESSION_TTL_MS,
         };

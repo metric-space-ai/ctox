@@ -9,10 +9,11 @@ The request must carry an instance-signed Business OS command-session token
 with a native `crew_binding`: exact attempt, task, member, lease owner and
 `leased_at` generation. Generic command sessions cannot read Crew context.
 Native queue-worker session setup attaches this binding from its explicitly
-prepared worker attempt when a Crew persona is present. It preserves the existing
-command/writeback eligibility gates; it does not issue sessions for external
-workers or create external admission. Both token verification and the reader's
-transaction compare the binding with current durable state. Extending only lease
+prepared worker attempt when a Crew persona is present. Explicit external
+requests without executable app writeback receive a Crew-only session after
+native Crew admission. Ordinary tasks retain their existing eligibility; any
+supplied writeback contract is validated before session creation. Both token
+verification and the reader's transaction compare the binding with current durable state. Extending only lease
 expiry preserves access; a new owner or lease generation invalidates the old token,
 even when the same member and command remain assigned.
 The transport verifies that token, and the handler revalidates the command's
@@ -60,10 +61,10 @@ guarded entry point rechecks the exact live binding after obtaining the write
 lock and before changing the plan. Rejected authority rolls back the transaction.
 A completed plan remains at 90 percent pending native review.
 
-Still required for external harness use: server-authorized external admission
-and bounded lease ownership, issuance of the appropriate scoped session,
-Workjet start/resume/compaction consumers, execution evidence and native review/
-learning integration. An advertised reader is not proof of an implemented
+Still required for external harness use: Workjet start/resume/compaction
+consumers, execution evidence and verified native review/learning integration.
+The native bounded handoff below provides the admission/session side, but its
+current tests have not yet passed CI. An advertised reader is not proof of an implemented
 external Crew execution lifecycle. General projects and ordinary users must not
 be marked supported by deriving broader access from this read operation.
 
@@ -129,8 +130,23 @@ changes close the offer; no external API acquires or renews an independent lease
 Remaining integration: Workjet submission, consumption of attempt discovery, controller
 claim and secure transport setup, harness execution and result reporting; native
 service restart/recovery and explicit cancellation verification; artifact and
-structured retrospective handling; token eligibility for general projects without
-app writeback contracts. The current production hook preserves existing command
-session eligibility. The fixture now covers native offer publication, real MCP
+structured retrospective handling; a full general-project submission path.
+Session setup no longer requires an app writeback contract for explicitly external,
+natively admitted Crew work. Its signed `crew_only` restriction permits only the
+five Crew operations documented here. Both `tools/list` and dispatch apply the
+same restriction; client arguments cannot disable it. Existing command, attempt,
+collection and private Crew policy checks still apply. This grants no app CRUD,
+writeback, shell, SQL or browser authority. It does not turn a general project into
+an app or supply the still-missing general-project submission path.
+
+A service regression uses real command admission, queue leasing and Crew
+preparation to exercise session setup without writeback. Missing Crew, missing
+worker attempt and expired admission cannot create a new session. The MCP fixture
+uses the restricted signed grant for context, plan, claim and report, verifies the
+advertised tool set, and rejects all other registered operations even when client
+context claims `crew_only: false`. Existing app-writeback setup remains in the CI
+filter to check compatibility. These new tests are unverified.
+
+The fixture also covers native offer publication, real MCP
 claim/report, repeated claims/results, wrong executor/conflicting results and
 retention of native finalization ownership. It has not yet passed CI.

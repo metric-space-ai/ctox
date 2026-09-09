@@ -517,6 +517,8 @@ struct BusinessOsMcpInternalSessionClaims {
     crew_binding: Option<crew_context::SessionBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     crew_work_key: Option<String>,
+    #[serde(default)]
+    crew_only: bool,
     issued_at_ms: i64,
     expires_at_ms: i64,
 }
@@ -674,6 +676,7 @@ pub(crate) fn issue_internal_command_session_token(
         allowed_collections: normalized_string_array(writeback_contract.get("allowed_collections")),
         crew_binding: None,
         crew_work_key: None,
+        crew_only: false,
         issued_at_ms,
         expires_at_ms: issued_at_ms.saturating_add(MCP_INTERNAL_SESSION_TTL_MS),
     };
@@ -689,6 +692,34 @@ fn sign_internal_command_session_claims(
     let key = hmac::Key::new(hmac::HMAC_SHA256, &secret);
     let signature = URL_SAFE_NO_PAD.encode(hmac::sign(&key, payload.as_bytes()).as_ref());
     Ok(format!("{payload}.{signature}"))
+}
+
+/// Narrow an existing command grant to Crew coordination only.
+/// This never adds app, data, shell, or writeback authority.
+pub(crate) fn restrict_internal_command_session_to_crew(
+    root: &Path,
+    token: &str,
+) -> anyhow::Result<String> {
+    verify_internal_command_session_token(root, token)?;
+    let mut claims = decode_internal_command_session_token(root, token)?;
+    claims.crew_only = true;
+    sign_internal_command_session_claims(root, &claims)
+}
+
+fn crew_only_session_allows_tool(tool_name: &str, context: Option<&Value>) -> bool {
+    let restricted = context.is_some_and(|context| {
+        string_field(context, "auth_source").as_deref() == Some(MCP_INTERNAL_SESSION_AUTH_SOURCE)
+            && context.get("crew_only").and_then(Value::as_bool) == Some(true)
+    });
+    !restricted
+        || matches!(
+            tool_name,
+            "business_os.get_crew_context"
+                | "business_os.update_crew_plan"
+                | "business_os.list_crew_executions"
+                | "business_os.claim_crew_execution"
+                | "business_os.report_crew_execution"
+        )
 }
 
 /// Bind a native command session to the explicitly admitted attempt and lease.
@@ -759,6 +790,7 @@ fn verify_internal_command_session_token(root: &Path, token: &str) -> anyhow::Re
     Ok(serde_json::json!({
         "crew_binding": claims.crew_binding,
         "crew_work_key": claims.crew_work_key,
+        "crew_only": claims.crew_only,
         "auth_source": MCP_INTERNAL_SESSION_AUTH_SOURCE,
         "channel": "ctox_internal_business_command",
         "surface": "business_os_command_session",
@@ -5215,7 +5247,9 @@ fn handle_json_rpc_with_gateway_context(
             }
         })),
         "tools/list" => Ok(serde_json::json!({
-            "tools": tool_descriptors()
+            "tools": tool_descriptors().into_iter()
+                .filter(|tool| crew_only_session_allows_tool(&tool.name, trusted_gateway_context))
+                .collect::<Vec<_>>()
         })),
         "tools/call" => {
             let params = body
@@ -6760,6 +6794,10 @@ fn enforce_internal_command_session_scope(
     }) else {
         return Ok(());
     };
+    anyhow::ensure!(
+        crew_only_session_allows_tool(tool_name, Some(context)),
+        "tool is outside this Crew-only command session"
+    );
     let allowed_actions = context
         .get("allowed_actions")
         .and_then(Value::as_array)
