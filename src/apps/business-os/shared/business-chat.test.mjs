@@ -2519,7 +2519,7 @@ function makeChatRootFixture({ chat, mutations }) {
       return null;
     },
     querySelectorAll(selector) {
-      if (selector === 'button, input, textarea, select, a') return interactiveNodes;
+      if (selector === 'button, input, textarea, select, a, summary') return interactiveNodes;
       return [];
     },
     getBoundingClientRect() {

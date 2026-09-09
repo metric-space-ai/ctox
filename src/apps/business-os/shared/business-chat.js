@@ -1140,7 +1140,7 @@ function hasScheduledChatAttachments(value) {
 }
 
 function setWindowInteractiveState(win, isActive) {
-  win.querySelectorAll('button, input, textarea, select, a').forEach((node) => {
+  win.querySelectorAll('button, input, textarea, select, a, summary').forEach((node) => {
     const isAlwaysInteractiveHeaderControl = Boolean(node.closest('.ctox-chat-header-actions, .ctox-chat-delegation-card'));
     if (isActive || isAlwaysInteractiveHeaderControl) {
       if (node.dataset.chatInactiveTabManaged === 'true') {
@@ -1536,6 +1536,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
           const scrollTop = body.scrollTop;
           body.innerHTML = content.body;
           body.scrollTop = scrollTop;
+          setWindowInteractiveState(win, win.classList.contains('is-active'));
           inPlaceDomChanged = true;
         }
       }
