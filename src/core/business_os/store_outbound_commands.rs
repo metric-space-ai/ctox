@@ -6122,11 +6122,39 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn create_adapter_reconciliation_rxdb_fixture(root: &Path) -> anyhow::Result<()> {
+        let path = super::super::store::rxdb_store_path(root);
+        std::fs::create_dir_all(path.parent().context("RxDB fixture parent")?)?;
+        let conn = Connection::open(path)?;
+        let schemas: Value =
+            serde_json::from_str(include_str!("business_os_schema_contract.json"))?;
+        for collection in [
+            "outbound_lead_generation_sources",
+            "outbound_lead_generation_adapters",
+            "outbound_lead_generation_research_policies",
+        ] {
+            let version = schemas[collection]["version"]
+                .as_u64()
+                .context("reconciliation collection schema version")?;
+            conn.execute_batch(&format!(
+                "CREATE TABLE ctox_business_os__{collection}__v{version} (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    revision TEXT,
+                    deleted INTEGER NOT NULL,
+                    lastWriteTime REAL NOT NULL,
+                    data TEXT NOT NULL
+                );"
+            ))?;
+        }
+        Ok(())
+    }
+
     #[test]
     fn outbound_adapter_reconciliation_projects_typed_result_without_secrets() -> anyhow::Result<()>
     {
         let temp = tempdir()?;
         let root = temp.path();
+        create_adapter_reconciliation_rxdb_fixture(root)?;
         let conn = open_store(root)?;
         let now = 1_000;
         let source = serde_json::json!({
@@ -6261,6 +6289,7 @@ mod tests {
     {
         let temp = tempdir()?;
         let root = temp.path();
+        create_adapter_reconciliation_rxdb_fixture(root)?;
         let conn = open_store(root)?;
         let now = 1_000;
         let source = |id: &str| {
