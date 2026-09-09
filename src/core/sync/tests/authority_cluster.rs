@@ -583,7 +583,7 @@ impl Cluster {
 async fn local_ipc_uses_committed_authority_and_never_reauthorizes_a_replay() {
     use ctox_sync::{
         contracts::{SyncIpcOperation, SyncIpcRequest, SyncIpcResponse, SyncIpcResult},
-        local_host::LocalAuthorityHost,
+        local_host::LocalIpcHost,
     };
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -591,11 +591,11 @@ async fn local_ipc_uses_committed_authority_and_never_reauthorizes_a_replay() {
     };
     let cluster = Cluster::new().await;
     let directory = cluster.root.path().join("ipc");
-    let server = LocalAuthorityHost::start(directory.clone(), cluster.nodes[&1].clone())
+    let server = LocalIpcHost::start_authority(directory.clone(), cluster.nodes[&1].clone())
         .await
         .unwrap();
     let mut client = UnixStream::connect(server.endpoint()).await.unwrap();
-    let duplicate = LocalAuthorityHost::start(directory, cluster.nodes[&1].clone()).await;
+    let duplicate = LocalIpcHost::start_authority(directory, cluster.nodes[&1].clone()).await;
     assert_eq!(duplicate.err().unwrap().kind(), io::ErrorKind::AddrInUse);
     async fn exchange(
         client: &mut UnixStream,
@@ -672,18 +672,18 @@ async fn local_ipc_uses_committed_authority_and_never_reauthorizes_a_replay() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn workjet_client_uses_native_quorum_and_observes_host_loss() {
-    use ctox_sync::local_host::LocalAuthorityHost;
+    use ctox_sync::local_host::LocalIpcHost;
     use std::process::Stdio;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     tokio::time::timeout(Duration::from_secs(30), async {
         let cluster = Cluster::new().await;
-        let host = LocalAuthorityHost::start(
+        let host = LocalIpcHost::start_authority(
             cluster.root.path().join("workjet-ipc"),
             cluster.nodes[&1].clone(),
         )
         .await
         .unwrap();
-        let target_host = LocalAuthorityHost::start(
+        let target_host = LocalIpcHost::start_authority(
             cluster.root.path().join("handoff-ipc"),
             cluster.nodes[&2].clone(),
         )

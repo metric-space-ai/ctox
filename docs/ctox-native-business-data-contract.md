@@ -47,8 +47,13 @@ SnapshotEnd must not be fabricated from this shape validation.
   peer admission, bounds a page to 200 documents and 2 MiB, and discards incomplete
   responses. This is the read primitive, not a logged-in Workjet data session.
 - `src/core/sync/src/ipc.rs` and `local_host.rs` currently serve execution
-  authority. Their private socket ownership, same-user check, framing deadlines
-  and supervised teardown are reusable. Their existing 64 KiB authority frame
+  authority through `IpcService` and the shared `LocalIpcHost`. The local host
+  accepts a connection-scoped service without requiring an execution node;
+  `start_authority` installs the existing authority dispatcher on that same host.
+  All callers use this lifecycle; the former `LocalAuthorityHost` type is removed.
+  Private socket ownership, same-user check and supervised teardown are preserved.
+  The service future owns its stream and pending work; shutdown cancels and drains
+  all connection futures before releasing the endpoint. The existing 64 KiB authority frame
   limit cannot silently carry a 2 MiB BusinessData page. A business stream needs
   explicitly bounded frames and flow control; do not raise authority limits as
   an incidental change or open a second HTTP/TCP data service.
@@ -147,6 +152,15 @@ Each query, subscription and command status observation belongs to the handle an
 generation. Switching instance/user closes old watches and invalidates in-flight
 results before exposing the new session. Reconnection rechecks authorization.
 Neither the signaling role nor the advertised room is sufficient target proof.
+Workjet's main-process AccountLifecycle initially awaits native authority, so
+credential admission cannot require its `isCurrent` ready predicate. The main
+owner first registers an invalidator (registration fails during invalidation),
+then captures the local epoch synchronously. A deferred credential callback checks
+that epoch and the attempt's retired state. Only confirmed native target/principal
+authority may call `confirmSession`; publishing data additionally requires
+`isCurrent`. Invalidation must await cancellation of the pending Open and disposal
+of any late handle before resolving. This describes the required handoff; the
+generic IPC service host does not itself implement Open or this account barrier.
 The production native target-proof and credential provisioning path is still
 required; the native credential test fixture does not establish it.
 

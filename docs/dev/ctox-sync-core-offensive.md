@@ -601,7 +601,7 @@ IPC-Client und die generierten Verträge, nicht den fehlenden produktiven
 Aufrufer, eine SSH-/QR-Aufnahme oder den nativen Reconnect.
 
 Plattformgrenze: `native_execution.rs::attach_worker` lehnt Nicht-Unix-Plattformen
-derzeit ausdrücklich mit `Unsupported` ab; `LocalAuthorityHost` ist ein
+derzeit ausdrücklich mit `Unsupported` ab; der gemeinsame `LocalIpcHost` ist ein
 Unix-Socket-Host. Die Named-Pipe-Unterstützung des Workjet-IPC-Clients ist deshalb
 noch kein Windows-Worker-Nachweis. Native Named-Pipe-Bindung, Zugriffskontrolle,
 Stop-/Neustart-Lifecycle und die entsprechenden Aufnahme-/Ausführungstests

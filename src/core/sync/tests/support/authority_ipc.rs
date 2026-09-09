@@ -15,9 +15,9 @@ pub async fn call(
 ) -> SyncIpcResult {
     #[cfg(unix)]
     {
-        use ctox_sync::local_host::{private_ipc_directory, LocalAuthorityHost};
+        use ctox_sync::local_host::{private_ipc_directory, LocalIpcHost};
         let directory = private_ipc_directory().unwrap();
-        let host = LocalAuthorityHost::start(directory.path().into(), node)
+        let host = LocalIpcHost::start_authority(directory.path().into(), node)
             .await
             .unwrap();
         let stream = tokio::net::UnixStream::connect(host.endpoint())

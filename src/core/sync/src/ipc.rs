@@ -4,13 +4,32 @@ use crate::{
     authority::{client::ExecutionAuthority, Command, Receipt, Request},
     contracts::{SyncIpcOperation, SyncIpcRequest, SyncIpcResponse, SyncIpcResult},
 };
-use std::{io, sync::Arc, time::Duration};
+use std::{future::Future, io, pin::Pin, sync::Arc, time::Duration};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub const IPC_PROTOCOL_VERSION: u32 = crate::contracts::CTOX_SYNC_IPC_PROTOCOL_VERSION;
 pub const IPC_MAX_FRAME_BYTES: usize = crate::contracts::CTOX_SYNC_IPC_MAX_FRAME_BYTES as usize;
 const FRAME_DEADLINE: Duration =
     Duration::from_millis(crate::contracts::CTOX_SYNC_IPC_DEADLINE_MILLIS as u64);
+
+/// An owned, authenticated platform stream. Socket/pipe ACLs and lifetime are
+/// supplied by the local host; the service owns protocol framing and dispatch.
+pub trait LocalIpcStream: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> LocalIpcStream for T {}
+pub type IpcServiceFuture<'a> = Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'a>>;
+
+/// One connection-scoped service future. Returning or cancelling this future
+/// must release all work and responses owned by that connection. Implementors
+/// must keep bounded framing and must not detach request/event workers.
+pub trait IpcService: Send + Sync {
+    fn serve_connection(&self, stream: Box<dyn LocalIpcStream>) -> IpcServiceFuture<'_>;
+}
+
+impl IpcService for AuthorityIpc {
+    fn serve_connection(&self, stream: Box<dyn LocalIpcStream>) -> IpcServiceFuture<'_> {
+        Box::pin(self.serve(stream))
+    }
+}
 
 pub struct AuthorityIpc {
     node: Arc<dyn ExecutionAuthority>,
