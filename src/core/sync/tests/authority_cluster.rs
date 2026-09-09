@@ -683,6 +683,31 @@ async fn workjet_client_uses_native_quorum_and_observes_host_loss() {
         )
         .await
         .unwrap();
+        let target_host = LocalAuthorityHost::start(
+            cluster.root.path().join("handoff-ipc"),
+            cluster.nodes[&2].clone(),
+        )
+        .await
+        .unwrap();
+        let mut handoff_spec = spec();
+        handoff_spec.job_id = "workjet-handoff-job".into();
+        handoff_spec.session_id = "workjet-handoff-session".into();
+        let receipts: Vec<_> = [1, 2]
+            .into_iter()
+            .map(|id| {
+                checkpoint_fixture::copy_receipt(
+                    cluster.root.path(),
+                    id,
+                    &cluster.keys[&id],
+                    &handoff_spec,
+                    &ownership(1, 1),
+                    1,
+                )
+            })
+            .collect();
+        let handoff = serde_json::json!({
+            "target": target_host.endpoint(), "spec": handoff_spec, "receipts": receipts,
+        });
         let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let workjet = source
             .join("../../../../workjet")
@@ -693,6 +718,7 @@ async fn workjet_client_uses_native_quorum_and_observes_host_loss() {
             .arg(workjet.join("apps/server/src/workjet/sync/WorkjetSyncIpc.ts"))
             .arg(host.endpoint())
             .arg(serde_json::to_string(&spec()).unwrap())
+            .arg(handoff.to_string())
             .current_dir(&workjet)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -720,6 +746,7 @@ async fn workjet_client_uses_native_quorum_and_observes_host_loss() {
         );
         drop(input);
         assert!(child.wait().await.unwrap().success());
+        target_host.shutdown().await.unwrap();
         cluster.close().await;
     })
     .await

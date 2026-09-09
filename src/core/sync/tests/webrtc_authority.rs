@@ -783,8 +783,8 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
             checkpoint_digest: checkpoint_digest.clone(),
         };
         assert!(
-            matches!(ipc_call(nodes[&3].clone(), "no-target-copy", takeover.clone()).await,
-            SyncIpcResult::Rejected { ref reason } if reason == "CheckpointUnavailable")
+            matches!(ipc_call(nodes[&3].clone(), "coordination-peer-cannot-takeover", takeover.clone()).await,
+            SyncIpcResult::Rejected { ref reason } if reason == "UnknownPeer")
         );
         assert!(matches!(ipc_call(nodes[&2].clone(), "wrong-digest",
             SyncIpcOperation::TakeOver { job_id: "job".into(),

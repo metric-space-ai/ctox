@@ -7,6 +7,7 @@ import { exerciseHandoff } from "./workjet_handoff_ipc.mjs";
 const [clientPath, endpoint, encodedSpec, encodedHandoff] = process.argv.slice(2);
 const { requestSyncAuthority } = await import(pathToFileURL(clientPath).href);
 const spec = JSON.parse(encodedSpec);
+assert.ok(encodedHandoff, "native fixture must supply the signed-copy handoff scenario");
 await exerciseHandoff(requestSyncAuthority, endpoint, JSON.parse(encodedHandoff));
 let sequence = 0;
 const request = (operation, requestId = `node-client-${++sequence}`) =>
