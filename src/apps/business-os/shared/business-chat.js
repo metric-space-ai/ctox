@@ -1362,7 +1362,9 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       if (chat) {
         const category = chatWorkjetCategory(chat);
         const categoryChanged = setDatasetIfChanged(chip, 'workjetCategory', category);
-        if (categoryChanged) {
+        const chipCreature = chip.querySelector('.ctox-crew-creature');
+        const crewChanged = Boolean(chipCreature && chipCreature.dataset?.crewIdentity !== JSON.stringify(crewIdentity(chat)));
+        if (categoryChanged || crewChanged) {
           if (typeof chip.getAttribute === 'function') {
             if (setAttrIfChanged(chip, 'style', chatWorkjetCategoryStyleText(category, chat))) inPlaceDomChanged = true;
           } else if (setInlineStyleIfChanged(chip, chatWorkjetCategoryStyleText(category, chat))) {
@@ -1397,7 +1399,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
           const markCreature = markEl.querySelector?.('.ctox-crew-creature');
           const markHasCorrectMode = !markCreature
             || markCreature.dataset?.crewMode === crewCreatureMode(chat, taskState);
-          if (!markHasCorrectState || !markHasCorrectMode) {
+          if (!markHasCorrectState || !markHasCorrectMode || crewChanged) {
             markEl.outerHTML = chatChipMarkHtml(chat, taskState);
             inPlaceDomChanged = true;
           } else if (markCreature && syncCrewTelemetryNode(markCreature, chat)) {
@@ -1448,7 +1450,9 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         inPlaceDomChanged = true;
       }
       const categoryChanged = setDatasetIfChanged(win, 'workjetCategory', category);
-      if (categoryChanged) {
+      const windowCreature = win.querySelector('.ctox-crew-creature');
+      const crewChanged = Boolean(windowCreature && windowCreature.dataset?.crewIdentity !== JSON.stringify(crewIdentity(chat)));
+      if (categoryChanged || crewChanged) {
         if (typeof win.getAttribute === 'function') {
             if (setAttrIfChanged(win, 'style', chatWorkjetCategoryStyleText(category, chat))) inPlaceDomChanged = true;
         } else if (setInlineStyleIfChanged(win, chatWorkjetCategoryStyleText(category, chat))) {
@@ -1463,6 +1467,15 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       }
 
       // Update title text in header
+      const titleButton = win.querySelector('[data-chat-title]');
+      if (titleButton) {
+        const title = chatWindowTitle(chat);
+        if (setAttrIfChanged(titleButton, 'aria-label', title)) inPlaceDomChanged = true;
+        if (setAttrIfChanged(titleButton, 'title', title)) inPlaceDomChanged = true;
+      }
+      const composerInput = win.querySelector('textarea[name="message"]');
+      if (composerInput && setAttrIfChanged(composerInput, 'placeholder', chatUiIsGerman()
+        ? `Aufgabe für ${crewIdentity(chat).name}...` : `Task for ${crewIdentity(chat).name}...`)) inPlaceDomChanged = true;
       const titleStrong = win.querySelector('.ctox-chat-title strong');
       if (titleStrong && setTextIfChanged(titleStrong, crewIdentity(chat).name)) inPlaceDomChanged = true;
       const titleTask = win.querySelector('.ctox-chat-title-task');
@@ -1484,7 +1497,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       }
 
       const creature = win.querySelector('.ctox-crew-creature');
-      if (creature && creature.dataset?.crewMode !== creatureMode) {
+      if (creature && (creature.dataset?.crewMode !== creatureMode || crewChanged)) {
         creature.outerHTML = crewCreatureHtml(chat, taskState, 'window');
         inPlaceDomChanged = true;
       } else if (creature && syncCrewTelemetryNode(creature, chat)) {
@@ -2451,6 +2464,14 @@ function crewIdentity(chat = {}) {
 
 // The member holding a chat's command, as the harness recorded it; the reason
 // the router gave, as the owner reads it.
+function chatCrewSnapshot(chat) {
+  const memberId = String(chat?.crew_member_id || '').trim();
+  if (!memberId || !String(chat?.crewIdentity?.name || '').trim()) return {};
+  // Cache public presentation only. Queue/member projections still determine
+  // assignment; no soul, permissions or execution context comes from this cache.
+  return { crew_member_id: memberId, crewIdentity: crewIdentity(chat) };
+}
+
 async function findCrewMembersByIds(collection, ids) {
   return findDocsByIds(collection, ids);
 }
@@ -2759,7 +2780,7 @@ export function crewCreatureHtml(chat, taskState = getTaskState(chat), placement
   const telemetry = executionActivityTelemetry(chat);
   const motionSeed = crewHash(`${crewIdentityKey(chat)}:${placement}`);
   return `
-    <span class="ctox-crew-creature is-${escapeAttr(taskState)} is-${escapeAttr(mode)} is-${escapeAttr(crew.shape)} is-${escapeAttr(placement)}" data-crew-mode="${escapeAttr(mode)}" data-crew-seed="${motionSeed}" data-crew-key="${escapeAttr(`${crewIdentityKey(chat)}:${placement}`)}" data-activity-turns="${telemetry.total}" data-activity-kind="${escapeAttr(telemetry.lastKind)}" data-activity-updated-at="${telemetry.updatedAt}" style="--crew-color:${escapeAttr(crew.color)};--ctox-progress-angle:${progressAngle}deg;${crewMotionStyle(chat)}" aria-hidden="true">
+    <span class="ctox-crew-creature is-${escapeAttr(taskState)} is-${escapeAttr(mode)} is-${escapeAttr(crew.shape)} is-${escapeAttr(placement)}" data-crew-mode="${escapeAttr(mode)}" data-crew-identity="${escapeAttr(JSON.stringify(crew))}" data-crew-seed="${motionSeed}" data-crew-key="${escapeAttr(`${crewIdentityKey(chat)}:${placement}`)}" data-activity-turns="${telemetry.total}" data-activity-kind="${escapeAttr(telemetry.lastKind)}" data-activity-updated-at="${telemetry.updatedAt}" style="--crew-color:${escapeAttr(crew.color)};--ctox-progress-angle:${progressAngle}deg;${crewMotionStyle(chat)}" aria-hidden="true">
       <svg viewBox="0 0 64 64" focusable="false">
         <g class="ctox-crew-body">${crewBodyMarkup(crew.shape)}</g>
         <g class="ctox-crew-eyes is-${escapeAttr(mode)}">${crewEyesMarkupForMode(crew.shape, mode)}</g>
@@ -2961,7 +2982,16 @@ function chatWorkjetCategoryStyleText(category, chat = null) {
   ].join(';');
 }
 
+function chatWindowTitle(chat) {
+  return [
+    `${crewIdentity(chat).name} · ${chat.title || (chatUiIsGerman() ? 'Neue Aufgabe' : 'New task')}`,
+    chatDockStatusText(chat, getTaskState(chat)),
+    executionProgressTooltip(executionProgressForChat(chat)),
+  ].filter(Boolean).join('\n');
+}
+
 function chatWindow(chat, activeId, relation = 'center') {
+
   const moduleName = chat.contextMeta?.module || 'ctox';
   const category = chatWorkjetCategory(chat);
   const categoryStyleText = chatWorkjetCategoryStyleText(category, chat);
@@ -3078,11 +3108,7 @@ function chatWindow(chat, activeId, relation = 'center') {
 
   const isMinimizedClass = chat.minimized ? 'is-minimized' : '';
   const taskStateClass = `is-task-${taskState}`;
-  const windowTitle = [
-    `${crew.name} · ${chat.title || (chatUiIsGerman() ? 'Neue Aufgabe' : 'New task')}`,
-    taskState,
-    executionProgressTooltip(executionProgressForChat(chat)),
-  ].filter(Boolean).join('\n');
+  const windowTitle = chatWindowTitle(chat);
 
   let schedulerBarHtml = '';
   if (isFuture) {
@@ -4772,6 +4798,7 @@ function readChatState(session) {
       chats: chats
         .filter((chat) => !chat.owner_user_id || chat.owner_user_id === owner)
         .map((chat) => ({
+          ...chatCrewSnapshot(chat),
           id: chat.id || `chat_${crypto.randomUUID()}`,
           title: chat.title || 'Crew',
           open: chat.open !== false,
@@ -5115,6 +5142,8 @@ function mergeChatPair(localChat, remoteChat, owner) {
   const messages = mergeChatMessages(local.messages, remote.messages);
   return applyChatTrackingSummary({
     ...base,
+    ...chatCrewSnapshot(localIsNewer ? remote : local),
+    ...chatCrewSnapshot(base),
     title: local.title || remote.title || base.title,
     open: local.open !== false || remote.open !== false,
     minimized: Boolean(presentation.minimized),
@@ -5228,6 +5257,7 @@ function preferredChatTrackingId(local, remote, messages) {
 
 function normalizeChat(chat) {
   return applyChatTrackingSummary({
+    ...chatCrewSnapshot(chat),
     id: chat.id || `chat_${crypto.randomUUID()}`,
     title: chat.title || 'Crew',
     open: chat.open !== false,

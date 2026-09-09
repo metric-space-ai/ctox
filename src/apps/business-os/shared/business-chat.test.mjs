@@ -64,6 +64,21 @@ test('a status-only projection retains this task plan without leaking it into th
   assert.equal(executionProgressForChat(chat), null, 'new task starts with no fabricated steps');
 });
 
+test('chat hydration and reload retain the assigned member public appearance', () => {
+  const { mergeChatPair, crewIdentity } = __businessChatTestInternals;
+  const local = { id: 'chat-assigned', owner_user_id: 'owner', createdAt: 1, updated_at_ms: 1,
+    messages: [], crew_member_id: 'crew-milo',
+    crewIdentity: { name: 'Milo', color: '#0088ff', shape: 'round', soul: 'never cache this' } };
+  const remote = { id: local.id, owner_user_id: 'owner', createdAt: 1, updated_at_ms: 2, messages: [] };
+  const merged = mergeChatPair(local, remote, 'owner');
+  assert.equal(merged.crew_member_id, 'crew-milo');
+  assert.deepEqual(crewIdentity(merged), { name: 'Milo', color: '#0088ff', shape: 'round' });
+  assert.deepEqual(Object.keys(merged.crewIdentity).sort(), ['color', 'name', 'shape']);
+  const reloaded = mergeChatPair(null, JSON.parse(JSON.stringify(merged)), 'owner');
+  assert.deepEqual(crewIdentity(reloaded), crewIdentity(merged));
+  assert.equal(reloaded.crew_member_id, 'crew-milo');
+});
+
 test('saved crew status messages use plain language without rewriting user instructions', () => {
   const previousDocument = globalThis.document;
   globalThis.document = { documentElement: { lang: 'de' } };

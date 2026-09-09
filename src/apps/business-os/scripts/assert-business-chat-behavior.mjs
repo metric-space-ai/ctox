@@ -317,8 +317,9 @@ try {
   });
 
   await scenario(page, 'inspection-survives-live-projection-while-typing', {
-    count: 1, activeIndex: 0, groupedResearch: true, progressTracking: true,
+    count: 1, activeIndex: 0, groupedResearch: true, progressTracking: true, crewMembers: 4,
   }, async () => {
+    await page.getByPlaceholder('Aufgabe für Pico...').waitFor();
     const inspection = page.locator('.ctox-chat-window.is-active .ctox-chat-inspection');
     await inspection.locator('summary').click();
     const input = page.locator('.ctox-chat-window.is-active textarea');
@@ -340,6 +341,9 @@ try {
     expect(await inspection.getAttribute('open') === '', 'live projection must keep inspection open');
     expect(await input.inputValue() === 'Bitte anschließend kurz zusammenfassen.', 'live projection must preserve the draft');
     expect(await input.evaluate(e => e === document.activeElement), 'live projection must preserve typing focus');
+    expect(await input.getAttribute('placeholder') === 'Aufgabe für Pico...', 'live projection retains the assigned member');
+    expect((await page.locator('.ctox-chat-window.is-active [data-chat-title]').getAttribute('aria-label')).startsWith('Pico ·'), 'header identifies the actual assigned member');
+    expect(JSON.parse(await page.locator('.ctox-chat-window.is-active .ctox-crew-creature').getAttribute('data-crew-identity')).name === 'Pico', 'creature appearance follows the assigned member');
     expect(await inspection.locator('.ctox-chat-inspection-steps li').count() === 3, 'inspection keeps the same plan steps');
     expect(!(await page.locator('.ctox-chat-window.is-active .ctox-chat-messages').innerText()).includes('Ein neuer Arbeitsschritt läuft.'), 'work status must not appear as a crew reply');
   });
@@ -867,7 +871,8 @@ function harnessHtml() {
         : options.progressTracking ? chats.flatMap(chat => chat.messages
           .filter(message => message.taskId && message.executionProgress)
           .map(message => ({ id: message.taskId, command_id: message.commandId,
-            status: message.status, execution_progress: message.executionProgress }))) : [];
+            status: message.status, execution_progress: message.executionProgress,
+            ...(options.crewMembers ? { crew_member_id: 'member_0' } : {}) }))) : [];
       initBusinessChat({
 
         session: { authenticated: true, user: { id: owner, name: 'Harness User' } },
