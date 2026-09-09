@@ -108,12 +108,32 @@ It does not create a ready BusinessData session or grant collection access.
 The public identity in the response is NOT a trust source. Workjet must obtain
 its pin through authenticated provisioning, confirmed enrollment or SSH, before
 releasing credentials. Its currently inspected saved targets contain logical
-instance IDs and signaling token hashes, not a proven source-key pin. Production
-pre-credential challenge integration, trusted key provisioning and current-account
-handle invalidation are still missing. The existing LocalSessionProvider contract
-requires trusted target authorization but does not supply that implementation.
-The standalone proof reader does not silently repair this gap or enable anonymous
-data reads. Native metadata proofs need revalidation on reconnect and grant change.
+instance IDs and signaling token hashes, not a proven source-key pin. Trusted key
+provisioning and the operational current-account data-handle service remain missing.
+
+`NativeSyncOptions.local_session_provider` now resolves a `NativeSessionTarget`:
+independently enrolled `public_identity`, expected `instance_id` and a deferred
+credential callback bound to that same target/account. The resolver must not read
+a bearer or sign a remote nonce. The core checks the current peer/lifetime,
+verifies a fresh channel-bound source proof, rechecks admission, and only then
+invokes credentials. The host callback must recheck its current account epoch;
+reconnection repeats target resolution and proof. Failure cannot fall back to an
+anonymous credential exchange. A weak pool reference avoids a provider/lifecycle
+ownership cycle. The original direct native credential-provider path is replaced.
+
+The existing request registry explicitly admits public `ctox.*.identity.v1`
+responders before session authentication, still behind the current peer filter.
+Protocol, collection, file and authority methods cannot register in this category.
+An unaccepted peer's identity request receives no cached capability and does not
+mark either handshake direction authenticated. Business OS installs its responder
+before room join; the same signed proof reader is reused before and after login.
+The standalone reader still requires reciprocal readiness for principal lookup.
+
+This native ordering is implemented but requires current CI acceptance. Its real
+WebRTC fixture uses independently generated fixture keys and asserts zero credential
+or signature callbacks for a wrong key/instance. It does not certify Workjet SSH/QR
+key enrollment or account-transition integration. Public source proof alone grants
+no collection access or ready data handle.
 
 ## Session and identity
 

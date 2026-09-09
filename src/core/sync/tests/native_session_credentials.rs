@@ -44,20 +44,34 @@ fn key() -> Arc<EcdsaKeyPair> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_device_credentials_unlock_real_webrtc_reads_and_obey_current_revocation() {
-    exercise(false, false).await;
+    exercise(false, false, TargetFault::None).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_device_credentials_from_another_key_cannot_unlock_replication() {
-    exercise(true, false).await;
+    exercise(true, false, TargetFault::None).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_peer_filter_revocation_denies_real_webrtc_reads_with_valid_credentials() {
-    exercise(false, true).await;
+    exercise(false, true, TargetFault::None).await;
 }
 
-async fn exercise(wrong_key: bool, revoke_peer_only: bool) {
+#[derive(Clone, Copy, PartialEq)]
+enum TargetFault {
+    None,
+    Key,
+    Instance,
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn wrong_source_pin_or_instance_never_requests_credentials_over_real_webrtc() {
+    for fault in [TargetFault::Key, TargetFault::Instance] {
+        exercise(false, false, fault).await;
+    }
+}
+
+async fn exercise(wrong_key: bool, revoke_peer_only: bool, target_fault: TargetFault) {
     tokio::time::timeout(Duration::from_secs(35), async {
         let signaling =
             signaling_fixture::SignalingFixture::with_roles(["ctox_instance", "workjet_executor"])
@@ -72,6 +86,8 @@ async fn exercise(wrong_key: bool, revoke_peer_only: bool) {
         let revoked = Arc::new(AtomicBool::new(false));
         let peer_allowed = Arc::new(AtomicBool::new(true));
         let verified_proofs = Arc::new(AtomicUsize::new(0));
+        let credential_requests = Arc::new(AtomicUsize::new(0));
+        let public_identity_seen = Arc::new(AtomicBool::new(false));
         let (server_root, server_db, mut server_options) =
             native_fixture::options(signaling.url.clone(), "credential-room", "server-session")
                 .await;
@@ -141,26 +157,29 @@ async fn exercise(wrong_key: bool, revoke_peer_only: bool) {
         ).unwrap());
         let source_pin = source_key.public_identity();
         let identity_revoked = revoked.clone();
+        let public_seen = public_identity_seen.clone();
         let server = NativeSyncSession::start_with_pool_setup(server_options, |pool| {
         let identity_transport = pool.connection_handler.clone();
-        pool.register_auxiliary_request_handler(
+        pool.register_identity_request_handler(
             ctox_sync::business_data_contract::CTOX_BUSINESS_DATA_IDENTITY_METHOD,
             Arc::new(move |peer_id, token, params| {
                 let key = source_key.clone();
                 let revoked = identity_revoked.clone();
                 let transport = identity_transport.clone();
+                let public_seen = public_seen.clone();
                 Box::pin(async move {
                     let connection = transport.connection_for_peer(&peer_id).ok_or_else(|| "retired peer".to_string())?;
                     let channel_binding = transport.channel_binding(&connection).await.map_err(|_| "invalid channel".to_string())?;
-                    if token != "fixture-private-read" || revoked.load(Ordering::SeqCst) {
+                    if (!token.is_empty() && token != "fixture-private-read") || revoked.load(Ordering::SeqCst) {
                         return Err("identity capability rejected".into());
                     }
                     let request: ctox_sync::business_data_contract::NativeBusinessDataIdentityRequest =
                         serde_json::from_value(params[0].clone()).map_err(|_| "invalid request".to_string())?;
                     let proof = key.attest_business_data_identity("fixture-instance", &request.challenge, &channel_binding,
-                        Some(ctox_sync::business_data_contract::NativeBusinessDataPrincipal {
+                        (!token.is_empty()).then(|| ctox_sync::business_data_contract::NativeBusinessDataPrincipal {
                             user_id: "fixture-user".into(), authorization_epoch: 1, device: None,
                         })).map_err(|_| "invalid challenge".to_string())?;
+                    if token.is_empty() { public_seen.store(true, Ordering::SeqCst); }
                     serde_json::to_value(proof).map_err(|_| "invalid identity".to_string())
                 })
             }),
@@ -176,10 +195,13 @@ async fn exercise(wrong_key: bool, revoke_peer_only: bool) {
         client_options.peer_role = NativePeerRole::WorkjetExecutor;
         let signed_challenges = Arc::new(AtomicUsize::new(0));
         let counter = signed_challenges.clone();
-        client_options.local_session_provider = Some(Arc::new(move |connection, nonce| {
-            // This test fixture pins its server route. Production hosts must
-            // resolve authenticated instance identity; a route is not a proof.
-            assert_eq!(connection.peer_id(), "native000001");
+        let credential_counter = credential_requests.clone();
+        let public_seen = public_identity_seen.clone();
+        let credentials: rxdb::plugins::replication_webrtc::LocalSessionProvider<
+            rxdb::plugins::replication_webrtc::WebRTCRsConnection,
+        > = Arc::new(move |_connection, nonce| {
+            assert!(public_seen.load(Ordering::SeqCst), "credentials accessed before source proof");
+            credential_counter.fetch_add(1, Ordering::SeqCst);
             let signer = signer.clone();
             let counter = counter.clone();
             Box::pin(async move {
@@ -198,8 +220,25 @@ async fn exercise(wrong_key: bool, revoke_peer_only: bool) {
                     device_proof,
                 })
             })
+        });
+        let pinned_key = if target_fault == TargetFault::Key {
+            ctox_sync::authority::auth::SigningIdentity::from_pkcs8(
+                &ctox_sync::authority::auth::SigningIdentity::generate_pkcs8().unwrap()
+            ).unwrap().public_identity()
+        } else { source_pin.clone() };
+        client_options.local_session_provider = Some(Arc::new(move |_connection| {
+            let public_identity = pinned_key.clone();
+            let credentials = credentials.clone();
+            Box::pin(async move {
+                Ok(ctox_sync::native::NativeSessionTarget {
+                    public_identity,
+                    instance_id: if target_fault == TargetFault::Instance { "wrong-instance" } else { "fixture-instance" }.into(),
+                    credentials,
+                })
+            })
         }));
         let client = NativeSyncSession::start(client_options).await.unwrap();
+        let mut client_errors = client.pool().error_subject.subscribe();
         // Wait for role-bearing signaling membership; only the lower ID offers.
         loop {
             if server
@@ -213,7 +252,14 @@ async fn exercise(wrong_key: bool, revoke_peer_only: bool) {
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        if wrong_key {
+        if target_fault != TargetFault::None {
+            assert!(client_errors.next().await.is_some(), "wrong target must fail the handshake");
+            assert!(public_identity_seen.load(Ordering::SeqCst), "public proof traversed WebRTC");
+            assert_eq!(credential_requests.load(Ordering::SeqCst), 0);
+            assert_eq!(signed_challenges.load(Ordering::SeqCst), 0);
+            assert_eq!(verified_proofs.load(Ordering::SeqCst), 0);
+            assert!(!signaling_fixture::route_ready(server.pool(), "native000002"));
+        } else if wrong_key {
             let error = server_errors.next().await.unwrap();
             assert_eq!(error.parameters()["code"], "peer_authentication_failed");
             assert_eq!(verified_proofs.load(Ordering::SeqCst), 0);
@@ -235,7 +281,8 @@ async fn exercise(wrong_key: bool, revoke_peer_only: bool) {
                 .connection_for_peer("native000001")
                 .unwrap();
             // Actual nonce/signature exchanges over the established DataChannel.
-            // This fixture still does NOT certify production pre-token enrollment.
+            // The actual core now verifies the enrolled fixture key before
+            // credentials. Workjet's production enrollment UI is still separate.
             let mut identity_timings = Vec::new();
             for _ in 0..30 {
                 let started = Instant::now();

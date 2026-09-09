@@ -16,6 +16,29 @@ pub type NativePool = Arc<RxWebRTCReplicationPool<WebRTCRsConnectionHandler>>;
 pub use rxdb::plugins::replication_webrtc::NativePeerRole;
 pub type SignalingUrls = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
 
+/// One current saved-target identity. Pins come from authenticated enrollment,
+/// never signaling or the proof response. The credential callback must retain
+/// that same target/account binding and recheck it when invoked after proof.
+pub struct NativeSessionTarget {
+    pub public_identity: String,
+    pub instance_id: String,
+    pub credentials: rxdb::plugins::replication_webrtc::LocalSessionProvider<
+        rxdb::plugins::replication_webrtc::WebRTCRsConnection,
+    >,
+}
+
+/// Resolve public pins without reading a token or signing a remote nonce.
+/// The native lifecycle invokes credentials only after channel-bound proof.
+pub type NativeSessionTargetProvider = Arc<
+    dyn Fn(
+            rxdb::plugins::replication_webrtc::WebRTCRsConnection,
+        ) -> futures_util::future::BoxFuture<
+            'static,
+            Result<NativeSessionTarget, rxdb::rx_error::RxError>,
+        > + Send
+        + Sync,
+>;
+
 /// Admission and business authorization remain the responsibility of the host.
 /// Neither a signaling role nor an execution vote grants access to collections.
 pub struct NativeAdmission {
@@ -31,12 +54,9 @@ pub struct NativeAdmission {
 
 pub struct NativeSyncOptions {
     pub peer_role: NativePeerRole,
-    /// Host-owned authenticated data identity, independent of execution votes.
-    pub local_session_provider: Option<
-        rxdb::plugins::replication_webrtc::LocalSessionProvider<
-            rxdb::plugins::replication_webrtc::WebRTCRsConnection,
-        >,
-    >,
+    /// Resolve the trusted target first; the native core gates credentials on
+    /// its fresh signed proof. Execution votes cannot supply a data identity.
+    pub local_session_provider: Option<NativeSessionTargetProvider>,
     /// Host-owned identity/persistence, independent from the replicated set.
     pub database: Arc<RxDatabase>,
     pub collections: Vec<Arc<RxCollection>>,
@@ -169,8 +189,8 @@ impl NativeSyncSession {
                 }
                 let handler = WebRTCRsConnectionHandler::prepare_with_signaling(config).await?;
                 resources.handler = Some(handler.clone());
-                handler.set_local_session_provider(options.local_session_provider);
                 let admission = options.admission;
+                let local_peer_gate = admission.peer.clone();
                 handler.set_collection_authz(admission.collection_read);
                 handler.set_collection_write_authz(admission.collection_write);
                 handler.set_document_read_authz(admission.document_read);
@@ -192,7 +212,9 @@ impl NativeSyncSession {
                     )
                     .await?,
                 );
-                setup(resources.pool.as_ref().expect("prepared native pool"))?;
+                let pool = resources.pool.as_ref().expect("prepared native pool");
+                install_target_provider(pool, options.local_session_provider, local_peer_gate);
+                setup(pool)?;
                 // Only advertise this peer after every pool request/connect
                 // subscriber and host handler exists. Peers may offer on join.
                 signaling.join(options.room).await?;
@@ -250,68 +272,14 @@ impl NativeSyncSession {
         expected_key: &str,
         expected_instance: &str,
     ) -> io::Result<crate::business_data_contract::NativeBusinessDataPeerIdentity> {
-        use crate::{business_data_contract::*, business_data_identity::*};
-        use rxdb::plugins::replication_webrtc::{send_message_and_await_answer, WebRTCMessage};
-        crate::authority::auth::public_key(expected_key)?;
-        let failure = || {
-            io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "BusinessData peer identity unavailable or invalid",
-            )
-        };
-        if !self.pool().is_peer_ready_for_control(&connection) {
-            return Err(failure());
-        }
-        let challenge = fresh_challenge()?;
-        let request = NativeBusinessDataIdentityRequest {
-            version: CTOX_BUSINESS_DATA_PROTOCOL_VERSION,
-            challenge: challenge.clone(),
-        };
-        // SDP access can await transport locks too. Both channel lookup and
-        // wire exchange belong to one deadline and the pool cancellation scope.
-        let exchange = async {
-            let channel_binding = self
-                .pool()
-                .connection_handler
-                .channel_binding(&connection)
-                .await
-                .map_err(|_| failure())?;
-            let response = send_message_and_await_answer(
-                self.pool().connection_handler.clone(),
-                connection.clone(),
-                WebRTCMessage {
-                    id: format!("business-identity-{challenge}"),
-                    method: CTOX_BUSINESS_DATA_IDENTITY_METHOD.into(),
-                    params: vec![serde_json::to_value(request).map_err(|_| failure())?],
-                    collection: None,
-                },
-            )
-            .await
-            .map_err(|_| failure())?;
-            Ok::<_, io::Error>((response, channel_binding))
-        };
-        let (response, channel_binding) = tokio::select! {
-            biased;
-            _ = self.pool().cancelled() => return Err(failure()),
-            response = tokio::time::timeout(Duration::from_secs(10), exchange) => {
-                response.map_err(|_| failure())??
-            }
-        };
-        if !self.pool().is_peer_ready_for_control(&connection)
-            || response.error.is_some()
-            || serde_json::to_vec(&response.result).map_or(true, |bytes| bytes.len() > 4096)
-        {
-            return Err(failure());
-        }
-        let proof = serde_json::from_value(response.result).map_err(|_| failure())?;
-        verify_peer_identity(
-            &proof,
+        request_identity_proof(
+            self.pool(),
+            connection,
             expected_key,
             expected_instance,
-            &challenge,
-            &channel_binding,
-        )?;
-        Ok(proof)
+            true,
+        )
+        .await
     }
 
     fn ensure_attachable(&self) -> io::Result<()> {
@@ -402,4 +370,118 @@ impl NativeSyncSession {
     pub async fn shutdown(&self) {
         self.resources.close().await;
     }
+}
+
+fn install_target_provider(
+    pool: &NativePool,
+    provider: Option<NativeSessionTargetProvider>,
+    peer_gate: Arc<dyn Fn(&String) -> bool + Send + Sync>,
+) {
+    use rxdb::plugins::replication_webrtc::{LocalSessionProvider, WebRTCRsConnection};
+    let weak_pool = Arc::downgrade(pool);
+    let wrapped: Option<LocalSessionProvider<WebRTCRsConnection>> = provider.map(|resolve| {
+        Arc::new(move |connection: WebRTCRsConnection, nonce: Option<String>| {
+            let resolve = resolve.clone();
+            let weak_pool = weak_pool.clone();
+            let peer_gate = peer_gate.clone();
+            Box::pin(async move {
+                let failure = || rxdb::rx_error::new_rx_error("RC_WEBRTC_PEER", Some(serde_json::json!({
+                    "code": "native_target_identity_unavailable",
+                    "message": "trusted target identity or current credentials unavailable"
+                })));
+                let pool = weak_pool.upgrade().ok_or_else(failure)?;
+                let allowed = || !pool.canceled.load(std::sync::atomic::Ordering::SeqCst)
+                    && pool.connection_handler.is_peer_current(&connection)
+                    && peer_gate(&connection.peer_id().to_owned());
+                if !allowed() { return Err(failure()); }
+                let target = resolve(connection.clone()).await.map_err(|_| failure())?;
+                if !allowed() { return Err(failure()); }
+                request_identity_proof(&pool, connection.clone(), &target.public_identity,
+                    &target.instance_id, false).await.map_err(|_| failure())?;
+                if !allowed() { return Err(failure()); }
+                // Only this point may access a bearer or sign the remote nonce.
+                // The host callback must also check its current account epoch.
+                let credentials = (target.credentials)(connection.clone(), nonce)
+                    .await.map_err(|_| failure())?;
+                if !allowed() { return Err(failure()); }
+                Ok(credentials)
+            }) as futures_util::future::BoxFuture<'static, _>
+        }) as LocalSessionProvider<WebRTCRsConnection>
+    });
+    pool.connection_handler.set_local_session_provider(wrapped);
+}
+
+async fn request_identity_proof(
+    pool: &NativePool,
+    connection: rxdb::plugins::replication_webrtc::WebRTCRsConnection,
+    expected_key: &str,
+    expected_instance: &str,
+    require_ready: bool,
+) -> io::Result<crate::business_data_contract::NativeBusinessDataPeerIdentity> {
+    use crate::{business_data_contract::*, business_data_identity::*};
+    use rxdb::plugins::replication_webrtc::{send_message_and_await_answer, WebRTCMessage};
+    crate::authority::auth::public_key(expected_key)?;
+    let failure = || {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "BusinessData peer identity unavailable or invalid",
+        )
+    };
+    let current = || {
+        !pool.canceled.load(std::sync::atomic::Ordering::SeqCst)
+            && pool.connection_handler.is_peer_current(&connection)
+            && (!require_ready || pool.is_peer_ready_for_control(&connection))
+    };
+    if !current() {
+        return Err(failure());
+    }
+    let challenge = fresh_challenge()?;
+    let request = NativeBusinessDataIdentityRequest {
+        version: CTOX_BUSINESS_DATA_PROTOCOL_VERSION,
+        challenge: challenge.clone(),
+    };
+    // SDP access can await transport locks too. Both channel lookup and
+    // wire exchange belong to one deadline and the pool cancellation scope.
+    let exchange = async {
+        let channel_binding = pool
+            .connection_handler
+            .channel_binding(&connection)
+            .await
+            .map_err(|_| failure())?;
+        let response = send_message_and_await_answer(
+            pool.connection_handler.clone(),
+            connection.clone(),
+            WebRTCMessage {
+                id: format!("business-identity-{challenge}"),
+                method: CTOX_BUSINESS_DATA_IDENTITY_METHOD.into(),
+                params: vec![serde_json::to_value(request).map_err(|_| failure())?],
+                collection: None,
+            },
+        )
+        .await
+        .map_err(|_| failure())?;
+        Ok::<_, io::Error>((response, channel_binding))
+    };
+    let (response, channel_binding) = tokio::select! {
+        biased;
+        _ = pool.cancelled() => return Err(failure()),
+        response = tokio::time::timeout(Duration::from_secs(10), exchange) => {
+            response.map_err(|_| failure())??
+        }
+    };
+    if !current()
+        || response.error.is_some()
+        || serde_json::to_vec(&response.result).map_or(true, |bytes| bytes.len() > 4096)
+    {
+        return Err(failure());
+    }
+    let proof = serde_json::from_value(response.result).map_err(|_| failure())?;
+    verify_peer_identity(
+        &proof,
+        expected_key,
+        expected_instance,
+        &challenge,
+        &channel_binding,
+    )?;
+    Ok(proof)
 }

@@ -122,6 +122,12 @@ pub type AuxiliaryRequestFuture =
     Pin<Box<dyn Future<Output = Result<Value, String>> + Send + 'static>>;
 pub type AuxiliaryRequestHandler =
     Arc<dyn Fn(String, String, Vec<Value>) -> AuxiliaryRequestFuture + Send + Sync + 'static>;
+
+#[derive(Clone)]
+struct RegisteredAuxiliaryRequest {
+    handler: AuxiliaryRequestHandler,
+    public_identity: bool,
+}
 const CTOX_RXDB_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-rxdb-native-v1",
     "ctox-file-chunks-v1",
@@ -267,7 +273,7 @@ pub struct RxWebRTCReplicationPool<H: WebRTCConnectionHandler> {
     /// Typed, explicitly registered request methods that share the authenticated
     /// WebRTC DataChannel without becoming RxDB documents. This is reserved for
     /// latency-sensitive ephemeral control planes such as the live Browser.
-    auxiliary_request_handlers: Mutex<HashMap<String, AuxiliaryRequestHandler>>,
+    auxiliary_request_handlers: Mutex<HashMap<String, RegisteredAuxiliaryRequest>>,
     /// Room admission is also required before sending auxiliary control RPCs.
     authenticated_peers: Arc<Mutex<HashSet<H::Peer>>>,
     outbound_ready_peers: Mutex<HashSet<H::Peer>>,
@@ -435,9 +441,13 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         method: impl Into<String>,
         handler: AuxiliaryRequestHandler,
     ) {
-        self.auxiliary_request_handlers
-            .lock()
-            .insert(method.into(), handler);
+        self.auxiliary_request_handlers.lock().insert(
+            method.into(),
+            RegisteredAuxiliaryRequest {
+                handler,
+                public_identity: false,
+            },
+        );
     }
 
     /// Register a lifecycle-owned control contract without silently replacing
@@ -447,7 +457,37 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         method: impl Into<String>,
         handler: AuxiliaryRequestHandler,
     ) -> Result<(), RxError> {
+        self.register_auxiliary(method.into(), handler, false)
+    }
+
+    /// Register a public source-key challenge responder before room admission.
+    /// It may prove server identity but must never expose user/business data.
+    /// Unauthenticated callers receive no capability from the pool. Only the
+    /// explicit CTOX identity namespace can precede session authentication;
+    /// collection, file, protocol and authority methods cannot opt into it.
+    pub fn register_identity_request_handler(
+        &self,
+        method: impl Into<String>,
+        handler: AuxiliaryRequestHandler,
+    ) -> Result<(), RxError> {
         let method = method.into();
+        if !method.starts_with("ctox.") || !method.ends_with(".identity.v1") {
+            return Err(new_rx_error(
+                "RC_WEBRTC_CONTROL",
+                Some(serde_json::json!({
+                    "message": "pre-session handlers must use the public identity namespace"
+                })),
+            ));
+        }
+        self.register_auxiliary(method, handler, true)
+    }
+
+    fn register_auxiliary(
+        &self,
+        method: String,
+        handler: AuxiliaryRequestHandler,
+        public_identity: bool,
+    ) -> Result<(), RxError> {
         let mut handlers = self.auxiliary_request_handlers.lock();
         if handlers.contains_key(&method) {
             return Err(new_rx_error(
@@ -458,7 +498,13 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
                 })),
             ));
         }
-        handlers.insert(method, handler);
+        handlers.insert(
+            method,
+            RegisteredAuxiliaryRequest {
+                handler,
+                public_identity,
+            },
+        );
         Ok(())
     }
 
@@ -1219,9 +1265,18 @@ where
                 {
                     continue;
                 }
+                let auxiliary = pool_clone
+                    .auxiliary_request_handlers
+                    .lock()
+                    .get(&item.message.method)
+                    .cloned();
+                let peer_authenticated = authenticated_peers.lock().contains(&item.peer);
                 if is_peer_session_valid.is_some()
                     && !matches!(item.message.method.as_str(), "ctoxProtocol" | "token")
-                    && !authenticated_peers.lock().contains(&item.peer)
+                    && !auxiliary
+                        .as_ref()
+                        .is_some_and(|entry| entry.public_identity)
+                    && !peer_authenticated
                 {
                     let response = WebRTCResponse {
                         id: item.message.id,
@@ -1300,12 +1355,7 @@ where
                 if is_browser_live {
                     BROWSER_LIVE_WIRE_RECEIVED.fetch_add(1, Ordering::Relaxed);
                 }
-                if let Some(auxiliary_handler) = pool_clone
-                    .auxiliary_request_handlers
-                    .lock()
-                    .get(&item.message.method)
-                    .cloned()
-                {
+                if let Some(auxiliary) = auxiliary {
                     if is_browser_live {
                         BROWSER_LIVE_HANDLER_FOUND.fetch_add(1, Ordering::Relaxed);
                     }
@@ -1323,10 +1373,14 @@ where
                     let response_collection =
                         auxiliary_response_collection(&request.method, &browser_operation);
                     let peer_identity = handler.peer_identity(&peer);
-                    let capability_token = handler.peer_capability_token(&peer).unwrap_or_default();
+                    let capability_token = if auxiliary.public_identity && !peer_authenticated {
+                        String::new()
+                    } else {
+                        handler.peer_capability_token(&peer).unwrap_or_default()
+                    };
                     pool_clone.spawn_auxiliary_tracked(async move {
                         let answer =
-                            auxiliary_handler(peer_identity, capability_token, request.params)
+                            (auxiliary.handler)(peer_identity, capability_token, request.params)
                                 .await;
                         let (result, error) = match answer {
                             Ok(result) => (result, None),
@@ -3937,11 +3991,38 @@ mod tests {
             .unwrap()
             .clone();
         assert_eq!(
-            installed(String::new(), String::new(), vec![])
+            (installed.handler)(String::new(), String::new(), vec![])
                 .await
                 .unwrap(),
             serde_json::json!("first")
         );
+    }
+
+    #[tokio::test]
+    async fn data_protocol_and_authority_methods_cannot_be_registered_as_public_identity() {
+        let collection =
+            crate::rx_collection::test_support::test_collection_named("identity_namespace").await;
+        let pool = RxWebRTCReplicationPool::new(collection, MockHandler::new());
+        for method in [
+            "masterWrite",
+            "masterChangesSince",
+            "ctoxProtocol",
+            "token",
+            "rxdb.query.fetch",
+            "rxdb.file.fetch",
+            "ctox.sync.authority.v1",
+        ] {
+            assert!(
+                pool.register_identity_request_handler(
+                    method,
+                    Arc::new(|_, _, _| Box::pin(async { Ok(Value::Null) }))
+                )
+                .is_err(),
+                "{method}"
+            );
+        }
+        assert!(pool.auxiliary_request_handlers.lock().is_empty());
+        pool.cancel().await;
     }
 
     #[tokio::test]
@@ -4613,6 +4694,44 @@ mod tests {
                 break;
             }
         }
+        pool.register_identity_request_handler(
+            "ctox.business_data.identity.v1",
+            Arc::new(|_, token, _| {
+                Box::pin(async move {
+                    assert!(
+                        token.is_empty(),
+                        "unaccepted peer must not inherit a capability"
+                    );
+                    Ok(serde_json::json!({"publicIdentity":"fixture-key"}))
+                })
+            }),
+        )
+        .unwrap();
+        let mut responses = handler.sent_subject.subscribe();
+        handler.inject_message(
+            "bound-peer",
+            WebRTCMessage {
+                id: "public-identity".into(),
+                method: "ctox.business_data.identity.v1".into(),
+                params: vec![],
+                collection: None,
+            },
+        );
+        let identity = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let WebRTCWireFrame::Response(response) = responses.next().await.unwrap() {
+                    if response.id == "public-identity" {
+                        break response;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("public identity must not wait for credential admission");
+        assert!(identity.error.is_none());
+        assert_eq!(identity.result["publicIdentity"], "fixture-key");
+        assert!(pool.authenticated_peers.lock().is_empty());
+        assert!(pool.outbound_ready_peers.lock().is_empty());
         handler.inject_message(
             "bound-peer",
             master_changes_since_frame("premature-read", "deferred_bound"),

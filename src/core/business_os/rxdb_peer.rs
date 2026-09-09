@@ -2944,7 +2944,7 @@ async fn run_native_peer(
                 let workjet_device_root = root.clone();
                 let business_data_root = root.clone();
                 let identity_transport = pool.connection_handler.clone();
-                pool.register_auxiliary_request_handler(
+                pool.register_identity_request_handler(
                     ctox_sync::business_data_contract::CTOX_BUSINESS_DATA_IDENTITY_METHOD,
                     Arc::new(move |peer_identity, capability_token, params| {
                         let root = business_data_root.clone();
