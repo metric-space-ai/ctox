@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
-const [clientPath, endpoint, encodedSpec] = process.argv.slice(2);
+import { exerciseHandoff } from "./workjet_handoff_ipc.mjs";
+const [clientPath, endpoint, encodedSpec, encodedHandoff] = process.argv.slice(2);
 const { requestSyncAuthority } = await import(pathToFileURL(clientPath).href);
 const spec = JSON.parse(encodedSpec);
+await exerciseHandoff(requestSyncAuthority, endpoint, JSON.parse(encodedHandoff));
 let sequence = 0;
 const request = (operation, requestId = `node-client-${++sequence}`) =>
   requestSyncAuthority(endpoint, { version: 1, requestId, operation });

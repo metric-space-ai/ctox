@@ -1,5 +1,7 @@
 #![cfg(feature = "webrtc")]
 //! Actual localhost WebRTC/UDP channels; only signaling is an isolated fixture.
+#[path = "support/authority_ipc.rs"]
+mod authority_ipc_fixture;
 #[path = "support/checkpoint.rs"]
 mod checkpoint_fixture;
 #[cfg(unix)]
@@ -498,6 +500,8 @@ async fn exercise_worker_session(reconnect: Option<u64>) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
+    use authority_ipc_fixture::call as ipc_call;
+    use ctox_sync::contracts::{SyncIpcOperation, SyncIpcResult};
     tokio::time::timeout(Duration::from_secs(60), async {
         let signal = SignalingFixture::start().await;
         let root = tempfile::tempdir().unwrap();
@@ -694,22 +698,89 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
             })
             .collect();
         let checkpoint_digest = receipts[0].checkpoint_digest.clone();
+        let protect = SyncIpcOperation::ProtectCheckpoint {
+            job_id: "job".into(),
+            ownership: job.ownership.clone(),
+            receipts: receipts.clone(),
+        };
+        // The local IPC cannot impersonate the checkpoint's current owner.
         assert!(matches!(
-            nodes[&1]
-                .submit(Request {
-                    request_id: "protect".into(),
-                    actor: 1,
-                    command: Command::ProtectCheckpoint {
-                        job_id: "job".into(),
-                        ownership: job.ownership.clone(),
-                        receipts
-                    },
-                })
-                .await
-                .unwrap(),
-            Receipt::Applied(_)
+            ipc_call(nodes[&2].clone(), "foreign-protect", protect.clone()).await,
+            SyncIpcResult::Rejected { .. }
+        ));
+        let mut tampered = receipts;
+        tampered[1].signature.push('0');
+        assert!(matches!(
+            ipc_call(
+                nodes[&1].clone(),
+                "tampered-copy",
+                SyncIpcOperation::ProtectCheckpoint {
+                    job_id: "job".into(),
+                    ownership: job.ownership.clone(),
+                    receipts: tampered,
+                }
+            )
+            .await,
+            SyncIpcResult::Rejected { .. }
+        ));
+        let protect_started = std::time::Instant::now();
+        assert!(matches!(
+            ipc_call(nodes[&1].clone(), "protect", protect.clone()).await,
+            SyncIpcResult::Applied { .. }
+        ));
+        println!(
+            "checkpoint_protect_private_ipc_ms={}",
+            protect_started.elapsed().as_millis()
+        );
+        assert!(matches!(
+            ipc_call(nodes[&1].clone(), "protect", protect).await,
+            SyncIpcResult::Replayed { .. }
+        ));
+        let takeover = SyncIpcOperation::TakeOver {
+            job_id: "job".into(),
+            expected: job.ownership.clone(),
+            checkpoint_digest: checkpoint_digest.clone(),
+        };
+        assert!(
+            matches!(ipc_call(nodes[&3].clone(), "no-target-copy", takeover.clone()).await,
+            SyncIpcResult::Rejected { ref reason } if reason == "CheckpointUnavailable")
+        );
+        assert!(matches!(ipc_call(nodes[&2].clone(), "wrong-digest",
+            SyncIpcOperation::TakeOver { job_id: "job".into(),
+                expected: job.ownership.clone(), checkpoint_digest: "0".repeat(64) }).await,
+            SyncIpcResult::Rejected { ref reason } if reason == "CheckpointUnavailable"));
+        assert!(matches!(
+            ipc_call(
+                nodes[&1].clone(),
+                "begin-unknown-effect",
+                SyncIpcOperation::BeginEffect {
+                    job_id: "job".into(),
+                    ownership: job.ownership.clone(),
+                    effect_id: "external".into()
+                }
+            )
+            .await,
+            SyncIpcResult::Applied { .. }
+        ));
+        assert!(
+            matches!(ipc_call(nodes[&2].clone(), "blocked-takeover", takeover.clone()).await,
+            SyncIpcResult::Rejected { ref reason } if reason == "ReconciliationRequired")
+        );
+        assert!(matches!(
+            ipc_call(
+                nodes[&1].clone(),
+                "reconcile-effect",
+                SyncIpcOperation::CompleteEffect {
+                    job_id: "job".into(),
+                    ownership: job.ownership.clone(),
+                    effect_id: "external".into()
+                }
+            )
+            .await,
+            SyncIpcResult::Applied { .. }
         ));
         // Sever actual DataChannels, not a mock transport flag.
+        let outage_started = std::time::Instant::now();
         let previous_leader = nodes[&2].leader().unwrap();
         let source_peer = clients[&1].own_peer_id().unwrap();
         for id in [2, 3] {
@@ -730,36 +801,28 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
             .validate_ownership("job", &job.ownership)
             .await
             .is_err());
-        let taken = nodes[&2]
-            .submit(Request {
-                request_id: "takeover".into(),
-                actor: 2,
-                command: Command::TakeOver {
-                    job_id: "job".into(),
-                    expected: job.ownership.clone(),
-                    checkpoint_digest,
-                    owner: 2,
-                },
-            })
-            .await
-            .unwrap_or_else(|error| {
-                panic!(
-                    "takeover was not confirmed: {error}; {:?}",
-                    nodes
-                        .iter()
-                        .map(|(id, node)| (id, node.diagnostics()))
-                        .collect::<BTreeMap<_, _>>()
-                )
-            });
+        let taken = ipc_call(nodes[&2].clone(), "takeover", takeover.clone()).await;
         let new_owner = match taken {
-            Receipt::Applied(job) => job.ownership,
+            SyncIpcResult::Applied { ownership, .. } => ownership,
             other => panic!("{other:?}"),
         };
+        assert_eq!(
+            new_owner.node_id, 2,
+            "target is derived from the native IPC owner"
+        );
         assert_eq!(new_owner.generation, 2);
         nodes[&2]
             .validate_ownership("job", &new_owner)
             .await
             .unwrap();
+        println!(
+            "partition_to_quorum_authorized_private_ipc_ms={}",
+            outage_started.elapsed().as_millis()
+        );
+        assert!(
+            matches!(ipc_call(nodes[&2].clone(), "takeover", takeover).await,
+            SyncIpcResult::Replayed { ownership, .. } if ownership == new_owner)
+        );
         // Rejoin using the explicit native setup. The old owner remains fenced.
         for id in [2, 3] {
             handlers[&1]
@@ -1073,11 +1136,31 @@ async fn exercise_native_session_group(scenario: NativeGroupScenario) {
             let mut client_spec = job.spec.clone();
             client_spec.job_id = "workjet-job".into();
             client_spec.session_id = "workjet-session".into();
+            let mut handoff_spec = client_spec.clone();
+            handoff_spec.job_id = "workjet-handoff-job".into();
+            handoff_spec.session_id = "workjet-handoff-session".into();
+            let receipts: Vec<_> = [1, 2]
+                .into_iter()
+                .map(|id| {
+                    checkpoint_fixture::copy_receipt(
+                        root.path(),
+                        id,
+                        &keys[&id],
+                        &handoff_spec,
+                        &job.ownership,
+                        1,
+                    )
+                })
+                .collect();
+            let handoff = json!({
+                "target": endpoints[&2], "spec": handoff_spec, "receipts": receipts,
+            });
             let mut client = tokio::process::Command::new("node")
                 .arg(source.join("tests/support/workjet_ipc_client.mjs"))
                 .arg(workjet.join("apps/server/src/workjet/sync/WorkjetSyncIpc.ts"))
                 .arg(&endpoints[&1])
                 .arg(serde_json::to_string(&client_spec).unwrap())
+                .arg(handoff.to_string())
                 .current_dir(&workjet)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())

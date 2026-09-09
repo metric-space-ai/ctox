@@ -177,6 +177,17 @@ deployable replacement daemon. Business records still replicate through RxDB.
   and non-socket files are never replaced.
   Windows named-pipe hosting remains to be implemented. This crate does not open
   an HTTP or TCP execution endpoint.
+  `protectCheckpoint` now forwards signed durable-copy receipts to the existing
+  authority, and `takeOver` forwards the expected ownership and protected digest.
+  Both are generated additions to IPC version 1; older hosts reject unknown
+  operations. The native listener derives the actor and the takeover target from
+  its own identity. Callers cannot supply another owner. Consensus still enforces
+  two suitable verified copies, current generation and reconciled effects;
+  replayed requests return historical receipts without fresh execution authority.
+  The private-IPC/WebRTC partition test and actual Workjet client fixture cover
+  this path, including control latency measurements. They execute no VM/harness:
+  guest freeze, target restore verification and effect-boundary enforcement
+  remain adapter integration work.
 - `checkpoint.rs`: immutable content-addressed artifacts and manifests. Restore
   creates a fresh directory and checks all hashes, paths and pending effects.
 
