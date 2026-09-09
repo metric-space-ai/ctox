@@ -6348,6 +6348,14 @@ fn start_prompt_worker(
                         &mut session_options,
                     )?;
                     configure_business_os_app_file_system_scope(&root, &job, &mut session_options)?;
+                    if let Some(command_id) = metadata_string(&job.queue_task_metadata, "business_os_command_id") {
+                        if let Some(reply) = crate::business_os::mcp_channel::run_external_crew_turn(
+                            &root, &command_id, &job.prompt,
+                            session_options.business_os_mcp_command_session.as_deref(),
+                        )? {
+                            return Ok(reply);
+                        }
+                    }
                     if queue_job_reuses_persistent_session(&session_options) {
                         let session_slot = {
                             let shared = lock_shared_state(&state);

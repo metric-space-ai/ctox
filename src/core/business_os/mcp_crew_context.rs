@@ -209,7 +209,8 @@ mod tests {
                 serde_json::json!({
                     "id": command, "module": "outbound-lead-generation",
                     "command_type": "business_os.chat.task", "record_id": "lead-a",
-                    "payload": {"instruction": "Inspect the assigned task", "mode": "data"},
+                    "payload": {"instruction": "Inspect the assigned task", "mode": "data",
+                        "external_executor": {"executor_id":"test-codex", "harness":"codex", "timeout_seconds":5}},
                     "client_context": {"capability_token": capability}
                 }),
                 store::CommandOrigin::ReplicatedPeer,
@@ -469,6 +470,107 @@ mod tests {
             [],
         )?;
         assert!(call(args.clone(), Some(&trusted)).is_ok());
+        let execution_token = issue_internal_command_session_token(
+            root,
+            "crew-parent",
+            trusted["payload_hash"].as_str().unwrap(),
+            "crew-operator",
+            "admin",
+            "crew-workspace",
+            &serde_json::json!({}),
+        )?;
+        let execution_token = bind_internal_command_session_to_crew_attempt(
+            root,
+            &execution_token,
+            "crew-attempt",
+            "crew-context-plan",
+        )?;
+        let worker_root = root.to_path_buf();
+        let worker = std::thread::spawn(move || {
+            crew_execution::run(
+                &worker_root,
+                "crew-parent",
+                "Inspect the assigned task",
+                Some(&execution_token),
+            )
+        });
+        let claim_args = serde_json::json!({"command_id":"crew-parent","executor_id":"test-codex","attempt_id":"crew-attempt"});
+        let mut offer = Err(anyhow::anyhow!("external Crew offer was not published"));
+        for _ in 0..20 {
+            offer = call_tool_with_trusted_gateway_context(
+                root,
+                "business_os.claim_crew_execution",
+                claim_args.clone(),
+                Some(&trusted),
+            );
+            if offer.is_ok() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let offer = match offer {
+            Ok(offer) => offer,
+            Err(error) => {
+                let _ = worker.join();
+                return Err(error);
+            }
+        };
+        assert_eq!(offer["harness"], "codex");
+        assert_eq!(offer["crew_context"]["member_id"], "crew-pico");
+        let reclaimed = call_tool_with_trusted_gateway_context(
+            root,
+            "business_os.claim_crew_execution",
+            claim_args,
+            Some(&trusted),
+        )?;
+        assert_eq!(reclaimed["command_session"], offer["command_session"]);
+        assert!(call_tool_with_trusted_gateway_context(
+            root,
+            "business_os.claim_crew_execution",
+            serde_json::json!({"command_id":"crew-parent","executor_id":"wrong-executor","attempt_id":"crew-attempt"}),
+            Some(&trusted)
+        )
+        .is_err());
+        let execution_authority = verify_internal_command_session_token(
+            root,
+            offer["command_session"]
+                .as_str()
+                .context("claim did not return execution authority")?,
+        )?;
+        let candidate = serde_json::json!({"reply":"External candidate for native review."});
+        for _ in 0..2 {
+            let reported = call_tool_with_trusted_gateway_context(
+                root,
+                "business_os.report_crew_execution",
+                candidate.clone(),
+                Some(&execution_authority),
+            )?;
+            assert_eq!(reported["review_status"], "pending");
+        }
+        assert!(call_tool_with_trusted_gateway_context(
+            root,
+            "business_os.report_crew_execution",
+            serde_json::json!({"reply":"Conflicting candidate"}),
+            Some(&execution_authority)
+        )
+        .is_err());
+        let reply = worker
+            .join()
+            .map_err(|_| anyhow::anyhow!("external Crew test worker panicked"))??;
+        assert_eq!(
+            reply.as_deref(),
+            Some("External candidate for native review.")
+        );
+        let finalized: Option<String> = conn.query_row(
+            "SELECT finalized_at FROM crew_attempts WHERE attempt_id='crew-attempt'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert!(
+            finalized.is_none(),
+            "external result must leave native review/finalization to the worker"
+        );
+
         conn.execute("UPDATE communication_routing_state SET lease_expires_at='2000-01-01T00:00:00Z' WHERE message_key=?1", [&task_id])?;
 
         assert!(call(args.clone(), Some(&trusted)).is_err());

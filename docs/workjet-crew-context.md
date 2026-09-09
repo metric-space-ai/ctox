@@ -91,3 +91,38 @@ prepares its first UPDATE, after its SELECT. It requires that competing write to
 be denied, finalization to succeed, and replay to leave counts at one. This is a
 source-level fix for an identified race; it is not yet proof that the original
 CI error was at this location or that the new Rust test passes.
+
+## Native external execution handoff (implementation pending verification)
+
+An authorized `business_os.chat.task` may explicitly carry
+`payload.external_executor = {executor_id, harness, timeout_seconds}`. Supported
+route names are codex, claude, opencode, grok and cursor; this is a route contract,
+not proof that Workjet implements all consumers. Timeout is 1–600 seconds. After
+normal native admission, Crew selection and eligible command-session setup, the
+worker persists an offer and waits under its existing capacity reservation and
+lease heartbeat. Absence of the field preserves native execution. Invalid or
+unserviceable explicit external requests fail; they never silently run natively.
+
+`business_os.claim_crew_execution` requires the exact command, executor and
+attempt identifiers, current command ownership and private Crew permissions. It
+returns a scoped command session, the original job prompt, native Crew context
+and external tool instructions. The grant is for the Workjet controller's MCP
+transport, not for copying into a model prompt or logs. Claims rather than bearer
+tokens are stored in the core handoff table. Repeated live claims return the same
+authority. Claims recheck the lease inside the state-change transaction.
+
+`business_os.report_crew_execution` takes exactly a reply or error candidate under
+that signed session. It checks the current lease in its write transaction and
+accepts identical repeated evidence while rejecting conflicts. The native worker
+returns the candidate into its existing finalization/review path. Reporting does
+not itself finalize the Crew attempt or mark a review passed. Expiry and lease
+changes close the offer; no external API acquires or renews an independent lease.
+
+Remaining integration: Workjet submission, exact attempt discovery, controller
+claim and secure transport setup, harness execution and result reporting; native
+service restart/recovery and explicit cancellation verification; artifact and
+structured retrospective handling; token eligibility for general projects without
+app writeback contracts. The current production hook preserves existing command
+session eligibility. The fixture now covers native offer publication, real MCP
+claim/report, repeated claims/results, wrong executor/conflicting results and
+retention of native finalization ownership. It has not yet passed CI.

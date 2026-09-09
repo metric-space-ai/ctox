@@ -37,9 +37,12 @@ use super::store;
 mod command_writeback;
 #[path = "mcp_crew_context.rs"]
 mod crew_context;
+#[path = "mcp_crew_execution.rs"]
+mod crew_execution;
 #[path = "mcp_crew_plan.rs"]
 mod crew_plan;
 pub(crate) use command_writeback::supports_command_writeback;
+pub(crate) use crew_execution::run as run_external_crew_turn;
 
 const DEFAULT_LIMIT: usize = 25;
 const MAX_LIMIT: usize = 100;
@@ -1154,6 +1157,18 @@ fn gateway_json_rpc_error(
 
 pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
     let mut tools = vec![
+        write_tool(
+            "business_os.claim_crew_execution",
+            "Claim an external Crew execution offered by the native worker for this command and executor. Requires the command owner and private Crew access. Returns scoped execution authority; it does not admit new work.",
+            object_schema(vec![required_string("command_id"), required_string("executor_id"), required_string("attempt_id")]),
+        ),
+        write_tool(
+            "business_os.report_crew_execution",
+            "Report a reply or failure candidate for this signed external Crew execution. Native review decides completion. Repeating identical evidence is idempotent.",
+            serde_json::json!({"type":"object","additionalProperties":false,
+                "properties":{"reply":{"type":"string"},"error":{"type":"string"}},
+                "oneOf":[{"required":["reply"]},{"required":["error"]}]}),
+        ),
         write_tool(
             "business_os.update_crew_plan",
             "Update steps for the exact Crew execution bound to this signed session. Native runtime owns progress and review; this does not complete the task or learn from it.",
@@ -2813,6 +2828,10 @@ fn call_tool_inner(
     enforce_argument_scope_policy(root, &context, tool_name, &arguments)?;
     enforce_rate_limit(root, &context)?;
     let result = match tool_name {
+        "business_os.claim_crew_execution" => crew_execution::claim(root, &context, &arguments)?,
+        "business_os.report_crew_execution" => {
+            crew_execution::report(root, &context, &arguments, trusted_gateway_context)?
+        }
         "business_os.update_crew_plan" => {
             crew_plan::update(root, &context, &arguments, trusted_gateway_context)?
         }
@@ -6442,6 +6461,8 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         }
         "business_os.reject" | "business_os.request_changes" => McpToolPolicyClass::Approval,
         "web_browser_prepare"
+        | "business_os.claim_crew_execution"
+        | "business_os.report_crew_execution"
         | "business_os.update_crew_plan"
         | "business_os.execute_writeback"
         | "business_os.execute_action"
