@@ -2,6 +2,16 @@
 
 ## Nachprüfung nach der Übergabe — 9. September 2026
 
+Weitere Nachprüfung: Commit `1c21f8bd96d81e4ba5148bef379e34ab7939794a` ist nach
+Wiederherstellung der SSH-Verbindung in PR87 gepusht; die zuvor dokumentierte
+lokale Push-Sperre ist damit aufgehoben. Die neue Profiler-Diagnostik hält sowohl
+stdout als auch stderr mit jeweils höchstens 16.384 Zeichen plus Truncation-Flag
+fest. Zuvor wurde stdout verworfen, obwohl Exit-255-Aufnahmen ohne stderr auftraten.
+Dies beweist nicht deren Ursache. Exit-/Signal-/Dateigrößen-/Sample-Guards bleiben
+unverändert. Drei gezielte Tests mit simuliertem Recorder bestehen (begrenzte
+Aufnahme, Permission-Fehler, begrenzte Ausgabe auf beiden Kanälen). Kein echtes
+Linux-perf oder vollständiger Browser-/Native-Lauf wurde dadurch ersetzt.
+
 Nachtrag zur Recovery-Prüfung: Die Fixture las die verknüpfte Queue-Task per ID,
 prüfte Eindeutigkeit danach aber über die allgemeine `find()`-Listenmitgliedschaft.
 Der Query-Loader darf bereits geladene Fenster zunächst stale liefern. Die drei
