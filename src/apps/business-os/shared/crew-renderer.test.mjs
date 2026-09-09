@@ -35,8 +35,15 @@ test('crew renderer and legacy adapter match all 360 pre-extraction reference re
       appearance, animationKey: chat.crewKey, taskState, mode, placement,
       progressPercent: 82, activity: { total: 6, lastKind: 'thinking', updatedAt: 1720000000000 },
     });
-    assert.equal(hash(rendered), expected, `pure renderer: ${key}`);
-    assert.equal(hash(crewCreatureHtml(chat, taskState, placement)), expected, `chat adapter: ${key}`);
+    // Main now carries the normalized appearance in one data attribute for
+    // procedural motion. Verify that addition and retain every historical
+    // byte-equivalence assertion for the rest of the extracted renderer.
+    for (const [label, html] of [['pure renderer', rendered], ['chat adapter', crewCreatureHtml(chat, taskState, placement)]]) {
+      const identities = [...html.matchAll(/ data-crew-identity="([^"]*)"/g)];
+      assert.equal(identities.length, 1, `${label} identity count: ${key}`);
+      assert.deepEqual(JSON.parse(identities[0][1].replaceAll('&quot;', '"')), appearance, `${label} identity: ${key}`);
+      assert.equal(hash(html.replace(identities[0][0], '')), expected, `${label}: ${key}`);
+    }
   }
 });
 
@@ -57,6 +64,7 @@ test('crew appearance preserves explicit names/colors/shapes and existing neutra
 test('crew renderer escapes caller values without interpreting them as markup or identity', () => {
   const malicious = '\" onmouseover=\"alert(1)';
   const html = renderCrewCreature({
+    appearance: { name: malicious, color: '#7d7f84', shape: 'round' },
     animationKey: malicious, taskState: 'idle', mode: 'sleeping',
     activity: { total: malicious, lastKind: malicious, updatedAt: malicious },
   });

@@ -142,7 +142,7 @@ export function renderCrewCreature({
   const telemetry = activity;
   const motionSeed = crewHash(`${animationKey}:${placement}`);
   return `
-    <span class="ctox-crew-creature is-${escapeAttr(taskState)} is-${escapeAttr(mode)} is-${escapeAttr(crew.shape)} is-${escapeAttr(placement)}" data-crew-mode="${escapeAttr(mode)}" data-crew-seed="${motionSeed}" data-crew-key="${escapeAttr(`${animationKey}:${placement}`)}" data-activity-turns="${escapeAttr(telemetry.total)}" data-activity-kind="${escapeAttr(telemetry.lastKind)}" data-activity-updated-at="${escapeAttr(telemetry.updatedAt)}" style="--crew-color:${escapeAttr(crew.color)};--ctox-progress-angle:${progressAngle}deg;${crewMotionStyle(animationKey)}" aria-hidden="true">
+    <span class="ctox-crew-creature is-${escapeAttr(taskState)} is-${escapeAttr(mode)} is-${escapeAttr(crew.shape)} is-${escapeAttr(placement)}" data-crew-mode="${escapeAttr(mode)}" data-crew-identity="${escapeAttr(JSON.stringify(crew))}" data-crew-seed="${motionSeed}" data-crew-key="${escapeAttr(`${animationKey}:${placement}`)}" data-activity-turns="${escapeAttr(telemetry.total)}" data-activity-kind="${escapeAttr(telemetry.lastKind)}" data-activity-updated-at="${escapeAttr(telemetry.updatedAt)}" style="--crew-color:${escapeAttr(crew.color)};--ctox-progress-angle:${progressAngle}deg;${crewMotionStyle(animationKey)}" aria-hidden="true">
       <svg viewBox="0 0 64 64" focusable="false">
         <g class="ctox-crew-body">${crewBodyMarkup(crew.shape)}</g>
         <g class="ctox-crew-eyes is-${escapeAttr(mode)}">${crewEyesMarkupForMode(crew.shape, mode)}</g>

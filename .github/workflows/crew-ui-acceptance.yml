@@ -32,7 +32,7 @@ jobs:
         working-directory: src/apps/business-os
         run: |
           node modules/ctox/test.js
-          node --test shared/business-chat.test.mjs
+          node --test shared/business-chat.test.mjs shared/react-settings.test.mjs shared/shell-crew-health.test.mjs
           node modules/tickets/tickets.test.mjs
       - name: Compact shell layout and interaction
         if: ${{ !cancelled() }}

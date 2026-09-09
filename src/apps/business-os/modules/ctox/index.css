@@ -2011,6 +2011,8 @@
   gap: 6px;
 }
 .ctox-task-control-assign .ctox-field-label {
+  flex: 0 0 auto;
+  white-space: nowrap;
   margin: 0;
   color: var(--muted);
   font-size: var(--fs-meta, 12px);
