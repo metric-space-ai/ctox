@@ -793,7 +793,13 @@ Fehlschläge in der Tätigkeit nur ohne Alternative. Die Antwort ist JSON
 (`member_id`, `reason`); ein unbrauchbares oder unerreichbares Urteil fällt auf
 die deterministische Punktzahl (`crew::select`) zurück, und die Begründung sagt
 das. Archivierte Mitglieder werden nicht neu ausgewählt. Ein wiederaufgenommener
-Versuch behält seine ursprüngliche Identität. Die wörtliche Begründung steht im
+Versuch behält seine ursprüngliche Identität. Die Zulassung prüft die bestehende
+Attempt-Zeile innerhalb derselben Schreibtransaktion wie die Crew-Bindung:
+Aufgabe und Mitglied müssen übereinstimmen, und der Attempt darf noch nicht
+finalisiert sein. Ein Konflikt verbraucht keine manuelle Zuweisung und schreibt
+keine neue Auswahl. Ein neuer Versuch benötigt eine neue Attempt-ID. Diese
+Prüfung ist eine Voraussetzung für die externe Crew-Anbindung, noch keine
+externe Laufzulassungs- oder Memory-API. Die wörtliche Begründung steht im
 Harness-Flow-Ereignis `crew_selected` (`selection_kind` routed/selected/
 assigned/continuity) und in dessen Cockpit-Projektion; das Lesen des
 Gedächtnisses erzeugt `crew.memory_read`. In Tests ist kein Router-Urteil

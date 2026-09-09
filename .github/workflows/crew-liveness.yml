@@ -4,6 +4,7 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - 'src/core/crew/**'
       - 'src/core/business_os/harness_cockpit_chat*'
       - 'src/core/business_os/rxdb_peer*'
       - 'src/core/service/service_queue_capacity.rs'

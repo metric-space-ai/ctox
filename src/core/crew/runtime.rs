@@ -39,7 +39,9 @@ fn selection_warning(root: &Path, task: Option<&str>, attempt: &str, cause: &str
         due
     };
     if first {
-        eprintln!("[ctox crew] selection unavailable: {cause}; execution continues without requiring crew identity");
+        eprintln!(
+            "[ctox crew] selection unavailable: {cause}; execution continues without requiring crew identity"
+        );
         crate::service::harness_flow::record_harness_flow_event_lossy(
             root,
             crate::service::harness_flow::RecordHarnessFlowEventRequest {
@@ -322,6 +324,24 @@ pub(crate) fn prepare_attempt(
     let now = chrono::Utc::now().to_rfc3339();
     let tx = conn.unchecked_transaction()?;
     let inserted=tx.execute("INSERT OR IGNORE INTO crew_attempts(attempt_id,task_id,member_id,module,thread_key,selected_at,started_at,selection_reason,task_summary) VALUES(?1,?2,?3,?4,?5,?6,?6,?7,?8)",params![attempt,task_id,member.id,task.module,thread_key,now,selection.reason,summary])?;
+    // Check the durable identity after INSERT OR IGNORE, inside the same write
+    // transaction as attachment. A replay must not borrow another task's member
+    // or revive an already finalized attempt. Checking only the earlier member
+    // lookup would also miss a concurrent insertion or finalization.
+    let (bound_task, bound_member, finalized): (String, String, Option<String>) = tx.query_row(
+        "SELECT task_id,member_id,finalized_at FROM crew_attempts WHERE attempt_id=?1",
+        [attempt],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    anyhow::ensure!(
+        bound_task == *task_id,
+        "crew attempt belongs to another task"
+    );
+    anyhow::ensure!(
+        bound_member == member.id,
+        "crew attempt member changed during admission"
+    );
+    anyhow::ensure!(finalized.is_none(), "crew attempt is already finalized");
     for id in task_ids {
         let changed = tx.execute(
             "UPDATE communication_routing_state SET crew_member_id=?2,crew_assigned_member_id=NULL,updated_at=?3
@@ -481,6 +501,121 @@ mod tests {
     }
 
     use super::*;
+    #[test]
+    fn conflicting_and_finalized_attempts_cannot_attach_or_consume_assignment() -> Result<()> {
+        for finalized in [false, true] {
+            let root = tempfile::tempdir()?;
+            let create = |thread: &str| {
+                crate::mission::channels::create_queue_task(
+                    root.path(),
+                    crate::mission::channels::QueueTaskCreateRequest {
+                        title: "Crew attempt binding fixture".into(),
+                        prompt: "Code prüfen".into(),
+                        thread_key: thread.into(),
+                        workspace_root: None,
+                        priority: "normal".into(),
+                        suggested_skill: None,
+                        parent_message_key: None,
+                        extra_metadata: None,
+                    },
+                )
+            };
+            let original = create("original-thread")?;
+            let other = create("other-thread")?;
+            let conn = Connection::open(crate::paths::core_db(root.path()))?;
+            conn.execute(
+                "UPDATE communication_routing_state SET route_status='leased',
+                 lease_owner='crew-worker',crew_assigned_member_id='crew-pico'
+                 WHERE message_key IN (?1,?2)",
+                params![original.message_key, other.message_key],
+            )?;
+            prepare_attempt(
+                root.path(),
+                &[original.message_key.clone()],
+                "crew-worker",
+                "immutable-attempt",
+                Some("original-thread"),
+                &json!({}),
+                None,
+                "Code prüfen",
+                None,
+            )?
+            .context("initial crew context missing")?;
+            let target = if finalized { &original } else { &other };
+            if finalized {
+                crate::crew::finalization::finalize_attempt(
+                    &conn,
+                    "immutable-attempt",
+                    "failed",
+                    None,
+                    "2026-09-09T12:00:00Z",
+                    None,
+                    "Attempt failed",
+                    None,
+                )?;
+            }
+            conn.execute(
+                "UPDATE communication_routing_state SET crew_member_id=NULL,
+                 crew_assigned_member_id='crew-nori' WHERE message_key=?1",
+                [&target.message_key],
+            )?;
+            let stats_before: String = conn.query_row(
+                "SELECT stats_json FROM crew_members WHERE id='crew-pico'",
+                [],
+                |r| r.get(0),
+            )?;
+            let events_before: i64 =
+                conn.query_row("SELECT COUNT(*) FROM ctox_harness_flow_events", [], |r| {
+                    r.get(0)
+                })?;
+            let error = prepare_attempt(
+                root.path(),
+                &[target.message_key.clone()],
+                "crew-worker",
+                "immutable-attempt",
+                Some("original-thread"),
+                &json!({}),
+                None,
+                "Code prüfen",
+                None,
+            )
+            .expect_err("an incompatible replay must be rejected");
+            assert_eq!(
+                error.to_string(),
+                if finalized {
+                    "crew attempt is already finalized"
+                } else {
+                    "crew attempt belongs to another task"
+                }
+            );
+            let binding: (Option<String>, Option<String>) = conn.query_row(
+                "SELECT crew_member_id,crew_assigned_member_id FROM communication_routing_state
+                 WHERE message_key=?1",
+                [&target.message_key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            assert_eq!(binding, (None, Some("crew-nori".into())));
+            let stored: (String, String, i64) = conn.query_row(
+                "SELECT task_id,member_id,COUNT(*) FROM crew_attempts",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?;
+            assert_eq!(stored, (original.message_key, "crew-pico".into(), 1));
+            let stats_after: String = conn.query_row(
+                "SELECT stats_json FROM crew_members WHERE id='crew-pico'",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(stats_after, stats_before);
+            let events_after: i64 =
+                conn.query_row("SELECT COUNT(*) FROM ctox_harness_flow_events", [], |r| {
+                    r.get(0)
+                })?;
+            assert_eq!(events_after, events_before);
+        }
+        Ok(())
+    }
+
     #[test]
     fn lease_identity_and_literal_reason_survive_replay() -> Result<()> {
         let root = tempfile::tempdir()?;
