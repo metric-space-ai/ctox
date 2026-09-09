@@ -14,6 +14,7 @@ mod customer_apps;
 pub mod decision_hub;
 mod desktop_files;
 mod external_sql_sync;
+mod guest_runtime;
 pub(crate) mod harness_cockpit;
 mod hashing;
 mod importer;
