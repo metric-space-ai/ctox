@@ -134,6 +134,7 @@ async fn exercise_worker_session(reconnect: Option<u64>) {
         };
         let mut sessions = BTreeMap::new();
         let mut nodes = BTreeMap::new();
+        let mut handoff_endpoints = BTreeMap::new();
         let mut databases = Vec::new();
         let mut peer_errors = BTreeMap::new();
         for id in 1..=4 {
@@ -203,6 +204,7 @@ async fn exercise_worker_session(reconnect: Option<u64>) {
                     .await
                     .unwrap();
                 nodes.insert(id, group.node().clone());
+                handoff_endpoints.insert(id, group.ipc_endpoint().to_path_buf());
             }
             sessions.insert(id, session);
             databases.push((directory, database));
@@ -306,6 +308,45 @@ async fn exercise_worker_session(reconnect: Option<u64>) {
             command: Command::AdmitWorker { worker: member.clone() }
         }).await.unwrap_or_else(|error| panic!("worker admission was not confirmed: {error}; {:?}", diagnostics()));
         assert!(matches!(admission, Receipt::WorkerApplied(_)), "{admission:?}; {:?}", diagnostics());
+        if reconnect.is_none() {
+            let mut handoff_spec = spec.clone();
+            handoff_spec.job_id = "additional-worker-handoff".into();
+            handoff_spec.session_id = "additional-worker-checkpoint".into();
+            let initial = call(&handoff_endpoints[&1], "create-for-worker-handoff",
+                SyncIpcOperation::Create { spec: handoff_spec.clone() }).await;
+            let SyncIpcResult::Applied { ownership: initial_owner, .. } = initial else {
+                panic!("{initial:?}");
+            };
+            let copies = |ids: [u64; 2]| ids.into_iter().map(|id|
+                checkpoint_fixture::copy_receipt(root.path(), id, &keys[&id],
+                    &handoff_spec, &initial_owner, 1)).collect::<Vec<_>>();
+            assert!(matches!(call(&handoff_endpoints[&1], "coordination-vote-is-not-data",
+                SyncIpcOperation::ProtectCheckpoint {
+                    job_id: handoff_spec.job_id.clone(), ownership: initial_owner.clone(),
+                    receipts: copies([1, 3]),
+                }).await, SyncIpcResult::Rejected { ref reason } if reason == "CheckpointUnavailable"));
+            let receipts = copies([1, 4]);
+            let digest = receipts[0].checkpoint_digest.clone();
+            assert!(matches!(call(&handoff_endpoints[&1], "protect-on-additional-worker",
+                SyncIpcOperation::ProtectCheckpoint {
+                    job_id: handoff_spec.job_id.clone(), ownership: initial_owner.clone(), receipts,
+                }).await, SyncIpcResult::Applied { .. }));
+            let operation = SyncIpcOperation::TakeOver {
+                job_id: handoff_spec.job_id.clone(), expected: initial_owner,
+                checkpoint_digest: digest,
+            };
+            let transferred = call(worker.ipc_endpoint(), "additional-worker-takeover", operation.clone()).await;
+            let SyncIpcResult::Applied { ownership: transferred_owner, .. } = transferred else {
+                panic!("{transferred:?}");
+            };
+            assert_eq!(transferred_owner.node_id, 4);
+            assert_eq!(transferred_owner.generation, 2);
+            assert!(matches!(call(worker.ipc_endpoint(), "additional-worker-takeover", operation).await,
+                SyncIpcResult::Replayed { ownership, .. } if ownership == transferred_owner));
+            assert!(matches!(call(worker.ipc_endpoint(), "validate-additional-worker-handoff",
+                SyncIpcOperation::Validate { job_id: handoff_spec.job_id, ownership: transferred_owner }).await,
+                SyncIpcResult::Authorized { .. }));
+        }
         let membership = call(
             worker.ipc_endpoint(),
             "current-membership",
