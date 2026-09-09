@@ -214,7 +214,7 @@ jobs:
         run: |
           node src/apps/business-os/scripts/assert-shell-v2-contract.mjs
           node src/apps/business-os/scripts/shell-v2-geometry-lab.mjs \
-            --apps ctox --widths 1180,1000,720 \
+            --apps ctox,reports --widths 1180,1000,720 \
             --output-dir "$RUNNER_TEMP/ctox-chat-proof/shell-geometry"
       - name: Chat interaction and delayed storage presentation
         if: ${{ !cancelled() }}

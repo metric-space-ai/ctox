@@ -1,3 +1,17 @@
+## Reports: CI-Geometrie und veralteter nativer Regressionstest
+
+Die vorhandene Chromium-Geometrieprüfung umfasst jetzt zusätzlich Reports bei
+1180,1000 und720Pixeln. Ihre Screenshots und Geometrieergebnisse werden im
+bestehenden CI-Artefakt aufbewahrt; kein neuer lokaler Browser gestartet.
+
+Der native Modus `business-os-ui-regression` verwendete für Reports zwei nicht
+mehr vorhandene Selectoren. Er prüft nun die tatsächlichen Shell-Band-Buttons,
+Sichtbarkeit der Statusleiste, Reset und Rückkehr zur Alle-Ansicht. Der Modus
+ist aktuell nicht direkt in einem Workflow aufgerufen: diese Korrektur ist
+noch keine laufende oder bestandene native Reports-Abnahme. Node-Syntax und
+diff-check bestanden; Browserausführung sowie Rust-/RxDB-Gesamtsuiten für diesen
+Stand nicht lokal ausgeführt (Admission weiterhin gesperrt).
+
 ## Ergänzung: ausführbarer Reports-Browser-Smoke
 
 `smoke-app-module.mjs reports --url <test-instance>` prüft jetzt am wirklich

@@ -9157,24 +9157,46 @@ function ensureCtoxSmokeBinary() {
             await delay(100);
             evidence.actions.push('notes-nav-filter');
           } else if (moduleId === 'reports') {
-            const kind = document.querySelector('[data-report-kind]');
-            const status = document.querySelector('[data-report-status]');
-            if (!kind || !status) throw new Error('Reports filter controls are missing');
-            kind.value = 'bug';
-            kind.dispatchEvent(new Event('change', { bubbles: true }));
+            const root = document.querySelector('[data-reports-root]');
+            const kind = root?.querySelector('[data-pg-band="bug"]');
+            const all = root?.querySelector('[data-pg-band="all"]');
+            const status = root?.querySelector('[data-pg-filter][data-pg-name="status"]');
+            const trayToggle = root?.querySelector('[data-pg-tray-toggle]');
+            const tray = root?.querySelector('[data-pg-tray]');
+            const reset = root?.querySelector('[data-pg-reset]');
+            if (!kind || !all || !status || !trayToggle || !tray || !reset) {
+              throw new Error('Reports shell filter controls are missing');
+            }
+            kind.click();
             await waitFor(() => ({
-              ok: document.querySelector('[data-report-kind]')?.value === 'bug',
-              kind: document.querySelector('[data-report-kind]')?.value || '',
-            }), 5000, 'reports kind filter');
+              ok: kind.getAttribute('aria-selected') === 'true'
+                && all.getAttribute('aria-selected') === 'false',
+            }), 5000, 'reports bug band selected');
+            if (tray.hidden) trayToggle.click();
+            await waitFor(() => ({
+              ok: !tray.hidden && trayToggle.getAttribute('aria-expanded') === 'true'
+                && status.getBoundingClientRect().height > 0,
+            }), 5000, 'reports status filter visible');
             status.value = 'open';
             status.dispatchEvent(new Event('change', { bubbles: true }));
-            kind.value = 'all';
-            kind.dispatchEvent(new Event('change', { bubbles: true }));
-            status.value = 'all';
-            status.dispatchEvent(new Event('change', { bubbles: true }));
-            evidence.actions.push('reports-filter-controls');
+            reset.click();
+            await waitFor(() => ({
+              ok: status.value === 'all',
+              status: status.value,
+            }), 5000, 'reports status filter reset by shell');
+            all.click();
+            await waitFor(() => ({
+              ok: all.getAttribute('aria-selected') === 'true'
+                && kind.getAttribute('aria-selected') === 'false',
+            }), 5000, 'reports all band restored');
+            trayToggle.click();
+            await waitFor(() => ({
+              ok: tray.hidden && trayToggle.getAttribute('aria-expanded') === 'false',
+            }), 5000, 'reports filter tray closed');
+            evidence.actions.push('reports-shell-filter-controls');
           } else if (moduleId === 'spreadsheets') {
             const search = document.querySelector('[data-spreadsheets-search]');
+
             if (!search) throw new Error('Spreadsheets search control is missing');
             search.value = 'regression-smoke';
             search.dispatchEvent(new Event('input', { bubbles: true }));
