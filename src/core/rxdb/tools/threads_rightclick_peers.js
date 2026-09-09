@@ -752,9 +752,12 @@ async function runReviewerInBrowser({
     throw new Error('reviewer shell must use its server-authenticated actor');
   }
   await state.openModule('threads', { force: true, asModule: true });
-  await waitFor(() => ({ ok: threadsCollections.every((name) => Boolean(state.db?.raw?.[name])) }),
+  // Establish the same explicit demand set that this peer's final status gate
+  // verifies. A collection owned by the requester is not active on its reviewer.
+  const requiredCollections = [...new Set(['business_commands', 'business_users', ...threadsCollections])];
+  await waitFor(() => ({ ok: requiredCollections.every((name) => Boolean(state.db?.raw?.[name])) }),
     30000, 'reviewer thread collections registered');
-  await Promise.all(threadsCollections.map((name) => state.sync.startCollection(name)));
+  await Promise.all(requiredCollections.map((name) => state.sync.startCollection(name)));
   const rawDb = state.db.raw;
   const expectedThreadId = `thread_${targetModule.id}_smoke-record_${targetRecordId}`;
   const projectionUpdatedAfterMs = Date.now() - 5 * 60 * 1000;
@@ -927,14 +930,7 @@ async function runReviewerInBrowser({
 
   const status = await globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
     includeCounts: false,
-    requiredCollections: [
-      'business_commands',
-      'business_users',
-      'user_threads',
-      'user_thread_messages',
-      'user_notifications',
-      'ctox_task_approval_requests',
-    ],
+    requiredCollections,
   });
   await globalThis.__ctoxRecordThreadsStatus(status);
   if (status?.version !== 'business-os-advanced-status-v1') {
