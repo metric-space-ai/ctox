@@ -120,6 +120,35 @@ def pr_info(job, url):
     return result
 
 
+def resolve_parent_project(request, parent_thread):
+    parent = request(10, 'thread/read', {'threadId': parent_thread, 'includeTurns': False})['thread']
+    if parent.get('projectId'):
+        return parent['projectId']
+    if not parent.get('cwd'):
+        raise ValueError('Parent task has neither a canonical project nor a working directory. Assign the parent to its intended project before creating a worker.')
+    cwd = Path(parent['cwd']).expanduser().resolve()
+    matches = set()
+    cursor = None
+    seen = set()
+    rid = 11
+    while True:
+        page = request(rid, 'project/list', {'cursor': cursor, 'limit': 100})
+        for project in page['data']:
+            if any(Path(root['path']).expanduser().resolve() == cwd for root in project.get('roots', [])):
+                matches.add(project['id'])
+        cursor = page.get('nextCursor')
+        if cursor is None:
+            break
+        if cursor in seen:
+            raise ValueError('Project listing repeated a cursor. Retry after the app-server project catalog is healthy; no worker was created.')
+        seen.add(cursor)
+        rid += 1
+    if len(matches) != 1:
+        raise ValueError('Parent task working directory ' + str(cwd) + ' matches ' + str(len(matches)) +
+                         ' projects. Assign the parent to exactly one intended project before creating a worker.')
+    return matches.pop()
+
+
 def create(args):
     if args.model not in PROXY_MODELS and not args.model.startswith('gpt-'):
         raise ValueError('Unregistered model; validate its provider before adding it')
@@ -175,8 +204,9 @@ def create(args):
             request(1, 'initialize', {'clientInfo': {'name': 'proxy_worker_setup', 'version': '1.0'},
                                       'capabilities': {'experimentalApi': True}})
             send({'method': 'initialized', 'params': {}})
+            project_id = resolve_parent_project(request, args.parent_thread)
             result = request(2, 'thread/start', {'model': args.model, 'modelProvider': provider,
-                'cwd': str(worktree), 'ephemeral': False,
+                'cwd': str(worktree), 'ephemeral': False, 'projectId': project_id,
                 'config': {'model_reasoning_effort': args.reasoning}})
             thread = result['thread']['id']
             path = JOBS / (thread + '.json')
@@ -191,6 +221,7 @@ def create(args):
                 'Report the PR, pushed commit, validation, remaining processes and cleanup status. '
                 'If pushing is blocked, preserve source durably and report the blocker.\n')
             job = {'thread_id': thread, 'host_id': 'local', 'parent_thread': args.parent_thread,
+                   'project_id': project_id,
                    'repository': repository, 'issue_url': issue['url'], 'repo': str(repo), 'worktree': str(worktree), 'branch': branch,
                    'model': args.model, 'provider': provider, 'reasoning': args.reasoning,
                    'title': title, 'summary': args.title, 'parent_title': args.parent_title, 'worker_number': worker_number,
@@ -199,6 +230,8 @@ def create(args):
             save(path, job)
             if result['thread']['modelProvider'] != provider or result.get('model') != args.model:
                 raise ValueError('App-server did not retain the requested model/provider')
+            if result['thread'].get('projectId') != project_id:
+                raise ValueError('App-server did not retain the parent project assignment')
             prompt_path.write_text(full_prompt)
             prompt_path.chmod(0o600)
             request(3, 'thread/name/set', {'threadId': thread, 'name': title})

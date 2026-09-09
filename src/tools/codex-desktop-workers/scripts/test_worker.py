@@ -16,6 +16,31 @@ spec.loader.exec_module(w)
 
 
 class WorkerGuards(unittest.TestCase):
+    def test_parent_canonical_project_wins_over_working_directory(self):
+        request = Mock(return_value={'thread': {'projectId': 'parent-project', 'cwd': '/different/repository'}})
+        self.assertEqual(w.resolve_parent_project(request, 'parent'), 'parent-project')
+        request.assert_called_once_with(10, 'thread/read', {'threadId': 'parent', 'includeTurns': False})
+
+    def test_parent_project_fallback_paginates_and_normalizes_exact_root(self):
+        with tempfile.TemporaryDirectory(dir=os.environ['TMPDIR']) as directory:
+            root = Path(directory)
+            request = Mock(side_effect=[
+                {'thread': {'projectId': None, 'cwd': str(root / 'repo' / '..')}},
+                {'data': [{'id': 'other', 'roots': [{'path': str(root / 'child')}]}], 'nextCursor': 'page2'},
+                {'data': [{'id': 'match', 'roots': [{'path': str(root)}]}], 'nextCursor': None},
+            ])
+            self.assertEqual(w.resolve_parent_project(request, 'parent'), 'match')
+            self.assertEqual(request.call_args_list[-1].args[2]['cursor'], 'page2')
+
+    def test_parent_project_fallback_rejects_ambiguous_or_missing_membership(self):
+        for ids in [[], ['first', 'second']]:
+            request = Mock(side_effect=[
+                {'thread': {'cwd': '/parent/root'}},
+                {'data': [{'id': project, 'roots': [{'path': '/parent/root'}]} for project in ids]},
+            ])
+            with self.subTest(ids=ids), self.assertRaisesRegex(ValueError, 'Assign the parent to exactly one'):
+                w.resolve_parent_project(request, 'parent')
+
     def test_failed_preparation_retains_registry_and_stops_setup_process(self):
         with tempfile.TemporaryDirectory(dir=os.environ['TMPDIR']) as directory:
             root = Path(directory)
@@ -29,8 +54,9 @@ class WorkerGuards(unittest.TestCase):
                                    parent_thread='parent', parent_title='Parent', title='Assignment',
                                    prompt_file=root / 'assignment.md', reasoning='high')
             client = Mock(turn_id='turn-1')
-            client.request.side_effect = [{}, {'model': 'kimi-k3', 'thread': {
-                'id': thread, 'modelProvider': 'cli_proxy', 'path': str(root / 'missing.jsonl')}}, {}]
+            client.request.side_effect = [{}, {'thread': {'projectId': 'parent-project'}},
+                {'model': 'kimi-k3', 'thread': {'id': thread, 'projectId': 'parent-project',
+                 'modelProvider': 'cli_proxy', 'path': str(root / 'missing.jsonl')}}, {}]
 
             def incomplete_turn(*_):
                 self.assertEqual(json.loads(registry.read_text())['preparation_status'], 'preparing')
@@ -51,6 +77,9 @@ class WorkerGuards(unittest.TestCase):
             saved = json.loads(registry.read_text())
             self.assertEqual(saved['preparation_status'], 'failed')
             self.assertEqual(saved['thread_id'], thread)
+            self.assertEqual(saved['project_id'], 'parent-project')
+            start = next(call for call in client.request.call_args_list if call.args[1] == 'thread/start')
+            self.assertEqual(start.args[2]['projectId'], 'parent-project')
             self.assertEqual(saved['preparation_turn_id'], 'turn-1')
             self.assertIn('Do not rerun create', saved['recovery'])
             client.interrupt.assert_called_once_with(thread)

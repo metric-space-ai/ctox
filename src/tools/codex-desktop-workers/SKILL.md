@@ -106,6 +106,10 @@ proxy requests. Grok's subscription backend has reported `grok-4.6-build`;
    `[Worker1@Exact parent task title]: Bounded task title` (then Worker2, etc.).
    It validates the existing worktree and records its task ID, provider,
    branch, repository and prompt in `~/.codex/proxy-workers/jobs/`.
+   It inherits the parent's canonical project even when the implementation uses
+   another repository. If the parent has no assignment, its working directory
+   must match exactly one saved project's root; otherwise fix the parent's
+   project assignment before retrying. The returned project assignment is verified.
    The initial READY-only turn consumes a model request and has a 90-second
    deadline. It must complete successfully with a real rollout file before
    `preparation_status` becomes `ready`. The assignment is not sent in this turn.
