@@ -33,7 +33,7 @@
     "shell:sign-release": "node scripts/sign-shell-release.mjs",
     "shell:sbom": "node scripts/build-shell-sbom.mjs",
     "test:shell-artifact": "node --test scripts/build-shell-artifact.test.mjs scripts/build-shell-sbom.test.mjs scripts/sign-shell-release.test.mjs && node scripts/shell-asset-routing.browser.mjs",
-    "test:shared": "node --test shared/*.test.mjs",
+    "test:shared": "node --test --test-concurrency=4 shared/*.test.mjs",
     "test:app-store": "node modules/app-store/app-store.test.mjs",
     "test:app-stories": "node scripts/run-app-story-tests.mjs",
     "test:module-bundles": "node modules/calendar/calendar.test.mjs && node modules/ctox/test.js && node modules/customers/customers.test.mjs && node modules/iot/iot.test.mjs && node modules/notes/notes.test.mjs && node modules/outbound/outbound.test.mjs && node modules/research/test.mjs",

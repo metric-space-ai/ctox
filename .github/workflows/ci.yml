@@ -188,6 +188,10 @@ jobs:
         shell: bash
         run: node src/apps/business-os/scripts/explorer-selection-actions.browser.mjs --output-dir "${RUNNER_TEMP}/ctox-explorer-selection-actions"
 
+      - name: Module local dialogs and filter controls
+        shell: bash
+        run: node src/apps/business-os/scripts/module-local-controls.browser.mjs --output-dir "${RUNNER_TEMP}/ctox-module-local-controls"
+
       - name: Business OS JS tests
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |

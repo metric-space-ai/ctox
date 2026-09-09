@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { collections } from '../schema.js';
+import { collections as coreCollections } from '../../ctox/schema.js';
 import {
   __kundenpipelineTestHooks as hooks,
   decisionCommand,
@@ -49,7 +50,8 @@ test('Decision Hub declares the native projection collections', () => {
   assert.equal(collections.kundenpipeline_entscheidungen.primaryKey, 'id');
   assert.ok(collections.kundenpipeline_entscheidungen.indexes.includes('status'));
   assert.ok(collections.kundenpipeline_vorgaenge.indexes.includes('kunde_id'));
-  assert.equal(collections.business_commands.version, 1);
+  assert.equal(collections.business_commands.version, 2);
+  assert.deepEqual(collections.business_commands, coreCollections.business_commands);
 });
 
 test('decision cards filter open items and retain agent options', () => {

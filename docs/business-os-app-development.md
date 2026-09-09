@@ -403,3 +403,22 @@ this complete flow without a developer-triggered daemon restart.
 - `docs/ctox-rxdb.md` — sync architecture and data boundary
 - `docs/business-os-app-platform-refactoring-plan.md` — client-only SDK work
 - `docs/business-os-dynamic-module-schemas-plan.md` — runtime schema loader
+
+## Module-local forms and controls
+
+Knowledge creation, import, export and configuration forms stay inside their
+own module window. Closing or pressing Escape restores focus to the invoking
+control; Tab remains inside the open form. A failed command keeps the entered
+values and exposes a retry action. Pending submission disables another submit,
+and an answer arriving after the form is closed must not reopen it.
+
+AppSec's native dialogs use `show()` and module-relative positioning. Its
+narrow layout scrolls within the allocated app height, so dialog controls remain
+inside the visible module. Reports uses the shared pane-grammar classes for
+search, filtering, reset, counted bands and footers.
+
+`node src/apps/business-os/scripts/module-local-controls.browser.mjs` checks
+these controls at 360, 640 and 1180 pixels, including a controlled command
+failure/retry. It mounts the real modules against explicit in-memory fixtures;
+it does not establish tenant synchronization, native command execution or
+installed Workjet acceptance. Those still require the real application tests.
