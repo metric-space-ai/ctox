@@ -93,7 +93,11 @@ jobs:
           npm ci --ignore-scripts --prefix src/apps/business-os
           npm audit --audit-level=low --prefix src/apps/business-os
           npm --prefix src/apps/business-os exec -- playwright install --with-deps chromium
-          node src/apps/business-os/rxdb/tests/run-all.mjs --require-wire-daemon
+          if ! node src/apps/business-os/rxdb/tests/run-all.mjs --require-wire-daemon; then
+            # Preserve the suite failure and expose paths hidden by its short error tail.
+            node src/apps/business-os/rxdb/tests/customer-identifier-inventory-smoke.mjs || true
+            exit 1
+          fi
       - name: Measure existing regression filters on campaign base
         if: ${{ always() && steps.compile.outcome == 'success' && (github.head_ref == 'codex/crew-open-items' || github.head_ref == 'codex/auth-assist-recovery' || (github.head_ref == 'codex/crew-attempt-binding' && steps.regressions.outcome == 'failure')) }}
         run: |
