@@ -209,6 +209,38 @@ struct FieldStatus {
 /// a bare object and, on 07.09.2026, the whole list as a JSON string (three
 /// rejections in a row for one lead, "expected a sequence"). The meaning is
 /// unambiguous in all three shapes, so accept them instead of losing the run.
+/// Workers that serialise a list through an XML-shaped intermediate wrap it in
+/// a single carrier key: `"sources": {"item": [ ... ]}` instead of
+/// `"sources": [ ... ]`. Measured on the Aeroxon lead 09.09.2026: a writeback
+/// delivered 16 verified fields, every one of them wrapped this way, and every
+/// one lost its evidence and fell back to `no_match`. The wrapper carries no
+/// meaning, so it is unwrapped rather than rejected.
+fn unwrap_single_item_container(value: &Value) -> Option<Value> {
+    let map = value.as_object()?;
+    if map.len() != 1 {
+        return None;
+    }
+    let (key, inner) = map.iter().next()?;
+    let carrier = matches!(
+        key.trim().to_ascii_lowercase().as_str(),
+        "item"
+            | "items"
+            | "entry"
+            | "entries"
+            | "element"
+            | "elements"
+            | "list"
+            | "source"
+            | "sources"
+            | "value"
+            | "values"
+    );
+    if !carrier || !(inner.is_array() || inner.is_object()) {
+        return None;
+    }
+    Some(inner.clone())
+}
+
 fn lenient_sources<'de, D>(deserializer: D) -> Result<Vec<FieldSource>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -221,9 +253,14 @@ where
                 .into_iter()
                 .map(|item| serde_json::from_value::<FieldSource>(item).map_err(E::custom))
                 .collect(),
-            Value::Object(_) => Ok(vec![
-                serde_json::from_value::<FieldSource>(value).map_err(E::custom)?
-            ]),
+            Value::Object(_) => {
+                if let Some(inner) = unwrap_single_item_container(&value) {
+                    return from_value(inner);
+                }
+                Ok(vec![
+                    serde_json::from_value::<FieldSource>(value).map_err(E::custom)?
+                ])
+            }
             Value::String(text) => {
                 let trimmed = text.trim();
                 if trimmed.is_empty() {
@@ -389,7 +426,12 @@ where
         match value {
             Value::Null => Ok(Vec::new()),
             Value::Array(items) => Ok(items),
-            Value::Object(_) => Ok(vec![value]),
+            Value::Object(_) => {
+                if let Some(inner) = unwrap_single_item_container(&value) {
+                    return from_value(inner);
+                }
+                Ok(vec![value])
+            }
             Value::String(text) => {
                 let trimmed = text.trim();
                 if trimmed.is_empty() {
@@ -3514,6 +3556,38 @@ mod tests {
             &serde_json::json!({})
         )
         .is_ok());
+    }
+
+    #[test]
+    fn sources_wrapped_in_an_item_carrier_are_still_sources() -> anyhow::Result<()> {
+        // Measured on the Aeroxon lead 09.09.2026: a writeback delivered 16
+        // verified fields whose evidence was wrapped as {"item": [...]}, and
+        // every one of them lost its sources and fell back to no_match.
+        let single: FieldStatus = serde_json::from_value(serde_json::json!({
+            "status": "verified",
+            "value": "www.aeroxon.de",
+            "sources": {"item": {"source_id": "aeroxon.de", "url": "https://www.aeroxon.de/impressum/", "quote": "Aeroxon Insect Control GmbH"}}
+        }))?;
+        assert_eq!(single.sources.len(), 1);
+        assert_eq!(single.sources[0].source_id, "aeroxon.de");
+        let many: FieldStatus = serde_json::from_value(serde_json::json!({
+            "status": "verified",
+            "value": "Aeroxon Insect Control GmbH",
+            "sources": {"item": [
+                {"source_id": "aeroxon.de", "url": "https://www.aeroxon.de/impressum/", "quote": "Aeroxon Insect Control GmbH"},
+                {"source_id": "northdata.com", "url": "https://www.northdata.com/AEROXON", "quote": "AEROXON INSECT CONTROL GmbH"}
+            ]}
+        }))?;
+        assert_eq!(many.sources.len(), 2);
+        // A real single source object is still a single source, not a carrier.
+        let plain: FieldStatus = serde_json::from_value(serde_json::json!({
+            "status": "verified",
+            "value": "x",
+            "sources": {"source_id": "a.test", "url": "https://a.test/", "quote": "x"}
+        }))?;
+        assert_eq!(plain.sources.len(), 1);
+        assert_eq!(plain.sources[0].source_id, "a.test");
+        Ok(())
     }
 
     #[test]
