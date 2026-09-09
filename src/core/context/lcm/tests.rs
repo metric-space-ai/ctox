@@ -140,11 +140,9 @@ fn live_working_set_is_bounded_with_large_message_and_continuity_history() -> Re
         128,
     )?;
     assert!(forgotten.len() <= 128);
-    assert!(
-        forgotten
-            .iter()
-            .all(|entry| entry.line.contains("forgotten line"))
-    );
+    assert!(forgotten
+        .iter()
+        .all(|entry| entry.line.contains("forgotten line")));
     let message_count: i64 = engine.conn.query_row(
         "SELECT COUNT(*) FROM messages WHERE conversation_id=?1",
         rusqlite::params![conversation_id],
@@ -376,30 +374,22 @@ fn secret_rewrite_replaces_literals_across_memory_without_breaking_structure() -
     assert!(rewrite.continuity_commit_rows_updated >= 1);
 
     let snapshot = engine.snapshot(91)?;
-    assert!(
-        snapshot
-            .messages
-            .iter()
-            .all(|item| !item.content.contains(literal))
-    );
-    assert!(
-        snapshot
-            .messages
-            .iter()
-            .any(|item| item.content.contains(replacement))
-    );
-    assert!(
-        snapshot
-            .summaries
-            .iter()
-            .all(|item| !item.content.contains(literal))
-    );
-    assert!(
-        snapshot
-            .summaries
-            .iter()
-            .any(|item| item.content.contains(replacement))
-    );
+    assert!(snapshot
+        .messages
+        .iter()
+        .all(|item| !item.content.contains(literal)));
+    assert!(snapshot
+        .messages
+        .iter()
+        .any(|item| item.content.contains(replacement)));
+    assert!(snapshot
+        .summaries
+        .iter()
+        .all(|item| !item.content.contains(literal)));
+    assert!(snapshot
+        .summaries
+        .iter()
+        .any(|item| item.content.contains(replacement)));
 
     let continuity = engine.continuity_show_all(91)?;
     assert!(!continuity.focus.content.contains(literal));
@@ -660,11 +650,9 @@ fn consecutive_focus_diffs_persist_the_second_mission_value() -> Result<()> {
     let mission = engine.mission_state(59)?;
 
     assert_eq!(mission.mission, "Second focus-diff mission.");
-    assert!(
-        focus
-            .content
-            .contains("- Mission: Second focus-diff mission.")
-    );
+    assert!(focus
+        .content
+        .contains("- Mission: Second focus-diff mission."));
     assert!(!focus.content.contains("First focus-diff mission."));
 
     let _ = std::fs::remove_file(db_path);
@@ -870,18 +858,14 @@ fn structured_mission_state_renders_over_conflicting_focus_text_without_reimport
         baseline.trigger_intensity
     );
     assert!(focus_semantic_conflicts_local(&after.focus.content).is_empty());
-    assert!(
-        !after
-            .focus
-            .content
-            .contains("Malicious text-only replacement")
-    );
-    assert!(
-        after
-            .focus
-            .content
-            .contains("Mission: Keep the structured focus head primary.")
-    );
+    assert!(!after
+        .focus
+        .content
+        .contains("Malicious text-only replacement"));
+    assert!(after
+        .focus
+        .content
+        .contains("Mission: Keep the structured focus head primary."));
 
     let _ = std::fs::remove_file(db_path);
     Ok(())
@@ -1210,41 +1194,31 @@ fn continuity_diff_documents_apply_and_track_forgotten_lines() -> Result<()> {
         ContinuityKind::Narrative,
         "## Entries\n+ entry_id: rollout-break\n+ event_type: failure\n+ summary: Service started with a fragile migration plan.\n+ consequence: Cache warmer timing caused the breakage.\n+ source_class: tool_observed\n+ source_ref: log://deploy\n+ observed_at: 2026-04-02T10:00:00Z\n",
     )?;
-    assert!(
-        updated
-            .content
-            .contains("Service started with a fragile migration plan.")
-    );
-    assert!(
-        updated
-            .content
-            .contains("Cache warmer timing caused the breakage.")
-    );
+    assert!(updated
+        .content
+        .contains("Service started with a fragile migration plan."));
+    assert!(updated
+        .content
+        .contains("Cache warmer timing caused the breakage."));
 
     let updated_again = engine.continuity_apply_diff(
         11,
         ContinuityKind::Narrative,
         "## Entries\n- consequence: Cache warmer timing caused the breakage.\n+ consequence: Cache warmer timing after verification caused the breakage.\n",
     )?;
-    assert!(
-        updated_again
-            .content
-            .contains("Cache warmer timing after verification caused the breakage.")
-    );
-    assert!(
-        !updated_again
-            .content
-            .contains("Cache warmer timing caused the breakage.")
-    );
+    assert!(updated_again
+        .content
+        .contains("Cache warmer timing after verification caused the breakage."));
+    assert!(!updated_again
+        .content
+        .contains("Cache warmer timing caused the breakage."));
 
     let forgotten =
         engine.continuity_forgotten(11, Some(ContinuityKind::Narrative), Some("Cache warmer"))?;
     assert_eq!(forgotten.len(), 1);
-    assert!(
-        forgotten[0]
-            .line
-            .contains("Cache warmer timing caused the breakage.")
-    );
+    assert!(forgotten[0]
+        .line
+        .contains("Cache warmer timing caused the breakage."));
 
     let rebuilt = engine.continuity_rebuild(11, ContinuityKind::Narrative)?;
     assert_eq!(rebuilt.content, updated_again.content);
@@ -1266,11 +1240,9 @@ fn continuity_apply_diff_accepts_headerless_anchor_entries() -> Result<()> {
     )?;
 
     assert!(updated.content.contains("ANCHOR_MAIN_GATEWAY"));
-    assert!(
-        updated
-            .content
-            .contains("Keep the gateway mission primary.")
-    );
+    assert!(updated
+        .content
+        .contains("Keep the gateway mission primary."));
 
     let rebuilt = engine.continuity_rebuild(46, ContinuityKind::Anchors)?;
     assert_eq!(rebuilt.content, updated.content);
@@ -1292,26 +1264,18 @@ fn continuity_apply_diff_routes_headerless_focus_fields_to_known_sections() -> R
         "+ Mission: Keep gateway intake hardening as the main mission.\n+ Mission state: active.\n+ Next slice: record the interrupt buffer without changing the main mission.\n+ Done gate: leave exactly one bounded continuation open.\n+ mission: keep gateway intake hardening primary\n+ next_slice: record interrupt buffer and return to the main thread\n",
     )?;
 
-    assert!(
-        updated
-            .content
-            .contains("Mission: keep gateway intake hardening primary")
-    );
-    assert!(
-        updated
-            .content
-            .contains("Next slice: record interrupt buffer and return to the main thread")
-    );
-    assert!(
-        updated
-            .content
-            .contains("mission: keep gateway intake hardening primary")
-    );
-    assert!(
-        updated
-            .content
-            .contains("next_slice: record interrupt buffer and return to the main thread")
-    );
+    assert!(updated
+        .content
+        .contains("Mission: keep gateway intake hardening primary"));
+    assert!(updated
+        .content
+        .contains("Next slice: record interrupt buffer and return to the main thread"));
+    assert!(updated
+        .content
+        .contains("mission: keep gateway intake hardening primary"));
+    assert!(updated
+        .content
+        .contains("next_slice: record interrupt buffer and return to the main thread"));
 
     let mission = engine.mission_state(47)?;
     assert_eq!(mission.mission, "keep gateway intake hardening primary");
@@ -1335,11 +1299,9 @@ fn continuity_apply_diff_accepts_indented_focus_diff_lines() -> Result<()> {
         "  + Mission: Keep gateway intake hardening as the main mission.\n  + Mission state: active.\n  + Next slice: record the interrupt buffer without changing the main mission.\n  + Done gate: leave exactly one bounded continuation open.\n  + mission: keep gateway intake hardening primary\n  - none\n",
     )?;
 
-    assert!(
-        updated
-            .content
-            .contains("Mission: keep gateway intake hardening primary")
-    );
+    assert!(updated
+        .content
+        .contains("Mission: keep gateway intake hardening primary"));
     assert!(updated.content.contains("## Next"));
     assert!(focus_semantic_conflicts_local(&updated.content).is_empty());
 
@@ -1365,40 +1327,30 @@ fn continuity_prompt_contains_document_and_diff_rules() -> Result<()> {
     )?;
 
     let payload = engine.continuity_build_prompt(12, ContinuityKind::Narrative)?;
-    assert!(
-        payload
-            .prompt
-            .contains("Reply with only a diff that uses the existing sections.")
-    );
+    assert!(payload
+        .prompt
+        .contains("Reply with only a diff that uses the existing sections."));
     assert!(payload.prompt.contains("<CURRENT_DOCUMENT>"));
     assert!(payload.prompt.contains("<RECENT_MESSAGES>"));
     assert!(payload.prompt.contains("## Entries"));
-    assert!(
-        payload
-            .prompt
-            .contains("The first non-empty diff line must be a `## ...` section header")
-    );
+    assert!(payload
+        .prompt
+        .contains("The first non-empty diff line must be a `## ...` section header"));
     assert!(payload.prompt.contains("Example valid diff:"));
 
     let focus_payload = engine.continuity_build_prompt(12, ContinuityKind::Focus)?;
     assert!(focus_payload.prompt.contains("mission_state:"));
     assert!(focus_payload.prompt.contains("continuation_mode:"));
     assert!(focus_payload.prompt.contains("next_slice:"));
-    assert!(
-        focus_payload
-            .prompt
-            .contains("update both `## Status` and `## Contract`/`## State`")
-    );
-    assert!(
-        focus_payload
-            .prompt
-            .contains("Do not keep stale closed fields")
-    );
-    assert!(
-        focus_payload
-            .prompt
-            .contains("+ Continuation mode: continuous")
-    );
+    assert!(focus_payload
+        .prompt
+        .contains("update both `## Status` and `## Contract`/`## State`"));
+    assert!(focus_payload
+        .prompt
+        .contains("Do not keep stale closed fields"));
+    assert!(focus_payload
+        .prompt
+        .contains("+ Continuation mode: continuous"));
 
     let _ = std::fs::remove_file(db_path);
     Ok(())
@@ -1417,16 +1369,12 @@ fn focus_continuity_prompt_keeps_open_continuation_signal_from_long_assistant_re
     )?;
 
     let focus_payload = engine.continuity_build_prompt(13, ContinuityKind::Focus)?;
-    assert!(
-        focus_payload
-            .prompt
-            .contains("Left exactly 1 open CTOX runtime item")
-    );
-    assert!(
-        focus_payload
-            .prompt
-            .contains("partial commit resync: verify restart stays on new head")
-    );
+    assert!(focus_payload
+        .prompt
+        .contains("Left exactly 1 open CTOX runtime item"));
+    assert!(focus_payload
+        .prompt
+        .contains("partial commit resync: verify restart stays on new head"));
 
     let _ = std::fs::remove_file(db_path);
     Ok(())

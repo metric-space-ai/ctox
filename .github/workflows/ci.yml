@@ -155,7 +155,6 @@ jobs:
           targets: ${{ matrix.target }}
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
         with:
           node-version: "22"
 
@@ -168,23 +167,32 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            bubblewrap libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev sqlite3
+            bubblewrap libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev sqlite3 ripgrep
+          # customer-identifier-inventory-smoke invokes rg directly.
+          rg --version
 
       - name: Business OS JS dependency bootstrap
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           npm ci --ignore-scripts --prefix src/apps/business-os
           npm audit --audit-level=low --prefix src/apps/business-os
 
       - name: Install Business OS browser test runtime
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: npm --prefix src/apps/business-os exec playwright install --with-deps chromium
 
       - name: Business OS Office mobile height
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: npm --prefix src/apps/business-os run qa:shell-office-height -- --output-dir "${RUNNER_TEMP}/ctox-shell-office-height"
       - name: Guard Office notification contract
+        shell: bash
         run: npm --prefix src/apps/business-os run qa:office-notifications -- --output-dir "${RUNNER_TEMP}/ctox-office-notifications"
+
+      - name: Explorer selection actions
+        shell: bash
+        run: node src/apps/business-os/scripts/explorer-selection-actions.browser.mjs --output-dir "${RUNNER_TEMP}/ctox-explorer-selection-actions"
+
+      - name: Module local dialogs and filter controls
+        shell: bash
+        run: node src/apps/business-os/scripts/module-local-controls.browser.mjs --output-dir "${RUNNER_TEMP}/ctox-module-local-controls"
 
       - name: Business OS JS tests
         if: matrix.target == 'x86_64-unknown-linux-gnu'
@@ -377,6 +385,10 @@ jobs:
       - name: Business OS command idempotency
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo test --locked --bin ctox native_peer_consumes_pending_business_command
+
+      - name: Workjet computer schema migration
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --bin ctox workjet_computer_schema_migration
 
       - name: Business OS schema hash parity
         if: matrix.target == 'x86_64-unknown-linux-gnu'

@@ -30,7 +30,7 @@ if (missing.length) {
 
 const testFiles = [...new Set(apps.flatMap((app) => app.testFiles))].sort();
 const startedAt = new Date().toISOString();
-const run = spawnSync(process.execPath, ['--test', ...testFiles], {
+const run = spawnSync(process.execPath, ['--test', '--test-concurrency=4', ...testFiles], {
   cwd: repoRoot,
   encoding: 'utf8',
   stdio: ['ignore', 'pipe', 'pipe'],

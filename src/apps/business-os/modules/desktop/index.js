@@ -175,6 +175,17 @@ export async function mount(ctx) {
   let disposed = false;
   const mountedAtMs = Date.now();
 
+  const layoutCollection = ctx.db?.collection?.('desktop_layout');
+  const iconsCollection = ctx.db?.collection?.('desktop_icons');
+  const commandsCollection = ctx.db?.collection?.('business_commands');
+
+  const layout = await ensureLayout(layoutCollection, launcher);
+  let iconPositionCache = readIconPositionCache();
+  let iconsReadiness = readIconsReadiness();
+  await ensureIcons(iconsCollection, launcher);
+  await renderIcons();
+
+  // Start timers only after maintenance-sensitive persistence has succeeded.
   // Wire up the live clock and date widget
   const timeEl = refs.root.querySelector('[data-widget-time]');
   const dateEl = refs.root.querySelector('[data-widget-date]');
@@ -205,15 +216,6 @@ export async function mount(ctx) {
     cleanups.push(() => clearInterval(clockInterval));
   }
   wireSyncStatusWidget();
-  const layoutCollection = ctx.db?.collection?.('desktop_layout');
-  const iconsCollection = ctx.db?.collection?.('desktop_icons');
-  const commandsCollection = ctx.db?.collection?.('business_commands');
-
-  const layout = await ensureLayout(layoutCollection, launcher);
-  let iconPositionCache = readIconPositionCache();
-  let iconsReadiness = readIconsReadiness();
-  await ensureIcons(iconsCollection, launcher);
-  await renderIcons();
 
   cleanups.push(subscribeIcons());
   cleanups.push(subscribeIconsReadiness());

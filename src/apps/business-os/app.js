@@ -1,15 +1,15 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260909-shell-v2-crew-feedback-v359';
-import { CtoxResizer } from './shared/resizer.js?v=20260909-shell-v2-crew-feedback-v359';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260909-shell-v2-crew-feedback-v359';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260909-shell-v2-crew-feedback-v359';
-import { createAppActions } from './shared/app-actions.js?v=20260909-shell-v2-crew-feedback-v359';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260909-shell-v2-workjet-computer-schema-v364';
+import { CtoxResizer } from './shared/resizer.js?v=20260909-shell-v2-workjet-computer-schema-v364';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260909-shell-v2-workjet-computer-schema-v364';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260909-shell-v2-workjet-computer-schema-v364';
+import { createAppActions } from './shared/app-actions.js?v=20260909-shell-v2-workjet-computer-schema-v364';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260909-shell-v2-crew-feedback-v359';
+} from './shared/app-lifecycle.js?v=20260909-shell-v2-workjet-computer-schema-v364';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -17,20 +17,20 @@ import {
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260909-shell-v2-crew-feedback-v359';
+} from './shared/permissions.js?v=20260909-shell-v2-workjet-computer-schema-v364';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260909-shell-v2-crew-feedback-v359';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260909-shell-v2-crew-feedback-v359';
+} from './shared/branding.js?v=20260909-shell-v2-workjet-computer-schema-v364';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260909-shell-v2-workjet-computer-schema-v364';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260909-shell-v2-crew-feedback-v359';
+} from './shared/presentation.js?v=20260909-shell-v2-workjet-computer-schema-v364';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -41,9 +41,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260909-shell-v2-crew-feedback-v359';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260909-shell-v2-crew-feedback-v359';
-import { createDocumentsFacade } from './shared/documents.js?v=20260909-shell-v2-crew-feedback-v359';
+} from './shared/shell-permissions-ui.js?v=20260909-shell-v2-workjet-computer-schema-v364';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260909-shell-v2-workjet-computer-schema-v364';
+import { createDocumentsFacade } from './shared/documents.js?v=20260909-shell-v2-workjet-computer-schema-v364';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -51,16 +51,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260909-shell-v2-crew-feedback-v359';
+} from './shared/maintenance-state.js?v=20260909-shell-v2-workjet-computer-schema-v364';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260909-shell-v2-crew-feedback-v359';
+} from './shared/workspace-session.js?v=20260909-shell-v2-workjet-computer-schema-v364';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260909-shell-v2-crew-feedback-v359';
+} from './shared/taskbar-pins.js?v=20260909-shell-v2-workjet-computer-schema-v364';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -68,9 +68,9 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260909-shell-v2-crew-feedback-v359';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260909-shell-v2-crew-feedback-v359';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260909-shell-v2-crew-feedback-v359';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260909-shell-v2-workjet-computer-schema-v364';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260909-shell-v2-workjet-computer-schema-v364';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260909-shell-v2-workjet-computer-schema-v364';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -85,7 +85,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260909-shell-v2-crew-feedback-v359';
+const APP_BUILD = '20260909-shell-v2-workjet-computer-schema-v364';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -10459,17 +10459,30 @@ async function loadLaunchContext() {
 }
 
 async function fetchBusinessOsControlJson(url, options = {}) {
+  const target = new URL(url, window.location.href);
+  const method = options.method || 'GET';
+  const token = window.CTOX_BUSINESS_OS_SESSION?.maintenance_control_token;
+  const maintenanceToken = method === 'GET'
+    && target.origin === window.location.origin
+    && ['https:', 'http:'].includes(target.protocol)
+    && target.pathname === '/api/business-os/ctox/maintenance'
+    && typeof token === 'string' && token !== '<redacted>' && token.length > 0
+    ? token : null;
   const headers = {
     Accept: 'application/json',
     ...(options.body ? { 'Content-Type': 'application/json' } : {}),
     ...(options.headers || {}),
+    ...(maintenanceToken ? { 'x-ctox-maintenance-token': maintenanceToken } : {}),
   };
   const response = await fetch(url, {
-    method: options.method || 'GET',
+    method,
     headers,
     body: options.body,
     credentials: 'same-origin',
     cache: 'no-store',
+    // A scoped control credential must never follow a redirect to another
+    // endpoint or origin. It is not a native capability or a browser cookie.
+    ...(maintenanceToken ? { redirect: 'error' } : {}),
   });
   const text = await response.text();
   let payload = null;
@@ -11121,7 +11134,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "default_width": 1120,
         "default_height": 760,
         "min_width": 640,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/app-store.jpg",
+        "icon_asset_sha256": "b6e9bc5bfa8bb42b86748efc00e9b5e736c4a0b6809b6c763aa6e8e7164de108",
+        "icon_selection_sha256": "b6e9bc5bfa8bb42b86748efc00e9b5e736c4a0b6809b6c763aa6e8e7164de108",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Development",
       "version": "1.1.1",
@@ -11389,7 +11407,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "default_width": 1280,
         "default_height": 820,
         "min_width": 640,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/appsec-pentest.jpg",
+        "icon_asset_sha256": "85fd7ee28a9d4f8a047569cbc376b63e5f26d16584272ccd0785fae638fb1a53",
+        "icon_selection_sha256": "85fd7ee28a9d4f8a047569cbc376b63e5f26d16584272ccd0785fae638fb1a53",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Security",
       "version": "0.2.0",
@@ -11467,7 +11490,11 @@ const OFFLINE_FALLBACK_CATALOG = {
         "min_height": 480,
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-browser\"><defs><linearGradient id=\"grad-browser\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0ea5e9\" /><stop offset=\"100%\" stop-color=\"#22c55e\" /></linearGradient></defs><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"3\" fill=\"url(#grad-browser)\" fill-opacity=\"0.12\" stroke=\"url(#grad-browser)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><path d=\"M3 9h18\" stroke=\"url(#grad-browser)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><circle cx=\"7\" cy=\"6.5\" r=\"0.8\" fill=\"url(#grad-browser)\"></circle><circle cx=\"10\" cy=\"6.5\" r=\"0.8\" fill=\"url(#grad-browser)\"></circle><path d=\"M8 15h8M12 11v8\" stroke=\"url(#grad-browser)\" stroke-width=\"1.7\" stroke-linecap=\"round\"></path></svg>",
         "top": "browser tabs and address bar",
-        "center": "web page"
+        "center": "web page",
+        "icon_asset_sha256": "8fa94a7ae4b6db8885c0088a68cf736a23c0fd717a3711cd9b015c969f799a11",
+        "icon_selection_sha256": "8fa94a7ae4b6db8885c0088a68cf736a23c0fd717a3711cd9b015c969f799a11",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Workspace",
       "version": "0.3.0",
@@ -11531,7 +11558,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "left": "Projects: Business OS apps the agent can work on",
         "center": "Chat with the pi agent (transcript + composer)",
         "right": "Live task artifact: free HTML the agent maintains about its run",
-        "third_pane_justification": "The agent's self-published progress artifact must stay visible while chatting — hiding it would blind the user to the running task."
+        "third_pane_justification": "The agent's self-published progress artifact must stay visible while chatting — hiding it would blind the user to the running task.",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/coding-agents.jpg",
+        "icon_asset_sha256": "1cf4cc4fd8e785f1b557be6dbbc3d0d8f02ab7462f9c16b17b163fc023c0bae3",
+        "icon_selection_sha256": "1cf4cc4fd8e785f1b557be6dbbc3d0d8f02ab7462f9c16b17b163fc023c0bae3",
+        "icon_selection_candidate": "candidate-09",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Development",
       "version": "0.2.6",
@@ -11590,7 +11622,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-importer\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-importer\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0ea5e9\" /><stop offset=\"100%\" stop-color=\"#6366f1\" /></linearGradient></defs><rect x=\"3\" y=\"9\" width=\"18\" height=\"12\" rx=\"2.5\" fill=\"url(#grad-importer)\" fill-opacity=\"0.12\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></rect><path d=\"M12 3v9\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M8.5 8.5 12 12l3.5-3.5\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path></svg>",
         "left": "Source: folder or GitHub",
         "center": "Durable porting and validation progress",
-        "right": "Live application evidence"
+        "right": "Live application evidence",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/importer.jpg",
+        "icon_asset_sha256": "13c493fc01ebc97db2fd6d098281ffde490761deadfbfc9963db7b8ecda60e61",
+        "icon_selection_sha256": "13c493fc01ebc97db2fd6d098281ffde490761deadfbfc9963db7b8ecda60e61",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "development",
       "version": "0.3.0",
@@ -11652,7 +11689,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-credentials\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-credentials\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#14b8a6\" /><stop offset=\"100%\" stop-color=\"#6366f1\" /></linearGradient></defs><path d=\"M12 2l8 3v6c0 5-3.5 8-8 11-4.5-3-8-6-8-11V5l8-3z\" fill=\"url(#grad-credentials)\" fill-opacity=\"0.12\" stroke=\"url(#grad-credentials)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><circle cx=\"12\" cy=\"10\" r=\"2.4\" stroke=\"url(#grad-credentials)\" stroke-width=\"2\"></circle><path d=\"M12 12.4V16\" stroke=\"url(#grad-credentials)\" stroke-width=\"2\" stroke-linecap=\"round\"></path></svg>",
         "left": "Credential catalog and status",
         "center": "Set, rotate and remove credentials",
-        "right": "Security notes"
+        "right": "Security notes",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/credentials.jpg",
+        "icon_asset_sha256": "d796dc418c8f64faadc3f43e914a7bfb6ea6e6a4b54a7b6d643e6ff40b1f4e57",
+        "icon_selection_sha256": "d796dc418c8f64faadc3f43e914a7bfb6ea6e6a4b54a7b6d643e6ff40b1f4e57",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Security",
       "version": "0.1.2",
@@ -11738,7 +11780,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "default_width": 1320,
         "default_height": 860,
         "min_width": 640,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/ctox.jpg",
+        "icon_asset_sha256": "595492dd0ab23f3db59a0ebe9a6ec8062b1b2a80cbc54f566ee32b0501bcf0ce",
+        "icon_selection_sha256": "595492dd0ab23f3db59a0ebe9a6ec8062b1b2a80cbc54f566ee32b0501bcf0ce",
+        "icon_selection_candidate": "candidate-02",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "System",
       "version": "1.1.2",
@@ -11809,7 +11856,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "drawers": {
           "left": "document metadata and import settings",
           "bottom": "diagnostics, export evidence, and selected document context"
-        }
+        },
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/documents.jpg",
+        "icon_asset_sha256": "31123bf173860e01f05eb6be2431f71925bab9f355241b2582d30a2d06aef216",
+        "icon_selection_sha256": "31123bf173860e01f05eb6be2431f71925bab9f355241b2582d30a2d06aef216",
+        "icon_selection_candidate": "candidate-05",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Knowledge",
       "version": "1.0.0",
@@ -11881,7 +11933,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-iot\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-iot\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\" /><stop offset=\"100%\" stop-color=\"#2563eb\" /></linearGradient></defs><circle cx=\"12\" cy=\"12\" r=\"3\" fill=\"url(#grad-iot)\" fill-opacity=\"0.18\" stroke=\"url(#grad-iot)\" stroke-width=\"2\"></circle><path d=\"M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4\" stroke=\"url(#grad-iot)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14\" stroke=\"url(#grad-iot)\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-opacity=\"0.7\"></path></svg>",
         "left": "Realm scope, asset/signal tree; right-click a signal to create an order or a webhook source",
         "center": "Dashboards of automation widgets (the three CTOX-programmed parts: trigger logic, widget code, order prompt), Karten ⇄ Liste",
-        "right": ""
+        "right": "",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/iot.jpg",
+        "icon_asset_sha256": "47e1a59d94e34baa238268a4eb5ec8190b8211e885ac418e106bb0de25bd2e43",
+        "icon_selection_sha256": "47e1a59d94e34baa238268a4eb5ec8190b8211e885ac418e106bb0de25bd2e43",
+        "icon_selection_candidate": "candidate-14",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Operations",
       "version": "1.0.2",
@@ -11970,7 +12027,11 @@ const OFFLINE_FALLBACK_CATALOG = {
         "default_width": 1200,
         "default_height": 720,
         "min_width": 360,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset_sha256": "257526ec6c932c287be864be47e7e7708f32d136d587ab2d17da6cc62629c220",
+        "icon_selection_sha256": "6aaaac3c849a444f1bc8af3e4f019eb4eded5ad64ac70ec85eee5c54cdb06e3b",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Knowledge",
       "version": "1.1.7",
@@ -12033,7 +12094,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "left": "Folders and note list",
         "center": "Markdown editor and rich text live preview",
         "right": "Command dashboard and formatting shortcuts",
-        "third_pane_justification": "Editor-type app (IA-Karte): left = books/tags nav + note list, main = rich-text editor; the third pane is the justified reference/metadata surface of the editor layout."
+        "third_pane_justification": "Editor-type app (IA-Karte): left = books/tags nav + note list, main = rich-text editor; the third pane is the justified reference/metadata surface of the editor layout.",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/notes.jpg",
+        "icon_asset_sha256": "aa1aafef932cb21d16611927780be82d4a5d68c9b474b70308aaeda83be5cf8b",
+        "icon_selection_sha256": "aa1aafef932cb21d16611927780be82d4a5d68c9b474b70308aaeda83be5cf8b",
+        "icon_selection_candidate": "candidate-06",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Productivity",
       "version": "1.0.2",
@@ -12105,7 +12171,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "default_width": 1120,
         "default_height": 760,
         "min_width": 640,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/reports.jpg",
+        "icon_asset_sha256": "f83ec81f7954a899490a63d02af84fc4d145f49184b7884b97a749a8bd373275",
+        "icon_selection_sha256": "f83ec81f7954a899490a63d02af84fc4d145f49184b7884b97a749a8bd373275",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Governance",
       "version": "1.1.2",
@@ -12179,7 +12250,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "drawers": {
           "right": "task setup, scoring model, and selected source detail",
           "bottom": "Knowledge table diagnostics and raw row evidence"
-        }
+        },
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/research.jpg",
+        "icon_asset_sha256": "a888d0b6ca2053cd15030286577951004fb449a97e79980df76ffaf643e796fb",
+        "icon_selection_sha256": "a888d0b6ca2053cd15030286577951004fb449a97e79980df76ffaf643e796fb",
+        "icon_selection_candidate": "candidate-14",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Research",
       "version": "1.0.16",
@@ -12247,7 +12323,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "drawers": {
           "left": "spreadsheet metadata and import settings",
           "bottom": "diagnostics, export evidence, and selected spreadsheet context"
-        }
+        },
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/spreadsheets.jpg",
+        "icon_asset_sha256": "664b5a31fa43c3d1135b15979c8348e0397dc648c37dbd823e681f4da35db284",
+        "icon_selection_sha256": "664b5a31fa43c3d1135b15979c8348e0397dc648c37dbd823e681f4da35db284",
+        "icon_selection_candidate": "candidate-05",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Analytics",
       "version": "1.0.1",
@@ -12320,7 +12401,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "default_width": 1120,
         "default_height": 760,
         "min_width": 640,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/threads.jpg",
+        "icon_asset_sha256": "b4cf784881d8c5463837688755795dffbd66b5082333bf1508357df3a10d28ed",
+        "icon_selection_sha256": "b4cf784881d8c5463837688755795dffbd66b5082333bf1508357df3a10d28ed",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "System",
       "version": "0.2.4",
@@ -12397,7 +12483,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "default_width": 1180,
         "default_height": 780,
         "min_width": 640,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/tickets.jpg",
+        "icon_asset_sha256": "6d0cbd2138977725b6043fd582b1d2b65b7214c8c9153ad7977942c26ebc4675",
+        "icon_selection_sha256": "6d0cbd2138977725b6043fd582b1d2b65b7214c8c9153ad7977942c26ebc4675",
+        "icon_selection_candidate": "candidate-02",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Operations",
       "version": "1.0.2",

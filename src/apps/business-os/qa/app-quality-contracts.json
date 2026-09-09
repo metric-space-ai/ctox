@@ -12,6 +12,9 @@
     "console_network_health"
   ],
   "apps": [
+    {"id":"creator","archetype":"queue-workflow","variant":"app-authoring","business_story":"App-Auftrag beschreiben, Grundstruktur wählen, Erstellung starten und Status verfolgen","required_actions":["configure","create","track","search"]},
+    {"id":"explorer","archetype":"record-workbench","variant":"filesystem","business_story":"Ordner auswählen, Dateien suchen, öffnen, umbenennen und kontrolliert in den Papierkorb verschieben","required_actions":["search","select","open","rename","trash"]},
+    {"id":"file-viewer","archetype":"editor-document","variant":"file-preview","business_story":"Gespeicherte Datei öffnen, typgerechte Vorschau prüfen und Original herunterladen","required_actions":["open","preview","download"]},
     { "id": "app-store", "archetype": "record-workbench", "variant": "store", "business_story": "App finden, filtern, installieren, Version und Release prüfen", "required_actions": ["filter", "sort", "install", "release"] },
     { "id": "appsec-pentest", "archetype": "queue-workflow", "variant": "review-evidence", "business_story": "Assessment starten, Finding prüfen und Freigabe delegieren", "required_actions": ["filter", "select", "run", "approve"] },
     { "id": "browser", "archetype": "editor-document", "variant": "browser", "business_story": "Session öffnen, URL ändern und Browseraktion ausführen", "required_actions": ["open", "edit", "run"] },

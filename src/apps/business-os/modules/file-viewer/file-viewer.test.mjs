@@ -18,7 +18,7 @@ describe('File Viewer module contract', () => {
     assert.match(viewerSource, /ctx\.setTitle\?\.\(name\)/);
     assert.doesNotMatch(viewerSource, /export const manifest/);
     assert.doesNotMatch(viewerSource, /desktop-apps\//);
-    assert.match(viewerHtml, /^<main class="ctox-workspace file-viewer"/);
+    assert.match(viewerHtml, /^<main class="ctox-workspace ctox-workspace--single file-viewer"/);
     assert.doesNotMatch(viewerHtml, /<!doctype|<(?:html|head|script|style)\b/i);
   });
 

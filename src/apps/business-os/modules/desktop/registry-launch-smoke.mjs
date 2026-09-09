@@ -167,7 +167,7 @@ assert.ok(
 
 for (const requiredSnippet of [
   'isLaunchableModule',
-  'normalizeDesktopAppItem',
+  "item.launch_kind === 'desktop-app'",
   'uniqueCatalogItems',
   'openDesktopApp',
 ]) {

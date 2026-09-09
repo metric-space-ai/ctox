@@ -1,4 +1,8 @@
+import { collections as conversationCollections } from '../conversations/schema.js';
+
 export const collections = {
+  // Reuse the canonical channel schema so Crew can load accounts before Mail or Conversations opens.
+  communication_accounts: conversationCollections.communication_accounts,
   ctox_crew_members: {
     version: 0,
     primaryKey: 'id',
@@ -555,7 +559,7 @@ export const collections = {
     additionalProperties: false
   },
   workjet_computers: {
-    version: 0,
+    version: 1,
     primaryKey: 'id',
     type: 'object',
     properties: {
@@ -714,6 +718,16 @@ export const collections = {
 };
 
 export const migrationStrategies = {
+  workjet_computers: {
+    1: (oldDoc) => ({
+      ...oldDoc,
+      device_binding_id: oldDoc.device_binding_id || '',
+      actor_epoch: oldDoc.actor_epoch || 0,
+      last_seen_at_ms: oldDoc.last_seen_at_ms || 0,
+      replication_up: oldDoc.replication_up || false,
+      is_deleted: oldDoc.is_deleted || false
+    })
+  },
   business_commands: {
     1: (oldDoc) => ({
       ...oldDoc,

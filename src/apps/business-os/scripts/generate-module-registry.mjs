@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Generates modules/registry.json and the offline-fallback catalog block in
 // app.js from the module manifests (modules/<id>/module.json). The manifests
-// are the single source of truth; this script only projects and validates.
+// own module metadata. The frozen operator selection owns approved icon metadata;
+// this script projects both without changing the selected artwork.
 //
 //   node scripts/generate-module-registry.mjs          # rewrite both outputs
 //   node scripts/generate-module-registry.mjs --check  # fail on any drift
@@ -52,6 +53,13 @@ function fail(message) {
 function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
+
+const iconManifest = readJson(resolve(root, 'shared/assets/workjet-icons/operator-selection-v1/manifest.json'));
+if (iconManifest.schema !== 'workjet.operator-icon-selection.v1'
+  || !Array.isArray(iconManifest.icons)
+  || iconManifest.icons.length !== iconManifest.count) fail('invalid operator icon selection');
+const selectedIcons = new Map(iconManifest.icons.map((icon) => [icon.appId, icon]));
+if (selectedIcons.size !== iconManifest.icons.length) fail('duplicate operator icon selection');
 
 const system = readJson(resolve(root, 'system-apps.json'));
 const systemIds = system.apps;
@@ -106,6 +114,17 @@ function registryEntry(manifest) {
   const entry = {};
   for (const key of REGISTRY_ENTRY_KEYS) {
     if (Object.prototype.hasOwnProperty.call(manifest, key)) entry[key] = manifest[key];
+  }
+  const icon = selectedIcons.get(manifest.id);
+  if (icon) {
+    entry.layout = {
+      ...entry.layout,
+      icon_asset: icon.renderAsset,
+      icon_asset_sha256: icon.renderSha256,
+      icon_selection_sha256: icon.sha256,
+      icon_selection_candidate: icon.candidateId,
+      icon_asset_kind: iconManifest.assetKind,
+    };
   }
   return entry;
 }

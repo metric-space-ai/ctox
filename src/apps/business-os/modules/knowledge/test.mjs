@@ -516,12 +516,17 @@ test('presentation follows compact Business OS knowledge contract', async () => 
   // pane's tabs + second-level switcher are the only navigation into a group.
   assert.doesNotMatch(css, /bundle-caret|knowledge-bundle-items/);
   assert.match(css, /\.bundle-meta\s*\{/);
-  assert.match(css, /\.ctox-column-resizer::before[\s\S]*?left:\s*50%;[\s\S]*?top:\s*50%/);
-  assert.match(css, /@container business-app-window \(max-width:\s*559px\)/);
+  // The full-height divider starts at the top and centers only horizontally.
+  assert.match(css, /\.ctox-column-resizer::before\s*\{[^}]*left:\s*50%;[^}]*top:\s*0;[^}]*transform:\s*translateX\(-50%\)/);
+  assert.deepEqual(
+    [...new Set([...css.matchAll(/@container business-app-window \(max-width:\s*(\d+)px\)/g)].map((match) => Number(match[1])))].sort((a, b) => a - b),
+    [768, 1024],
+    'responsive stages follow the two shell breakpoints',
+  );
   assert.match(css, /\.knowledge-app-overlay\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?inset:\s*0/);
   assert.match(js, /function openKnowledgeOverlay/);
   assert.doesNotMatch(js, /state\.ctx\.open(?:Left|Right|Bottom)Drawer/);
-  assert.match(js, /knowledge-detail-empty/);
+  assert.match(js, /els\.markdownView\.innerHTML = .{0,20}\$\{escapeHtml\(copy\.detailEmptyHint/);
   assert.equal(manifest.layout.min_width, 360);
   assert.equal(manifest.presentation.minimum_size.width, 360);
 });

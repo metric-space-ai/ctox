@@ -292,8 +292,9 @@ test('mail surface provides a progressive inspector workbench and responsive com
   assert.match(html, /data-mail-mailbox-password[^>]+type="password"|type="password"[^>]+data-mail-mailbox-password/);
   assert.match(css, /@container business-app-window \(max-width: 768px\)/);
   assert.match(css, /\.mail-module\.is-inspector-open/);
-  assert.match(source, /function mailActionIcon\(/);
-  assert.match(source, /const MAIL_ICON_FALLBACK_PATHS = Object\.freeze/);
+  assert.match(source, /function renderActionIcons\(ctx, refs\)/);
+  assert.match(source, /ctx\.getActionIcon\?\.\(name\)/);
+  assert.doesNotMatch(source, /MAIL_ICON_FALLBACK_PATHS|function mailActionIcon\(/);
   assert.equal(manifest.layout.shell_contract, 'v2');
   assert.equal(manifest.install_scope, 'store');
   assert.equal(manifest.default_installed, false);

@@ -274,8 +274,13 @@ test('all app launch routes converge on the shared window manager', () => {
   assert.match(appSource, /state\.windowManager\.create\(\{/);
   assert.match(appSource, /ownerId: `desktop-app:\$\{entry\.id\}`/);
   assert.match(appSource, /ownerId: `desktop-app:\$\{mod\.id\}`/);
-  for (const staticAppId of ['explorer', 'file-viewer']) {
-    assert.match(appSource, new RegExp(`id: '${staticAppId}'`));
+  for (const appId of ['explorer', 'file-viewer']) {
+    const manifest = JSON.parse(readFileSync(resolve(businessOsRoot, 'modules', appId, 'module.json'), 'utf8'));
+    assert.equal(manifest.id, appId);
+    assert.equal(manifest.install_scope, 'core');
+    assert.equal(manifest.launch_kind, 'desktop-app');
+    assert.deepEqual(resolveShellWindowContract(manifest), { contract: 'v2', geometryContract: SHELL_WINDOW_GEOMETRY_CONTRACT });
+    assert.equal(launchesInWindow(manifest), true);
   }
   assert.doesNotMatch(appSource, /id:\s*'code-editor',[\s\S]*?title:\s*'Source Editor'/);
   assert.match(appSource, /mountIntegratedModuleSource[\s\S]*?desktop-apps\/code-editor\/app\.js/);

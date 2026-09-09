@@ -1,4 +1,38 @@
 .knowledge-module {
+  position: relative;
+}
+
+/* Forms stay inside their owning app; shell chrome and other windows remain accessible. */
+.knowledge-app-overlay {
+  position: absolute;
+  inset: 0;
+  padding: 12px;
+  overflow: auto;
+}
+.knowledge-app-overlay > .ctox-modal-card {
+  width: min(640px, 100%);
+  max-height: 100%;
+  min-height: 0;
+  overflow: auto;
+}
+
+.knowledge-app-overlay .knowledge-drawer-actions {
+  flex-wrap: wrap;
+}
+.knowledge-app-overlay .knowledge-drawer-actions [data-command-status] {
+  flex: 1 0 100%;
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+}
+.knowledge-app-overlay [data-command-status]:empty {
+  display: none;
+}
+.knowledge-app-overlay .knowledge-drawer-actions button {
+  flex-shrink: 0;
+}
+.knowledge-module {
   /* Module palette = aliases of the shell tokens (app.css/base.css own
      light/dark). */
   --knowledge-bg: var(--bg);
