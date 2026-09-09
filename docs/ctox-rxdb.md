@@ -92,33 +92,30 @@ Consequences (all from `src/apps/business-os/rxdb/README.md`):
 
 The Rust side is a byte-correct port of RxDB 16.20.0 (upstream pin
 `c69c94bb…`, see `src/core/rxdb/PORTING.md` and `vendor/rxdb.version`),
-reduced to the CTOX-as-WebRTC-peer scope. Root `README.md` ("Business OS
-Connectivity", from line 54) defines the relationship: the browser shell may
-be delivered by CTOX itself, ctox.dev, or the desktop app, but business data
-always uses one path — CTOX Sync Engine over WebRTC between browser IndexedDB and the
-CTOX SQLite store.
+reduced to the CTOX-as-WebRTC-peer scope. The
+[README's peer-to-peer sync overview](../README.md#features) describes one
+business-data path: CTOX Sync Engine over WebRTC between browser IndexedDB and
+the native replicated document store. The instance's selected, verified shell
+release determines static asset identity; see the shell artifact boundary
+above. A routing host does not select an independent shell release.
 
 ---
 
 ## 2. The Data Boundary (normative)
 
-Root `README.md:165-176` ("### Data Boundary") is the normative statement.
-Verbatim:
+The [repository's Business OS data boundary](../AGENTS.md#business-os-data-boundary)
+requires WebRTC replication for Business OS collections and module runtime
+data, commands and queue projections, files/chunks, module manifests and native
+runtime status. HTTP may serve static shell assets, bootstrap, status, auth and
+explicit control-plane endpoints; it must not bridge or fall back for these
+business records.
 
-> The following records must never be proxied through HTTP between the
-> browser and CTOX:
->
-> - Business OS collections and module runtime data
-> - `business_commands` and `ctox_queue_tasks`
-> - `desktop_files` and `desktop_file_chunks`
-> - module manifests and native runtime status
->
-> Those records replicate only through RxDB/WebRTC and persist on the CTOX
-> side in `runtime/ctox.sqlite3`.
-
-(On the exact SQLite file see the persistence map in §4 — the document store
-is `runtime/business-os-rxdb.sqlite3`; the README sentence is a boundary-level
-simplification, not a path spec.)
+Replicated documents persist in `runtime/business-os-rxdb.sqlite3`, resolved
+by `store_sync_turn_auth.rs::rxdb_store_path` using `store.rs::RXDB_STORE_FILE`.
+Canonical execution and command state in `runtime/ctox.sqlite3` and domain
+records in `runtime/business-os.sqlite3` remain distinct owners/stores. See
+§4 and [HARNESS.md](../HARNESS.md#business-os-command-architecture) for their
+relationship; no cross-WAL atomicity is implied.
 
 Workspace branding (`business_workspace_branding`) is treated as Business OS
 collection data under the same boundary: update through the Business OS command
@@ -220,6 +217,29 @@ clock-tick information are unavailable, not zero CPU. Field meanings and units
 follow [Linux proc_pid_stat(5)](https://www.man7.org/linux/man-pages/man5/proc_pid_stat.5.html).
 The sampler has a live Linux child-process check in the canonical JS suite;
 a retained CPU profile still requires analysis and is not tenant acceptance.
+
+For source-symbol attribution, the full-host workflow runs a separate context
+reproduction **after** the unprofiled acceptance measurements. Its test-driver
+option `--native-symbol-perf=<executable>` attaches Linux perf only to the owned
+native child after 30 seconds and records user-space CPU samples at 49 Hz for
+at most 30 seconds. PID start identity is checked before attachment; child
+task inheritance and stack/memory capture are disabled. The profiler receives
+SIGINT at the limit (SIGKILL after three more seconds if needed); it never
+signals the native host. Host cleanup waits for bounded profiler finalization.
+The report subprocess has a five-second/two-MiB output bound. Permission errors,
+missing tools, zero samples and oversized recordings are explicit unavailable
+results, not successful profiles. See
+[perf-record(1)](https://man7.org/linux/man-pages/man1/perf-record.1.html).
+
+Artifacts under `ctox-host-proof/symbol-profile/` include tool version, fixture
+exit status, flat symbol report, recording and process identity metadata.
+The workflow requires a successful real Linux owned-child profiler check and
+a nonempty native sample. The original context fixture exit code is preserved.
+These diagnostic timings never replace the command/reload budgets, and a flat
+user-space profile is neither a call graph nor kernel-CPU or tenant acceptance.
+Local process-lifecycle tests cover PID reuse, permission failure, empty samples
+and bounded profiler cleanup; real Linux attribution remains unverified until
+the workflow produces a usable profile.
 
 The authenticated two-profile context fixture persists the exact requester
 command and reviewer result status snapshots before their assertions, outside
@@ -964,7 +984,7 @@ that fails on the pre-fix code.
 | **The desktop-file idle scan must not re-check every chunk of a verified generation.** Newly written or once-verified eager file docs carry `chunk_count` and `generation_verified_at_ms`; unchanged rescans use that marker instead of rebuilding the expected chunk-id list every 15 s. | Materialised large files stayed sticky `available`, but the idle scan still checked every expected chunk id on every pass. Large files therefore created periodic CPU spikes even when no file changed. | `rxdb_peer.rs::desktop_file_generation_verified_by_metadata` / `mark_desktop_file_chunk_generation_verified` | `materialized_large_file_survives_lazy_rescan`; targeted `rxdb_peer.rs` tests |
 | **Active-collection gating must never lose events permanently.** Three sub-rules: (a) a peer that has never reported an active set is fail-open (all relays delivered) until its first report; (b) applying a new active set pushes one resync master-change per re-activated collection (closes the send→apply transit window); (c) the browser runs one checkpoint pull per newly-activated collection on every registry change. | Relays for "inactive" collections are dropped and browser pulls are purely event-driven — each hole left a collection permanently stale (viewer-restart soak mode: the browser file doc stayed `lazy` forever while the native doc was `available`). | `connection_handler_rs.rs::is_collection_active_for_peer` / `apply_active_collections` (+ the resync push in its message loop); relay drop point in `index_mod.rs`; `replication-webrtc.mjs` registry subscription | gating tests in `connection_handler_rs.rs`; `active-collections-catchup-smoke` (browser); viewer-restart soak mode |
 | **The multiplex room handshake carries per-collection checkpoints** (`collectionCheckpoints`, mirroring `collectionSchemas`; key absent for single-collection rooms). | Collections deriving their protocol from the room handshake advertised the REPRESENTATIVE collection's checkpoint epoch — wrong-collection checkpoint evidence after every native restart. | `index_mod.rs::collection_checkpoints_payload`; consumed by `replication-webrtc.mjs::remoteProtocolForCollection` | `handshake_payload_omits_collection_schemas_when_none` |
-| **Native schema-version cleanup runs only after an additive migration copied and verified every source row.** Identity migrations are idempotent, preserve the newer destination row by `lastWriteTime`, and abort peer bring-up when any source id is absent or older in the destination. | Creating v1 metadata/table and crashing before the copy let the next startup classify the non-empty v0 table as stale and delete the only complete thread history. | `rxdb_peer.rs::migrate_additive_native_rxdb_collection_versions`, called after collection registration and before `repair_stale_rxdb_collection_schema_versions` | `additive_thread_schema_migration_copies_and_verifies_before_cleanup` |
+| **Native schema-version cleanup runs only after an additive migration copied and verified every source row.** Identity retries do not rewrite identical rows. A newer destination wins by `lastWriteTime`; equal clocks require equal revision, deletion marker and migrated document. Divergence rolls back that collection's transaction and aborts peer bring-up before cleanup, retaining source evidence for explicit reconciliation. Transactions cover one collection/version pair, not all stores. This guard alone does not provide a backup or recovery rehearsal. | Creating v1 metadata/table and crashing before the copy let the next startup delete the only complete thread history. An equal-clock legacy upsert could also overwrite a destination tombstone. | `rxdb_peer.rs::migrate_additive_native_rxdb_collection_versions`, called after collection registration and before `repair_stale_rxdb_collection_schema_versions` | `additive_thread_schema_migration_copies_and_verifies_before_cleanup`, `native_schema_migration_equal_clock_conflicts_preserve_both_stores`, `native_schema_migration_exact_retry_preserves_tombstones_without_rewrites` |
 | **Runtime app migrations are declared in JSON and enforced natively.** The browser side mirrors declarations (guarded for parity by `assert-declarative-migrations.mjs`) but execution is native-only. Every runtime collection with `version > 0` must provide every intermediate `migration_strategies.<collection>.<targetVersion>` entry. The native peer supports the same `set_from_first_truthy` and `set_boolean` operations as the browser plus identity migrations (`operations: []`). Missing strategies with persisted source rows abort before cleanup. | Browser-only `schema.js` functions left the native v0 store stranded or tempted operators into destructive same-version cleanup; schema changes made in place could also produce DB6 forever. | `shared/declarative-migrations.js`, `module_static_check.mjs`, `rxdb_peer.rs::migrate_additive_native_rxdb_collection_versions` | `runtime_installed_declarative_migration_is_discovered_and_copied`, `native_declarative_migration_matches_browser_operations`, `runtime_migration_without_strategy_retains_old_table_and_fails_closed` |
 | **A terminal `completed` command ack without `task_id` is success.** Control commands (`ctox.file.materialize`, `ctox.module.*`, …) are executed directly and intentionally never get a queue-task projection. | The command bus waited 45 s for a task that never comes — every control command dispatched through it failed. | `command-bus.js::waitForAuthoritativeQueueProjection` | `command-bus-projection-smoke` |
 | **The 410 data-plane gate has an explicit control-plane allowlist** (subscription auth, CTOX release check/apply, `sync/native-peer/restart`). Control routes carry no Business OS records; CTOX release actions are admin-gated and only read release metadata or launch the existing installer, and the peer-restart route additionally answers 403 unless `CTOX_BUSINESS_OS_ENABLE_SMOKE_CONTROLS` is set. This is NOT a precedent for HTTP data routes. | The blanket 410 also killed the peer-lifecycle hook the rollover soak mode uses. | `server.rs::is_business_os_control_plane_path` | rollover soak mode |

@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260909-workjet-project-chats-v364';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260909-workjet-project-chats-v365';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',

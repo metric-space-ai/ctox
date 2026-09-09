@@ -5,7 +5,38 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const vm = require('vm');
-const { runThreadsRightClickPeers, openContextTargetInBrowser } = require('./threads_rightclick_peers.js');
+const { runThreadsRightClickPeers, runRequesterInBrowser, openContextTargetInBrowser } = require('./threads_rightclick_peers.js');
+
+test('direct denial polling retains admission evidence without serializing command credentials', async () => {
+  // Execute the actual browser predicate, including its returned timeout state.
+  const source = runRequesterInBrowser.toString();
+  const start = source.indexOf('const deniedDirectCommand = await waitFor(');
+  const end = source.indexOf(", 30000, 'threads right-click direct native denial');", start);
+  assert.ok(start >= 0 && end > start);
+  const predicate = source.slice(start + 'const deniedDirectCommand = await waitFor('.length, end);
+  for (const status of ['pending_sync', 'failed']) {
+    const record = {
+      id: 'command-1', command_id: 'command-1', status,
+      command_type: 'business_os.data.modify',
+      client_context: { capability_token: 'fixture-bearer', actor: { password: 'fixture-password' } },
+      payload: { prompt: 'private-prompt' },
+      result: { decision: { reason_code: 'role_or_scope_denied', token: 'nested-secret' } },
+    };
+    const state = { db: { raw: { business_commands: { find(query) {
+      assert.equal(query.selector.command_id, record.command_id);
+      return { exec: async () => [record] };
+    } } } } };
+    const result = await vm.runInNewContext('(' + predicate + ')()', {
+      state, docsToJson: docs => docs, deniedCommandId: record.command_id, deniedDispatchError: '',
+    });
+    assert.equal(result.ok, status === 'failed');
+    assert.equal(result.command.status, status);
+    assert.equal(result.command.command_id, record.command_id);
+    assert.equal(result.command.result.decision.reason_code, 'role_or_scope_denied');
+    assert.doesNotMatch(JSON.stringify(result), /fixture-bearer|fixture-password|private-prompt|nested-secret/);
+    assert.ok(record.client_context.capability_token, 'diagnostics must not mutate the stored command');
+  }
+});
 
 
 function targetWindowDriver({ focused = true, failed = false, minimized = false, missing = false, hidden = false } = {}) {

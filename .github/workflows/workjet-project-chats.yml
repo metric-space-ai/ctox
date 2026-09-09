@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: workjet-project-chats-${{ github.event.pull_request.number || github.ref }}
+  group: workjet-project-chats-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -34,6 +34,8 @@ jobs:
           node src/core/rxdb/tools/build_business_os_module_schema_files.mjs
           node src/core/rxdb/tools/build_business_os_schema_contract.mjs
           node src/core/rxdb/tools/build_business_os_schema_hashes.mjs
+          node src/apps/business-os/scripts/generate-module-registry.mjs --check
+          node src/apps/business-os/rxdb/tests/data-plane-guard-smoke.mjs
       - name: Rebuild pinned browser bundle
         env:
           npm_config_cache: ${{ runner.temp }}/workjet-schema-npm

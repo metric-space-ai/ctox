@@ -103,6 +103,7 @@ const zlib = require('zlib');
 const { spawn, spawnSync } = require('child_process');
 const { forwardNativeLogLines } = require('./native_log_lines.js');
 const { startNativeCpuProfile } = require('./native_cpu_profile.js');
+const { startNativeSymbolProfile } = require('./native_symbol_profile.js');
 const { runThreadsRightClickPeers } = require('./threads_rightclick_peers.js');
 const {
   businessOsProductionSmokeModes,
@@ -195,6 +196,10 @@ const nativeBusinessOsSqlitePath = path.join(runtimeRoot, 'runtime/business-os.s
 // it produced a silent 404 boot and a misleading timeout 30s later.
 const pagePath = process.env.SMOKE_PAGE_PATH || '/index.html';
 const smokeMode = process.env.SMOKE_MODE || 'browser-to-rust';
+const nativeSymbolPerf = process.argv.find(arg => arg.startsWith('--native-symbol-perf='))?.slice('--native-symbol-perf='.length) || '';
+if (nativeSymbolPerf && (smokeMode !== 'business-os-threads-rightclick-ui' || !smokeProcessLifecyclePath)) {
+  throw new Error('native symbol profiling requires the isolated context fixture and a process evidence path');
+}
 const SELLIFY_SCALE_POPULATIONS = Object.freeze({
   sellify_activities: 139804,
   sellify_campaigns: 86551,
@@ -4117,6 +4122,7 @@ function staleRustSeedChunkGeneration(seed) {
 }
 
 async function stopChild(child) {
+  if (child?.__ctoxNativeSymbolProfile) await child.__ctoxNativeSymbolProfile.stop('fixture-finalizer');
   if (!child || child.exitCode !== null) return;
   terminateOwnedSmokeChild(child, 'SIGINT', 'smoke-finalizer', 'graceful-stop');
   await new Promise((resolve) => {
@@ -4159,6 +4165,15 @@ function startCtoxServer() {
     startNativeCpuProfile(child, {
       outputPath: smokeProcessLifecyclePath.replace(/\.json$/, '') + '.native-cpu-' + child.pid + '.jsonl',
       phase: () => smokeProcessLifecycle.startupPhase,
+    });
+  }
+  if (nativeSymbolPerf) {
+    child.__ctoxNativeSymbolProfile = startNativeSymbolProfile(child, {
+      outputPrefix: smokeProcessLifecyclePath.replace(/\.json$/, '') + '.native-symbols-' + child.pid,
+      perfExecutable: nativeSymbolPerf,
+    }, {
+      spawnRecord: (executable, args, options) => trackSmokeChild(spawn(executable, args, options), 'native-symbol-profiler'),
+      signalRecord: (recorder, signal, reason) => terminateOwnedSmokeChild(recorder, signal, 'native-symbol-profiler', reason),
     });
   }
   let resolveListening;

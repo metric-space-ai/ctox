@@ -1400,7 +1400,12 @@ function harnessHtml() {
       const [year, month, day] = dateStr.split('-').map(Number);
       const hour = 6 + (Math.floor(index / 4) % 18);
       const minute = (index % 4) * 10;
-      return new Date(year, month - 1, day, hour, minute, 0, 0).getTime();
+      const timestamp = new Date(year, month - 1, day, hour, minute, 0, 0).getTime();
+      // Today's existing chats must already exist, including before 06:00.
+      // A future creation stamp makes submitting a follow-up schedule it.
+      // Explicit future dates retain their real scheduling semantics.
+      return dateStr === localDateString(new Date())
+        ? Math.min(timestamp, Date.now() - 1) : timestamp;
     }
   </script>
 </body>
