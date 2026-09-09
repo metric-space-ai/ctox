@@ -129,6 +129,12 @@ pub trait WebRTCConnectionHandler: Send + Sync {
         super::NativePeerRole::CtoxInstance
     }
 
+    /// A query-only consumer uses the existing browser/replica wire role.
+    /// This is fixed before signaling join, never inferred from remote input.
+    fn is_data_client(&self) -> bool {
+        false
+    }
+
     /// Fresh host credentials for this connection and optional remote challenge.
     /// The host must authorize disclosure to this peer; room membership alone
     /// is not authentication. No provider means the existing anonymous envelope.
