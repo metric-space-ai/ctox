@@ -12,6 +12,8 @@ use serde::Deserialize;
 use std::future::Future;
 
 #[cfg(target_os = "linux")]
+mod image;
+#[cfg(target_os = "linux")]
 mod qemu;
 mod qmp;
 mod x11;

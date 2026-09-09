@@ -52,7 +52,7 @@ pub(super) struct QemuProcess {
     runtime: TempDir,
 }
 
-fn regular_file(path: &Path) -> Result<std::fs::Metadata> {
+pub(super) fn regular_file(path: &Path) -> Result<std::fs::Metadata> {
     ensure!(path.is_absolute(), "QEMU paths must be absolute");
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|_| anyhow!("prepared QEMU file is unavailable"))?;

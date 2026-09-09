@@ -98,6 +98,8 @@ jobs:
             src/core/business_os/guest_runtime/x11.rs \
             src/core/business_os/guest_runtime/qmp.rs \
             src/core/business_os/guest_runtime/qmp/tests.rs \
+            src/core/business_os/guest_runtime/image.rs \
+            src/core/business_os/guest_runtime/image/tests.rs \
             src/core/business_os/guest_runtime/qemu.rs \
             src/core/business_os/guest_runtime/qemu/tests.rs \
             src/core/business_os/guest_runtime/tests.rs \
