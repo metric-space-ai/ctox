@@ -61,9 +61,10 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_INCREMENTAL: '0'
-      CARGO_TARGET_DIR: ${{ runner.temp }}/workjet-project-chats-target
-      TMPDIR: ${{ runner.temp }}
     steps:
+      - name: Configure disposable native build storage
+        run: |
+          printf 'CARGO_TARGET_DIR=%s/workjet-project-chats-target\nTMPDIR=%s\n' "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           ref: ${{ github.event.pull_request.head.sha }}
