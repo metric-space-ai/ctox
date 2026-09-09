@@ -3252,3 +3252,16 @@ test('an inspection receipt marker does not suppress the later worker answer', (
     assert.equal(hooks.hasReplyAlready(chat, tracked, '12 minus 5 ergibt 7.'), true);
   }
 });
+
+
+test('completed tracking keeps syncing until an actual answer arrives', () => {
+  const hooks = __businessChatTestInternals;
+  const tracked = { role: 'ctox', kind: 'status', text: 'Die Bearbeitung hat begonnen.', commandId: 'cmd-final', taskId: 'queue-final', status: 'completed' };
+  const receipt = { role: 'ctox', text: 'Aufgabe in der CTOX Queue angelegt.', replyFor: 'cmd-final', status: 'completed' };
+  const plan = { role: 'ctox', kind: 'status', text: 'Plan aktualisiert', commandId: 'cmd-final', taskId: 'queue-final', status: 'completed' };
+  const chat = { id: 'chat-final', messages: [tracked, receipt, plan] };
+  const state = { chats: [chat] };
+  assert.equal(hooks.hasTrackedMessagesNeedingSync(state), true, 'receipts and plan updates are not the final answer');
+  chat.messages.push({ role: 'ctox', kind: 'reply', text: '12 minus 5 ergibt 7.', commandId: 'cmd-final', taskId: 'queue-final', status: 'completed' });
+  assert.equal(hooks.hasTrackedMessagesNeedingSync(state), false);
+});

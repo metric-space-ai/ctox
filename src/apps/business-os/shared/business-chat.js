@@ -4313,7 +4313,12 @@ function hasTerminalReplyForTracking(chat, trackedMessage) {
   ].filter(Boolean);
   if (!refs.length) return false;
   return (Array.isArray(chat?.messages) ? chat.messages : []).some((message) => {
-    if (!message || message === trackedMessage) return false;
+    if (!message) return false;
+    if (message === trackedMessage && !['reply', 'interim'].includes(message.kind)) return false;
+    // Completion of the task and delivery of its answer are separate updates.
+    // A receipt/plan promoted to completed must not stop answer hydration.
+    if (canonicalTrackingStatus(trackedMessage?.status) === 'completed'
+      && isChatInspectionMessage(message)) return false;
     if (String(message.role || '').toLowerCase() !== 'ctox') return false;
     if (!String(message.text || '').trim()) return false;
     if (!isTerminalTrackingStatus(message.status || 'completed')) return false;
