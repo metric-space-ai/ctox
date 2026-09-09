@@ -1735,6 +1735,28 @@ fn crew_read_is_public(
         ))
 }
 
+fn workjet_record_visible(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    collection: &str,
+    record: &Value,
+) -> anyhow::Result<bool> {
+    if !super::project_chats::has_restricted_reference(collection, record) {
+        return Ok(true);
+    }
+    let actor = resolved_mcp_actor_context(root, context)?;
+    if actor["active"] != true {
+        return Ok(false);
+    }
+    Ok(super::project_chats::document_visible_to_actor(
+        root,
+        collection,
+        record,
+        actor["id"].as_str().unwrap_or_default(),
+    )
+    .unwrap_or(true))
+}
+
 pub fn query_records(
     root: &Path,
     context: &McpChannelRequestContext,
@@ -1752,15 +1774,16 @@ pub fn query_records(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let records = documents
-        .into_iter()
-        .map(|mut record| {
-            if public_crew {
-                crate::crew::public_member_document(&mut record);
-            }
-            record_summary_from_value(collection, record)
-        })
-        .collect::<Vec<_>>();
+    let mut records = Vec::new();
+    for mut record in documents {
+        if !workjet_record_visible(root, context, collection, &record)? {
+            continue;
+        }
+        if public_crew {
+            crate::crew::public_member_document(&mut record);
+        }
+        records.push(record_summary_from_value(collection, record));
+    }
     Ok(BusinessOsMcpList {
         ok: true,
         count: records.len(),
@@ -1805,7 +1828,9 @@ pub fn upsert_record(
     let collection = required_arg(arguments, "collection")?;
     ensure_non_empty("collection", &collection)?;
     enforce_collection_policy(root, &collection)?;
-    if collection_requires_typed_mcp_tool(&collection) {
+    if collection_requires_typed_mcp_tool(&collection)
+        || super::project_chats::is_owned_collection(&collection)
+    {
         return Err(anyhow::Error::new(BusinessOsMcpError::validation(
             "collection",
             format!(
@@ -4006,6 +4031,13 @@ pub fn get_record(
             format!("Business OS record `{record_id}` was not found in `{collection}`"),
         )
     })?;
+    if !workjet_record_visible(root, context, collection, &payload)? {
+        return Err(BusinessOsMcpError::not_found(
+            BusinessOsMcpErrorCode::RecordNotFound,
+            format!("Business OS record `{record_id}` was not found in `{collection}`"),
+        )
+        .into());
+    }
     let mut payload = payload;
     if public_crew {
         crate::crew::public_member_document(&mut payload);
@@ -4029,6 +4061,13 @@ pub fn get_command_status(
                 format!("Business OS command `{command_id}` was not found"),
             )
         })?;
+    if !workjet_record_visible(root, context, "business_commands", &payload)? {
+        return Err(BusinessOsMcpError::not_found(
+            BusinessOsMcpErrorCode::RecordNotFound,
+            format!("Business OS command `{command_id}` was not found"),
+        )
+        .into());
+    }
     Ok(BusinessOsMcpRecordResponse {
         ok: true,
         record: record_summary_from_value("business_commands", payload),

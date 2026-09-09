@@ -30,6 +30,7 @@ pub(crate) mod office_staging_repair;
 mod person_research_command;
 mod person_research_gap_closure;
 pub mod policy;
+mod project_chats;
 mod rxdb_peer;
 mod rxdb_peer_browser;
 mod rxdb_peer_commands;
@@ -61,6 +62,7 @@ mod store_workjet_projects;
 mod store_workjet_sessions;
 mod support;
 mod threads;
+mod worker_profile_bindings;
 pub mod workjet_transfer_git;
 
 pub(crate) use app_runtime::inspect_module as inspect_app_runtime_module;

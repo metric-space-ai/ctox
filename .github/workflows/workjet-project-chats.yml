@@ -1,0 +1,103 @@
+name: Workjet project chats
+
+on:
+  pull_request:
+    branches: [main, codex/native-transport-parity]
+    paths:
+      - '.github/workflows/workjet-project-chats.yml'
+      - 'src/core/business_os/**'
+      - 'src/apps/business-os/modules/**'
+      - 'src/apps/business-os/rxdb/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workjet-project-chats-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  schemas:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.13.1'
+      - name: Verify generated schema contracts
+        run: |
+          node src/core/rxdb/tools/build_business_os_module_schema_files.mjs
+          node src/core/rxdb/tools/build_business_os_schema_contract.mjs
+          node src/core/rxdb/tools/build_business_os_schema_hashes.mjs
+      - name: Rebuild pinned browser bundle
+        env:
+          npm_config_cache: ${{ runner.temp }}/workjet-schema-npm
+        run: |
+          npx -y esbuild@0.28.0 src/apps/business-os/rxdb/src/index.mjs \
+            --bundle --format=esm \
+            --outfile=src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs \
+            "--banner:js=// CTOX Sync Engine app-local bundle. Generated from src/apps/business-os/rxdb/src/index.mjs."
+          git rev-parse HEAD > "${RUNNER_TEMP}/source-revision.txt"
+      - name: Retain generated bundle for review
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workjet-project-chats-generated-bundle
+          path: |
+            src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs
+            ${{ runner.temp }}/source-revision.txt
+          if-no-files-found: error
+      - name: Require committed bundle to match generated source
+        run: git diff --exit-code -- src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs
+
+  native:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: '2'
+      RUST_TEST_THREADS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+      CARGO_TARGET_DIR: ${{ runner.temp }}/workjet-project-chats-target
+      TMPDIR: ${{ runner.temp }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.13.1'
+      - uses: ./.github/actions/build-pi-sidecar
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: '1.93.0'
+          components: rustfmt
+      - name: Native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev sqlite3
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+        with:
+          key: workjet-project-chats-no-debug
+          cache-on-failure: true
+          workspaces: . -> ${{ runner.temp }}/workjet-project-chats-target
+      - name: Format touched native modules
+        run: |
+          rustfmt --check --edition 2021 --config skip_children=true \
+            src/core/business_os/project_chats.rs \
+            src/core/business_os/project_chats/privacy.rs \
+            src/core/business_os/project_chats/tests.rs \
+            src/core/business_os/worker_profile_bindings.rs \
+            src/core/business_os/store_workjet_projects.rs \
+            src/core/business_os/command_plane.rs \
+            src/core/business_os/mcp_channel.rs \
+            src/core/business_os/threads.rs \
+            src/core/business_os/mod.rs
+      - name: Native project-chat and project-store regressions
+        run: |
+          cargo test --locked --bin ctox -- \
+            business_os::project_chats business_os::store_workjet_projects \
+            --test-threads=2

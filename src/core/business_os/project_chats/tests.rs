@@ -1,0 +1,540 @@
+// Origin: CTOX
+// License: AGPL-3.0-only
+use super::*;
+use crate::business_os::store::CommandOrigin;
+use crate::business_os::{mcp_channel, store, threads, worker_profile_bindings};
+use std::sync::{Arc, Barrier};
+use tempfile::{tempdir, TempDir};
+
+fn command(kind: &str, id: &str, payload: Value) -> BusinessCommand {
+    BusinessCommand {
+        id: Some(id.to_owned()),
+        module: "ctox".to_owned(),
+        command_type: kind.to_owned(),
+        record_id: None,
+        payload,
+        client_context: json!({}),
+        origin: CommandOrigin::TrustedLocal,
+    }
+}
+
+fn fixture() -> anyhow::Result<TempDir> {
+    let root = tempdir()?;
+    super::super::store_workjet_projects::tests::create_workjet_rxdb_projection_tables(
+        root.path(),
+    )?;
+    let rxdb = Connection::open(store::rxdb_store_path(root.path()))?;
+    let schemas: Value = serde_json::from_str(include_str!("../business_os_schema_contract.json"))?;
+    for collection in [
+        MEMBERS,
+        worker_profile_bindings::COLLECTION,
+        "user_thread_messages",
+        "business_commands",
+        "ctox_queue_tasks",
+        "ctox_runs",
+        "ctox_harness_events",
+    ] {
+        let version = schemas[collection]["version"]
+            .as_u64()
+            .context("canonical fixture version")?;
+        rxdb.execute_batch(&format!(
+            "CREATE TABLE IF NOT EXISTS ctox_business_os__{collection}__v{version} (
+            id TEXT PRIMARY KEY NOT NULL, revision TEXT, deleted INTEGER NOT NULL DEFAULT 0,
+            lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL);"
+        ))?;
+    }
+    let conn = open_store(root.path())?;
+    store::upsert_business_record(
+        &conn,
+        "workjet_projects",
+        "project",
+        1,
+        json!({"id":"project","name":"Project","owner_user_id":"owner","status":"active","created_at_ms":1,"is_deleted":false}),
+    )?;
+    store::upsert_business_record(
+        &conn,
+        "workjet_computers",
+        "computer",
+        1,
+        json!({"id":"computer","owner_user_id":"owner","status":"assigned","hosting_mode":"workstation","is_deleted":false}),
+    )?;
+    handle_command(
+        root.path(),
+        &command(
+            "ctox.workjet.worker_profile.bind",
+            "bind",
+            json!({"worker_profile_id":"profile-uuid","computer_id":"computer"}),
+        ),
+        "owner",
+    )?;
+    Ok(root)
+}
+
+fn add(root: &Path, id: &str) -> anyhow::Result<Value> {
+    handle_command(
+        root,
+        &command(
+            "ctox.workjet.project.worker.add",
+            id,
+            json!({"project_id":"project","worker_profile_id":"profile-uuid"}),
+        ),
+        "owner",
+    )
+}
+
+fn count(root: &Path, collection: &str) -> anyhow::Result<i64> {
+    Ok(open_store(root)?.query_row(
+        "SELECT count(*) FROM business_records WHERE collection=?1 AND deleted=0",
+        [collection],
+        |row| row.get(0),
+    )?)
+}
+
+fn mcp_context(actor: &str, role: &str) -> mcp_channel::McpChannelRequestContext {
+    mcp_channel::McpChannelRequestContext {
+        channel: "test".into(),
+        surface: "test".into(),
+        actor: actor.into(),
+        workspace: "test".into(),
+        tool: "business_os.query".into(),
+        request_id: "test".into(),
+        confirmation_state: mcp_channel::McpConfirmationState::NotRequired,
+        trusted_role: Some(role.into()),
+        trusted_role_source: Some("test_authenticated_gateway".into()),
+    }
+}
+
+#[test]
+fn concurrent_peer_intents_share_one_group_membership_and_first_private_chat() -> anyhow::Result<()>
+{
+    let root = fixture()?;
+    let barrier = Arc::new(Barrier::new(3));
+    let workers = ["peer-a", "peer-b"].map(|id| {
+        let path = root.path().to_path_buf();
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            add(&path, id)
+        })
+    });
+    barrier.wait();
+    let [a, b] = workers;
+    let a = a.join().expect("first peer")?;
+    let b = b.join().expect("second peer")?;
+    assert_eq!(a["group_chat_id"], b["group_chat_id"]);
+    assert_eq!(a["first_chat_id"], b["first_chat_id"]);
+    assert_eq!(count(root.path(), CHATS)?, 2);
+    assert_eq!(count(root.path(), MEMBERS)?, 1);
+    assert_eq!(count(root.path(), THREADS)?, 2);
+    Ok(())
+}
+
+#[test]
+fn explicit_chats_are_distinct_but_replaying_each_command_preserves_identity() -> anyhow::Result<()>
+{
+    let root = fixture()?;
+    let initial = add(root.path(), "add")?;
+    let create = |id| {
+        handle_command(
+            root.path(),
+            &command(
+                "ctox.workjet.project.chat.create",
+                id,
+                json!({"project_id":"project","worker_profile_id":"profile-uuid","title":"Independent work"}),
+            ),
+            "owner",
+        )
+    };
+    let a = create("first")?; // May not collide with the first-chat discriminator.
+    let b = create("another")?;
+    assert_ne!(a["chat_id"], initial["first_chat_id"]);
+    assert_ne!(a["chat_id"], b["chat_id"]);
+    assert_eq!(a["chat_id"], create("first")?["chat_id"]);
+    assert_eq!(count(root.path(), CHATS)?, 4);
+    Ok(())
+}
+
+#[test]
+fn membership_failure_rolls_back_group_and_membership_without_adopting_old_history(
+) -> anyhow::Result<()> {
+    let root = fixture()?;
+    let collision = stable_id(
+        "workjet_private",
+        &["owner", "project", "profile-uuid", "first"],
+    );
+    store::upsert_business_record(
+        &open_store(root.path())?,
+        THREADS,
+        &collision,
+        1,
+        json!({"id":collision,"title":"Existing unrelated history","participant_ids":["owner"],"status":"open"}),
+    )?;
+    assert!(add(root.path(), "add").is_err());
+    assert_eq!(count(root.path(), CHATS)?, 0);
+    assert_eq!(count(root.path(), MEMBERS)?, 0);
+    assert_eq!(
+        outbound_load_record(&open_store(root.path())?, THREADS, &collision)?.unwrap()["title"],
+        "Existing unrelated history"
+    );
+    Ok(())
+}
+
+#[test]
+fn removing_and_readding_a_worker_keeps_private_history() -> anyhow::Result<()> {
+    let root = fixture()?;
+    let initial = add(root.path(), "add")?;
+    let chat = initial["first_chat_id"].as_str().unwrap();
+    let conn = open_store(root.path())?;
+    let mut history = outbound_load_record(&conn, THREADS, chat)?.unwrap();
+    history["last_message_id"] = json!("existing-message");
+    history["title"] = json!("My separate work");
+    store::upsert_business_record(&conn, THREADS, chat, 2, history)?;
+    handle_command(
+        root.path(),
+        &command(
+            "ctox.workjet.project.worker.remove",
+            "remove",
+            json!({"project_id":"project","worker_profile_id":"profile-uuid"}),
+        ),
+        "owner",
+    )?;
+    assert!(handle_command(
+        root.path(),
+        &command(
+            "ctox.workjet.project.chat.create",
+            "new",
+            json!({"project_id":"project","worker_profile_id":"profile-uuid","title":"Denied"})
+        ),
+        "owner"
+    )
+    .is_err());
+    assert_eq!(
+        add(root.path(), "again")?["first_chat_id"],
+        initial["first_chat_id"]
+    );
+    let history = outbound_load_record(&conn, THREADS, chat)?.unwrap();
+    assert_eq!(history["last_message_id"], "existing-message");
+    assert_eq!(history["title"], "My separate work");
+    Ok(())
+}
+
+#[test]
+fn project_and_profile_checks_refuse_cross_owner_and_unknown_inputs() -> anyhow::Result<()> {
+    let root = fixture()?;
+    for payload in [
+        json!({"project_id":"foreign-instance-project","worker_profile_id":"profile-uuid"}),
+        json!({"project_id":"project","worker_profile_id":"unknown-profile"}),
+        json!({"project_id":"project","worker_profile_id":"profile-uuid","owner_user_id":"owner"}),
+    ] {
+        assert!(handle_command(
+            root.path(),
+            &command("ctox.workjet.project.worker.add", "bad", payload),
+            "owner"
+        )
+        .is_err());
+    }
+    assert!(handle_command(
+        root.path(),
+        &command(
+            "ctox.workjet.project.worker.add",
+            "other",
+            json!({"project_id":"project","worker_profile_id":"profile-uuid"})
+        ),
+        "other-user"
+    )
+    .is_err());
+    assert_eq!(count(root.path(), CHATS)?, 0);
+    Ok(())
+}
+
+#[test]
+fn unassigned_computer_and_unbound_profile_cannot_join_a_project() -> anyhow::Result<()> {
+    let root = fixture()?;
+    handle_command(
+        root.path(),
+        &command(
+            "ctox.workjet.worker_profile.unbind",
+            "unbind",
+            json!({"worker_profile_id":"profile-uuid"}),
+        ),
+        "owner",
+    )?;
+    assert!(add(root.path(), "add").is_err());
+    handle_command(
+        root.path(),
+        &command(
+            "ctox.workjet.worker_profile.bind",
+            "rebind",
+            json!({"worker_profile_id":"profile-uuid","computer_id":"computer"}),
+        ),
+        "owner",
+    )?;
+    let conn = open_store(root.path())?;
+    let mut computer = outbound_load_record(&conn, "workjet_computers", "computer")?.unwrap();
+    computer["status"] = json!("unassigned");
+    store::upsert_business_record(&conn, "workjet_computers", "computer", 2, computer)?;
+    assert!(add(root.path(), "still-denied").is_err());
+    Ok(())
+}
+
+#[test]
+fn binding_uses_existing_core_crew_and_never_creates_an_identity() -> anyhow::Result<()> {
+    let root = fixture()?;
+    let core = Connection::open(crate::paths::core_db(root.path()))?;
+    core.execute_batch(
+        "CREATE TABLE IF NOT EXISTS crew_members (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, shape TEXT NOT NULL, color TEXT NOT NULL,
+        created_at TEXT NOT NULL, archived INTEGER NOT NULL, soul_json TEXT NOT NULL,
+        specialties_json TEXT NOT NULL, stats_json TEXT NOT NULL, updated_at TEXT NOT NULL
+    );",
+    )?;
+    let soul = json!({
+        "gruendlichkeit_vs_tempo":50,"vorsicht_vs_mut":50,"knapp_vs_ausfuehrlich":50,
+        "regeltreu_vs_kreativ":50,"nachfragen_vs_annehmen":50,"sketch":"Existing identity","voice":"Concise"
+    }).to_string();
+    for (id, archived, soul) in [
+        ("existing-crew", false, soul.as_str()),
+        ("archived-crew", true, soul.as_str()),
+        ("malformed-crew", false, "invalid-json"),
+    ] {
+        core.execute("INSERT INTO crew_members
+            (id,name,shape,color,created_at,archived,soul_json,specialties_json,stats_json,updated_at)
+            VALUES (?1,'Existing','round','#123456','2026-09-09',?2,?3,'{}','{}','2026-09-09')",
+            rusqlite::params![id, archived, soul])?;
+    }
+    let bind = |member| {
+        handle_command(
+            root.path(),
+            &command(
+                "ctox.workjet.worker_profile.bind",
+                "crew",
+                json!({"worker_profile_id":"profile-uuid","computer_id":"computer","crew_member_id":member}),
+            ),
+            "owner",
+        )
+    };
+    assert!(bind("made-up-crew").is_err());
+    assert!(bind("archived-crew").is_err());
+    assert!(bind("malformed-crew").is_err());
+    bind("existing-crew")?;
+    let binding = worker_profile_bindings::require_active(
+        &open_store(root.path())?,
+        "owner",
+        "profile-uuid",
+    )?;
+    assert_eq!(binding["worker_profile_id"], "profile-uuid");
+    assert_eq!(binding["crew_member_id"], "existing-crew");
+    let count: i64 = core.query_row("SELECT count(*) FROM crew_members", [], |r| r.get(0))?;
+    assert_eq!(count, 3);
+    Ok(())
+}
+
+#[test]
+fn mcp_private_records_and_related_results_are_hidden_even_from_other_admins() -> anyhow::Result<()>
+{
+    let root = fixture()?;
+    let result = add(root.path(), "add")?;
+    let chat = result["first_chat_id"].as_str().unwrap();
+    let mut projections = Vec::new();
+    persist(
+        &open_store(root.path())?,
+        "user_thread_messages",
+        "private-message",
+        json!({"id":"private-message","thread_id":chat,"body":"Private details","updated_at_ms":1}),
+        &mut projections,
+    )?;
+    persist(
+        &open_store(root.path())?,
+        "business_commands",
+        "private-command",
+        json!({"id":"private-command","command_type":"threads.message.create","payload":{"thread_id":chat,"body":"Private details"},"updated_at_ms":1}),
+        &mut projections,
+    )?;
+    publish(root.path(), &projections)?;
+    for role in ["user", "admin", "chef", "founder"] {
+        let other = mcp_context("other-user", role);
+        assert!(mcp_channel::get_record(root.path(), &other, THREADS, chat).is_err());
+        assert_eq!(
+            mcp_channel::query_records(root.path(), &other, "user_thread_messages", Some(100))?
+                .count,
+            0
+        );
+        assert_eq!(
+            mcp_channel::query_records(root.path(), &other, "business_commands", Some(100))?.count,
+            0
+        );
+        assert_eq!(
+            mcp_channel::list_record_activity(root.path(), &other, THREADS, chat, Some(100))?.count,
+            0
+        );
+        assert!(mcp_channel::get_command_status(root.path(), &other, "private-command").is_err());
+    }
+    let owner = mcp_context("owner", "admin");
+    assert_eq!(
+        mcp_channel::get_record(root.path(), &owner, THREADS, chat)?
+            .record
+            .data["id"],
+        chat
+    );
+    assert_eq!(
+        mcp_channel::query_records(root.path(), &owner, "user_thread_messages", Some(100))?.count,
+        1
+    );
+    Ok(())
+}
+
+#[test]
+fn webrtc_filter_rechecks_project_revocation_and_does_not_trust_snapshot_participants(
+) -> anyhow::Result<()> {
+    let root = fixture()?;
+    let result = add(root.path(), "add")?;
+    let chat = result["first_chat_id"].as_str().unwrap();
+    let conn = open_store(root.path())?;
+    let record = outbound_load_record(&conn, THREADS, chat)?.unwrap();
+    let now = store::now_ms();
+    let (owner, _) = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        "owner",
+        "Owner",
+        "admin",
+        now,
+    )?;
+    let (other, _) = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        "other",
+        "Other",
+        "admin",
+        now,
+    )?;
+    let filter = threads::replication_document_filter(root.path(), &owner, THREADS);
+    assert!(filter(&record));
+    assert!(!threads::may_replicate_document(
+        root.path(),
+        &other,
+        THREADS,
+        &record
+    ));
+    let mut forged = record.clone();
+    forged["owner_user_id"] = json!("other");
+    forged["participant_ids"] = json!(["other"]);
+    assert!(!threads::may_replicate_document(
+        root.path(),
+        &other,
+        THREADS,
+        &forged
+    ));
+    assert!(!threads::may_replicate_document(
+        root.path(),
+        &owner,
+        THREADS,
+        &json!({"id":"workjet_private_foreign-instance","participant_ids":["owner"]})
+    ));
+    let mut project = outbound_load_record(&conn, "workjet_projects", "project")?.unwrap();
+    project["owner_user_id"] = json!("new-owner");
+    store::upsert_business_record(&conn, "workjet_projects", "project", 2, project)?;
+    assert!(!filter(&record));
+    assert!(
+        mcp_channel::get_record(root.path(), &mcp_context("owner", "admin"), THREADS, chat)
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn private_execution_results_follow_native_command_and_task_relationships() -> anyhow::Result<()> {
+    let root = fixture()?;
+    let initial = add(root.path(), "add")?;
+    let chat = initial["first_chat_id"].as_str().unwrap();
+    let conn = open_store(root.path())?;
+    let records = [
+        (
+            "business_commands",
+            "private-intent",
+            json!({
+                "id":"private-intent","command_type":"threads.message.create",
+                "payload":{"thread_id":chat,"body":"Private work"},"updated_at_ms":1
+            }),
+        ),
+        (
+            "ctox_queue_tasks",
+            "private-task",
+            json!({
+                "id":"private-task","command_id":"private-intent","title":"Private task","updated_at_ms":1
+            }),
+        ),
+        (
+            "ctox_runs",
+            "private-run",
+            json!({
+                "id":"private-run","task_id":"private-task","retrospective":"Private result","updated_at_ms":1
+            }),
+        ),
+        (
+            "ctox_harness_events",
+            "private-event",
+            json!({
+                "id":"private-event","task_id":"private-task","title":"Private tool result","updated_at_ms":1
+            }),
+        ),
+    ];
+    let mut projections = Vec::new();
+    for (collection, id, record) in &records {
+        persist(&conn, collection, id, record.clone(), &mut projections)?;
+    }
+    publish(root.path(), &projections)?;
+    for (collection, id, record) in &records {
+        assert_eq!(
+            document_visible_to_actor(root.path(), collection, record, "owner"),
+            Some(true)
+        );
+        assert_eq!(
+            document_visible_to_actor(root.path(), collection, record, "other-user"),
+            Some(false)
+        );
+        assert!(mcp_channel::get_record(
+            root.path(),
+            &mcp_context("other-user", "admin"),
+            collection,
+            id
+        )
+        .is_err());
+        assert_eq!(
+            mcp_channel::query_records(
+                root.path(),
+                &mcp_context("other-user", "admin"),
+                collection,
+                Some(100)
+            )?
+            .count,
+            0
+        );
+    }
+    assert_eq!(
+        document_visible_to_actor(
+            root.path(),
+            "ctox_runs",
+            &json!({"id":"legacy-run","task_id":"unrelated-legacy-task"}),
+            "owner"
+        ),
+        None
+    );
+    Ok(())
+}
+
+#[test]
+fn private_threads_reject_foreign_human_mentions_and_admin_mutation() -> anyhow::Result<()> {
+    let root = fixture()?;
+    let initial = add(root.path(), "add")?;
+    let chat = initial["first_chat_id"].as_str().unwrap();
+    let mut message = command(
+        "threads.message.create",
+        "message",
+        json!({"thread_id":chat,"body":"My private message","target_user_ids":["other-user"]}),
+    );
+    message.module = "threads".into();
+    assert!(command_access_check(root.path(), &message, "owner").is_err());
+    message.payload["target_user_ids"] = json!(["owner"]);
+    command_access_check(root.path(), &message, "owner")?;
+    assert!(command_access_check(root.path(), &message, "other-user").is_err());
+    Ok(())
+}

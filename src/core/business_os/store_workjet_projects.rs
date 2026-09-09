@@ -180,9 +180,10 @@ pub(super) fn handle_workjet_project_upsert_command(
     let name = bounded_required(&payload.name, "name", 256)?;
     let description = optional_bounded(payload.description, "description", 4096)?;
 
-    let conn = open_store(root)?;
+    let mut conn = open_store(root)?;
+    let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let now = super::store::now_ms() as i64;
-    let existing = outbound_load_record(&conn, PROJECTS_COLLECTION, &project_id)?;
+    let existing = outbound_load_record(&transaction, PROJECTS_COLLECTION, &project_id)?;
     ensure_owned(existing.as_ref(), &owner_user_id, "project")?;
     let created_at_ms = existing
         .as_ref()
@@ -220,18 +221,25 @@ pub(super) fn handle_workjet_project_upsert_command(
         project["archived_at_ms"] = Value::from(archived_at_ms);
     }
 
-    let project = persist_and_project_idempotently(
+    let project =
+        persist_idempotently(&transaction, PROJECTS_COLLECTION, &project_id, now, project)?;
+    let mut chat_projections = Vec::new();
+    let group_chat_id =
+        super::project_chats::ensure_default_group(&transaction, &project, &mut chat_projections)?;
+    transaction.commit()?;
+    upsert_rxdb_collection_record(
         root,
-        &conn,
         PROJECTS_COLLECTION,
         &project_id,
-        now,
-        project,
+        project["updated_at_ms"].as_i64().unwrap_or(now),
+        project.clone(),
     )?;
+    super::project_chats::publish(root, &chat_projections)?;
     Ok(serde_json::json!({
         "ok": true,
         "collection": PROJECTS_COLLECTION,
         "project": project,
+        "group_chat_id": group_chat_id,
     }))
 }
 
@@ -355,7 +363,7 @@ fn deterministic_working_copy_id(project_id: &str, computer_id: &str, path: &str
     format!("workjet_wc_{:x}", hasher.finalize())
 }
 
-fn persist_idempotently(
+pub(super) fn persist_idempotently(
     conn: &Connection,
     collection: &str,
     record_id: &str,
@@ -485,10 +493,15 @@ pub(crate) mod tests {
     pub(crate) fn create_workjet_rxdb_projection_tables(root: &Path) -> anyhow::Result<()> {
         fs::create_dir_all(root.join("runtime"))?;
         let conn = Connection::open(rxdb_store_path(root))?;
-        for collection in [PROJECTS_COLLECTION, WORKING_COPIES_COLLECTION] {
+        for (collection, version) in [
+            (PROJECTS_COLLECTION, 0),
+            (WORKING_COPIES_COLLECTION, 0),
+            (super::super::project_chats::CHATS, 0),
+            (super::super::project_chats::THREADS, 1),
+        ] {
             conn.execute(
                 &format!(
-                    "CREATE TABLE ctox_business_os__{collection}__v0 (
+                    "CREATE TABLE IF NOT EXISTS ctox_business_os__{collection}__v{version} (
                         id TEXT PRIMARY KEY NOT NULL,
                         revision TEXT,
                         deleted INTEGER NOT NULL DEFAULT 0,

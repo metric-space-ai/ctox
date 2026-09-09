@@ -198,7 +198,9 @@ pub(super) fn is_threads_owned_collection(collection: &str) -> bool {
 }
 
 pub(super) fn may_accept_peer_write(root: &Path, token: &str, collection: &str) -> bool {
-    if is_threads_owned_collection(collection) {
+    if is_threads_owned_collection(collection)
+        || super::project_chats::is_owned_collection(collection)
+    {
         return false;
     }
     if collection == "ctox_queue_tasks" {
@@ -349,6 +351,11 @@ fn actor_may_replicate_document(
     role: &str,
     collection_read_allowed: bool,
 ) -> bool {
+    if let Some(allowed) =
+        super::project_chats::document_visible_to_actor(root, collection, document, user_id)
+    {
+        return allowed && collection_read_allowed;
+    }
     if is_browser_collection(collection) {
         return browser_document_visible_to_actor(root, collection, document, user_id);
     }
@@ -803,6 +810,7 @@ pub(super) fn handle_business_command(
     session: &BusinessOsSession,
     command: &BusinessCommand,
 ) -> anyhow::Result<Value> {
+    super::project_chats::command_access_check(root, command, &actor_id(session))?;
     anyhow::ensure!(
         command.module == "threads",
         "threads commands require module=threads"

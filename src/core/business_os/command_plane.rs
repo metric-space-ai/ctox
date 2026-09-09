@@ -273,7 +273,7 @@ mod crew_cockpit_tests;
 #[path = "crew_identity_command_tests.rs"]
 mod crew_identity_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 88] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 94] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -346,6 +346,12 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 88] = [
     "ctox.workjet.computer.list",
     "ctox.workjet.computer.unassign",
     "ctox.workjet.project.list",
+    "ctox.workjet.project.chat.ensure",
+    "ctox.workjet.project.chat.create",
+    "ctox.workjet.project.worker.add",
+    "ctox.workjet.project.worker.remove",
+    "ctox.workjet.worker_profile.bind",
+    "ctox.workjet.worker_profile.unbind",
     "ctox.workjet.project.upsert",
     "ctox.workjet.session.create",
     "ctox.workjet.session.delete",
@@ -1023,6 +1029,10 @@ impl CentralCommandPolicyRequirement {
             Some(CommandPolicyRequirement::workspace(
                 BusinessOsPermission::DataRead,
             ))
+        } else if super::project_chats::is_command(command_type) {
+            Some(CommandPolicyRequirement::workspace(
+                BusinessOsPermission::DataWrite,
+            ))
         } else if matches!(
             command_type,
             "ctox.workjet.project.upsert"
@@ -1392,6 +1402,19 @@ fn dispatch_business_command(
         | "ctox.business_os.support.export_diagnostics"
         | "ctox.business_os.why" => {
             handle_business_os_command(root, command).map(BusinessCommandDispatchOutcome::Returned)
+        }
+        kind if super::project_chats::is_command(kind) => {
+            let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
+            let owner = session_user_id(session)
+                .context("authorized Workjet chat command is missing a user identity")?;
+            match super::project_chats::handle_command(root, command, owner) {
+                Ok(outcome) => Ok(BusinessCommandDispatchOutcome::completed(outcome, None)),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
+                    None,
+                    serde_json::json!({"ok": false, "error": error.to_string()}),
+                    error,
+                )),
+            }
         }
         "ctox.workjet.project.list"
         | "ctox.workjet.project.upsert"
