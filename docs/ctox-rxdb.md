@@ -6,6 +6,8 @@ for engineers and coding agents, and every technical claim in it has been
 verified against the cited source file. When this document and the code
 disagree, the code wins — and this document should be fixed.
 
+[Domain application receipts and command recovery](domain-effect-recovery.md) define the native boundary for a committed domain mutation whose RxDB/result delivery failed. Core remains the lifecycle owner; domain receipts are atomic application evidence, not another outbox.
+
 ### Auth-assist command recovery
 
 `web_stack.auth_assist.request` represents an outstanding human login request.

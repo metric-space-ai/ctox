@@ -283,7 +283,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cargo test --locked --bin ctox business_os::command_plane::tests -- --test-threads=2 \
+          cargo test --locked --bin ctox business_os::command_plane:: -- --test-threads=2 \
             | tee "$RUNNER_TEMP/ctox-host-proof/command-completion-tests.log"
           cargo test --locked --bin ctox -- mission::channels::tests::business_command mission::channels::tests::business_control --test-threads=2 \
             | tee "$RUNNER_TEMP/ctox-host-proof/command-transaction-tests.log"
@@ -306,7 +306,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cargo test --locked --bin ctox -- persistence::tests secrets::tests \
+          cargo test --locked --bin ctox -- persistence::tests secrets::tests business_os::domain_effect::tests \
             --nocapture --test-threads=2 \
             | tee "$RUNNER_TEMP/ctox-host-proof/secret-reader-tests.log"
       - name: Context prompt first paint and authorized native command
