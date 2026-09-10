@@ -1,3 +1,17 @@
+# Task roles and worker delegation
+
+Every task has one role. A supervisor task coordinates several main tasks. A
+main/standard task owns a user goal and may use workers when that saves tokens.
+A worker task is a normal Codex task created for another task; its title starts
+with `[WorkerN@Parent title]:` and changes to `#[PRnumber]:` after its PR exists.
+The worker contract also names its parent and worker task IDs. Those title or
+contract markers identify a worker even when the sidebar label is missing.
+
+Only main/standard tasks may delegate. A worker completes its assigned package
+and reports to its named parent; it never creates subworkers or changes the
+hierarchy. If no worker marker or contract is present, treat the task as a
+main/standard task. The supervisor does not implement a parent's package.
+
 # Use workers to save main-task tokens
 
 Workers are an option for reducing the main task's token cost, leaving it more

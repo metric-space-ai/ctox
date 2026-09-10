@@ -172,7 +172,7 @@ def create(args):
         if job.get('worktree') == str(worktree) and not job.get('archived_at'):
             raise ValueError('An unarchived worker already owns this worktree: ' + job['thread_id'] +
                              '. Inspect ' + str(existing) + ' and recover that task; do not create a duplicate.')
-    title = f'[Worker{worker_number}@{args.parent_title}]: {args.title}'
+    title = f'[Worker{worker_number}@{args.parent_title}]: [{args.model}] {args.title}'
     prompt = read(args.prompt_file)
     if not prompt:
         raise ValueError('Assignment must not be empty')
@@ -221,8 +221,9 @@ def create(args):
             thread = result['thread']['id']
             path = JOBS / (thread + '.json')
             prompt_path = JOBS / (thread + '.prompt.md')
-            full_prompt = (prompt + '\n\nIssue: ' + issue['url'] +
-                '\nParent task: ' + args.parent_thread + '\nWorker task: ' + thread +
+            full_prompt = ('Role: Worker Task. Parent task: ' + args.parent_thread +
+                '. Do not create subworkers or delegate.\n\n' + prompt + '\n\nIssue: ' + issue['url'] +
+                '\nWorker task: ' + thread +
                 '\nHelper commands, when needed: ~/.codex/skills/proxy-model-workers/PROTOCOL.md\n')
             job = {'thread_id': thread, 'host_id': 'local', 'parent_thread': args.parent_thread,
                    'project_id': project_id,
@@ -347,7 +348,7 @@ def main():
                 raise ValueError('Worktree HEAD does not equal the pushed PR head')
             pr_number = pr['url'].rstrip('/').split('/')[-1]
             job.update(pr_url=pr['url'], pushed_commit=head, pr_registered_at=timestamp(),
-                       required_title=f"#[PR{pr_number}]: {job['summary']}")
+                       required_title=f"#[PR{pr_number}]: [{job['model']}] {job['summary']}")
         elif args.command == 'record-review':
             if pr['state'] not in ('OPEN', 'MERGED'):
                 raise ValueError('Retrospective requires an open or merged PR')
