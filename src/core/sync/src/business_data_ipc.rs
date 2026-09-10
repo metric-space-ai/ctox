@@ -18,7 +18,13 @@ pub trait BusinessDataDispatcher: Send + Sync {
     /// Must own only this private connection's handles and authorization state.
     /// Dropping its pending future cancels the operation; no detached work.
     fn dispatch(&self, request: Request) -> BusinessDataDispatchFuture;
+    /// Await connection-owned cleanup after request cancellation and before the
+    /// IPC service future completes. The default has no owned resources.
+    fn shutdown(&self) -> BusinessDataShutdownFuture<'_> {
+        Box::pin(async { Ok(()) })
+    }
 }
+pub type BusinessDataShutdownFuture<'a> = Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'a>>;
 pub type BusinessDataConnectionFactory = Arc<
     dyn Fn(CredentialRequester, mpsc::Sender<Event>) -> io::Result<Arc<dyn BusinessDataDispatcher>>
         + Send
@@ -44,6 +50,7 @@ impl BusinessDataIpc {
         let (mut credentials, requester) = credential_channel();
         let (events, mut event_receiver) = mpsc::channel(8);
         let dispatcher = (self.factory)(requester, events)?;
+        let connection_dispatcher = dispatcher.clone();
         let (incoming, mut received) = mpsc::channel(8);
         // Separate futures, not spawned tasks. A partial read is never cancelled
         // merely because a response/event wins a select branch.
@@ -102,10 +109,12 @@ impl BusinessDataIpc {
                 }
             }
         };
-        // Error/EOF/cancellation drops both futures, the dispatcher and the
-        // credential owner. No connection-owned task outlives this service.
-        tokio::try_join!(read, dispatch)?;
-        Ok(())
+        let dispatcher = connection_dispatcher;
+        // Error/EOF/cancellation drops both futures and the credential owner.
+        // Connection-owned cleanup is awaited even when a future failed.
+        let result = tokio::try_join!(read, dispatch);
+        let cleanup = dispatcher.shutdown().await;
+        result.and(cleanup)
     }
 }
 impl IpcService for BusinessDataIpc {
