@@ -22,9 +22,9 @@ import {
   collectionTopic,
   nativeRxdbPeerReady,
   normalizeCollectionReadinessState,
-} from './sync-contract.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
-import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
-import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+} from './sync-contract.js?v=20260910-shell-v2-startup-deadlines-v373';
+import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260910-shell-v2-startup-deadlines-v373';
+import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20260910-shell-v2-startup-deadlines-v373';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
