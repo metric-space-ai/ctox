@@ -35,6 +35,20 @@ function makeLoader({ storage, sidecar, generations, fetches }) {
   });
 }
 
+// The loader owns the scheduler crossing before it invokes its public
+// requestQueryFetch contract. Wait for that invocation instead of assuming a
+// fixed number of microtasks or macrotasks on every host.
+async function waitForFetchInvocation(isInvoked) {
+  const startedAtMs = Date.now();
+  while (!isInvoked()) {
+    assert.ok(
+      Date.now() - startedAtMs < 1_000,
+      'authoritative demand loader did not invoke requestQueryFetch',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
 // Strict reads require a generation and can never come from ordinary defaults.
 {
   const loader = createQueryDemandLoader({
@@ -69,7 +83,7 @@ function makeLoader({ storage, sidecar, generations, fetches }) {
     return originalBulkWrite(rows);
   };
   const pending = loader.resolveQuery({ selector: { id: 'layout' }, requireRevision: 'same-token' });
-  await new Promise((resolve) => setImmediate(resolve));
+  await waitForFetchInvocation(() => typeof releaseFetch === 'function');
   releaseFetch({ documents: [{ id: 'layout', taskbar_pins: ['late'] }], authoritativeRevision: 'late' });
   await assert.rejects(() => pending, (error) => error?.code === 'QUERY_CANCELLED' && error?.generationChanged === true);
   assert.equal(storage.documents.has('layout'), true, 'committed materialization is not rolled back');
