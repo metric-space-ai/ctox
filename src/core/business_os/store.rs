@@ -1426,6 +1426,19 @@ fn refresh_attached_queue_projections(
     if !attached {
         return Ok(());
     }
+    // The store file is attached whenever it exists, but its schema may not
+    // be there yet: the hooks are registered process-wide by the first
+    // open_store, so a root whose store was never opened attaches an empty
+    // file. Without the table there is nothing to refresh.
+    let has_records: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM business_os_projection.sqlite_master
+                       WHERE type = 'table' AND name = 'business_records')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_records {
+        return Ok(());
+    }
     let updated_at_ms = now_ms() as i64;
     for task in tasks {
         let row = conn
