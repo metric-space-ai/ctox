@@ -11,6 +11,10 @@ accepted.
 
 1. Start with one open issue in the target repository. The parent task owns the
    issue analysis, solution sketch, acceptance criteria and bounded handover.
+   The package covers a coherent outcome, including required tests, generated
+   outputs and consumers. Do not fragment it into one worker per file or check.
+   When two independent packages are ready, verify concurrent worker execution
+   with separate ownership while heavy verification remains serialized by the gate.
 2. Check `/Volumes/tmp`, host capacity and the shared heavy-job gate. Put the
    dedicated Git worktree under `/Volumes/tmp/worktrees/...` and route build or
    cache output under `/Volumes/tmp/dev-artifacts/...`.
@@ -76,7 +80,10 @@ active turn and changed source or fresh validation evidence. A successful send,
 an old test result or a correction embedded in a tool output is insufficient. Keep
 the same worktree, provider/model settings, branch and exactly one PR. The
 parent reviews the actual diff, pushed head and validation evidence after every
-rework; worker prose alone is not completion evidence.
+rework; worker prose alone is not completion evidence. The parent consolidates
+findings and resolves ordinary follow-on changes within the agreed outcome in
+this same PR. Supervisor acknowledgement is not a prerequisite for routine rework;
+only material goal/risk changes or cross-parent conflicts need escalation.
 
 ## 4. Retrospective, merge, archive and registry closure
 

@@ -10,8 +10,10 @@ This is the modus operandi for implementation work in main Codex tasks:
    questions and decomposition remain with the main task.
 3. Once the problem is understood, the main task must sketch the solution and
    prepare a written handover: issue, findings/root cause, intended approach, owned
-   files, exclusions, acceptance checks, verification and known risks. Delegate
-   this bounded implementation package to a disposable worker. Do not hand an
+   components, exclusions, acceptance checks, verification and known risks. Delegate
+   a coherent implementation outcome to a disposable worker. Include foreseeable
+   tests, documentation, generated outputs and dependent consumer adjustments in
+   the package. Do not hand an
    unresolved problem or vague goal to an implementation worker.
 4. The worker implements only that package, commits/pushes its changes and submits
    exactly one PR, draft if unfinished. The main task reviews the diff and evidence,
@@ -22,6 +24,46 @@ This is the modus operandi for implementation work in main Codex tasks:
    user's/repository's merge authority, verifies GitHub reports MERGED, checks that
    the retrospective still matches the final head, and archives the idle worker
    as part of the same completion step. The worker must never merge itself.
+
+## Package size and decision ownership
+
+For multi-hour goals, delegate a substantial, independently reviewable outcome,
+not one worker per file, command, test failure or workflow step. Bundle tightly
+coupled changes that share acceptance and would otherwise require stacked PRs
+just to pass the same checks. Split for independent outcomes, meaningful risk or
+ownership boundaries, or a package too large to review; do not bundle unrelated
+work merely to make a worker larger. A small standalone worker needs a concrete
+benefit such as isolation or independent delivery. Otherwise include the change
+in the relevant package before dispatch. Do not invent minimum runtimes or
+require extra planning reports to justify every assignment.
+
+The main task leads multiple workers: decompose a substantial goal into coherent
+packages, identify dependencies, then launch the ready independent packages as a
+parallel wave. This is the default after decomposition, not an optional exception.
+After analysis, dispatch independent, substantial packages concurrently; do not
+wait for one worker's PR to merge before starting an unrelated ready package.
+Start with at most two active implementation workers per parent, subject to shared
+host/provider capacity and other tasks. Give them separate worktrees and clear
+ownership; serialize actual dependencies or overlapping changes. Follow both by
+ID and handle whichever result is actionable. The single shared heavy-job gate
+still serializes builds and heavy tests across the host; it does not require all
+editing or model work to run serially. Never bypass the gate to gain parallelism.
+
+The parent owns routine implementation decisions, review corrections, validation
+and directly required follow-on files within the agreed outcome. Update the
+handover and keep the same worker/PR; do not request supervisor approval for each
+file or correction. Explicit exclusions, other owners' work, privacy boundaries,
+new product behavior and materially different risks still require resolution by
+the responsible owner. The supervisor handles cross-parent conflicts and material
+changes to the overall goal. Reports are notifications, not approval requests.
+Do not wait for acknowledgements or relay unchanged status through the hierarchy.
+Complete the relevant review pass before sending one prioritized correction list
+with locations, expected behavior and acceptance checks. Include available CI and
+subagent findings together; do not dispatch one turn per finding. On the next pass,
+review the correction delta and remaining risks. Reuse analysis and test evidence;
+avoid duplicating the parent's review or full worker history at supervisor level
+unless a concrete failure requires it. Existing PR, publication and archive gates
+remain in force. Do not recreate or combine active workers solely to adopt this rule.
 
 Before selecting a worker, read `~/.codex/proxy-workers/MODEL-EXPERIENCE.md` and
 check `worker.py availability`. Choose using reviewed evidence for that task type;
@@ -141,7 +183,7 @@ and a durable checkpoint; never treat a successful send alone as compliance.
 
 The parent acknowledges by taking the next review/rework/recovery action and
 reports material transitions to its assigned supervisor with send_message_to_thread:
-PR ready, blocked/failed, and finally merged plus archived/cleaned or the exact
+PR ready, blockers/failures needing supervisor action, and finally merged plus archived/cleaned or the exact
 remaining cleanup blocker. Include evidence links and worker ID. For a smoke test,
 explicitly state whether acceptance passed and what remains untested. Never report
 an overall goal complete merely because one worker finished.
