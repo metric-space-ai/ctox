@@ -15,7 +15,10 @@ Keep the brief short:
 
 Run independent packages in parallel when useful. Workers implement and test;
 you review the result and consolidate necessary corrections. Avoid coordination
-that consumes the savings. Use clear English.
+that consumes the savings. Use clear English. Workers report to their parent.
+Parents handle worker and PR updates themselves; contact the supervisor only for
+completed goal outcomes or decisions they cannot resolve. Do not forward routine
+worker updates, review progress, CI status or resource waits.
 
 Once delegated, the worker must use its own tmp worktree and one PR. The parent
 reviews the result, requests rework if needed, then merges and archives the worker.
