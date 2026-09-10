@@ -1,15 +1,15 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
-import { CtoxResizer } from './shared/resizer.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
-import { createAppActions } from './shared/app-actions.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260910-shell-v2-authoritative-pins-v373';
+import { CtoxResizer } from './shared/resizer.js?v=20260910-shell-v2-authoritative-pins-v373';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260910-shell-v2-authoritative-pins-v373';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260910-shell-v2-authoritative-pins-v373';
+import { createAppActions } from './shared/app-actions.js?v=20260910-shell-v2-authoritative-pins-v373';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+} from './shared/app-lifecycle.js?v=20260910-shell-v2-authoritative-pins-v373';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -17,20 +17,20 @@ import {
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+} from './shared/permissions.js?v=20260910-shell-v2-authoritative-pins-v373';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+} from './shared/branding.js?v=20260910-shell-v2-authoritative-pins-v373';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260910-shell-v2-authoritative-pins-v373';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+} from './shared/presentation.js?v=20260910-shell-v2-authoritative-pins-v373';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -41,9 +41,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
-import { createDocumentsFacade } from './shared/documents.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+} from './shared/shell-permissions-ui.js?v=20260910-shell-v2-authoritative-pins-v373';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260910-shell-v2-authoritative-pins-v373';
+import { createDocumentsFacade } from './shared/documents.js?v=20260910-shell-v2-authoritative-pins-v373';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -51,11 +51,11 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+} from './shared/maintenance-state.js?v=20260910-shell-v2-authoritative-pins-v373';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+} from './shared/workspace-session.js?v=20260910-shell-v2-authoritative-pins-v373';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
@@ -68,9 +68,9 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260910-shell-v2-authoritative-pins-v373';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260910-shell-v2-authoritative-pins-v373';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260910-shell-v2-authoritative-pins-v373';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
