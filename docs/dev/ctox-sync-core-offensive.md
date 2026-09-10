@@ -5,6 +5,12 @@ Offensive. Es ist keine Produktionsfreigabe. Der neue native Kern ist noch nicht
 an die Workjet-Ausführung angeschlossen; die alten Ausführungspfade sind daher
 noch aktiv. Ihre Entfernung gehört ausdrücklich zur Abnahme.
 
+Der portable Checkpoint-Vertrag für die spätere Ausführungsanbindung ist in
+[ctox-sync-portable-checkpoint-contract.md](ctox-sync-portable-checkpoint-contract.md)
+dokumentiert. Er verschärft das Manifest auf Version 2 und beschreibt die
+Capture-/Restore-Grenze; er ersetzt noch keinen Codex-/Claude-Adapter und ist
+keine Produktionsfreigabe.
+
 ## Aktueller Abnahmestand
 
 Nachtrag 2026-09-08: Die unten protokollierten grünen Standalone-Sync-Tests
