@@ -221,20 +221,9 @@ def create(args):
             thread = result['thread']['id']
             path = JOBS / (thread + '.json')
             prompt_path = JOBS / (thread + '.prompt.md')
-            full_prompt = ('Issue: ' + issue['url'] + '\n\n' + prompt + '\n\nExecution contract: This is an analyzed, bounded implementation task. '
-                'Read ~/.codex/skills/proxy-model-workers/SKILL.md before work. '
-                'Stay within the assigned scope; return unclear decisions to the parent. '
-                'Do not recursively delegate or merge. Use this tmp-volume worktree and the shared heavy-job gate. '
-                'Before first publication, send the exact diff, all new commits and proposed public text '
-                'to the parent for confidentiality review. Keep private handovers, runtime IDs and local '
-                'operator details out of public text and source. After review, commit, push and open '
-                'a PR before handoff (draft if unfinished). '
-                'After creating the PR, rename this task with set_thread_title to the required_title returned by bind-pr. '
-                'Register the PR with worker.py bind-pr --thread ' + thread + ' --pr PR_URL. '
-                'Actively report PR-ready, rework-ready or actionable blockers with send_message_to_thread '
-                'to parent ' + args.parent_thread + ', including pushed commit, validation gaps, '
-                'remaining processes and cleanup status. Do not rely on a final answer alone. '
-                'If pushing is blocked, preserve source durably and report the blocker.\n')
+            full_prompt = (prompt + '\n\nIssue: ' + issue['url'] +
+                '\nParent task: ' + args.parent_thread + '\nWorker task: ' + thread +
+                '\nHelper commands, when needed: ~/.codex/skills/proxy-model-workers/PROTOCOL.md\n')
             job = {'thread_id': thread, 'host_id': 'local', 'parent_thread': args.parent_thread,
                    'project_id': project_id,
                    'repository': repository, 'issue_url': issue['url'], 'repo': str(repo), 'worktree': str(worktree), 'branch': branch,

@@ -5,7 +5,9 @@ description: Delegate implementation packages to parallel Codex Desktop workers 
 
 # Codex Desktop workers
 
-The main task analyzes and dispatches independent packages in parallel.
+Use workers when they are likely to save main-task tokens after handover and
+review costs. Delegation is optional; do the work yourself when that is cheaper.
+Dispatch independent packages in parallel when useful.
 A short assignment states the problem, outcome, boundaries and success criteria.
 The worker chooses the implementation. The main task consolidates corrections,
 reviews the work and archives the worker after merging its PR.
