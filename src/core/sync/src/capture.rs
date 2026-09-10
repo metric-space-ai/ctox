@@ -271,7 +271,7 @@ fn read_workspace_entry(
             "untracked entry is not a bounded regular file",
         ));
     }
-    let mut file = fs::File::open(path)?;
+    let file = fs::File::open(path)?;
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take(max_blob_bytes + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > max_blob_bytes {
