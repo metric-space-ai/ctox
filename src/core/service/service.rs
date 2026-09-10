@@ -6412,10 +6412,10 @@ fn start_prompt_worker(
                                 },
                             );
                         if result.is_err() {
-                            // Recreate the in-process client after any failed
-                            // slice. The next job resumes the same durable rollout
-                            // instead of trusting possibly broken process-local
-                            // transport state.
+                            // Drop the process-local client after any failed
+                            // slice. The next job must bind the same named
+                            // durable thread; a lookup/resume/turn-start
+                            // failure must not create a replacement thread.
                             *session = None;
                         }
                         result

@@ -2,5 +2,6 @@
 // License: AGPL-3.0-only
 
 pub mod direct_session;
+mod session_continuity;
 pub mod turn_engine;
 pub mod turn_loop;
