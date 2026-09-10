@@ -5,6 +5,10 @@ description: Delegate Codex Desktop coding subtasks to Grok, GLM, Kimi, or OpenA
 
 # Codex Desktop workers
 
+Write assignments and corrections in clear sentences: the problem, expected
+working result, approach and acceptance checks come first. Keep identifiers and
+PR administration in supporting details; do not send cryptic status shorthand.
+
 The parent analyzes and decomposes the goal, then dispatches ready independent
 packages in parallel. There is no fixed worker-count limit: respect actual shared
 host/provider capacity, ownership and dependencies. The heavy-job gate remains

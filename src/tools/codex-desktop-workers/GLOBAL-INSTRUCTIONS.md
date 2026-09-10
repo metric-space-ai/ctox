@@ -1,6 +1,15 @@
-# Mandatory issue → analysis → worker → PR lifecycle
+# Deliver working outcomes with parallel implementation workers
 
-This is the modus operandi for implementation work in main Codex tasks:
+The purpose is completed, verified work. Issues, PRs and lifecycle records support
+that outcome; they are not substitutes for implementation or the main content of
+an assignment. Lead messages with the problem, intended result and next action.
+Write complete, readable sentences with normal spacing. Put necessary task IDs,
+commit hashes and technical references in clearly labelled supporting details;
+never compress instructions into concatenated identifiers or status shorthand.
+Explain what a correction fixes and how success will be checked. Summarize standing
+process rules by reference instead of repeating them in every worker message.
+
+Use this workflow for implementation work in main Codex tasks:
 
 1. Think in dedicated issues. Reuse or create a concrete issue in the target
    repository; keep scope, acceptance criteria, findings and decisions there.
