@@ -731,6 +731,21 @@ class WorkflowIntegrationTest(unittest.TestCase):
         self.assertNotIn("--package", self.workflow)
         self.assertNotIn("--activity", self.workflow)
 
+    def test_focused_suite_runs_in_ci_with_evidence_artifact(self):
+        for path in (
+            "src/scripts/android-framework-diagnostics.py",
+            "tests/test_android_framework_diagnostics.py",
+        ):
+            self.assertIn(f'- "{path}"\n', self.workflow)
+        job = self.workflow.split("  framework-diagnostics-tests:", 1)[1].split("\n  portable:", 1)[0]
+        self.assertIn("timeout-minutes: 5", job)
+        self.assertIn("python3 -m unittest -v tests/test_android_framework_diagnostics.py", job)
+        self.assertIn("android-framework-diagnostics-tests.log", job)
+        upload = job.split("      - name: Upload focused framework diagnostics test log", 1)[1]
+        self.assertIn("if: always()", upload)
+        self.assertIn("if-no-files-found: error", upload)
+        self.assertIn("retention-days: 7", upload)
+
     def test_existing_tablet_assertions_and_profile_are_preserved(self):
         for expected in (
             'profile: "Nexus 9"',
