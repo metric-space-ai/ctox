@@ -142,6 +142,13 @@ untrusted project layer. OpenAI workers do not receive these overrides.
 
 ## Context continuity and publication
 
+After reporting review-ready work or an actionable blocker, end the worker turn
+instead of polling the parent. The parent waits for idle before sending the full
+consolidated correction, and verifies a new turn plus actual execution. A message
+sent to an active Desktop turn can be surfaced as tool output; successful delivery
+does not establish that the correction was followed. Recover a missed correction
+through the same idle worker with its current assignment and private checkpoint.
+
 Compaction is not completion. Keep a concise private checkpoint containing the
 active goal, completed work and evidence, outstanding checks, latest corrections,
 publication restrictions and next responsible task. Recover it after every

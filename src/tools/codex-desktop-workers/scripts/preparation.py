@@ -17,6 +17,7 @@ CONTRACT = (
     'commits and the diff. Report review-ready work or an actionable blocker to the exact parent '
     'task ID with send_message_to_thread before ending the turn. If that tool is unavailable, '
     'persist the pending notification and explain the blocker; never claim delivery. '
+    'After reporting, end the turn and wait for the next user assignment; do not poll the parent. '
     'The parent owns review, merge and archive. Do not merge or archive yourself.'
 )
 

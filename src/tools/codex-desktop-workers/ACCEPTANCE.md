@@ -70,7 +70,10 @@ accepted.
 
 ## 3. Apply parent corrections
 
-Send corrections to the same Desktop task with `send_message_to_thread`. Keep
+Wait until the reporting worker turn has ended, then send the consolidated
+corrections to the same Desktop task with `send_message_to_thread`. Verify a new
+active turn and changed source or fresh validation evidence. A successful send,
+an old test result or a correction embedded in a tool output is insufficient. Keep
 the same worktree, provider/model settings, branch and exactly one PR. The
 parent reviews the actual diff, pushed head and validation evidence after every
 rework; worker prose alone is not completion evidence.

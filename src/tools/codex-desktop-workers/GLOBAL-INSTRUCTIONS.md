@@ -128,6 +128,17 @@ turn. Include worker ID, issue/PR URL (or why none exists), pushed head,
 validation results and gaps, owned processes/lease, and the next required action.
 A PR-ready report is a request for review, not permission to merge or archive.
 
+After reporting, the worker ends its turn; it must not poll the parent or keep the
+turn alive waiting for review. The parent waits for that worker turn to complete
+before sending one consolidated rework assignment, then verifies a new active
+turn and actual progress. Delivery success is not execution evidence: messages
+sent during an active Desktop turn can appear among tool outputs and be missed.
+If corrections were delivered but not acted on, preserve the current assignment
+and latest corrections privately, then resend the consolidated assignment to the
+same idle worker as its next user request. Do not create a replacement or revive
+initialization. Urgent updates during work still need observed acknowledgement
+and a durable checkpoint; never treat a successful send alone as compliance.
+
 The parent acknowledges by taking the next review/rework/recovery action and
 reports material transitions to its assigned supervisor with send_message_to_thread:
 PR ready, blocked/failed, and finally merged plus archived/cleaned or the exact
