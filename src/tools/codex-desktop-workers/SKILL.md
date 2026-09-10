@@ -5,28 +5,18 @@ description: Delegate Codex Desktop coding subtasks to Grok, GLM, Kimi, or OpenA
 
 # Codex Desktop workers
 
-Delegate only after the parent has analyzed and bounded the task. The assignment
-must include the analysis/findings, owned components and expected files, explicit exclusions, acceptance
-criteria and validation commands. Keep unresolved architecture, ambiguous scope
-and task decomposition with the parent. Workers implement the specified package
-and return unexpected design decisions for clarification. Size packages around a
-reviewable outcome, including its tests, documentation, generated artifacts and
-dependent consumers. Do not create separate workers for each file, failed check
-or mechanical step of that outcome. Prefer substantial coherent packages for
-multi-hour goals; small standalone packages need a concrete isolation or delivery
-benefit. Avoid unrelated batching or arbitrary minimum runtimes. Dispatch ready,
-independent packages concurrently, initially at most two active workers per
-parent within shared capacity. Use separate worktrees and clear ownership; only
-actual dependencies or overlaps require serial execution. A pending PR does not
-block another independent package. The shared heavy-job gate remains exclusive
-across all tasks even while workers edit concurrently.
+The parent analyzes and decomposes the goal, then dispatches ready independent
+packages in parallel. There is no fixed worker-count limit: respect actual shared
+host/provider capacity, ownership and dependencies. The heavy-job gate remains
+exclusive across tasks while independent workers can edit concurrently.
 
-The parent can resolve ordinary follow-on changes and consolidated review fixes
-within that outcome, updating the same worker's handover and PR without supervisor
-approval. Respect explicit exclusions and other owners' work. Escalate material
-goal/risk changes or cross-parent conflicts, not routine execution. Keep reports
-brief and evidence-linked; a status notification does not require acknowledgement
-before authorized work continues. See GLOBAL-INSTRUCTIONS.md for decision ownership.
+Give each worker a coherent outcome with findings, intended approach, owned
+components, exclusions and acceptance checks, including foreseeable tests,
+documentation, generated files and consumers. Do not split by file or mechanical
+step. Keep unresolved architecture with the parent. The parent consolidates
+review findings and handles routine follow-on changes in the same worker/PR;
+escalate material goal/risk changes or cross-parent conflicts, not routine rework.
+Reports are notifications, not requests to wait for supervisor acknowledgement.
 
 The parent may send follow-up instructions and corrections through
 `send_message_to_thread` to the same task. Keep its worktree, provider and branch;

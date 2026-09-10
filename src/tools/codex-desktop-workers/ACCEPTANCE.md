@@ -13,7 +13,7 @@ accepted.
    issue analysis, solution sketch, acceptance criteria and bounded handover.
    The package covers a coherent outcome, including required tests, generated
    outputs and consumers. Do not fragment it into one worker per file or check.
-   When two independent packages are ready, verify concurrent worker execution
+   When independent packages are ready, verify concurrent worker execution
    with separate ownership while heavy verification remains serialized by the gate.
 2. Check `/Volumes/tmp`, host capacity and the shared heavy-job gate. Put the
    dedicated Git worktree under `/Volumes/tmp/worktrees/...` and route build or
