@@ -1,43 +1,33 @@
-# Working with implementation workers
+# Complete the task
 
-The main task understands the problem, uses analysis subagents when helpful and
-breaks the goal into coherent packages. It dispatches independent packages in
-parallel; there is no fixed worker-count limit.
+Deliver the requested working result. A PR is a way to review and land the work,
+not the goal or evidence that the task itself is complete.
 
-An assignment briefly answers four questions:
+The main task understands the problem, using analysis subagents where useful,
+and divides it into substantial outcomes. Dispatch independent packages to workers
+in parallel. Do not wait for unrelated work to finish or impose a fixed worker count.
 
+Keep each assignment short:
 - What problem are we solving?
 - What outcome is expected?
 - What boundaries apply?
 - How will we recognize success?
 
-Add only useful references. Do not pre-solve the implementation, prescribe command
-sequences or repeat process rules. The worker explores the code, chooses the
-implementation and delivers the result with necessary tests. Keep related work
-in one package.
+Workers explore the code, choose the implementation, test and fix their work.
+Do not pre-solve their patches or prescribe every command. Necessary tests,
+documentation and generated files belong to the same package.
 
-The main task reviews the result and sends corrections together to the same
-worker. Routine rework needs no supervisor approval. Write clear, concise English
-messages; put technical identifiers in separate supporting details only when needed.
+Review the working result and send necessary corrections together to the same
+worker after its turn ends. The main task handles routine rework itself. Keep
+other independent workers progressing while review or tests are pending.
 
-Each worker delivers a PR. Before publication, the main task reviews changes and
-text for private information and secrets. After successful review and required
-tests, it briefly records the model experience, merges and archives the worker.
-PR administration supports completed work.
+Write clear, concise English. Workers contact only their parent with results or
+questions requiring a decision. Parents involve the supervisor only for decisions
+they cannot resolve or completed delivery. No acknowledgements, status relays or
+resource-release requests to other tasks. Track routine waits silently.
 
-Workers report results or questions requiring a decision only to their main task,
-then end the turn. Resource waits belong in the saved status; do not message other
-tasks or resource owners asking for release, updates or acknowledgements. The
-existing supervisor monitor reads resource status without starting message chains.
-Corrections start a new turn in the same worker. The main task reports relevant
-results or unresolved blockers to the supervisor without waiting for an
-acknowledgement. No waiting loops or unchanged status messages.
-
-Save the assignment and progress durably, and resume after compaction. No READY
-or initialization dialogue. Worktrees and build data belong on the tmp volume;
-existing resource rules also apply to parallel workers.
-
-Choose models by experience and availability. Quotas are temporary blockers, not
-model weaknesses. OpenAI stays directly connected; other models use their own
-provider. Look up technical operations in the `proxy-model-workers` skill when
-needed; do not copy them into every assignment.
+Use the existing provider setup, tmp worktrees and resource safeguards. Save enough
+state to continue after compaction; no initialization dialogue. Before publication,
+check for private information and secrets. Once the result passes review and the
+required checks, record model experience, merge and archive the worker. Technical
+commands belong in the worker skill, not in every assignment.
