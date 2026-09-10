@@ -1,15 +1,15 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
-import { CtoxResizer } from './shared/resizer.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
-import { createAppActions } from './shared/app-actions.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260910-shell-v2-startup-deadlines-v373';
+import { CtoxResizer } from './shared/resizer.js?v=20260910-shell-v2-startup-deadlines-v373';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260910-shell-v2-startup-deadlines-v373';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260910-shell-v2-startup-deadlines-v373';
+import { createAppActions } from './shared/app-actions.js?v=20260910-shell-v2-startup-deadlines-v373';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+} from './shared/app-lifecycle.js?v=20260910-shell-v2-startup-deadlines-v373';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -17,20 +17,20 @@ import {
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+} from './shared/permissions.js?v=20260910-shell-v2-startup-deadlines-v373';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+} from './shared/branding.js?v=20260910-shell-v2-startup-deadlines-v373';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260910-shell-v2-startup-deadlines-v373';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+} from './shared/presentation.js?v=20260910-shell-v2-startup-deadlines-v373';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -41,9 +41,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
-import { createDocumentsFacade } from './shared/documents.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+} from './shared/shell-permissions-ui.js?v=20260910-shell-v2-startup-deadlines-v373';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260910-shell-v2-startup-deadlines-v373';
+import { createDocumentsFacade } from './shared/documents.js?v=20260910-shell-v2-startup-deadlines-v373';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -51,16 +51,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+} from './shared/maintenance-state.js?v=20260910-shell-v2-startup-deadlines-v373';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+} from './shared/workspace-session.js?v=20260910-shell-v2-startup-deadlines-v373';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+} from './shared/taskbar-pins.js?v=20260910-shell-v2-startup-deadlines-v373';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -68,9 +68,17 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260910-shell-v2-startup-deadlines-v373';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260910-shell-v2-startup-deadlines-v373';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260910-shell-v2-startup-deadlines-v373';
+import {
+  LAUNCH_CONTEXT_DEADLINE_MS,
+  SHELL_GENERATION_PROBE_DEADLINE_MS,
+  cancelStartupResponseBody,
+  isStartupDeadlineError,
+  shouldPropagateGenerationProbeError,
+  withStartupDeadline,
+} from './shared/startup-deadlines.js?v=20260910-shell-v2-startup-deadlines-v373';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -85,7 +93,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260909-shell-v2-crew-terminal-evidence-v372';
+const APP_BUILD = '20260910-shell-v2-startup-deadlines-v373';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -932,12 +940,20 @@ async function importBusinessOsModule(url, label) {
     } catch (error) {
       lastError = error;
       try {
-        const generationProbe = await fetch(`app.js?v=${APP_BUILD}`, { cache: 'no-store' });
-        if (scheduleShellGenerationReload(generationProbe)) {
+        const generationProbe = await withStartupDeadline(
+          (probeSignal) => fetch(`app.js?v=${APP_BUILD}`, { cache: 'no-store', signal: probeSignal }),
+          SHELL_GENERATION_PROBE_DEADLINE_MS,
+          `Shell generation probe timed out after ${SHELL_GENERATION_PROBE_DEADLINE_MS / 1000} seconds.`,
+        );
+        const reloadGeneration = scheduleShellGenerationReload(generationProbe);
+        await cancelStartupResponseBody(generationProbe);
+        if (reloadGeneration) {
           throw new Error(`${label} belongs to an inactive shell generation`);
         }
       } catch (generationError) {
-        if (shellGenerationReloadGuard.scheduled) throw generationError;
+        if (shouldPropagateGenerationProbeError(generationError, shellGenerationReloadGuard.scheduled)) {
+          throw generationError;
+        }
       }
       if (attempt < retryDelaysMs.length - 1) {
         console.warn(`[business-os] ${label} temporarily unavailable; retrying`, error);
@@ -10472,8 +10488,13 @@ async function loadLaunchContext() {
   }
   let payload;
   try {
-    payload = await fetchBusinessOsControlJson('/api/business-os/launch-context');
+    payload = await withStartupDeadline(
+      (signal) => fetchBusinessOsControlJson('/api/business-os/launch-context', { signal }),
+      LAUNCH_CONTEXT_DEADLINE_MS,
+      `Business OS launch context timed out after ${LAUNCH_CONTEXT_DEADLINE_MS / 1000} seconds.`,
+    );
   } catch (error) {
+    if (isStartupDeadlineError(error)) throw error;
     throw new Error(`Business OS launch context could not be loaded: ${error?.message || error}`);
   }
   const hasOwn = (key) => Object.prototype.hasOwnProperty.call(payload || {}, key);
@@ -10506,6 +10527,7 @@ async function fetchBusinessOsControlJson(url, options = {}) {
     body: options.body,
     credentials: 'same-origin',
     cache: 'no-store',
+    signal: options.signal,
   });
   const text = await response.text();
   let payload = null;
@@ -14296,6 +14318,10 @@ function getFriendlyErrorMessage(error) {
     title = `${instanceName} konnte nicht geladen werden`;
     description = 'Die CTOX-Instanz hat den Zugriff auf die benötigten Business-OS-Daten abgelehnt. Der verwaltete Workspace wurde deshalb sicher gestoppt.';
     advice = 'Bitte die Berechtigungen dieser ctox.dev-Verbindung prüfen. Eine lokale Ersatzoberfläche wird nicht verwendet.';
+  } else if (isStartupDeadlineError(error)) {
+    title = 'Netzwerk-Zeitüberschreitung beim Start';
+    description = 'Eine benötigte Startanfrage hat nicht rechtzeitig geantwortet.';
+    advice = 'Bitte auf "Erneut versuchen" klicken. Bleibt die Meldung bestehen, prüfen Sie die Netzwerkverbindung und den CTOX-Dienst.';
   } else if (msg.includes('WebCrypto') || msg.includes('subtle') || !globalThis.crypto?.subtle) {
     title = 'Sicherer Kontext erforderlich (WebCrypto fehlt)';
     description = 'Safari blockiert notwendige Verschlüsselungsfunktionen, wenn die Seite über die IP-Adresse "127.0.0.1" geladen wird.';
