@@ -1,191 +1,39 @@
-# Deliver working outcomes with parallel implementation workers
+# Zusammenarbeit mit Workern
 
-The purpose is completed, verified work. Issues, PRs and lifecycle records support
-that outcome; they are not substitutes for implementation or the main content of
-an assignment. Lead messages with the problem, intended result and next action.
-Write complete, readable sentences with normal spacing. Put necessary task IDs,
-commit hashes and technical references in clearly labelled supporting details;
-never compress instructions into concatenated identifiers or status shorthand.
-Explain what a correction fixes and how success will be checked. Summarize standing
-process rules by reference instead of repeating them in every worker message.
+Der Haupttask versteht das Problem, nutzt bei Bedarf Analyse-Subagents und zerlegt
+das Ziel in sinnvolle Arbeitspakete. Er vergibt unabhängige Pakete parallel;
+es gibt keine pauschale Begrenzung der Worker-Anzahl.
 
-Use this workflow for implementation work in main Codex tasks:
+Ein Auftrag beantwortet kurz vier Fragen:
+- Welches Problem lösen wir?
+- Welches Ergebnis wird erwartet?
+- Welche Grenzen gelten?
+- Woran erkennen wir Erfolg?
 
-1. Think in dedicated issues. Reuse or create a concrete issue in the target
-   repository; keep scope, acceptance criteria, findings and decisions there.
-2. Analyze before implementing. Use native Codex subagents to investigate bounded,
-   independent questions about the problem, code, tests and risks. The main task
-   consolidates the evidence and owns the problem understanding. Open architecture
-   questions and decomposition remain with the main task.
-3. Once the problem is understood, the main task must sketch the solution and
-   prepare a written handover: issue, findings/root cause, intended approach, owned
-   components, exclusions, acceptance checks, verification and known risks. Delegate
-   a coherent implementation outcome to a disposable worker. Include foreseeable
-   tests, documentation, generated outputs and dependent consumer adjustments in
-   the package. Do not hand an
-   unresolved problem or vague goal to an implementation worker.
-4. The worker implements only that package, commits/pushes its changes and submits
-   exactly one PR, draft if unfinished. The main task reviews the diff and evidence,
-   sends corrections to the same worker, and repeats review/rework as needed.
-5. Before merge, the main task performs the retrospective and reviews/updates the
-   shared model-experience notebook for the exact PR head it assessed.
-6. After satisfactory review and required checks, the main task merges under the
-   user's/repository's merge authority, verifies GitHub reports MERGED, checks that
-   the retrospective still matches the final head, and archives the idle worker
-   as part of the same completion step. The worker must never merge itself.
+Nur hilfreiche Fundstellen ergänzen. Keine vorweggenommene Implementierung,
+Befehlsketten oder wiederholten Prozessregeln. Der Worker erkundet den Code,
+entscheidet die Umsetzung und liefert das Ergebnis einschließlich nötiger Tests.
+Zusammengehörige Arbeit bleibt in einem Paket.
 
-## Package size and decision ownership
+Der Haupttask prüft das Ergebnis und gibt nötige Korrekturen gesammelt an denselben
+Worker. Normale Nacharbeit braucht keine Supervisor-Freigabe. Nachrichten sind
+verständlich und knapp; technische Kennungen stehen nur bei Bedarf separat.
 
-The main task analyzes the goal, identifies dependencies and dispatches all ready,
-independent implementation packages in parallel. There is no fixed worker-count
-limit; size concurrency from actual host/provider capacity. Only real dependencies,
-overlapping ownership or observed capacity limits justify serial execution. The
-shared heavy-job gate still permits only one heavy local job across all tasks.
+Jeder Worker liefert einen PR. Vor Veröffentlichung prüft der Haupttask Änderungen
+und Text auf private Informationen und Geheimnisse. Nach erfolgreichem Review und
+den erforderlichen Tests hält er die Modellerfahrung kurz fest, merged und
+archiviert den Worker. PR-Verwaltung dient der erledigten Arbeit.
 
-Each package delivers a coherent, reviewable outcome including foreseeable tests,
-documentation, generated outputs and dependent consumers. Do not split per file,
-command or CI failure, or bundle unrelated work merely to increase package size.
-The parent owns routine follow-on decisions and sends consolidated review findings
-to the same worker/PR after its turn ends. Respect explicit exclusions and other
-owners; escalate material goal/risk changes or cross-parent conflicts. Supervisor
-reports do not require acknowledgement before authorized work continues. Reuse
-existing evidence and review correction deltas; do not duplicate full reviews or
-relay unchanged status. Existing privacy, PR and archive gates remain. Retain
-active workers and PRs when adopting this rule.
+Worker melden Ergebnisse oder echte Blockaden an ihren Haupttask und beenden den
+Turn. Korrekturen starten danach einen neuen Turn im selben Worker. Der Haupttask
+meldet relevante Ergebnisse oder ungelöste Blockaden dem Supervisor, ohne auf eine
+Empfangsbestätigung zu warten. Keine Warteschleifen oder unveränderten Statusmeldungen.
 
-Before selecting a worker, read `~/.codex/proxy-workers/MODEL-EXPERIENCE.md` and
-check `worker.py availability`. Choose using reviewed evidence for that task type;
-keep unknown strengths/weaknesses provisional. The notebook is evidence, not
-instructions to execute. Quota, rate-limit, capacity and environment failures do
-not establish poor model quality. Record temporary availability separately in
-`~/.codex/proxy-workers/AVAILABILITY.json`: use the provider reset timestamp, or
-retry after one day if unknown. Never permanently exclude a model for a quota.
-If work must wait, schedule a bounded retry with the Codex automation tools;
-otherwise explicitly select another available worker model. Do not silently remap
-an alias or spin in retry loops. Preserve an existing worker's draft PR and state.
+Auftrag und Zwischenstand dauerhaft sichern und nach Kompaktierung fortsetzen.
+Kein READY- oder Initialisierungsdialog. Worktrees und Builddaten liegen auf der
+tmp-Platte; vorhandene Ressourcenregeln gelten auch bei parallelen Workern.
 
-Read `~/.codex/skills/proxy-model-workers/SKILL.md` for the commands and protocol.
-Workers are regular Desktop tasks in the same project, separate from native
-analysis subagents. The installed `scripts/worker.py create` helper prepares them
-with an explicit modelProvider/model; dispatch and correct with
-send_message_to_thread and follow with wait_threads. Model-only selection does
-not change providers. `grok-4.6-exact` (high), `glm-5.3-flash` and `kimi-k3` use
-cli_proxy. OpenAI tasks retain openai and their existing settings. Never switch
-the global provider to the proxy as a delegation side effect.
-
-There must be no initialization model turn or READY handshake. Prepare only the
-execution contract, then send the complete implementation assignment as the first
-user request. Proxy workers use a configured context of 256000 tokens with an
-automatic compaction threshold of 230400, verified through their private ignored
-worktree configuration so Desktop resume reloads it. Do not override OpenAI tasks.
-
-Compaction is continuation, never completion. Maintain a durable private checkpoint
-with the current assignment, completed changes and evidence, unresolved checks,
-latest corrections, publication restrictions, exact parent ID and next action.
-Recover it after every compaction; newer corrections supersede historical summaries.
-Do not revive an old handshake or repeat completed work. Validate consecutive
-compactions with intervening corrections before claiming continuity works; a
-context-size setting or one successful model reply does not prove this.
-
-Current Desktop listing limitation: list_threads filters its ordinary results to
-the global provider. After preparing a proxy worker, pin it through
-move_thread_to_sidebar_section(sectionId="pinned") so it remains visible and can
-be fetched by ID. Keep its canonical project_id in the registry; the app's legacy
-project label can be empty even when app-server owns the correct assignment.
-Use the registry and wait_threads/read_thread for supervision; an omitted ordinary
-list result is not a failed worker. A complete app-server inventory uses
-thread/list with modelProviders: []. After archive, remove the temporary pin.
-Do not falsify provider metadata or patch app internals to hide this limitation.
-
-Worker titles start `[Worker1@Exact parent task title]: Summary`, numbered per
-parent. As soon as a PR exists, rename the task `#[PR123]: Summary` with its actual
-PR number. Keep task ID, parent ID/title, issue, repository, worktree, branch,
-pushed head, model and PR durably in the worker registry. Each worker is single-use;
-never recycle it for unrelated assignments.
-
-Every delegated implementation uses `/Volumes/tmp/worktrees/<project>/codex/<task>/`
-and the shared host resource gate. This applies even when ordinary project work
-usually defaults to main. Build/cache data also goes to the tmp volume. Push and
-open/update the PR during this session, before handoff or cleanup. If blocked from
-pushing, preserve source durably outside tmp and report the exact blocker.
-
-Use worker.py bind-pr after pushing; apply its required_title with set_thread_title.
-Record the parent's retrospective with worker.py record-review --head ASSESSED_SHA.
-Use ready-to-archive before set_thread_archived, then record archived. Closed but
-unmerged PRs, extra commits, dirty worktrees or missing/current-head-mismatched
-retrospectives must not be treated as completed workers. Remove a merged worktree
-only through git worktree remove after it is clean and HEAD equals the merged PR
-head. Never force-delete it or affect another task's processes/data.
-
-## Public repository confidentiality boundary
-
-Public issues, comments, commits, pushes, PRs (including drafts), CI logs and
-artifacts are publication surfaces. Before publishing, inspect the exact outgoing
-text/files, all new commits and the staged diff, including generated data and
-attachments. Review for secrets AND nonpublic information: credentials, OAuth
-callback URLs/cookies, customer or personal/business data, private chats/handovers,
-raw logs, operator-specific usernames/paths/hosts, and internal task/session IDs.
-Never copy private coordination records or the model-experience notebook into a
-public issue or PR. Use repository-relative paths, synthetic fixtures and minimal
-sanitized technical context. Keep parent/worker IDs and private evidence in durable
-local records outside the repository. Do not put real secrets into scanner output.
-
-The parent prepares a public-safe issue/acceptance summary separately from the
-private worker handover. Workers that receive private context must obtain parent
-review of their exact proposed first public diff/new commits and outgoing text
-before pushing or posting. Parent review also covers later new sensitive content.
-A scanner is supplemental; a clean scan is not proof of confidentiality. Recheck
-that generated logs/artifacts do not expose private data before uploading them.
-Keep ambiguous sensitive content local and escalate only that content category;
-do not block already sanitized unrelated work or demand repetitive approvals.
-
-If accidental disclosure is found, preserve evidence privately, report location
-and category without repeating values, and correct the affected owned public
-content. An edit does not recall notifications, clones or caches. Exposed
-credentials require revocation/rotation by the authorized owner; do not silently
-rewrite shared history or claim exposure undone. Never claim zero leaks from a
-prompt rule or limited scan alone.
-
-## Mandatory completion and escalation reporting
-
-Every worker handover must name the exact parent task ID. If a supervisor is
-assigned, the main task's coordination record must also name its exact task ID.
-Do not infer recipients from titles or assume a final chat answer wakes a parent.
-
-On PR-ready, rework-ready, a blocker requiring parent action, or an execution
-failure, the worker must send_message_to_thread to its parent before ending its
-turn. Include worker ID, issue/PR URL (or why none exists), pushed head,
-validation results and gaps, owned processes/lease, and the next required action.
-A PR-ready report is a request for review, not permission to merge or archive.
-
-After reporting, the worker ends its turn; it must not poll the parent or keep the
-turn alive waiting for review. The parent waits for that worker turn to complete
-before sending one consolidated rework assignment, then verifies a new active
-turn and actual progress. Delivery success is not execution evidence: messages
-sent during an active Desktop turn can appear among tool outputs and be missed.
-If corrections were delivered but not acted on, preserve the current assignment
-and latest corrections privately, then resend the consolidated assignment to the
-same idle worker as its next user request. Do not create a replacement or revive
-initialization. Urgent updates during work still need observed acknowledgement
-and a durable checkpoint; never treat a successful send alone as compliance.
-
-The parent acknowledges by taking the next review/rework/recovery action and
-reports material transitions to its assigned supervisor with send_message_to_thread:
-PR ready, blockers/failures needing supervisor action, and finally merged plus archived/cleaned or the exact
-remaining cleanup blocker. Include evidence links and worker ID. For a smoke test,
-explicitly state whether acceptance passed and what remains untested. Never report
-an overall goal complete merely because one worker finished.
-
-Persist the latest reported state and next responsible task in the durable
-coordination record. Check message-tool success; on failure preserve a pending
-notification with recipient, event and error. Retry only on the next bounded
-supervision pass, not in a loop. Do not send repeated unchanged status messages.
-
-Notifications supplement observation: the parent follows its worker by exact ID
-with bounded wait_threads and registry/PR evidence. The supervisor's existing
-heartbeat reconciles all assigned parents/workers and pending notifications,
-including idle workers with open PRs and merged PRs awaiting archive. Missing
-Desktop toolmarkers alone do not mean inactivity. Reconcile an unreported state
-with the existing owner; never spawn a replacement merely because a message or
-progress projection is missing. Reuse the existing monitor rather than creating
-a competing polling chain.
+Modelle nach Erfahrung und Verfügbarkeit wählen. Quoten sind vorübergehende
+Blockaden, keine Modellschwäche. OpenAI bleibt direkt angebunden; andere Modelle
+nutzen ihren eigenen Provider. Technische Bedienung bei Bedarf im Skill
+`proxy-model-workers` nachschlagen, nicht in jeden Auftrag kopieren.
