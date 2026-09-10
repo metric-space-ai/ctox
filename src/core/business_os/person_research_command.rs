@@ -104,6 +104,7 @@ pub(super) fn start(root: &Path, command: BusinessCommand) -> anyhow::Result<Val
 }
 
 pub(crate) fn recover_once(root: &Path) -> anyhow::Result<usize> {
+    super::contact_email_validation::sweep_unchecked_leads(root);
     let terminal_candidates = store::terminal_person_research_projection_candidates(root)?;
     let mut recovered = 0;
     for candidate in terminal_candidates {
@@ -456,7 +457,13 @@ fn project_outbound_lead_generation_lead_state(
         record_id,
         now,
         lead_document,
-    )
+    )?;
+    if result.is_some() {
+        // A research result may bring contact addresses; the daemon checks
+        // them itself because nobody else can (see contact_email_validation).
+        super::contact_email_validation::spawn_contact_email_validation(root, record_id);
+    }
+    Ok(())
 }
 
 fn outbound_lead_generation_lead_state_document(
@@ -794,6 +801,7 @@ fn merge_researched_person_records_with_context(
                     && contacts_match(existing, &normalized))
         });
         if let Some(existing_index) = existing_index {
+            keep_email_verdict(&contacts[existing_index], &mut normalized);
             if contacts[existing_index]
                 .get("crm_known")
                 .and_then(Value::as_bool)
@@ -805,6 +813,28 @@ fn merge_researched_person_records_with_context(
             }
         } else {
             contacts.push(normalized);
+        }
+    }
+}
+
+/// A checked address keeps its verdict: a later writeback that only carries
+/// the worker's `no_match` for the same person must not wipe the daemon's
+/// `valid`/`invalid`.
+fn keep_email_verdict(existing: &Value, incoming: &mut Value) {
+    let Some(incoming) = incoming.as_object_mut() else {
+        return;
+    };
+    for key in ["person_email_validation", "email_validation"] {
+        let existing_is_verdict = existing
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(super::contact_email_validation::is_email_verdict);
+        let incoming_is_verdict = incoming
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(super::contact_email_validation::is_email_verdict);
+        if existing_is_verdict && !incoming_is_verdict {
+            incoming.remove(key);
         }
     }
 }
@@ -1460,6 +1490,7 @@ pub(super) fn field_accepts_single_authoritative_source(field_key: &str) -> bool
             | "person_funktion"
             | "person_position"
             | "person_email"
+            | "person_email_validation"
             | "person_telefon"
             | "person_linkedin"
             | "person_xing"
@@ -2796,6 +2827,20 @@ mod tests {
         // An address is not a word to be respelled.
         assert_eq!(restored["person_email"], "j.mueller@example.test");
         assert_eq!(restored["person_key"], "p1");
+    }
+
+    #[test]
+    fn a_checked_address_keeps_its_verdict() {
+        let existing = serde_json::json!({"person_email_validation": "valid"});
+        let mut incoming =
+            serde_json::json!({"person_email_validation": "no_match", "person_telefon": "+49 1"});
+        keep_email_verdict(&existing, &mut incoming);
+        assert!(incoming.get("person_email_validation").is_none());
+        assert_eq!(incoming["person_telefon"], "+49 1");
+        // A new real verdict still replaces the old one.
+        let mut newer = serde_json::json!({"person_email_validation": "invalid"});
+        keep_email_verdict(&existing, &mut newer);
+        assert_eq!(newer["person_email_validation"], "invalid");
     }
 
     #[test]

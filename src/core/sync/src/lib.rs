@@ -4,6 +4,8 @@ pub mod authority;
 pub mod business_data;
 #[cfg(feature = "webrtc")]
 pub mod business_data_ipc;
+#[cfg(feature = "webrtc")]
+pub mod business_data_session;
 pub use authority::auth::business_data_identity;
 #[path = "business-data.generated.rs"]
 pub mod business_data_contract;

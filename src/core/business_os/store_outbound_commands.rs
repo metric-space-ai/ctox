@@ -35,8 +35,12 @@ pub(super) fn handle_outbound_active_command(
     _command_id: &str,
     command: &BusinessCommand,
 ) -> anyhow::Result<Value> {
+    // The outbound-lead-generation app publishes its research policy under its
+    // own module id; every other active outbound command stays on `outbound`.
     anyhow::ensure!(
-        command.module == "outbound",
+        command.module == "outbound"
+            || (command.command_type == "outbound.research_policy.publish"
+                && command.module == "outbound-lead-generation"),
         "active outbound commands require module=outbound"
     );
     let now = now_ms() as i64;
