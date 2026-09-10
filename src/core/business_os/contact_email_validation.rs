@@ -29,7 +29,6 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -271,11 +270,7 @@ pub(super) fn apply_email_verdicts(lead: &mut Value, verdicts: &[EmailVerdict]) 
     changed
 }
 
-fn run_dir_from_envelope(stdout: &[u8]) -> Option<PathBuf> {
-    let text = String::from_utf8_lossy(stdout);
-    let start = text.find('{')?;
-    let end = text.rfind('}')?;
-    let envelope: Value = serde_json::from_str(&text[start..=end]).ok()?;
+fn run_dir_from_envelope(envelope: &Value) -> Option<PathBuf> {
     let manifest = envelope
         .get("run_manifest_path")
         .or_else(|| envelope.pointer("/result/run_manifest_path"))
@@ -284,30 +279,47 @@ fn run_dir_from_envelope(stdout: &[u8]) -> Option<PathBuf> {
 }
 
 /// Runs the validation target for one address and returns its verdict.
-fn run_validation(
-    root: &Path,
-    ctox_bin: &Path,
-    email: &str,
-) -> anyhow::Result<Option<EmailVerdict>> {
-    let output = Command::new(ctox_bin)
-        .arg("scrape")
-        .arg("execute")
-        .arg("--target-key")
-        .arg(VALIDATION_TARGET_KEY)
-        .arg("--trigger-kind")
-        .arg("manual")
-        .arg("--timeout-seconds")
-        .arg("180")
-        .arg("--input-json")
-        .arg(json!({ "email": email }).to_string())
-        .arg("--runtime-root")
-        .arg(root)
-        .output()?;
-    let Some(run_dir) = run_dir_from_envelope(&output.stdout) else {
-        anyhow::bail!(
-            "validation run for {email} printed no run manifest (exit {:?})",
-            output.status.code()
-        );
+///
+/// The run happens in-process against the daemon's own root. The first
+/// version shelled out to `ctox scrape execute --runtime-root <root>`; the CLI
+/// relays that call to the daemon, the relay refuses `--runtime-root`, and
+/// every check on THESEN 10.09.2026 died unseen before it started.
+fn run_validation(root: &Path, email: &str) -> anyhow::Result<Option<EmailVerdict>> {
+    // The target's run lock names its holder by pid, and every in-process run
+    // carries the daemon's pid: two checks at once would refuse each other.
+    static RUNS: Mutex<()> = Mutex::new(());
+    let _serial = RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut attempt = 0;
+    loop {
+        match run_validation_once(root, email) {
+            Err(error)
+                if attempt < 5 && format!("{error:#}").contains("already has an active run") =>
+            {
+                attempt += 1;
+                std::thread::sleep(Duration::from_secs(15));
+            }
+            other => return other,
+        }
+    }
+}
+
+fn run_validation_once(root: &Path, email: &str) -> anyhow::Result<Option<EmailVerdict>> {
+    let args = [
+        "execute",
+        "--target-key",
+        VALIDATION_TARGET_KEY,
+        "--trigger-kind",
+        "manual",
+        "--timeout-seconds",
+        "180",
+        "--input-json",
+        &json!({ "email": email }).to_string(),
+    ]
+    .map(str::to_string);
+    let outcome = crate::capabilities::scrape::execute_scrape_with_outcome(root, &args)?;
+    let envelope = serde_json::to_value(&outcome)?;
+    let Some(run_dir) = run_dir_from_envelope(&envelope) else {
+        anyhow::bail!("validation run for {email} reported no run manifest");
     };
     let run_id = run_dir
         .file_name()
@@ -339,17 +351,14 @@ fn validate_lead_contacts(root: &Path, record_id: &str) -> anyhow::Result<usize>
     if emails.is_empty() {
         return Ok(0);
     }
-    let ctox_bin = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("ctox"));
     let mut verdicts = Vec::new();
+    let mut failures = Vec::new();
     for email in &emails {
-        match run_validation(root, &ctox_bin, email) {
+        match run_validation(root, email) {
             Ok(Some(verdict)) => verdicts.push(verdict),
-            Ok(None) => eprintln!("[email-validation] {record_id}: no verdict for {email}"),
-            Err(error) => eprintln!("[email-validation] {record_id}: {email}: {error:#}"),
+            Ok(None) => failures.push(json!({"email": email, "error": "kein Urteil im Lauf"})),
+            Err(error) => failures.push(json!({"email": email, "error": format!("{error:#}")})),
         }
-    }
-    if verdicts.is_empty() {
-        return Ok(0);
     }
     // The slow runs happen outside the per-record guard; the patch waits for it
     // so it never interleaves with a research writeback on the same lead.
@@ -373,12 +382,39 @@ fn validate_lead_contacts(root: &Path, record_id: &str) -> anyhow::Result<usize>
         return Ok(0);
     };
     let changed = apply_email_verdicts(&mut lead, &verdicts);
-    if changed > 0 {
-        let now = super::person_research_command::now_ms();
-        lead["research_updated_at_ms"] = Value::from(now);
-        store::upsert_rxdb_collection_record(root, LEAD_COLLECTION, record_id, now, lead)?;
+    let now = super::person_research_command::now_ms();
+    // The daemon's stderr goes nowhere on a managed tenant, so every pass
+    // leaves its account on the lead itself.
+    if !lead.get("payload").is_some_and(Value::is_object) {
+        lead["payload"] = json!({});
     }
+    lead["payload"]["email_validation_pass"] = json!({
+        "at_ms": now,
+        "checked": verdicts
+            .iter()
+            .map(|verdict| json!({"email": verdict.email, "valid": verdict.valid, "run_id": verdict.run_id}))
+            .collect::<Vec<_>>(),
+        "failed": failures,
+    });
+    lead["research_updated_at_ms"] = Value::from(now);
+    store::upsert_rxdb_collection_record(root, LEAD_COLLECTION, record_id, now, lead)?;
     Ok(changed)
+}
+
+fn in_flight_key(root: &Path, record_id: &str) -> (PathBuf, String) {
+    (
+        std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf()),
+        record_id.to_string(),
+    )
+}
+
+fn validate_registered(root: &Path, record_id: &str, key: &(PathBuf, String)) {
+    match validate_lead_contacts(root, record_id) {
+        Ok(0) => {}
+        Ok(changed) => eprintln!("[email-validation] {record_id}: {changed} contact(s) checked"),
+        Err(error) => eprintln!("[email-validation] {record_id}: {error:#}"),
+    }
+    in_flight().remove(key);
 }
 
 /// Checks the contact addresses of one lead in the background. At most one
@@ -388,10 +424,7 @@ pub(super) fn spawn_contact_email_validation(root: &Path, record_id: &str) {
     if cfg!(test) {
         return;
     }
-    let key = (
-        std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf()),
-        record_id.to_string(),
-    );
+    let key = in_flight_key(root, record_id);
     if !in_flight().insert(key.clone()) {
         return;
     }
@@ -399,18 +432,77 @@ pub(super) fn spawn_contact_email_validation(root: &Path, record_id: &str) {
     let record_id = record_id.to_string();
     let spawned = std::thread::Builder::new()
         .name("ctox-email-validation".to_string())
-        .spawn(move || {
-            match validate_lead_contacts(&root, &record_id) {
-                Ok(0) => {}
-                Ok(changed) => {
-                    eprintln!("[email-validation] {record_id}: {changed} contact(s) checked")
-                }
-                Err(error) => eprintln!("[email-validation] {record_id}: {error:#}"),
-            }
-            in_flight().remove(&key);
-        });
+        .spawn(move || validate_registered(&root, &record_id, &key));
     if spawned.is_err() {
         eprintln!("[email-validation] could not start the validation thread");
+    }
+}
+
+const SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
+const RETRY_AFTER_MS: i64 = 6 * 3600 * 1000;
+
+/// Whether the recovery sweep should check this lead now: it carries an
+/// unchecked address, no research is writing to it, and its last pass is not
+/// recent.
+pub(super) fn lead_due_for_sweep(lead: &Value, now_ms: i64) -> bool {
+    let status = lead
+        .get("research_status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if matches!(status, "queued" | "running") {
+        return false;
+    }
+    if emails_needing_validation(lead, 1).is_empty() {
+        return false;
+    }
+    let last_pass = lead
+        .pointer("/payload/email_validation_pass/at_ms")
+        .and_then(Value::as_i64);
+    last_pass.is_none_or(|at| now_ms - at >= RETRY_AFTER_MS)
+}
+
+/// Picks up addresses stored before this check existed and passes that
+/// failed. Runs from the recovery loop, at most once an hour, one lead after
+/// the other in a single background thread.
+pub(super) fn sweep_unchecked_leads(root: &Path) {
+    if cfg!(test) {
+        return;
+    }
+    static LAST_SWEEP: Mutex<Option<Instant>> = Mutex::new(None);
+    {
+        let mut last = LAST_SWEEP
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if last.is_some_and(|at| at.elapsed() < SWEEP_INTERVAL) {
+            return;
+        }
+        *last = Some(Instant::now());
+    }
+    let Ok(leads) = store::load_rxdb_collection_records(root, LEAD_COLLECTION) else {
+        return;
+    };
+    let now = super::person_research_command::now_ms();
+    let due: Vec<String> = leads
+        .iter()
+        .filter(|lead| lead_due_for_sweep(lead, now))
+        .filter_map(|lead| lead.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    if due.is_empty() {
+        return;
+    }
+    let root = root.to_path_buf();
+    let spawned = std::thread::Builder::new()
+        .name("ctox-email-validation-sweep".to_string())
+        .spawn(move || {
+            for record_id in due {
+                let key = in_flight_key(&root, &record_id);
+                if in_flight().insert(key.clone()) {
+                    validate_registered(&root, &record_id, &key);
+                }
+            }
+        });
+    if spawned.is_err() {
+        eprintln!("[email-validation] could not start the validation sweep");
     }
 }
 
@@ -534,11 +626,42 @@ mod tests {
     }
 
     #[test]
-    fn the_run_directory_is_found_in_the_cli_envelope() {
-        let stdout = br#"log line
-{"ok": true, "run_manifest_path": "/srv/ctox/runtime/scraping/targets/experte-de/runs/scrape_run-a9873c8554ce056c/run.json"}"#;
+    fn the_sweep_checks_idle_leads_with_unchecked_addresses_once_per_window() {
+        let now = 100 * 3600 * 1000;
+        let lead = |status: &str, pass_at: Option<i64>| {
+            let mut lead = json!({
+                "research_status": status,
+                "contacts": [{"person_email": "a.weidling@weicon.de", "person_email_validation": "no_match"}],
+                "payload": {},
+            });
+            if let Some(at) = pass_at {
+                lead["payload"]["email_validation_pass"] = json!({"at_ms": at});
+            }
+            lead
+        };
+        assert!(lead_due_for_sweep(&lead("needs_review", None), now));
+        assert!(!lead_due_for_sweep(&lead("running", None), now));
+        assert!(!lead_due_for_sweep(&lead("queued", None), now));
+        assert!(!lead_due_for_sweep(
+            &lead("completed", Some(now - 3600 * 1000)),
+            now
+        ));
+        assert!(lead_due_for_sweep(
+            &lead("completed", Some(now - RETRY_AFTER_MS)),
+            now
+        ));
+        let checked = json!({
+            "research_status": "completed",
+            "contacts": [{"person_email": "a.weidling@weicon.de", "person_email_validation": "valid"}],
+        });
+        assert!(!lead_due_for_sweep(&checked, now));
+    }
+
+    #[test]
+    fn the_run_directory_is_found_in_the_outcome() {
+        let envelope = json!({"ok": true, "run_manifest_path": "/srv/ctox/runtime/scraping/targets/experte-de/runs/scrape_run-a9873c8554ce056c/run.json"});
         assert_eq!(
-            run_dir_from_envelope(stdout),
+            run_dir_from_envelope(&envelope),
             Some(PathBuf::from(
                 "/srv/ctox/runtime/scraping/targets/experte-de/runs/scrape_run-a9873c8554ce056c"
             ))

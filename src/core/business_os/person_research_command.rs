@@ -104,6 +104,7 @@ pub(super) fn start(root: &Path, command: BusinessCommand) -> anyhow::Result<Val
 }
 
 pub(crate) fn recover_once(root: &Path) -> anyhow::Result<usize> {
+    super::contact_email_validation::sweep_unchecked_leads(root);
     let terminal_candidates = store::terminal_person_research_projection_candidates(root)?;
     let mut recovered = 0;
     for candidate in terminal_candidates {
