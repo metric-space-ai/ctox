@@ -45,12 +45,27 @@ install required untracked files, and refuse resume if any step is ambiguous.
 Provider export/import/resume remains a separate adapter acceptance gate for
 Codex and Claude; a fresh thread is not an acceptable fallback.
 
+## Capture producer
+
+`ctox_sync::capture::CaptureRequest` and `CheckpointStore::capture` provide the
+first real producer for this format. The asynchronous producer runs Git with a
+10-second deadline, captures `HEAD`, staged and unstaged binary diffs, staged
+and unstaged deletions, and every untracked file reported by Git. It rejects
+symlink traversal, non-UTF-8 paths, unbounded files, invalid Git output, and a
+workspace without a verifiable commit. Journal, attachment, workspace, and
+provider artifacts are supplied by the execution owner inside the same
+quiescent boundary and are ingested through the same hash-verified store.
+
+The producer publishes only after the complete manifest validates. It does not
+acknowledge a replica, apply the patches, or start a provider; those actions
+remain explicit authority and adapter steps.
+
 ## Evidence required before production use
 
 The contract tests cover round-trip hashing, Git metadata restoration,
 case/path collision rejection, deleted/untracked overlap rejection, corrupt
-copy rejection, and pending-effect blocking. Production readiness still
-requires a capture producer, a real Git reconstruction consumer, provider
-export/import/resume evidence, two eligible durable data copies, and a
-cross-host failover drill. Until those callers exist, this contract is a
-fail-closed foundation and not a portability claim.
+copy rejection, pending-effect blocking, and capture from a real temporary Git
+repository. Production readiness still requires a real Git reconstruction
+consumer, provider export/import/resume evidence, two eligible durable data
+copies, and a cross-host failover drill. Until those callers exist, this
+contract and producer are a fail-closed foundation and not a portability claim.
