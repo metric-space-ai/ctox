@@ -23,7 +23,7 @@ use std::{
     process::Stdio,
     time::Duration,
 };
-use tokio::{process::Command, time::timeout};
+use tokio::{io::AsyncReadExt, process::Command, time::timeout};
 
 const GIT_COMMAND_DEADLINE: Duration = Duration::from_secs(10);
 const MAX_GIT_STDERR_BYTES: usize = 64 * 1024;
@@ -227,24 +227,77 @@ async fn git_bytes(root: &Path, args: &[&str], max_output_bytes: u64) -> io::Res
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let output = timeout(GIT_COMMAND_DEADLINE, command.output())
-        .await
-        .map_err(|_| invalid_capture("Git command exceeded its deadline"))??;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let detail = stderr
-            .chars()
-            .take(MAX_GIT_STDERR_BYTES)
-            .collect::<String>();
+    let mut child = command.spawn()?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| invalid_capture("Git stdout pipe was not created"))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| invalid_capture("Git stderr pipe was not created"))?;
+    let result = timeout(GIT_COMMAND_DEADLINE, async {
+        tokio::try_join!(
+            read_git_stdout(&mut stdout, max_output_bytes),
+            read_git_stderr(&mut stderr),
+            child.wait(),
+        )
+    })
+    .await;
+    let (stdout, stderr, status) = match result {
+        Ok(Ok(result)) => result,
+        Ok(Err(error)) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(error);
+        }
+        Err(_) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(invalid_capture("Git command exceeded its deadline"));
+        }
+    };
+    if !status.success() {
         return Err(invalid_capture(format!(
             "Git command failed with status {}: {}",
-            output.status, detail
+            status, stderr
         )));
     }
-    if output.stdout.len() as u64 > max_output_bytes {
-        return Err(invalid_capture("Git output exceeds the capture budget"));
+    Ok(stdout)
+}
+
+async fn read_git_stdout<R>(reader: &mut R, max_output_bytes: u64) -> io::Result<Vec<u8>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let count = reader.read(&mut buffer).await?;
+        if count == 0 {
+            return Ok(bytes);
+        }
+        if bytes.len() as u64 + count as u64 > max_output_bytes {
+            return Err(invalid_capture("Git output exceeds the capture budget"));
+        }
+        bytes.extend_from_slice(&buffer[..count]);
     }
-    Ok(output.stdout)
+}
+
+async fn read_git_stderr<R>(reader: &mut R) -> io::Result<String>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let count = reader.read(&mut buffer).await?;
+        if count == 0 {
+            return Ok(String::from_utf8_lossy(&bytes).into_owned());
+        }
+        let remaining = MAX_GIT_STDERR_BYTES.saturating_sub(bytes.len());
+        bytes.extend_from_slice(&buffer[..count.min(remaining)]);
+    }
 }
 
 fn read_workspace_entry(
