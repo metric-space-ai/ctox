@@ -15411,6 +15411,10 @@ pub(super) fn is_outbound_active_command(command_type: &str) -> bool {
             // through to the harness queue and cost a full worker turn per
             // save; research tasks waited behind it (THESEN 10.09.2026).
             | "outbound.research_policy.publish"
+            // Same: the outbound app reads the registry whenever its source
+            // panel opens, and every read became a worker task that mostly
+            // failed (THESEN 05.-10.09.2026).
+            | "outbound.research_source.registry_read"
     )
 }
 
