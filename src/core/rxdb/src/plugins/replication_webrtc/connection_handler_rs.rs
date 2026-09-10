@@ -237,6 +237,20 @@ impl WebRTCRsConnectionHandler {
             .map(|entry| WebRTCRsConnection::new(peer_id.to_owned(), entry.generation))
     }
 
+    /// Enumerate exact open transport handles for connection-owned callers.
+    /// Route strings alone are not identities and generations are never reused.
+    pub fn current_connections(&self) -> Vec<WebRTCRsConnection> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Vec::new();
+        }
+        self.peers
+            .lock()
+            .iter()
+            .filter(|(_, entry)| entry.data_channel_open)
+            .map(|(peer_id, entry)| WebRTCRsConnection::new(peer_id.clone(), entry.generation))
+            .collect()
+    }
+
     /// Bind an application identity proof to this established DTLS channel.
     /// A nonce/signature alone can be relayed through another connection.
     pub async fn channel_binding(&self, connection: &WebRTCRsConnection) -> RxResult<String> {
