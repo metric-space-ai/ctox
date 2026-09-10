@@ -1,39 +1,40 @@
-# Zusammenarbeit mit Workern
+# Working with implementation workers
 
-Der Haupttask versteht das Problem, nutzt bei Bedarf Analyse-Subagents und zerlegt
-das Ziel in sinnvolle Arbeitspakete. Er vergibt unabhängige Pakete parallel;
-es gibt keine pauschale Begrenzung der Worker-Anzahl.
+The main task understands the problem, uses analysis subagents when helpful and
+breaks the goal into coherent packages. It dispatches independent packages in
+parallel; there is no fixed worker-count limit.
 
-Ein Auftrag beantwortet kurz vier Fragen:
-- Welches Problem lösen wir?
-- Welches Ergebnis wird erwartet?
-- Welche Grenzen gelten?
-- Woran erkennen wir Erfolg?
+An assignment briefly answers four questions:
 
-Nur hilfreiche Fundstellen ergänzen. Keine vorweggenommene Implementierung,
-Befehlsketten oder wiederholten Prozessregeln. Der Worker erkundet den Code,
-entscheidet die Umsetzung und liefert das Ergebnis einschließlich nötiger Tests.
-Zusammengehörige Arbeit bleibt in einem Paket.
+- What problem are we solving?
+- What outcome is expected?
+- What boundaries apply?
+- How will we recognize success?
 
-Der Haupttask prüft das Ergebnis und gibt nötige Korrekturen gesammelt an denselben
-Worker. Normale Nacharbeit braucht keine Supervisor-Freigabe. Nachrichten sind
-verständlich und knapp; technische Kennungen stehen nur bei Bedarf separat.
+Add only useful references. Do not pre-solve the implementation, prescribe command
+sequences or repeat process rules. The worker explores the code, chooses the
+implementation and delivers the result with necessary tests. Keep related work
+in one package.
 
-Jeder Worker liefert einen PR. Vor Veröffentlichung prüft der Haupttask Änderungen
-und Text auf private Informationen und Geheimnisse. Nach erfolgreichem Review und
-den erforderlichen Tests hält er die Modellerfahrung kurz fest, merged und
-archiviert den Worker. PR-Verwaltung dient der erledigten Arbeit.
+The main task reviews the result and sends corrections together to the same
+worker. Routine rework needs no supervisor approval. Write clear, concise English
+messages; put technical identifiers in separate supporting details only when needed.
 
-Worker melden Ergebnisse oder echte Blockaden an ihren Haupttask und beenden den
-Turn. Korrekturen starten danach einen neuen Turn im selben Worker. Der Haupttask
-meldet relevante Ergebnisse oder ungelöste Blockaden dem Supervisor, ohne auf eine
-Empfangsbestätigung zu warten. Keine Warteschleifen oder unveränderten Statusmeldungen.
+Each worker delivers a PR. Before publication, the main task reviews changes and
+text for private information and secrets. After successful review and required
+tests, it briefly records the model experience, merges and archives the worker.
+PR administration supports completed work.
 
-Auftrag und Zwischenstand dauerhaft sichern und nach Kompaktierung fortsetzen.
-Kein READY- oder Initialisierungsdialog. Worktrees und Builddaten liegen auf der
-tmp-Platte; vorhandene Ressourcenregeln gelten auch bei parallelen Workern.
+Workers report results or real blockers to their main task, then end the turn.
+Corrections start a new turn in the same worker. The main task reports relevant
+results or unresolved blockers to the supervisor without waiting for an
+acknowledgement. No waiting loops or unchanged status messages.
 
-Modelle nach Erfahrung und Verfügbarkeit wählen. Quoten sind vorübergehende
-Blockaden, keine Modellschwäche. OpenAI bleibt direkt angebunden; andere Modelle
-nutzen ihren eigenen Provider. Technische Bedienung bei Bedarf im Skill
-`proxy-model-workers` nachschlagen, nicht in jeden Auftrag kopieren.
+Save the assignment and progress durably, and resume after compaction. No READY
+or initialization dialogue. Worktrees and build data belong on the tmp volume;
+existing resource rules also apply to parallel workers.
+
+Choose models by experience and availability. Quotas are temporary blockers, not
+model weaknesses. OpenAI stays directly connected; other models use their own
+provider. Look up technical operations in the `proxy-model-workers` skill when
+needed; do not copy them into every assignment.

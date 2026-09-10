@@ -5,26 +5,26 @@ description: Delegate implementation packages to parallel Codex Desktop workers 
 
 # Codex Desktop workers
 
-Ein Haupttask analysiert und verteilt unabhängige Arbeitspakete parallel.
-Der kurze Auftrag beschreibt Problem, Ergebnis, Grenzen und Erfolgskriterien.
-Der Worker entscheidet die Umsetzung. Der Haupttask bündelt Korrekturen,
-prüft die Arbeit und archiviert den Worker nach dem Merge seines PRs.
-Die gemeinsamen Regeln stehen in GLOBAL-INSTRUCTIONS.md; nicht jedem Auftrag beilegen.
+The main task analyzes and dispatches independent packages in parallel.
+A short assignment states the problem, outcome, boundaries and success criteria.
+The worker chooses the implementation. The main task consolidates corrections,
+reviews the work and archives the worker after merging its PR.
+Shared rules are in GLOBAL-INSTRUCTIONS.md; do not attach them to every assignment.
 
-Für die konkrete Bedienung nur den benötigten Abschnitt in [PROTOCOL.md](PROTOCOL.md) lesen:
+For technical operations, read only the relevant section of [PROTOCOL.md](PROTOCOL.md):
 
-- Modellwahl und Anmeldung: **Model routing**. Grok, GLM und Kimi nutzen
-  `cli_proxy` mit Reasoning `high`; OpenAI behält seine direkte Verbindung.
-  Erfahrung: `~/.codex/proxy-workers/MODEL-EXPERIENCE.md`.
-  Verfügbarkeit: `scripts/worker.py availability`; Quoten separat zurückstellen.
-- Worker anlegen: **Prepare and dispatch**. Der Helper setzt Provider, Projekt,
-  Titel und 256k-Kontext ohne Initialisierungsturn. Dann den echten Auftrag senden.
-- Korrektur oder Kompaktierung: **Context continuity and publication**.
-- PR zuordnen, Review festhalten, archivieren: **PR and merge lifecycle**.
+- Model selection and authentication: **Model routing**. Grok, GLM and Kimi use
+  `cli_proxy` with `high` reasoning; OpenAI retains its direct connection.
+  Experience: `~/.codex/proxy-workers/MODEL-EXPERIENCE.md`.
+  Availability: `scripts/worker.py availability`; defer quota blocks separately.
+- Creating a worker: **Prepare and dispatch**. The helper sets provider, project,
+  title and 256k context without an initialization turn. Then send the real assignment.
+- Corrections or compaction: **Context continuity and publication**.
+- Binding a PR, recording review and archiving: **PR and merge lifecycle**.
 
-Worktrees und temporäre Daten gehören auf `/Volumes/tmp`; der gemeinsame
-Ressourcenwächter bleibt verbindlich. Technische Referenzen und private
-Koordination gehören nicht in öffentliche Issues oder PRs.
+Worktrees and temporary data belong on `/Volumes/tmp`; the shared resource gate
+remains mandatory. Technical references and private coordination do not belong
+in public issues or PRs.
 
-[ACCEPTANCE.md](ACCEPTANCE.md) ist für Tests der Worker-Integration gedacht,
-nicht als Pflichtprogramm für jede Implementierungsaufgabe.
+[ACCEPTANCE.md](ACCEPTANCE.md) tests the worker integration; it is not a mandatory
+checklist for every implementation assignment.
