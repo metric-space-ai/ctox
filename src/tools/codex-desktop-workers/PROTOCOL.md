@@ -58,8 +58,11 @@ untrusted project layer. OpenAI workers do not receive these overrides.
    `/Volumes/tmp/worktrees/<project>/codex/<task>/`. Never use the canonical
    checkout or `~/.codex/worktrees` for delegated implementation. Route build
    outputs and caches to `/Volumes/tmp/dev-artifacts/<project>/<task>/`.
-   Use the shared heavy admission gate for checkout/build/install/test work;
-   do not bypass a rejected gate. Keep at most two compiler/test processes for heavy commands; this is not an AI-worker limit.
+   Use the shared gate for heavy builds, installs and tests. Ordinary worktree
+   creation and worker startup do not require that lease when host capacity is
+   sufficient. Expensive checkout filters or indexing still require admission.
+   Do not bypass a rejected heavy job. Keep at most two compiler/test processes
+   for heavy commands; this is not an AI-worker limit.
 3. Write the bounded assignment to a durable prompt file: problem, desired result,
    boundaries and success criteria, plus the parent task ID for reporting. Require a
    pushed PR before handoff, draft if unfinished, with no secrets/unrelated edits.
