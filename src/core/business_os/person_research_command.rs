@@ -456,7 +456,13 @@ fn project_outbound_lead_generation_lead_state(
         record_id,
         now,
         lead_document,
-    )
+    )?;
+    if result.is_some() {
+        // A research result may bring contact addresses; the daemon checks
+        // them itself because nobody else can (see contact_email_validation).
+        super::contact_email_validation::spawn_contact_email_validation(root, record_id);
+    }
+    Ok(())
 }
 
 fn outbound_lead_generation_lead_state_document(
@@ -1460,6 +1466,7 @@ pub(super) fn field_accepts_single_authoritative_source(field_key: &str) -> bool
             | "person_funktion"
             | "person_position"
             | "person_email"
+            | "person_email_validation"
             | "person_telefon"
             | "person_linkedin"
             | "person_xing"
