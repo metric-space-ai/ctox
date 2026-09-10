@@ -25,7 +25,10 @@ text for private information and secrets. After successful review and required
 tests, it briefly records the model experience, merges and archives the worker.
 PR administration supports completed work.
 
-Workers report results or real blockers to their main task, then end the turn.
+Workers report results or questions requiring a decision only to their main task,
+then end the turn. Resource waits belong in the saved status; do not message other
+tasks or resource owners asking for release, updates or acknowledgements. The
+existing supervisor monitor reads resource status without starting message chains.
 Corrections start a new turn in the same worker. The main task reports relevant
 results or unresolved blockers to the supervisor without waiting for an
 acknowledgement. No waiting loops or unchanged status messages.
