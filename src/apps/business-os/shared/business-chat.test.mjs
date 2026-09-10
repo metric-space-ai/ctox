@@ -809,6 +809,185 @@ test('business chat tracking sync follows business command execution phase', asy
   assert.equal(state.chats[0].messages[0].status, 'running');
 });
 
+test('terminal command phase does not mask failed status or nested succeeded envelopes', () => {
+  const hooks = __businessChatTestInternals;
+  const failedCommand = {
+    execution_phase: 'terminal',
+    terminal_status: 'failed',
+    status: 'failed',
+    result: { status: 'succeeded', outbound_text: 'Die Aufgabe ist erledigt.' },
+  };
+  assert.equal(hooks.preferredTrackingStatus(failedCommand, null, 'queued'), 'failed');
+  assert.equal(hooks.preferredTrackingStatus(failedCommand, null, 'running'), 'failed');
+  assert.equal(
+    hooks.preferredTrackingStatus({
+      execution_phase: 'terminal',
+      result: { status: 'succeeded', outbound_text: 'Fertig.' },
+    }, null, 'queued'),
+    'queued',
+    'unknown terminal outcome stays pending',
+  );
+  assert.equal(hooks.getTaskState({
+    lastTrackingId: 'cmd-terminal',
+    messages: [{ commandId: 'cmd-terminal', status: 'terminal' }],
+  }), 'queued');
+  assert.equal(hooks.isActiveTrackingStatus('terminal'), true);
+  assert.equal(hooks.isTerminalTrackingStatus('terminal'), false);
+  assert.equal(hooks.preferredTrackingStatus({
+    execution_phase: 'running',
+    terminal_status: 'none',
+    status: 'accepted',
+  }, { status: 'queued' }, 'queued'), 'running');
+});
+
+test('failed terminal command stays tracked until the delayed queue task arrives', async () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = { documentElement: { lang: 'de' } };
+  const hooks = __businessChatTestInternals;
+  const reviewProgress = {
+    version: 1,
+    revision: 3,
+    phase: 'review',
+    percent: 90,
+    current_step: 3,
+    completed_steps: 2,
+    total_steps: 3,
+    steps: [
+      { position: 1, label: 'Lesen', status: 'completed', activity_turns: 2 },
+      { position: 2, label: 'Prüfen', status: 'completed', activity_turns: 3 },
+      { position: 3, label: 'Antworten', status: 'completed', activity_turns: 1 },
+    ],
+    review: { status: 'in_progress' },
+    activity_turns: { total: 8, thinking: 5, tools: 3, last_kind: 'thinking' },
+    updated_at_ms: 1700,
+  };
+  const command = {
+    id: 'cmd-delayed-fail',
+    execution_phase: 'terminal',
+    terminal_status: 'failed',
+    status: 'failed',
+    error: 'Usage limit exceeded.',
+    result: { status: 'succeeded', outbound_text: 'Die Aufgabe ist erledigt.', message: 'OK' },
+  };
+  const tracked = {
+    id: 'message-delayed-fail',
+    role: 'ctox',
+    text: 'Die Bearbeitung hat begonnen.',
+    commandId: 'cmd-delayed-fail',
+    status: 'running',
+    executionProgress: reviewProgress,
+    createdAt: Date.now(),
+  };
+  const historicalTakeover = {
+    id: 'takeover-historical',
+    role: 'ctox',
+    text: 'Pico übernimmt: frühere Zuweisung.',
+    takeoverFor: 'cmd-delayed-fail',
+    commandId: 'cmd-delayed-fail',
+    crewMemberId: 'member_0',
+    status: 'running',
+    createdAt: Date.now() - 10,
+  };
+  const chat = {
+    id: 'chat-delayed-fail',
+    lastTrackingId: 'cmd-delayed-fail',
+    createdAt: Date.now(),
+    messages: [tracked, historicalTakeover],
+  };
+  const state = { chats: [chat] };
+
+  try {
+    const first = await hooks.syncTrackedMessages({
+      state,
+      db: { raw: { business_commands: makeBatchCollection([command]), ctox_queue_tasks: makeBatchCollection([]) } },
+    });
+    assert.equal(first, true);
+    assert.equal(tracked.status, 'failed');
+    assert.equal(tracked.taskId || '', '');
+    assert.equal(tracked.executionProgress.percent, 90);
+    assert.equal(chat.messages.filter((message) => message.failureFor).length, 1);
+    assert.equal(chat.messages.some((message) => String(message.text || '').includes('Die Aufgabe ist erledigt.')), false);
+    assert.equal(hooks.hasTrackedMessagesNeedingSync(state), true, 'failure without a queue task must keep tracking');
+
+    const task = {
+      id: 'queue:system::delayed-fail',
+      command_id: 'cmd-delayed-fail',
+      status: 'failed',
+      status_note: 'Usage limit exceeded.',
+      crew_member_id: 'member_0',
+    };
+    const members = makeBatchCollection([{
+      id: 'member_0',
+      name: 'Pico',
+      shape: 'round',
+      color: '#e0a458',
+    }]);
+    const second = await hooks.syncTrackedMessages({
+      state,
+      db: {
+        raw: {
+          business_commands: makeBatchCollection([command]),
+          ctox_queue_tasks: makeBatchCollection([task]),
+          ctox_crew_members: members,
+        },
+      },
+    });
+    assert.equal(second, true);
+    assert.equal(tracked.taskId, 'queue:system::delayed-fail');
+    assert.equal(tracked.status, 'failed');
+    assert.equal(chat.messages.filter((message) => message.failureFor).length, 1, 'failure is delivered once');
+    assert.equal(chat.messages.filter((message) => message.takeoverFor).length, 1, 'historical takeover is retained once');
+    assert.equal(chat.crew_member_id, 'member_0');
+    assert.equal(hooks.hasTrackedMessagesNeedingSync(state), false);
+
+    const card = hooks.delegationProgressCardHtml(chat, {
+      taskId: tracked.taskId,
+      commandId: tracked.commandId,
+      taskStatus: 'failed',
+    });
+    assert.match(card, /90%/);
+    assert.doesNotMatch(card, /is-reviewing/);
+    assert.equal(hooks.progressShowsActiveReview(tracked.executionProgress, 'failed'), false);
+    assert.equal(hooks.progressShowsActiveReview(tracked.executionProgress, 'running'), true);
+    assert.equal(hooks.crewCreatureMode(chat, 'failed'), 'failed');
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+  }
+});
+
+test('unknown terminal command outcome stays pending and does not publish nested success', async () => {
+  const hooks = __businessChatTestInternals;
+  const tracked = {
+    id: 'message-unknown-terminal',
+    commandId: 'cmd-unknown-terminal',
+    status: 'running',
+    createdAt: Date.now(),
+  };
+  const state = { chats: [{ id: 'chat-unknown-terminal', lastTrackingId: 'cmd-unknown-terminal', messages: [tracked] }] };
+  const changed = await hooks.syncTrackedMessages({
+    state,
+    db: {
+      raw: {
+        business_commands: makeBatchCollection([{
+          id: 'cmd-unknown-terminal',
+          execution_phase: 'terminal',
+          terminal_status: 'none',
+          result: { status: 'succeeded', outbound_text: 'Fertig ohne Ergebnis.' },
+        }]),
+        ctox_queue_tasks: makeBatchCollection([]),
+      },
+    },
+  });
+  assert.equal(changed, false);
+  assert.equal(tracked.status, 'running');
+  assert.equal(state.chats[0].messages.some((message) => String(message.text || '').includes('Fertig ohne Ergebnis.')), false);
+  assert.equal(hooks.getTaskState(state.chats[0]), 'running');
+  assert.equal(hooks.hasTrackedMessagesNeedingSync(state), true);
+});
+
+
+
 test('business chat projects durable execution progress into the tracked crew message', async () => {
   const progress = {
     version: 1,

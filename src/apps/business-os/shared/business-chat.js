@@ -2247,7 +2247,7 @@ function getTaskState(chat) {
   if (status === 'success' || status === 'completed' || status === 'handled' || status === 'done' || status === 'erledigt') return 'success';
   if (isBlockedTrackingStatus(status)) return 'blocked';
   if (['failed', 'error'].includes(status)) return 'failed';
-  if (['queued', 'pending', 'pending_sync', 'waiting'].includes(status)) return 'queued';
+  if (['queued', 'pending', 'pending_sync', 'waiting', 'terminal'].includes(status)) return 'queued';
   if (['running', 'processing', 'executing', 'active'].includes(status)) return 'running';
   return 'idle';
 }
@@ -2792,7 +2792,8 @@ function executionProgressForChat(chat) {
 
 function executionProgressSignature(chat) {
   const progress = executionProgressForChat(chat);
-  if (!progress) return 'planning';
+  const status = canonicalTrackingStatus(latestTrackingMessage(chat)?.status || getTaskState(chat) || '');
+  if (!progress) return `planning:${status}`;
   return [
     progress.revision,
     progress.percent,
@@ -2801,6 +2802,7 @@ function executionProgressSignature(chat) {
     progress.activity_turns.total,
     progress.activity_turns.last_kind,
     progress.updated_at_ms,
+    status,
   ].join(':');
 }
 
@@ -2820,9 +2822,9 @@ function executionStepStatusLabel(status) {
   return 'Offen';
 }
 
-function executionProgressTooltip(progress) {
+function executionProgressTooltip(progress, taskStatus = '') {
   if (!progress) return chatUiIsGerman() ? 'Plan wird erstellt' : 'Creating plan';
-  const isReviewPhase = progress.phase === 'review' || progress.phase === 'completed';
+  const isReviewPhase = progressShowsActiveReview(progress, taskStatus);
   const current = isReviewPhase
     ? null
     : progress.steps.find((step) => step.position === progress.current_step)
@@ -2846,6 +2848,13 @@ function executionProgressTooltip(progress) {
   return lines.join('\n');
 }
 
+function progressShowsActiveReview(progress, taskStatus = '') {
+  if (!progress) return false;
+  const status = canonicalTrackingStatus(taskStatus);
+  if (isFailureStatus(status) || isCancelledTrackingStatus(status)) return false;
+  return progress.phase === 'review' || progress.phase === 'completed';
+}
+
 function delegationProgressCardHtml(chat, { taskId = '', commandId = '', taskStatus = 'queued' } = {}) {
   const progress = executionProgressForChat(chat);
   if (!progress) {
@@ -2854,7 +2863,7 @@ function delegationProgressCardHtml(chat, { taskId = '', commandId = '', taskSta
       ? (chatUiIsGerman() ? 'Plan wird erstellt' : 'Creating plan')
       : (chatUiIsGerman() ? 'Noch kein Ausführungsplan' : 'No execution plan yet');
     return `
-      <div class="ctox-chat-delegation-card ${isPlanning ? 'is-planning' : 'is-dormant'}" data-progress-signature="planning">
+      <div class="ctox-chat-delegation-card ${isPlanning ? 'is-planning' : 'is-dormant'}" data-progress-signature="${escapeAttr(executionProgressSignature(chat))}">
         <button class="ctox-progress-visual ${isPlanning ? 'is-planning' : 'is-dormant'}" type="button" style="--ctox-progress-percent:0" data-track-task ${taskId ? '' : 'disabled'} data-task-id="${escapeAttr(taskId)}" data-command-id="${escapeAttr(commandId)}" data-task-status="${escapeAttr(taskStatus)}" aria-label="${escapeAttr(tooltip)}" title="${escapeAttr(tooltip)}">
           <span class="ctox-progress-activity" style="--ctox-turn-angle:0deg" aria-hidden="true"><i></i></span>
           <span class="ctox-progress-track">
@@ -2866,7 +2875,7 @@ function delegationProgressCardHtml(chat, { taskId = '', commandId = '', taskSta
     `;
   }
 
-  const isReviewPhase = progress.phase === 'review' || progress.phase === 'completed';
+  const isReviewPhase = progressShowsActiveReview(progress, taskStatus);
   const current = isReviewPhase
     ? null
     : progress.steps.find((step) => step.position === progress.current_step)
@@ -2883,7 +2892,7 @@ function delegationProgressCardHtml(chat, { taskId = '', commandId = '', taskSta
   const workSegments = progress.steps.map((step) => `
     <span class="ctox-progress-segment is-${escapeAttr(step.status)}" title="${escapeAttr(`${step.position}. ${step.label}: ${executionStepStatusLabel(step.status)}`)}"></span>
   `).join('');
-  const tooltip = executionProgressTooltip(progress);
+  const tooltip = executionProgressTooltip(progress, taskStatus);
 
   return `
     <div class="ctox-chat-delegation-card ${activityClass}" data-progress-signature="${escapeAttr(executionProgressSignature(chat))}">
@@ -2920,7 +2929,7 @@ function chatWindowTitle(chat) {
   return [
     `${crewIdentity(chat).name} · ${chat.title || (chatUiIsGerman() ? 'Neue Aufgabe' : 'New task')}`,
     chatDockStatusText(chat, getTaskState(chat)),
-    executionProgressTooltip(executionProgressForChat(chat)),
+    executionProgressTooltip(executionProgressForChat(chat), getTaskState(chat)),
   ].filter(Boolean).join('\n');
 }
 
@@ -4173,7 +4182,7 @@ async function syncTrackedMessages({ state, db, sync = null }) {
         chatChanged = true;
       }
       const takeoverKey = nextTaskId || commandId;
-      if (member && takeoverKey && !chat.messages.some((item) => item.takeoverFor === takeoverKey)) {
+      if (member && takeoverKey && !hasTrackingMarker(chat, 'takeoverFor', { commandId, taskId: nextTaskId })) {
         const reasonTitle = await crewSelectionReason(db?.raw?.ctox_harness_events, String(taskDoc?.task_id || taskDoc?.id || nextTaskId).replace(/^queue-/, ''));
         chat.messages.push({
           id: `takeover_${crypto.randomUUID()}`,
@@ -4197,7 +4206,8 @@ async function syncTrackedMessages({ state, db, sync = null }) {
         || commandDoc?.executionProgress
         || null;
       const normalizedProgress = normalizeExecutionProgress(nextProgress);
-      if (JSON.stringify(message.executionProgress || null) !== JSON.stringify(normalizedProgress)) {
+      if (normalizedProgress
+        && JSON.stringify(message.executionProgress || null) !== JSON.stringify(normalizedProgress)) {
         message.executionProgress = normalizedProgress;
         changed = true;
         chatChanged = true;
@@ -4221,7 +4231,9 @@ async function syncTrackedMessages({ state, db, sync = null }) {
         changed = true;
         chatChanged = true;
       }
-      const outbound = extractOutboundText(commandDoc) || extractOutboundText(taskDoc);
+      const outbound = shouldDeliverTrackedOutbound(nextStatus, commandDoc, taskDoc)
+        ? (extractOutboundText(commandDoc) || extractOutboundText(taskDoc))
+        : '';
       // A tracked message starts with only its command id and gains its task id
       // the moment the queue admits it. Matching the marker against the current
       // identity alone therefore missed a reply that had been filed under the
@@ -4303,6 +4315,9 @@ function trackedMessageNeedsSync(chat, message) {
   const status = message?.status || 'queued';
   if (isActiveTrackingStatus(status)) return true;
   if (!isTerminalTrackingStatus(status)) return false;
+  if ((isFailureStatus(status) || isCancelledTrackingStatus(status)) && !trackingIdFromMessage(message, 'task')) {
+    return true;
+  }
   return !hasTerminalReplyForTracking(chat, message);
 }
 
@@ -4410,11 +4425,16 @@ async function findDoc(collection, id) {
 }
 
 function preferredTrackingStatus(commandDoc, taskDoc, currentStatus = '') {
-  const commandStatus = firstStatusValue(commandDoc, ['execution_phase', 'task_status', 'status', 'route_status', 'terminal_status']);
-  const taskStatus = firstStatusValue(taskDoc, ['execution_phase', 'task_status', 'status', 'route_status', 'terminal_status']);
-  const terminalStatus = [commandStatus, taskStatus].find(isTerminalTrackingStatus);
+  const commandOutcome = firstStatusValue(commandDoc, ['terminal_status', 'task_status', 'status', 'route_status']);
+  const taskOutcome = firstStatusValue(taskDoc, ['terminal_status', 'task_status', 'status', 'route_status']);
+  const commandPhase = firstStatusValue(commandDoc, ['execution_phase']);
+  const taskPhase = firstStatusValue(taskDoc, ['execution_phase']);
+  const outcomes = [commandOutcome, taskOutcome].map(canonicalTrackingStatus).filter(Boolean);
+  const terminalStatus = outcomes.find(isTerminalTrackingStatus);
   if (terminalStatus) return canonicalTrackingStatus(terminalStatus);
-  return canonicalTrackingStatus(commandStatus || taskStatus || currentStatus || '');
+  const phases = [commandPhase, taskPhase, currentStatus].map(canonicalTrackingStatus);
+  if (phases.some((status) => status === 'running')) return 'running';
+  return canonicalTrackingStatus(commandOutcome || taskOutcome || commandPhase || taskPhase || currentStatus || '');
 }
 
 async function flushChatTrackingCollections({ sync, db } = {}) {
@@ -4438,8 +4458,8 @@ function firstStatusValue(doc, fields) {
   if (!doc || typeof doc !== 'object') return '';
   for (const field of fields) {
     const value = String(doc[field] || '').trim();
-    if (value === 'none') continue;
-    if (value) return value;
+    if (!value || value === 'none' || value === 'terminal') continue;
+    return value;
   }
   return '';
 }
@@ -4516,8 +4536,23 @@ function extractOutboundText(doc) {
   return String(candidates.find((value) => String(value || '').trim()) || '').trim();
 }
 
+function shouldDeliverTrackedOutbound(status, commandDoc, taskDoc) {
+  const value = canonicalTrackingStatus(status);
+  if (isFailureStatus(value) || isCancelledTrackingStatus(value) || value === 'terminal') return false;
+  if (!isTerminalTrackingStatus(value)) {
+    const rawPhase = String(commandDoc?.execution_phase || taskDoc?.execution_phase || '').trim().toLowerCase();
+    if (rawPhase === 'terminal') return false;
+  }
+  return true;
+}
+
 function isFailureStatus(status) {
   return ['failed', 'error'].includes(String(status || '').toLowerCase());
+}
+
+function isCancelledTrackingStatus(status) {
+  const value = canonicalTrackingStatus(status);
+  return value === 'cancelled' || value === 'canceled';
 }
 
 // Every other Business OS surface (ctox, conversations, outbound) reports
@@ -4530,6 +4565,7 @@ function isBlockedTrackingStatus(status) {
 function isActiveTrackingStatus(status) {
   const value = String(status || '').toLowerCase();
   if (isBlockedTrackingStatus(value)) return true;
+  if (value === 'terminal') return true;
   return ['accepted', 'queued', 'pending', 'pending_sync', 'waiting', 'retry_wait', 'retry-wait', 'review_rework', 'review-rework', 'running', 'processing', 'executing', 'active'].includes(value);
 }
 
@@ -9050,8 +9086,11 @@ export const __businessChatTestInternals = Object.freeze({
   isTransientCommandTrackingError,
   withChatPersistenceTimeout,
   isBlockedTrackingStatus,
+  isCancelledTrackingStatus,
   isFailureStatus,
   isTerminalTrackingStatus,
   isActiveTrackingStatus,
   getTaskState,
+  preferredTrackingStatus,
+  progressShowsActiveReview,
 });

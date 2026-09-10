@@ -760,6 +760,142 @@ try {
     expect(m.navCount === 0, `390px one-chat state must not show chat nav, got ${m.navCount}`);
   });
 
+
+  await scenario(page, 'terminal-failure-reconciles-delayed-task-and-preserves-composer', {
+    count: 1,
+    messagesPerChat: 12,
+    longMessages: true,
+    reviewFailureReconciliation: true,
+    crewMembers: 1,
+  }, async (m) => {
+    expect(m.progressReviewing === true, `running review must use active review styling, got reviewing=${m.progressReviewing}`);
+    expect(m.progressPercent === '90', `running review must keep 90 percent, got ${m.progressPercent}`);
+    expect(m.activeTaskClass.includes('is-task-running'), `review chat must start running, got ${m.activeTaskClass}`);
+    expect(m.takeoverCount === 1, `historical takeover must render once, got ${m.takeoverCount}`);
+    const prepared = await page.evaluate(async () => {
+      document.querySelector('.ctox-chat-window.is-active [data-chat-maximize]').click();
+      await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-active')?.classList.contains('is-maximized'));
+      const win = document.querySelector('.ctox-chat-window.is-active');
+      const textarea = win?.querySelector('textarea[name="message"]');
+      const inspection = win?.querySelector('.ctox-chat-inspection');
+      if (inspection && inspection.open !== true) inspection.open = true;
+      textarea.focus();
+      textarea.value = 'Bitte nicht verlieren';
+      textarea.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      textarea.setSelectionRange(7, 12);
+      const pane = win?.querySelector('.ctox-chat-messages');
+      if (pane) pane.scrollTop = 12;
+      window.__chatTextarea = textarea;
+      return {
+        focused: document.activeElement === textarea,
+        selectionStart: textarea.selectionStart,
+        selectionEnd: textarea.selectionEnd,
+        scrollTop: pane?.scrollTop || 0,
+      };
+    });
+    results.push({ scenario: 'terminal-failure-prepared', prepared });
+    expect(prepared.selectionStart === 7 && prepared.selectionEnd === 12, `caret must remain in the composer, got ${prepared.selectionStart}:${prepared.selectionEnd}`);
+
+    const afterCommand = await page.evaluate(async () => {
+      window.chatHarness.upsertCommand({
+        id: 'cmd_review_fail',
+        execution_phase: 'terminal',
+        terminal_status: 'failed',
+        status: 'failed',
+        error: 'Usage limit exceeded.',
+        result: { status: 'succeeded', outbound_text: 'Die Aufgabe ist erledigt.' },
+      });
+      window.chatHarness.replaceQueueTasks([]);
+      window.chatHarness.emitTracking();
+      await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-active')?.classList.contains('is-task-failed'), 4000);
+      await window.chatHarness.waitForPaint();
+      const textarea = document.querySelector('.ctox-chat-window.is-active textarea[name="message"]');
+      return {
+        ...window.chatHarness.collect(),
+        sameTextarea: textarea === window.__chatTextarea,
+        selectionStart: textarea?.selectionStart,
+        selectionEnd: textarea?.selectionEnd,
+        scrollTop: document.querySelector('.ctox-chat-window.is-active .ctox-chat-messages')?.scrollTop || 0,
+        nestedSuccess: (document.body.innerText || '').includes('Die Aufgabe ist erledigt.'),
+        failureCount: (document.querySelector('.ctox-chat-window.is-active')?.innerText.match(/nicht abschließen/g) || []).length,
+      };
+    });
+    results.push({ scenario: 'terminal-failure-command-only', metrics: afterCommand });
+    expect(afterCommand.activeTaskClass.includes('is-task-failed'), `terminal failed command must render failed, got ${afterCommand.activeTaskClass}`);
+    expect(!afterCommand.activeTaskClass.includes('is-task-review'), 'failed chat must drop active review window styling');
+    expect(afterCommand.progressReviewing === false, 'failed chat must drop active review progress styling');
+    expect(afterCommand.progressPercent === '90', `failed chat must keep last percent, got ${afterCommand.progressPercent}`);
+    expect(!afterCommand.nestedSuccess, 'nested succeeded envelope must not become a reply');
+    expect(afterCommand.failureCount === 1, `failure must be delivered once, got ${afterCommand.failureCount}`);
+    expect(afterCommand.sameTextarea === true, 'composer textarea identity must survive the command-only failure');
+    expect(afterCommand.composerValue === 'Bitte nicht verlieren', `draft must survive command-only failure, got ${afterCommand.composerValue}`);
+    expect(afterCommand.inspectionOpen === true, 'inspector fold must survive command-only failure');
+    expect(afterCommand.maximized === true, 'maximized state must survive command-only failure');
+    expect(afterCommand.scrollTop === 12, `history scroll must survive command-only failure, got ${afterCommand.scrollTop}`);
+
+    const afterTask = await page.evaluate(async () => {
+      window.chatHarness.upsertCommand({
+        id: 'cmd_review_fail',
+        task_id: 'task_review_fail',
+        execution_phase: 'terminal',
+        terminal_status: 'failed',
+        status: 'failed',
+        error: 'Usage limit exceeded.',
+        result: { status: 'succeeded', outbound_text: 'Die Aufgabe ist erledigt.' },
+      });
+      window.chatHarness.upsertQueueTask({
+        id: 'task_review_fail',
+        command_id: 'cmd_review_fail',
+        status: 'failed',
+        status_note: 'Usage limit exceeded.',
+        crew_member_id: 'member_0',
+      });
+      window.chatHarness.emitTracking();
+      await window.chatHarness.waitFor(() => Boolean(document.querySelector('.ctox-chat-window.is-active [data-task-id="task_review_fail"]')), 4000);
+      await window.chatHarness.waitForPaint();
+      const textarea = document.querySelector('.ctox-chat-window.is-active textarea[name="message"]');
+      return {
+        ...window.chatHarness.collect(),
+        sameTextarea: textarea === window.__chatTextarea,
+        selectionStart: textarea?.selectionStart,
+        focused: document.activeElement === textarea,
+        nestedSuccess: (document.body.innerText || '').includes('Die Aufgabe ist erledigt.'),
+        failureCount: ((document.querySelector('.ctox-chat-window.is-active .ctox-chat-messages')?.textContent.match(/nicht abschließen/g) || []).length)
+          + ((document.querySelector('.ctox-chat-window.is-active .ctox-chat-inspection')?.textContent.match(/nicht abschließen/g) || []).length),
+      };
+    });
+    results.push({ scenario: 'terminal-failure-delayed-task', metrics: afterTask });
+    expect(afterTask.activeTaskClass.includes('is-task-failed'), `delayed failed task must keep failed state, got ${afterTask.activeTaskClass}`);
+    expect(afterTask.takeoverCount === 1, `historical takeover must remain unique after delayed member, got ${afterTask.takeoverCount}`);
+    expect(!afterTask.nestedSuccess, 'delayed task must not publish nested succeeded text');
+    expect(afterTask.progressReviewing === false, 'delayed failed task must not revive review styling');
+    expect(afterTask.progressPercent === '90', `delayed failed task must keep 90 percent, got ${afterTask.progressPercent}`);
+    expect(afterTask.sameTextarea === true, 'composer textarea identity must survive delayed task evidence');
+    expect(afterTask.composerValue === 'Bitte nicht verlieren', `draft must survive delayed task evidence, got ${afterTask.composerValue}`);
+    expect(afterTask.inspectionOpen === true, 'inspector fold must survive delayed task evidence');
+    expect(afterTask.maximized === true, 'maximized state must survive delayed task evidence');
+    expect((afterTask.activeMessageText + afterTask.activeInspectionText).includes('Usage limit exceeded'), 'delayed failed task note must appear');
+
+    const restored = await page.evaluate(async () => {
+      const restore = document.querySelector('.ctox-chat-window.is-active [data-chat-maximize]');
+      restore?.click();
+      await window.chatHarness.waitFor(() => !document.querySelector('.ctox-chat-window.is-active')?.classList.contains('is-maximized'));
+      await window.chatHarness.waitForPaint();
+      const textarea = document.querySelector('.ctox-chat-window.is-active textarea[name="message"]');
+      return {
+        ...window.chatHarness.collect(),
+        sameTextarea: textarea === window.__chatTextarea,
+      };
+    });
+    results.push({ scenario: 'terminal-failure-restore', metrics: restored });
+    expect(restored.maximized === false, 'Restore must leave the maximized state');
+    expect(restored.sameTextarea === true, 'Restore must keep the same composer textarea');
+    expect(restored.composerValue === 'Bitte nicht verlieren', `Restore must keep the draft, got ${restored.composerValue}`);
+    expect(restored.inspectionOpen === true, 'Restore must keep the inspector fold');
+    expect(restored.progressPercent === '90', `Restore must keep last progress percent, got ${restored.progressPercent}`);
+    expect(restored.progressReviewing === false, 'Restore must not revive review styling');
+  });
+
   const blockingConsole = consoleEvents.filter((event) => {
     if (event.type === 'warning') return false;
     if (/favicon/i.test(event.text || '')) return false;
@@ -1024,13 +1160,20 @@ function harnessHtml() {
           .map(message => ({ id: message.taskId, command_id: message.commandId,
             status: message.status, execution_progress: message.executionProgress,
             ...(options.crewMembers ? { crew_member_id: 'member_0' } : {}) }))) : [];
+      const commandDocs = Array.isArray(options.commandDocs) ? options.commandDocs
+        : options.reviewFailureReconciliation ? [{
+            id: 'cmd_review_fail',
+            execution_phase: 'running',
+            terminal_status: 'none',
+            status: 'running',
+          }] : [];
       const initStarted = performance.now();
       initBusinessChat({
 
         session: { authenticated: true, user: { id: owner, name: 'Harness User' } },
         commandBus: makeCommandBus(options),
         sync: makeReadiness(),
-        db: makeDb(chats, options.dbDelay || 0, Boolean(options.dbTransientError), Boolean(options.dbDeleteError), Number(options.crewMembers) || 0, queueTasks, Boolean(options.holdChatReads)),
+        db: makeDb(chats, options.dbDelay || 0, Boolean(options.dbTransientError), Boolean(options.dbDeleteError), Number(options.crewMembers) || 0, queueTasks, Boolean(options.holdChatReads), commandDocs),
         getActiveModule: () => ({ id: 'ctox', name: 'CTOX' }),
       });
       await waitFor(() => document.querySelector('[data-chat-dock]'));
@@ -1054,11 +1197,14 @@ function harnessHtml() {
         });
       }
       const failedChat = Boolean(options.failedChat) && index === Number(options.activeIndex || 0);
+      const reviewFail = Boolean(options.reviewFailureReconciliation) && index === Number(options.activeIndex || 0);
       const trackingId = groupedResearch
         ? 'task_research_' + index
-        : failedChat
-          ? 'task_failed_' + index
-          : '';
+        : reviewFail
+          ? 'cmd_review_fail'
+          : failedChat
+            ? 'task_failed_' + index
+            : '';
       if (groupedResearch) {
         messages.push({ id: 'request_' + index, role: 'user', text: 'Bitte recherchiere Auftrag ' + (index + 1), createdAt });
         const statuses = ['running', 'queued', 'success', 'success', 'success', 'failed'];
@@ -1092,6 +1238,43 @@ function harnessHtml() {
           };
         }
         messages.push(trackingMessage);
+      } else if (reviewFail) {
+        messages.push({ id: 'request_review_fail', role: 'user', text: 'Bitte prüfe die Rechnung.', createdAt });
+        messages.push({
+          id: 'status_review_fail',
+          role: 'ctox',
+          text: 'Die Prüfung läuft.',
+          commandId: 'cmd_review_fail',
+          status: 'running',
+          executionProgress: {
+            version: 1,
+            revision: 3,
+            phase: 'review',
+            percent: 90,
+            current_step: 3,
+            completed_steps: 2,
+            total_steps: 3,
+            steps: [
+              { position: 1, label: 'Lesen', status: 'completed', activity_turns: 2 },
+              { position: 2, label: 'Prüfen', status: 'completed', activity_turns: 3 },
+              { position: 3, label: 'Antworten', status: 'completed', activity_turns: 1 },
+            ],
+            review: { status: 'in_progress' },
+            activity_turns: { total: 8, thinking: 5, tools: 3, last_kind: 'thinking' },
+            updated_at_ms: createdAt + 500,
+          },
+          createdAt: createdAt + 500,
+        });
+        messages.push({
+          id: 'takeover_review_fail',
+          role: 'ctox',
+          text: 'Pico übernimmt.',
+          takeoverFor: 'cmd_review_fail',
+          commandId: 'cmd_review_fail',
+          crewMemberId: 'member_0',
+          status: 'running',
+          createdAt: createdAt + 600,
+        });
       } else if (failedChat) {
         messages.push({
           id: 'status_failed_' + index,
@@ -1112,7 +1295,8 @@ function harnessHtml() {
         owner_user_id: owner,
         lastTrackingId: trackingId,
         messages,
-        draft: '',
+        draft: reviewFail ? 'Bitte nicht verlieren' : '',
+        inspectionOpen: Boolean(reviewFail),
         contextMeta: groupedResearch
           ? {
               module: moduleName,
@@ -1190,7 +1374,7 @@ function harnessHtml() {
       }));
     }
 
-    function makeDb(chats, delayMs, transientError, deleteError, crewMemberCount = 0, queueTasks = [], holdChatReads = false) {
+    function makeDb(chats, delayMs, transientError, deleteError, crewMemberCount = 0, queueTasks = [], holdChatReads = false, commandDocs = []) {
       const store = new Map(chats.map((chat) => [chat.id, structuredClone(chat)]));
       const readStats = { started: 0, completed: 0, crewReads: 0, crewSubscriptions: 0 };
       const chatReadGate = new Promise((resolve) => {
@@ -1207,6 +1391,33 @@ function harnessHtml() {
         await emitChats();
       };
       const crewMembers = makeCrewMembers(crewMemberCount);
+      const commands = commandDocs.map((doc) => structuredClone(doc));
+      const tasks = queueTasks.map((doc) => structuredClone(doc));
+      const commandSubscribers = new Set();
+      const queueSubscribers = new Set();
+      const upsertRow = (rows, doc) => {
+        const index = rows.findIndex((row) => row.id === doc.id);
+        if (index >= 0) rows[index] = structuredClone(doc);
+        else rows.push(structuredClone(doc));
+      };
+      const docsMatching = (rows, query = {}) => {
+        const ids = query?.selector?.id?.$in;
+        const commandIds = query?.selector?.command_id?.$in;
+        if (Array.isArray(ids) && ids.length) return rows.filter((row) => ids.map(String).includes(String(row.id)));
+        if (Array.isArray(commandIds) && commandIds.length) {
+          return rows.filter((row) => commandIds.map(String).includes(String(row.command_id || row.commandId || '')));
+        }
+        return rows;
+      };
+      window.chatHarness.upsertCommand = (doc) => upsertRow(commands, doc);
+      window.chatHarness.upsertQueueTask = (doc) => upsertRow(tasks, doc);
+      window.chatHarness.replaceQueueTasks = (docs) => {
+        tasks.splice(0, tasks.length, ...docs.map((doc) => structuredClone(doc)));
+      };
+      window.chatHarness.emitTracking = () => {
+        for (const callback of [...commandSubscribers]) callback({ documents: [] });
+        for (const callback of [...queueSubscribers]) callback({ documents: [] });
+      };
       const delay = () => new Promise((resolve) => setTimeout(resolve, delayMs));
       const maybeThrow = async () => {
         await delay();
@@ -1238,10 +1449,33 @@ function harnessHtml() {
             findOne: (id) => ({ exec: async () => { await maybeThrow(); return docFor(id); } }),
             insert: async (doc) => { await maybeThrow(); store.set(doc.id, structuredClone(doc)); return docFor(doc.id); },
           },
-          business_commands: { $: { subscribe: () => ({ unsubscribe() {} }) } },
+          business_commands: {
+            $: {
+              subscribe: (callback) => {
+                commandSubscribers.add(callback);
+                return { unsubscribe: () => commandSubscribers.delete(callback) };
+              },
+            },
+            find: (query) => ({ exec: async () => { await maybeThrow(); return docsMatching(commands, query).map((row) => ({ toJSON: () => structuredClone(row) })); } }),
+            findOne: (id) => ({ exec: async () => {
+              await maybeThrow();
+              const row = commands.find((item) => item.id === id);
+              return row ? { toJSON: () => structuredClone(row) } : null;
+            } }),
+          },
           ctox_queue_tasks: {
-            $: { subscribe: () => ({ unsubscribe() {} }) },
-            find: () => ({ exec: async () => { await maybeThrow(); return queueTasks.map((task) => ({ toJSON: () => structuredClone(task) })); } }),
+            $: {
+              subscribe: (callback) => {
+                queueSubscribers.add(callback);
+                return { unsubscribe: () => queueSubscribers.delete(callback) };
+              },
+            },
+            find: (query) => ({ exec: async () => { await maybeThrow(); return docsMatching(tasks, query).map((row) => ({ toJSON: () => structuredClone(row) })); } }),
+            findOne: (id) => ({ exec: async () => {
+              await maybeThrow();
+              const row = tasks.find((item) => item.id === id);
+              return row ? { toJSON: () => structuredClone(row) } : null;
+            } }),
           },
           ctox_crew_members: {
             $: { subscribe: (callback) => {
@@ -1402,6 +1636,12 @@ function harnessHtml() {
         activeStatusText: document.querySelector('.ctox-chat-window.is-active .ctox-chat-status-badge')?.textContent?.trim() || '',
         activeMessageText: document.querySelector('.ctox-chat-window.is-active .ctox-chat-messages')?.textContent?.trim() || '',
         activeInspectionText: document.querySelector('.ctox-chat-window.is-active .ctox-chat-inspection')?.textContent?.trim() || '',
+        progressReviewing: Boolean(document.querySelector('.ctox-chat-window.is-active .ctox-progress-visual.is-reviewing')),
+        progressPercent: document.querySelector('.ctox-chat-window.is-active .ctox-progress-track[aria-valuenow]')?.getAttribute('aria-valuenow') || '',
+        takeoverCount: (document.querySelector('.ctox-chat-window.is-active')?.innerText.match(/übernimmt/g) || []).length,
+        inspectionOpen: Boolean(document.querySelector('.ctox-chat-window.is-active .ctox-chat-inspection')?.open),
+        maximized: Boolean(activeWindow?.classList.contains('is-maximized')),
+        composerValue: document.querySelector('.ctox-chat-window.is-active textarea[name="message"]')?.value || '',
         storedChats: Array.isArray(stored.chats) ? stored.chats.length : 0,
         chatReadStats: { ...window.chatHarness.chatReadStats },
         initialPaintMs: window.chatHarness.initialPaintMs,
