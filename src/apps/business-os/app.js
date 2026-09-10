@@ -60,7 +60,7 @@ import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260909-shell-v2-crew-terminal-evidence-v372';
+} from './shared/taskbar-pins.js?v=20260910-shell-v2-authoritative-pins-v373';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -81,11 +81,12 @@ const RXDB_BOOTSTRAP_VERSION_KEY = 'ctox.businessOs.rxdbBootstrapVersion';
 const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
+const TASKBAR_PIN_HYDRATION_TIMEOUT_MS = 20_000;
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260909-shell-v2-crew-terminal-evidence-v372';
+const APP_BUILD = '20260910-shell-v2-authoritative-pins-v373';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -305,6 +306,7 @@ const state = {
   governance: null,
   moduleLayout: null,
   taskbarPins: [],
+  taskbarPinsKnown: false,
   taskbarPinsUpdatedAtMs: 0,
   schemaRegistrations: new Map(),
   schemaRegistrationQueue: Promise.resolve(),
@@ -1331,7 +1333,9 @@ async function bootstrap() {
   }
   state.governance = modules.governance || null;
   state.moduleLayout = normalizeModuleLayout(await loadModuleLayout(), state.modules);
-  state.taskbarPins = normalizeTaskbarPins(readTaskbarPins(), state.modules);
+  state.taskbarPins = normalizeTaskbarPins(readTaskbarPins(), state.modules, {
+    preserveKnownEmpty: state.taskbarPinsKnown === true,
+  });
   persistModuleLayout();
   renderTabs();
   const shellUi = await loadShellUiModules();
@@ -1536,6 +1540,11 @@ async function openBusinessDataPlane(syncConfig) {
   try {
     state.syncConfig = syncConfig;
     const dbName = businessDbName(syncConfig);
+    // Pending edits and known-empty state are scoped to the database/session
+    // identity now opening. Never let a replacement race inherit them.
+    state.taskbarPins = [];
+    state.taskbarPinsKnown = false;
+    state.taskbarPinsUpdatedAtMs = 0;
 
     await openBusinessDbAndRegisterCoreCollections(dbName);
 
@@ -5286,7 +5295,9 @@ function renderTabs() {
   const fragment = document.createDocumentFragment();
   const tabsTarget = { append: (node) => fragment.append(node) };
   state.moduleLayout = normalizeModuleLayout(state.moduleLayout || readModuleLayout(), state.modules);
-  state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules);
+  state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules, {
+    preserveKnownEmpty: state.taskbarPinsKnown === true,
+  });
   const rendered = new Set();
   for (const id of state.taskbarPins) {
     const target = launchTargetForId(id);
@@ -5607,7 +5618,10 @@ function toggleTaskbarPin(targetId, shouldPin = !isTaskbarPinned(targetId)) {
   if (!launchTargetForId(targetId)) return;
   const pins = state.taskbarPins.filter((id) => id !== targetId);
   if (shouldPin) pins.push(targetId);
-  state.taskbarPins = normalizeTaskbarPins(pins, state.modules);
+  state.taskbarPins = normalizeTaskbarPins(pins, state.modules, {
+    preserveKnownEmpty: true,
+  });
+  state.taskbarPinsKnown = true;
   persistTaskbarPins();
   renderTabs();
 }
@@ -5618,7 +5632,10 @@ function moveTaskbarPinBefore(targetId, beforeTargetId) {
   const index = pins.indexOf(beforeTargetId);
   if (index >= 0) pins.splice(index, 0, targetId);
   else pins.push(targetId);
-  state.taskbarPins = normalizeTaskbarPins(pins, state.modules);
+  state.taskbarPins = normalizeTaskbarPins(pins, state.modules, {
+    preserveKnownEmpty: true,
+  });
+  state.taskbarPinsKnown = true;
   persistTaskbarPins();
   renderTabs();
 }
@@ -5632,10 +5649,14 @@ function draggedTaskbarPinId(event) {
 function readTaskbarPins() {
   const cached = decodeTaskbarPinCache(readScopedLocalStorage(TASKBAR_PINS_KEY));
   state.taskbarPinsUpdatedAtMs = cached.updatedAtMs;
-  return cached.pins.length ? cached.pins : null;
+  // A valid cache exists even when its selection is deliberately empty.
+  // Missing or malformed storage is unknown, not native/native-empty.
+  state.taskbarPinsKnown = cached.present === true;
+  return cached.pins;
 }
 
 function persistTaskbarPins() {
+  state.taskbarPinsKnown = true;
   state.taskbarPinsUpdatedAtMs = Date.now();
   writeScopedLocalStorage(
     TASKBAR_PINS_KEY,
@@ -5657,7 +5678,10 @@ function normalizeTaskbarPins(rawPins, modules, options = {}) {
     .map((id) => String(id || '').trim())
     .filter((id, index, arr) => id && valid.has(id) && arr.indexOf(id) === index);
   if (options.compactLegacyAllPins && looksLikeLegacyAllPins(pins, valid)) pins = [];
-  if (!pins.length) {
+  // Preserve only an explicitly supplied empty selection. Do not turn a
+  // non-empty native list whose ids are currently invalid into a user choice.
+  const suppliedEmpty = Array.isArray(rawPins) && rawPins.length === 0;
+  if (!pins.length && !(options.preserveKnownEmpty && suppliedEmpty)) {
     pins = DEFAULT_TASKBAR_PIN_IDS.filter((id) => valid.has(id));
     if (!pins.length) pins = listLaunchTargets('module').slice(0, 4).map((target) => target.id);
   }
@@ -5672,32 +5696,80 @@ function looksLikeLegacyAllPins(pins, valid) {
 
 async function hydrateTaskbarPinsFromDesktopLayout() {
   const database = state.db;
-  const collection = database?.collection?.('desktop_layout');
-  if (!collection) {
-    state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules);
+  const sync = state.sync;
+  const storageKey = scopedStorageKey(TASKBAR_PINS_KEY);
+  if (!sync?.readCollectionNativeDocument || !database) {
+    state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules, {
+      preserveKnownEmpty: state.taskbarPinsKnown === true,
+    });
     return;
   }
-  const doc = await collection.findOne('layout').exec();
-  if (state.db !== database) return; // Do not apply a late read to another session.
-  const layout = doc?.toJSON?.() || null;
-  const local = decodeTaskbarPinCache(readScopedLocalStorage(TASKBAR_PINS_KEY));
+  // The native wrapper owns collection lifecycle, query readiness and an
+  // opaque authority token. It rejects pending, stale and cancelled reads;
+  // it never translates them into a completed empty answer.
+  let authoritativeDocument = null;
+  try {
+    authoritativeDocument = await sync.readCollectionNativeDocument('desktop_layout', 'layout', {
+      timeoutMs: TASKBAR_PIN_HYDRATION_TIMEOUT_MS,
+    });
+  } catch (error) {
+    console.warn('[business-os] authoritative taskbar pin read failed:', error);
+    return;
+  }
+  if (state.db !== database || state.sync !== sync
+    || scopedStorageKey(TASKBAR_PINS_KEY) !== storageKey) {
+    return;
+  }
+  state.taskbarPinsKnown = true;
+  const layout = authoritativeDocument?.toJSON?.() || null;
+  const cache = decodeTaskbarPinCache(readScopedLocalStorage(TASKBAR_PINS_KEY));
+  const cachePresent = cache.present === true;
+  const pendingLocal = state.taskbarPinsKnown
+    && Number(state.taskbarPinsUpdatedAtMs || 0) > Number(cache.updatedAtMs || 0);
+  const localPins = pendingLocal ? state.taskbarPins : cache.pins;
+  const localUpdatedAtMs = pendingLocal
+    ? Number(state.taskbarPinsUpdatedAtMs || 0)
+    : Number(cache.updatedAtMs || 0);
+  const localPresent = cachePresent || pendingLocal;
   const resolved = resolveTaskbarPinState({
-    localPins: local.pins,
-    localUpdatedAtMs: local.updatedAtMs,
+    localPins,
+    localUpdatedAtMs,
+    localPresent,
     remotePins: layout?.taskbar_pins,
     remoteUpdatedAtMs: layout?.updated_at_ms,
   });
-  state.taskbarPins = state.modules.length
-    ? normalizeTaskbarPins(resolved.pins, state.modules, {
-        compactLegacyAllPins: resolved.source === 'remote',
-      })
+  const reconciledPins = resolved.source === 'local' && !localPresent
+    ? state.taskbarPins
     : resolved.pins;
-  state.taskbarPinsUpdatedAtMs = resolved.updatedAtMs || Date.now();
-  writeScopedLocalStorage(
-    TASKBAR_PINS_KEY,
-    encodeTaskbarPinCache(state.taskbarPins, state.taskbarPinsUpdatedAtMs),
-  );
-  await syncTaskbarPinsToDesktopLayout();
+  state.taskbarPins = state.modules.length
+    ? normalizeTaskbarPins(reconciledPins, state.modules, {
+      compactLegacyAllPins: resolved.source === 'remote',
+      preserveKnownEmpty: true,
+    })
+    : reconciledPins;
+  // Confirmed absence is not a user edit. Preserve zero rather than inventing
+  // an initialization timestamp; remote and real pending values retain theirs.
+  state.taskbarPinsUpdatedAtMs = Number(resolved.updatedAtMs || 0);
+  if (resolved.source === 'remote' || localUpdatedAtMs > 0) {
+    try {
+      writeScopedLocalStorage(
+        TASKBAR_PINS_KEY,
+        encodeTaskbarPinCache(state.taskbarPins, state.taskbarPinsUpdatedAtMs),
+      );
+    } catch (error) {
+      // The pending in-memory edit remains eligible for authoritative
+      // write-back even when private mode or quota blocks the cache.
+      console.warn('[business-os] taskbar pin cache write failed:', error);
+    }
+  }
+  renderTabs();
+  // Only a real, strictly newer local selection may write back. The existing
+  // authoritative handle avoids a second ordinary/local query.
+  const shouldWriteBack = resolved.source === 'local'
+    && localUpdatedAtMs > Number(layout?.updated_at_ms || 0);
+  if (shouldWriteBack && authoritativeDocument) {
+    await syncTaskbarPinsToDesktopLayout({ authoritativeDocument });
+  }
 }
 
 async function withStartupTimeout(promise, timeoutMs, fallback, label) {
@@ -5717,19 +5789,44 @@ async function withStartupTimeout(promise, timeoutMs, fallback, label) {
   }
 }
 
-async function syncTaskbarPinsToDesktopLayout() {
+async function syncTaskbarPinsToDesktopLayout(options = {}) {
   const database = state.db;
+  const sync = state.sync;
+  const storageKey = scopedStorageKey(TASKBAR_PINS_KEY);
+  if (!database) return;
+  let existing = options.authoritativeDocument || null;
+  if (!existing) {
+    if (!sync?.readCollectionNativeDocument) return;
+    try {
+      existing = await sync.readCollectionNativeDocument('desktop_layout', 'layout', {
+        timeoutMs: TASKBAR_PIN_HYDRATION_TIMEOUT_MS,
+      });
+    } catch (error) {
+      // Keep the in-memory pending edit. Storage/cache remains best effort.
+      console.warn('[business-os] taskbar pin write-back read failed:', error);
+      return;
+    }
+  }
+  if (state.db !== database || state.sync !== sync
+    || scopedStorageKey(TASKBAR_PINS_KEY) !== storageKey) {
+    return;
+  }
   const collection = database?.collection?.('desktop_layout');
   if (!collection) return;
-  const existing = await collection.findOne('layout').exec();
-  if (state.db !== database) return;
   const existingLayout = existing?.toJSON?.() || null;
-  const remoteUpdatedAtMs = Number(existingLayout?.updated_at_ms || 0);
-  if (remoteUpdatedAtMs > Number(state.taskbarPinsUpdatedAtMs || 0)) {
+  const resolved = resolveTaskbarPinState({
+    localPins: state.taskbarPins,
+    localUpdatedAtMs: state.taskbarPinsUpdatedAtMs,
+    localPresent: state.taskbarPinsKnown === true,
+    remotePins: existingLayout?.taskbar_pins,
+    remoteUpdatedAtMs: existingLayout?.updated_at_ms,
+  });
+  if (resolved.source === 'remote') {
     state.taskbarPins = normalizeTaskbarPins(existingLayout.taskbar_pins, state.modules, {
       compactLegacyAllPins: true,
+      preserveKnownEmpty: true,
     });
-    state.taskbarPinsUpdatedAtMs = remoteUpdatedAtMs;
+    state.taskbarPinsUpdatedAtMs = Number(existingLayout?.updated_at_ms || 0);
     writeScopedLocalStorage(
       TASKBAR_PINS_KEY,
       encodeTaskbarPinCache(state.taskbarPins, state.taskbarPinsUpdatedAtMs),
@@ -5737,21 +5834,25 @@ async function syncTaskbarPinsToDesktopLayout() {
     renderTabs();
     return;
   }
+  // Only a genuine user edit can reach here with a timestamp. Confirmed
+  // absence and unchanged values must not invent one or create a layout.
+  if (!state.taskbarPinsKnown || Number(state.taskbarPinsUpdatedAtMs || 0) <= 0) return;
   const remotePins = Array.isArray(existingLayout?.taskbar_pins)
     ? existingLayout.taskbar_pins.map((id) => String(id || '').trim()).filter(Boolean)
-    : [];
+    : null;
   const localPins = Array.isArray(state.taskbarPins)
     ? state.taskbarPins.map((id) => String(id || '').trim()).filter(Boolean)
     : [];
   if (existing
-    && remoteUpdatedAtMs === Number(state.taskbarPinsUpdatedAtMs || 0)
+    && Number(existingLayout?.updated_at_ms || 0) === Number(state.taskbarPinsUpdatedAtMs || 0)
+    && Array.isArray(remotePins)
     && remotePins.length === localPins.length
     && remotePins.every((id, index) => id === localPins[index])) {
     return;
   }
   const patch = {
     taskbar_pins: state.taskbarPins,
-    updated_at_ms: state.taskbarPinsUpdatedAtMs || Date.now(),
+    updated_at_ms: Number(state.taskbarPinsUpdatedAtMs || 0),
   };
   if (existing) {
     await existing.incrementalPatch(patch);

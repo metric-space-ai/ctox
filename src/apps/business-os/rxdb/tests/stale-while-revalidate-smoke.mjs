@@ -100,6 +100,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
     sidecar,
     collectionName: 'business_records',
     schemaVersion: 1,
+    queryGeneration: () => 'swr-authority-generation',
     requestQueryFetch: async () => {
       fetches += 1;
       if (fetches === 1) return { documents: [{ id: 'a', status: 'open' }], authoritativeRevision: 'r1' };
@@ -157,6 +158,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
     sidecar,
     collectionName: 'business_records',
     schemaVersion: 1,
+    queryGeneration: () => 'swr-authority-generation',
     requestQueryFetch: async () => {
       fetches += 1;
       if (fetches === 1) {
@@ -185,10 +187,10 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
     });
   assert((await stale).length === 1, 'concurrent non-strict read still serves stale data');
   await settle();
-  assert(!strictResolved, 'concurrent strict read must await the shared remote fetch');
+  assert(!strictResolved, 'concurrent strict read must await its authoritative refresh');
   release();
   assert((await strict).length === 2, 'concurrent strict read returns the refreshed window');
-  assert(fetches === 2, `strict and stale reads share one refresh (got ${fetches} fetches)`);
+  assert(fetches === 3, `strict read remains isolated from the untyped SWR refresh (got ${fetches} fetches)`);
 }
 
 // --- 4. reconnect-abort never tombstones ever-complete window members -------

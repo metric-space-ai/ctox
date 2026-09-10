@@ -47,6 +47,22 @@ async function runDesktopPinReload({ page, readNativeLayout, outputPath }) {
       held = false;
       for (const { socket, message } of messages.splice(0)) socket.send(message);
     };
+    await context.addInitScript(() => {
+      const writes = [];
+      globalThis.__ctoxPinCacheWrites = writes;
+      const originalSetItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function setItem(key, value) {
+        if (key === 'ctox.businessOs.taskbarPins' || String(key || '').includes('.taskbarPins')) {
+          writes.push({
+            at: Date.now(),
+            key,
+            value: String(value || ''),
+            stack: new Error().stack || '',
+          });
+        }
+        return originalSetItem.call(this, key, value);
+      };
+    });
     await context.routeWebSocket(/.*/, socket => {
       const server = socket.connectToServer();
       server.onMessage(message => {
@@ -71,10 +87,14 @@ async function runDesktopPinReload({ page, readNativeLayout, outputPath }) {
     const pending = await fresh.evaluate(pinKey => ({
       cache: localStorage.getItem(pinKey),
       timestamp: globalThis.ctoxBusinessOsSmoke.state.taskbarPinsUpdatedAtMs,
+      known: globalThis.ctoxBusinessOsSmoke.state.taskbarPinsKnown,
+      pinWrites: globalThis.__ctoxPinCacheWrites || [],
     }), pinKey);
     report.pending = pending;
     assert.equal(pending.cache, null, 'unanswered native layout must not create a pin cache');
     assert.equal(Number(pending.timestamp || 0), 0, 'startup must not invent a pin timestamp');
+    assert.equal(pending.known, false, 'pending authority must remain unknown');
+    assert.equal(pending.pinWrites.length, 0, 'no first pin-cache writer may run before native authority');
     assert.ok(matches(await readNativeLayout()), 'native pins changed before signaling release');
     if (gateError) throw gateError;
     assert.ok(messages.length > 0, 'test must actually hold signaling messages');

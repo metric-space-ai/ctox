@@ -1654,7 +1654,7 @@ var QueryMetaStorage = class {
     await this.backend.putQueryWindow(record);
     return record;
   }
-  async upsertQueryWindow({ collection, queryFingerprint: queryFingerprint2, offset, limit, documentIds, complete, authoritativeRevision, satisfiedRevision = null, queryShape = null }) {
+  async upsertQueryWindow({ collection, queryFingerprint: queryFingerprint2, offset, limit, documentIds, complete, authoritativeRevision, satisfiedRevision = null, satisfiedGeneration = null, queryShape = null }) {
     const now = this.clock();
     const existing = await this.backend.getQueryWindow(
       [collection, queryFingerprint2, offset, limit].join("|")
@@ -1676,6 +1676,7 @@ var QueryMetaStorage = class {
       // Opaque caller requireRevision token this window's last successful
       // fetch satisfied — distinct from the server echo above.
       satisfiedRevision: satisfiedRevision ?? null,
+      satisfiedGeneration: satisfiedGeneration ?? null,
       queryShape: queryShape && typeof queryShape === "object" ? structuredCloneSafe3(queryShape) : null,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -7467,6 +7468,9 @@ function createQueryDemandLoader({
   status = null,
   clock = Date.now,
   queryWindowRevalidateMs = DEFAULT_QUERY_WINDOW_REVALIDATE_MS,
+  // Opaque identity of the bridge/connection generation. Strict
+  // requireRevision reads must never cross this boundary.
+  queryGeneration = null,
   // Origin stamp (object or provider fn) for every document this loader
   // writes into the primary store. Demand-fetched documents ARE master
   // state: without the stamp they counted as unsynced LOCAL writes, so the
@@ -7489,9 +7493,22 @@ function createQueryDemandLoader({
   const coordinatedByFingerprint = /* @__PURE__ */ new Map();
   let nextRequestSequence = 0;
   const resolvingByInput = /* @__PURE__ */ new Map();
+  const consumerSignals = /* @__PURE__ */ new WeakMap();
+  let nextConsumerSignalSequence = 0;
   return {
-    async resolveQuery(query, { window: window2 } = {}) {
+    async resolveQuery(query, { window: window2, signal } = {}) {
       const normalizedWindow = normalizeWindow(window2, query);
+      const strictRequireRevision = Boolean(query?.requireRevision);
+      const generation = strictRequireRevision ? String(queryGeneration?.() || "") : "";
+      if (strictRequireRevision && !generation) {
+        throw new Error("QUERY_GENERATION_REQUIRED: strict demand read has no bridge generation");
+      }
+      const consumerSignal = signal && typeof signal.addEventListener === "function" ? signal : null;
+      let signalToken = "";
+      if (consumerSignal) {
+        signalToken = consumerSignals.get(consumerSignal) || `signal-${nextConsumerSignalSequence += 1}`;
+        consumerSignals.set(consumerSignal, signalToken);
+      }
       const fingerprintInput = {
         collection: collectionName,
         schemaVersion: schemaVersion ?? 0,
@@ -7503,7 +7520,9 @@ function createQueryDemandLoader({
       };
       const inputKey = JSON.stringify({
         ...fingerprintInput,
-        requireRevision: query?.requireRevision ?? null
+        requireRevision: query?.requireRevision ?? null,
+        requireGeneration: generation || null,
+        signalToken: signalToken || null
       });
       const existingInvocation = resolvingByInput.get(inputKey);
       if (existingInvocation) {
@@ -7516,25 +7535,53 @@ function createQueryDemandLoader({
         requestId,
         fingerprint: null,
         cancelledReason: null,
-        rejectCancellation: null
+        rejectCancellation: null,
+        consumerCancelled: false,
+        detachConsumerSignal: null
       };
       const cancellationPromise = new Promise((_, reject) => {
         invocationEntry.rejectCancellation = reject;
       });
       cancellationPromise.catch(() => {
       });
+      if (consumerSignal) {
+        const abortConsumer = () => {
+          if (invocationEntry.cancelledReason) return;
+          invocationEntry.consumerCancelled = true;
+          invocationEntry.cancelledReason = "consumer-abort";
+          invocationEntry.rejectCancellation?.(createQueryCancelledError("consumer-abort"));
+          Promise.resolve().then(() => requestCancel?.({
+            requestId: invocationEntry.requestId,
+            fingerprint: invocationEntry.fingerprint,
+            reason: "consumer-abort"
+          })).catch(() => {
+          });
+        };
+        if (consumerSignal.aborted) abortConsumer();
+        else consumerSignal.addEventListener("abort", abortConsumer, { once: true });
+        invocationEntry.detachConsumerSignal = () => {
+          consumerSignal.removeEventListener("abort", abortConsumer);
+          invocationEntry.detachConsumerSignal = null;
+        };
+      }
+      const assertFresh = () => {
+        throwIfQueryCancelled(invocationEntry);
+        if (strictRequireRevision && queryGeneration?.() !== generation) {
+          throw createQueryGenerationChangedError();
+        }
+      };
       const invocationJob = (async () => {
         const fingerprint = await queryFingerprint(fingerprintInput);
         invocationEntry.fingerprint = fingerprint;
-        throwIfQueryCancelled(invocationEntry);
+        assertFresh();
         const sidecarKey = [collectionName, fingerprint, normalizedWindow.offset, normalizedWindow.limit];
         const cached = await sidecar.getQueryWindow(sidecarKey);
-        throwIfQueryCancelled(invocationEntry);
+        assertFresh();
         const cachedDocumentsAvailable = await queryWindowDocumentsAvailable(
           storageCollection,
           cached?.documentIds
         );
-        throwIfQueryCancelled(invocationEntry);
+        assertFresh();
         if (cached && (cached.complete || cached.everCompleted) && !cachedDocumentsAvailable) {
           await sidecar.invalidateQueryWindow(sidecarKey);
           cached.complete = false;
@@ -7546,7 +7593,16 @@ function createQueryDemandLoader({
         const mutableMembershipWindowStale = isMutableMembershipCollection(collectionName) && cached && Array.isArray(cached.documentIds) && cached.documentIds.length > 0 && clock() - Number(cached.updatedAt || cached.createdAt || 0) >= MUTABLE_QUERY_MEMBERSHIP_REVALIDATE_MS;
         const queryWindowStale = cached && clock() - Number(cached.updatedAt || cached.createdAt || 0) >= boundedQueryWindowRevalidateMs;
         if (cached && cached.complete && cachedDocumentsAvailable && !emptyWindowStale && !mutableMembershipWindowStale && !queryWindowStale) {
-          if (query?.requireRevision && cached.satisfiedRevision !== query.requireRevision) {
+          if (strictRequireRevision) {
+            if (cached.satisfiedRevision === query.requireRevision && cached.satisfiedGeneration === generation && !controlPlaneWindowStale) {
+              await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
+              return readLocalDocuments(
+                storageCollection,
+                query,
+                normalizedWindow,
+                cached.documentIds
+              );
+            }
           } else if (!controlPlaneWindowStale) {
             await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
             return readLocalDocuments(
@@ -7557,7 +7613,7 @@ function createQueryDemandLoader({
             );
           }
         }
-        const dedupKey = `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}`;
+        const dedupKey = strictRequireRevision ? `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}|strict|${query.requireRevision}|${generation}` : `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}`;
         const startFetchJob = () => {
           if (inflightByFingerprint.has(dedupKey)) {
             bumpStatus(status, "queryFetchDedupHitCount");
@@ -7569,6 +7625,7 @@ function createQueryDemandLoader({
           const job = (async () => {
             const startedAt = clock();
             try {
+              assertFresh();
               const result = await Promise.race([
                 requestQueryFetch({
                   requestId,
@@ -7586,7 +7643,9 @@ function createQueryDemandLoader({
                 }),
                 cancellationPromise
               ]);
+              assertFresh();
               await materializeChunks(storageCollection, result.documents || [], resolveReplicationOrigin());
+              assertFresh();
               const documentIds = (result.documents || []).map(extractId).filter(Boolean);
               await sidecar.upsertQueryWindow({
                 collection: collectionName,
@@ -7597,14 +7656,17 @@ function createQueryDemandLoader({
                 complete: true,
                 authoritativeRevision: result.authoritativeRevision ?? null,
                 satisfiedRevision: query?.requireRevision ?? null,
+                satisfiedGeneration: strictRequireRevision ? generation : null,
                 queryShape: {
                   selector: query?.selector ?? {},
                   sort: normalizeSort(query?.sort)
                 }
               });
+              assertFresh();
               await sidecar.touchDocuments(collectionName, documentIds, {
                 estimatedBytes: estimateBytesPerDocument(result.documents || [])
               });
+              assertFresh();
               bumpStatus(status, "queryFetchSuccessCount");
               if (status) status.lastQueryFetchMs = clock() - startedAt;
               v15Log("fetch:ok", { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
@@ -7613,6 +7675,7 @@ function createQueryDemandLoader({
               if (isQueryCancelledError(error)) {
                 bumpStatus(status, "queryFetchCancelCount");
                 v15Log("fetch:cancel", { fingerprint, error: String(error?.message ?? error) });
+                if (strictRequireRevision || invocationEntry.consumerCancelled) throw error;
                 return readLocalDocuments(
                   storageCollection,
                   query,
@@ -7634,6 +7697,9 @@ function createQueryDemandLoader({
         const runCoordinatedFetchJob = async () => {
           if (!multiTabBroker?.claim) return startFetchJob();
           if (multiTabBroker.closed) {
+            if (strictRequireRevision || invocationEntry.consumerCancelled) {
+              throw createQueryCancelledError("multi-tab-broker-closed");
+            }
             return readLocalDocuments(
               storageCollection,
               query,
@@ -7641,7 +7707,9 @@ function createQueryDemandLoader({
               cached?.documentIds
             );
           }
+          assertFresh();
           const leader = await multiTabBroker.claim(dedupKey);
+          assertFresh();
           if (leader) {
             try {
               return await startFetchJob();
@@ -7650,7 +7718,11 @@ function createQueryDemandLoader({
             }
           }
           await multiTabBroker.waitForRemote?.(dedupKey, 5e3);
+          assertFresh();
           if (multiTabBroker.closed) {
+            if (strictRequireRevision || invocationEntry.consumerCancelled) {
+              throw createQueryCancelledError("multi-tab-broker-closed");
+            }
             return readLocalDocuments(
               storageCollection,
               query,
@@ -7659,7 +7731,8 @@ function createQueryDemandLoader({
             );
           }
           const materialized = await sidecar.getQueryWindow(sidecarKey);
-          if (materialized?.complete && await queryWindowDocumentsAvailable(storageCollection, materialized.documentIds)) {
+          assertFresh();
+          if (materialized?.complete && await queryWindowDocumentsAvailable(storageCollection, materialized.documentIds) && (!strictRequireRevision || materialized.satisfiedRevision === query.requireRevision && materialized.satisfiedGeneration === generation)) {
             bumpStatus(status, "queryFetchDedupHitCount");
             return readLocalDocuments(
               storageCollection,
@@ -7669,8 +7742,12 @@ function createQueryDemandLoader({
             );
           }
           const takeover = await multiTabBroker.claim(dedupKey);
+          assertFresh();
           if (!takeover) {
             if (multiTabBroker.closed) {
+              if (strictRequireRevision || invocationEntry.consumerCancelled) {
+                throw createQueryCancelledError("multi-tab-broker-closed");
+              }
               return readLocalDocuments(
                 storageCollection,
                 query,
@@ -7723,8 +7800,10 @@ function createQueryDemandLoader({
       try {
         return await invocationJob;
       } finally {
+        invocationEntry.detachConsumerSignal?.();
         if (resolvingByInput.get(inputKey)?.job === invocationJob) resolvingByInput.delete(inputKey);
         invocationEntry.rejectCancellation = null;
+        invocationEntry.detachConsumerSignal = null;
       }
     },
     inflightSize() {
@@ -7993,6 +8072,13 @@ function createQueryCancelledError(reason) {
 function throwIfQueryCancelled(invocationEntry) {
   if (!invocationEntry.cancelledReason) return;
   throw createQueryCancelledError(invocationEntry.cancelledReason);
+}
+function createQueryGenerationChangedError() {
+  const error = new Error("QUERY_CANCELLED: generation-replaced");
+  error.code = "QUERY_CANCELLED";
+  error.retryable = false;
+  error.generationChanged = true;
+  return error;
 }
 var v15LogSink = null;
 function setV15LogSink(fn) {
@@ -9269,6 +9355,15 @@ function randomTabId() {
 }
 
 // src/apps/business-os/rxdb/src/replication-webrtc.mjs
+var GENERATION_OBJECT_IDS = /* @__PURE__ */ new WeakMap();
+var nextGenerationObjectId = 0;
+function generationObjectId(value) {
+  if (!value || typeof value !== "object" && typeof value !== "function") return String(value || "");
+  if (!GENERATION_OBJECT_IDS.has(value)) {
+    GENERATION_OBJECT_IDS.set(value, `obj-${nextGenerationObjectId += 1}`);
+  }
+  return GENERATION_OBJECT_IDS.get(value);
+}
 var ACTIVE_COLLECTIONS_METHOD = "rxdb.activeCollections";
 var GLOBAL_QUERY_META_BUDGET_BYTES = 512 * 1024 * 1024;
 var DEFAULT_QUERY_META_BUDGET_BYTES = 6 * 1024 * 1024;
@@ -10102,6 +10197,7 @@ var CtoxWebRtcReplicationState = class {
     this.canceled$ = new CtoxSubject(false);
     this.peerStates$ = new CtoxSubject(/* @__PURE__ */ new Map());
     this.transportStatus$ = new CtoxSubject({});
+    this.queryReady$ = new CtoxSubject(null);
     this.masterChange$ = new CtoxSubject();
     this.shared = null;
     this.initialReplicationDeferred = createDeferred();
@@ -10131,9 +10227,76 @@ var CtoxWebRtcReplicationState = class {
     this.demandStatus = createV1_5StatusState();
     this.schemaHashValue = null;
     this.peerReadyPromisesByPeer = /* @__PURE__ */ new Map();
+    this.queryReadyAttempt = null;
   }
   get peer() {
     return this.shared?.peer || null;
+  }
+  collectionQueryGenerationToken(peerId = this.activeRemotePeerId) {
+    const negotiated = this.shared?.negotiated || null;
+    if (!negotiated || negotiated.peerId !== peerId) return "";
+    const connection = this.shared?.peer?.connections?.get?.(peerId) || null;
+    if (!this.shared?.isPeerOpen?.(peerId)) return "";
+    return JSON.stringify({
+      databaseName: this.collection?.storageCollection?.databaseName || "",
+      collectionName: this.collection?.name || "",
+      schemaVersion: this.collection?.schema?.version ?? null,
+      shared: generationObjectId(this.shared),
+      negotiated: generationObjectId(negotiated),
+      connection: generationObjectId(connection),
+      peerId
+    });
+  }
+  publishQueryReady(peerId) {
+    if (this.cancelled) return;
+    const generation = this.collectionQueryGenerationToken(peerId);
+    const loaderIsCurrent = this.demandLoader && this.collection?.demandLoader === this.demandLoader;
+    if (!generation || !loaderIsCurrent) return;
+    this.demandStatus.queryDemandReadyGeneration = generation;
+    this.queryReady$.next(generation);
+  }
+  async awaitQueryReady(timeoutMs = 15e3) {
+    const budgetMs = Math.max(250, Number(timeoutMs) || 15e3);
+    const subscriptions = [];
+    let timer = null;
+    try {
+      return await new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (fn, value) => {
+          if (settled) return;
+          settled = true;
+          fn(value);
+        };
+        const inspect = () => {
+          if (settled) return;
+          if (this.cancelled) return finish(reject, new Error("WebRTC replication cancelled"));
+          const negotiated = this.shared?.negotiated || null;
+          if (!negotiated) return;
+          if (!negotiated.queryFetchCapable) {
+            return finish(reject, new Error(`Native WebRTC peer lacks ${CTOX_QUERY_FETCH_CAPABILITY}`));
+          }
+          const generation = this.collectionQueryGenerationToken(negotiated.peerId);
+          if (!generation) return;
+          if (this.demandStatus.queryDemandReadyGeneration === generation) {
+            return finish(resolve, generation);
+          }
+        };
+        subscriptions.push(this.queryReady$?.subscribe?.(inspect));
+        subscriptions.push(this.peerStates$?.subscribe?.(inspect));
+        inspect();
+        timer = setTimeout(() => {
+          finish(reject, new Error(`Native query readiness exceeded ${budgetMs}ms`));
+        }, budgetMs);
+      });
+    } finally {
+      if (timer) clearTimeout(timer);
+      for (const subscription of subscriptions) {
+        try {
+          subscription?.unsubscribe?.();
+        } catch {
+        }
+      }
+    }
   }
   async requestNative(method, params = {}, options = {}) {
     if (this.cancelled) throw new Error("WebRTC replication state is cancelled");
@@ -10317,9 +10480,10 @@ var CtoxWebRtcReplicationState = class {
     this.peerStates$.next(peerStates);
     this.active$.next(true);
     this.transportStatus$.next(this.decorateTransportStatus(this.shared?.getTransportStatus?.() || this.transportStatus$.getValue?.() || {}));
-    if (queryFetchCapable && !this.demandLoaderActive) {
+    if (queryFetchCapable) {
       try {
         await this.enableDemandLoading();
+        this.publishQueryReady?.(peerId);
       } catch (error) {
         this.error$.next(error);
       }
@@ -10935,6 +11099,9 @@ var CtoxWebRtcReplicationState = class {
     this.demandFileLoader = null;
     this.multiTabBroker = null;
     this.demandLoaderActive = false;
+    this.demandStatus.queryDemandReadyGeneration = null;
+    this.queryReadyAttempt = null;
+    this.queryReady$?.next?.(null);
   }
   /// V1.5 production wiring: build the sidecar + query demand loader and attach
   /// them to the underlying collection so that `find().exec()` and observable
@@ -11035,6 +11202,7 @@ var CtoxWebRtcReplicationState = class {
       requestCancel: ({ requestId, reason }) => demandTransport.requestQueryCancel({ requestId, reason }),
       status: this.demandStatus,
       multiTabBroker: this.multiTabBroker,
+      queryGeneration: () => this.collectionQueryGenerationToken(this.activeRemotePeerId),
       replicationOrigin: demandReplicationOrigin
     }) : null;
     if (typeof this.collection.setDemandLoader === "function") {
@@ -11116,6 +11284,8 @@ var CtoxWebRtcReplicationState = class {
     this.pushCheckpointsByPeer.delete(peerId);
     this.peerStates$.next(peerStates);
     this.publishTransportStatus();
+    this.demandStatus.queryDemandReadyGeneration = null;
+    this.queryReady$?.next?.(null);
     try {
       this.demandLoader?.abortAllInFlight?.(`peer-${reason}`);
     } catch {
@@ -12501,6 +12671,7 @@ var CtoxRxQuery = class _CtoxRxQuery {
   constructor(collection, query, single) {
     this.collection = collection;
     this.query = normalizeQuery(query, collection.schema.primaryPath);
+    this.signal = query?.signal && typeof query.signal.addEventListener === "function" ? query.signal : null;
     this.single = single;
     this.$ = {
       subscribe: (listener) => {
@@ -12653,7 +12824,8 @@ var CtoxRxQuery = class _CtoxRxQuery {
     getActiveCollectionRegistry().markRead(this.collection.name);
     let docs;
     if (this.collection.demandLoader) {
-      const demandOptions = this.single && !Number.isFinite(Number(this.query.limit)) ? { window: { offset: Number(this.query.skip || 0), limit: 1 } } : void 0;
+      const demandOptions = this.single && !Number.isFinite(Number(this.query.limit)) ? { window: { offset: Number(this.query.skip || 0), limit: 1 } } : {};
+      demandOptions.signal = this.signal;
       docs = await this.collection.demandLoader.resolveQuery(this.query, demandOptions);
     } else if (typeof this.collection.storageCollection.queryDocuments === "function") {
       docs = await this.collection.storageCollection.queryDocuments(this.query, {

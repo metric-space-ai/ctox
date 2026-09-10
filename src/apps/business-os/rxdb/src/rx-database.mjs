@@ -478,6 +478,7 @@ class CtoxRxQuery {
   constructor(collection, query, single) {
     this.collection = collection;
     this.query = normalizeQuery(query, collection.schema.primaryPath);
+    this.signal = query?.signal && typeof query.signal.addEventListener === 'function' ? query.signal : null;
     this.single = single;
     this.$ = {
       subscribe: (listener) => {
@@ -646,7 +647,8 @@ class CtoxRxQuery {
     if (this.collection.demandLoader) {
       const demandOptions = this.single && !Number.isFinite(Number(this.query.limit))
         ? { window: { offset: Number(this.query.skip || 0), limit: 1 } }
-        : undefined;
+        : {};
+      demandOptions.signal = this.signal;
       docs = await this.collection.demandLoader.resolveQuery(this.query, demandOptions);
     } else if (typeof this.collection.storageCollection.queryDocuments === 'function') {
       docs = await this.collection.storageCollection.queryDocuments(this.query, {

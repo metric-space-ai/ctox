@@ -48,7 +48,7 @@ export class QueryMetaStorage {
     return record;
   }
 
-  async upsertQueryWindow({ collection, queryFingerprint, offset, limit, documentIds, complete, authoritativeRevision, satisfiedRevision = null, queryShape = null }) {
+  async upsertQueryWindow({ collection, queryFingerprint, offset, limit, documentIds, complete, authoritativeRevision, satisfiedRevision = null, satisfiedGeneration = null, queryShape = null }) {
     const now = this.clock();
     const existing = await this.backend.getQueryWindow(
       [collection, queryFingerprint, offset, limit].join('|'),
@@ -70,6 +70,7 @@ export class QueryMetaStorage {
       // Opaque caller requireRevision token this window's last successful
       // fetch satisfied — distinct from the server echo above.
       satisfiedRevision: satisfiedRevision ?? null,
+      satisfiedGeneration: satisfiedGeneration ?? null,
       queryShape: queryShape && typeof queryShape === 'object' ? structuredCloneSafe(queryShape) : null,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
