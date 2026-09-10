@@ -1505,6 +1505,15 @@ fn refresh_attached_queue_projections(
             continue;
         };
         let mut command_payload = serde_json::from_str::<Value>(&command_raw)?;
+        if task.route_status == "leased" {
+            mark_outbound_lead_running_attached(
+                conn,
+                &command_payload,
+                &command_id,
+                &task.message_key,
+                updated_at_ms,
+            )?;
+        }
         let command_projection_changed =
             !command_projection_status_fields_match(&command_payload, task);
         if command_projection_changed {
@@ -1551,6 +1560,81 @@ fn refresh_attached_queue_projections(
             command_payload,
         )?;
     }
+    Ok(())
+}
+
+/// A lead whose research task a worker has picked up says "Läuft".
+///
+/// Measured on THESEN 10.09.2026: Kiesow's research task was leased at 09:33,
+/// and the app kept showing "Wartet" until the first writeback, because the
+/// only transition to `running` happened there. The queue-to-command sync
+/// already sees the lease, so it moves the lead along — only a lead that is
+/// still `queued` and belongs to this very command, read from the live RxDB
+/// document so no browser edit is overwritten.
+fn mark_outbound_lead_running_attached(
+    conn: &Connection,
+    command: &Value,
+    command_id: &str,
+    task_id: &str,
+    now: i64,
+) -> anyhow::Result<()> {
+    if command.get("module").and_then(Value::as_str) != Some("outbound-lead-generation")
+        || command.get("command_type").and_then(Value::as_str) != Some("business_os.chat.task")
+    {
+        return Ok(());
+    }
+    let Some(record_id) = command
+        .get("record_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && !value.starts_with("campaign:"))
+    else {
+        return Ok(());
+    };
+    let Some(table) = attached_rxdb_collection_table(conn, "outbound_lead_generation_leads")?
+    else {
+        return Ok(());
+    };
+    let raw = conn
+        .query_row(
+            &format!(
+                "SELECT data FROM business_os_rxdb_projection.{} WHERE id = ?1",
+                sqlite_quote_identifier(&table)
+            ),
+            params![record_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let Some(raw) = raw else {
+        return Ok(());
+    };
+    let Ok(mut lead) = serde_json::from_str::<Value>(&raw) else {
+        return Ok(());
+    };
+    if lead.get("_deleted").and_then(Value::as_bool) == Some(true)
+        || lead.get("research_status").and_then(Value::as_str) != Some("queued")
+    {
+        return Ok(());
+    }
+    let owner = lead
+        .get("command_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    if !owner.is_empty() && owner != command_id {
+        return Ok(());
+    }
+    lead["research_status"] = Value::String("running".to_string());
+    lead["task_id"] = Value::String(task_id.to_string());
+    lead["research_updated_at_ms"] = Value::from(now);
+    upsert_attached_business_record(
+        conn,
+        "outbound_lead_generation_leads",
+        record_id,
+        now,
+        lead.clone(),
+    )?;
+    upsert_attached_rxdb_record(conn, "outbound_lead_generation_leads", record_id, now, lead)?;
     Ok(())
 }
 
@@ -15323,6 +15407,10 @@ pub(super) fn is_outbound_active_command(command_type: &str) -> bool {
             | "outbound.research_source.test"
             | "outbound.research_source.auth_assist"
             | "outbound.sellify.lookup"
+            // Has a native handler. Without this entry the command fell
+            // through to the harness queue and cost a full worker turn per
+            // save; research tasks waited behind it (THESEN 10.09.2026).
+            | "outbound.research_policy.publish"
     )
 }
 

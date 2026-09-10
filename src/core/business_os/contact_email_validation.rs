@@ -83,11 +83,33 @@ fn contact_email(contact: &Value) -> Option<String> {
         .find_map(normalize_email)
 }
 
+/// Only a real verdict counts. On THESEN 10.09.2026 the research worker had
+/// written `no_match` into Ralph Weidling's `person_email_validation` — which
+/// only says the worker could not run the check — and treating any non-empty
+/// value as a verdict would have skipped exactly that address forever.
+pub(super) fn is_email_verdict(value: &str) -> bool {
+    let value = value.trim().to_lowercase();
+    [
+        "valid",
+        "invalid",
+        "gültig",
+        "gueltig",
+        "ungültig",
+        "ungueltig",
+        "zustellbar",
+        "unzustellbar",
+        "bestätigt",
+        "bestaetigt",
+    ]
+    .iter()
+    .any(|word| value.contains(word))
+}
+
 fn contact_has_verdict(contact: &Value) -> bool {
     ["person_email_validation", "email_validation"]
         .iter()
         .filter_map(|key| contact.get(*key).and_then(Value::as_str))
-        .any(|value| !value.trim().is_empty())
+        .any(is_email_verdict)
 }
 
 /// Addresses on this lead that carry no verdict yet, deduplicated, capped.
@@ -452,13 +474,18 @@ mod tests {
         let lead = json!({"contacts": [
             {"name": "Ralph Weidling", "person_email": "r.weidling@weicon.de"},
             {"name": "Ann-Katrin Weidling", "email": "a.weidling@weicon.de", "person_email_validation": "valid"},
+            {"name": "Nicht geprueft", "email": "s.beilmann@weicon.de", "person_email_validation": "no_match"},
             {"name": "Doppelt", "person_email": "R.Weidling@weicon.de"},
             {"name": "Probe", "person_email": "max.muster@example.de"},
             {"name": "Ohne Adresse"}
         ]});
+        // `no_match` means the worker could not check; it is not a verdict.
         assert_eq!(
             emails_needing_validation(&lead, 4),
-            vec!["r.weidling@weicon.de".to_string()]
+            vec![
+                "r.weidling@weicon.de".to_string(),
+                "s.beilmann@weicon.de".to_string()
+            ]
         );
     }
 
