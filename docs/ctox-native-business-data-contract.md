@@ -2,7 +2,9 @@
 
 Status: implementation boundary agreed with the Workjet consumer on 2026-09-09.
 This document specifies the remaining integration; it is not a declaration that
-an IPC client, target resolver or resumable subscription is available.
+an application client, production Workjet resolver or resumable subscription is
+available. A native Open/Status/Close lifecycle service and a reusable trusted
+host seam now exist; scoped query/watch/command execution remains outstanding.
 
 ## Generated host-consumer API
 
@@ -33,11 +35,54 @@ unknown at the TypeScript boundary and require their existing domain validation.
 The native `business_data::decode_request` checks input shape and budgets. It
 does not resolve a target, authenticate a session, authorize a selector, confirm
 a command or mint a cursor. The generated types are an integration contract;
-there is not yet an operational NativeBusinessDataClient or native data service.
-Their binding must reuse the native private IPC lifecycle, retain bounded frame
-assembly/backpressure and preserve authority framing limits. No new endpoint or
-transport is introduced by the decoder. A completed page, native ready state or
-SnapshotEnd must not be fabricated from this shape validation.
+there is not yet an operational application client. Their binding must reuse the
+native private IPC lifecycle, retain bounded frame assembly/backpressure and
+preserve authority framing limits. No new endpoint or transport is introduced by
+the decoder. A completed page, native ready state or SnapshotEnd must not be
+fabricated from shape validation alone.
+
+## Trusted native lifecycle service
+
+`BusinessDataService` is a connection-scoped dispatcher for the private
+`BusinessDataIpc` factory. `BusinessDataServiceDispatcher::dispatch` implements
+`Open`, `Status` and `Close`; all query, watch, command and unwatch operations
+return explicit `Unsupported` or `UnknownSession` failures without exposing
+data. One dispatcher owns one random opaque handle table and credential
+requester, so concurrent private clients cannot share a handle or lease.
+
+The host implements `BusinessDataSessionHost`. For a renderer-selected target
+ID it asynchronously supplies:
+
+* independently enrolled `public_identity` and `instance_id`;
+* the host-local `account_epoch`, which is distinct from the server principal's
+  `authorization_epoch`;
+* the current authenticated principal;
+* query-only `NativeSyncOptions` with no local session provider.
+
+The service installs the sole local session provider. Bring-up is launched as a
+connection-owned task only after its Connecting handle is registered;
+disconnect or host shutdown therefore awaits that task and its successful
+transport before returning. The native startup boundary remains bounded by the
+host-supplied bring-up deadline, followed by the same five-second owned-cleanup
+budget. After the existing channel-bound source proof, the service rechecks
+that the saved target and epoch are current before exposing the credential
+challenge. It then waits for reciprocal peer readiness, performs a second
+ready-channel proof, and accepts `Ready` only when the independently pinned
+key/instance and attested principal equal the host's current values.
+Target/account/principal changes are checked on every `Status`; a mismatch
+revokes the session and runs bounded shutdown.
+
+`Close` removes the exact handle/generation and awaits session cleanup. Cleanup
+has a five-second deadline; startup failure drains before the response, while
+startup cancellation first awaits the bounded startup task and then drains any
+successful transport. A timeout returns `LimitExceeded`, never a successful
+close. Disconnect first cancels pending lifecycle work, then the private IPC
+service awaits dispatcher shutdown. Concurrent opens each receive a fresh
+handle and own a separate native transport and credentials.
+
+This service does not add a saved-target store, policy store or Workjet
+bootstrap. It also does not authorize scoped selectors or provide subscription
+or command execution.
 
 
 ## Private host credential callback
@@ -70,9 +115,12 @@ the requester to one exact WebRTCRsConnection plus host-owned connection ID,
 saved target ID and account epoch. Existing source proof remains ahead of that
 callback. The real WebRTC credential tests use this correlated channel, including
 wrong source pin and revocation cases; their runtime result is still pending.
-The saved-target resolver, real BusinessData dispatcher and application bootstrap
-remain outstanding. Seven targeted tests
-cover framing, correlation, timeout and teardown; runtime results remain to verify.
+The operational Open/Status/Close lifecycle uses this resolver seam; the
+application bootstrap remains outstanding. Seven targeted tests cover framing,
+correlation, timeout and teardown, and the new real WebRTC/private-IPC lifecycle
+fixtures exercise ready, status, unsupported operations, bounded close, live
+saved-target/principal invalidation, and disconnect while connection-owned Open
+startup is pending.
 Workjet binds the generated callback to a host-owned credential lease and
 validates target/connection/epoch before reading or signing; this is not yet a
 running native service.
