@@ -4332,6 +4332,8 @@ mod tests {
 
     #[test]
     fn active_sync_send_mail_uses_compose_mail_opaque_mime_payload() {
+        use super::wbxml_encode_active_sync_send_mail;
+
         let encoded = wbxml_encode_active_sync_send_mail("cid", b"From: a\r\n");
         assert_eq!(
             encoded,
