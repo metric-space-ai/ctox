@@ -1574,16 +1574,36 @@ fn sanitize_research_writeback(
     // An unchecked Sellify citation is dropped, not merely left uncounted: it
     // would otherwise reach the lead's evidence and read as a CRM confirmation
     // that does not exist (Sasol, 11.09.2026: `sellify://person/<import key>`).
+    // A checked citation must also back the field's value: Destilla,
+    // 11.09.2026, carried 205 employees "confirmed" by a Sellify quote of 192.
     for (field, status) in request.field_status.iter_mut() {
+        let value = match &status.value {
+            Value::String(text) => text.trim().to_string(),
+            Value::Number(number) => number.to_string(),
+            _ => String::new(),
+        };
         let before = status.sources.len();
-        status
-            .sources
-            .retain(|source| crm.check(field, &source.url, &source.quote) != Some(false));
+        let mut contradicted = false;
+        status.sources.retain(
+            |source| match crm.check(field, &source.url, &source.quote) {
+                None => true,
+                Some(false) => false,
+                Some(true) => {
+                    let backs = value.is_empty() || crm.value_agrees(field, &source.url, &value);
+                    contradicted |= !backs;
+                    backs
+                }
+            },
+        );
         let dropped = before - status.sources.len();
         if dropped > 0 {
             rejections.push(format!(
                 "field_status.{field}: {dropped} Sellify-Beleg(e) verworfen ({})",
-                crm.hint()
+                if contradicted {
+                    "Sellify fuehrt fuer dieses Feld einen anderen Wert".to_string()
+                } else {
+                    crm.hint()
+                }
             ));
         }
     }
@@ -2044,6 +2064,23 @@ impl CrmBaseline {
 }
 
 impl CrmBaseline {
+    /// Whether the record behind a checked `url` holds `value` for `field`.
+    fn value_agrees(&self, field: &str, url: &str, value: &str) -> bool {
+        let prefix = format!("{CRM_SOURCE_SCHEME}://");
+        let url = url.trim();
+        if !url.to_ascii_lowercase().starts_with(&prefix) {
+            return false;
+        }
+        let Some(record) = self.records.get(url[prefix.len()..].trim_end_matches('/')) else {
+            return false;
+        };
+        crm_record_keys(field).iter().any(|key| {
+            record
+                .get(*key)
+                .is_some_and(|stored| crm_agrees(value, stored))
+        })
+    }
+
     /// The Sellify source for `value` when the carried record holds the same
     /// value for `field`: the company record for company fields, the person
     /// named by `person_key` (a `sellify-person-…` id) for person fields.
@@ -3806,6 +3843,7 @@ mod tests {
                 "plz": "20537",
                 "telefon": "+4940636841000",
                 "wz_code": "20590",
+                "mitarbeiter": "192",
                 "umsatz": "2100 Mio. €"
             },
             "known_person_records": [{
@@ -3855,6 +3893,7 @@ mod tests {
                 "wz_code",
                 "firma_telefon",
                 "person_vorname",
+                "mitarbeiter",
             ],
         )?;
         let northdata = "https://www.northdata.de/Sasol+Germany+GmbH,+Hamburg/HRB+78475";
@@ -3884,6 +3923,11 @@ mod tests {
                     // A self-reported field needs one source, but Sellify is not it.
                     "firma_telefon": {"status": "verified", "value": "+49 40 63684-1000", "sources": [
                         {"source_id": "sellify", "url": "sellify://company/2559", "quote": "+49 40 63684-1000"}
+                    ]},
+                    // A true quote does not back a different value (Destilla: 205 vs 192).
+                    "mitarbeiter": {"status": "verified", "value": "205", "sources": [
+                        {"source_id": "sellify", "url": "sellify://company/2559", "quote": "Mitarbeiter: 192"},
+                        {"source_id": "northdata.de", "url": northdata, "quote": "205 Mitarbeiter"}
                     ]},
                     // A quote Sellify does not hold is no Sellify source.
                     "wz_code": {"status": "verified", "value": "20599", "sources": [
@@ -3926,6 +3970,14 @@ mod tests {
         );
         assert_eq!(
             lead["field_status"]["person_vorname"]["status"], "verified",
+            "{result}"
+        );
+        assert_eq!(
+            lead["field_status"]["mitarbeiter"]["status"], "unsupported",
+            "{result}"
+        );
+        assert!(
+            result["rejections"].to_string().contains("anderen Wert"),
             "{result}"
         );
         assert!(
