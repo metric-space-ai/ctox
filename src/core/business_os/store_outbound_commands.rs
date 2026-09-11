@@ -1966,6 +1966,38 @@ pub(super) fn apply_outbound_adapter_reconciliation_reply(
             outbound_put_string(&mut source_record, "adapter_status", status);
             outbound_put_string(&mut source_record, "scrape_status", scrape_status);
             outbound_put_string(&mut source_record, "auth_status", auth_status);
+            // The worker's auth_status is a guess about the portal, not about
+            // the credential store: a reconciliation reported "required" for
+            // XING although XING_BROWSER_LOGIN is stored, and every built-in
+            // login source lost "credential_available" (Klicktest P4 T71,
+            // thesen 11.09.2026). A stored credential wins over that guess.
+            if source_record
+                .get("requires_credential")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                && matches!(
+                    source_record.get("auth_status").and_then(Value::as_str),
+                    Some("required" | "not_required" | "credential_missing")
+                )
+            {
+                if let Some(secret_name) =
+                    outbound_string(&source_record, &["credential_secret_name"])
+                {
+                    if crate::secrets::secret_exists(
+                        root,
+                        crate::secrets::credential_scope(),
+                        &secret_name,
+                    )
+                    .unwrap_or(false)
+                    {
+                        outbound_put_string(
+                            &mut source_record,
+                            "auth_status",
+                            "credential_available".to_string(),
+                        );
+                    }
+                }
+            }
             outbound_put_i64(&mut source_record, "updated_at_ms", now);
             upsert_business_record(
                 conn,
