@@ -792,9 +792,19 @@ fn merge_researched_person_records_with_context(
             continue;
         }
         normalized = with_stable_contact_id(lead_id, normalized, index);
+        let person_key = |contact: &Value| {
+            contact
+                .get("person_key")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                .map(str::to_string)
+        };
+        let normalized_key = person_key(&normalized);
         let existing_index = contacts.iter().position(|existing| {
             existing.get("id").and_then(Value::as_str)
                 == normalized.get("id").and_then(Value::as_str)
+                || (normalized_key.is_some() && person_key(existing) == normalized_key)
                 || profiles_match(existing, &normalized)
                 || same_person_by_name(existing, &normalized)
                 || (existing.get("crm_known").and_then(Value::as_bool) == Some(true)
@@ -867,13 +877,18 @@ fn known_person_contact(lead_id: &str, known: Value, locations: &[String]) -> Op
     let function = contact_string(&known, &["funktion", "person_funktion", "role"]);
     let email = contact_string(&known, &["email", "person_email"]);
     let phone = contact_string(&known, &["telefon", "person_telefon", "phone"]);
-    let sellify_contact_id = contact_string(&known, &["sellify_contact_id"]);
-    let sellify_contact_id = sellify_contact_id
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-        .then_some(sellify_contact_id)
-        .filter(|value| !value.is_empty() && value.len() <= 64)
-        .unwrap_or_default();
+    let safe_id = |value: String| {
+        value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            .then_some(value)
+            .filter(|value| !value.is_empty() && value.len() <= 64)
+            .unwrap_or_default()
+    };
+    let sellify_contact_id = safe_id(contact_string(&known, &["sellify_contact_id"]));
+    // The app's handover finds the CRM person by this id; without it a known
+    // Sellify person would be created a second time.
+    let sellify_person_id = safe_id(contact_string(&known, &["sellify_person_id"]));
     let known_source_url = contact_string(&known, &["source"]);
     let known_source_url = url::Url::parse(&known_source_url)
         .ok()
@@ -884,10 +899,12 @@ fn known_person_contact(lead_id: &str, known: Value, locations: &[String]) -> Op
     if name.is_empty() && email.is_empty() && phone.is_empty() {
         return None;
     }
-    let id_suffix = if sellify_contact_id.is_empty() {
-        javascript_fingerprint(&format!("{lead_id}|{name}|{email}|{phone}"))
-    } else {
+    let id_suffix = if !sellify_contact_id.is_empty() {
         sellify_contact_id.clone()
+    } else if !sellify_person_id.is_empty() {
+        sellify_person_id.clone()
+    } else {
+        javascript_fingerprint(&format!("{lead_id}|{name}|{email}|{phone}"))
     };
     let mut contact = serde_json::json!({
         "id": format!("contact_sellify_{id_suffix}"),
@@ -901,6 +918,10 @@ fn known_person_contact(lead_id: &str, known: Value, locations: &[String]) -> Op
         "source": "sellify",
         "crm_known": true,
     });
+    if !sellify_person_id.is_empty() {
+        contact["sellify_person_id"] = Value::String(sellify_person_id.clone());
+        contact["person_key"] = Value::String(sellify_person_id);
+    }
     contact = normalize_researched_contact_with_context(contact, locations)?;
     contact["source"] = Value::String("sellify".to_string());
     contact["crm_known"] = Value::Bool(true);
@@ -1136,12 +1157,15 @@ fn same_person_by_name(left: &Value, right: &Value) -> bool {
     let last = |contact: &Value| {
         normalize_person_name_for_match(&contact_string(contact, &["person_nachname", "last_name"]))
     };
+    // Split before normalizing: the normalizer joins the tokens, so "Mark H."
+    // became "markh" and never met "Mark Henryk" ("markhenryk") - one Sasol
+    // managing director stood twice in the recipient list (11.09.2026).
     let first_token = |contact: &Value| {
-        normalize_person_name_for_match(&contact_string(contact, &["person_vorname", "first_name"]))
+        contact_string(contact, &["person_vorname", "first_name"])
             .split_whitespace()
             .next()
+            .map(normalize_person_name_for_match)
             .unwrap_or_default()
-            .to_string()
     };
     let (left_last, right_last) = (last(left), last(right));
     if left_last.is_empty() || left_last != right_last {
@@ -1507,7 +1531,7 @@ pub(super) fn required_independent_sources(field_key: &str) -> usize {
 }
 
 pub(super) fn independent_research_evidence_count(evidence: &[Value], field_key: &str) -> usize {
-    evidence
+    let providers = evidence
         .iter()
         .filter(|entry| {
             entry
@@ -1517,8 +1541,21 @@ pub(super) fn independent_research_evidence_count(evidence: &[Value], field_key:
                 == Some(field_key)
         })
         .filter_map(research_evidence_source_key)
-        .collect::<HashSet<_>>()
-        .len()
+        .collect::<HashSet<_>>();
+    crm_aware_provider_count(providers.len(), providers.iter().map(String::as_str))
+}
+
+/// Sellify counts as one source but proves nothing alone — not even for a
+/// self-reported field, where a single source is otherwise enough.
+pub(super) fn crm_aware_provider_count<'a>(
+    count: usize,
+    mut providers: impl Iterator<Item = &'a str>,
+) -> usize {
+    if providers.all(|provider| provider == super::person_research_gap_closure::CRM_SOURCE_SCHEME) {
+        0
+    } else {
+        count
+    }
 }
 
 /// Suffixes whose second-to-last label is not the provider.
@@ -1557,6 +1594,16 @@ fn research_evidence_source_key(entry: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty());
+    // `sellify://company/…` and `sellify://person/…` are one provider: the CRM.
+    // Read as URLs they would count as the hosts `company` and `person`.
+    if source_url.is_some_and(|value| {
+        value.to_ascii_lowercase().starts_with(&format!(
+            "{}://",
+            super::person_research_gap_closure::CRM_SOURCE_SCHEME
+        ))
+    }) {
+        return Some(super::person_research_gap_closure::CRM_SOURCE_SCHEME.to_string());
+    }
     if let Some(host) = source_url
         .and_then(|source_url| {
             url::Url::parse(source_url)
@@ -3186,6 +3233,37 @@ mod tests {
 
         assert!(!contacts_match(&first, &namesake));
         assert!(contacts_match(&first, &same_email));
+    }
+
+    #[test]
+    fn an_initial_and_the_full_middle_name_are_one_person_on_one_lead() {
+        let imported = serde_json::json!({
+            "person_vorname": "Mark H.",
+            "person_nachname": "Breitenfelder"
+        });
+        let researched = serde_json::json!({
+            "person_vorname": "Mark Henryk",
+            "person_nachname": "Breitenfelder",
+            "person_email": "mark.breitenfelder@de.sasol.com"
+        });
+        let other = serde_json::json!({
+            "person_vorname": "Markus",
+            "person_nachname": "Breitenfelder"
+        });
+        assert!(same_person_by_name(&imported, &researched));
+        assert!(!same_person_by_name(&imported, &other));
+        let mut contacts = vec![imported];
+        merge_researched_person_records(
+            "lead-sasol",
+            &mut contacts,
+            vec![serde_json::json!({
+                "person_key": "sellify-person-58494",
+                "person_vorname": "Mark Henryk",
+                "person_nachname": "Breitenfelder",
+                "person_email": "mark.breitenfelder@de.sasol.com"
+            })],
+        );
+        assert_eq!(contacts.len(), 1, "{contacts:?}");
     }
 
     #[test]

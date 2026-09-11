@@ -176,6 +176,7 @@ When to write a script: a source you will hit again for many leads (register lis
 ## 6. Evidence rules
 
 - A field is `verified` only with a value and **two independent sources on different hosts**; each source has `source_id`, `url` and a verbatim `quote`. Two pages of one host are one source. Sellify alone proves nothing, but counts as one source.
+- **Citing Sellify.** A value from `sellify_company` or `known_person_records` is cited as a source with `source_id: "sellify"`, `url: "sellify://company/<contact_id>"` (company fields) or `url: "sellify://person/<sellify_person_id>"` (person fields, with that person's `person_key`), and as `quote` the stored Sellify value verbatim. The server checks the citation against the record your assignment carried and drops it when the quote is not that record's value for the field. It is one source, never enough on its own — not even for a self-reported field such as a phone number, which otherwise needs only one source.
 - `no_match` only after at least one documented search and two documented page reads for that field.
 - `action_required` only for a login or approval you could not get: reference the auth-assist (`source_id` and your command id) or a source with `requires_credential=true`. Also for conflicts: keep both candidates with their sources, leave the value empty, reason `conflict`.
 - `unsupported` only when the field cannot be researched under this contract (e.g. AT-only field on a DE lead).
@@ -264,7 +265,7 @@ The human is not always at the keyboard, and your turn is bounded. The system th
 | Scrape target classifies `temporary_unreachable` / `blocked` | Fall back to another source; do not queue a repair. |
 | No adapter for a recurring source | Write the extraction script, `register-script`, `execute --allow-heal`. For a one-off page use `web read` or `browser-capture` instead — do not build a target for a single lead. |
 | Two sources contradict each other | Leave the value empty, keep both in `candidates` with their sources, status `action_required`, reason `conflict`. Never average, never pick the prettier one. |
-| Sellify already holds a value | It is the starting value and counts as one source. Confirm it with one independent source (then `verified`), or contradict it with two (then take the new value and say so in `reason`). |
+| Sellify already holds a value | It is the starting value and counts as one source (cite it as `sellify://…`, see §6). Confirm it with one independent source (then `verified`), or contradict it with two (then take the new value and say so in `reason`). A value found only in Sellify and one external page is `verified`, not `no_match`. |
 | A Sellify person is outdated (left the company) | Keep the `person_key`, set the function to the documented state (for example "Geschäftsführung (ausgeschieden)"), and add the current holder as a new person. Never delete a Sellify person. |
 | Two persons look like one (same name, different profile) | Distinct `person_key` each; only merge with a document that shows they are the same person. |
 | A profile URL as `person_key` | Do not do it. `person_key` is a stable key (Sellify id or a key you keep for this lead), not a URL — profile URLs change and produce duplicates. |

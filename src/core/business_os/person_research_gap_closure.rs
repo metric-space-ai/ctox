@@ -1110,12 +1110,14 @@ pub(super) fn handle_research_writeback(
     // rejections as a failed call and resend the same field over and over
     // (07.09.2026: Aeroxon, seven identical one-field writebacks in five
     // minutes), so undelivered fields are reported separately as `open_fields`.
-    let rejections = sanitize_research_writeback(&mut request, &requested_fields)?
+    let research_payload = research_command_payload(root, &request.research_command_id)?;
+    let crm = CrmBaseline::from_research_payload(&research_payload);
+    let rejections = sanitize_research_writeback(&mut request, &requested_fields, &crm)?
         .into_iter()
         .filter(|entry| !entry.ends_with(": nicht geliefert"))
         .collect::<Vec<String>>();
     validate_field_status_keys(&requested_fields, &request.field_status)?;
-    validate_result_shape(&request.result, &requested_fields)?;
+    validate_result_shape(&request.result, &requested_fields, &crm)?;
     validate_result_field_status_consistency(&request.result, &request.field_status)?;
     if let Some((task, contract)) = &gap_task {
         let workspace = task_workspace(root, task, contract)?;
@@ -1123,9 +1125,18 @@ pub(super) fn handle_research_writeback(
             validate_terminal_field(field, status, &workspace, contract)?;
         }
     }
+    // The chat assignment carries the Sellify persons on the research command;
+    // only the gap task copied them into its contract. Without this the nine
+    // Sasol persons Sellify holds never reached the lead (11.09.2026).
     let known_person_records = gap_task
         .as_ref()
         .and_then(|(_, contract)| contract.get("known_person_records").cloned())
+        .or_else(|| {
+            research_payload
+                .get("known_person_records")
+                .filter(|records| records.is_array())
+                .cloned()
+        })
         .unwrap_or_else(|| Value::Array(Vec::new()));
     let mut projection_result = serde_json::json!({
         "fields": request.result.fields,
@@ -1179,12 +1190,22 @@ pub(super) fn handle_research_writeback(
     // Felder fehlen.
     let accepted_count = accepted_fields.len();
     let open_count = open_fields.len();
+    // Judged on the lead's merged state, not on this call's subset: a closing
+    // writeback that only resolved two conflicts turned a lead with 21
+    // `no_match` fields into `completed` (Sasol, 11.09.2026).
     let needs_review = !rejections.is_empty()
         || !open_fields.is_empty()
-        || request
-            .field_status
-            .values()
-            .any(|field| matches!(field.status.as_str(), "no_match" | "action_required"));
+        || lead["field_status"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .any(|(field, status)| {
+                requested_fields.contains(field)
+                    && matches!(
+                        status.get("status").and_then(Value::as_str),
+                        Some("no_match" | "action_required")
+                    )
+            });
     let terminal_lead_status = if needs_review {
         "needs_review"
     } else {
@@ -1280,6 +1301,22 @@ fn load_gap_task_by_idempotency_key(
         .find(|task| {
             task.metadata.get("idempotency_key").and_then(Value::as_str) == Some(idempotency_key)
         }))
+}
+
+/// The payload of the research command a writeback answers (`Null` when the
+/// command is unknown or unreadable).
+fn research_command_payload(root: &Path, research_command_id: &str) -> anyhow::Result<Value> {
+    let conn = store::open_store(root)?;
+    let payload_json: Option<String> = conn
+        .query_row(
+            "SELECT payload_json FROM business_commands WHERE command_id = ?1",
+            params![research_command_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(payload_json
+        .and_then(|json| serde_json::from_str::<Value>(&json).ok())
+        .unwrap_or(Value::Null))
 }
 
 /// The canonical field set of a chat assignment: the app puts the requested
@@ -1398,6 +1435,7 @@ fn validate_task_correlation(
 fn sanitize_research_writeback(
     request: &mut ResearchWritebackRequest,
     requested_fields: &[String],
+    crm: &CrmBaseline,
 ) -> anyhow::Result<Vec<String>> {
     let mut rejections: Vec<String> = Vec::new();
     let requested: BTreeSet<&String> = requested_fields.iter().collect();
@@ -1463,16 +1501,26 @@ fn sanitize_research_writeback(
             .or_else(|| evidence.get("field"))
             .and_then(Value::as_str)
             .map(str::to_string);
-        let url_ok = evidence
+        let raw_url = evidence
             .get("url")
             .or_else(|| evidence.get("source_url"))
             .and_then(Value::as_str)
             .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .and_then(|value| url::Url::parse(value).ok())
-            .is_some_and(|url| {
-                matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
-            });
+            .filter(|value| !value.is_empty());
+        let crm_citation = match (field.as_deref(), raw_url) {
+            (Some(field), Some(url)) => crm.check(
+                field,
+                url,
+                evidence.get("quote").and_then(Value::as_str).unwrap_or(""),
+            ),
+            _ => None,
+        };
+        let url_ok = crm_citation == Some(true)
+            || raw_url
+                .and_then(|value| url::Url::parse(value).ok())
+                .is_some_and(|url| {
+                    matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
+                });
         let grund = match field.as_deref() {
             None => Some("field_key fehlt".to_string()),
             Some(field) if !requested.contains(&field.to_string()) => {
@@ -1484,6 +1532,10 @@ fn sanitize_research_writeback(
             Some(field) if parse_requested_fields(&[field.to_string()]).is_err() => {
                 Some(format!("Feld {field} ist kein bekanntes Recherchefeld"))
             }
+            Some(_) if crm_citation == Some(false) => Some(
+                "Sellify-Beleg passt zu keinem Wert, den der Auftrag aus Sellify mitgebracht hat"
+                    .to_string(),
+            ),
             Some(_) if !url_ok => Some("Beleg-URL ist keine http(s)-Adresse".to_string()),
             Some(_)
                 if !evidence
@@ -1553,15 +1605,21 @@ fn sanitize_research_writeback(
             // Warteschlangenweg (validate_terminal_field). Die Chemie-Kampagne
             // lief ueber den Chatweg, wo die Regel schlicht nicht existierte.
             // "verified" bedeutete damit nicht, was es behauptet.
+            // A checked Sellify record is one host of its own; an unchecked
+            // Sellify citation is none (it would read as host `company`).
             let hosts = status
                 .sources
                 .iter()
-                .filter_map(|source| {
-                    url::Url::parse(source.url.trim()).ok().and_then(|url| {
-                        url.host_str()
-                            .map(|host| host.trim_start_matches("www.").to_ascii_lowercase())
-                    })
-                })
+                .filter_map(
+                    |source| match crm.check(field, &source.url, &source.quote) {
+                        Some(true) => Some(CRM_SOURCE_SCHEME.to_string()),
+                        Some(false) => None,
+                        None => url::Url::parse(source.url.trim()).ok().and_then(|url| {
+                            url.host_str()
+                                .map(|host| host.trim_start_matches("www.").to_ascii_lowercase())
+                        }),
+                    },
+                )
                 .collect::<BTreeSet<_>>();
             // A probe against the writeback contract is not evidence. One bad
             // field is demoted; the other thirty-one survive.
@@ -1576,7 +1634,19 @@ fn sanitize_research_writeback(
                 continue;
             }
             let benoetigt = super::person_research_command::required_independent_sources(field);
-            if hosts.len() < benoetigt {
+            let unabhaengig = super::person_research_command::crm_aware_provider_count(
+                hosts.len(),
+                hosts.iter().map(String::as_str),
+            );
+            if unabhaengig == 0 && !hosts.is_empty() {
+                demotieren.push((
+                    field.clone(),
+                    "Sellify allein belegt nichts: eine externe Quelle muss den Wert bestaetigen"
+                        .to_string(),
+                ));
+                continue;
+            }
+            if unabhaengig < benoetigt {
                 demotieren.push((
                     field.clone(),
                     format!(
@@ -1771,6 +1841,147 @@ fn validate_terminal_field(
     Ok(())
 }
 
+/// Sellify, the customer's CRM, is the starting value of every field and one
+/// source (THESEN procedure, step 0; skill: "Sellify alone proves nothing, but
+/// counts as one source"). A CRM record has no web address, and every evidence
+/// check demanded HTTP(S), so no worker could cite it: a value held in Sellify
+/// and confirmed by Northdata ended as `no_match` (thesen, Sasol Germany,
+/// 11.09.2026: address, postcode, phone, WZ code, revenue, person e-mails).
+///
+/// A Sellify record is cited as `sellify://company/<contact_id>` or
+/// `sellify://person/<sellify_person_id>`. The citation counts only for a
+/// record the research command carried (`sellify_company`,
+/// `known_person_records`), and only when its quote is that record's value for
+/// the cited field, so a worker cannot manufacture a CRM source.
+pub(super) const CRM_SOURCE_SCHEME: &str = "sellify";
+
+#[derive(Debug, Default)]
+struct CrmBaseline {
+    /// `company/<contact_id>` or `person/<sellify_person_id>` → field → value.
+    records: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+impl CrmBaseline {
+    fn from_research_payload(payload: &Value) -> Self {
+        let scalar_fields = |record: &Value| -> BTreeMap<String, String> {
+            record
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter_map(|(key, value)| {
+                    let text = match value {
+                        Value::String(text) => text.trim().to_string(),
+                        Value::Number(number) => number.to_string(),
+                        _ => return None,
+                    };
+                    (!text.is_empty()).then(|| (key.clone(), text))
+                })
+                .collect()
+        };
+        let mut records = BTreeMap::new();
+        if let Some(company) = payload.get("sellify_company").filter(|v| v.is_object()) {
+            let contact_id = company
+                .get("contact_id")
+                .and_then(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_string)
+                        .or_else(|| value.as_i64().map(|id| id.to_string()))
+                })
+                .map(|id| id.trim().to_string())
+                .filter(|id| !id.is_empty());
+            if let Some(contact_id) = contact_id {
+                records.insert(format!("company/{contact_id}"), scalar_fields(company));
+            }
+        }
+        for person in payload
+            .get("known_person_records")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let person_id = person
+                .get("sellify_person_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|id| !id.is_empty());
+            if let Some(person_id) = person_id {
+                records.insert(format!("person/{person_id}"), scalar_fields(person));
+            }
+        }
+        Self { records }
+    }
+
+    /// `None`: not a Sellify citation. `Some(true)`: the command carried this
+    /// record and the quote is its value for `field`. `Some(false)`: a Sellify
+    /// citation that proves nothing.
+    fn check(&self, field: &str, url: &str, quote: &str) -> Option<bool> {
+        let url = url.trim();
+        let prefix = format!("{CRM_SOURCE_SCHEME}://");
+        if !url.to_ascii_lowercase().starts_with(&prefix) {
+            return None;
+        }
+        let path = url[prefix.len()..].trim_end_matches('/');
+        let Some(record) = self.records.get(path) else {
+            return Some(false);
+        };
+        let quote = crm_comparable(quote);
+        if quote.chars().count() < 2 {
+            return Some(false);
+        }
+        // The quote carries the stored value, or is at least half of it: a
+        // fragment such as "+49 40" sits in every Hamburg number and proves
+        // nothing about this one.
+        let matches = crm_record_keys(field).iter().any(|key| {
+            record.get(*key).is_some_and(|value| {
+                let value = crm_comparable(value);
+                let value_len = value.chars().count();
+                value_len >= 2
+                    && (quote.contains(&value)
+                        || (value.contains(&quote) && quote.chars().count() * 2 >= value_len))
+            })
+        });
+        Some(matches)
+    }
+}
+
+/// The Sellify keys that can support a research field. The address fields
+/// share the one Sellify address; person fields carry their own name.
+fn crm_record_keys(field: &str) -> &'static [&'static str] {
+    match field {
+        "firma_name" => &["name"],
+        "firma_anschrift" | "firma_besucheranschrift" | "firma_postanschrift" => {
+            &["anschrift", "plz", "ort"]
+        }
+        "firma_plz" => &["plz"],
+        "firma_ort" => &["ort"],
+        "firma_land" => &["land"],
+        "firma_email" => &["email"],
+        "firma_domain" => &["domain"],
+        "firma_telefon" => &["telefon"],
+        "firma_fax" => &["fax"],
+        "wz_code" => &["wz_code"],
+        "mitarbeiter" => &["mitarbeiter"],
+        "umsatz" => &["umsatz"],
+        "person_vorname" => &["person_vorname"],
+        "person_nachname" => &["person_nachname"],
+        "person_funktion" => &["person_funktion"],
+        "person_position" => &["person_position", "person_funktion"],
+        "person_email" => &["person_email"],
+        "person_telefon" => &["person_telefon"],
+        _ => &[],
+    }
+}
+
+/// Letters and digits only, lower case: "+49 40 63684-1000" and the stored
+/// "+4940636841000" are the same number.
+fn crm_comparable(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
 fn validate_source(field: &str, source: &FieldSource) -> anyhow::Result<()> {
     anyhow::ensure!(
         !source.source_id.trim().is_empty(),
@@ -1953,6 +2164,7 @@ fn action_required_has_auth_reference(status: &FieldStatus, contract: &Value) ->
 fn validate_result_shape(
     result: &ResearchWritebackResult,
     requested_fields: &[String],
+    crm: &CrmBaseline,
 ) -> anyhow::Result<()> {
     let fields = result
         .fields
@@ -2022,13 +2234,16 @@ fn validate_result_shape(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .with_context(|| format!("research writeback result.evidence[{index}] requires URL"))?;
-        let source_url = url::Url::parse(source_url).with_context(|| {
-            format!("research writeback result.evidence[{index}] has invalid URL")
-        })?;
-        anyhow::ensure!(
-            matches!(source_url.scheme(), "http" | "https") && source_url.host_str().is_some(),
-            "research writeback result.evidence[{index}] URL must be HTTP(S)"
-        );
+        let quote = evidence.get("quote").and_then(Value::as_str).unwrap_or("");
+        if crm.check(field, source_url, quote) != Some(true) {
+            let source_url = url::Url::parse(source_url).with_context(|| {
+                format!("research writeback result.evidence[{index}] has invalid URL")
+            })?;
+            anyhow::ensure!(
+                matches!(source_url.scheme(), "http" | "https") && source_url.host_str().is_some(),
+                "research writeback result.evidence[{index}] URL must be HTTP(S)"
+            );
+        }
         anyhow::ensure!(
             evidence
                 .get("quote")
@@ -3361,6 +3576,244 @@ mod tests {
         Ok(())
     }
 
+    fn create_chat_fixture_with_sellify(
+        root: &Path,
+        research_command_id: &str,
+        record_id: &str,
+        fields: &[&str],
+    ) -> anyhow::Result<()> {
+        drop(store::open_store(root)?);
+        seed_rxdb_collection_table_for_tests(root, LEAD_COLLECTION)?;
+        let payload = serde_json::json!({
+            "company": "Sasol Germany GmbH",
+            "fields": fields,
+            "sellify_company": {
+                "contact_id": "2559",
+                "name": "Sasol Germany GmbH",
+                "anschrift": "Anckelmannsplatz 1",
+                "plz": "20537",
+                "telefon": "+4940636841000",
+                "wz_code": "20590",
+                "umsatz": "2100 Mio. €"
+            },
+            "known_person_records": [{
+                "sellify_person_id": "sellify-person-8096",
+                "person_vorname": "Holger",
+                "person_email": "holger.hess@de.sasol.com"
+            }]
+        });
+        let conn = store::open_store(root)?;
+        conn.execute(
+            "INSERT INTO business_commands
+                (command_id, module, command_type, record_id, status, payload_json, client_context_json, observed_at_ms)
+             VALUES (?1, 'outbound-lead-generation', 'business_os.chat.task', ?2, 'running', ?3, '{}', 1)",
+            rusqlite::params![research_command_id, record_id, serde_json::to_string(&payload)?],
+        )?;
+        drop(conn);
+        store::upsert_rxdb_collection_record(
+            root,
+            LEAD_COLLECTION,
+            record_id,
+            1,
+            serde_json::json!({
+                "id": record_id,
+                "data": {},
+                "contacts": [],
+                "evidence": [],
+                "research_status": "running",
+                "payload": {"last_research_command_id": research_command_id}
+            }),
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_checked_sellify_value_counts_as_one_source_and_a_forged_one_as_none() -> anyhow::Result<()>
+    {
+        let temp = tempfile::tempdir()?;
+        let record_id = "lead-sellify-quelle";
+        let research_command_id = "research-sellify-quelle";
+        create_chat_fixture_with_sellify(
+            temp.path(),
+            research_command_id,
+            record_id,
+            &["firma_plz", "umsatz", "wz_code", "firma_telefon"],
+        )?;
+        let northdata = "https://www.northdata.de/Sasol+Germany+GmbH,+Hamburg/HRB+78475";
+        let command = writeback_command(
+            record_id,
+            serde_json::json!({
+                "record_id": record_id,
+                "module": "outbound-lead-generation",
+                "research_command_id": research_command_id,
+                "gap_task_id": "",
+                "field_status": {
+                    // Sellify plus Northdata: two independent sources.
+                    "firma_plz": {"status": "verified", "value": "20537", "sources": [
+                        {"source_id": "sellify", "url": "sellify://company/2559", "quote": "20537"},
+                        {"source_id": "northdata.de", "url": northdata, "quote": "Anckelmannsplatz 1, 20537 Hamburg"}
+                    ]},
+                    // Sellify alone proves nothing.
+                    "umsatz": {"status": "verified", "value": "2.100 Mio. €", "sources": [
+                        {"source_id": "sellify", "url": "sellify://company/2559", "quote": "2.100 Mio. €"}
+                    ]},
+                    // A self-reported field needs one source, but Sellify is not it.
+                    "firma_telefon": {"status": "verified", "value": "+49 40 63684-1000", "sources": [
+                        {"source_id": "sellify", "url": "sellify://company/2559", "quote": "+49 40 63684-1000"}
+                    ]},
+                    // A quote Sellify does not hold is no Sellify source.
+                    "wz_code": {"status": "verified", "value": "20599", "sources": [
+                        {"source_id": "sellify", "url": "sellify://company/2559", "quote": "20599"},
+                        {"source_id": "northdata.de", "url": northdata, "quote": "WZ 20599"}
+                    ]}
+                },
+                "result": {
+                    "fields": {"firma_plz": {"value": "20537"}},
+                    "person_records": [],
+                    "evidence": [
+                        {"field_key": "firma_plz", "source_id": "sellify", "url": "sellify://company/2559", "quote": "20537"},
+                        {"field_key": "firma_plz", "source_id": "sellify", "url": "sellify://company/9999", "quote": "20537"}
+                    ]
+                }
+            }),
+        );
+
+        let result = handle_research_writeback(temp.path(), &command)?;
+        let lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("lead missing after writeback")?;
+        assert_eq!(
+            lead["field_status"]["firma_plz"]["status"], "verified",
+            "{result}"
+        );
+        assert_eq!(
+            lead["field_status"]["umsatz"]["status"], "unsupported",
+            "{result}"
+        );
+        assert_eq!(
+            lead["field_status"]["wz_code"]["status"], "unsupported",
+            "{result}"
+        );
+        assert_eq!(
+            lead["field_status"]["firma_telefon"]["status"], "unsupported",
+            "{result}"
+        );
+        assert!(
+            result["rejections"]
+                .to_string()
+                .contains("Sellify allein belegt nichts"),
+            "{result}"
+        );
+        let rejections = result["rejections"].to_string();
+        assert!(
+            rejections.contains("Sellify-Beleg passt zu keinem Wert"),
+            "the record the command did not carry must be named: {rejections}"
+        );
+        let evidence = lead["evidence"].as_array().context("evidence missing")?;
+        assert!(
+            evidence.iter().any(|entry| {
+                entry["source_url"] == "sellify://company/2559"
+                    || entry["url"] == "sellify://company/2559"
+            }),
+            "the checked Sellify source must reach the lead: {evidence:?}"
+        );
+        assert!(!evidence
+            .iter()
+            .any(|entry| entry.to_string().contains("sellify://company/9999")));
+        // The Sellify persons of the assignment reach the lead with their id,
+        // so the handover updates them instead of creating them again.
+        let contacts = lead["contacts"].as_array().context("contacts missing")?;
+        assert!(
+            contacts.iter().any(
+                |contact| contact["sellify_person_id"] == "sellify-person-8096"
+                    && contact["crm_known"] == true
+            ),
+            "{contacts:?}"
+        );
+        // 21 documented gaps are a reason to look, whatever the last call held.
+        assert_eq!(lead["research_status"], "needs_review");
+        Ok(())
+    }
+
+    #[test]
+    fn a_sellify_citation_is_checked_against_the_record_the_command_carried() {
+        let crm = CrmBaseline::from_research_payload(&serde_json::json!({
+            "sellify_company": {"contact_id": 2559, "telefon": "+4940636841000", "anschrift": "Anckelmannsplatz 1"},
+            "known_person_records": [{"sellify_person_id": "sellify-person-8096", "person_email": "holger.hess@de.sasol.com"}]
+        }));
+        assert_eq!(crm.check("firma_telefon", "https://sasol.com", "x"), None);
+        assert_eq!(
+            crm.check(
+                "firma_telefon",
+                "sellify://company/2559",
+                "+49 40 63684-1000"
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            crm.check(
+                "firma_anschrift",
+                "sellify://company/2559/",
+                "Anckelmannsplatz 1, 20537 Hamburg"
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            crm.check(
+                "person_email",
+                "sellify://person/sellify-person-8096",
+                "holger.hess@de.sasol.com"
+            ),
+            Some(true)
+        );
+        // Wrong field, wrong record, wrong value, uncheckable field.
+        assert_eq!(
+            crm.check("firma_fax", "sellify://company/2559", "+4940636841000"),
+            Some(false)
+        );
+        assert_eq!(
+            crm.check("firma_telefon", "sellify://company/1", "+4940636841000"),
+            Some(false)
+        );
+        assert_eq!(
+            crm.check("firma_telefon", "sellify://company/2559", "+49 40 1"),
+            Some(false)
+        );
+        assert_eq!(
+            crm.check("firma_telefon", "sellify://company/2559", "+49 40"),
+            Some(false)
+        );
+        assert_eq!(
+            crm.check(
+                "firma_prokura",
+                "sellify://company/2559",
+                "Anckelmannsplatz"
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            super::super::person_research_command::independent_research_evidence_count(
+                &[
+                    serde_json::json!({"field_key": "firma_ort", "url": "sellify://company/2559"}),
+                    serde_json::json!({"field_key": "firma_ort", "url": "sellify://person/sellify-person-8096"}),
+                    serde_json::json!({"field_key": "firma_ort", "url": "https://www.northdata.de/x"}),
+                ],
+                "firma_ort"
+            ),
+            2,
+            "company and person records are one provider: Sellify"
+        );
+        assert_eq!(
+            super::super::person_research_command::independent_research_evidence_count(
+                &[
+                    serde_json::json!({"field_key": "firma_telefon", "url": "sellify://company/2559"})
+                ],
+                "firma_telefon"
+            ),
+            0,
+            "Sellify alone proves nothing, even where one source is enough"
+        );
+    }
+
     #[test]
     fn no_match_writeback_finishes_lead_as_needs_review() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
@@ -3479,12 +3932,14 @@ mod tests {
             "fields": {"firma_domain": "example.test"}
         }))
         .unwrap();
-        assert!(
-            validate_result_shape(&free_text, &["firma_domain".to_string()])
-                .unwrap_err()
-                .to_string()
-                .contains("structured object")
-        );
+        assert!(validate_result_shape(
+            &free_text,
+            &["firma_domain".to_string()],
+            &CrmBaseline::default()
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("structured object"));
 
         let result: ResearchWritebackResult = serde_json::from_value(serde_json::json!({
             "fields": {"firma_domain": {"value": "example.test"}}
