@@ -185,7 +185,7 @@ When to write a script: a source you will hit again for many leads (register lis
 
 ## 7. Writeback — the only way results reach the lead
 
-One writeback per lead, sent through the **MCP tool `business_os.execute_writeback`** of the
+The writeback goes through the **MCP tool `business_os.execute_writeback`** of the
 `ctox-business-os` server. The server binds `module` and `research_command_id` to your task
 itself, validates the payload with the native handler, writes the lead collection, and the UI
 updates through replication. Nothing else counts: **do not** run `ctox business-os commands
@@ -226,19 +226,20 @@ until a retry succeeds.
 
 ### Validation rules the daemon enforces (get them right on the first attempt)
 
-Build the writeback in this order, then send it once: (1) collect the terminal status per field, (2) copy each verified value **identically** into `result.fields`, (3) attach sources with absolute URLs, (4) give every person value and its evidence the same `person_key`, (5) check that the key set equals `payload.fields`. These five are the reasons live runs were rejected.
+Build the writeback in this order: (1) collect the terminal status per field, (2) copy each verified value **identically** into `result.fields`, (3) attach sources with absolute URLs, (4) give every person value and its evidence the same `person_key`, (5) check that the key set equals `payload.fields`. These five are the reasons live runs were rejected.
 
-- `field_status` covers **every field of `payload.fields`** (normally all 32) with a terminal status; a missing or extra field is rejected. Reporting only the fields you worked on is not accepted — an untouched field is `no_match` (with its evidence) or keeps the status it had.
+- Across all parts, `field_status` covers **every field of `payload.fields`** (normally all 32) with a terminal status; a field that was not requested is rejected. One part may carry a subset — the server fills the rest from earlier parts. An untouched field is `no_match` (with its evidence) or keeps the status it had.
 - Every `field_status` entry is an object with `status`; `value` only for `verified`.
 - For a `verified` field the value in `result.fields.<field>.value` must be **identical** to `field_status.<field>.value` — same string, no reformatting, no added prefix.
 - Every populated `person_*` value, in `result.fields` and in `person_records`, needs the `person_key` of the person it belongs to. Keep the `person_key` from `known_person_records` for a Sellify person; invent a stable one only for a new person.
 - `result.fields` holds objects (`{"value": …, "sources": [...]}`), never bare strings.
 - Every evidence entry needs `field_key`, `source_id`, `url`; person evidence also `person_key`, and it must be **the same `person_key`** the value in `result.fields` carries.
-- Every `url` — in sources and in evidence — is an absolute `http(s)://` URL. A file path, a note or an empty string is rejected.
+- Every `url` — in sources and in evidence — is an absolute `http(s)://` URL, or a Sellify citation `sellify://company/<contact_id>` / `sellify://person/<sellify_person_id>` (§6). A file path, a note or an empty string is rejected.
 - A **non-verified** field (`no_match`, `unsupported`, `action_required`) must NOT carry a populated `value`. State the reason instead.
 - Person fields describe the priority contact(s) you actually found: when you report persons in `person_records`, set the matching `person_*` fields `verified` with their `person_key` instead of `no_match`. `no_match` on a person field means you found no such person at all.
 - Person fields carry a `person_key`; `result.fields` holds structured objects only, never free text.
-- **Exactly one writeback call per lead.** Never dispatch read commands (`outbound.task.readback`, `outbound.lead.read`, `outbound.queue_task.read`, `outbound.lead.show` or anything similar) to check your own result, and never enqueue Business OS actions (`business_os.execute_action`, `business_os.propose_action`) for the writeback — they are not the writeback and are rejected outside the task contract. Every dispatched command becomes its own queue task and its own agent turn — twelve such reads once blocked a whole campaign for three hours.
+- **Send large results in parts.** A tool call is limited by the model's output size: a 50 KB writeback (all 32 fields with sources) breaks off and the turn ends without a receipt (Sasol, 11.09.2026, twice). Send at most about 10 fields per `execute_writeback` call; the server merges the parts, a field missing from one part keeps the status an earlier part gave it, and the response lists `open_fields` still to send. Do not re-send fields that are already stored.
+- Never dispatch read commands (`outbound.task.readback`, `outbound.lead.read`, `outbound.queue_task.read`, `outbound.lead.show` or anything similar) to check your own result, and never enqueue Business OS actions (`business_os.execute_action`, `business_os.propose_action`) for the writeback — they are not the writeback and are rejected outside the task contract. Every dispatched command becomes its own queue task and its own agent turn — twelve such reads once blocked a whole campaign for three hours.
 - Done means `business_os.execute_writeback` returned status `accepted` or `completed`. Report the counts (verified / no_match / action_required / unsupported) and the persons found in one short chat message.
 
 ## 8. Unblocking across turns (login, captcha, MFA)
