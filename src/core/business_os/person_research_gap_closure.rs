@@ -2031,21 +2031,13 @@ impl CrmBaseline {
         let Some(record) = self.records.get(path) else {
             return Some(false);
         };
-        let quote = crm_comparable(quote);
-        if quote.chars().count() < 2 {
+        if crm_comparable(quote).chars().count() < 2 {
             return Some(false);
         }
-        // The quote carries the stored value, or is at least half of it: a
-        // fragment such as "+49 40" sits in every Hamburg number and proves
-        // nothing about this one.
         let matches = crm_record_keys(field).iter().any(|key| {
-            record.get(*key).is_some_and(|value| {
-                let value = crm_comparable(value);
-                let value_len = value.chars().count();
-                value_len >= 2
-                    && (quote.contains(&value)
-                        || (value.contains(&quote) && quote.chars().count() * 2 >= value_len))
-            })
+            record
+                .get(*key)
+                .is_some_and(|stored| crm_agrees(quote, stored))
         });
         Some(matches)
     }
@@ -2081,13 +2073,7 @@ impl CrmBaseline {
         let quote = crm_record_keys(field)
             .iter()
             .filter_map(|key| record.get(*key))
-            .find(|stored| {
-                let stored = crm_comparable(stored);
-                let value = crm_comparable(value);
-                value.contains(&stored)
-                    || (stored.contains(&value)
-                        && value.chars().count() * 2 >= stored.chars().count())
-            })?
+            .find(|stored| crm_agrees(value, stored))?
             .clone();
         Some(FieldSource {
             source_id: CRM_SOURCE_SCHEME.to_string(),
@@ -2161,6 +2147,41 @@ fn crm_record_keys(field: &str) -> &'static [&'static str] {
         "person_telefon" => &["person_telefon"],
         _ => &[],
     }
+}
+
+/// Whether `text` (a quote or a researched value) states the stored Sellify
+/// value: it carries the stored value, or is at least half of it. Compared on
+/// whole tokens, so "ca. 145" does not state "45" and "+49 40" does not state
+/// a Hamburg number, while "+49 8031/2434-15" states "+498031243415".
+fn crm_agrees(text: &str, stored: &str) -> bool {
+    let text_tokens = crm_tokens(text);
+    let stored_tokens = crm_tokens(stored);
+    let stored_joined = stored_tokens.concat();
+    let text_joined = text_tokens.concat();
+    if stored_joined.chars().count() < 2 || text_joined.chars().count() < 2 {
+        return false;
+    }
+    crm_token_window(&text_tokens, &stored_joined)
+        || (crm_token_window(&stored_tokens, &text_joined)
+            && text_joined.chars().count() * 2 >= stored_joined.chars().count())
+}
+
+fn crm_tokens(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(|token| token.chars().flat_map(char::to_lowercase).collect())
+        .collect()
+}
+
+/// A run of consecutive tokens whose concatenation is exactly `needle`.
+fn crm_token_window(tokens: &[String], needle: &str) -> bool {
+    (0..tokens.len()).any(|start| {
+        let mut joined = String::new();
+        tokens[start..].iter().any(|token| {
+            joined.push_str(token);
+            joined == needle
+        })
+    })
 }
 
 /// Letters and digits only, lower case: "+49 40 63684-1000" and the stored
@@ -4108,6 +4129,19 @@ mod tests {
             crm.check("firma_telefon", "sellify://company/2559", "+49 40"),
             Some(false)
         );
+        assert!(crm_agrees("ca. 45", "45"));
+        assert!(
+            !crm_agrees("ca. 145", "45"),
+            "a number inside another number is no match"
+        );
+        assert!(crm_agrees("+49 8031/2434-15", "+498031243415"));
+        assert!(crm_agrees("2.100 Mio. €", "2100 Mio. €"));
+        assert!(!crm_agrees("170 Mio. €", "70 Mio. €"));
+        assert!(crm_agrees(
+            "Anckelmannsplatz 1, 20537 Hamburg",
+            "Anckelmannsplatz 1"
+        ));
+        assert!(!crm_agrees("Anckelmannsplatz 12", "Anckelmannsplatz 1"));
         assert_eq!(
             crm.check(
                 "firma_prokura",
