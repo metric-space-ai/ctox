@@ -12597,15 +12597,65 @@ pub(super) fn detach_secret_intake_value(command_id: &str, command: &mut Busines
     else {
         return;
     };
-    let Some(value) = value.as_str().map(str::to_string) else {
-        return;
-    };
+    if let Some(value) = value.as_str() {
+        stash_secret_intake_value(command_id, field, value.to_string());
+    }
+}
+
+fn stash_secret_intake_value(command_id: &str, field: &'static str, value: String) {
     let mut values = SECRET_INTAKE_VALUES
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     values.retain(|_, (_, detached_at)| detached_at.elapsed() < SECRET_INTAKE_VALUE_TTL);
     values.insert((command_id.to_string(), field), (value, Instant::now()));
+}
+
+/// Master-write sanitizer for replicated documents (installed on the native
+/// RxDB peer). A browser pushes its `business_commands` document with the
+/// secret in the payload; the native store would hold it — and replicate it to
+/// every other browser — until intake overwrote the document. Seconds, but
+/// measured live (UI-Test 11.09.2026, P0-04/P0-08). The value is taken out
+/// before the document is persisted and reaches intake through the stash.
+pub(crate) fn detach_secret_from_replicated_document(collection: &str, document: &mut Value) {
+    if collection != "business_commands" {
+        return;
+    }
+    let Some(object) = document.as_object_mut() else {
+        return;
+    };
+    let Some(field) = ["command_type", "type"]
+        .iter()
+        .filter_map(|key| object.get(*key).and_then(Value::as_str))
+        .find_map(secret_payload_field)
+    else {
+        return;
+    };
+    let Some(command_id) = ["command_id", "id"]
+        .iter()
+        .filter_map(|key| object.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let Some(value) = object
+        .get_mut("payload")
+        .and_then(Value::as_object_mut)
+        .and_then(|payload| payload.remove(field))
+    else {
+        return;
+    };
+    if let Some(value) = value.as_str() {
+        stash_secret_intake_value(&command_id, field, value.to_string());
+    }
+}
+
+pub(crate) fn install_replicated_secret_sanitizer() {
+    rxdb::replication_protocol::index_mod::set_master_write_sanitizer(Arc::new(
+        detach_secret_from_replicated_document,
+    ));
 }
 
 /// The secret a handler needs: the value detached at intake, or — for callers
@@ -39914,6 +39964,93 @@ pub(super) mod tests {
     // business_command_aggregates, ctox_process_events and the replicated RxDB
     // business_commands document. The handler redacted only its own writes;
     // intake had already persisted the original payload.
+    // UI-Test 11.09.2026 (P0-04/P0-08): the browser's pushed document held the
+    // value in the native store for seconds after "gespeichert". The
+    // master-write sanitizer takes it out before persistence; intake must still
+    // store the credential from the stash.
+    #[test]
+    fn replicated_secret_put_document_is_stripped_before_persistence_and_still_applied(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        fs::create_dir_all(root.join("runtime"))?;
+        seed_business_user(root, "global_admin", "admin")?;
+        let value = r#"{"username":"uitest-user","password":"REPLICATED_PLAINTEXT"}"#;
+        let mut document = serde_json::json!({
+            "id": "cmd_outbound_secret_put_replicated",
+            "command_id": "cmd_outbound_secret_put_replicated",
+            "module": "outbound-lead-generation",
+            "command_type": "ctox.secret.put",
+            "record_id": "OUTBOUND_REPLICATED_LOGIN",
+            "payload": { "name": "OUTBOUND_REPLICATED_LOGIN", "value": value },
+            "client_context": {
+                "actor": { "id": "global_admin", "display_name": "Global Admin" }
+            }
+        });
+        detach_secret_from_replicated_document("business_commands", &mut document);
+        assert!(document.pointer("/payload/value").is_none());
+        assert_eq!(
+            document.pointer("/payload/name").and_then(Value::as_str),
+            Some("OUTBOUND_REPLICATED_LOGIN")
+        );
+        {
+            let conn = Connection::open(rxdb_store_path(root))?;
+            rxdb::storage::sqlite::sql::ensure_collection_table(
+                &conn,
+                "ctox_business_os__business_commands__v2",
+            )?;
+            conn.execute(
+                "INSERT INTO ctox_business_os__business_commands__v2
+                    (id, revision, deleted, lastWriteTime, data)
+                 VALUES (?1, '1-browser', 0, ?2, ?3)",
+                params![
+                    "cmd_outbound_secret_put_replicated",
+                    now_ms() as f64,
+                    serde_json::to_string(&document)?,
+                ],
+            )?;
+        }
+        let put = accept_rxdb_business_command(root, document)?;
+        assert_eq!(put.get("status").and_then(Value::as_str), Some("completed"));
+        assert_eq!(
+            crate::secrets::read_secret_value(
+                root,
+                crate::secrets::credential_scope(),
+                "OUTBOUND_REPLICATED_LOGIN"
+            )?,
+            value
+        );
+        let hits = sqlite_cells_containing(root, "REPLICATED_PLAINTEXT")?;
+        assert!(
+            hits.is_empty(),
+            "secret value persisted in plaintext: {hits:#?}"
+        );
+
+        // Other collections and non-secret commands pass untouched.
+        let mut lead = serde_json::json!({
+            "id": "lead_x",
+            "command_type": "ctox.secret.put",
+            "payload": { "value": "kept" }
+        });
+        detach_secret_from_replicated_document("outbound_lead_generation_leads", &mut lead);
+        assert_eq!(
+            lead.pointer("/payload/value").and_then(Value::as_str),
+            Some("kept")
+        );
+        let mut other = serde_json::json!({
+            "id": "cmd_other",
+            "command_type": "outbound.sellify.lookup",
+            "payload": { "value": "kept" }
+        });
+        detach_secret_from_replicated_document("business_commands", &mut other);
+        assert_eq!(
+            other.pointer("/payload/value").and_then(Value::as_str),
+            Some("kept")
+        );
+        Ok(())
+    }
+
     #[test]
     fn ctox_secret_put_value_reaches_no_table_in_any_store() -> anyhow::Result<()> {
         let temp = tempdir()?;
