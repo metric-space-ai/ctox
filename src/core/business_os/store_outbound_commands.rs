@@ -1249,10 +1249,89 @@ fn outbound_handle_research_source_registry_read(
             "latest_script_revision_no": ziel.get("latest_script_revision_no").cloned().unwrap_or(Value::Null),
         }));
     }
+    let script = match command
+        .payload
+        .get("include_script_target")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+    {
+        Some(key) => outbound_registry_latest_script(root, key)?,
+        None => Value::Null,
+    };
     Ok(serde_json::json!({
         "ok": true,
         "schema": "ctox.outbound.research_source_registry.v1",
         "targets": eintraege,
+        "script": script,
+    }))
+}
+
+/// Latest registered script of one scrape target, for the Outbound app's
+/// "Adapter-Skript ansehen" dialog. The dialog could never show a script: the
+/// app looked for it in its own adapter records, while scripts live only in
+/// the scrape registry (Klicktest-Befund P4 V14, 11.09.2026). Bounded so the
+/// command result stays inside the peer wire budget.
+fn outbound_registry_latest_script(root: &Path, target_key: &str) -> anyhow::Result<Value> {
+    const MAX_SCRIPT_BYTES: usize = 150_000;
+    let antwort = scrape::dispatch_capturing(
+        root,
+        &[
+            "show-target".to_string(),
+            "--target-key".to_string(),
+            target_key.to_string(),
+        ],
+    )
+    .with_context(|| format!("scrape target {target_key} could not be read"))?;
+    let Some(revision) = antwort
+        .pointer("/target/revisions")
+        .and_then(Value::as_array)
+        .and_then(|revisions| {
+            revisions.iter().max_by_key(|revision| {
+                revision
+                    .get("revision_no")
+                    .and_then(Value::as_i64)
+                    .unwrap_or_default()
+            })
+        })
+    else {
+        return Ok(serde_json::json!({ "target_key": target_key, "available": false }));
+    };
+    let script_path = revision
+        .get("script_path")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let path = if Path::new(script_path).is_absolute() {
+        std::path::PathBuf::from(script_path)
+    } else {
+        root.join(script_path)
+    };
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return Ok(serde_json::json!({
+                "target_key": target_key,
+                "available": false,
+                "revision_no": revision.get("revision_no").cloned().unwrap_or(Value::Null),
+                "error": format!("script file not readable: {error}"),
+            }))
+        }
+    };
+    let truncated = bytes.len() > MAX_SCRIPT_BYTES;
+    let mut text =
+        String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_SCRIPT_BYTES)]).into_owned();
+    if truncated {
+        text.push_str("\n/* … gekürzt: Skript größer als 150 KB … */\n");
+    }
+    Ok(serde_json::json!({
+        "target_key": target_key,
+        "available": true,
+        "revision_no": revision.get("revision_no").cloned().unwrap_or(Value::Null),
+        "language": revision.get("language").cloned().unwrap_or(Value::Null),
+        "script_sha256": revision.get("script_sha256").cloned().unwrap_or(Value::Null),
+        "created_at": revision.get("created_at").cloned().unwrap_or(Value::Null),
+        "truncated": truncated,
+        "text": text,
     }))
 }
 
@@ -6187,6 +6266,86 @@ mod tests {
     };
     use super::*;
     use tempfile::tempdir;
+
+    // Klicktest P4 V14 (11.09.2026): "Adapter-Skript ansehen" could never show
+    // a script; the registry read now carries the latest script of one target.
+    #[test]
+    fn the_registry_read_carries_the_latest_script_of_the_asked_target() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let target_file = root.join("uitest-target.json");
+        fs::write(
+            &target_file,
+            serde_json::to_vec(&serde_json::json!({
+                "target_key": "uitest-script",
+                "display_name": "UITEST Skript",
+                "start_url": "https://uitest-script.ctox.dev/",
+                "target_kind": "prospect-research",
+            }))?,
+        )?;
+        scrape::dispatch_capturing(
+            root,
+            &[
+                "upsert-target".to_string(),
+                "--input".to_string(),
+                target_file.display().to_string(),
+            ],
+        )?;
+        let script_file = root.join("uitest-script.js");
+        fs::write(
+            &script_file,
+            "// UITEST_SCRIPT_MARKER\nexport default async () => [];\n",
+        )?;
+        scrape::dispatch_capturing(
+            root,
+            &[
+                "register-script".to_string(),
+                "--target-key".to_string(),
+                "uitest-script".to_string(),
+                "--script-file".to_string(),
+                script_file.display().to_string(),
+            ],
+        )?;
+        let command = BusinessCommand {
+            id: Some("cmd_registry_script".to_string()),
+            module: "outbound".to_string(),
+            command_type: "outbound.research_source.registry_read".to_string(),
+            record_id: Some("registry".to_string()),
+            payload: serde_json::json!({
+                "target_keys": ["uitest-script"],
+                "include_script_target": "uitest-script",
+            }),
+            client_context: serde_json::json!({}),
+            origin: CommandOrigin::TrustedLocal,
+        };
+        let result = outbound_handle_research_source_registry_read(root, &command)?;
+        assert_eq!(
+            result.pointer("/script/available").and_then(Value::as_bool),
+            Some(true),
+            "{result:#}"
+        );
+        assert!(result
+            .pointer("/script/text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.contains("UITEST_SCRIPT_MARKER")));
+        assert_eq!(
+            result
+                .pointer("/script/revision_no")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+        // Without the flag the answer stays metadata only.
+        let plain = outbound_handle_research_source_registry_read(
+            root,
+            &BusinessCommand {
+                payload: serde_json::json!({ "target_keys": ["uitest-script"] }),
+                ..command
+            },
+        )?;
+        assert!(plain.get("script").is_some_and(Value::is_null));
+        Ok(())
+    }
 
     #[test]
     fn a_campaign_search_returns_names_and_an_import_only_the_asked_columns() -> anyhow::Result<()>
