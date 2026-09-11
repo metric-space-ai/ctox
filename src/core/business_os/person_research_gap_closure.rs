@@ -1620,6 +1620,51 @@ fn sanitize_research_writeback(
         }
     }
 
+    // Sellify agrees -> Sellify is a source, whether or not the worker wrote
+    // the citation. Six live runs on 11.09.2026 produced no usable
+    // `sellify://` citation (none, or the lead id, an import key, a
+    // paraphrase); the server holds the CRM record and compares the value
+    // itself. Sellify still never counts alone (see crm_aware_provider_count).
+    let field_person_keys: BTreeMap<String, String> = request
+        .result
+        .fields
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(field, entry)| {
+            entry
+                .get("person_key")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                .map(|key| (field.clone(), key.to_string()))
+        })
+        .collect();
+    for (field, status) in request.field_status.iter_mut() {
+        if status.status != "verified"
+            || status
+                .sources
+                .iter()
+                .any(|source| crm.check(field, &source.url, &source.quote) == Some(true))
+        {
+            continue;
+        }
+        let value = match &status.value {
+            Value::String(text) => text.trim().to_string(),
+            Value::Number(number) => number.to_string(),
+            _ => continue,
+        };
+        let person_key = field_person_keys.get(field).cloned().or_else(|| {
+            status
+                .sources
+                .iter()
+                .find_map(|source| source.person_key.clone())
+        });
+        if let Some(source) = crm.agreeing_source(field, &value, person_key.as_deref()) {
+            status.sources.push(source);
+        }
+    }
+
     // Feldstatus gegen das Ergebnis abgleichen. Ein Widerspruch verwirft NUR
     // dieses Feld, nie die ganze Firma.
     let fields_snapshot = request.result.fields.clone();
@@ -2007,6 +2052,54 @@ impl CrmBaseline {
 }
 
 impl CrmBaseline {
+    /// The Sellify source for `value` when the carried record holds the same
+    /// value for `field`: the company record for company fields, the person
+    /// named by `person_key` (a `sellify-person-…` id) for person fields.
+    fn agreeing_source(
+        &self,
+        field: &str,
+        value: &str,
+        person_key: Option<&str>,
+    ) -> Option<FieldSource> {
+        let record_key = if field.starts_with("person_") {
+            let key = format!("person/{}", person_key?.trim());
+            self.records.contains_key(&key).then_some(key)?
+        } else {
+            self.records
+                .keys()
+                .find(|key| {
+                    key.strip_prefix("company/")
+                        .is_some_and(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()))
+                })?
+                .clone()
+        };
+        let url = format!("{CRM_SOURCE_SCHEME}://{record_key}");
+        if self.check(field, &url, value) != Some(true) {
+            return None;
+        }
+        let record = self.records.get(&record_key)?;
+        let quote = crm_record_keys(field)
+            .iter()
+            .filter_map(|key| record.get(*key))
+            .find(|stored| {
+                let stored = crm_comparable(stored);
+                let value = crm_comparable(value);
+                value.contains(&stored)
+                    || (stored.contains(&value)
+                        && value.chars().count() * 2 >= stored.chars().count())
+            })?
+            .clone();
+        Some(FieldSource {
+            source_id: CRM_SOURCE_SCHEME.to_string(),
+            url,
+            quote,
+            person_key: person_key.map(str::to_string),
+            requires_credential: false,
+            task_id: String::new(),
+            command_id: String::new(),
+        })
+    }
+
     /// The citations this assignment allows, for a rejection the worker can act on.
     fn hint(&self) -> String {
         if self.records.is_empty() {
@@ -3860,6 +3953,92 @@ mod tests {
         );
         // 21 documented gaps are a reason to look, whatever the last call held.
         assert_eq!(lead["research_status"], "needs_review");
+        Ok(())
+    }
+
+    #[test]
+    fn a_value_sellify_holds_gets_sellify_as_its_second_source_without_a_citation(
+    ) -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let record_id = "lead-sellify-auto";
+        let research_command_id = "research-sellify-auto";
+        create_chat_fixture_with_sellify(
+            temp.path(),
+            research_command_id,
+            record_id,
+            &[
+                "firma_plz",
+                "umsatz",
+                "wz_code",
+                "firma_telefon",
+                "person_email",
+            ],
+        )?;
+        let northdata = "https://www.northdata.de/Sasol+Germany+GmbH,+Hamburg/HRB+78475";
+        let command = writeback_command(
+            record_id,
+            serde_json::json!({
+                "record_id": record_id,
+                "module": "outbound-lead-generation",
+                "research_command_id": research_command_id,
+                "gap_task_id": "",
+                "field_status": {
+                    // One external source, Sellify agrees: verified.
+                    "firma_plz": {"status": "verified", "value": "20537", "sources": [
+                        {"source_id": "northdata.de", "url": northdata, "quote": "20537 Hamburg"}
+                    ]},
+                    "umsatz": {"status": "verified", "value": "2.100 Mio. €", "sources": [
+                        {"source_id": "bundesanzeiger.de", "url": "https://www.bundesanzeiger.de/x", "quote": "Umsatzerloese 2.100 Mio. EUR"}
+                    ]},
+                    // One external source, Sellify holds another code: stays open.
+                    "wz_code": {"status": "verified", "value": "20599", "sources": [
+                        {"source_id": "northdata.de", "url": northdata, "quote": "WZ 20599"}
+                    ]},
+                    // Sellify agrees, but nothing external: Sellify alone proves nothing.
+                    "firma_telefon": {"status": "verified", "value": "+49 40 63684-1000", "sources": []},
+                    "person_email": {"status": "verified", "value": "holger.hess@de.sasol.com", "sources": [
+                        {"source_id": "sasol.com", "url": "https://www.sasol.com/de/kontakt", "quote": "holger.hess@de.sasol.com", "person_key": "sellify-person-8096"}
+                    ]}
+                },
+                "result": {
+                    "fields": {
+                        "firma_plz": {"value": "20537"},
+                        "umsatz": {"value": "2.100 Mio. €"},
+                        "person_email": {"value": "holger.hess@de.sasol.com", "person_key": "sellify-person-8096"}
+                    },
+                    "person_records": [],
+                    "evidence": []
+                }
+            }),
+        );
+
+        let result = handle_research_writeback(temp.path(), &command)?;
+        let lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("lead missing after writeback")?;
+        let status = |field: &str| lead["field_status"][field]["status"].clone();
+        assert_eq!(status("firma_plz"), "verified", "{result}");
+        assert_eq!(status("umsatz"), "verified", "{result}");
+        assert_eq!(status("wz_code"), "unsupported", "{result}");
+        assert_eq!(status("firma_telefon"), "unsupported", "{result}");
+        assert_eq!(status("person_email"), "verified", "{result}");
+        let sellify_urls = |field: &str| {
+            lead["field_status"][field]["sources"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|source| source["url"].as_str())
+                .filter(|url| url.starts_with("sellify://"))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(sellify_urls("firma_plz"), vec!["sellify://company/2559"]);
+        assert_eq!(sellify_urls("umsatz"), vec!["sellify://company/2559"]);
+        assert_eq!(
+            sellify_urls("person_email"),
+            vec!["sellify://person/sellify-person-8096"]
+        );
+        let evidence = lead["evidence"].to_string();
+        assert!(evidence.contains("sellify://company/2559"), "{evidence}");
         Ok(())
     }
 
