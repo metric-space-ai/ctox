@@ -43,3 +43,21 @@ Ende der Synchronisation das Quellen-Panel (Zahnrad). Zählen, wie viele
 Warum dauert die Peer-Authentifizierung eines neuen Tabs unter Last länger
 als 45 s, obwohl der Server-Peer gesund ist, und warum erholt sich ein Tab mit
 `peer-not-open` nicht selbst?
+
+## Nachtrag 11.09.2026 abends — zweiter Schreibvorgang kurz nach dem Einfügen geht verloren
+
+Quelle: Nachtest F (`thesen-operations/2026-09-11-outbound-ui-test/runs/F/retest-final.md`, NF-2).
+
+- Outbound 1.0.172 fügte eine Quelle ein (`sources.insert`, `auth_status=required`) und
+  patchte sie ≈1 s später (`incrementalPatch({auth_status:'credential_available'})`).
+- Der Server blieb 70 s lang und auch nach dem Schließen des Tabs auf Revision
+  `1-…` mit `auth_status=required`. Der zweite Schreibvorgang kam nie an, und im
+  Browser erschien keine Konsolenmeldung.
+- Das ist dieselbe Klasse wie der Befund N1 aus Stufe 3: ein Schreibvorgang kurz nach
+  einem vorigen auf dasselbe Dokument geht verloren.
+- Die App umgeht das ab 1.0.174 mit einem einzigen Schreibvorgang. Der
+  Grundfehler (Push-Verlust bei schneller Folgeänderung) liegt in der
+  Sync-Engine.
+
+Nachstellung: im selben Tab `insert(doc)`, sofort danach `incrementalPatch`
+auf dasselbe Dokument, dann die Serverrevision nach 30 s lesen. Erwartet `2-…`.
