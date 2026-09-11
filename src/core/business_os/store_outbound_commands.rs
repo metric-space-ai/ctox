@@ -21,7 +21,7 @@ use crate::mission::channels;
 use anyhow::Context;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1304,7 +1304,17 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
     };
     // Campaign imports must see the FULL membership of one campaign; the
     // usual dedupe/lookup cap of 100 would silently truncate it.
-    let limit_cap = if entity == "campaign" { 2000 } else { 100 };
+    // A name search groups rows server-side (see below), so it may scan many
+    // more rows than it returns.
+    let group_by_name =
+        entity == "campaign" && payload.get("group_by").and_then(Value::as_str) == Some("name");
+    let limit_cap = if group_by_name {
+        50_000
+    } else if entity == "campaign" {
+        2000
+    } else {
+        100
+    };
     let limit = payload
         .get("limit")
         .and_then(Value::as_u64)
@@ -1399,6 +1409,58 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
                 if seen.insert(id) {
                     records.push(record);
                 }
+            }
+        }
+    }
+    // Beauty, 11.09.2026: a campaign search returned 2000 full rows (1.1 MB);
+    // the peer dropped the result ("exceeds peer wire budget", 256 KB) and the
+    // browser reported "no Sellify campaign found". A search needs names and
+    // counts, an import only a few columns.
+    if group_by_name {
+        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+        for record in &records {
+            let name = record
+                .get("name")
+                .or_else(|| record.get("title"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("");
+            if !name.is_empty() && record.get("is_deleted").and_then(Value::as_bool) != Some(true) {
+                *counts.entry(name.to_string()).or_default() += 1;
+            }
+        }
+        let mut groups = counts.into_iter().collect::<Vec<_>>();
+        groups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let truncated = records.len() >= limit;
+        let groups = groups
+            .into_iter()
+            .take(200)
+            .map(|(name, count)| serde_json::json!({ "name": name, "count": count }))
+            .collect::<Vec<_>>();
+        return Ok(serde_json::json!({
+            "ok": true,
+            "entity": entity,
+            "groups": groups,
+            "scanned": records.len(),
+            "truncated": truncated,
+            "records": [],
+        }));
+    }
+    let fields = payload
+        .get("fields")
+        .and_then(Value::as_array)
+        .map(|fields| {
+            fields
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter(|fields| !fields.is_empty());
+    if let Some(fields) = fields {
+        for record in records.iter_mut() {
+            if let Some(object) = record.as_object_mut() {
+                object.retain(|key, _| key == "id" || fields.iter().any(|field| field == key));
             }
         }
     }
@@ -6125,6 +6187,58 @@ mod tests {
     };
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn a_campaign_search_returns_names_and_an_import_only_the_asked_columns() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        drop(super::super::store::open_store(root)?);
+        super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+            root,
+            "sellify_campaigns",
+        )?;
+        for (id, name, contact) in [
+            ("c1", "Beauty - Welle 5 – 10.09.2026", 3181),
+            ("c2", "Beauty - Welle 5 – 10.09.2026", 3182),
+            ("c3", "Beauty - 2023 - Welle 1 - 07.06.2023", 3183),
+            ("c4", "Chemie D – 01.07.2026", 3184),
+        ] {
+            super::super::store::upsert_rxdb_collection_record(
+                root,
+                "sellify_campaigns",
+                id,
+                1,
+                serde_json::json!({"id": id, "name": name, "contact_id": contact,
+                    "company_id": format!("sellify-company-{contact}"), "note_text": "x".repeat(500)}),
+            )?;
+        }
+        let search = outbound_sellify_lookup(
+            root,
+            &serde_json::json!({"entity": "campaign", "group_by": "name", "limit": 50000,
+                "fuzzy_selectors": [{"field": "name", "value": "Beauty"}]}),
+        )?;
+        assert_eq!(
+            search["groups"],
+            serde_json::json!([
+                {"name": "Beauty - Welle 5 – 10.09.2026", "count": 2},
+                {"name": "Beauty - 2023 - Welle 1 - 07.06.2023", "count": 1}
+            ])
+        );
+        assert_eq!(search["records"], serde_json::json!([]));
+        let import = outbound_sellify_lookup(
+            root,
+            &serde_json::json!({"entity": "campaign", "limit": 2000,
+                "fields": ["contact_id", "company_id", "name"],
+                "selectors": [{"field": "name", "value": "Beauty - Welle 5 – 10.09.2026"}]}),
+        )?;
+        let rows = import["records"].as_array().context("records")?;
+        assert_eq!(rows.len(), 2);
+        assert!(rows
+            .iter()
+            .all(|row| row.get("note_text").is_none() && row["contact_id"].is_number()));
+        Ok(())
+    }
 
     #[test]
     fn outbound_adapter_reconciliation_projects_typed_result_without_secrets() -> anyhow::Result<()>
