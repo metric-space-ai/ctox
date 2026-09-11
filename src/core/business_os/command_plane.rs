@@ -649,6 +649,10 @@ pub fn accept_rxdb_business_command_with_origin(
             .cloned()
             .unwrap_or(Value::Null),
     };
+    // A secret value must leave the command before intake persists anything:
+    // the claim intent, business_commands, business_records, process events
+    // and the RxDB projection all store this command.
+    super::store::detach_secret_intake_value(&command_id, &mut command);
     if matches!(command.origin, CommandOrigin::ReplicatedPeer) {
         let intake_started = command_timing_probe_requested(&command).then(std::time::Instant::now);
         let session = rxdb_authenticated_session(root, &command)?;
