@@ -597,8 +597,17 @@ pub fn sync_prompt_identity(root: &Path, settings: &BTreeMap<String, String>) ->
             "smtpPort": settings.get("CTO_EMAIL_SMTP_PORT").map(|value| value.trim()).unwrap_or(""),
             "graphUser": settings.get("CTO_EMAIL_GRAPH_USER").map(|value| value.trim()).unwrap_or(""),
             "ewsUrl": settings.get("CTO_EMAIL_EWS_URL").map(|value| value.trim()).unwrap_or(""),
+            "owaUrl": settings.get("CTO_EMAIL_OWA_URL").map(|value| value.trim()).unwrap_or(""),
             "ewsAuthType": settings.get("CTO_EMAIL_EWS_AUTH_TYPE").map(|value| value.trim()).unwrap_or(""),
             "ewsUsername": settings.get("CTO_EMAIL_EWS_USERNAME").map(|value| value.trim()).unwrap_or(""),
+            "ewsVersion": settings.get("CTO_EMAIL_EWS_VERSION").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncServer": settings.get("CTO_EMAIL_ACTIVESYNC_SERVER").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncUsername": settings.get("CTO_EMAIL_ACTIVESYNC_USERNAME").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncPath": settings.get("CTO_EMAIL_ACTIVESYNC_PATH").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncDeviceId": settings.get("CTO_EMAIL_ACTIVESYNC_DEVICE_ID").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncDeviceType": settings.get("CTO_EMAIL_ACTIVESYNC_DEVICE_TYPE").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncProtocolVersion": settings.get("CTO_EMAIL_ACTIVESYNC_PROTOCOL_VERSION").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncPolicyKey": settings.get("CTO_EMAIL_ACTIVESYNC_POLICY_KEY").map(|value| value.trim()).unwrap_or(""),
         });
         ensure_account(
             &mut conn,
