@@ -859,9 +859,13 @@ fn set_known_person_contacts(
         let Some(mut contact) = known_person_contact(lead_id, known, locations) else {
             continue;
         };
-        let existing_index = contacts
-            .iter()
-            .position(|existing| contacts_match(existing, &contact));
+        // The imported "Mark H. Breitenfelder" and Sellify's "Mark
+        // Breitenfelder" share neither e-mail nor phone; the name rule (same
+        // surname and first name, no conflicting address or profile) is what
+        // makes them one person (Sasol, 11.09.2026).
+        let existing_index = contacts.iter().position(|existing| {
+            contacts_match(existing, &contact) || same_person_by_name(existing, &contact)
+        });
         if let Some(existing_index) = existing_index {
             merge_known_contact_values(&mut contact, &contacts[existing_index]);
             contacts[existing_index] = contact;
@@ -3264,6 +3268,31 @@ mod tests {
             })],
         );
         assert_eq!(contacts.len(), 1, "{contacts:?}");
+    }
+
+    #[test]
+    fn a_known_sellify_person_absorbs_the_imported_initial_form() {
+        let mut contacts = vec![serde_json::json!({
+            "id": "contact_8f0cix",
+            "person_key": "person_breitenfelder_mark",
+            "person_vorname": "Mark H.",
+            "person_nachname": "Breitenfelder",
+            "person_funktion": "Geschäftsführer"
+        })];
+        set_known_person_contacts(
+            "lead-sasol",
+            &mut contacts,
+            vec![serde_json::json!({
+                "sellify_person_id": "sellify-person-58494",
+                "person_vorname": "Mark",
+                "person_nachname": "Breitenfelder",
+                "person_email": "mark.breitenfelder@de.sasol.com"
+            })],
+            &[],
+        );
+        assert_eq!(contacts.len(), 1, "{contacts:?}");
+        assert_eq!(contacts[0]["sellify_person_id"], "sellify-person-58494");
+        assert_eq!(contacts[0]["crm_known"], true);
     }
 
     #[test]
