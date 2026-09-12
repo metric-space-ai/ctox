@@ -1,0 +1,58 @@
+name: Harness persistent resume
+
+on:
+  pull_request:
+    paths:
+      - "src/core/harness/**"
+      - ".github/workflows/harness-persistent-resume.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/core/harness/**"
+      - ".github/workflows/harness-persistent-resume.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  persistent-resume:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 50
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+      RUST_TEST_THREADS: "2"
+      CARGO_TARGET_DIR: ${{ runner.temp }}/ctox-persistent-resume/target
+      CARGO_HOME: ${{ runner.temp }}/ctox-persistent-resume/cargo-home
+      TMPDIR: ${{ runner.temp }}/ctox-persistent-resume/tmp
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Prepare disposable directories
+        run: mkdir -p "$CARGO_TARGET_DIR" "$CARGO_HOME" "$TMPDIR"
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: "1.93.0"
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev sqlite3
+      - name: Verify persistent restart and missing resume
+        timeout-minutes: 45
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_name='persistent_resume_tests::named_persistent_thread_survives_manager_restart_and_missing_resume_fails_closed'
+          cargo_args=(--locked --manifest-path src/core/harness/Cargo.toml -p ctox-app-server-client --lib --jobs 2)
+          cargo test "${cargo_args[@]}" "$test_name" -- --exact --list | tee "$TMPDIR/test-list.txt"
+          python3 - "$TMPDIR/test-list.txt" "$test_name" <<'PYCODE'
+          import pathlib, sys
+          lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+          assert lines.count(sys.argv[2] + ": test") == 1, lines
+          PYCODE
+          cargo test "${cargo_args[@]}" "$test_name" -- --exact --test-threads=2 | tee "$TMPDIR/test-result.txt"
+          python3 - "$TMPDIR/test-result.txt" <<'PYCODE'
+          import pathlib, sys
+          result = pathlib.Path(sys.argv[1]).read_text()
+          assert "test result: ok. 1 passed; 0 failed; 0 ignored;" in result, result
+          PYCODE

@@ -41,9 +41,11 @@ use ctox_core::config_loader::CloudRequirementsLoader;
 use ctox_core::config_loader::LoaderOverrides;
 use ctox_feedback::CodexFeedback;
 use ctox_protocol::protocol::SessionSource;
+use futures::FutureExt;
 use pretty_assertions::assert_eq;
 use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::time::Duration;
@@ -57,7 +59,6 @@ const FIXTURE_TIMEOUT: Duration = Duration::from_secs(90);
 const START_TIMEOUT: Duration = Duration::from_secs(15);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const TURN_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
-const CLIENT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const SESSION_INDEX_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct IsolatedClient {
@@ -117,30 +118,46 @@ impl IsolatedClient {
     where
         T: DeserializeOwned + Send,
     {
-        timeout(REQUEST_TIMEOUT, self.get().request_typed::<T>(request))
-            .await
-            .unwrap_or_else(|_| panic!("{what} timed out"))
-            .expect_err(what)
+        match timeout(REQUEST_TIMEOUT, self.get().request_typed::<T>(request)).await {
+            Err(_) => panic!("{what} timed out"),
+            Ok(Err(err)) => err,
+            Ok(Ok(_)) => panic!("{what} succeeded, expected a JSON-RPC error"),
+        }
     }
 
-    async fn shutdown(mut self) {
+    async fn shutdown(&mut self) {
         if let Some(client) = self.client.take() {
-            timeout(CLIENT_SHUTDOWN_TIMEOUT, client.shutdown())
-                .await
-                .expect("client shutdown timed out")
-                .expect("client shutdown failed");
+            // Native shutdown already bounds send + worker wait internally.
+            client.shutdown().await.expect("client shutdown failed");
+        }
+    }
+
+    async fn shutdown_best_effort(&mut self) {
+        if let Some(client) = self.client.take() {
+            let _ = client.shutdown().await;
         }
     }
 }
 
-impl Drop for IsolatedClient {
-    fn drop(&mut self) {
-        if let Some(client) = self.client.take()
-            && let Ok(handle) = tokio::runtime::Handle::try_current()
-        {
-            handle.spawn(async move {
-                let _ = timeout(CLIENT_SHUTDOWN_TIMEOUT, client.shutdown()).await;
-            });
+#[derive(Default)]
+struct ClientScope {
+    clients: Vec<IsolatedClient>,
+}
+
+impl ClientScope {
+    async fn start(&mut self, session_source: SessionSource, config: Arc<Config>) -> usize {
+        self.clients
+            .push(IsolatedClient::start(session_source, config).await);
+        self.clients.len() - 1
+    }
+
+    fn get_mut(&mut self, id: usize) -> &mut IsolatedClient {
+        &mut self.clients[id]
+    }
+
+    async fn shutdown_all(&mut self) {
+        for client in &mut self.clients {
+            client.shutdown_best_effort().await;
         }
     }
 }
@@ -346,13 +363,14 @@ async fn manager_thread_ids(client: &IsolatedClient) -> Vec<String> {
     ids
 }
 
-async fn run_named_persistent_thread_restart() {
+async fn run_named_persistent_thread_restart(scope: &mut ClientScope) {
     let server = create_mock_responses_server_repeating_assistant(ASSISTANT_MARKER).await;
     let codex_home = tempfile::TempDir::new().expect("tempdir");
     let config = isolated_mock_config(codex_home.path(), &server.uri()).await;
 
     let created = {
-        let mut client = IsolatedClient::start(SessionSource::Exec, Arc::clone(&config)).await;
+        let id = scope.start(SessionSource::Exec, Arc::clone(&config)).await;
+        let client = scope.get_mut(id);
         let started: ThreadStartResponse = client
             .request(
                 ClientRequest::ThreadStart {
@@ -475,7 +493,8 @@ async fn run_named_persistent_thread_restart() {
     );
 
     let restarted_config = isolated_mock_config(codex_home.path(), &server.uri()).await;
-    let client = IsolatedClient::start(SessionSource::Exec, restarted_config).await;
+    let id = scope.start(SessionSource::Exec, restarted_config).await;
+    let client = scope.get_mut(id);
     assert!(
         manager_thread_ids(&client).await.is_empty(),
         "a restarted ThreadManager must not inherit in-memory threads"
@@ -589,7 +608,17 @@ async fn run_named_persistent_thread_restart() {
 
 #[tokio::test]
 async fn named_persistent_thread_survives_manager_restart_and_missing_resume_fails_closed() {
-    timeout(FIXTURE_TIMEOUT, run_named_persistent_thread_restart())
-        .await
-        .expect("persistent-thread restart fixture timed out");
+    let mut scope = ClientScope::default();
+    let outcome = AssertUnwindSafe(timeout(
+        FIXTURE_TIMEOUT,
+        run_named_persistent_thread_restart(&mut scope),
+    ))
+    .catch_unwind()
+    .await;
+    scope.shutdown_all().await;
+    match outcome {
+        Ok(Ok(())) => {}
+        Ok(Err(_)) => panic!("persistent-thread restart fixture timed out"),
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
