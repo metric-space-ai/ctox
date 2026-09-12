@@ -290,6 +290,12 @@ Direct-session model events write token and timing forensics to
 `runtime/context-log.jsonl`. Worker failures are persisted as structured
 `messages.agent_outcome` values rather than by scraping assistant text.
 
+The direct-session adapter retains an explicitly final answer when a separate
+terminal `ctox-crew` metadata block follows in the same turn. Known commentary
+is never promoted to the reply. Unphased providers keep last-message behavior;
+an unphased earlier message is not evidence for recovering an answer from a
+metadata-only completion. Existing thread and turn attribution gates still apply.
+
 On Linux, CTOX-managed in-process sessions select the stable Landlock backend
 for root workers and reviewers. Normal workers can read and write their current
 workspace plus the minimal system paths required to execute commands; sibling
