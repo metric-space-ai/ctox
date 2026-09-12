@@ -151,6 +151,10 @@ async function assertCompanionsStartDuringStalledModuleLaunch() {
   const page = await context.newPage();
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
+  const consoleErrors = [];
+  page.on('console', (message) => {
+    if (['error', 'warning'].includes(message.type()) && consoleErrors.length < 40) consoleErrors.push(message.text());
+  });
 
   try {
     await page.goto(`http://127.0.0.1:${server.address().port}/business-os/index.html#notes`);
@@ -165,6 +169,17 @@ async function assertCompanionsStartDuringStalledModuleLaunch() {
     }));
     assert.deepEqual(companions, { reporter: true, chat: true });
     assert.deepEqual(pageErrors, []);
+  } catch (error) {
+    const state = await page.evaluate(() => ({
+      authState: document.documentElement.dataset.authState,
+      startupStatus: document.getElementById('startup-status-text')?.textContent,
+      resources: performance.getEntriesByType('resource').map((entry) => new URL(entry.name).pathname).filter((path) => /business-(chat|reporter)|notes|window-manager/.test(path)),
+      startupError: document.getElementById('startup-error-msg')?.textContent?.trim(),
+      reporter: Boolean(document.querySelector('[data-ctox-reporter]')),
+      chat: Boolean(document.querySelector('[data-ctox-chat-root]')),
+    }));
+    console.error(JSON.stringify({ stalledModuleRequests, pageErrors, consoleErrors, state }));
+    throw error;
   } finally {
     await context.close();
     await browser.close();
@@ -175,6 +190,7 @@ function contentType(path) {
     '.css': 'text/css; charset=utf-8',
     '.html': 'text/html; charset=utf-8',
     '.js': 'text/javascript; charset=utf-8',
+    '.mjs': 'text/javascript; charset=utf-8',
     '.json': 'application/json; charset=utf-8',
     '.svg': 'image/svg+xml',
   })[extname(path)] || 'application/octet-stream';
