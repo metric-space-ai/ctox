@@ -228,5 +228,73 @@ function nativeSync(implementation) {
   assert.equal(mutations, 0, 'old write-back authority cannot mutate new session');
   assert.deepEqual(state.taskbarPins, ['new-session']);
 }
+// A replaced startup generation retries the strict authority read, then stops
+// once the same native authority has made the pin state known.
+{
+  const retrySource = shellSource.slice(
+    shellSource.indexOf('function clearTaskbarPinHydrationRetry('),
+    shellSource.indexOf('async function hydrateTaskbarPinsFromDesktopLayout(', shellSource.indexOf('function clearTaskbarPinHydrationRetry(')),
+  );
+  let nativeReads = 0;
+  const sync = {
+    async readCollectionNativeDocument() {
+      nativeReads += 1;
+      if (nativeReads === 1) throw new Error('QUERY_CANCELLED: generation-replaced');
+      return { toJSON: () => ({ taskbar_pins: ['remote-after-retry'], updated_at_ms: 500 }) };
+    },
+  };
+  const state = {
+    db: {}, sync, modules: ['x'], taskbarPins: [], taskbarPinsKnown: false,
+    taskbarPinsUpdatedAtMs: 0,
+  };
+  let nextTimerId = 1;
+  const timers = [];
+  const cancelled = new Set();
+  const window = {
+    clearTimeout(id) {
+      cancelled.add(id);
+      const index = timers.findIndex((timer) => timer.id === id);
+      if (index >= 0) timers.splice(index, 1);
+    },
+    setTimeout(callback, delay) {
+      const id = nextTimerId++;
+      timers.push({ id, callback, delay });
+      return id;
+    },
+  };
+  let renderCount = 0;
+  const start = new Function(
+    'state', 'window', 'console', 'TASKBAR_PIN_HYDRATION_RETRY_BASE_MS',
+    'TASKBAR_PIN_HYDRATION_RETRY_LIMIT', 'hydrateTaskbarPinsFromDesktopLayout', 'renderTabs',
+    `${retrySource}; return { start(runtimeState) { state = runtimeState; scheduleTaskbarPinHydrationRetry(); } };`,
+  )(
+    state, window, { warn() {} }, 500, 4,
+    () => hydrateTaskbarPinsFromDesktopLayout(state), () => { renderCount += 1; },
+  );
+  const hydrate = makeHydrate({ syncTaskbar: async () => {} });
+  const runCurrentTimer = async () => {
+    const timer = timers.shift();
+    if (!timer) throw new Error('expected a bounded hydration retry timer');
+    timer.callback();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    return timer;
+  };
+
+  start.start(state);
+  const first = await runCurrentTimer();
+  assert.equal(nativeReads, 1, 'first retry must observe the replaced generation');
+  assert.equal(state.taskbarPinsKnown, false, 'a cancelled native read remains unknown');
+  assert.equal(first.delay, 500, 'retry backoff starts bounded');
+  assert.equal(timers.length, 1, 'the rejected read schedules exactly one follow-up');
+
+  await runCurrentTimer();
+  assert.equal(nativeReads, 2, 'the follow-up reads the newly available authority');
+  assert.equal(state.taskbarPinsKnown, true);
+  assert.deepEqual(state.taskbarPins, ['remote-after-retry']);
+  assert.equal(state.taskbarPinsUpdatedAtMs, 500);
+  assert.equal(renderCount >= 1, true);
+  assert.equal(timers.length, 0, 'authority known stops the bounded retry chain');
+}
+
 
 console.log('ok - authoritative taskbar pins preserve empty, pending and session states');

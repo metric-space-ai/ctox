@@ -1,15 +1,15 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260910-shell-v2-chat-inspection-row-v373';
-import { CtoxResizer } from './shared/resizer.js?v=20260910-shell-v2-chat-inspection-row-v373';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260910-shell-v2-chat-inspection-row-v373';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260910-shell-v2-chat-inspection-row-v373';
-import { createAppActions } from './shared/app-actions.js?v=20260910-shell-v2-chat-inspection-row-v373';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260910-shell-v2-chat-inspection-row-v374';
+import { CtoxResizer } from './shared/resizer.js?v=20260910-shell-v2-chat-inspection-row-v374';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260910-shell-v2-chat-inspection-row-v374';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260910-shell-v2-chat-inspection-row-v374';
+import { createAppActions } from './shared/app-actions.js?v=20260910-shell-v2-chat-inspection-row-v374';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260910-shell-v2-chat-inspection-row-v373';
+} from './shared/app-lifecycle.js?v=20260910-shell-v2-chat-inspection-row-v374';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -17,20 +17,20 @@ import {
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260910-shell-v2-chat-inspection-row-v373';
+} from './shared/permissions.js?v=20260910-shell-v2-chat-inspection-row-v374';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260910-shell-v2-chat-inspection-row-v373';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260910-shell-v2-chat-inspection-row-v373';
+} from './shared/branding.js?v=20260910-shell-v2-chat-inspection-row-v374';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260910-shell-v2-chat-inspection-row-v374';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260910-shell-v2-chat-inspection-row-v373';
+} from './shared/presentation.js?v=20260910-shell-v2-chat-inspection-row-v374';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -41,9 +41,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260910-shell-v2-chat-inspection-row-v373';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260910-shell-v2-chat-inspection-row-v373';
-import { createDocumentsFacade } from './shared/documents.js?v=20260910-shell-v2-chat-inspection-row-v373';
+} from './shared/shell-permissions-ui.js?v=20260910-shell-v2-chat-inspection-row-v374';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260910-shell-v2-chat-inspection-row-v374';
+import { createDocumentsFacade } from './shared/documents.js?v=20260910-shell-v2-chat-inspection-row-v374';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -51,16 +51,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260910-shell-v2-chat-inspection-row-v373';
+} from './shared/maintenance-state.js?v=20260910-shell-v2-chat-inspection-row-v374';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260910-shell-v2-chat-inspection-row-v373';
+} from './shared/workspace-session.js?v=20260910-shell-v2-chat-inspection-row-v374';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260910-shell-v2-chat-inspection-row-v373';
+} from './shared/taskbar-pins.js?v=20260910-shell-v2-chat-inspection-row-v374';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -68,9 +68,9 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260910-shell-v2-chat-inspection-row-v373';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260910-shell-v2-chat-inspection-row-v373';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260910-shell-v2-chat-inspection-row-v373';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260910-shell-v2-chat-inspection-row-v374';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260910-shell-v2-chat-inspection-row-v374';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260910-shell-v2-chat-inspection-row-v374';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -82,11 +82,13 @@ const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const TASKBAR_PIN_HYDRATION_TIMEOUT_MS = 20_000;
+const TASKBAR_PIN_HYDRATION_RETRY_BASE_MS = 500;
+const TASKBAR_PIN_HYDRATION_RETRY_LIMIT = 4;
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260910-shell-v2-chat-inspection-row-v373';
+const APP_BUILD = '20260910-shell-v2-chat-inspection-row-v374';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -231,6 +233,8 @@ function assertCriticalSyncCollectionsMatchBundle(rxdb) {
 }
 let moduleLayoutSaveTimer = null;
 let taskbarPinSaveTimer = null;
+let taskbarPinHydrationRetryTimer = null;
+let taskbarPinHydrationRetryCount = 0;
 let workspaceSessionSaveTimer = null;
 let desktopOpenIconObserver = null;
 let desktopOpenIconObserverTarget = null;
@@ -1608,9 +1612,12 @@ async function openBusinessDataPlane(syncConfig) {
     });
     // Reconcile only after transport registration. An unresolved native read
     // must not become an empty layout or a fresh local write during startup.
+    // A replaced peer generation is a transport boundary, not authoritative
+    // absence; retry the same strict read briefly so late signaling converges.
+    clearTaskbarPinHydrationRetry({ resetAttempts: true });
     void hydrateTaskbarPinsFromDesktopLayout().then(() => renderTabs()).catch((error) => {
       console.warn('[business-os] taskbar pin hydration failed:', error);
-    });
+    }).finally(() => scheduleTaskbarPinHydrationRetry());
     startShellCtoxHealthMonitor();
     startWorkspaceBrandingMonitor();
 
@@ -5692,6 +5699,31 @@ function looksLikeLegacyAllPins(pins, valid) {
   if (pins.length <= DEFAULT_TASKBAR_PIN_IDS.length + 2) return false;
   const coverage = pins.filter((id) => valid.has(id)).length / Math.max(1, valid.size);
   return coverage >= 0.75;
+}
+
+function clearTaskbarPinHydrationRetry({ resetAttempts = false } = {}) {
+  if (taskbarPinHydrationRetryTimer) {
+    window.clearTimeout(taskbarPinHydrationRetryTimer);
+    taskbarPinHydrationRetryTimer = null;
+  }
+  if (resetAttempts) taskbarPinHydrationRetryCount = 0;
+}
+
+function scheduleTaskbarPinHydrationRetry() {
+  if (!state.sync?.readCollectionNativeDocument || state.taskbarPinsKnown === true) return;
+  if (taskbarPinHydrationRetryCount >= TASKBAR_PIN_HYDRATION_RETRY_LIMIT) return;
+  if (taskbarPinHydrationRetryTimer) return;
+  const attempt = taskbarPinHydrationRetryCount + 1;
+  taskbarPinHydrationRetryTimer = window.setTimeout(() => {
+    taskbarPinHydrationRetryTimer = null;
+    taskbarPinHydrationRetryCount = attempt;
+    void hydrateTaskbarPinsFromDesktopLayout()
+      .then(() => renderTabs())
+      .catch((error) => {
+        console.warn('[business-os] taskbar pin hydration retry failed:', error);
+      })
+      .finally(() => scheduleTaskbarPinHydrationRetry());
+  }, Math.min(5000, TASKBAR_PIN_HYDRATION_RETRY_BASE_MS * attempt));
 }
 
 async function hydrateTaskbarPinsFromDesktopLayout() {
