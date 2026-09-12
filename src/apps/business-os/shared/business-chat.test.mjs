@@ -3,12 +3,23 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { CREW_CREATURE_BASE_CSS } from './crew-renderer.js';
 
-import {
+if (typeof globalThis.window === 'undefined') {
+  globalThis.window = globalThis;
+}
+if (typeof globalThis.document === 'undefined') {
+  globalThis.document = {
+    documentElement: { lang: 'de' },
+    addEventListener() {},
+    body: { append() {} },
+  };
+}
+
+const {
   __businessChatTestInternals,
   chatAgentScopeViewFromMeta,
   crewAppPresenceFromTasks,
   renderChatAgentScopeHtml,
-} from './business-chat.js';
+} = await import('./business-chat.js');
 
 const rawBusinessChatSource = readFileSync(new URL('./business-chat.js', import.meta.url), 'utf8');
 assert.ok(rawBusinessChatSource.includes('${CREW_CREATURE_BASE_CSS}'), 'chat stylesheet must consume the shared creature rules');
