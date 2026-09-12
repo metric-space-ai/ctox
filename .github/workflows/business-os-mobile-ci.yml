@@ -4,16 +4,20 @@ on:
   pull_request:
     paths:
       - "src/apps/business-os-mobile/**"
+      - "src/scripts/android-framework-diagnostics.py"
       - ".github/workflows/business-os-mobile-ci.yml"
       - "docs/ctox-business-os-mobile.md"
       - "src/apps/business-os/**"
+      - "tests/test_android_framework_diagnostics.py"
   push:
     branches: [main]
     paths:
       - "src/apps/business-os-mobile/**"
+      - "src/scripts/android-framework-diagnostics.py"
       - ".github/workflows/business-os-mobile-ci.yml"
       - "docs/ctox-business-os-mobile.md"
       - "src/apps/business-os/**"
+      - "tests/test_android_framework_diagnostics.py"
 
 permissions:
   contents: read
@@ -28,6 +32,30 @@ env:
   MOBILE_ROOT: src/apps/business-os-mobile
 
 jobs:
+  framework-diagnostics-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Run focused framework diagnostics suite
+        id: framework-tests
+        run: |
+          set -o pipefail
+          python3 -m unittest -v tests/test_android_framework_diagnostics.py 2>&1 | tee "$RUNNER_TEMP/android-framework-diagnostics-tests.log"
+      - name: Upload focused framework diagnostics test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-framework-diagnostics-focused-test-log
+          path: ${{ runner.temp }}/android-framework-diagnostics-tests.log
+          if-no-files-found: error
+          retention-days: 7
+
   portable:
     runs-on: ubuntu-24.04
     steps:
@@ -149,6 +177,7 @@ jobs:
         working-directory: ${{ env.MOBILE_ROOT }}/android
         run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
       - name: Emulator launch smoke
+        id: phone
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -160,7 +189,14 @@ jobs:
             adb install -r src/apps/business-os-mobile/android/app/build/outputs/apk/debug/app-debug.apk
             adb shell am start -W -n dev.ctox.businessosmobile/.MainActivity
             adb exec-out screencap -p > "$RUNNER_TEMP/android-phone.png"
+      - name: Start bounded tablet framework diagnostics
+        run: |
+          python3 src/scripts/android-framework-diagnostics.py start \
+            --ownership "$RUNNER_TEMP/android-tablet-framework-diagnostics.ownership.json" \
+            --output "$RUNNER_TEMP/android-tablet-framework-diagnostics.jsonl" \
+            --phone-outcome "${{ steps.phone.outcome }}"
       - name: 4:3 tablet launch smoke
+        id: tablet
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -184,6 +220,21 @@ jobs:
             assert width > height, f"tablet did not rotate to landscape: {width}x{height}"
             assert abs((width / height) - (4 / 3)) < 0.08, f"tablet is not 4:3: {width}x{height}"
             PY
+      - name: Finalize bounded tablet framework diagnostics
+        if: always()
+        run: |
+          python3 src/scripts/android-framework-diagnostics.py stop \
+            --ownership "$RUNNER_TEMP/android-tablet-framework-diagnostics.ownership.json" \
+            --output "$RUNNER_TEMP/android-tablet-framework-diagnostics.json" \
+            --tablet-outcome "${{ steps.tablet.outcome }}"
+      - name: Upload sanitized tablet framework diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: business-os-mobile-android-tablet-framework-diagnostics
+          path: ${{ runner.temp }}/android-tablet-framework-diagnostics.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Package checksums and manifests
         run: |
           cp "$MOBILE_ROOT/android/app/build/outputs/apk/debug/app-debug.apk" "$RUNNER_TEMP/CTOXBusinessOSMobile-android-debug.apk"
