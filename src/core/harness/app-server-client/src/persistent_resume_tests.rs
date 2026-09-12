@@ -5,6 +5,9 @@
 //! under an isolated `codex_home`, then recreate the manager and prove lookup,
 //! resume, and history replay. They are not scripted
 //! `DirectSessionControlClient` adapters.
+//!
+//! Run from the nested harness workspace, not the repository root:
+//! `cargo test --manifest-path src/core/harness/Cargo.toml -p ctox-app-server-client -- --test-threads=2 named_persistent_thread_survives_manager_restart`
 
 use super::*;
 use app_test_support::create_mock_responses_server_repeating_assistant;
@@ -39,6 +42,7 @@ use ctox_core::config_loader::LoaderOverrides;
 use ctox_feedback::CodexFeedback;
 use ctox_protocol::protocol::SessionSource;
 use pretty_assertions::assert_eq;
+use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -49,6 +53,97 @@ const THREAD_NAME: &str = "ctox-issue97-persistent-worker";
 const USER_MARKER: &str = "remember this marker: persist-resume-97";
 const ASSISTANT_MARKER: &str = "persistent-resume-ack";
 const MISSING_THREAD_ID: &str = "00000000-0000-4000-8000-000000000001";
+const FIXTURE_TIMEOUT: Duration = Duration::from_secs(90);
+const START_TIMEOUT: Duration = Duration::from_secs(15);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const TURN_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
+const CLIENT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const SESSION_INDEX_TIMEOUT: Duration = Duration::from_secs(5);
+
+struct IsolatedClient {
+    client: Option<InProcessAppServerClient>,
+}
+
+impl IsolatedClient {
+    async fn start(session_source: SessionSource, config: Arc<Config>) -> Self {
+        let client = timeout(
+            START_TIMEOUT,
+            InProcessAppServerClient::start(InProcessClientStartArgs {
+                arg0_paths: Arg0DispatchPaths::default(),
+                config,
+                cli_overrides: Vec::new(),
+                loader_overrides: LoaderOverrides::default(),
+                cloud_requirements: CloudRequirementsLoader::default(),
+                auth_manager: None,
+                thread_manager: None,
+                feedback: CodexFeedback::new(),
+                config_warnings: Vec::new(),
+                session_source,
+                enable_ctox_api_key_env: false,
+                client_name: "ctox-app-server-client-persistent-resume-test".to_string(),
+                client_version: "0.0.0-test".to_string(),
+                experimental_api: true,
+                opt_out_notification_methods: Vec::new(),
+                channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+            }),
+        )
+        .await
+        .expect("in-process app-server client start timed out")
+        .expect("in-process app-server client should start");
+        Self {
+            client: Some(client),
+        }
+    }
+
+    fn get(&self) -> &InProcessAppServerClient {
+        self.client.as_ref().expect("isolated client still live")
+    }
+
+    fn get_mut(&mut self) -> &mut InProcessAppServerClient {
+        self.client.as_mut().expect("isolated client still live")
+    }
+
+    async fn request<T>(&self, request: ClientRequest, what: &str) -> T
+    where
+        T: DeserializeOwned + Send,
+    {
+        timeout(REQUEST_TIMEOUT, self.get().request_typed(request))
+            .await
+            .unwrap_or_else(|_| panic!("{what} timed out"))
+            .unwrap_or_else(|err| panic!("{what} failed: {err}"))
+    }
+
+    async fn request_err<T>(&self, request: ClientRequest, what: &str) -> TypedRequestError
+    where
+        T: DeserializeOwned + Send,
+    {
+        timeout(REQUEST_TIMEOUT, self.get().request_typed::<T>(request))
+            .await
+            .unwrap_or_else(|_| panic!("{what} timed out"))
+            .expect_err(what)
+    }
+
+    async fn shutdown(mut self) {
+        if let Some(client) = self.client.take() {
+            timeout(CLIENT_SHUTDOWN_TIMEOUT, client.shutdown())
+                .await
+                .expect("client shutdown timed out")
+                .expect("client shutdown failed");
+        }
+    }
+}
+
+impl Drop for IsolatedClient {
+    fn drop(&mut self) {
+        if let Some(client) = self.client.take()
+            && let Ok(handle) = tokio::runtime::Handle::try_current()
+        {
+            handle.spawn(async move {
+                let _ = timeout(CLIENT_SHUTDOWN_TIMEOUT, client.shutdown()).await;
+            });
+        }
+    }
+}
 
 async fn isolated_mock_config(codex_home: &Path, server_uri: &str) -> Arc<Config> {
     write_mock_responses_config_toml(
@@ -61,39 +156,16 @@ async fn isolated_mock_config(codex_home: &Path, server_uri: &str) -> Arc<Config
         "compact",
     )
     .expect("mock config should write");
-    Arc::new(
+    timeout(
+        START_TIMEOUT,
         ConfigBuilder::default()
             .codex_home(codex_home.to_path_buf())
-            .build()
-            .await
-            .expect("isolated config should build"),
+            .build(),
     )
-}
-
-async fn start_isolated_client(
-    session_source: SessionSource,
-    config: Arc<Config>,
-) -> InProcessAppServerClient {
-    InProcessAppServerClient::start(InProcessClientStartArgs {
-        arg0_paths: Arg0DispatchPaths::default(),
-        config,
-        cli_overrides: Vec::new(),
-        loader_overrides: LoaderOverrides::default(),
-        cloud_requirements: CloudRequirementsLoader::default(),
-        auth_manager: None,
-        thread_manager: None,
-        feedback: CodexFeedback::new(),
-        config_warnings: Vec::new(),
-        session_source,
-        enable_ctox_api_key_env: false,
-        client_name: "ctox-app-server-client-persistent-resume-test".to_string(),
-        client_version: "0.0.0-test".to_string(),
-        experimental_api: true,
-        opt_out_notification_methods: Vec::new(),
-        channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
-    })
     .await
-    .expect("in-process app-server client should start")
+    .expect("isolated config build timed out")
+    .map(Arc::new)
+    .expect("isolated config should build")
 }
 
 fn persistent_start_params(cwd: &Path) -> ThreadStartParams {
@@ -124,21 +196,30 @@ fn adapter_list_params() -> ThreadListParams {
     }
 }
 
-fn history_contains_markers(thread: &ctox_app_server_protocol::Thread) -> bool {
-    user_texts(thread)
+fn completed_turn(thread: &ctox_app_server_protocol::Thread) -> bool {
+    thread
+        .turns
         .iter()
-        .any(|text| text.contains(USER_MARKER))
-        && agent_texts(thread)
-            .iter()
-            .any(|text| text.contains(ASSISTANT_MARKER))
+        .any(|turn| turn.status == TurnStatus::Completed)
 }
 
-async fn wait_for_turn_completed(client: &mut InProcessAppServerClient, thread_id: &str) {
-    let deadline = Duration::from_secs(45);
-    timeout(deadline, async {
+fn failed_turn_error(thread: &ctox_app_server_protocol::Thread) -> Option<String> {
+    thread.turns.iter().find_map(|turn| {
+        matches!(turn.status, TurnStatus::Failed | TurnStatus::Interrupted)
+            .then(|| format!("{:?}: {:?}", turn.status, turn.error))
+    })
+}
+
+fn is_transient_read_error(err: &TypedRequestError) -> bool {
+    let message = err.to_string();
+    message.contains("not materialized yet") || message.contains("includeTurns is unavailable")
+}
+
+async fn wait_for_turn_completed(client: &mut IsolatedClient, thread_id: &str) {
+    timeout(TURN_WAIT_TIMEOUT, async {
         let mut poll_id = 1000i64;
         loop {
-            match timeout(Duration::from_millis(250), client.next_event()).await {
+            match timeout(Duration::from_millis(250), client.get_mut().next_event()).await {
                 Ok(Some(InProcessServerEvent::ServerNotification(
                     ServerNotification::TurnCompleted(notification),
                 ))) if notification.thread_id == thread_id => {
@@ -166,29 +247,45 @@ async fn wait_for_turn_completed(client: &mut InProcessAppServerClient, thread_i
                 Ok(None) => panic!("in-process event stream closed before turn completed"),
                 Ok(Some(_)) | Err(_) => {}
             }
+
             let request_id = RequestId::Integer(poll_id);
             poll_id += 1;
-            if let Ok(read) = client
-                .request_typed::<ThreadReadResponse>(ClientRequest::ThreadRead {
-                    request_id,
-                    params: ThreadReadParams {
-                        thread_id: thread_id.to_string(),
-                        include_turns: true,
-                    },
-                })
-                .await
-                && history_contains_markers(&read.thread)
+            match timeout(
+                REQUEST_TIMEOUT,
+                client
+                    .get()
+                    .request_typed::<ThreadReadResponse>(ClientRequest::ThreadRead {
+                        request_id,
+                        params: ThreadReadParams {
+                            thread_id: thread_id.to_string(),
+                            include_turns: true,
+                        },
+                    }),
+            )
+            .await
             {
-                return;
+                Err(_) => panic!("thread/read timed out while waiting for turn completion"),
+                Ok(Err(err)) if is_transient_read_error(&err) => {}
+                Ok(Err(err)) => {
+                    panic!("thread/read failed while waiting for turn completion: {err}")
+                }
+                Ok(Ok(read)) => {
+                    if let Some(error) = failed_turn_error(&read.thread) {
+                        panic!("turn did not complete successfully: {error}");
+                    }
+                    if completed_turn(&read.thread) {
+                        return;
+                    }
+                }
             }
         }
     })
     .await
-    .expect("timed out waiting for persisted turn history");
+    .expect("timed out waiting for a completed turn");
 }
 
 async fn wait_for_session_index_name(codex_home: &Path) {
-    timeout(Duration::from_secs(5), async {
+    timeout(SESSION_INDEX_TIMEOUT, async {
         let path = codex_home.join("session_index.jsonl");
         loop {
             if let Ok(index) = std::fs::read_to_string(&path)
@@ -236,65 +333,90 @@ fn agent_texts(thread: &ctox_app_server_protocol::Thread) -> Vec<String> {
         .collect()
 }
 
-#[tokio::test]
-async fn named_persistent_thread_survives_manager_restart_and_missing_resume_fails_closed() {
+async fn manager_thread_ids(client: &IsolatedClient) -> Vec<String> {
+    let mut ids = client
+        .get()
+        .thread_manager()
+        .list_thread_ids()
+        .await
+        .into_iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids
+}
+
+async fn run_named_persistent_thread_restart() {
     let server = create_mock_responses_server_repeating_assistant(ASSISTANT_MARKER).await;
     let codex_home = tempfile::TempDir::new().expect("tempdir");
     let config = isolated_mock_config(codex_home.path(), &server.uri()).await;
 
     let created = {
-        let mut client = start_isolated_client(SessionSource::Exec, Arc::clone(&config)).await;
+        let mut client = IsolatedClient::start(SessionSource::Exec, Arc::clone(&config)).await;
         let started: ThreadStartResponse = client
-            .request_typed(ClientRequest::ThreadStart {
-                request_id: RequestId::Integer(1),
-                params: persistent_start_params(codex_home.path()),
-            })
-            .await
-            .expect("thread/start should succeed");
+            .request(
+                ClientRequest::ThreadStart {
+                    request_id: RequestId::Integer(1),
+                    params: persistent_start_params(codex_home.path()),
+                },
+                "thread/start",
+            )
+            .await;
         assert!(
             !started.thread.ephemeral,
             "persistent worker threads must be materialized on disk"
         );
         let thread_id = started.thread.id.clone();
         let _: ThreadSetNameResponse = client
-            .request_typed(ClientRequest::ThreadSetName {
-                request_id: RequestId::Integer(2),
-                params: ThreadSetNameParams {
-                    thread_id: thread_id.clone(),
-                    name: THREAD_NAME.to_string(),
+            .request(
+                ClientRequest::ThreadSetName {
+                    request_id: RequestId::Integer(2),
+                    params: ThreadSetNameParams {
+                        thread_id: thread_id.clone(),
+                        name: THREAD_NAME.to_string(),
+                    },
                 },
-            })
-            .await
-            .expect("thread/name/set should succeed");
+                "thread/name/set",
+            )
+            .await;
         let _: TurnStartResponse = client
-            .request_typed(ClientRequest::TurnStart {
-                request_id: RequestId::Integer(3),
-                params: TurnStartParams {
-                    thread_id: thread_id.clone(),
-                    input: vec![UserInput::Text {
-                        text: USER_MARKER.to_string(),
-                        text_elements: Vec::new(),
-                    }],
-                    ..TurnStartParams::default()
+            .request(
+                ClientRequest::TurnStart {
+                    request_id: RequestId::Integer(3),
+                    params: TurnStartParams {
+                        thread_id: thread_id.clone(),
+                        input: vec![UserInput::Text {
+                            text: USER_MARKER.to_string(),
+                            text_elements: Vec::new(),
+                        }],
+                        ..TurnStartParams::default()
+                    },
                 },
-            })
-            .await
-            .expect("turn/start should succeed");
+                "turn/start",
+            )
+            .await;
         wait_for_turn_completed(&mut client, &thread_id).await;
         wait_for_session_index_name(codex_home.path()).await;
 
         let read: ThreadReadResponse = client
-            .request_typed(ClientRequest::ThreadRead {
-                request_id: RequestId::Integer(4),
-                params: ThreadReadParams {
-                    thread_id: thread_id.clone(),
-                    include_turns: true,
+            .request(
+                ClientRequest::ThreadRead {
+                    request_id: RequestId::Integer(4),
+                    params: ThreadReadParams {
+                        thread_id: thread_id.clone(),
+                        include_turns: true,
+                    },
                 },
-            })
-            .await
-            .expect("thread/read should succeed before restart");
+                "thread/read before restart",
+            )
+            .await;
         assert_eq!(read.thread.id, thread_id);
         assert_eq!(read.thread.name.as_deref(), Some(THREAD_NAME));
+        assert!(
+            completed_turn(&read.thread),
+            "pre-restart history should include a completed turn: {:?}",
+            read.thread.turns
+        );
         assert!(
             user_texts(&read.thread)
                 .iter()
@@ -335,17 +457,9 @@ async fn named_persistent_thread_survives_manager_restart_and_missing_resume_fai
             session_index.contains(THREAD_NAME),
             "session index should contain the assigned thread name"
         );
-        assert!(
-            client
-                .thread_manager()
-                .list_thread_ids()
-                .await
-                .iter()
-                .any(|id| id.to_string() == thread_id),
-            "live manager should retain the started thread"
-        );
+        assert_eq!(manager_thread_ids(&client).await, vec![thread_id.clone()]);
 
-        client.shutdown().await.expect("first manager shutdown");
+        client.shutdown().await;
         (
             thread_id,
             rollout_path,
@@ -361,19 +475,21 @@ async fn named_persistent_thread_survives_manager_restart_and_missing_resume_fai
     );
 
     let restarted_config = isolated_mock_config(codex_home.path(), &server.uri()).await;
-    let client = start_isolated_client(SessionSource::Exec, restarted_config).await;
+    let client = IsolatedClient::start(SessionSource::Exec, restarted_config).await;
     assert!(
-        client.thread_manager().list_thread_ids().await.is_empty(),
+        manager_thread_ids(&client).await.is_empty(),
         "a restarted ThreadManager must not inherit in-memory threads"
     );
 
     let listed: ThreadListResponse = client
-        .request_typed(ClientRequest::ThreadList {
-            request_id: RequestId::Integer(10),
-            params: adapter_list_params(),
-        })
-        .await
-        .expect("thread/list should succeed after restart");
+        .request(
+            ClientRequest::ThreadList {
+                request_id: RequestId::Integer(10),
+                params: adapter_list_params(),
+            },
+            "thread/list after restart",
+        )
+        .await;
     let listed_thread = listed
         .data
         .iter()
@@ -385,43 +501,44 @@ async fn named_persistent_thread_survives_manager_restart_and_missing_resume_fai
     assert_eq!(listed_thread.path.as_ref(), Some(&rollout_path));
 
     let resumed: ThreadResumeResponse = client
-        .request_typed(ClientRequest::ThreadResume {
-            request_id: RequestId::Integer(11),
-            params: ThreadResumeParams {
-                thread_id: thread_id.clone(),
-                model: Some("compact".to_string()),
-                model_provider: Some("mock_provider".to_string()),
-                persist_extended_history: true,
-                ..ThreadResumeParams::default()
+        .request(
+            ClientRequest::ThreadResume {
+                request_id: RequestId::Integer(11),
+                params: ThreadResumeParams {
+                    thread_id: thread_id.clone(),
+                    model: Some("compact".to_string()),
+                    model_provider: Some("mock_provider".to_string()),
+                    persist_extended_history: true,
+                    ..ThreadResumeParams::default()
+                },
             },
-        })
-        .await
-        .expect("thread/resume should restore the identified thread");
+            "thread/resume identified thread",
+        )
+        .await;
     assert_eq!(resumed.thread.id, thread_id);
     assert_eq!(resumed.thread.name.as_deref(), Some(THREAD_NAME));
     assert!(!resumed.thread.ephemeral);
-    assert!(
-        client
-            .thread_manager()
-            .list_thread_ids()
-            .await
-            .iter()
-            .any(|id| id.to_string() == thread_id),
-        "resume should load the same thread into the new manager"
-    );
+    assert_eq!(manager_thread_ids(&client).await, vec![thread_id.clone()]);
 
     let reread: ThreadReadResponse = client
-        .request_typed(ClientRequest::ThreadRead {
-            request_id: RequestId::Integer(12),
-            params: ThreadReadParams {
-                thread_id: thread_id.clone(),
-                include_turns: true,
+        .request(
+            ClientRequest::ThreadRead {
+                request_id: RequestId::Integer(12),
+                params: ThreadReadParams {
+                    thread_id: thread_id.clone(),
+                    include_turns: true,
+                },
             },
-        })
-        .await
-        .expect("thread/read should inspect resumed history");
+            "thread/read after resume",
+        )
+        .await;
     assert_eq!(reread.thread.id, thread_id);
     assert_eq!(reread.thread.name.as_deref(), Some(THREAD_NAME));
+    assert!(
+        completed_turn(&reread.thread),
+        "resumed history should include a completed turn: {:?}",
+        reread.thread.turns
+    );
     assert_eq!(user_texts(&reread.thread), original_user_texts);
     assert_eq!(agent_texts(&reread.thread), original_agent_texts);
     assert!(
@@ -438,16 +555,18 @@ async fn named_persistent_thread_survives_manager_restart_and_missing_resume_fai
     );
 
     let err = client
-        .request_typed::<ThreadResumeResponse>(ClientRequest::ThreadResume {
-            request_id: RequestId::Integer(13),
-            params: ThreadResumeParams {
-                thread_id: MISSING_THREAD_ID.to_string(),
-                persist_extended_history: true,
-                ..ThreadResumeParams::default()
+        .request_err::<ThreadResumeResponse>(
+            ClientRequest::ThreadResume {
+                request_id: RequestId::Integer(13),
+                params: ThreadResumeParams {
+                    thread_id: MISSING_THREAD_ID.to_string(),
+                    persist_extended_history: true,
+                    ..ThreadResumeParams::default()
+                },
             },
-        })
-        .await
-        .expect_err("missing identified thread must fail closed");
+            "missing identified thread must fail closed",
+        )
+        .await;
     match err {
         TypedRequestError::Server { method, source } => {
             assert_eq!(method, "thread/resume");
@@ -459,9 +578,18 @@ async fn named_persistent_thread_survives_manager_restart_and_missing_resume_fai
         }
         other => panic!("expected JSON-RPC server error for missing resume, got {other}"),
     }
+    assert_eq!(
+        manager_thread_ids(&client).await,
+        vec![thread_id.clone()],
+        "missing-id resume rejection must keep exactly the original loaded thread"
+    );
 
-    client
-        .shutdown()
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn named_persistent_thread_survives_manager_restart_and_missing_resume_fails_closed() {
+    timeout(FIXTURE_TIMEOUT, run_named_persistent_thread_restart())
         .await
-        .expect("restarted manager shutdown should complete");
+        .expect("persistent-thread restart fixture timed out");
 }
