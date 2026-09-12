@@ -8,9 +8,10 @@ use super::store::{
     open_store, projection_route_status_for_command_status, projection_status_is_active,
     push_repair_action, queue_status_is_terminal_failure, queue_status_is_terminal_success,
     redact_document_client_context_secrets, repair_inline_payload_artifacts,
-    upsert_command_projection_from_queue_status, upsert_rxdb_collection_record,
-    upsert_rxdb_collection_record_cached, BusinessCommand, QueueProjectionRepairOptions,
-    RxdbProjectionWriterCache, BUSINESS_OS_QUEUE_ORPHAN_REPAIR_AGE_MS,
+    repair_placeholder_business_chat_owners, upsert_command_projection_from_queue_status,
+    upsert_rxdb_collection_record, upsert_rxdb_collection_record_cached, BusinessCommand,
+    QueueProjectionRepairOptions, RxdbProjectionWriterCache,
+    BUSINESS_OS_QUEUE_ORPHAN_REPAIR_AGE_MS,
 };
 use crate::mission::channels;
 use anyhow::Context;
@@ -116,18 +117,110 @@ pub(super) fn business_chat_title(command: &BusinessCommand) -> String {
         .unwrap_or_else(|| "CTOX".to_string())
 }
 
-pub(super) fn business_chat_owner_user_id(command: &BusinessCommand) -> String {
-    first_string_field(&command.client_context, &["owner_user_id", "user_id"])
+fn client_context_string(value: &Value, pointer: &str) -> Option<String> {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+}
+
+pub(super) fn is_placeholder_business_chat_owner(owner: &str) -> bool {
+    let trimmed = owner.trim();
+    trimmed.is_empty() || trimmed == "local-dev"
+}
+
+fn non_placeholder_owner(value: Option<String>) -> Option<String> {
+    value.filter(|item| !is_placeholder_business_chat_owner(item))
+}
+
+fn owner_user_id_from_context(value: &Value) -> Option<String> {
+    for key in ["owner_user_id", "user_id", "owner"] {
+        if let Some(owner) = non_placeholder_owner(first_string_field(value, &[key])) {
+            return Some(owner);
+        }
+    }
+    non_placeholder_owner(client_context_string(value, "/actor/id"))
+        .or_else(|| non_placeholder_owner(client_context_string(value, "/actor/user_id")))
         .or_else(|| {
-            command
-                .client_context
-                .pointer("/actor/id")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
+            non_placeholder_owner(
+                value
+                    .get("actor")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|item| !item.is_empty())
+                    .map(str::to_string),
+            )
         })
-        .unwrap_or_else(|| "local-dev".to_string())
+}
+
+fn resolve_existing_business_chat_owner(existing: &str, projected: String) -> String {
+    let _ = projected;
+    existing.trim().to_string()
+}
+
+pub(super) fn existing_business_chat_owner(
+    conn: &Connection,
+    chat_id: &str,
+) -> anyhow::Result<Option<String>> {
+    let payload = conn
+        .query_row(
+            "SELECT payload_json FROM business_records
+             WHERE collection = 'business_chats' AND record_id = ?1 AND deleted = 0",
+            params![chat_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let Some(payload) = payload else {
+        return Ok(None);
+    };
+    let value: Value = serde_json::from_str(&payload)?;
+    Ok(Some(
+        value
+            .get("owner_user_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string(),
+    ))
+}
+
+pub(super) fn business_chat_owner_user_id(command: &BusinessCommand) -> String {
+    owner_user_id_from_context(&command.client_context).unwrap_or_else(|| "local-dev".to_string())
+}
+
+pub(super) fn initial_pending_business_chat_payload(
+    command: &BusinessCommand,
+    command_id: &str,
+    owner_user_id: &str,
+    updated_at_ms: i64,
+    task_id: &str,
+) -> Value {
+    let chat_id = business_chat_id(command, command_id);
+    let title = business_chat_title(command);
+    let auto_focus = command
+        .client_context
+        .get("business_chat_auto_focus")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    serde_json::json!({
+        "id": chat_id,
+        "title": title,
+        "open": true,
+        "minimized": !auto_focus,
+        "owner_user_id": owner_user_id,
+        "contextMeta": {
+            "module": command.module,
+            "source_module": command.module,
+            "client_context": command.client_context
+        },
+        "lastTrackingId": task_id,
+        "messages": [],
+        "draft": "",
+        "createdAt": updated_at_ms,
+        "updated_at_ms": updated_at_ms
+    })
 }
 
 pub(super) fn materialize_pending_business_chat(
@@ -173,23 +266,13 @@ pub(super) fn materialize_pending_business_chat(
         .optional()?
         .and_then(|payload| serde_json::from_str::<Value>(&payload).ok())
         .unwrap_or_else(|| {
-            serde_json::json!({
-                "id": chat_id,
-                "title": title,
-                "open": true,
-                "minimized": !auto_focus,
-                "owner_user_id": owner_user_id,
-                "contextMeta": {
-                    "module": command.module,
-                    "source_module": command.module,
-                    "client_context": command.client_context
-                },
-                "lastTrackingId": task_id,
-                "messages": [],
-                "draft": "",
-                "createdAt": updated_at_ms,
-                "updated_at_ms": updated_at_ms
-            })
+            initial_pending_business_chat_payload(
+                command,
+                command_id,
+                &owner_user_id,
+                updated_at_ms,
+                &task_id,
+            )
         });
     let obj = chat
         .as_object_mut()
@@ -207,7 +290,18 @@ pub(super) fn materialize_pending_business_chat(
             "client_context": command.client_context
         })
     });
-    obj.insert("owner_user_id".to_string(), Value::String(owner_user_id));
+    let existing_owner = obj
+        .get("owner_user_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    obj.insert(
+        "owner_user_id".to_string(),
+        Value::String(resolve_existing_business_chat_owner(
+            &existing_owner,
+            owner_user_id,
+        )),
+    );
     obj.insert(
         "lastTrackingId".to_string(),
         Value::String(if task_id.is_empty() {
@@ -438,9 +532,17 @@ pub(super) fn business_chat_payload(
     obj.insert("open".to_string(), Value::Bool(true));
     obj.entry("minimized".to_string())
         .or_insert_with(|| Value::Bool(false));
+    let existing_owner = obj
+        .get("owner_user_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     obj.insert(
         "owner_user_id".to_string(),
-        Value::String(owner_user_id.to_string()),
+        Value::String(resolve_existing_business_chat_owner(
+            &existing_owner,
+            owner_user_id.to_string(),
+        )),
     );
     obj.insert(
         "lastTrackingId".to_string(),
@@ -1330,6 +1432,16 @@ pub fn repair_queue_projections(
         }
     }
 
+    repair_placeholder_business_chat_owners(
+        root,
+        &conn,
+        &mut rxdb_writers,
+        apply,
+        now,
+        &mut counters,
+        &mut actions,
+    )?;
+
     let redacted = repair_inline_payload_artifacts(root, &conn, apply, now)?;
     if redacted > 0 {
         counters.insert("oversized_inline_artifacts_redacted", redacted);
@@ -1354,16 +1466,18 @@ pub fn repair_queue_projections(
 pub(crate) mod tests {
     use super::super::store::{
         accept_rxdb_business_command, load_rxdb_collection_record, now_ms, open_store,
-        queue_status_is_terminal_success, rxdb_store_path,
+        queue_status_is_terminal_success, rxdb_store_path, set_rxdb_chat_owner_repair_interleave,
+        BusinessCommand, CommandOrigin,
     };
     use super::{
-        business_chat_result_status_is_failure, effective_queue_projection_route_status,
-        repair_queue_projections, upsert_business_record, QueueProjectionRepairOptions,
+        business_chat_owner_user_id, business_chat_result_status_is_failure,
+        effective_queue_projection_route_status, repair_queue_projections,
+        resolve_existing_business_chat_owner, upsert_business_record, QueueProjectionRepairOptions,
     };
     use crate::mission::channels;
     use anyhow::Context;
     use rusqlite::{params, Connection};
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use std::fs;
     use std::path::Path;
     use tempfile::tempdir;
@@ -1371,6 +1485,16 @@ pub(crate) mod tests {
     pub(crate) fn create_repair_rxdb_tables(root: &Path) -> anyhow::Result<Connection> {
         fs::create_dir_all(root.join("runtime"))?;
         let conn = Connection::open(rxdb_store_path(root))?;
+        conn.execute(
+            "CREATE TABLE ctox_business_os__business_chats__v0 (
+                id TEXT PRIMARY KEY NOT NULL,
+                revision TEXT,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                lastWriteTime REAL NOT NULL DEFAULT 0,
+                data TEXT NOT NULL
+            )",
+            [],
+        )?;
         conn.execute(
             "CREATE TABLE ctox_business_os__ctox_queue_tasks__v0 (
                 id TEXT PRIMARY KEY NOT NULL,
@@ -1430,14 +1554,117 @@ pub(crate) mod tests {
         id: &str,
         payload: Value,
     ) -> anyhow::Result<()> {
+        insert_rxdb_test_record_with_deleted(conn, table, id, payload, false)
+    }
+
+    pub(crate) fn insert_rxdb_test_record_with_deleted(
+        conn: &Connection,
+        table: &str,
+        id: &str,
+        payload: Value,
+        deleted: bool,
+    ) -> anyhow::Result<()> {
         conn.execute(
             &format!(
                 "INSERT INTO {table} (id, revision, deleted, lastWriteTime, data)
-                 VALUES (?1, 'rev_stale', 0, 1.0, ?2)"
+                 VALUES (?1, 'rev_stale', ?2, 1.0, ?3)"
             ),
-            params![id, serde_json::to_string(&payload)?],
+            params![
+                id,
+                if deleted { 1 } else { 0 },
+                serde_json::to_string(&payload)?
+            ],
         )?;
         Ok(())
+    }
+
+    fn chat_owner_command(client_context: Value) -> BusinessCommand {
+        BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd-chat-owner".into()),
+            module: "ctox".into(),
+            command_type: "business_os.chat.task".into(),
+            record_id: Some("chat-owner".into()),
+            payload: json!({}),
+            client_context,
+        }
+    }
+
+    #[test]
+    fn business_chat_owner_user_id_reads_owner_and_actor_user_id() {
+        assert_eq!(
+            business_chat_owner_user_id(&chat_owner_command(json!({"owner": "user-1"}))),
+            "user-1"
+        );
+        assert_eq!(
+            business_chat_owner_user_id(&chat_owner_command(
+                json!({"actor": {"user_id": "user-2"}})
+            )),
+            "user-2"
+        );
+        assert_eq!(
+            business_chat_owner_user_id(&chat_owner_command(json!({"actor": {"id": "user-3"}}))),
+            "user-3"
+        );
+        assert_eq!(
+            business_chat_owner_user_id(&chat_owner_command(json!({"actor": "user-4"}))),
+            "user-4"
+        );
+        assert_eq!(
+            business_chat_owner_user_id(&chat_owner_command(json!({}))),
+            "local-dev"
+        );
+    }
+
+    #[test]
+    fn business_chat_owner_skips_placeholder_candidates_before_actor_id() {
+        assert_eq!(
+            business_chat_owner_user_id(&chat_owner_command(json!({
+                "owner_user_id": "local-dev",
+                "actor": { "id": "user-1" }
+            }))),
+            "user-1"
+        );
+        assert_eq!(
+            business_chat_owner_user_id(&chat_owner_command(json!({
+                "owner_user_id": "local-dev",
+                "actor": { "user_id": "user-2" }
+            }))),
+            "user-2"
+        );
+    }
+
+    #[test]
+    fn business_chat_owner_does_not_clobber_or_transfer_a_real_owner() {
+        assert_eq!(
+            resolve_existing_business_chat_owner("user-1", "local-dev".to_string()),
+            "user-1"
+        );
+        assert_eq!(
+            resolve_existing_business_chat_owner("local-dev", "user-1".to_string()),
+            "local-dev",
+            "projection must not adopt an existing placeholder chat"
+        );
+        assert_eq!(
+            resolve_existing_business_chat_owner("user-1", "user-2".to_string()),
+            "user-1",
+            "a real owner must not transfer to another real actor via projection"
+        );
+        assert_eq!(
+            resolve_existing_business_chat_owner("", "local-dev".to_string()),
+            "",
+            "an existing empty owner stays unattributed"
+        );
+        assert_eq!(
+            business_chat_owner_user_id(&chat_owner_command(json!({
+                "owner_user_id": "local-dev",
+                "contextMeta": {
+                    "client_context": { "owner": "user-9", "actor": { "user_id": "user-9" } }
+                }
+            }))),
+            "local-dev",
+            "stored chat client_context is not a trusted owner receipt"
+        );
     }
 
     #[test]
@@ -1779,6 +2006,977 @@ pub(crate) mod tests {
             Some("handled"),
             "historical non-pending mismatches require an explicit migration, not repair_queue_projections"
         );
+        Ok(())
+    }
+
+    fn seed_completed_chat_with_receipt(
+        conn: &Connection,
+        chat_id: &str,
+        command_id: &str,
+        event_id: &str,
+        owner: &str,
+        deleted: bool,
+        payload_chat_id: &str,
+        messages: Value,
+    ) -> anyhow::Result<()> {
+        let now = now_ms() as i64;
+        conn.execute(
+            "INSERT INTO business_records
+                (collection, record_id, rev, deleted, updated_at_ms, payload_json)
+             VALUES ('business_chats', ?1, 'rev_chat', ?2, ?3, ?4)",
+            params![
+                chat_id,
+                if deleted { 1 } else { 0 },
+                now,
+                serde_json::to_string(&serde_json::json!({
+                    "id": chat_id,
+                    "owner_user_id": "local-dev",
+                    "title": "Public answer",
+                    "minimized": false,
+                    "messages": messages,
+                    "tracking_status": "completed"
+                }))?
+            ],
+        )?;
+        conn.execute(
+            "INSERT INTO business_commands
+                (command_id, module, command_type, record_id, status, payload_json, client_context_json, observed_at_ms)
+             VALUES (?1, 'ctox', 'business_os.chat.task', ?2, 'completed', ?3, ?4, ?5)",
+            params![
+                command_id,
+                payload_chat_id,
+                serde_json::to_string(&serde_json::json!({
+                    "reply_to": payload_chat_id,
+                    "chat_id": payload_chat_id,
+                    "title": "Public answer"
+                }))?,
+                serde_json::to_string(&serde_json::json!({
+                    "source": "business-os-chat"
+                }))?,
+                now
+            ],
+        )?;
+        conn.execute(
+            "INSERT INTO business_events
+                (event_id, collection, record_id, command_type, payload_json, observed_at_ms)
+             VALUES (?1, 'business_commands', ?2, 'business_os.policy.allowed', ?3, ?4)",
+            params![
+                event_id,
+                command_id,
+                serde_json::to_string(&serde_json::json!({
+                    "event_type": "business_os.policy.allowed",
+                    "command_id": command_id,
+                    "actor": { "id": owner, "trusted": true }
+                }))?,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn repair_queue_projections_repairs_placeholder_chat_owner_from_trusted_receipt(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let now = now_ms() as i64;
+        let conn = open_store(root)?;
+        let messages = serde_json::json!([
+            {"id": "chatmsg-public", "role": "user", "text": "What is the answer?"},
+            {"id": "reply_cmd-public", "role": "ctox", "kind": "reply", "text": "42", "status": "completed"}
+        ]);
+        seed_completed_chat_with_receipt(
+            &conn,
+            "chat-public",
+            "cmd-public",
+            "evt-public",
+            "user-a@example.test",
+            false,
+            "chat-public",
+            messages.clone(),
+        )?;
+        seed_completed_chat_with_receipt(
+            &conn,
+            "chat-unproven",
+            "cmd-unproven",
+            "evt-unproven",
+            "local-dev",
+            false,
+            "chat-unproven",
+            serde_json::json!([{"id": "m1", "role": "user", "text": "orphan"}]),
+        )?;
+        seed_completed_chat_with_receipt(
+            &conn,
+            "chat-conflict",
+            "cmd-conflict-a",
+            "evt-conflict-a",
+            "user-a@example.test",
+            false,
+            "chat-conflict",
+            serde_json::json!([{"id": "m2", "role": "user", "text": "conflict"}]),
+        )?;
+        conn.execute(
+            "INSERT INTO business_commands
+                (command_id, module, command_type, record_id, status, payload_json, client_context_json, observed_at_ms)
+             VALUES (?1, 'ctox', 'business_os.chat.task', ?2, 'completed', ?3, ?4, ?5)",
+            params![
+                "cmd-conflict-b",
+                "chat-conflict",
+                serde_json::to_string(&serde_json::json!({
+                    "reply_to": "chat-conflict",
+                    "chat_id": "chat-conflict"
+                }))?,
+                serde_json::to_string(&serde_json::json!({"source": "business-os-chat"}))?,
+                now
+            ],
+        )?;
+        conn.execute(
+            "INSERT INTO business_events
+                (event_id, collection, record_id, command_type, payload_json, observed_at_ms)
+             VALUES (?1, 'business_commands', ?2, 'business_os.policy.allowed', ?3, ?4)",
+            params![
+                "evt-conflict-b",
+                "cmd-conflict-b",
+                serde_json::to_string(&serde_json::json!({
+                    "event_type": "business_os.policy.allowed",
+                    "command_id": "cmd-conflict-b",
+                    "actor": { "id": "user-b@example.test", "trusted": true }
+                }))?,
+                now
+            ],
+        )?;
+        seed_completed_chat_with_receipt(
+            &conn,
+            "chat-deleted",
+            "cmd-deleted",
+            "evt-deleted",
+            "user-a@example.test",
+            true,
+            "chat-deleted",
+            serde_json::json!([{"id": "m3", "role": "user", "text": "deleted"}]),
+        )?;
+        let queue_id = "queue:system::public-chat";
+        let queue_payload = serde_json::json!({
+            "id": queue_id,
+            "command_id": "cmd-public",
+            "status": "completed",
+            "route_status": "handled",
+            "task_status": "completed",
+            "updated_at_ms": now
+        });
+        upsert_business_record(
+            &conn,
+            "ctox_queue_tasks",
+            queue_id,
+            now,
+            queue_payload.clone(),
+        )?;
+        let queue_count_before: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_records WHERE collection='ctox_queue_tasks' AND deleted=0",
+            [],
+            |row| row.get(0),
+        )?;
+        drop(conn);
+
+        let dry_run =
+            repair_queue_projections(root, QueueProjectionRepairOptions { apply: false })?;
+        assert_eq!(
+            dry_run
+                .pointer("/counts/chat_owner_repaired")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        let conn = open_store(root)?;
+        let dry_chat: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection='business_chats' AND record_id='chat-public' AND deleted=0",
+            [],
+            |row| row.get(0),
+        )?;
+        let dry_chat: Value = serde_json::from_str(&dry_chat)?;
+        assert_eq!(
+            dry_chat.get("owner_user_id").and_then(Value::as_str),
+            Some("local-dev")
+        );
+        assert_eq!(dry_chat.get("messages"), Some(&messages));
+        let dry_queue: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection='ctox_queue_tasks' AND record_id=?1",
+            params![queue_id],
+            |row| row.get(0),
+        )?;
+        let dry_queue: Value = serde_json::from_str(&dry_queue)?;
+        assert_eq!(
+            dry_queue.get("route_status").and_then(Value::as_str),
+            Some("handled")
+        );
+        let queue_count_dry: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_records WHERE collection='ctox_queue_tasks' AND deleted=0",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(queue_count_dry, queue_count_before);
+        drop(conn);
+        assert!(
+            load_rxdb_collection_record(root, "business_chats", "chat-public")?.is_none(),
+            "dry-run must not create an RxDB chat projection"
+        );
+
+        let first_apply =
+            repair_queue_projections(root, QueueProjectionRepairOptions { apply: true })?;
+        assert_eq!(
+            first_apply
+                .pointer("/counts/chat_owner_repaired")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        let conn = open_store(root)?;
+        let applied: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection='business_chats' AND record_id='chat-public' AND deleted=0",
+            [],
+            |row| row.get(0),
+        )?;
+        let applied: Value = serde_json::from_str(&applied)?;
+        assert_eq!(
+            applied.get("owner_user_id").and_then(Value::as_str),
+            Some("user-a@example.test")
+        );
+        assert_eq!(applied.get("messages"), Some(&messages));
+        assert_eq!(
+            applied.get("title").and_then(Value::as_str),
+            Some("Public answer")
+        );
+        assert_eq!(
+            applied.get("tracking_status").and_then(Value::as_str),
+            Some("completed")
+        );
+        let unproven: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection='business_chats' AND record_id='chat-unproven' AND deleted=0",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            serde_json::from_str::<Value>(&unproven)?
+                .get("owner_user_id")
+                .and_then(Value::as_str),
+            Some("local-dev")
+        );
+        let conflict: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection='business_chats' AND record_id='chat-conflict' AND deleted=0",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            serde_json::from_str::<Value>(&conflict)?
+                .get("owner_user_id")
+                .and_then(Value::as_str),
+            Some("local-dev")
+        );
+        let deleted: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection='business_chats' AND record_id='chat-deleted' AND deleted=1",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            serde_json::from_str::<Value>(&deleted)?
+                .get("owner_user_id")
+                .and_then(Value::as_str),
+            Some("local-dev")
+        );
+        let queue_count_after: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_records WHERE collection='ctox_queue_tasks' AND deleted=0",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(queue_count_after, queue_count_before);
+        let applied_queue: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection='ctox_queue_tasks' AND record_id=?1",
+            params![queue_id],
+            |row| row.get(0),
+        )?;
+        let applied_queue: Value = serde_json::from_str(&applied_queue)?;
+        assert_eq!(
+            applied_queue.get("route_status").and_then(Value::as_str),
+            Some("handled")
+        );
+        drop(conn);
+        assert!(
+            load_rxdb_collection_record(root, "business_chats", "chat-public")?.is_none(),
+            "first apply must leave RxDB unrepaired when the projection writer is unavailable"
+        );
+
+        let rxdb_conn = create_repair_rxdb_tables(root)?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__business_chats__v0",
+            "chat-public",
+            serde_json::json!({
+                "id": "chat-public",
+                "owner_user_id": "local-dev",
+                "title": "Public answer",
+                "messages": messages,
+                "tracking_status": "completed"
+            }),
+        )?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__ctox_queue_tasks__v0",
+            queue_id,
+            queue_payload.clone(),
+        )?;
+        drop(rxdb_conn);
+
+        let retry = repair_queue_projections(root, QueueProjectionRepairOptions { apply: true })?;
+        assert_eq!(
+            retry
+                .pointer("/counts/chat_owner_repaired")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        let conn = open_store(root)?;
+        let retried: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection='business_chats' AND record_id='chat-public' AND deleted=0",
+            [],
+            |row| row.get(0),
+        )?;
+        let retried: Value = serde_json::from_str(&retried)?;
+        assert_eq!(
+            retried.get("owner_user_id").and_then(Value::as_str),
+            Some("user-a@example.test")
+        );
+        assert_eq!(retried.get("messages"), Some(&messages));
+        let queue_count_retry: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_records WHERE collection='ctox_queue_tasks' AND deleted=0",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(queue_count_retry, queue_count_before);
+        drop(conn);
+        let rxdb_chat = load_rxdb_collection_record(root, "business_chats", "chat-public")?
+            .context("expected repaired rxdb chat")?;
+        assert_eq!(
+            rxdb_chat.get("owner_user_id").and_then(Value::as_str),
+            Some("user-a@example.test")
+        );
+        assert_eq!(rxdb_chat.get("messages"), Some(&messages));
+
+        let noop = repair_queue_projections(root, QueueProjectionRepairOptions { apply: true })?;
+        assert_eq!(
+            noop.pointer("/counts/chat_owner_repaired")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            0
+        );
+        Ok(())
+    }
+
+    fn rxdb_chat_row(root: &Path, chat_id: &str) -> anyhow::Result<(i64, f64, Value)> {
+        let conn = Connection::open(rxdb_store_path(root))?;
+        let (deleted, last_write_time, data): (i64, f64, String) = conn.query_row(
+            "SELECT deleted, lastWriteTime, data
+             FROM ctox_business_os__business_chats__v0
+             WHERE id = ?1",
+            [chat_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        Ok((deleted, last_write_time, serde_json::from_str(&data)?))
+    }
+
+    fn native_chat_payload(conn: &Connection, chat_id: &str) -> anyhow::Result<Value> {
+        let raw: String = conn.query_row(
+            "SELECT payload_json FROM business_records
+             WHERE collection='business_chats' AND record_id=?1",
+            [chat_id],
+            |row| row.get(0),
+        )?;
+        Ok(serde_json::from_str(&raw)?)
+    }
+
+    #[test]
+    fn repair_queue_projections_does_not_resurrect_rxdb_chat_tombstone() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        let native_messages = serde_json::json!([
+            {"id": "native-live", "role": "user", "text": "keep native"}
+        ]);
+        let tombstone_messages = serde_json::json!([
+            {"id": "rxdb-deleted", "role": "user", "text": "must stay deleted"}
+        ]);
+        seed_completed_chat_with_receipt(
+            &conn,
+            "chat-tombstone-json",
+            "cmd-tombstone-json",
+            "evt-tombstone-json",
+            "user-a@example.test",
+            false,
+            "chat-tombstone-json",
+            native_messages.clone(),
+        )?;
+        seed_completed_chat_with_receipt(
+            &conn,
+            "chat-tombstone-column",
+            "cmd-tombstone-column",
+            "evt-tombstone-column",
+            "user-a@example.test",
+            false,
+            "chat-tombstone-column",
+            native_messages.clone(),
+        )?;
+        seed_completed_chat_with_receipt(
+            &conn,
+            "chat-tombstone-flag",
+            "cmd-tombstone-flag",
+            "evt-tombstone-flag",
+            "user-a@example.test",
+            false,
+            "chat-tombstone-flag",
+            native_messages.clone(),
+        )?;
+        drop(conn);
+
+        let rxdb_conn = create_repair_rxdb_tables(root)?;
+        let json_tombstone = serde_json::json!({
+            "id": "chat-tombstone-json",
+            "owner_user_id": "local-dev",
+            "title": "Deleted in browser",
+            "minimized": true,
+            "messages": tombstone_messages,
+            "_deleted": true,
+            "is_deleted": true
+        });
+        let column_tombstone = serde_json::json!({
+            "id": "chat-tombstone-column",
+            "owner_user_id": "local-dev",
+            "title": "Column deleted",
+            "minimized": true,
+            "messages": tombstone_messages
+        });
+        insert_rxdb_test_record_with_deleted(
+            &rxdb_conn,
+            "ctox_business_os__business_chats__v0",
+            "chat-tombstone-json",
+            json_tombstone,
+            true,
+        )?;
+        insert_rxdb_test_record_with_deleted(
+            &rxdb_conn,
+            "ctox_business_os__business_chats__v0",
+            "chat-tombstone-column",
+            column_tombstone,
+            true,
+        )?;
+        insert_rxdb_test_record_with_deleted(
+            &rxdb_conn,
+            "ctox_business_os__business_chats__v0",
+            "chat-tombstone-flag",
+            serde_json::json!({
+                "id": "chat-tombstone-flag",
+                "owner_user_id": "local-dev",
+                "title": "JSON deleted",
+                "minimized": true,
+                "messages": tombstone_messages,
+                "_deleted": true
+            }),
+            false,
+        )?;
+        drop(rxdb_conn);
+
+        let applied = repair_queue_projections(root, QueueProjectionRepairOptions { apply: true })?;
+        assert_eq!(
+            applied
+                .pointer("/counts/chat_owner_repaired")
+                .and_then(Value::as_u64),
+            Some(3),
+            "live native placeholders still repair; RxDB tombstones must not block native"
+        );
+
+        let conn = open_store(root)?;
+        assert_eq!(
+            native_chat_payload(&conn, "chat-tombstone-json")?
+                .get("owner_user_id")
+                .and_then(Value::as_str),
+            Some("user-a@example.test")
+        );
+        assert_eq!(
+            native_chat_payload(&conn, "chat-tombstone-column")?
+                .get("owner_user_id")
+                .and_then(Value::as_str),
+            Some("user-a@example.test")
+        );
+        assert_eq!(
+            native_chat_payload(&conn, "chat-tombstone-flag")?
+                .get("owner_user_id")
+                .and_then(Value::as_str),
+            Some("user-a@example.test")
+        );
+        drop(conn);
+
+        let (json_deleted, json_lwt, json_data) = rxdb_chat_row(root, "chat-tombstone-json")?;
+        assert_eq!(json_deleted, 1);
+        assert_eq!(json_lwt, 1.0);
+        assert_eq!(
+            json_data.get("_deleted").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            json_data.get("is_deleted").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            json_data.get("owner_user_id").and_then(Value::as_str),
+            Some("local-dev")
+        );
+        assert_eq!(
+            json_data.get("title").and_then(Value::as_str),
+            Some("Deleted in browser")
+        );
+        assert_eq!(json_data.get("messages"), Some(&tombstone_messages));
+
+        let (column_deleted, column_lwt, column_data) =
+            rxdb_chat_row(root, "chat-tombstone-column")?;
+        assert_eq!(column_deleted, 1);
+        assert_eq!(column_lwt, 1.0);
+        assert_eq!(
+            column_data.get("owner_user_id").and_then(Value::as_str),
+            Some("local-dev")
+        );
+        assert_eq!(
+            column_data.get("title").and_then(Value::as_str),
+            Some("Column deleted")
+        );
+        assert_eq!(column_data.get("messages"), Some(&tombstone_messages));
+        assert_ne!(
+            column_data.get("_deleted").and_then(Value::as_bool),
+            Some(false),
+            "upsert must not reactivate a table-deleted tombstone"
+        );
+
+        let (flag_deleted, flag_lwt, flag_data) = rxdb_chat_row(root, "chat-tombstone-flag")?;
+        assert_eq!(flag_deleted, 0);
+        assert_eq!(flag_lwt, 1.0);
+        assert_eq!(
+            flag_data.get("_deleted").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            flag_data.get("owner_user_id").and_then(Value::as_str),
+            Some("local-dev")
+        );
+        assert_eq!(
+            flag_data.get("title").and_then(Value::as_str),
+            Some("JSON deleted")
+        );
+
+        let noop = repair_queue_projections(root, QueueProjectionRepairOptions { apply: true })?;
+        assert_eq!(
+            noop.pointer("/counts/chat_owner_repaired")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            0
+        );
+        let (json_deleted_again, json_lwt_again, _) = rxdb_chat_row(root, "chat-tombstone-json")?;
+        assert_eq!(json_deleted_again, 1);
+        assert_eq!(json_lwt_again, 1.0);
+        Ok(())
+    }
+
+    #[test]
+    fn repair_queue_projections_patches_only_live_rxdb_owner_and_inserts_when_absent(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        let native_messages = serde_json::json!([
+            {"id": "native-msg", "role": "user", "text": "native transcript"}
+        ]);
+        let browser_messages = serde_json::json!([
+            {"id": "browser-msg", "role": "user", "text": "fresher browser transcript"}
+        ]);
+        let draft = serde_json::json!({"text": "unsent draft", "updated_at_ms": 99});
+        seed_completed_chat_with_receipt(
+            &conn,
+            "chat-live-rxdb",
+            "cmd-live-rxdb",
+            "evt-live-rxdb",
+            "user-a@example.test",
+            false,
+            "chat-live-rxdb",
+            native_messages.clone(),
+        )?;
+        seed_completed_chat_with_receipt(
+            &conn,
+            "chat-absent-rxdb",
+            "cmd-absent-rxdb",
+            "evt-absent-rxdb",
+            "user-a@example.test",
+            false,
+            "chat-absent-rxdb",
+            native_messages.clone(),
+        )?;
+        drop(conn);
+
+        let rxdb_conn = create_repair_rxdb_tables(root)?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__business_chats__v0",
+            "chat-live-rxdb",
+            serde_json::json!({
+                "id": "chat-live-rxdb",
+                "owner_user_id": "local-dev",
+                "title": "Browser title",
+                "minimized": true,
+                "messages": browser_messages,
+                "draft": draft,
+                "tracking_status": "completed"
+            }),
+        )?;
+        drop(rxdb_conn);
+
+        let applied = repair_queue_projections(root, QueueProjectionRepairOptions { apply: true })?;
+        assert_eq!(
+            applied
+                .pointer("/counts/chat_owner_repaired")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+
+        let conn = open_store(root)?;
+        let native_live = native_chat_payload(&conn, "chat-live-rxdb")?;
+        assert_eq!(
+            native_live.get("owner_user_id").and_then(Value::as_str),
+            Some("user-a@example.test")
+        );
+        assert_eq!(native_live.get("messages"), Some(&native_messages));
+        assert_eq!(
+            native_live.get("title").and_then(Value::as_str),
+            Some("Public answer")
+        );
+        let native_absent = native_chat_payload(&conn, "chat-absent-rxdb")?;
+        assert_eq!(
+            native_absent.get("owner_user_id").and_then(Value::as_str),
+            Some("user-a@example.test")
+        );
+        drop(conn);
+
+        let live_rxdb = load_rxdb_collection_record(root, "business_chats", "chat-live-rxdb")?
+            .context("expected owner-patched live rxdb chat")?;
+        assert_eq!(
+            live_rxdb.get("owner_user_id").and_then(Value::as_str),
+            Some("user-a@example.test")
+        );
+        assert_eq!(live_rxdb.get("messages"), Some(&browser_messages));
+        assert_eq!(
+            live_rxdb.get("title").and_then(Value::as_str),
+            Some("Browser title")
+        );
+        assert_eq!(
+            live_rxdb.get("minimized").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(live_rxdb.get("draft"), Some(&draft));
+        assert_eq!(
+            live_rxdb.get("tracking_status").and_then(Value::as_str),
+            Some("completed")
+        );
+
+        let inserted = load_rxdb_collection_record(root, "business_chats", "chat-absent-rxdb")?
+            .context("expected full native insert for absent rxdb chat")?;
+        assert_eq!(
+            inserted.get("owner_user_id").and_then(Value::as_str),
+            Some("user-a@example.test")
+        );
+        assert_eq!(inserted.get("messages"), Some(&native_messages));
+        assert_eq!(
+            inserted.get("title").and_then(Value::as_str),
+            Some("Public answer")
+        );
+        assert_eq!(
+            inserted.get("minimized").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(inserted.get("draft").is_none());
+
+        let noop = repair_queue_projections(root, QueueProjectionRepairOptions { apply: true })?;
+        assert_eq!(
+            noop.pointer("/counts/chat_owner_repaired")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            0
+        );
+        Ok(())
+    }
+
+    fn overwrite_rxdb_chat(
+        root: &Path,
+        chat_id: &str,
+        payload: Value,
+        deleted: bool,
+    ) -> anyhow::Result<()> {
+        let conn = Connection::open(rxdb_store_path(root))?;
+        let changed = conn.execute(
+            "UPDATE ctox_business_os__business_chats__v0
+             SET deleted = ?1, lastWriteTime = 9.0, data = ?2
+             WHERE id = ?3",
+            params![
+                if deleted { 1 } else { 0 },
+                serde_json::to_string(&payload)?,
+                chat_id
+            ],
+        )?;
+        anyhow::ensure!(changed == 1, "expected one RxDB chat row to update");
+        Ok(())
+    }
+
+    #[test]
+    fn repair_queue_projections_owner_patch_keeps_interleaved_rxdb_content_update(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        let stale_messages = serde_json::json!([
+            {"id": "stale-msg", "role": "user", "text": "selected before repair"}
+        ]);
+        let interleaved_messages = serde_json::json!([
+            {"id": "fresh-msg", "role": "user", "text": "browser edited after selection"}
+        ]);
+        let interleaved_draft = serde_json::json!({"text": "typed after selection"});
+        seed_completed_chat_with_receipt(
+            &conn,
+            "chat-race-update",
+            "cmd-race-update",
+            "evt-race-update",
+            "user-a@example.test",
+            false,
+            "chat-race-update",
+            stale_messages.clone(),
+        )?;
+        drop(conn);
+
+        let rxdb_conn = create_repair_rxdb_tables(root)?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__business_chats__v0",
+            "chat-race-update",
+            serde_json::json!({
+                "id": "chat-race-update",
+                "owner_user_id": "local-dev",
+                "title": "Stale title",
+                "minimized": false,
+                "messages": stale_messages,
+                "draft": {"text": "old draft"}
+            }),
+        )?;
+        drop(rxdb_conn);
+
+        let root_buf = root.to_path_buf();
+        let interleaved_messages_hook = interleaved_messages.clone();
+        let interleaved_draft_hook = interleaved_draft.clone();
+        let _interleave = set_rxdb_chat_owner_repair_interleave(move |_, chat_id| {
+            if chat_id != "chat-race-update" {
+                return;
+            }
+            overwrite_rxdb_chat(
+                &root_buf,
+                chat_id,
+                serde_json::json!({
+                    "id": "chat-race-update",
+                    "owner_user_id": "local-dev",
+                    "title": "Browser title after selection",
+                    "minimized": true,
+                    "messages": interleaved_messages_hook,
+                    "draft": interleaved_draft_hook
+                }),
+                false,
+            )
+            .expect("interleave content update");
+        });
+
+        let applied = repair_queue_projections(root, QueueProjectionRepairOptions { apply: true })?;
+        assert_eq!(
+            applied
+                .pointer("/counts/chat_owner_repaired")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        let rxdb = load_rxdb_collection_record(root, "business_chats", "chat-race-update")?
+            .context("expected live rxdb chat after interleaved update")?;
+        assert_eq!(
+            rxdb.get("owner_user_id").and_then(Value::as_str),
+            Some("user-a@example.test")
+        );
+        assert_eq!(rxdb.get("messages"), Some(&interleaved_messages));
+        assert_eq!(
+            rxdb.get("title").and_then(Value::as_str),
+            Some("Browser title after selection")
+        );
+        assert_eq!(rxdb.get("minimized").and_then(Value::as_bool), Some(true));
+        assert_eq!(rxdb.get("draft"), Some(&interleaved_draft));
+        Ok(())
+    }
+
+    #[test]
+    fn repair_queue_projections_does_not_resurrect_interleaved_rxdb_deletion() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        let messages = serde_json::json!([
+            {"id": "live-then-deleted", "role": "user", "text": "will be deleted after selection"}
+        ]);
+        seed_completed_chat_with_receipt(
+            &conn,
+            "chat-race-delete",
+            "cmd-race-delete",
+            "evt-race-delete",
+            "user-a@example.test",
+            false,
+            "chat-race-delete",
+            messages.clone(),
+        )?;
+        drop(conn);
+
+        let rxdb_conn = create_repair_rxdb_tables(root)?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__business_chats__v0",
+            "chat-race-delete",
+            serde_json::json!({
+                "id": "chat-race-delete",
+                "owner_user_id": "local-dev",
+                "title": "Live at selection",
+                "messages": messages
+            }),
+        )?;
+        drop(rxdb_conn);
+
+        let root_buf = root.to_path_buf();
+        let tombstone_messages = messages.clone();
+        let _interleave = set_rxdb_chat_owner_repair_interleave(move |_, chat_id| {
+            if chat_id != "chat-race-delete" {
+                return;
+            }
+            overwrite_rxdb_chat(
+                &root_buf,
+                chat_id,
+                serde_json::json!({
+                    "id": "chat-race-delete",
+                    "owner_user_id": "local-dev",
+                    "title": "Deleted after selection",
+                    "messages": tombstone_messages,
+                    "_deleted": true,
+                    "is_deleted": true
+                }),
+                true,
+            )
+            .expect("interleave deletion");
+        });
+
+        let applied = repair_queue_projections(root, QueueProjectionRepairOptions { apply: true })?;
+        assert_eq!(
+            applied
+                .pointer("/counts/chat_owner_repaired")
+                .and_then(Value::as_u64),
+            Some(1),
+            "native owner may still repair; interleaved RxDB tombstone must not be resurrected"
+        );
+        let conn = open_store(root)?;
+        assert_eq!(
+            native_chat_payload(&conn, "chat-race-delete")?
+                .get("owner_user_id")
+                .and_then(Value::as_str),
+            Some("user-a@example.test")
+        );
+        drop(conn);
+        let (deleted, last_write_time, data) = rxdb_chat_row(root, "chat-race-delete")?;
+        assert_eq!(deleted, 1);
+        assert_eq!(last_write_time, 9.0);
+        assert_eq!(data.get("_deleted").and_then(Value::as_bool), Some(true));
+        assert_eq!(data.get("is_deleted").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            data.get("owner_user_id").and_then(Value::as_str),
+            Some("local-dev")
+        );
+        assert_eq!(
+            data.get("title").and_then(Value::as_str),
+            Some("Deleted after selection")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn repair_queue_projections_does_not_overwrite_interleaved_rxdb_insert() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        let native_messages = serde_json::json!([
+            {"id": "native-msg", "role": "user", "text": "native snapshot at selection"}
+        ]);
+        let browser_messages = serde_json::json!([
+            {"id": "browser-msg", "role": "user", "text": "created after selection"}
+        ]);
+        let browser_draft = serde_json::json!({"text": "unsent after selection"});
+        seed_completed_chat_with_receipt(
+            &conn,
+            "chat-race-insert",
+            "cmd-race-insert",
+            "evt-race-insert",
+            "user-a@example.test",
+            false,
+            "chat-race-insert",
+            native_messages.clone(),
+        )?;
+        drop(conn);
+
+        create_repair_rxdb_tables(root)?;
+        assert!(
+            load_rxdb_collection_record(root, "business_chats", "chat-race-insert")?.is_none(),
+            "candidate selection starts from an absent RxDB chat"
+        );
+
+        let root_buf = root.to_path_buf();
+        let browser_messages_hook = browser_messages.clone();
+        let browser_draft_hook = browser_draft.clone();
+        let _interleave = set_rxdb_chat_owner_repair_interleave(move |_, chat_id| {
+            if chat_id != "chat-race-insert" {
+                return;
+            }
+            let conn = Connection::open(rxdb_store_path(&root_buf)).expect("open rxdb");
+            insert_rxdb_test_record(
+                &conn,
+                "ctox_business_os__business_chats__v0",
+                chat_id,
+                serde_json::json!({
+                    "id": "chat-race-insert",
+                    "owner_user_id": "local-dev",
+                    "title": "Browser created after selection",
+                    "minimized": true,
+                    "messages": browser_messages_hook,
+                    "draft": browser_draft_hook
+                }),
+            )
+            .expect("interleave insert");
+        });
+
+        let applied = repair_queue_projections(root, QueueProjectionRepairOptions { apply: true })?;
+        assert_eq!(
+            applied
+                .pointer("/counts/chat_owner_repaired")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        let rxdb = load_rxdb_collection_record(root, "business_chats", "chat-race-insert")?
+            .context("expected concurrent rxdb insert to remain")?;
+        assert_eq!(
+            rxdb.get("owner_user_id").and_then(Value::as_str),
+            Some("user-a@example.test")
+        );
+        assert_eq!(rxdb.get("messages"), Some(&browser_messages));
+        assert_eq!(
+            rxdb.get("title").and_then(Value::as_str),
+            Some("Browser created after selection")
+        );
+        assert_eq!(rxdb.get("minimized").and_then(Value::as_bool), Some(true));
+        assert_eq!(rxdb.get("draft"), Some(&browser_draft));
+        assert_ne!(rxdb.get("messages"), Some(&native_messages));
         Ok(())
     }
 
