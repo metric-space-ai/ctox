@@ -67,6 +67,9 @@ impl CheckpointStore {
         if !root.is_dir() {
             return Err(invalid_capture("workspace root is not a directory"));
         }
+        if git_bytes(&root, &["rev-parse", "--show-prefix"], 4096).await? != b"\n" {
+            return Err(invalid_capture("capture requires the Git workspace root"));
+        }
         let base_commit = git_line(&root, &["rev-parse", "--verify", "HEAD^{commit}"], 128).await?;
         if !commit_valid(&base_commit) {
             return Err(invalid_capture("Git returned an invalid base commit"));
@@ -74,7 +77,16 @@ impl CheckpointStore {
         let index_patch = self.ingest_bytes(
             &git_bytes(
                 &root,
-                &["diff", "--binary", "--no-ext-diff", "--cached"],
+                &[
+                    "diff",
+                    "--binary",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--no-relative",
+                    "--src-prefix=a/",
+                    "--dst-prefix=b/",
+                    "--cached",
+                ],
                 self.max_blob_bytes(),
             )
             .await?,
@@ -82,7 +94,15 @@ impl CheckpointStore {
         let worktree_patch = self.ingest_bytes(
             &git_bytes(
                 &root,
-                &["diff", "--binary", "--no-ext-diff"],
+                &[
+                    "diff",
+                    "--binary",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--no-relative",
+                    "--src-prefix=a/",
+                    "--dst-prefix=b/",
+                ],
                 self.max_blob_bytes(),
             )
             .await?,
@@ -156,21 +176,18 @@ impl CheckpointStore {
     }
 
     async fn capture_untracked(&self, root: &Path) -> io::Result<Vec<WorkspaceEntry>> {
-        let status = git_bytes(
+        let paths = git_bytes(
             root,
-            &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            &["ls-files", "--others", "--exclude-standard", "-z"],
             self.max_blob_bytes(),
         )
         .await?;
         let mut entries = Vec::new();
-        for record in status
+        for record in paths
             .split(|byte| *byte == 0)
             .filter(|record| !record.is_empty())
         {
-            if !record.starts_with(b"?? ") {
-                continue;
-            }
-            let path = std::str::from_utf8(&record[3..])
+            let path = std::str::from_utf8(record)
                 .map_err(|_| invalid_capture("Git returned a non-UTF-8 untracked path"))?;
             let (kind, bytes, executable) =
                 read_workspace_entry(root, path, self.max_blob_bytes())?;

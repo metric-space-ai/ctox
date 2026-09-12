@@ -133,3 +133,109 @@ async fn capture_fails_closed_outside_a_git_workspace() {
         .await;
     assert!(result.is_err());
 }
+
+fn request(workspace_root: &Path) -> CaptureRequest {
+    CaptureRequest {
+        session: session(),
+        sequence: 1,
+        workspace_root: workspace_root.to_owned(),
+        history: vec![b"journal".to_vec()],
+        attachments: vec![],
+        workspace: vec![],
+        provider_state: vec![CaptureEntry {
+            path: "provider.json".into(),
+            kind: WorkspaceEntryKind::File,
+            bytes: b"provider".to_vec(),
+            executable: false,
+        }],
+        pending_effects: vec![],
+    }
+}
+
+#[tokio::test]
+async fn capture_patches_restore_original_bytes_despite_git_display_configuration() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    fs::create_dir_all(workspace.join("nested")).unwrap();
+    git(&workspace, &["init", "-q"]);
+    git(
+        &workspace,
+        &["config", "user.email", "capture@example.invalid"],
+    );
+    git(&workspace, &["config", "user.name", "Capture Test"]);
+    fs::write(workspace.join(".gitattributes"), "*.bin diff=capture\n").unwrap();
+    fs::write(workspace.join("nested/state.bin"), b"base\0bytes").unwrap();
+    fs::write(workspace.join("rename-source.txt"), b"renamed bytes").unwrap();
+    git(&workspace, &["add", "."]);
+    git(&workspace, &["commit", "-qm", "base"]);
+    git(
+        &workspace,
+        &["config", "diff.capture.textconv", "git hash-object"],
+    );
+    git(&workspace, &["config", "diff.noprefix", "true"]);
+    git(&workspace, &["config", "diff.relative", "true"]);
+    let staged = b"staged\0bytes";
+    let unstaged = b"unstaged\0bytes";
+    fs::write(workspace.join("nested/state.bin"), staged).unwrap();
+    git(&workspace, &["add", "nested/state.bin"]);
+    fs::write(workspace.join("nested/state.bin"), unstaged).unwrap();
+    // A rename's second porcelain field must not become an untracked record.
+    git(&workspace, &["mv", "rename-source.txt", "renamed.txt"]);
+    fs::write(workspace.join("untracked.txt"), b"required bytes").unwrap();
+
+    let store = CheckpointStore::open(root.path().join("store"), 1024 * 1024).unwrap();
+    let captured = store.capture(request(&workspace)).await.unwrap();
+    assert_eq!(
+        captured.manifest.workspace_state.required_untracked.len(),
+        1
+    );
+    assert_eq!(
+        captured.manifest.workspace_state.required_untracked[0].path,
+        "untracked.txt"
+    );
+    let artifacts = root.path().join("artifacts");
+    store.restore(&captured.digest, &artifacts).unwrap();
+    let target = root.path().join("target");
+    git(
+        root.path(),
+        &[
+            "clone",
+            "-q",
+            "--no-hardlinks",
+            workspace.to_str().unwrap(),
+            target.to_str().unwrap(),
+        ],
+    );
+    git(
+        &target,
+        &[
+            "apply",
+            "--index",
+            artifacts.join("git/index.patch").to_str().unwrap(),
+        ],
+    );
+    assert_eq!(fs::read(target.join("nested/state.bin")).unwrap(), staged);
+    assert!(target.join("renamed.txt").is_file());
+    assert!(!target.join("rename-source.txt").exists());
+    git(
+        &target,
+        &[
+            "apply",
+            artifacts.join("git/worktree.patch").to_str().unwrap(),
+        ],
+    );
+    assert_eq!(fs::read(target.join("nested/state.bin")).unwrap(), unstaged);
+    let index = Command::new("git")
+        .args(["show", ":nested/state.bin"])
+        .current_dir(&target)
+        .output()
+        .unwrap();
+    assert!(index.status.success());
+    assert_eq!(index.stdout, staged);
+
+    let nested_capture = store.capture(request(&workspace.join("nested"))).await;
+    assert!(nested_capture
+        .unwrap_err()
+        .to_string()
+        .contains("workspace root"));
+}
