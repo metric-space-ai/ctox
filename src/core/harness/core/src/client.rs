@@ -71,6 +71,7 @@ use ctox_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use ctox_protocol::config_types::ServiceTier;
 use ctox_protocol::config_types::Verbosity as VerbosityConfig;
 use ctox_protocol::models::ContentItem;
+use ctox_protocol::models::DeveloperInstructions;
 use ctox_protocol::models::LocalShellAction;
 use ctox_protocol::models::ResponseItem;
 use ctox_protocol::openai_models::ModelInfo;
@@ -758,6 +759,54 @@ fn apply_required_initial_tool(
     Ok((tools, "auto".to_string()))
 }
 
+/// The planning call sees only the required tool. Without a word about the
+/// rest, the model read the one-tool list as "this task has no tools" and
+/// planned a blocker answer instead of the research (thesen, Sasol,
+/// 11.09.2026: plan "check available tools → document blocker", zero tool
+/// calls, while the next call carried 42 tools). The notice names what is
+/// withheld for this one call only.
+fn required_initial_tool_notice(
+    all_tools: &[Value],
+    visible_tools: &[Value],
+    required_initial_tool: Option<&str>,
+) -> Option<ResponseItem> {
+    let required_initial_tool = required_initial_tool?;
+    if visible_tools.len() >= all_tools.len() {
+        return None;
+    }
+    let withheld: Vec<&str> = all_tools
+        .iter()
+        .filter_map(|tool| {
+            tool.get("name")
+                .and_then(Value::as_str)
+                .or_else(|| tool.get("type").and_then(Value::as_str))
+        })
+        .filter(|name| *name != required_initial_tool)
+        .collect();
+    if withheld.is_empty() {
+        return None;
+    }
+    const LISTED: usize = 60;
+    let mut listed = withheld
+        .iter()
+        .take(LISTED)
+        .copied()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if withheld.len() > LISTED {
+        listed.push_str(&format!(", and {} more", withheld.len() - LISTED));
+    }
+    let text = format!(
+        "Planning step: only `{required_initial_tool}` is visible for this first call. \
+         Right after it, the full tool surface of this session is available again \
+         ({count} further tools: {listed}). Plan the task with those tools. Do not \
+         conclude from this restricted list that tools are unavailable; report a \
+         blocker only after an actual tool call has failed, quoting its error.",
+        count = withheld.len(),
+    );
+    Some(DeveloperInstructions::new(text).into())
+}
+
 impl ModelClientSession {
     fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
@@ -778,10 +827,20 @@ impl ModelClientSession {
         service_tier: Option<ServiceTier>,
     ) -> Result<ResponsesApiRequest> {
         let instructions = &prompt.base_instructions.text;
-        let input = prompt.get_formatted_input();
-        let tools = create_tools_json_for_responses_api(&prompt.tools)?;
-        let (tools, tool_choice) =
-            apply_required_initial_tool(tools, &input, prompt.required_initial_tool.as_deref())?;
+        let mut input = prompt.get_formatted_input();
+        let all_tools = create_tools_json_for_responses_api(&prompt.tools)?;
+        let (tools, tool_choice) = apply_required_initial_tool(
+            all_tools.clone(),
+            &input,
+            prompt.required_initial_tool.as_deref(),
+        )?;
+        if let Some(notice) = required_initial_tool_notice(
+            &all_tools,
+            &tools,
+            prompt.required_initial_tool.as_deref(),
+        ) {
+            input.push(notice);
+        }
         let default_reasoning_effort = model_info.default_reasoning_level;
         let supports_managed_local_reasoning =
             self.client.state.provider.requires_socket_transport()

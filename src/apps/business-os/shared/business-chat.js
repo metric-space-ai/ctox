@@ -7737,6 +7737,18 @@ ${CREW_CREATURE_BASE_CSS}
     .ctox-chat-window:not(:has(.ctox-chat-form)):not(:has(.ctox-followup-container)):not(:has(.ctox-chat-scheduler-card)) {
       grid-template-rows: 64px minmax(0, 1fr);
     }
+    /* The task inspection is a fourth grid child between header and
+       messages. With the three-row templates it took the flexible row: on
+       THESEN 10.09.2026 it stood 402px tall and empty while the messages got
+       56px and the user's own task sat clipped behind the input. */
+    .ctox-chat-window:has(> .ctox-chat-inspection),
+    .ctox-chat-window.is-active:has(> .ctox-chat-inspection),
+    .ctox-chat-window[class*="is-task-"]:has(> .ctox-chat-inspection) {
+      grid-template-rows: 64px auto minmax(0, 1fr) 56px;
+    }
+    .ctox-chat-window:has(> .ctox-chat-inspection):not(:has(.ctox-chat-form)):not(:has(.ctox-followup-container)):not(:has(.ctox-chat-scheduler-card)) {
+      grid-template-rows: 64px auto minmax(0, 1fr);
+    }
     .ctox-chat-window header {
       position: relative;
       box-sizing: border-box;
