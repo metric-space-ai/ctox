@@ -2511,7 +2511,7 @@ pub(crate) fn http_request(
     headers: &BTreeMap<String, String>,
     body: Option<&[u8]>,
 ) -> Result<HttpResponse> {
-    let mut request = ureq::request(method, url);
+    let mut request = ureq::request(method, url).timeout(Duration::from_secs(20));
     for (key, value) in headers {
         request = request.set(key, value);
     }
