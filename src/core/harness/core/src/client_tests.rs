@@ -66,6 +66,57 @@ fn required_initial_tool_releases_normal_tool_selection_after_its_call() {
 }
 
 #[test]
+fn required_initial_tool_notice_names_the_withheld_tools_for_the_planning_call() {
+    let tools = vec![
+        json!({"type": "function", "name": "exec_command"}),
+        json!({"type": "function", "name": "update_plan"}),
+        json!({"type": "web_search"}),
+    ];
+    let (visible, _) =
+        super::apply_required_initial_tool(tools.clone(), &[], Some("update_plan")).unwrap();
+
+    let notice = super::required_initial_tool_notice(&tools, &visible, Some("update_plan"))
+        .expect("planning call must explain the restricted tool list");
+
+    let ResponseItem::Message { role, content, .. } = notice else {
+        panic!("notice must be a message");
+    };
+    assert_eq!(role, "developer");
+    let text = content
+        .iter()
+        .map(|item| match item {
+            ContentItem::InputText { text } => text.as_str(),
+            _ => "",
+        })
+        .collect::<String>();
+    assert!(text.contains("only `update_plan` is visible"), "{text}");
+    assert!(
+        text.contains("2 further tools: exec_command, web_search"),
+        "{text}"
+    );
+}
+
+#[test]
+fn required_initial_tool_notice_is_absent_once_the_full_surface_is_visible() {
+    let tools = vec![
+        json!({"type": "function", "name": "exec_command"}),
+        json!({"type": "function", "name": "update_plan"}),
+    ];
+    let input = vec![ResponseItem::FunctionCall {
+        id: None,
+        name: "update_plan".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: "call-1".to_string(),
+    }];
+    let (visible, _) =
+        super::apply_required_initial_tool(tools.clone(), &input, Some("update_plan")).unwrap();
+
+    assert!(super::required_initial_tool_notice(&tools, &visible, Some("update_plan")).is_none());
+    assert!(super::required_initial_tool_notice(&tools, &tools, None).is_none());
+}
+
+#[test]
 fn required_initial_tool_fails_closed_when_not_model_visible() {
     let error = super::apply_required_initial_tool(
         vec![json!({"type": "function", "name": "exec_command"})],

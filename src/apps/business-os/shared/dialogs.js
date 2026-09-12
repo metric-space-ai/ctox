@@ -9,8 +9,30 @@ export function setBusinessDialogHost(element) {
   window.__ctoxBusinessDialogHost = element && typeof element.append === 'function' ? element : null;
 }
 
+// The host set at mount time goes stale when the operator switches windows:
+// after opening another app and returning, every dialog of the first app was
+// appended to the other app's window, underneath, and waited there unseen
+// (field report 11.09.2026, thesen). Prefer the module window the operator
+// last interacted with.
+if (!window.__ctoxDialogInteractionTracked) {
+  window.__ctoxDialogInteractionTracked = true;
+  // Resolve the window at interaction time: the clicked element itself is
+  // often re-rendered (and detached) by the very click that opens a dialog.
+  const remember = (event) => {
+    const host = typeof event.target?.closest === 'function' ? event.target.closest('[data-module-content]') : null;
+    if (host) window.__ctoxLastDialogInteraction = host;
+  };
+  document.addEventListener('pointerdown', remember, true);
+  document.addEventListener('focusin', remember, true);
+}
+
+function interactionDialogHost() {
+  const host = window.__ctoxLastDialogInteraction;
+  return host && host.isConnected ? host : null;
+}
+
 function resolveDialogHost(explicitHost) {
-  const candidate = explicitHost || window.__ctoxBusinessDialogHost;
+  const candidate = explicitHost || interactionDialogHost() || window.__ctoxBusinessDialogHost;
   return candidate && typeof candidate.append === 'function' && candidate.isConnected
     ? candidate
     : document.body;

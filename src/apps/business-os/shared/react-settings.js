@@ -4133,6 +4133,18 @@ const EMAIL_PROVIDERS = [
     glyph: 'M',
   },
   {
+    id: 'owa',
+    title: 'Microsoft Exchange / OWA',
+    short: 'EWS über den OWA-Server',
+    glyph: 'E',
+  },
+  {
+    id: 'activesync',
+    title: 'Microsoft Exchange ActiveSync',
+    short: 'ActiveSync für Exchange-Postfächer',
+    glyph: 'A',
+  },
+  {
     id: 'apple',
     title: 'Apple iCloud / Mail',
     short: 'IMAP + SMTP mit App-Passwort',
@@ -4723,7 +4735,7 @@ function emailWizard(state) {
       step: 2, totalSteps: 3,
       body: `
         <div class="channels-testing">
-          <div class="channels-testing-step is-active">⏳ CTOX testet IMAP + SMTP …</div>
+          <div class="channels-testing-step is-active">⏳ CTOX testet ${escapeHtml(emailTestProtocolLabel(state.provider || state.data?.emailProvider))} …</div>
           <small class="channels-form-note">Backend führt den Verbindungstest aus.</small>
         </div>
       `,
@@ -4758,6 +4770,12 @@ function emailProviderLabel(id) {
   return EMAIL_PROVIDERS.find((p) => p.id === id)?.title || 'E-Mail';
 }
 
+function emailTestProtocolLabel(id) {
+  if (id === 'owa') return 'EWS/OWA';
+  if (id === 'activesync') return 'ActiveSync';
+  return 'IMAP + SMTP';
+}
+
 function emailProviderForm(state) {
   const provider = state.provider || state.data?.emailProvider || 'custom';
   if (provider === 'gmail') {
@@ -4790,6 +4808,49 @@ function emailProviderForm(state) {
             <input type="password" data-channel-input="email:clientSecret" />
           </label>
         ` : ''}
+      </div>
+    `;
+  }
+  if (provider === 'owa') {
+    return `
+      <div class="channels-form">
+        <label class="channels-field">
+          <span>E-Mail-Adresse</span>
+          <input type="email" data-channel-input="email:address" placeholder="name@firma.de" value="${escapeHtml(state.data?.emailAddress || '')}" />
+        </label>
+        <label class="channels-field">
+          <span>Passwort</span>
+          <input type="password" data-channel-input="email:password" autocomplete="off" />
+        </label>
+        <div class="channels-form-grid">
+          <label class="channels-field"><span>OWA-URL</span><input type="url" data-channel-input="email:owaUrl" placeholder="https://server.firma.de/owa/" /></label>
+          <label class="channels-field"><span>EWS-Benutzername (optional)</span><input type="text" data-channel-input="email:ewsUsername" placeholder="DOMÄNE\\\\Benutzer" /></label>
+          <label class="channels-field"><span>EWS-Authentifizierung</span><select data-channel-input="email:ewsAuthType"><option value="basic" selected>Basic</option><option value="ntlm">NTLM</option></select></label>
+          <label class="channels-field"><span>EWS-Version</span><select data-channel-input="email:ewsVersion"><option value="Exchange2019" selected>Exchange 2019</option><option value="Exchange2016">Exchange 2016</option><option value="Exchange2013">Exchange 2013</option></select></label>
+        </div>
+        <p class="channels-form-note">CTOX leitet aus der OWA-URL automatisch <code>/EWS/Exchange.asmx</code> ab.</p>
+      </div>
+    `;
+  }
+  if (provider === 'activesync') {
+    return `
+      <div class="channels-form">
+        <label class="channels-field">
+          <span>E-Mail-Adresse</span>
+          <input type="email" data-channel-input="email:address" placeholder="name@firma.de" value="${escapeHtml(state.data?.emailAddress || '')}" />
+        </label>
+        <label class="channels-field">
+          <span>Passwort</span>
+          <input type="password" data-channel-input="email:password" autocomplete="off" />
+        </label>
+        <div class="channels-form-grid">
+          <label class="channels-field"><span>ActiveSync-Server</span><input type="url" data-channel-input="email:activeSyncServer" placeholder="https://server.firma.de" /></label>
+          <label class="channels-field"><span>ActiveSync-Benutzername (optional)</span><input type="text" data-channel-input="email:activeSyncUsername" placeholder="DOMÄNE\\\\Benutzer" /></label>
+          <label class="channels-field"><span>Pfad</span><input type="text" data-channel-input="email:activeSyncPath" value="Microsoft-Server-ActiveSync" /></label>
+          <label class="channels-field"><span>Protokollversion</span><select data-channel-input="email:activeSyncProtocolVersion"><option value="14.1" selected>14.1</option><option value="14.0">14.0</option><option value="12.1">12.1</option></select></label>
+          <label class="channels-field"><span>Geräte-ID (optional)</span><input type="text" data-channel-input="email:activeSyncDeviceId" placeholder="CTOX-ActiveSync" /></label>
+          <label class="channels-field"><span>Gerätetyp</span><input type="text" data-channel-input="email:activeSyncDeviceType" value="CTOX" /></label>
+        </div>
       </div>
     `;
   }
@@ -5225,6 +5286,18 @@ function channelDataKey(inputKey) {
     case 'email:imapPort': return 'emailImapPort';
     case 'email:smtpHost': return 'emailSmtpHost';
     case 'email:smtpPort': return 'emailSmtpPort';
+    case 'email:owaUrl': return 'emailOwaUrl';
+    case 'email:ewsUrl': return 'emailEwsUrl';
+    case 'email:ewsAuthType': return 'emailEwsAuthType';
+    case 'email:ewsUsername': return 'emailEwsUsername';
+    case 'email:ewsVersion': return 'emailEwsVersion';
+    case 'email:activeSyncServer': return 'emailActiveSyncServer';
+    case 'email:activeSyncUsername': return 'emailActiveSyncUsername';
+    case 'email:activeSyncPath': return 'emailActiveSyncPath';
+    case 'email:activeSyncDeviceId': return 'emailActiveSyncDeviceId';
+    case 'email:activeSyncDeviceType': return 'emailActiveSyncDeviceType';
+    case 'email:activeSyncProtocolVersion': return 'emailActiveSyncProtocolVersion';
+    case 'email:activeSyncPolicyKey': return 'emailActiveSyncPolicyKey';
     case 'teams:customApp': return 'teamsCustomApp';
     case 'teams:tenantId': return 'teamsTenantId';
     case 'teams:clientId': return 'teamsClientId';
@@ -5417,6 +5490,18 @@ function emailConfigPayload(channels) {
     imap_port: parseInt(data.emailImapPort, 10) || 0,
     smtp_host: data.emailSmtpHost || '',
     smtp_port: parseInt(data.emailSmtpPort, 10) || 0,
+    owa_url: data.emailOwaUrl || '',
+    ews_url: data.emailEwsUrl || '',
+    ews_auth_type: data.emailEwsAuthType || '',
+    ews_username: data.emailEwsUsername || '',
+    ews_version: data.emailEwsVersion || '',
+    active_sync_server: data.emailActiveSyncServer || '',
+    active_sync_username: data.emailActiveSyncUsername || '',
+    active_sync_path: data.emailActiveSyncPath || '',
+    active_sync_device_id: data.emailActiveSyncDeviceId || '',
+    active_sync_device_type: data.emailActiveSyncDeviceType || '',
+    active_sync_protocol_version: data.emailActiveSyncProtocolVersion || '',
+    active_sync_policy_key: data.emailActiveSyncPolicyKey || '',
     custom_app: !!data.emailCustomApp,
     tenant_id: data.emailTenantId || '',
     client_id: data.emailClientId || '',

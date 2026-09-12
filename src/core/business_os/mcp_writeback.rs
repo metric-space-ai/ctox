@@ -16,6 +16,15 @@ fn bound_payload(parent_id: &str, contract: &Value, arguments: &Value) -> anyhow
         supports_command_writeback(contract),
         "unsupported Business OS writeback contract"
     );
+    // An empty call is a writeback cut off at the model's output limit, not a
+    // forgotten field (Sasol, 11.09.2026: two calls without arguments, answered
+    // with a bare "ValidationFailed: required" the worker could not act on).
+    anyhow::ensure!(
+        arguments
+            .as_object()
+            .is_some_and(|object| !object.is_empty()),
+        "business_os.execute_writeback arrived without arguments; the call was most likely cut off at the output limit. Send record_id and payload in parts of about 10 fields; the server merges them."
+    );
     let record_id = required_arg(arguments, "record_id")?;
     anyhow::ensure!(
         normalized_string_array(contract.get("record_ids")).contains(&record_id),
@@ -209,6 +218,19 @@ mod tests {
         );
         Ok(())
     }
+    #[test]
+    fn an_empty_writeback_call_is_named_as_cut_off() {
+        let contract = serde_json::json!({
+            "mechanism": "business_command", "command_type": RESEARCH_WRITEBACK_COMMAND,
+            "collection": RESEARCH_COLLECTION, "record_ids": ["lead-a"]
+        });
+        let error = bound_payload("research-a", &contract, &serde_json::json!({}))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("without arguments"), "{error}");
+        assert!(error.contains("in parts"), "{error}");
+    }
+
     #[test]
     fn incident_writeback_scope_rejects_cross_record_parent_and_gap() -> anyhow::Result<()> {
         let contract = serde_json::json!({

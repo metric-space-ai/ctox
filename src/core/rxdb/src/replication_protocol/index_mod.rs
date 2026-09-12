@@ -207,6 +207,23 @@ pub async fn replicate_rx_storage_instance(
     state
 }
 
+/// Host hook applied to every document a remote peer writes to this master,
+/// before it is persisted: `(collection_name, new_document_state)`. CTOX uses
+/// it to take secret values out of replicated command documents, which would
+/// otherwise rest in the master store and replicate to every other peer until
+/// the host overwrote them (CTOX-Feldbefund 11.09.2026). Not part of upstream
+/// RxDB.
+pub type MasterWriteSanitizer = Arc<dyn Fn(&str, &mut serde_json::Value) + Send + Sync>;
+
+static MASTER_WRITE_SANITIZER: std::sync::OnceLock<MasterWriteSanitizer> =
+    std::sync::OnceLock::new();
+
+/// Install the process-wide master-write sanitizer. The first installation
+/// wins; later calls return `false`.
+pub fn set_master_write_sanitizer(sanitizer: MasterWriteSanitizer) -> bool {
+    MASTER_WRITE_SANITIZER.set(sanitizer).is_ok()
+}
+
 // ref: rxdb/src/replication-protocol/index.ts:170-318
 /// Adapt a storage instance + conflict handler into a `RxReplicationHandler`.
 /// The handler exposes the master-side surface used by the upstream replication
@@ -341,7 +358,10 @@ impl crate::types::RxReplicationHandler for StorageReplicationHandler {
             String,
             crate::types::RxReplicationWriteToMasterRow,
         > = std::collections::HashMap::new();
-        for row in rows.into_iter() {
+        for mut row in rows.into_iter() {
+            if let Some(sanitize) = MASTER_WRITE_SANITIZER.get() {
+                sanitize(self.instance.collection_name(), &mut row.new_document_state);
+            }
             let id = row
                 .new_document_state
                 .get(&primary_path)
