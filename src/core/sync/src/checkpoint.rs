@@ -37,6 +37,9 @@ impl CheckpointStore {
             max_blob_bytes,
         })
     }
+    pub(crate) fn max_blob_bytes(&self) -> u64 {
+        self.max_blob_bytes
+    }
     fn blob_path(&self, artifact: &ArtifactRef) -> io::Result<PathBuf> {
         if !hash_valid(&artifact.sha256) || artifact.size_bytes > self.max_blob_bytes {
             return Err(invalid("invalid checkpoint artifact identity or size"));
@@ -433,7 +436,7 @@ fn commit_valid(commit: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-fn validate_path(path: &str) -> io::Result<()> {
+pub(crate) fn validate_path(path: &str) -> io::Result<()> {
     if path.is_empty()
         || path.len() > 4096
         || path.starts_with('/')
@@ -460,7 +463,7 @@ fn validate_path(path: &str) -> io::Result<()> {
     }
     Ok(())
 }
-fn validate_link(path: &str, target: &str) -> io::Result<()> {
+pub(crate) fn validate_link(path: &str, target: &str) -> io::Result<()> {
     if target.is_empty()
         || target.len() > 4096
         || target.starts_with('/')

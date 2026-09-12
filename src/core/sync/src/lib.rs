@@ -9,6 +9,7 @@ pub mod business_data_session;
 pub use authority::auth::business_data_identity;
 #[path = "business-data.generated.rs"]
 pub mod business_data_contract;
+pub mod capture;
 pub mod checkpoint;
 #[path = "contracts.generated.rs"]
 pub mod contracts;
