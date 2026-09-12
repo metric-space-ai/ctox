@@ -95,13 +95,10 @@ versioned commits to the module source.",
     )
 }
 
-/// Build the pi model config that points the sidecar's stream at the local CTOX
-/// model gateway — a loopback Responses HTTP server. The provider api is pi-ai's
-/// OpenAI Responses provider (`openai-responses`); the exact protocol + auth
-/// match is confirmed by a real turn against the running gateway (decision-1).
+/// Public descriptor for the inherited main route. Its private endpoint and
+/// capability are resolved by the native owner immediately before a real turn.
 pub fn gateway_model(root: &Path) -> Value {
     let gateway = crate::execution::responses::gateway::GatewayConfig::resolve_with_root(root);
-    let base_url = format!("http://{}:{}/v1", gateway.listen_host, gateway.listen_port);
     let model_id = gateway
         .active_model
         .unwrap_or_else(|| "ctox-gateway".to_string());
@@ -110,7 +107,8 @@ pub fn gateway_model(root: &Path) -> Value {
         "name": "CTOX Model Gateway",
         "api": "openai-responses",
         "provider": "ctox-gateway",
-        "baseUrl": base_url,
+        "baseUrl": "http://127.0.0.1:1/v1",
+        "ctoxRoute": { "kind": "inherit_ctox" },
         "reasoning": false,
         "input": ["text"],
         "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
@@ -119,7 +117,7 @@ pub fn gateway_model(root: &Path) -> Value {
     })
 }
 
-/// The coding default inherits CTOX's active main model through the gateway.
+/// The coding default inherits CTOX's active main model through its native owner.
 /// Provider credentials and routing remain server-side; callers may still
 /// supply an explicit typed pi-ai model override.
 pub fn coding_default_model(root: &Path) -> Value {
@@ -491,6 +489,9 @@ fn prepare_coding_turn_model(
     require_unique_subscription_account: bool,
 ) -> anyhow::Result<PreparedCodingTurnModel> {
     let mut model = model_override.unwrap_or_else(|| coding_default_model(root));
+    if model.pointer("/ctoxRoute/kind").and_then(Value::as_str) == Some("inherit_ctox") {
+        return prepare_inherited_coding_model(root);
+    }
     let model_id = model
         .get("id")
         .and_then(Value::as_str)
@@ -605,6 +606,142 @@ fn prepare_coding_turn_model(
         provider,
         model_id,
         account_id,
+    })
+}
+
+struct InheritedCodingRoute {
+    provider: String,
+    model_id: String,
+    base_url: String,
+    credential_key: &'static str,
+    api: &'static str,
+}
+
+fn resolve_inherited_coding_route(root: &Path) -> anyhow::Result<InheritedCodingRoute> {
+    use crate::execution::models::{runtime_env, runtime_kernel, runtime_state};
+
+    let runtime = runtime_kernel::InferenceRuntimeKernel::resolve(root)?;
+    let mut settings = runtime_env::load_persisted_runtime_env_map_cached(root)?;
+    runtime_state::apply_runtime_state_to_env_map(&mut settings, &runtime.state);
+    let provider = runtime_state::infer_api_provider_from_env_map(&settings);
+    // The main spec owns provider/model, endpoint and credential selection.
+    // Pi's existing wire adapters handle the actual provider edge: direct
+    // MiniMax/OpenRouter speak Chat Completions, not the proxy's Responses API.
+    anyhow::ensure!(
+        matches!(
+            provider.as_str(),
+            "openai" | "ctox_proxy" | "azure_foundry" | "minimax" | "openrouter"
+        ),
+        "inherited Pi route does not support main provider {provider}; select a supported coding preset"
+    );
+    let model_id = runtime
+        .state
+        .active_or_selected_model()
+        .filter(|model| !model.trim().is_empty())
+        .context("CTOX main route has no selected model")?
+        .to_owned();
+    let spec = crate::execution::agent::turn_loop::resolve_api_model_provider_spec(
+        &model_id,
+        &settings,
+        Some(&runtime),
+    );
+    let (base_url, credential_key) = if provider == "openai" {
+        (runtime.internal_responses_base_url(), "OPENAI_API_KEY")
+    } else {
+        let spec = spec.context("CTOX main provider/model route is not available to Pi")?;
+        anyhow::ensure!(
+            spec.wire_api == "responses" && spec.subscription_provider.is_none(),
+            "CTOX main provider needs a different coding protocol adapter"
+        );
+        (spec.base_url, spec.env_key)
+    };
+    let endpoint = url::Url::parse(&base_url).context("CTOX main route has an invalid endpoint")?;
+    anyhow::ensure!(
+        matches!(endpoint.scheme(), "http" | "https")
+            && endpoint.host_str().is_some()
+            && endpoint.username().is_empty()
+            && endpoint.password().is_none()
+            && endpoint.port() != Some(12434),
+        "CTOX main route has an unsupported endpoint"
+    );
+    let api = match provider.as_str() {
+        "minimax" | "openrouter" => "openai-completions",
+        _ => "openai-responses",
+    };
+    Ok(InheritedCodingRoute {
+        provider,
+        model_id,
+        base_url,
+        credential_key,
+        api,
+    })
+}
+
+/// Operator-only nonsecret route evidence. No sidecar/listener/network call or
+/// Business OS data access; origin omits paths, queries and credentials.
+pub fn inherited_coding_route_status(root: &Path) -> anyhow::Result<Value> {
+    let route = resolve_inherited_coding_route(root)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "schema": "ctox.coding.main-route.v1",
+        "provider": route.provider,
+        "model": route.model_id,
+        "upstream_origin": url::Url::parse(&route.base_url)?.origin().ascii_serialization(),
+        "wire_api": route.api,
+    }))
+}
+
+fn prepare_inherited_coding_model(root: &Path) -> anyhow::Result<PreparedCodingTurnModel> {
+    let route = resolve_inherited_coding_route(root)?;
+    prepare_inherited_coding_model_route(root, route)
+}
+
+fn prepare_inherited_coding_model_route(
+    root: &Path,
+    route: InheritedCodingRoute,
+) -> anyhow::Result<PreparedCodingTurnModel> {
+    let settings = crate::execution::models::runtime_env::load_runtime_env_map(root)?;
+    let api_key = settings
+        .get(route.credential_key)
+        .filter(|value| !value.trim().is_empty())
+        .with_context(|| {
+            format!(
+                "CTOX main provider {} has no configured credential",
+                route.provider
+            )
+        })?
+        .to_owned();
+    let bridge = if route.api == "openai-completions" {
+        AnthropicCodingBridge::spawn_chat_completions(api_key, &route.base_url, &route.model_id)?
+    } else {
+        AnthropicCodingBridge::spawn_responses(api_key, &route.base_url, &route.model_id)?
+    };
+    let mut model = gateway_model(root);
+    model["id"] = Value::String(route.model_id.clone());
+    model["api"] = Value::String(route.api.to_owned());
+    if route.api == "openai-completions" {
+        // Explicit compatibility survives the loopback endpoint/provider alias;
+        // SDK hostname heuristics cannot recognize the private bridge.
+        model["compat"] = serde_json::json!({
+            "supportsDeveloperRole": false,
+            "supportsStore": false,
+            "supportsReasoningEffort": false,
+            "supportsStrictMode": false,
+            "maxTokensField": "max_tokens",
+        });
+    }
+    model["baseUrl"] = Value::String(format!("{}/v1", bridge.base_url()));
+    model["headers"] = serde_json::json!({ (BRIDGE_TOKEN_HEADER): bridge.capability_token() });
+    model
+        .as_object_mut()
+        .expect("native model descriptor")
+        .remove("ctoxRoute");
+    Ok(PreparedCodingTurnModel {
+        model,
+        coding_plan_bridge: Some(bridge),
+        provider: route.provider,
+        model_id: route.model_id,
+        account_id: None,
     })
 }
 
@@ -1317,17 +1454,32 @@ mod tests {
     #[test]
     fn coding_default_inherits_the_active_ctox_model() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
+        let settings = BTreeMap::from([
+            ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
+            ("CTOX_API_PROVIDER".to_owned(), "ctox_proxy".to_owned()),
+            ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
+            ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
+            (
+                "CTOX_UPSTREAM_BASE_URL".to_owned(),
+                "https://llm.ctox.dev".to_owned(),
+            ),
+        ]);
+        crate::execution::models::runtime_env::save_runtime_env_map(temp.path(), &settings)?;
         let model = coding_default_model(temp.path());
-        assert_eq!(model["id"], gateway_model(temp.path())["id"]);
+        assert_eq!(model["id"], "MiniMax-M3");
         assert_eq!(
             model["api"].as_str(),
             Some("openai-responses"),
-            "the coding default speaks the gateway's Responses shape"
+            "the public descriptor advertises the default wire shape before native preparation"
         );
-        let base_url = model["baseUrl"].as_str().unwrap_or_default();
-        assert!(
-            base_url.starts_with("http://") && base_url.ends_with(":12434/v1"),
-            "coding default routes through the loopback gateway on :12434 (got {base_url})"
+        assert_eq!(
+            model["baseUrl"], "http://127.0.0.1:1/v1",
+            "the public descriptor must defer its private endpoint to the native turn owner"
+        );
+        assert_eq!(
+            model["ctoxRoute"],
+            serde_json::json!({ "kind": "inherit_ctox" }),
+            "the coding default must request native main-route resolution"
         );
         Ok(())
     }
@@ -1619,14 +1771,195 @@ mod tests {
     }
 
     #[test]
-    fn gateway_model_points_at_the_loopback_responses_gateway() -> anyhow::Result<()> {
+    fn inherited_ctox_proxy_route_keeps_credentials_and_configuration_native() -> anyhow::Result<()>
+    {
+        use crate::execution::models::runtime_env;
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let settings = BTreeMap::from([
+            ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
+            ("CTOX_API_PROVIDER".to_owned(), "ctox_proxy".to_owned()),
+            ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
+            ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
+            (
+                "CTOX_UPSTREAM_BASE_URL".to_owned(),
+                "https://llm.ctox.dev".to_owned(),
+            ),
+            (
+                "CTOX_LLM_PROXY_API_KEY".to_owned(),
+                "selected-proxy-secret".to_owned(),
+            ),
+            (
+                "MINIMAX_API_KEY".to_owned(),
+                "unrelated-minimax-secret".to_owned(),
+            ),
+        ]);
+        runtime_env::save_runtime_env_map(root, &settings)?;
+        let before = runtime_env::load_runtime_env_map(root)?;
+        let prepared = prepare_coding_turn_model(root, None, None, false)?;
+        assert_eq!(prepared.provider, "ctox_proxy");
+        assert_eq!(prepared.model_id, "MiniMax-M3");
+        assert!(prepared.coding_plan_bridge.is_some());
+        let public = prepared.model.to_string();
+        assert!(!public.contains("selected-proxy-secret"));
+        assert!(!public.contains("unrelated-minimax-secret"));
+        assert!(!public.contains("llm.ctox.dev"));
+        assert!(!public.contains(":12434"));
+        assert!(prepared.model.get("ctoxRoute").is_none());
+        assert_eq!(runtime_env::load_runtime_env_map(root)?, before);
+        drop(prepared);
+        Ok(())
+    }
+
+    #[test]
+    fn inherited_minimax_uses_chat_wire_and_its_own_credential() -> anyhow::Result<()> {
+        use crate::execution::models::runtime_env;
+        let temp = tempfile::tempdir()?;
+        let settings = BTreeMap::from([
+            ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
+            ("CTOX_API_PROVIDER".to_owned(), "minimax".to_owned()),
+            ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
+            ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
+            (
+                "CTOX_UPSTREAM_BASE_URL".to_owned(),
+                "https://api.minimax.io".to_owned(),
+            ),
+            (
+                "MINIMAX_API_KEY".to_owned(),
+                "native-minimax-key".to_owned(),
+            ),
+            (
+                "CTOX_LLM_PROXY_API_KEY".to_owned(),
+                "unrelated-proxy-key".to_owned(),
+            ),
+        ]);
+        runtime_env::save_runtime_env_map(temp.path(), &settings)?;
+        let route = resolve_inherited_coding_route(temp.path())?;
+        assert_eq!(route.credential_key, "MINIMAX_API_KEY");
+        assert_eq!(route.base_url, "https://api.minimax.io/v1");
+        let evidence = inherited_coding_route_status(temp.path())?;
+        assert_eq!(evidence["provider"], "minimax");
+        assert_eq!(evidence["wire_api"], "openai-completions");
+        assert_eq!(evidence["upstream_origin"], "https://api.minimax.io");
+        assert!(!evidence.to_string().contains("key"));
+        let prepared = prepare_coding_turn_model(temp.path(), None, None, false)?;
+        assert_eq!(prepared.model["api"], "openai-completions");
+        assert_eq!(prepared.model["compat"]["maxTokensField"], "max_tokens");
+        assert!(!prepared.model.to_string().contains("native-minimax-key"));
+        Ok(())
+    }
+
+    #[test]
+    fn inherited_minimax_route_drives_real_pi_tools_through_native_bridge() -> anyhow::Result<()> {
+        let dist = sidecar_dist_path(&repo_root());
+        anyhow::ensure!(
+            node_available() && dist.exists(),
+            "real Pi regression requires Node and built sidecar bundle"
+        );
+        let temp = tempfile::tempdir()?;
+        let settings = BTreeMap::from([
+            ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
+            ("CTOX_API_PROVIDER".to_owned(), "minimax".to_owned()),
+            ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
+            ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
+            (
+                "CTOX_UPSTREAM_BASE_URL".to_owned(),
+                "https://api.minimax.io".to_owned(),
+            ),
+            (
+                "MINIMAX_API_KEY".to_owned(),
+                "fixture-main-secret".to_owned(),
+            ),
+        ]);
+        crate::execution::models::runtime_env::save_runtime_env_map(temp.path(), &settings)?;
+        let mut route = resolve_inherited_coding_route(temp.path())?;
+        assert_eq!(route.api, "openai-completions");
+        let upstream =
+            Server::http("127.0.0.1:0").map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        // Private test seam changes only transport destination after resolving
+        // the real provider, model, credential selector and protocol.
+        route.base_url = format!(
+            "http://{}/v1",
+            upstream.server_addr().to_ip().context("fixture IP")?
+        );
+        let worker = std::thread::spawn(move || {
+            for turn in 0..2 {
+                let mut request = upstream
+                    .recv_timeout(Duration::from_secs(15))
+                    .unwrap()
+                    .expect("real Pi request");
+                assert_eq!(request.url(), "/v1/chat/completions");
+                assert!(request.headers().iter().any(|header| header
+                    .field
+                    .as_str()
+                    .as_str()
+                    .eq_ignore_ascii_case("authorization")
+                    && header.value.as_str() == "Bearer fixture-main-secret"));
+                let mut body = String::new();
+                request.as_reader().read_to_string(&mut body).unwrap();
+                let body: Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(body["model"], "MiniMax-M3");
+                assert!(body.get("store").is_none());
+                let (delta, finish) = if turn == 0 {
+                    (
+                        serde_json::json!({"role":"assistant", "tool_calls":[{"index":0,"id":"write-1","type":"function","function":{"name":"write","arguments":"{\"path\":\"index.js\",\"content\":\"export const v = 2;\\n\"}"}}]}),
+                        "tool_calls",
+                    )
+                } else {
+                    assert!(body["messages"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|message| message["role"] == "tool"));
+                    (
+                        serde_json::json!({"role":"assistant", "content":"Done"}),
+                        "stop",
+                    )
+                };
+                let chunk = serde_json::json!({"id":"fixture", "object":"chat.completion.chunk", "created":1, "model":"MiniMax-M3", "choices":[{"index":0,"delta":delta,"finish_reason":null}]});
+                let end = serde_json::json!({"id":"fixture", "object":"chat.completion.chunk", "created":1, "model":"MiniMax-M3", "choices":[{"index":0,"delta":{},"finish_reason":finish}], "usage":{"prompt_tokens":10,"completion_tokens":10,"total_tokens":20}});
+                request
+                    .respond(
+                        Response::from_string(format!(
+                            "data: {chunk}\n\ndata: {end}\n\ndata: [DONE]\n\n"
+                        ))
+                        .with_header(
+                            Header::from_bytes("content-type", "text/event-stream").unwrap(),
+                        ),
+                    )
+                    .unwrap();
+            }
+        });
+        let prepared = prepare_inherited_coding_model_route(temp.path(), route)?;
+        let response = run_pi_turn(
+            &dist,
+            &serde_json::json!({
+                "id":"main-route-fixture", "prompt":"Write index.js with v = 2", "files":{"index.js":"export const v = 1;\n"},
+                "maxAssistantTurns":3, "tools":["write"], "model":prepared.model,
+            }),
+            false,
+        )?;
+        worker.join().expect("provider fixture assertions");
+        assert_eq!(response["ok"], true, "{response}");
+        assert!(response["snapshot"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["content"] == "export const v = 2;\n"));
+        drop(prepared.coding_plan_bridge);
+        Ok(())
+    }
+
+    #[test]
+    fn gateway_model_defers_private_route_resolution_to_the_turn_owner() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let model = gateway_model(temp.path());
         let base_url = model["baseUrl"].as_str().unwrap_or_default();
         assert!(
-            base_url.starts_with("http://") && base_url.ends_with(":12434/v1"),
-            "gateway model targets the loopback Responses gateway on :12434 (got {base_url})"
+            base_url == "http://127.0.0.1:1/v1",
+            "public descriptor must not advertise the retired gateway (got {base_url})"
         );
+        assert_eq!(model["ctoxRoute"]["kind"], "inherit_ctox");
         assert_eq!(
             model["api"].as_str(),
             Some("openai-responses"),
