@@ -1296,6 +1296,138 @@ test('business chat does not defer remote hydration while a tracked command is a
   }
 });
 
+test('chat ownership stays exact and does not claim placeholder remote chats', () => {
+  const { isOwnedChat, mergeChatPair, mergeChats } = __businessChatTestInternals;
+  assert.equal(isOwnedChat({ owner_user_id: 'local-dev' }, 'user-1'), false);
+  assert.equal(isOwnedChat({ owner_user_id: '' }, 'user-1'), true);
+  assert.equal(isOwnedChat({ owner_user_id: 'user-1' }, 'user-1'), true);
+  assert.equal(isOwnedChat({ owner_user_id: 'user-2' }, 'user-1'), false);
+  const merged = mergeChatPair(
+    {
+      id: 'chat-placeholder-owner',
+      owner_user_id: 'local-dev',
+      draft: 'Unsent follow-up that must survive merge.',
+      messages: [],
+      updated_at_ms: 1,
+    },
+    {
+      id: 'chat-placeholder-owner',
+      owner_user_id: 'local-dev',
+      draft: '',
+      messages: [],
+      updated_at_ms: 2,
+    },
+    'user-1',
+  );
+  assert.equal(merged.owner_user_id, 'user-1');
+  assert.equal(merged.draft, 'Unsent follow-up that must survive merge.');
+  assert.equal(
+    mergeChats([], [{ id: 'chat-unattributed', owner_user_id: 'local-dev', messages: [] }], 'user-1').length,
+    0,
+    'remote placeholder chats must not be claimed by the current session',
+  );
+});
+
+test('hydration keeps an in-session placeholder chat and heals owner from the session', async () => {
+  const previousLocalStorage = globalThis.localStorage;
+  const store = new Map();
+  globalThis.localStorage = {
+    getItem(key) {
+      return store.has(key) ? store.get(key) : null;
+    },
+    setItem(key, value) {
+      store.set(key, String(value));
+    },
+    removeItem(key) {
+      store.delete(key);
+    },
+  };
+  const createdAt = Date.now();
+  const draft = 'Unsent follow-up that must survive hydration.';
+  const localChat = {
+    id: 'chat-placeholder-owner',
+    owner_user_id: 'local-dev',
+    title: 'Crew',
+    createdAt,
+    updated_at_ms: createdAt,
+    open: true,
+    minimized: false,
+    draft,
+    contextMeta: {
+      client_context: {
+        owner: 'user-1',
+        actor: { user_id: 'user-1', display_name: 'Operator', role: 'user' },
+      },
+    },
+    messages: [{
+      id: 'status-placeholder',
+      role: 'ctox',
+      commandId: 'cmd-placeholder',
+      taskId: 'queue-placeholder',
+      status: 'queued',
+      createdAt,
+    }],
+  };
+  const ownedRemote = {
+    id: 'chat-already-owned',
+    owner_user_id: 'user-1',
+    title: 'Andere Aufgabe',
+    createdAt: createdAt - 1000,
+    updated_at_ms: createdAt - 1000,
+    open: true,
+    minimized: true,
+    messages: [],
+  };
+  const unattributedRemote = {
+    ...localChat,
+    draft: '',
+    updated_at_ms: createdAt + 500,
+    messages: [...localChat.messages],
+  };
+  store.set('ctox.businessOs.chat.v1', JSON.stringify({
+    activeChatId: localChat.id,
+    chats: [localChat],
+  }));
+  const state = {
+    ownerUserId: 'user-1',
+    selectedDate: __businessChatTestInternals.getLocalDateString(createdAt),
+    activeChatId: localChat.id,
+    dockCollapsed: false,
+    remoteHydrationComplete: true,
+    deletedChatIds: {},
+    chats: [localChat],
+  };
+
+  try {
+    const restored = __businessChatTestInternals.readChatState({ user: { id: 'user-1' } });
+    assert.equal(restored.chats.length, 0, 'shared localStorage must not claim placeholder-owned chats');
+
+    const changed = await __businessChatTestInternals.hydrateChatsFromRxDb({
+      state,
+      session: { user: { id: 'user-1' } },
+      db: { raw: { business_chats: makeFindCollection([unattributedRemote, ownedRemote]) } },
+    });
+
+    const chat = state.chats.find((item) => item.id === localChat.id);
+    assert.equal(changed, true);
+    assert.ok(chat, 'in-session placeholder chat must not be dropped when other owned remotes exist');
+    assert.equal(chat.draft, draft);
+    assert.equal(chat.owner_user_id, 'user-1');
+    assert.equal(state.chats.some((item) => item.id === ownedRemote.id), true);
+    const persisted = JSON.parse(store.get('ctox.businessOs.chat.v1'));
+    const persistedChat = persisted.chats.find((item) => item.id === localChat.id);
+    assert.ok(persistedChat);
+    assert.equal(persistedChat.draft, draft);
+    assert.equal(persistedChat.owner_user_id, 'user-1');
+  } finally {
+    if (previousLocalStorage === undefined) {
+      delete globalThis.localStorage;
+    } else {
+      globalThis.localStorage = previousLocalStorage;
+    }
+  }
+});
+
 test('business chat hydration focuses a newly replicated CTOX reply inside an open dock', async () => {
   const previousLocalStorage = globalThis.localStorage;
   const store = new Map();

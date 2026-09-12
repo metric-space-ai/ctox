@@ -735,8 +735,25 @@ export function normalizeCommandClientContext({
   if (normalizedRecordType) context.record_type = normalizedRecordType;
   context.inbound_channel = cleanContextText(inboundChannel || context.inbound_channel || normalizedModule) || normalizedModule;
   context.dispatch_transport = 'rxdb-command-bus';
-  if (actor && !context.actor) {
-    context.actor = actor;
+  if (actor) {
+    if (!context.actor) {
+      context.actor = actor;
+    } else if (typeof context.actor === 'object' && !actorIdentity(context.actor)) {
+      context.actor = {
+        ...context.actor,
+        id: actor.id,
+        display_name: context.actor.display_name || actor.display_name,
+        role: context.actor.role || actor.role,
+        is_admin: context.actor.is_admin ?? actor.is_admin,
+      };
+    }
+  }
+  const attributedOwner = cleanContextText(context.owner_user_id)
+    || (typeof context.owner === 'string' ? cleanContextText(context.owner) : '')
+    || actorIdentity(context.actor)
+    || actorIdentity(actor);
+  if (attributedOwner && (!context.owner_user_id || context.owner_user_id === 'local-dev')) {
+    context.owner_user_id = attributedOwner;
   }
   context.scope = normalizeCommandScope({
     context,
@@ -810,8 +827,14 @@ function normalizeCommandScope({
   return current;
 }
 
+function actorIdentity(actor) {
+  if (!actor) return '';
+  if (typeof actor !== 'object') return String(actor).trim();
+  return String(actor.id || actor.user_id || '').trim();
+}
+
 function resolveActorContext(command, session) {
-  if (command?.client_context?.actor) return null;
+  if (actorIdentity(command?.client_context?.actor)) return null;
   const currentSession = typeof session === 'function' ? session() : session;
   const user = currentSession?.user || {};
   const id = String(user.id || '').trim();

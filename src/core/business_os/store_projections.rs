@@ -116,17 +116,56 @@ pub(super) fn business_chat_title(command: &BusinessCommand) -> String {
         .unwrap_or_else(|| "CTOX".to_string())
 }
 
-pub(super) fn business_chat_owner_user_id(command: &BusinessCommand) -> String {
-    first_string_field(&command.client_context, &["owner_user_id", "user_id"])
+fn client_context_string(value: &Value, pointer: &str) -> Option<String> {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+}
+
+fn is_placeholder_business_chat_owner(owner: &str) -> bool {
+    let trimmed = owner.trim();
+    trimmed.is_empty() || trimmed == "local-dev"
+}
+
+fn owner_user_id_from_context(value: &Value) -> Option<String> {
+    first_string_field(value, &["owner_user_id", "user_id", "owner"])
+        .or_else(|| client_context_string(value, "/actor/id"))
+        .or_else(|| client_context_string(value, "/actor/user_id"))
         .or_else(|| {
-            command
-                .client_context
-                .pointer("/actor/id")
+            value
+                .get("actor")
                 .and_then(Value::as_str)
                 .map(str::trim)
-                .filter(|value| !value.is_empty())
+                .filter(|item| !item.is_empty())
                 .map(str::to_string)
         })
+        .filter(|item| !is_placeholder_business_chat_owner(item))
+}
+
+fn resolve_existing_business_chat_owner(
+    obj: &serde_json::Map<String, Value>,
+    projected: String,
+) -> String {
+    if !is_placeholder_business_chat_owner(&projected) {
+        return projected;
+    }
+    let existing_owner = obj
+        .get("owner_user_id")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if !is_placeholder_business_chat_owner(existing_owner) {
+        return existing_owner.trim().to_string();
+    }
+    obj.pointer("/contextMeta/client_context")
+        .and_then(owner_user_id_from_context)
+        .unwrap_or(projected)
+}
+
+pub(super) fn business_chat_owner_user_id(command: &BusinessCommand) -> String {
+    owner_user_id_from_context(&command.client_context)
         .unwrap_or_else(|| "local-dev".to_string())
 }
 
@@ -207,7 +246,11 @@ pub(super) fn materialize_pending_business_chat(
             "client_context": command.client_context
         })
     });
-    obj.insert("owner_user_id".to_string(), Value::String(owner_user_id));
+    let existing_owner = resolve_existing_business_chat_owner(obj, owner_user_id);
+    obj.insert(
+        "owner_user_id".to_string(),
+        Value::String(existing_owner),
+    );
     obj.insert(
         "lastTrackingId".to_string(),
         Value::String(if task_id.is_empty() {
@@ -438,9 +481,10 @@ pub(super) fn business_chat_payload(
     obj.insert("open".to_string(), Value::Bool(true));
     obj.entry("minimized".to_string())
         .or_insert_with(|| Value::Bool(false));
+    let existing_owner = resolve_existing_business_chat_owner(obj, owner_user_id.to_string());
     obj.insert(
         "owner_user_id".to_string(),
-        Value::String(owner_user_id.to_string()),
+        Value::String(existing_owner),
     );
     obj.insert(
         "lastTrackingId".to_string(),
@@ -1354,16 +1398,17 @@ pub fn repair_queue_projections(
 pub(crate) mod tests {
     use super::super::store::{
         accept_rxdb_business_command, load_rxdb_collection_record, now_ms, open_store,
-        queue_status_is_terminal_success, rxdb_store_path,
+        queue_status_is_terminal_success, rxdb_store_path, BusinessCommand, CommandOrigin,
     };
     use super::{
-        business_chat_result_status_is_failure, effective_queue_projection_route_status,
-        repair_queue_projections, upsert_business_record, QueueProjectionRepairOptions,
+        business_chat_owner_user_id, business_chat_result_status_is_failure,
+        effective_queue_projection_route_status, repair_queue_projections,
+        resolve_existing_business_chat_owner, upsert_business_record, QueueProjectionRepairOptions,
     };
     use crate::mission::channels;
     use anyhow::Context;
     use rusqlite::{params, Connection};
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use std::fs;
     use std::path::Path;
     use tempfile::tempdir;
@@ -1438,6 +1483,78 @@ pub(crate) mod tests {
             params![id, serde_json::to_string(&payload)?],
         )?;
         Ok(())
+    }
+
+    fn chat_owner_command(client_context: Value) -> BusinessCommand {
+        BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd-chat-owner".into()),
+            module: "ctox".into(),
+            command_type: "business_os.chat.task".into(),
+            record_id: Some("chat-owner".into()),
+            payload: json!({}),
+            client_context,
+        }
+    }
+
+    #[test]
+    fn business_chat_owner_user_id_reads_owner_and_actor_user_id() {
+        assert_eq!(
+            business_chat_owner_user_id(&chat_owner_command(json!({"owner": "user-1"}))),
+            "user-1"
+        );
+        assert_eq!(
+            business_chat_owner_user_id(&chat_owner_command(
+                json!({"actor": {"user_id": "user-2"}})
+            )),
+            "user-2"
+        );
+        assert_eq!(
+            business_chat_owner_user_id(&chat_owner_command(json!({"actor": {"id": "user-3"}}))),
+            "user-3"
+        );
+        assert_eq!(
+            business_chat_owner_user_id(&chat_owner_command(json!({"actor": "user-4"}))),
+            "user-4"
+        );
+        assert_eq!(
+            business_chat_owner_user_id(&chat_owner_command(json!({}))),
+            "local-dev"
+        );
+    }
+
+    fn resolve_owner(obj: Value, projected: &str) -> String {
+        resolve_existing_business_chat_owner(obj.as_object().expect("object"), projected.to_string())
+    }
+
+    #[test]
+    fn business_chat_owner_does_not_clobber_real_owner_with_local_dev() {
+        assert_eq!(
+            resolve_owner(json!({"owner_user_id": "user-1"}), "local-dev"),
+            "user-1"
+        );
+        assert_eq!(
+            resolve_owner(json!({"owner_user_id": "local-dev"}), "user-1"),
+            "user-1"
+        );
+        assert_eq!(
+            resolve_owner(json!({"owner_user_id": "user-1"}), "user-2"),
+            "user-2"
+        );
+        assert_eq!(
+            resolve_owner(json!({"owner_user_id": ""}), "local-dev"),
+            "local-dev"
+        );
+        assert_eq!(
+            resolve_owner(
+                json!({
+                    "owner_user_id": "local-dev",
+                    "contextMeta": {"client_context": {"owner": "user-9", "actor": {"user_id": "user-9"}}}
+                }),
+                "local-dev"
+            ),
+            "user-9"
+        );
     }
 
     #[test]
