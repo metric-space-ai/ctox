@@ -342,6 +342,26 @@ test('command client context fills placeholder actor identity from the session',
   assert.equal(context.owner_user_id, 'user-1');
 });
 
+test('command client context skips local-dev owner_user_id before actor identity', () => {
+  const sessionActor = { id: 'user-1', display_name: 'Operator', role: 'user', is_admin: false };
+  const context = normalizeCommandClientContext({
+    command: {
+      module: 'ctox',
+      command_type: 'business_os.chat.task',
+      client_context: {
+        owner_user_id: 'local-dev',
+        actor: { user_id: 'user-1', display_name: 'Operator' },
+      },
+    },
+    moduleId: 'ctox',
+    commandType: 'business_os.chat.task',
+    inboundChannel: 'business_os_chat',
+    actor: sessionActor,
+  });
+  assert.equal(context.owner_user_id, 'user-1');
+  assert.equal(context.actor.id, 'user-1');
+});
+
 test('command bus scopes demand-only desktop chunk dependencies with leases', () => {
   assert.match(source, /const DEMAND_ONLY_SYNC_COLLECTIONS = new Set/);
   assert.match(source, /'desktop_file_chunks'/);

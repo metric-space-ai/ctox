@@ -738,23 +738,28 @@ export function normalizeCommandClientContext({
   if (actor) {
     if (!context.actor) {
       context.actor = actor;
-    } else if (typeof context.actor === 'object' && !actorIdentity(context.actor)) {
-      context.actor = {
-        ...context.actor,
-        id: actor.id,
-        display_name: context.actor.display_name || actor.display_name,
-        role: context.actor.role || actor.role,
-        is_admin: context.actor.is_admin ?? actor.is_admin,
-      };
+    } else if (typeof context.actor === 'object') {
+      const existingId = actorIdentity(context.actor);
+      if (!existingId) {
+        context.actor = {
+          ...context.actor,
+          id: actor.id,
+          display_name: context.actor.display_name || actor.display_name,
+          role: context.actor.role || actor.role,
+          is_admin: context.actor.is_admin ?? actor.is_admin,
+        };
+      } else if (!cleanContextText(context.actor.id)) {
+        context.actor = { ...context.actor, id: existingId };
+      }
     }
   }
-  const attributedOwner = cleanContextText(context.owner_user_id)
-    || (typeof context.owner === 'string' ? cleanContextText(context.owner) : '')
-    || actorIdentity(context.actor)
-    || actorIdentity(actor);
-  if (attributedOwner && (!context.owner_user_id || context.owner_user_id === 'local-dev')) {
-    context.owner_user_id = attributedOwner;
-  }
+  const attributedOwner = firstNonPlaceholderIdentity(
+    context.owner_user_id,
+    typeof context.owner === 'string' ? context.owner : '',
+    context.actor,
+    actor,
+  );
+  if (attributedOwner) context.owner_user_id = attributedOwner;
   context.scope = normalizeCommandScope({
     context,
     payloadContext,
@@ -831,6 +836,16 @@ function actorIdentity(actor) {
   if (!actor) return '';
   if (typeof actor !== 'object') return String(actor).trim();
   return String(actor.id || actor.user_id || '').trim();
+}
+
+function firstNonPlaceholderIdentity(...candidates) {
+  for (const candidate of candidates) {
+    const value = typeof candidate === 'string' || candidate == null
+      ? cleanContextText(candidate)
+      : actorIdentity(candidate);
+    if (value && value !== 'local-dev') return value;
+  }
+  return '';
 }
 
 function resolveActorContext(command, session) {

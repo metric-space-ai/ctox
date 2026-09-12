@@ -1297,30 +1297,11 @@ test('business chat does not defer remote hydration while a tracked command is a
 });
 
 test('chat ownership stays exact and does not claim placeholder remote chats', () => {
-  const { isOwnedChat, mergeChatPair, mergeChats } = __businessChatTestInternals;
+  const { isOwnedChat, mergeChats } = __businessChatTestInternals;
   assert.equal(isOwnedChat({ owner_user_id: 'local-dev' }, 'user-1'), false);
   assert.equal(isOwnedChat({ owner_user_id: '' }, 'user-1'), true);
   assert.equal(isOwnedChat({ owner_user_id: 'user-1' }, 'user-1'), true);
   assert.equal(isOwnedChat({ owner_user_id: 'user-2' }, 'user-1'), false);
-  const merged = mergeChatPair(
-    {
-      id: 'chat-placeholder-owner',
-      owner_user_id: 'local-dev',
-      draft: 'Unsent follow-up that must survive merge.',
-      messages: [],
-      updated_at_ms: 1,
-    },
-    {
-      id: 'chat-placeholder-owner',
-      owner_user_id: 'local-dev',
-      draft: '',
-      messages: [],
-      updated_at_ms: 2,
-    },
-    'user-1',
-  );
-  assert.equal(merged.owner_user_id, 'user-1');
-  assert.equal(merged.draft, 'Unsent follow-up that must survive merge.');
   assert.equal(
     mergeChats([], [{ id: 'chat-unattributed', owner_user_id: 'local-dev', messages: [] }], 'user-1').length,
     0,
@@ -1328,7 +1309,7 @@ test('chat ownership stays exact and does not claim placeholder remote chats', (
   );
 });
 
-test('hydration keeps an in-session placeholder chat and heals owner from the session', async () => {
+test('another session does not persist a leftover placeholder chat as its own', async () => {
   const previousLocalStorage = globalThis.localStorage;
   const store = new Map();
   globalThis.localStorage = {
@@ -1343,89 +1324,72 @@ test('hydration keeps an in-session placeholder chat and heals owner from the se
     },
   };
   const createdAt = Date.now();
-  const draft = 'Unsent follow-up that must survive hydration.';
-  const localChat = {
-    id: 'chat-placeholder-owner',
+  const leftover = {
+    id: 'chat-from-user-a',
     owner_user_id: 'local-dev',
     title: 'Crew',
     createdAt,
     updated_at_ms: createdAt,
     open: true,
-    minimized: false,
-    draft,
-    contextMeta: {
-      client_context: {
-        owner: 'user-1',
-        actor: { user_id: 'user-1', display_name: 'Operator', role: 'user' },
-      },
-    },
-    messages: [{
-      id: 'status-placeholder',
-      role: 'ctox',
-      commandId: 'cmd-placeholder',
-      taskId: 'queue-placeholder',
-      status: 'queued',
-      createdAt,
-    }],
-  };
-  const ownedRemote = {
-    id: 'chat-already-owned',
-    owner_user_id: 'user-1',
-    title: 'Andere Aufgabe',
-    createdAt: createdAt - 1000,
-    updated_at_ms: createdAt - 1000,
-    open: true,
-    minimized: true,
+    draft: 'Should stay unclaimed.',
     messages: [],
   };
-  const unattributedRemote = {
-    ...localChat,
-    draft: '',
-    updated_at_ms: createdAt + 500,
-    messages: [...localChat.messages],
-  };
-  store.set('ctox.businessOs.chat.v1', JSON.stringify({
-    activeChatId: localChat.id,
-    chats: [localChat],
-  }));
   const state = {
-    ownerUserId: 'user-1',
+    ownerUserId: 'user-b',
     selectedDate: __businessChatTestInternals.getLocalDateString(createdAt),
-    activeChatId: localChat.id,
+    activeChatId: leftover.id,
     dockCollapsed: false,
     remoteHydrationComplete: true,
     deletedChatIds: {},
-    chats: [localChat],
+    chats: [leftover],
   };
-
   try {
-    const restored = __businessChatTestInternals.readChatState({ user: { id: 'user-1' } });
-    assert.equal(restored.chats.length, 0, 'shared localStorage must not claim placeholder-owned chats');
-
-    const changed = await __businessChatTestInternals.hydrateChatsFromRxDb({
-      state,
-      session: { user: { id: 'user-1' } },
-      db: { raw: { business_chats: makeFindCollection([unattributedRemote, ownedRemote]) } },
-    });
-
-    const chat = state.chats.find((item) => item.id === localChat.id);
-    assert.equal(changed, true);
-    assert.ok(chat, 'in-session placeholder chat must not be dropped when other owned remotes exist');
-    assert.equal(chat.draft, draft);
-    assert.equal(chat.owner_user_id, 'user-1');
-    assert.equal(state.chats.some((item) => item.id === ownedRemote.id), true);
-    const persisted = JSON.parse(store.get('ctox.businessOs.chat.v1'));
-    const persistedChat = persisted.chats.find((item) => item.id === localChat.id);
-    assert.ok(persistedChat);
-    assert.equal(persistedChat.draft, draft);
-    assert.equal(persistedChat.owner_user_id, 'user-1');
+    await __businessChatTestInternals.persistChatState({ state, db: null, remote: false });
+    const persisted = JSON.parse(store.get('ctox.businessOs.chat.v1') || '{}');
+    assert.equal((persisted.chats || []).length, 0, 'placeholder chats must not be persisted for another session');
+    assert.equal(leftover.owner_user_id, 'local-dev');
+    const restored = __businessChatTestInternals.readChatState({ user: { id: 'user-b' } });
+    assert.equal(restored.chats.length, 0);
   } finally {
-    if (previousLocalStorage === undefined) {
-      delete globalThis.localStorage;
-    } else {
-      globalThis.localStorage = previousLocalStorage;
-    }
+    if (previousLocalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = previousLocalStorage;
   }
+});
+
+test('remote persistence does not patch another users existing chat', async () => {
+  const patches = [];
+  const inserts = [];
+  const collection = {
+    findOne(id) {
+      assert.equal(id, 'chat-owner-a');
+      return {
+        async exec() {
+          return {
+            toJSON: () => ({
+              id: 'chat-owner-a',
+              owner_user_id: 'user-a',
+              title: 'Owner A chat',
+              messages: [{ id: 'chatmsg-owner-a', text: 'Create the owned chat.' }],
+            }),
+            async incrementalPatch(patch) {
+              patches.push(patch);
+            },
+          };
+        },
+      };
+    },
+    async insert(doc) {
+      inserts.push(doc);
+    },
+  };
+  await __businessChatTestInternals.persistChatDocsRemote(collection, [{
+    id: 'chat-owner-a',
+    owner_user_id: 'user-b',
+    title: 'Foreign targeting',
+    messages: [{ id: 'chatmsg-owner-b', text: 'Inject into the other chat.' }],
+  }]);
+  assert.equal(patches.length, 0, 'foreign targeting must not patch another users chat');
+  assert.equal(inserts.length, 0, 'foreign targeting must not insert over another users chat');
 });
 
 test('business chat hydration focuses a newly replicated CTOX reply inside an open dock', async () => {

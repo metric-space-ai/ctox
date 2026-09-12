@@ -3645,7 +3645,7 @@ function touchChats(state, chats) {
   state.lastUiMutationMs = now;
   chats.forEach((chat) => {
     if (!chat) return;
-    chat.owner_user_id = canonicalChatOwnerUserId(chat.owner_user_id, state.ownerUserId);
+    chat.owner_user_id = chat.owner_user_id || state.ownerUserId || '';
     chat.updated_at_ms = now;
     applyChatTrackingSummary(chat);
   });
@@ -4827,7 +4827,7 @@ function readChatState(session) {
           userMinimized: Boolean(chat.userMinimized && chat.minimized),
           presentation_updated_at_ms: Number(chat.presentation_updated_at_ms || 0),
           maximized: Boolean(chat.maximized),
-          owner_user_id: canonicalChatOwnerUserId(chat.owner_user_id, owner),
+          owner_user_id: chat.owner_user_id || owner,
           lastTrackingId: chat.lastTrackingId || '',
           messages: Array.isArray(chat.messages) ? chat.messages.slice(-40) : [],
           draft: chat.draft || '',
@@ -4871,12 +4871,7 @@ function writeChatState(state) {
       ? state.preCollapseExpandedChatIds.filter(Boolean)
       : [],
     deletedChatIds,
-    chats: state.chats
-      .map((chat) => ({
-        ...chat,
-        owner_user_id: canonicalChatOwnerUserId(chat.owner_user_id, state.ownerUserId),
-      }))
-      .filter((chat) => isOwnedChat(chat, state.ownerUserId)).map((chat) => ({
+    chats: state.chats.filter((chat) => isOwnedChat(chat, state.ownerUserId)).map((chat) => ({
       ...chat,
       messages: chat.messages.slice(-40),
       draft: chat.draft || '',
@@ -4935,12 +4930,12 @@ function isChatLocallyDeleted(state, chat) {
 
 async function persistChatState({ state, db, remote = true }) {
   const now = Date.now();
-  for (const chat of state.chats) {
-    chat.owner_user_id = canonicalChatOwnerUserId(chat.owner_user_id, state.ownerUserId);
+  const ownedChats = state.chats.filter((item) => isOwnedChat(item, state.ownerUserId));
+  for (const chat of ownedChats) {
+    chat.owner_user_id = chat.owner_user_id || state.ownerUserId || '';
     chat.updated_at_ms = now;
     applyChatTrackingSummary(chat);
   }
-  const ownedChats = state.chats.filter((item) => isOwnedChat(item, state.ownerUserId));
   writeChatState(state);
   const collection = db?.raw?.[CHAT_COLLECTION];
   if (!remote || !collection || !ownedChats.length) return;
@@ -4980,7 +4975,12 @@ async function persistChatDocsRemote(collection, docs) {
       const existing = await withChatPersistenceTimeout(collection.findOne(doc.id).exec());
       if (existing) {
         const existingJson = existing.toJSON?.() || {};
-        const owner = canonicalChatOwnerUserId(doc.owner_user_id, existingJson.owner_user_id);
+        const existingOwner = String(existingJson.owner_user_id || '').trim();
+        const docOwner = String(doc.owner_user_id || '').trim();
+        if (existingOwner && existingOwner !== docOwner) {
+          continue;
+        }
+        const owner = doc.owner_user_id || existingJson.owner_user_id || '';
         const merged = mergeChatPair(doc, existingJson, owner);
         await withChatPersistenceTimeout(existing.incrementalPatch(merged));
       } else {
@@ -5144,10 +5144,7 @@ function mergeChats(localChats, remoteChats, owner) {
     if (isOwnedChat(normalized, owner)) remoteById.set(normalized.id, normalized);
   }
   for (const chat of localChats) {
-    const normalized = normalizeChat({
-      ...chat,
-      owner_user_id: canonicalChatOwnerUserId(chat.owner_user_id, owner),
-    });
+    const normalized = normalizeChat({ ...chat, owner_user_id: chat.owner_user_id || owner });
     if (isOwnedChat(normalized, owner)) localById.set(normalized.id, normalized);
   }
   const ids = new Set([...remoteById.keys(), ...localById.keys()]);
@@ -5159,8 +5156,8 @@ function mergeChats(localChats, remoteChats, owner) {
 }
 
 function mergeChatPair(localChat, remoteChat, owner) {
-  if (!localChat) return normalizeChat({ ...remoteChat, owner_user_id: canonicalChatOwnerUserId(remoteChat.owner_user_id, owner) });
-  if (!remoteChat) return normalizeChat({ ...localChat, owner_user_id: canonicalChatOwnerUserId(localChat.owner_user_id, owner) });
+  if (!localChat) return normalizeChat({ ...remoteChat, owner_user_id: remoteChat.owner_user_id || owner });
+  if (!remoteChat) return normalizeChat({ ...localChat, owner_user_id: localChat.owner_user_id || owner });
   const local = normalizeChat(localChat);
   const remote = normalizeChat(remoteChat);
   const localIsNewer = (local.updated_at_ms || 0) >= (remote.updated_at_ms || 0);
@@ -5179,7 +5176,7 @@ function mergeChatPair(localChat, remoteChat, owner) {
     userMinimized: Boolean(presentation.userMinimized && presentation.minimized),
     presentation_updated_at_ms: Math.max(localPresentationAt, remotePresentationAt),
     maximized: Boolean(presentation.maximized),
-    owner_user_id: canonicalChatOwnerUserId(local.owner_user_id, remote.owner_user_id, owner),
+    owner_user_id: local.owner_user_id || remote.owner_user_id || owner,
     lastTrackingId: preferredChatTrackingId(local, remote, messages),
     messages,
     draft: local.draft || '',
