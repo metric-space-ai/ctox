@@ -20,7 +20,7 @@ test('Workjet project control is installed and uses the RxDB command plane', () 
   assert.match(controlSource, /startCollection\?\.\('business_commands'\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_projects'\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_working_copies'\)/);
-  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 3);
+  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 4);
   assert.match(controlSource, /waitForProjectedWorkjetProject\(/);
   assert.match(controlSource, /rawProject\?\.name === expectedTitle/);
   assert.match(controlSource, /rawProject\?\.status === 'active'/);
@@ -202,4 +202,160 @@ test('Workjet project create/list is idempotent across optional copies and compu
     3,
     'retry reuses the same child command id instead of creating another logical copy',
   );
+});
+
+function projectChatFixture(dispatch, onBridge = async () => {}) {
+  const commands = [];
+  const state = {
+    session: { id: 'owner-1' },
+    db: { collection: () => ({}) },
+    sync: { startCollection: onBridge },
+    commandBus: {
+      async dispatch(command, options) {
+        commands.push({ command, options });
+        return dispatch(command, state);
+      },
+    },
+  };
+  const context = {
+    state,
+    actorContext: (session) => ({ id: session?.id }),
+    waitForSyncBridgeReady: async () => {},
+    newId: () => { throw new Error('Chat mutations must retain their supplied command id.'); },
+  };
+  vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
+  return { state, commands, invoke: async (request) => JSON.parse(JSON.stringify(await context.invoke(request))) };
+}
+
+function projectChatRequest(action = 'project.worker.add') {
+  return {
+    action,
+    commandId: 'native-command-1',
+    projectId: 'project-1',
+    workerProfileId: 'worker-1',
+    createdAt: '2026-09-12T12:00:00.000Z',
+    ...(action === 'project.chat.create' ? { title: 'Second conversation' } : {}),
+  };
+}
+
+function nativeChatReceipt(command) {
+  return {
+    ok: true,
+    status: 'completed',
+    command_id: command.id,
+    target_record_id: command.record_id,
+    payload: { ...command.payload },
+    result: {
+      ok: true,
+      contract: 'workjet-project-chats.v1',
+      ...(command.command_type.endsWith('worker.add')
+        ? { first_chat_id: 'workjet_private_native_first' }
+        : { chat_id: 'workjet_private_native_second' }),
+    },
+  };
+}
+
+for (const action of ['project.worker.add', 'project.chat.create']) {
+  test(`Workjet ${action} forwards native mutation and preserves receipt identity on retry`, async () => {
+    const { commands, invoke } = projectChatFixture(nativeChatReceipt);
+    const request = projectChatRequest(action);
+    const response = await invoke(request);
+    assert.deepEqual(response, {
+      action,
+      commandId: request.commandId,
+      projectId: request.projectId,
+      workerProfileId: request.workerProfileId,
+      chatId: action.endsWith('worker.add') ? 'workjet_private_native_first' : 'workjet_private_native_second',
+    });
+    assert.deepEqual(await invoke(request), response);
+    assert.equal(commands.length, 2);
+    for (const { command, options } of commands) {
+      assert.equal(command.id, request.commandId);
+      assert.equal(command.command_id, request.commandId);
+      assert.equal(command.command_type, `ctox.workjet.${action}`);
+      assert.equal(command.record_id, request.projectId);
+      assert.deepEqual(JSON.parse(JSON.stringify(command.payload)), {
+        project_id: request.projectId,
+        worker_profile_id: request.workerProfileId,
+        ...(request.title ? { title: request.title } : {}),
+      });
+      assert.equal(options.until, 'terminal');
+      assert.equal(command.client_context.actor.id, 'owner-1');
+    }
+  });
+}
+
+const invalidChatReceipts = {
+  'different command': (receipt) => { receipt.command_id = 'other-command'; },
+  'different project': (receipt) => { receipt.payload.project_id = 'other-project'; },
+  'different worker': (receipt) => { receipt.payload.worker_profile_id = 'other-worker'; },
+  'different record': (receipt) => { receipt.target_record_id = 'other-project'; },
+  'pending command': (receipt) => { receipt.status = 'running'; },
+  'cancelled command': (receipt) => { receipt.status = 'cancelled'; },
+  'failed command': (receipt) => { receipt.ok = false; },
+  'failed domain mutation': (receipt) => { receipt.result.ok = false; },
+  'wrong contract': (receipt) => { receipt.result.contract = 'unknown'; },
+  'missing native id': (receipt) => { delete receipt.result.first_chat_id; },
+  'group id': (receipt) => { receipt.result.first_chat_id = 'workjet_group_native'; },
+};
+for (const [reason, mutate] of Object.entries(invalidChatReceipts)) {
+  test(`Workjet private chat rejects ${reason} without dispatching a replacement`, async () => {
+    const { invoke, commands } = projectChatFixture((command) => {
+      const receipt = nativeChatReceipt(command);
+      mutate(receipt);
+      return receipt;
+    });
+    await assert.rejects(invoke(projectChatRequest()), /receipt|private chat id/);
+    assert.equal(commands.length, 1);
+  });
+}
+
+test('Workjet chat creation rejects a receipt for another title', async () => {
+  const { invoke } = projectChatFixture((command) => {
+    const receipt = nativeChatReceipt(command);
+    receipt.payload.title = 'Different conversation';
+    return receipt;
+  });
+  await assert.rejects(invoke(projectChatRequest('project.chat.create')), /receipt/);
+});
+
+test('Workjet chat mutation propagates native policy rejection without retry', async () => {
+  const { invoke, commands } = projectChatFixture(() => { throw new Error('native policy denied'); });
+  await assert.rejects(invoke(projectChatRequest()), /native policy denied/);
+  assert.equal(commands.length, 1);
+});
+
+for (const changed of ['session', 'database']) {
+  test(`Workjet discards a pending chat receipt after ${changed} replacement`, async () => {
+    const { invoke, commands } = projectChatFixture(async (command, state) => {
+      await Promise.resolve();
+      if (changed === 'session') state.session = { id: 'owner-2' };
+      else state.db = { collection: () => ({}) };
+      return nativeChatReceipt(command);
+    });
+    await assert.rejects(invoke(projectChatRequest()), /session changed/);
+    assert.equal(commands.length, 1);
+  });
+}
+
+test('Workjet validates chat request fields before dispatch', async () => {
+  const { invoke, commands } = projectChatFixture(nativeChatReceipt);
+  for (const request of [
+    { ...projectChatRequest(), commandId: '' },
+    { ...projectChatRequest(), workerProfileId: '' },
+    { ...projectChatRequest(), ownerUserId: 'other-owner' },
+    { ...projectChatRequest(), createdAt: 'not-a-date' },
+    { ...projectChatRequest('project.chat.create'), title: '' },
+  ]) await assert.rejects(invoke(request));
+  assert.equal(commands.length, 0);
+});
+
+test('Workjet does not dispatch after session replacement during data-plane readiness', async () => {
+  let fixture;
+  fixture = projectChatFixture(nativeChatReceipt, async () => {
+    fixture.state.session = { id: 'owner-2' };
+    return {};
+  });
+  await assert.rejects(fixture.invoke(projectChatRequest()), /session changed/);
+  assert.equal(fixture.commands.length, 0);
 });

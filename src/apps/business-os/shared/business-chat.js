@@ -7766,8 +7766,8 @@ ${CREW_CREATURE_BASE_CSS}
       grid-template-rows: 64px minmax(0, 1fr);
     }
     /* The task inspection is a fourth grid child between header and
-       messages. With the three-row templates it took the flexible row:
-       the inspection stood 402px tall and empty while the messages got
+       messages. With the three-row templates it took the flexible row: on
+       an affected layout it stood 402px tall and empty while the messages got
        56px and the user's own task sat clipped behind the input. */
     .ctox-chat-window:has(> .ctox-chat-inspection),
     .ctox-chat-window.is-active:has(> .ctox-chat-inspection),

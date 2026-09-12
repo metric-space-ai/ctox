@@ -1580,8 +1580,7 @@ fn refresh_attached_queue_projections(
 
 /// A lead whose research task a worker has picked up says "Läuft".
 ///
-/// Measured on THESEN 10.09.2026: Kiesow's research task was leased at 09:33,
-/// and the app kept showing "Wartet" until the first writeback, because the
+/// A leased research task kept showing "Wartet" until the first writeback, because the
 /// only transition to `running` happened there. The queue-to-command sync
 /// already sees the lease, so it moves the lead along — only a lead that is
 /// still `queued` and belongs to this very command, read from the live RxDB
@@ -13138,7 +13137,7 @@ fn list_credentials_command(root: &Path) -> anyhow::Result<Value> {
 /// Store/rotate a credential value in the encrypted secret store. The value is
 /// never echoed back; the caller redacts it from the persisted command record.
 /// Secret values detached from `ctox.secret.put` at intake, keyed by command
-/// id, with the time they were detached. Feldbefund thesen 11.09.2026: the
+/// id, with the time they were detached. Previously the
 /// handler redacted its own writes, but intake had already persisted the
 /// original payload in business_command_aggregates (claim intent),
 /// business_records, business_commands, ctox_process_events and the RxDB
@@ -16112,11 +16111,11 @@ pub(super) fn is_outbound_active_command(command_type: &str) -> bool {
             | "outbound.sellify.lookup"
             // Has a native handler. Without this entry the command fell
             // through to the harness queue and cost a full worker turn per
-            // save; research tasks waited behind it (THESEN 10.09.2026).
+            // save; research tasks waited behind it.
             | "outbound.research_policy.publish"
             // Same: the outbound app reads the registry whenever its source
             // panel opens, and every read became a worker task that mostly
-            // failed (THESEN 05.-10.09.2026).
+            // failed.
             | "outbound.research_source.registry_read"
     )
 }
@@ -23838,7 +23837,7 @@ pub(super) fn redact_document_client_context_secrets(payload: &mut Value) {
     // A ctox.secret.put document arrives from the browser carrying the value.
     // Every native projection of the command merges into that document, so a
     // redacted command payload alone leaves the browser's value in place
-    // (Feldbefund thesen 11.09.2026). Strip it from the final document.
+    // after writeback. Strip it from the final document.
     let secret_field = ["command_type", "type"]
         .iter()
         .filter_map(|key| object.get(*key).and_then(Value::as_str))
@@ -40533,7 +40532,7 @@ pub(super) mod tests {
         Ok(hits)
     }
 
-    // Feldbefund thesen 11.09.2026: a credential saved from the Outbound app
+    // A credential saved from the Outbound app
     // stood in plaintext in business_commands, business_records,
     // business_command_aggregates, ctox_process_events and the replicated RxDB
     // business_commands document. The handler redacted only its own writes;

@@ -241,7 +241,7 @@ test('presentation layer stays compact and shell-native', async () => {
   assert.match(at768, /\[data-resizer\][\s\S]*display: none !important/);
   // Stacked, the rail header is the ONLY head of the top row: it has to keep
   // the icon zone (80px, left) and the window controls (74x74, right) free.
-  assert.match(at768, /\.reports-rail > \.ctox-pane-header,[\s\S]{0,120}?\.reports-rail > \.reports-filterbar \{\s*padding-right: 70px/);
+  assert.match(at768, /\.reports-rail > \.ctox-pane-header,[\s\S]{0,120}?\.reports-rail > \.ctox-filterbar \{\s*padding-right: 70px/);
   // Decorative helpers from the previous layout are gone — the icon button's
   // aria-label/title is the single source of the accessible name.
   assert.doesNotMatch(css, /\.reports-sr-only/);
