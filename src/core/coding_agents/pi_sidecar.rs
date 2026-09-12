@@ -1454,17 +1454,32 @@ mod tests {
     #[test]
     fn coding_default_inherits_the_active_ctox_model() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
+        let settings = BTreeMap::from([
+            ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
+            ("CTOX_API_PROVIDER".to_owned(), "ctox_proxy".to_owned()),
+            ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
+            ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
+            (
+                "CTOX_UPSTREAM_BASE_URL".to_owned(),
+                "https://llm.ctox.dev".to_owned(),
+            ),
+        ]);
+        crate::execution::models::runtime_env::save_runtime_env_map(temp.path(), &settings)?;
         let model = coding_default_model(temp.path());
-        assert_eq!(model["id"], gateway_model(temp.path())["id"]);
+        assert_eq!(model["id"], "MiniMax-M3");
         assert_eq!(
             model["api"].as_str(),
             Some("openai-responses"),
-            "the coding default speaks the gateway's Responses shape"
+            "the public descriptor advertises the default wire shape before native preparation"
         );
-        let base_url = model["baseUrl"].as_str().unwrap_or_default();
-        assert!(
-            base_url.starts_with("http://") && base_url.ends_with(":12434/v1"),
-            "coding default routes through the loopback gateway on :12434 (got {base_url})"
+        assert_eq!(
+            model["baseUrl"], "http://127.0.0.1:1/v1",
+            "the public descriptor must defer its private endpoint to the native turn owner"
+        );
+        assert_eq!(
+            model["ctoxRoute"],
+            serde_json::json!({ "kind": "inherit_ctox" }),
+            "the coding default must request native main-route resolution"
         );
         Ok(())
     }
