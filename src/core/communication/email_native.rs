@@ -3204,7 +3204,7 @@ fn normalize_ews_mail_item(
         .collect::<String>();
     let (body_text, body_html) = match body.attribute("BodyType") {
         Some("Text") => (content, String::new()),
-        Some("HTML") => (strip_html(&content), content),
+        Some("HTML") => (ews_html_body_text(&content), content),
         _ => bail!("EWS GetItem Body has missing or unsupported BodyType"),
     };
     let received_at = descendant_text(node, "DateTimeReceived");
@@ -3244,6 +3244,67 @@ fn normalize_ews_mail_item(
             "references": descendant_text(node, "References").unwrap_or_default(),
         }),
     })
+}
+
+fn ews_html_body_text(input: &str) -> String {
+    // Parse markup before decoding its text: stripping tags after replacing
+    // &lt;/&gt; loses literal angle-bracket content from human replies.
+    let document = scraper::Html::parse_document(input);
+    let mut output = String::new();
+    // An explicit stack keeps deeply nested mail from growing the call stack.
+    let mut pending = vec![(document.tree.root(), false)];
+    while let Some((node, closing_block)) = pending.pop() {
+        if closing_block {
+            output.push(' ');
+            continue;
+        }
+        match node.value() {
+            scraper::Node::Text(text) => output.push_str(text),
+            scraper::Node::Element(element) => {
+                if matches!(element.name(), "head" | "style" | "script" | "template") {
+                    continue;
+                }
+                if matches!(
+                    element.name(),
+                    "address"
+                        | "article"
+                        | "aside"
+                        | "blockquote"
+                        | "br"
+                        | "div"
+                        | "dl"
+                        | "dt"
+                        | "dd"
+                        | "footer"
+                        | "h1"
+                        | "h2"
+                        | "h3"
+                        | "h4"
+                        | "h5"
+                        | "h6"
+                        | "header"
+                        | "hr"
+                        | "li"
+                        | "main"
+                        | "ol"
+                        | "p"
+                        | "pre"
+                        | "section"
+                        | "table"
+                        | "td"
+                        | "th"
+                        | "tr"
+                        | "ul"
+                ) {
+                    output.push(' ');
+                    pending.push((node, true));
+                }
+                pending.extend(node.children().rev().map(|child| (child, false)));
+            }
+            _ => pending.extend(node.children().rev().map(|child| (child, false))),
+        }
+    }
+    output.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn descendant_text(node: roxmltree::Node<'_, '_>, name: &str) -> Option<String> {
@@ -4489,6 +4550,38 @@ mod tests {
             assert_eq!(mail.remote_id, "sent-1");
             assert_eq!(mail.external_created_at, "2026-09-12T07:59:00Z");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn ews_html_hydration_preserves_literals_and_excludes_document_metadata() -> anyhow::Result<()>
+    {
+        let html = "<html><head><title>Mail title</title><style>p { color: red }</style></head><body><p>Please keep &lt;literal&gt; &amp; &#x1F642;</p><div>Agree<b>d</b>.</div>Next<br>line<script>tracking()</script></body></html>";
+        let messages = super::list_ews_folder("inbox", 1, None, |op, _, _| {
+            Ok(if op == "FindItem" {
+                ews_find_fixture(&["one"])
+            } else {
+                ews_envelope(
+                    "GetItem",
+                    &ews_get_fixture_item(
+                        "one",
+                        &format!(
+                            "<t:Body BodyType=\"HTML\">{}</t:Body>",
+                            super::xml_escape(html),
+                        ),
+                    ),
+                )
+            })
+        })?;
+        assert_eq!(messages[0].body_html, html);
+        assert_eq!(
+            messages[0].body_text,
+            "Please keep <literal> & 🙂 Agreed. Next line"
+        );
+        assert_eq!(
+            messages[0].preview,
+            "Please keep <literal> & 🙂 Agreed. Next line"
+        );
         Ok(())
     }
 
