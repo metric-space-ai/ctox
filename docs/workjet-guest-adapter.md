@@ -1,6 +1,6 @@
 # Guest desktop adapter boundary
 
-This is an implementation seam for the Workjet VM tool, not an enabled VM feature. It adds a guest-local X11 driver and typed bounded actions next to browser_runtime. No browser operation, controller lease, Sync scheduler, transport, provisioner or collection is changed. No model-facing tool or native dispatcher entry is registered until the real authority connector exists.
+This is an implementation seam for the Workjet VM tool, not an enabled VM feature. It adds a guest-local X11 driver and typed bounded actions next to browser_runtime. No browser operation, controller lease, Sync scheduler, transport, provisioner or collection is changed. Business OS commands `ctox.guest.observe` and `ctox.guest.input` are registered on the command plane. Public RxDB intake passes `GuestRuntimeInjection::Unregistered` and fails closed. A registered owner is an explicit extra argument on `accept_rxdb_business_command_with_guest_runtime`; this slice does not install a production owner. No model-facing tool or production VM provisioner is enabled.
 
 ## Required authority
 
@@ -36,7 +36,11 @@ Tests exercise pre-capture denial, revocation before publication, distinct obser
 
 That test is a local virtual-display driver test, not proof of VM isolation, provisioning, production authorization, human takeover races or two independent guest targets. The latter remain required before release.
 
-Next integration must describe a separate typed Guest dispatcher extension using the existing native auxiliary transport. It must not reinterpret ctox.browser.live.v1's current human-controller semantics. The agreed native authority supplies the GuestAuthorization implementation and the existing frame/delivery path; only then can Workjet advertise VM in its capability catalog and expose its surface when enabled.
+The command connector is `src/core/business_os/guest_commands.rs`. Payloads are bounded metadata only: a guest ID, optional scope claims, a frame ID for input, and a typed `GuestInput`. Receipts return `command_id`, `guest_id`, `outcome`, and an opaque `frame_id` for observe. Raw PNG bytes and helper arguments are rejected. GuestScope/GuestCaller are native owner/session inputs; payload strings are claims, not proof.
+
+The command plane carries `GuestRuntimeInjection` on the prepared command. Ordinary `accept_rxdb_business_command` / `accept_rxdb_business_command_with_origin` pass only `Unregistered`, so dispatch fails closed. `accept_rxdb_business_command_with_guest_runtime` is the explicit injection boundary: `Registered` holds a type-erased `GuestCommandExecutor` that calls `dispatch_guest`. Tests use that boundary; they do not install a process-global owner, and this slice does not register a production lifecycle owner.
+
+This path must not reinterpret ctox.browser.live.v1's current human-controller semantics. Remaining unowned work: VM provision/guest readiness, a production GuestAuthorization plus frame/delivery path, P2P streaming attachment, takeover fencing, and two-host restore. Only after those exist and are verified can Workjet advertise VM in its capability catalog.
 
 ## QEMU monitor adapter
 

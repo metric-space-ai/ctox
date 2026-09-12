@@ -16,6 +16,7 @@ pub mod decision_hub;
 mod desktop_files;
 mod domain_effect;
 mod external_sql_sync;
+mod guest_commands;
 mod guest_runtime;
 pub(crate) mod harness_cockpit;
 mod hashing;
