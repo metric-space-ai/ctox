@@ -14,7 +14,12 @@ export function setBusinessDialogHost(element) {
 // appended to the other app's window, underneath, and waited there unseen
 // (field report 11.09.2026, thesen). Prefer the module window the operator
 // last interacted with.
-if (!window.__ctoxDialogInteractionTracked) {
+if (
+  typeof window !== 'undefined'
+  && typeof document !== 'undefined'
+  && typeof document.addEventListener === 'function'
+  && !window.__ctoxDialogInteractionTracked
+) {
   window.__ctoxDialogInteractionTracked = true;
   // Resolve the window at interaction time: the clicked element itself is
   // often re-rendered (and detached) by the very click that opens a dialog.
