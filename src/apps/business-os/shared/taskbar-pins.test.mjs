@@ -263,15 +263,21 @@ function nativeSync(implementation) {
     },
   };
   let renderCount = 0;
+  const hydrate = async () => {
+    nativeReads += 1;
+    if (nativeReads === 1) throw new Error('QUERY_CANCELLED: generation-replaced');
+    state.taskbarPins = ['remote-after-retry'];
+    state.taskbarPinsUpdatedAtMs = 500;
+    state.taskbarPinsKnown = true;
+  };
   const start = new Function(
     'state', 'window', 'console', 'TASKBAR_PIN_HYDRATION_RETRY_BASE_MS',
     'TASKBAR_PIN_HYDRATION_RETRY_LIMIT', 'hydrateTaskbarPinsFromDesktopLayout', 'renderTabs',
-    `${retrySource}; return { start(runtimeState) { state = runtimeState; scheduleTaskbarPinHydrationRetry(); } };`,
+    `let taskbarPinHydrationRetryTimer = null; let taskbarPinHydrationRetryCount = 0; ${retrySource}; return { start(runtimeState) { state = runtimeState; scheduleTaskbarPinHydrationRetry(); } };`,
   )(
     state, window, { warn() {} }, 500, 4,
-    () => hydrateTaskbarPinsFromDesktopLayout(state), () => { renderCount += 1; },
+    () => hydrate(), () => { renderCount += 1; },
   );
-  const hydrate = makeHydrate({ syncTaskbar: async () => {} });
   const runCurrentTimer = async () => {
     const timer = timers.shift();
     if (!timer) throw new Error('expected a bounded hydration retry timer');
