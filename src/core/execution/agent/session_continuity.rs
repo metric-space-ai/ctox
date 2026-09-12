@@ -474,6 +474,7 @@ mod tests {
 
     struct ScriptedControlClient {
         calls: Mutex<Vec<String>>,
+        params: Mutex<Vec<JsonValue>>,
         replies: Mutex<VecDeque<ScriptedReply>>,
     }
 
@@ -481,12 +482,38 @@ mod tests {
         fn new(replies: Vec<ScriptedReply>) -> Self {
             Self {
                 calls: Mutex::new(Vec::new()),
+                params: Mutex::new(Vec::new()),
                 replies: Mutex::new(VecDeque::from(replies)),
             }
         }
 
         fn methods(&self) -> Vec<String> {
             self.calls.lock().expect("calls").clone()
+        }
+
+        fn params(&self) -> Vec<JsonValue> {
+            self.params.lock().expect("params").clone()
+        }
+    }
+
+    fn request_params(request: &ClientRequest) -> JsonValue {
+        match request {
+            ClientRequest::ThreadList { params, .. } => {
+                serde_json::to_value(params).expect("thread/list params")
+            }
+            ClientRequest::ThreadResume { params, .. } => {
+                serde_json::to_value(params).expect("thread/resume params")
+            }
+            ClientRequest::ThreadStart { params, .. } => {
+                serde_json::to_value(params).expect("thread/start params")
+            }
+            ClientRequest::TurnStart { params, .. } => {
+                serde_json::to_value(params).expect("turn/start params")
+            }
+            ClientRequest::ThreadSetName { params, .. } => {
+                serde_json::to_value(params).expect("thread/name/set params")
+            }
+            other => panic!("unexpected control request {}", other.method()),
         }
     }
 
@@ -499,7 +526,9 @@ mod tests {
             T: DeserializeOwned + Send,
         {
             let method = request.method();
+            let params = request_params(&request);
             self.calls.lock().expect("calls").push(method.clone());
+            self.params.lock().expect("params").push(params);
             let reply = self.replies.lock().expect("replies").pop_front();
             async move {
                 match reply {
@@ -685,6 +714,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn provider_contract_change_resumes_identified_thread_without_replacement() {
+        let mut recorded = test_thread("thr-keep", Some("ctox-service-worker"), false);
+        recorded.model_provider = "openai".to_string();
+        let client = ScriptedControlClient::new(vec![
+            thread_list(vec![recorded], None),
+            resume_ok("thr-keep", Some("ctox-service-worker")),
+        ]);
+        let mut seq = RequestIdSeq::new();
+        let mut spec = persistent_spec("ctox-service-worker");
+        spec.model = "MiniMax-M2.5";
+        spec.model_provider = Some("minimax");
+        let thread_id = bind_session_thread(&client, &mut seq, &spec, &fast_timeouts())
+            .await
+            .expect("resume across provider contract change");
+        assert_eq!(thread_id, "thr-keep");
+        assert_eq!(
+            client.methods(),
+            vec!["thread/list".to_string(), "thread/resume".to_string()]
+        );
+        let params = client.params();
+        let list: ThreadListParams =
+            serde_json::from_value(params[0].clone()).expect("thread/list params");
+        assert_eq!(list.model_providers, Some(Vec::new()));
+        assert_eq!(list.search_term, None);
+        assert_eq!(list.source_kinds, Some(vec![ThreadSourceKind::Exec]));
+        let resume: ThreadResumeParams =
+            serde_json::from_value(params[1].clone()).expect("thread/resume params");
+        assert_eq!(resume.thread_id, "thr-keep");
+        assert_eq!(resume.model.as_deref(), Some("MiniMax-M2.5"));
+        assert_eq!(resume.model_provider.as_deref(), Some("minimax"));
+        assert!(resume.persist_extended_history);
+        assert!(
+            !client
+                .methods()
+                .iter()
+                .any(|method| method == "thread/start"),
+            "provider resume must not create a replacement thread"
+        );
+    }
+
+    #[tokio::test]
     async fn successful_restart_finds_named_thread_on_later_list_page() {
         let client = ScriptedControlClient::new(vec![
             thread_list(
@@ -797,6 +867,13 @@ mod tests {
             client.methods(),
             vec!["thread/list".to_string(), "thread/resume".to_string()]
         );
+        assert!(
+            !client
+                .methods()
+                .iter()
+                .any(|method| method == "thread/start" || method == "turn/start"),
+            "identified-thread resume rejection must not replace the thread or start a turn"
+        );
     }
 
     #[tokio::test]
@@ -882,6 +959,9 @@ mod tests {
         );
         assert_eq!(thread_id, "thr-keep");
         assert_eq!(client.methods(), vec!["turn/start".to_string()]);
+        let turn: TurnStartParams =
+            serde_json::from_value(client.params()[0].clone()).expect("turn/start params");
+        assert_eq!(turn.thread_id, "thr-keep");
     }
 
     #[tokio::test]
@@ -937,6 +1017,9 @@ mod tests {
         assert!(err.downcast_ref::<SessionPoisoned>().is_some(), "{err:#}");
         assert_eq!(thread_id, "thr-keep");
         assert_eq!(client.methods(), vec!["turn/start".to_string()]);
+        let turn: TurnStartParams =
+            serde_json::from_value(client.params()[0].clone()).expect("turn/start params");
+        assert_eq!(turn.thread_id, "thr-keep");
     }
 
     #[tokio::test]
@@ -958,5 +1041,8 @@ mod tests {
         assert!(err.downcast_ref::<SessionPoisoned>().is_some(), "{err:#}");
         assert_eq!(thread_id, "thr-keep");
         assert_eq!(client.methods(), vec!["turn/start".to_string()]);
+        let turn: TurnStartParams =
+            serde_json::from_value(client.params()[0].clone()).expect("turn/start params");
+        assert_eq!(turn.thread_id, "thr-keep");
     }
 }
