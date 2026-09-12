@@ -13114,7 +13114,7 @@ async function workjetProjectControl(request = {}) {
     }
     const chatId = creatingChat ? receipt.result.chat_id : receipt.result.first_chat_id;
     if (typeof chatId !== 'string' || !/^workjet_private_[A-Za-z0-9_-]+$/.test(chatId) || chatId.length > 256) {
-      throw new Error('Workjet project command did not return a native private chat id.');
+      throw new Error('Workjet project command did not return a private chat id.');
     }
     return { action, commandId, projectId, workerProfileId, chatId };
   }
