@@ -204,8 +204,8 @@ pub fn export_jami_archive_for_business_os(root: &Path) -> Value {
     })
 }
 
-/// Persist channel-specific settings (Email IMAP/SMTP/Graph, Teams tenant/client,
-/// Jami account id, …) into the operator env map and then re-run
+/// Persist channel-specific settings (Email IMAP/SMTP/Graph/EWS/ActiveSync,
+/// Teams tenant/client, Jami account id, …) into the operator env map and then re-run
 /// sync_prompt_identity so communication_accounts is updated immediately.
 pub fn save_channel_settings_for_business_os(
     root: &Path,
@@ -236,6 +236,11 @@ pub fn save_channel_settings_for_business_os(
             if let Some(value) = str_field("provider") {
                 env_map.insert("CTO_EMAIL_PROVIDER".to_owned(), value);
             }
+            if let Some(value) = str_field("password") {
+                // save_runtime_env_map routes CTO_EMAIL_PASSWORD through the
+                // encrypted secret store; it must never land in runtime_env_kv.
+                env_map.insert("CTO_EMAIL_PASSWORD".to_owned(), value);
+            }
             if let Some(value) = str_field("imap_host") {
                 env_map.insert("CTO_EMAIL_IMAP_HOST".to_owned(), value);
             }
@@ -256,6 +261,42 @@ pub fn save_channel_settings_for_business_os(
             }
             if let Some(value) = str_field("graph_user") {
                 env_map.insert("CTO_EMAIL_GRAPH_USER".to_owned(), value);
+            }
+            if let Some(value) = str_field("ews_url") {
+                env_map.insert("CTO_EMAIL_EWS_URL".to_owned(), value);
+            }
+            if let Some(value) = str_field("owa_url") {
+                env_map.insert("CTO_EMAIL_OWA_URL".to_owned(), value);
+            }
+            if let Some(value) = str_field("ews_auth_type") {
+                env_map.insert("CTO_EMAIL_EWS_AUTH_TYPE".to_owned(), value);
+            }
+            if let Some(value) = str_field("ews_username") {
+                env_map.insert("CTO_EMAIL_EWS_USERNAME".to_owned(), value);
+            }
+            if let Some(value) = str_field("ews_version") {
+                env_map.insert("CTO_EMAIL_EWS_VERSION".to_owned(), value);
+            }
+            if let Some(value) = str_field("active_sync_server") {
+                env_map.insert("CTO_EMAIL_ACTIVESYNC_SERVER".to_owned(), value);
+            }
+            if let Some(value) = str_field("active_sync_username") {
+                env_map.insert("CTO_EMAIL_ACTIVESYNC_USERNAME".to_owned(), value);
+            }
+            if let Some(value) = str_field("active_sync_path") {
+                env_map.insert("CTO_EMAIL_ACTIVESYNC_PATH".to_owned(), value);
+            }
+            if let Some(value) = str_field("active_sync_device_id") {
+                env_map.insert("CTO_EMAIL_ACTIVESYNC_DEVICE_ID".to_owned(), value);
+            }
+            if let Some(value) = str_field("active_sync_device_type") {
+                env_map.insert("CTO_EMAIL_ACTIVESYNC_DEVICE_TYPE".to_owned(), value);
+            }
+            if let Some(value) = str_field("active_sync_protocol_version") {
+                env_map.insert("CTO_EMAIL_ACTIVESYNC_PROTOCOL_VERSION".to_owned(), value);
+            }
+            if let Some(value) = str_field("active_sync_policy_key") {
+                env_map.insert("CTO_EMAIL_ACTIVESYNC_POLICY_KEY".to_owned(), value);
             }
         }
         "teams" => {

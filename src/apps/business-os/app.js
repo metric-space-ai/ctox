@@ -15048,9 +15048,13 @@ function detectRecordFromElement(moduleId, element) {
   let current = element.nodeType === Node.ELEMENT_NODE ? element : element.parentElement;
 
   // `data-*-id` attributes that are layout/UI hooks, never a record handle.
+  // data-owner-id/data-window-id name the shell window, not a record: the
+  // context menu of an app window showed a random heading ("Kampagnen") as
+  // record label (Klicktest Outbound P2 SHL-06, 11.09.2026).
   const NON_RECORD_ID_ATTRS = new Set([
     'data-context-id', 'data-context-record-id', 'data-tab-id', 'data-grad-id',
-    'data-gradient-id', 'data-loading-id', 'data-drawer-id',
+    'data-gradient-id', 'data-loading-id', 'data-drawer-id', 'data-owner-id',
+    'data-window-id',
   ]);
   // Trailing tokens that describe an interaction (`data-account-click-id`), not the type.
   const ACTION_SUFFIXES = new Set(['click', 'select', 'open', 'toggle', 'manage', 'expand', 'edit', 'view']);

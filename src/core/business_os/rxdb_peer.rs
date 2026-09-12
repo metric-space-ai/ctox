@@ -1910,6 +1910,7 @@ fn native_peer_health_error(
 }
 
 pub fn ensure_native_peer(root: &Path) -> anyhow::Result<()> {
+    store::install_replicated_secret_sanitizer();
     let config = store::sync_config(root)?;
     spawn_native_peer(
         root,
@@ -1955,6 +1956,7 @@ pub fn restart_native_peer(root: &Path) -> anyhow::Result<Value> {
 }
 
 pub fn run_native_peer_foreground(root: &Path) -> anyhow::Result<()> {
+    store::install_replicated_secret_sanitizer();
     let config = store::sync_config(root)?;
     let root = root.to_path_buf();
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -1983,6 +1985,7 @@ pub fn spawn_native_peer(
     signaling_urls: Vec<String>,
     signaling_room_password: String,
 ) {
+    store::install_replicated_secret_sanitizer();
     let claimed = with_native_peer_lifecycle_mut(NativePeerLifecycle::supervisor_start);
     match claimed {
         Ok(true) => {}

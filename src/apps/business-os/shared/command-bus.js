@@ -202,11 +202,17 @@ export function createCommandBus({ db, sync = null, session = null } = {}) {
         rememberCommandTimingProbe(commandId, dispatchStartedAt);
       }
       emitCommandLifecycle(commandId, command.command_type || command.type, 'dispatch_started');
+      // `sync_queue_tasks: false` was honoured only on the command; passed as
+      // a dispatch option it was ignored and every control command first
+      // waited for the queue-task collection (field report 11.09.2026).
+      const submitted = options?.sync_queue_tasks === false && command?.sync_queue_tasks !== false
+        ? { ...command, sync_queue_tasks: false }
+        : command;
       const receipt = await submitRxdbCommand({
         db,
         sync,
         session,
-        command,
+        command: submitted,
         dispatchStartedAt,
       });
       emitCommandLifecycle(receipt.command_id, command.command_type || command.type, 'local_receipt', dispatchStartedAt);

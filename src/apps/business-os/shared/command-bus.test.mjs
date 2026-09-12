@@ -75,6 +75,38 @@ test('dispatch receipt lifecycle reports elapsed time from the original dispatch
   }
 });
 
+test('sync_queue_tasks:false as a dispatch option skips the queue-task collection', async () => {
+  let stored;
+  const started = [];
+  const commands = {
+    async insert(document) { stored = { ...document }; },
+    findOne() {
+      return {
+        $: { subscribe(listener) {
+          listener({ toJSON: () => ({ ...stored }) });
+          return { unsubscribe() {} };
+        } },
+        async exec() { return stored ? { toJSON: () => ({ ...stored }) } : null; },
+      };
+    },
+  };
+  const bus = createCommandBus({
+    db: { raw: { business_commands: commands } },
+    sync: { async startCollection(name) {
+      started.push(name);
+      return { state: { async pushDocumentsToRemotePeers() {
+        stored = { ...stored, status: 'queued', replication_phase: 'native_observed' };
+        return true;
+      } } };
+    } },
+  });
+  await bus.dispatch({ id: 'cmd-option-no-queue', command_type: 'ctox.secret.list' }, {
+    until: 'accepted',
+    sync_queue_tasks: false,
+  });
+  assert.deepEqual(started.filter((name) => name === 'ctox_queue_tasks'), []);
+  assert.ok(started.includes('business_commands'));
+});
 
 function leaseTestState(connected) {
   const listeners = new Set();
