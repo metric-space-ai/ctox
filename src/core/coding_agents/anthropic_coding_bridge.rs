@@ -31,6 +31,7 @@ pub(crate) const BRIDGE_TOKEN_HEADER: &str = "X-CTOX-Bridge-Token";
 enum CodingProtocol {
     Anthropic,
     Responses { model: String },
+    ChatCompletions { model: String },
 }
 
 pub(crate) struct AnthropicCodingBridge {
@@ -57,6 +58,20 @@ impl AnthropicCodingBridge {
             api_key,
             upstream_base_url,
             CodingProtocol::Responses {
+                model: model.to_owned(),
+            },
+        )
+    }
+
+    pub(crate) fn spawn_chat_completions(
+        api_key: String,
+        upstream_base_url: &str,
+        model: &str,
+    ) -> anyhow::Result<Self> {
+        Self::spawn_protocol(
+            api_key,
+            upstream_base_url,
+            CodingProtocol::ChatCompletions {
                 model: model.to_owned(),
             },
         )
@@ -151,6 +166,7 @@ fn handle_request(
     let path = match protocol {
         CodingProtocol::Anthropic => "/v1/messages",
         CodingProtocol::Responses { .. } => "/v1/responses",
+        CodingProtocol::ChatCompletions { .. } => "/v1/chat/completions",
     };
     if request.method().as_str() != "POST" || request.url() != path {
         let _ = request.respond(Response::from_string("not found").with_status_code(404));
@@ -195,7 +211,9 @@ fn handle_request(
         return;
     }
 
-    if let CodingProtocol::Responses { model } = protocol {
+    if let CodingProtocol::Responses { model } | CodingProtocol::ChatCompletions { model } =
+        protocol
+    {
         // A turn capability cannot select a different upstream model.
         let allowed = serde_json::from_slice::<serde_json::Value>(&body)
             .ok()
@@ -217,6 +235,7 @@ fn handle_request(
     let url = match protocol {
         CodingProtocol::Anthropic => format!("{upstream_base_url}/v1/messages"),
         CodingProtocol::Responses { .. } => format!("{upstream_base_url}/responses"),
+        CodingProtocol::ChatCompletions { .. } => format!("{upstream_base_url}/chat/completions"),
     };
     let mut upstream = agent
         .post(&url)
@@ -224,7 +243,7 @@ fn handle_request(
         .set("accept", "application/json, text/event-stream");
     upstream = match protocol {
         CodingProtocol::Anthropic => upstream.set("x-api-key", api_key),
-        CodingProtocol::Responses { .. } => {
+        CodingProtocol::Responses { .. } | CodingProtocol::ChatCompletions { .. } => {
             upstream.set("authorization", &format!("Bearer {api_key}"))
         }
     };
@@ -272,6 +291,47 @@ fn handle_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inherited_chat_bridge_uses_selected_provider_endpoint_and_bearer() -> anyhow::Result<()> {
+        let upstream =
+            Server::http("127.0.0.1:0").map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let address = upstream
+            .server_addr()
+            .to_ip()
+            .context("fake chat upstream")?;
+        let worker = std::thread::spawn(move || {
+            let mut request = upstream
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .expect("chat request");
+            assert_eq!(request.url(), "/v1/chat/completions");
+            assert!(request.headers().iter().any(|header| header
+                .field
+                .as_str()
+                .as_str()
+                .eq_ignore_ascii_case("authorization")
+                && header.value.as_str() == "Bearer native-minimax-key"));
+            let mut body = String::new();
+            request.as_reader().read_to_string(&mut body).unwrap();
+            let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(body["model"], "MiniMax-M3");
+            assert_eq!(body["messages"][0]["content"], "bounded fixture");
+            request.respond(Response::from_string("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n").with_header(Header::from_bytes("content-type", "text/event-stream").unwrap())).unwrap();
+        });
+        let bridge = AnthropicCodingBridge::spawn_chat_completions(
+            "native-minimax-key".to_owned(),
+            &format!("http://{address}/v1"),
+            "MiniMax-M3",
+        )?;
+        let response = ureq::post(&format!("{}/v1/chat/completions", bridge.base_url()))
+            .set(BRIDGE_TOKEN_HEADER, bridge.capability_token())
+            .send_string(r#"{"model":"MiniMax-M3","messages":[{"role":"user","content":"bounded fixture"}],"stream":true}"#)?;
+        assert!(response.into_string()?.contains("[DONE]"));
+        worker.join().expect("chat upstream assertions");
+        drop(bridge);
+        Ok(())
+    }
 
     #[test]
     fn inherited_responses_bridge_authenticates_scopes_streams_and_stops() -> anyhow::Result<()> {

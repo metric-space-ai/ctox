@@ -42,16 +42,23 @@ primitive, **not** a terminal UI. `pi-tui` is not used.
 
 The inherited `ctox` preset resolves the current main model and provider using
 the native runtime kernel and the same API route specification as the main
-harness. Responses-capable API routes use a fresh turn-scoped capability
+harness. API routes use a fresh turn-scoped capability
 bridge: the native owner injects the selected provider credential, pins the
 model, streams the response, and drops the listener at turn completion. The
 sidecar receives neither the provider key nor its remote URL. This does not
 start or depend on the retired persistent `127.0.0.1:12434` gateway.
 
-The initial inherited adapter covers OpenAI, CTOX proxy and Azure
-Responses routes. Other main protocols fail explicitly before sidecar startup;
+OpenAI, CTOX proxy and Azure use Pi's Responses adapter. Direct MiniMax and
+OpenRouter use Pi's existing Chat Completions adapter and the configured
+upstream's `/chat/completions` endpoint. The bridge preserves the selected
+wire protocol and streams bytes; it does not translate SSE or infer the
+provider from a model name. Other main protocols fail explicitly before sidecar startup;
 they require their own supported adapter or an independent server-authored
 preset. An upstream model name alone never selects a credential or provider.
+
+`ctox coding-agent route` reports the inherited provider, model, upstream
+origin and wire API through the operator CLI. It does not start Pi, call a
+provider, read app records or return credentials, endpoint paths or account IDs.
 
 Provider and model selection are independent dimensions. The browser sends an
 opaque server-authored `preset_id`; native CTOX resolves the account, model,
