@@ -814,6 +814,8 @@ where
                 options.crew_persona.as_deref(),
             )?)
         } else {
+            // Persistent start binds the named durable thread or fails closed.
+            // Do not fall back to an isolated/fresh thread from this caller.
             Some(PersistentSession::start(
                 root,
                 &operator_settings,

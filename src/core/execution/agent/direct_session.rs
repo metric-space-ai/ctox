@@ -19,15 +19,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ctox_app_server_client::{
-    InProcessAppServerClient, InProcessClientStartArgs, InProcessServerEvent, TypedRequestError,
+    InProcessAppServerClient, InProcessClientStartArgs, InProcessServerEvent,
     DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
 };
 use ctox_app_server_protocol::{
-    ClientRequest, JSONRPCNotification, RequestId, ServerNotification, ThreadCompactStartParams,
-    ThreadCompactStartResponse, ThreadListParams, ThreadListResponse, ThreadResumeParams,
-    ThreadResumeResponse, ThreadSetNameParams, ThreadSetNameResponse, ThreadSortKey,
-    ThreadSourceKind, ThreadStartParams, ThreadStartResponse, TurnInterruptParams,
-    TurnInterruptResponse, TurnStartParams, TurnStartResponse,
+    ClientRequest, JSONRPCNotification, ServerNotification, ThreadCompactStartParams,
+    ThreadCompactStartResponse, TurnInterruptParams, TurnInterruptResponse, TurnStartParams,
+    TurnStartResponse,
 };
 use ctox_arg0::Arg0DispatchPaths;
 use ctox_cloud_requirements::cloud_requirements_loader;
@@ -54,6 +52,11 @@ use crate::inference::runtime_kernel;
 use crate::inference::runtime_state;
 use crate::secrets;
 
+pub(crate) use super::session_continuity::SessionPoisoned;
+use super::session_continuity::{
+    bind_session_thread, start_bound_turn, RequestIdSeq, SessionControlTimeouts, SessionThreadSpec,
+};
+
 const OPENAI_AUTH_MODE_KEY: &str = "CTOX_OPENAI_AUTH_MODE";
 const OPENAI_AUTH_MODE_CHATGPT_SUBSCRIPTION: &str = "chatgpt_subscription";
 const CHATGPT_AUTH_SECRET_SCOPE: &str = "ctox-auth";
@@ -72,6 +75,16 @@ const DIRECT_SESSION_INTERRUPT_TIMEOUT_SECS: u64 = 10;
 // bounded: an unbounded await here hangs the whole prompt worker when the
 // session runtime is wedged (ctox#21).
 const DIRECT_SESSION_TURN_START_TIMEOUT_SECS: u64 = 30;
+
+fn production_session_control_timeouts() -> SessionControlTimeouts {
+    SessionControlTimeouts {
+        list: Duration::from_secs(DIRECT_SESSION_CONTROL_REQUEST_TIMEOUT_SECS),
+        resume: Duration::from_secs(DIRECT_SESSION_TURN_START_TIMEOUT_SECS),
+        start: Duration::from_secs(DIRECT_SESSION_TURN_START_TIMEOUT_SECS),
+        turn_start: Duration::from_secs(DIRECT_SESSION_TURN_START_TIMEOUT_SECS),
+    }
+}
+
 const EXACT_PROMPT_SAFE_INPUT_BUDGET_NUMERATOR: i64 = 3;
 const EXACT_PROMPT_SAFE_INPUT_BUDGET_DENOMINATOR: i64 = 4;
 const CTOX_PERSISTENT_WORKER_THREAD_NAME: &str = "ctox-service-worker";
@@ -743,20 +756,6 @@ fn direct_session_deadline_capped_timeout(
 // ---------------------------------------------------------------------------
 // PersistentSession — lives across normal worker turns and bounded helper turns
 // ---------------------------------------------------------------------------
-
-/// Marker error for ambiguous turn outcomes that must poison the session.
-/// Carried through anyhow so `run_turn_inner_with_context` can flip the
-/// session's `poisoned` flag on the way out.
-#[derive(Debug)]
-pub(crate) struct SessionPoisoned(pub(crate) String);
-
-impl std::fmt::Display for SessionPoisoned {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::error::Error for SessionPoisoned {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TurnRuntimeErrorClass {
@@ -1564,7 +1563,7 @@ impl PersistentSession {
         };
 
         eprintln!("[ctox direct-session] starting InProcessAppServerClient...");
-        let mut client = InProcessAppServerClient::start(start_args)
+        let client = InProcessAppServerClient::start(start_args)
             .await
             .map_err(|err| anyhow::anyhow!("client start: {err}"))?;
         eprintln!("[ctox direct-session] client started");
@@ -1572,108 +1571,19 @@ impl PersistentSession {
         let mut seq = RequestIdSeq::new();
         let canonical_cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
         let persistent_thread_name = persistent_worker.then(|| persistent_worker_thread_name(root));
-        let resumable_thread_id = if let Some(persistent_thread_name) =
-            persistent_thread_name.as_deref()
-        {
-            match client
-                .request_typed::<ThreadListResponse>(ClientRequest::ThreadList {
-                    request_id: seq.next(),
-                    params: ThreadListParams {
-                        cursor: None,
-                        limit: Some(20),
-                        sort_key: Some(ThreadSortKey::UpdatedAt),
-                        model_providers: None,
-                        source_kinds: Some(vec![ThreadSourceKind::Exec]),
-                        archived: Some(false),
-                        cwd: None,
-                        search_term: Some(persistent_thread_name.to_string()),
-                    },
-                })
-                .await
-            {
-                Ok(response) => response
-                    .data
-                    .into_iter()
-                    .find(|thread| {
-                        !thread.ephemeral && thread.name.as_deref() == Some(persistent_thread_name)
-                    })
-                    .map(|thread| thread.id),
-                Err(err) => {
-                    eprintln!(
-                        "[ctox direct-session] persistent thread lookup failed; starting fresh: {err}"
-                    );
-                    None
-                }
-            }
-        } else {
-            None
+        let spec = SessionThreadSpec {
+            model: &model,
+            model_provider: selected_provider_id.as_deref(),
+            cwd: &canonical_cwd,
+            base_instructions,
+            disable_active_tools,
+            disable_mcp_servers,
+            thread_config,
+            persistent_worker,
+            persistent_thread_name: persistent_thread_name.as_deref(),
         };
-
-        let thread_id = if let Some(thread_id) = resumable_thread_id {
-            match client
-                .request_typed::<ThreadResumeResponse>(ClientRequest::ThreadResume {
-                    request_id: seq.next(),
-                    params: ThreadResumeParams {
-                        thread_id: thread_id.clone(),
-                        history: None,
-                        path: None,
-                        model: Some(model.clone()),
-                        model_provider: selected_provider_id.clone(),
-                        service_tier: None,
-                        cwd: Some(canonical_cwd.to_string_lossy().to_string()),
-                        approval_policy: Some(AskForApproval::Never.into()),
-                        approvals_reviewer: None,
-                        sandbox: Some(ctox_app_server_protocol::SandboxMode::WorkspaceWrite),
-                        config: None,
-                        base_instructions: Some(base_instructions.to_string()),
-                        developer_instructions: None,
-                        personality: None,
-                        persist_extended_history: true,
-                    },
-                })
-                .await
-            {
-                Ok(response) => {
-                    let resumed_id = response.thread.id;
-                    eprintln!("[ctox direct-session] thread resumed: {resumed_id}");
-                    resumed_id
-                }
-                Err(err) => {
-                    eprintln!(
-                        "[ctox direct-session] thread/resume failed for {thread_id}; starting fresh: {err}"
-                    );
-                    start_session_thread(
-                        &mut client,
-                        &mut seq,
-                        &model,
-                        selected_provider_id.as_deref(),
-                        &canonical_cwd,
-                        base_instructions,
-                        disable_active_tools,
-                        disable_mcp_servers,
-                        thread_config,
-                        persistent_worker,
-                        persistent_thread_name.as_deref(),
-                    )
-                    .await?
-                }
-            }
-        } else {
-            start_session_thread(
-                &mut client,
-                &mut seq,
-                &model,
-                selected_provider_id.as_deref(),
-                &canonical_cwd,
-                base_instructions,
-                disable_active_tools,
-                disable_mcp_servers,
-                thread_config,
-                persistent_worker,
-                persistent_thread_name.as_deref(),
-            )
-            .await?
-        };
+        let timeouts = production_session_control_timeouts();
+        let thread_id = bind_session_thread(&client, &mut seq, &spec, &timeouts).await?;
 
         Ok((
             client,
@@ -1721,8 +1631,9 @@ impl PersistentSession {
         // and ephemeral threads stay registered in the in-memory manager.
         // Reuse makes a slice (main turn + continuity refreshes) one thread,
         // sends the base instructions once instead of four times, and is the
-        // first building block of the long-lived worker session. A defensive
-        // fallback below still rotates the thread if TurnStart reports it
+        // first building block of the long-lived worker session. Persistent
+        // workers fail closed on a rejected turn/start instead of rotating.
+        // Isolated sessions still rotate once if TurnStart reports the thread
         // missing.
         let thread_id = session_thread_id.clone();
 
@@ -1802,8 +1713,9 @@ impl PersistentSession {
             }
         }
 
-        // TurnStart on the session thread, with a one-shot rotation fallback
-        // if the thread genuinely went away (defensive; see comment above).
+        // TurnStart on the bound session thread. Persistent workers refuse
+        // replacement threads; isolated sessions still rotate once on a
+        // definitive server rejection.
         let turn_start_params = |thread_id: &str| TurnStartParams {
             thread_id: thread_id.to_string(),
             input: vec![UserInput::Text {
@@ -1832,91 +1744,28 @@ impl PersistentSession {
             output_schema: None,
             collaboration_mode: None,
         };
-        // A turn/start TIMEOUT is ambiguous: the facade detaches the request
-        // onto its own task, so timing out the caller-side future does NOT
-        // cancel the server-side turn — it may still be starting. Rotating
-        // the thread and re-submitting the same prompt on a timeout would
-        // duplicate model/tool side effects (ctox#21 P1 review). So we only
-        // rotate on a DEFINITIVE error response (the turn provably did not
-        // start); a timeout poisons the session and bails without retry.
-        let turn_resp: TurnStartResponse = match tokio::time::timeout(
-            Duration::from_secs(DIRECT_SESSION_TURN_START_TIMEOUT_SECS),
-            client.request_typed(ClientRequest::TurnStart {
-                request_id: seq.next(),
-                params: turn_start_params(&thread_id),
-            }),
-        )
-        .await
-        {
-            Ok(Ok(resp)) => resp,
-            Err(_) => {
-                return Err(anyhow::Error::new(SessionPoisoned(format!(
-                    "turn/start timed out after {DIRECT_SESSION_TURN_START_TIMEOUT_SECS}s; the turn may have started server-side, so the session is poisoned instead of retried to avoid a duplicate turn"
-                ))));
-            }
-            // Transport and decode failures are as ambiguous as a timeout:
-            // the request may have reached the processor (transport) or the
-            // response arrived but could not be decoded (deserialize) — in
-            // both cases the turn may be running. Only a definitive server
-            // rejection proves the turn did not start.
-            Ok(Err(
-                err @ (TypedRequestError::Transport { .. } | TypedRequestError::Deserialize { .. }),
-            )) => {
-                return Err(anyhow::Error::new(SessionPoisoned(format!(
-                    "turn/start ended ambiguously ({err}); session poisoned instead of retried to avoid a duplicate turn"
-                ))));
-            }
-            Ok(Err(err @ TypedRequestError::Server { .. })) => {
-                eprintln!(
-                    "[ctox direct-session] turn/start on session thread {thread_id} was rejected by the server ({err}); rotating thread"
-                );
-                let rotated_thread_id = start_session_thread(
-                    client,
-                    seq,
-                    model,
-                    model_provider,
-                    cwd,
-                    base_instructions,
-                    disable_active_tools,
-                    disable_mcp_servers,
-                    thread_config,
-                    persistent_worker,
-                    persistent_worker
-                        .then(|| persistent_worker_thread_name(root))
-                        .as_deref(),
-                )
-                .await
-                .map_err(|err| anyhow::anyhow!("thread/start (rotation): {err}"))?;
-                eprintln!("[ctox direct-session] rotated session thread: {rotated_thread_id}");
-                *session_thread_id = rotated_thread_id.clone();
-                // The rotation retry is likewise timeout-poisoned: a fresh
-                // thread's turn/start that times out must not fan out again.
-                match tokio::time::timeout(
-                    Duration::from_secs(DIRECT_SESSION_TURN_START_TIMEOUT_SECS),
-                    client.request_typed(ClientRequest::TurnStart {
-                        request_id: seq.next(),
-                        params: turn_start_params(&rotated_thread_id),
-                    }),
-                )
-                .await
-                {
-                    Ok(Ok(resp)) => resp,
-                    Ok(Err(err @ TypedRequestError::Server { .. })) => {
-                        return Err(anyhow::anyhow!("turn/start: {err}"));
-                    }
-                    Ok(Err(err)) => {
-                        return Err(anyhow::Error::new(SessionPoisoned(format!(
-                            "turn/start on rotated thread ended ambiguously ({err}); session poisoned"
-                        ))));
-                    }
-                    Err(_) => {
-                        return Err(anyhow::Error::new(SessionPoisoned(format!(
-                            "turn/start on rotated thread timed out after {DIRECT_SESSION_TURN_START_TIMEOUT_SECS}s; session poisoned instead of retried"
-                        ))));
-                    }
-                }
-            }
+        let persistent_thread_name = persistent_worker.then(|| persistent_worker_thread_name(root));
+        let spec = SessionThreadSpec {
+            model,
+            model_provider,
+            cwd,
+            base_instructions,
+            disable_active_tools,
+            disable_mcp_servers,
+            thread_config,
+            persistent_worker,
+            persistent_thread_name: persistent_thread_name.as_deref(),
         };
+        let timeouts = production_session_control_timeouts();
+        let turn_resp: TurnStartResponse = start_bound_turn(
+            client,
+            seq,
+            session_thread_id,
+            turn_start_params,
+            &spec,
+            &timeouts,
+        )
+        .await?;
         let thread_id = session_thread_id.clone();
         let turn_id = turn_resp.turn.id;
 
@@ -2993,93 +2842,6 @@ impl PersistentSession {
 // ---------------------------------------------------------------------------
 // Internals
 // ---------------------------------------------------------------------------
-
-struct RequestIdSeq {
-    next: i64,
-}
-impl RequestIdSeq {
-    fn new() -> Self {
-        Self { next: 1 }
-    }
-    fn next(&mut self) -> RequestId {
-        let id = self.next;
-        self.next += 1;
-        RequestId::Integer(id)
-    }
-}
-
-async fn start_session_thread(
-    client: &mut InProcessAppServerClient,
-    seq: &mut RequestIdSeq,
-    model: &str,
-    model_provider: Option<&str>,
-    cwd: &Path,
-    base_instructions: &str,
-    disable_active_tools: bool,
-    disable_mcp_servers: bool,
-    thread_config: Option<&HashMap<String, JsonValue>>,
-    persistent_worker: bool,
-    persistent_thread_name: Option<&str>,
-) -> Result<String> {
-    // Bound these control requests: a wedged response path must not hang the
-    // worker indefinitely (ctox#21 P1 review). They register/name a thread
-    // with no model side effects, so a timeout simply surfaces as an error
-    // and the session is rebuilt.
-    let thread_start_fut = client.request_typed(ClientRequest::ThreadStart {
-        request_id: seq.next(),
-        params: ThreadStartParams {
-            model: Some(model.to_string()),
-            model_provider: model_provider.map(str::to_string),
-            cwd: Some(cwd.to_string_lossy().to_string()),
-            approval_policy: Some(AskForApproval::Never.into()),
-            sandbox: Some(ctox_app_server_protocol::SandboxMode::WorkspaceWrite),
-            config: thread_config.cloned(),
-            base_instructions: Some(base_instructions.to_string()),
-            dynamic_tools: disable_active_tools.then(Vec::new),
-            disable_mcp_servers: Some(disable_mcp_servers),
-            ephemeral: Some(!persistent_worker),
-            persist_extended_history: persistent_worker,
-            ..ThreadStartParams::default()
-        },
-    });
-    let response: ThreadStartResponse = match tokio::time::timeout(
-        Duration::from_secs(DIRECT_SESSION_TURN_START_TIMEOUT_SECS),
-        thread_start_fut,
-    )
-    .await
-    {
-        Ok(result) => result.map_err(|err| anyhow::anyhow!("thread/start: {err}"))?,
-        Err(_) => {
-            anyhow::bail!("thread/start timed out after {DIRECT_SESSION_TURN_START_TIMEOUT_SECS}s")
-        }
-    };
-    let thread_id = response.thread.id;
-    if let Some(persistent_thread_name) = persistent_thread_name {
-        let set_name_fut =
-            client.request_typed::<ThreadSetNameResponse>(ClientRequest::ThreadSetName {
-                request_id: seq.next(),
-                params: ThreadSetNameParams {
-                    thread_id: thread_id.clone(),
-                    name: persistent_thread_name.to_string(),
-                },
-            });
-        match tokio::time::timeout(
-            Duration::from_secs(DIRECT_SESSION_TURN_START_TIMEOUT_SECS),
-            set_name_fut,
-        )
-        .await
-        {
-            Ok(result) => {
-                result.map_err(|err| anyhow::anyhow!("thread/name/set: {err}"))?;
-            }
-            Err(_) => anyhow::bail!(
-                "thread/name/set timed out after {DIRECT_SESSION_TURN_START_TIMEOUT_SECS}s"
-            ),
-        }
-    }
-    eprintln!("[ctox direct-session] thread started: {thread_id}");
-    Ok(thread_id)
-}
 
 /// Conversation/thread id a legacy notification is scoped to, when present.
 /// Legacy `codex/event/*` notifications place it at the params top level as

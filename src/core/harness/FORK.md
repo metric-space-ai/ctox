@@ -140,3 +140,33 @@ without changing existing error Display strings or unrelated retry behavior:
   Display text while using the typed protocol projection.
 
 Ticket: I-074.
+
+## 2026-09 Named Persistent Thread Resume Test
+
+CTOX native workers reuse one named non-ephemeral harness thread. The
+app-server JSON-RPC path must look that thread up from disk after a
+`ThreadManager` restart and fail closed if an identified `thread/resume`
+cannot load it. This is not Codex/Claude export/import or cross-device
+restore.
+
+Fork test delta:
+
+- `app-server-client/src/persistent_resume_tests.rs`: in-process
+  `InProcessAppServerClient` coverage against an isolated `codex_home`.
+  A named persistent thread is started, named, and given a mock Responses
+  turn. After manager shutdown, a new manager on the same home lists the
+  named Exec thread, resumes the same id, and rereads the same completed
+  history. Resume of a missing identified id returns a JSON-RPC server
+  error (`no rollout found`) and leaves the original loaded thread id in
+  the manager. Provider traffic stays on the local mock fixture.
+
+This nested package is not executed by root `cargo test`. Existing CI
+does not invoke `ctox-app-server-client` tests.
+
+Verification command:
+
+```bash
+cargo test --manifest-path src/core/harness/Cargo.toml -p ctox-app-server-client -- --test-threads=2 named_persistent_thread_survives_manager_restart
+```
+
+Refs #97.
