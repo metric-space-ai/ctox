@@ -676,7 +676,7 @@ export async function mount(ctx) {
     </div>`;
     }
     const progress = messageProgressModel(record);
-    const progressIcons = progress.steps.map((step) => `<span class="mail-progress-step is-${escapeAttribute(step.state)}" title="${escapeAttribute(step.label)}" aria-label="${escapeAttribute(step.label)}">${ctx.getActionIcon?.(step.icon, 11, 1.9) || ''}</span>`).join('');
+    const progressIcons = progress.steps.map((step) => `<span class="mail-progress-step is-${escapeAttribute(step.state)}" title="${escapeAttribute(step.label)}" aria-label="${escapeAttribute(step.label)}">${mailActionIcon(ctx, step.icon, 11, 1.9)}</span>`).join('');
     const group = campaign?.name ? `${escapeHtml(campaign.name)} · ` : '';
     return `${open}
       <span class="mail-record-copy"><span class="mail-record-subject">${escapeHtml(subject)}</span><span class="mail-record-meta">${escapeHtml(recipient)} · ${group}${escapeHtml(status)}</span><span class="mail-record-progress" role="img" aria-label="${escapeAttribute(progress.ariaLabel)}"><span class="mail-progress-track"><i style="width:${progress.percent}%"></i></span><span class="mail-progress-steps">${progressIcons}</span><span class="mail-progress-label">${escapeHtml(displayStatus)}</span></span></span>
@@ -2011,7 +2011,7 @@ function collectRefs(root) {
 }
 
 function renderActionIcons(ctx, refs) {
-  const icon = (name) => ctx.getActionIcon?.(name) || '';
+  const icon = (name) => mailActionIcon(ctx, name);
   const assignments = [
     [refs.compose, 'edit'], [refs.newGroup, 'add'], [refs.settings, 'settings'], [refs.openNav, 'columns'],
     [refs.closeNav, 'close'], [refs.closeDetail, 'chevronLeft'],
@@ -2027,6 +2027,39 @@ function renderActionIcons(ctx, refs) {
   refs.leftPane?.querySelectorAll('[data-pg-reset]').forEach((button) => assignments.push([button, 'refresh']));
   refs.listPane?.querySelectorAll('[data-pg-reset]').forEach((button) => assignments.push([button, 'refresh']));
   assignments.forEach(([button, name]) => { if (button) button.innerHTML = icon(name); });
+}
+
+// The shell normally supplies these glyphs. Keep a local stroke fallback so
+// standalone fixtures and a briefly unavailable shell never render blank
+// controls (especially close/navigation actions and delivery progress).
+const MAIL_ICON_FALLBACK_PATHS = Object.freeze({
+  add: 'M12 5v14M5 12h14',
+  check: 'M4.5 12.5l5 5L19.5 7',
+  chevronLeft: 'M15 6l-6 6 6 6',
+  chevronRight: 'M9 6l6 6-6 6',
+  clock: 'M12 4.5a7.5 7.5 0 1 1 0 15 7.5 7.5 0 0 1 0-15ZM12 8v4.5l3 2',
+  close: 'M6 6l12 12M18 6L6 18',
+  columns: 'M4 4h16v16H4zM10 4v16M16 4v16',
+  download: 'M12 4v11M12 15l-4-4M12 15l4-4M5 19h14',
+  edit: 'M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3ZM14.5 6.5l3 3',
+  export: 'M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7',
+  eye: 'M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6ZM12 9.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z',
+  filter: 'M4 6h16M7 12h10M10 18h4',
+  grid: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
+  link: 'M10 14a4 4 0 0 0 6 .4l3-3a4 4 0 0 0-5.6-5.6L12 7.2M14 10a4 4 0 0 0-6-.4l-3 3a4 4 0 0 0 5.6 5.6L12 16.8',
+  list: 'M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01',
+  more: 'M6 12h.01M12 12h.01M18 12h.01',
+  refresh: 'M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4',
+  send: 'M4 12 20 4l-4 16-4.5-6.5L4 12ZM11.5 13.5 20 4',
+  settings: 'M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6',
+  warning: 'M12 4 2.8 19.5h18.4L12 4ZM12 10v4M12 17h.01',
+});
+
+function mailActionIcon(ctx, name, size = 16, strokeWidth = 1.8) {
+  const fromShell = ctx?.getActionIcon?.(name, size, strokeWidth);
+  if (typeof fromShell === 'string' && fromShell.trim()) return fromShell;
+  const path = MAIL_ICON_FALLBACK_PATHS[name] || MAIL_ICON_FALLBACK_PATHS.more;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="mail-action-icon mail-action-${name}"><path d="${path}"></path></svg>`;
 }
 
 // One-button view switch (operator directive, 31.08.2026). The button is an
@@ -2052,7 +2085,7 @@ function syncViewToggleButton(ctx, pane, currentView, t) {
   button.removeAttribute('aria-pressed');
   button.setAttribute('aria-label', label);
   button.setAttribute('title', label);
-  button.innerHTML = ctx.getActionIcon?.(cards ? 'list' : 'grid') || '';
+  button.innerHTML = mailActionIcon(ctx, cards ? 'list' : 'grid');
 }
 
 function normalizePaneGrammar(detail, fallback) {
@@ -2852,6 +2885,7 @@ export const __mailTestHooks = {
   messageEventTimeline,
   plainTextToEmailHtml,
   buildComposeCommandBundle,
+  mailActionIcon,
   validateComposeInput,
   messageActions,
   isDraftMessage,
