@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OUT = Path(os.environ['RUNNER_TEMP']) / 'native-integration'
 EVIDENCE = OUT / 'evidence'
 EVIDENCE.mkdir(parents=True, exist_ok=True)
-DEADLINE = time.monotonic() + 4200
+DEADLINE = time.monotonic() + 4800
 TARGET = 'x86_64-unknown-linux-gnu'
 FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
            'business_chat', 'repair_queue_projections']

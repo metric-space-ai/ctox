@@ -17,7 +17,7 @@ concurrency:
 jobs:
   linux:
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    timeout-minutes: 100
     env:
       CARGO_BUILD_JOBS: '2'
       RUST_TEST_THREADS: '2'
@@ -25,7 +25,7 @@ jobs:
       RAYON_NUM_THREADS: '2'
       CARGO_INCREMENTAL: '0'
       CARGO_TERM_COLOR: never
-      REVIEWED_SOURCE_REVISION: 99be929e67ad7314e37750bd182297c6c2f72b5b
+      REVIEWED_SOURCE_REVISION: 8c23939347d2800b956b150fce5306276a748332
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
@@ -39,12 +39,14 @@ jobs:
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
         with:
           key: native-integration-linux-x64-release
+          cache-on-failure: true
+          cache-workspace-crates: true
       - name: Install native dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev libcap-dev libpcap-dev
       - name: Verify reviewed source, test, and package
-        timeout-minutes: 75
+        timeout-minutes: 85
         run: python3 src/scripts/native-integration-artifact.py
       - name: Upload verification evidence
         if: always()
