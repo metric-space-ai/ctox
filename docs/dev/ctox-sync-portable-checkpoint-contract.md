@@ -50,7 +50,11 @@ Codex and Claude; a fresh thread is not an acceptable fallback.
 `ctox_sync::capture::CaptureRequest` and `CheckpointStore::capture` provide the
 first real producer for this format. The asynchronous producer runs Git with a
 10-second deadline, captures `HEAD`, staged and unstaged binary diffs, staged
-and unstaged deletions, and every untracked file reported by Git. It rejects
+and unstaged deletions, and every untracked file reported by Git. Capture must
+start at the repository root. Patch output disables text conversion and relative
+paths and uses fixed `a/` and `b/` prefixes so local display settings cannot
+change the bytes or patch paths. Untracked paths come directly from Git’s
+NUL-delimited file listing, independently of rename status records. It rejects
 symlink traversal, non-UTF-8 paths, unbounded files, invalid Git output, and a
 workspace without a verifiable commit. Journal, attachment, workspace, and
 provider artifacts are supplied by the execution owner inside the same
