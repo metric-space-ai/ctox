@@ -62,14 +62,26 @@ mobile suspend/resume, or full runtime compatibility across all hosts.
 
 ### Desktop pin hydration
 
-The shell renders its cached taskbar pins before starting Sync, but reconciles
-`desktop_layout` only after the command transport has been registered. This
-reconciliation does not block shell bootstrap. A pending native read is never
-converted into an absent layout: doing so could assign the fallback pins a new
-local timestamp and overwrite an older, valid remote layout. The actual read
-must settle before pin/cache reconciliation and any write-back. A response for
-a replaced database is discarded. Query failures remain failures; hydration
-does not add retry timers or a second data path.
+The shell may paint UI-only defaults before Sync starts. Cached pin state is
+read from the scoped localStorage entry; a missing or malformed entry is
+unknown, while a valid array — including `[]` — is a known local selection.
+Startup has no initialization timestamp and performs no pin-cache or layout
+write for unknown state.
+
+Authoritative reconciliation uses the existing collection lease and
+query-demand-loader with an opaque `requireRevision` hydration token. Query
+readiness means the negotiated peer has query-fetch capability and the actual
+loader finished installation; registration, transport activity and
+`active$` are not sufficient. Strict required-revision reads are keyed by that
+token plus the actual database/bridge/negotiation/connection generation and
+reject timeout, consumer cancellation, broker closure, loader cancellation and
+generation replacement. They never fall back to local data. A completed native
+query may return no document (confirmed absence) or an explicit `[]` selection.
+Only a strictly newer genuine local edit wins and writes back; ties, older
+locals, remote empty arrays and confirmed absence never create an
+initialization timestamp or layout mutation. Replaced database/runtime/auth
+storage scopes discard pending edits and late results; a reconnect within the
+same identity preserves them until the new authority settles.
 
 The full-host critical-reload fixture additionally runs a separate fresh-context
 pin-preservation story after the 30 timing samples. It confirms a seeded layout
@@ -510,6 +522,14 @@ already exist always render regardless of readiness.
 
 Explicit non-goal: readiness is a **render hint, never a mount blocker**. The OS
 stays snappy; a module must not wait for sync to appear.
+
+A stricter authority-readiness barrier is separate from the render hint. It
+requires query-fetch capability plus a successfully installed demand loader for
+the current connection generation. `requireRevision` reads use this barrier and
+are never satisfied by ordinary stale-while-revalidate state, a closed
+multi-tab broker, a timeout, or another connection generation. The opaque token
+is carried through the existing in-flight identity and sidecar satisfied-token
+fields; it is not a server revision or new transport.
 
 ### 3.2 Shell integration
 
@@ -1736,6 +1756,7 @@ persisted even on failure. This is the retained-profile browser cohort only;
 | `projection-window-gc-smoke` | Stale projection windows are garbage-collected. |
 | `query-api-smoke` | Query API surface. |
 | `query-fetch-capability-smoke` | Capability negotiation surface. |
+| `query-demand-authoritative-generation-smoke` | Strict authority tokens reject absent/replaced/cancelled generations, accept native empty, and reuse only the same token/generation. |
 | `query-fingerprint-corpus-smoke` | JS fingerprints match the shared JS/Rust corpus byte-for-byte. |
 | `quota-recovery-smoke` | Sidecar behaviour under quota pressure. |
 | `replication-demand-race-smoke` | Concurrent `masterChangesSince` vs query-fetch does not corrupt state. |

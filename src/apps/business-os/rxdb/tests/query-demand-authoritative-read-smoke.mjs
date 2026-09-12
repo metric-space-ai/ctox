@@ -30,6 +30,7 @@ const loader = createQueryDemandLoader({
     documents: [{ id: local.id, status: 'completed' }],
     authoritativeRevision: 'server-completed',
   }),
+  queryGeneration: () => 'authoritative-generation',
 });
 
 const [result] = await loader.resolveQuery({
