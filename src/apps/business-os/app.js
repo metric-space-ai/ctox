@@ -13048,7 +13048,54 @@ async function workjetProjectControl(request = {}) {
   }
   const action = boundedWorkjetProjectText(request.action, 'action', 64);
   const ownerUserId = boundedWorkjetProjectText(actorContext(state.session).id, 'owner_user_id', 256);
+  const requestSession = state.session;
+  const requestDb = state.db;
   const { projectBridge, workingCopyBridge } = await requireWorkjetProjectDataPlane();
+
+  if (action === 'project.worker.add' || action === 'project.chat.create') {
+    const creatingChat = action === 'project.chat.create';
+    const allowedKeys = new Set(['action', 'commandId', 'projectId', 'workerProfileId', 'createdAt']);
+    if (creatingChat) allowedKeys.add('title');
+    assertWorkjetProjectPayloadKeys(request, allowedKeys);
+    const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
+    const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
+    const workerProfileId = boundedWorkjetProjectText(request.workerProfileId, 'workerProfileId', 256);
+    boundedWorkjetProjectIsoDate(request.createdAt, 'createdAt');
+    const payload = { project_id: projectId, worker_profile_id: workerProfileId };
+    if (creatingChat) payload.title = boundedWorkjetProjectText(request.title, 'title', 256);
+    const assertCurrentSession = () => {
+      if (state.session !== requestSession || state.db !== requestDb
+        || actorContext(state.session).id !== ownerUserId) {
+        throw new Error('Workjet project session changed before the command result was delivered.');
+      }
+    };
+    assertCurrentSession();
+    const receipt = await state.commandBus.dispatch({
+      id: commandId,
+      command_id: commandId,
+      module: 'ctox',
+      command_type: creatingChat ? 'ctox.workjet.project.chat.create' : 'ctox.workjet.project.worker.add',
+      record_id: projectId,
+      payload,
+      client_context: {
+        source: 'workjet-project-control',
+        actor: actorContext(requestSession),
+      },
+    }, { until: 'terminal', timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
+    assertCurrentSession();
+    if (receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
+      || receipt.target_record_id !== projectId
+      || receipt.payload?.project_id !== projectId || receipt.payload?.worker_profile_id !== workerProfileId
+      || (creatingChat && receipt.payload?.title !== payload.title)
+      || receipt.result?.ok !== true || receipt.result?.contract !== 'workjet-project-chats.v1') {
+      throw new Error('Workjet project command returned an uncorrelated or unsuccessful receipt.');
+    }
+    const chatId = creatingChat ? receipt.result.chat_id : receipt.result.first_chat_id;
+    if (typeof chatId !== 'string' || !/^workjet_private_[A-Za-z0-9_-]+$/.test(chatId) || chatId.length > 256) {
+      throw new Error('Workjet project command did not return a native private chat id.');
+    }
+    return { action, commandId, projectId, workerProfileId, chatId };
+  }
 
   if (action === 'project.list') {
     assertWorkjetProjectPayloadKeys(request, new Set(['action']));
