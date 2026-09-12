@@ -96,6 +96,19 @@ class BoundedChildTest(unittest.TestCase):
         self.assertEqual("interrupted", sample["collection_status"])
         self.assertTrue(all_unknown)
 
+    def test_cleanup_failure_after_success_stops_remaining_probes(self):
+        executor = FakeExecutor([
+            diagnostics.CommandResult("ok", b"device", 0),
+            diagnostics.CommandResult("cleanup_failed"),
+        ])
+        sample, _, measurements_absent = diagnostics.sample_once(
+            executor, "adb", "emulator-5554", 0, []
+        )
+        self.assertTrue(sample["child_cleanup_failed"])
+        self.assertEqual(2, executor.index)
+        self.assertEqual("partial", sample["collection_status"])
+        self.assertFalse(measurements_absent)
+
     def test_monitor_cleanup_failure_stops_probes_and_preserves_reason(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "monitor.jsonl"
@@ -117,6 +130,44 @@ class BoundedChildTest(unittest.TestCase):
             self.assertEqual("collection_failure", completion["completion_reason"])
             self.assertEqual("child_cleanup_failure", completion["collection_failure_reason"])
 
+    def test_monitor_cleanup_after_success_stops_probes_and_preserves_reason(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "monitor.jsonl"
+            monitor = diagnostics.FrameworkMonitor(output, "adb", 0.01, 1, 0.1)
+            calls = []
+
+            def cleanup_after_success(argv):
+                calls.append(argv)
+                if len(calls) == 1:
+                    return diagnostics.CommandResult("ok", b"device", 0)
+                return diagnostics.CommandResult("cleanup_failed")
+
+            monitor._executor = cleanup_after_success
+            exit_code = monitor.run()
+            samples, completion, rejected = diagnostics._parse_monitor_output(output)
+            self.assertEqual(2, exit_code)
+            self.assertEqual(2, len(calls))
+            self.assertEqual(1, len(samples))
+            self.assertTrue(samples[0]["child_cleanup_failed"])
+            self.assertEqual("partial", samples[0]["collection_status"])
+            self.assertEqual(0, rejected["malformed_records"])
+            self.assertEqual("collection_failure", completion["completion_reason"])
+            self.assertEqual("child_cleanup_failure", completion["collection_failure_reason"])
+
+    def test_deadline_without_successful_measurements_is_not_generic_unknown(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "monitor.jsonl"
+            monitor = diagnostics.FrameworkMonitor(output, "adb", 0.01, 0.03, 0.1)
+            monitor._executor = lambda argv: diagnostics.CommandResult("error")
+            exit_code = monitor.run()
+            samples, completion, rejected = diagnostics._parse_monitor_output(output)
+            self.assertEqual(0, exit_code)
+            self.assertGreater(len(samples), 0)
+            self.assertEqual("deadline", completion["completion_reason"])
+            self.assertEqual(
+                "no_successful_measurements", completion["collection_failure_reason"]
+            )
+            self.assertEqual(0, rejected["malformed_records"])
 
 class FakeExecutor:
     def __init__(self, results):
@@ -343,6 +394,22 @@ class StrictMetadataParsingTest(unittest.TestCase):
         self.assertEqual("all_samples_unknown", completion["collection_failure_reason"])
         self.assertNotIn("TOPSECRET", json.dumps(completion))
 
+    def test_no_success_completion_reasons_are_preserved(self):
+        for expected in ("all_samples_unknown", "no_successful_measurements"):
+            with self.subTest(reason=expected):
+                raw = json.dumps({
+                    "record_type": "completion", "sample_count": 1,
+                    "completion_reason": "deadline",
+                    "collection_failure_reason": expected,
+                    "output_truncated": False,
+                }).encode("utf-8")
+                with tempfile.NamedTemporaryFile(mode="wb", suffix=".jsonl") as source:
+                    source.write(raw)
+                    source.flush()
+                    _, completion, rejected = diagnostics._parse_monitor_output(Path(source.name))
+                self.assertEqual(0, rejected["malformed_records"])
+                self.assertEqual(expected, completion["collection_failure_reason"])
+
     def _valid_ownership(self, directory):
         return {
             "schema": diagnostics.OWNERSHIP_SCHEMA,
@@ -438,7 +505,7 @@ def _fake_adb(directory: Path, broken: bool = False, slow: bool = False) -> Path
     executable = directory / "adb-fixture"
     if broken:
         interpreter = "/bin/sh"
-        body = "exit 72\n"
+        body = "sleep 0.05\nexit 72\n"
     elif slow:
         interpreter = "/usr/bin/env python3"
         child_pid_path = directory / "adb-child.pid"
@@ -565,8 +632,8 @@ class OwnershipLifecycleTest(unittest.TestCase):
 
     def test_broken_adb_is_explicit_collection_failure(self):
         adb = _fake_adb(self.root, broken=True)
-        self.assertEqual(0, self._start(adb, lifetime=0.4, command_timeout=0.5))
-        _wait_for_completion(self.monitor_output)
+        self.assertEqual(0, self._start(adb, lifetime=2, command_timeout=0.5))
+        self.assertTrue(_wait_for_file(self.monitor_output))
         self.assertEqual(2, self._stop())
         result = json.loads(self.result.read_text())
         self.assertEqual("collection_failure", result["status"])
