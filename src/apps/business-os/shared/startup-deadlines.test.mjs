@@ -59,6 +59,30 @@ test('the generation probe wiring propagates typed timeouts and cancels complete
   assert.match(appSource, /if \(shouldPropagateGenerationProbeError\(generationError, shellGenerationReloadGuard\.scheduled\)\) \{\s*throw generationError;/);
 });
 
+test('shell companions start before module launch and workspace restore', async () => {
+  const appSource = await readFile(new URL('../app.js', import.meta.url), 'utf8');
+  const moduleStart = appSource.indexOf('await openModule(explicitModule || workspaceSession?.activeModuleId');
+  const companionStart = appSource.lastIndexOf('scheduleBusinessCompanions();', moduleStart);
+  const restoreStart = appSource.indexOf('await restoreWorkspaceSession(workspaceSession', companionStart);
+
+  assert.ok(moduleStart >= 0, 'module launch must exist');
+  assert.ok(companionStart >= 0 && companionStart < moduleStart, 'companions must start before module launch');
+  assert.ok(restoreStart > companionStart, 'companions must start before workspace restore');
+  assert.equal(appSource.indexOf('scheduleBusinessCompanions();', restoreStart), -1);
+});
+
+test('fatal startup authorization cancels pending companion work', async () => {
+  const appSource = await readFile(new URL('../app.js', import.meta.url), 'utf8');
+  const authBranch = appSource.indexOf('if (isManagedCollectionAuthorizationError(error)) {\n      showStartupError(error);');
+  const startupError = appSource.indexOf('function showStartupError(error) {', authBranch);
+  const cancelPending = appSource.indexOf('cancelBusinessCompanions();', startupError);
+
+  assert.ok(authBranch >= 0, 'bootstrap must route managed authorization failures to the fatal startup error path');
+  assert.ok(startupError >= 0, 'fatal startup error handler must exist');
+  const errorHandler = appSource.indexOf("console.error('[business-os] bootstrap error caught:", startupError);
+  assert.ok(cancelPending > startupError && cancelPending < errorHandler, 'fatal startup errors must cancel pending companions before error rendering');
+});
+
 test('the deadline wins while the request or response body is pending', async () => {
   const timers = immediateTimers();
   let resolveBody;

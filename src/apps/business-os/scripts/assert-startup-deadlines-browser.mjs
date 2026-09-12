@@ -34,69 +34,142 @@ await new Promise((resolveListen, rejectListen) => {
   server.listen(0, '127.0.0.1', resolveListen);
 });
 
-const executablePath = [
-  process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE,
-  chromium.executablePath(),
-  '/Applications/Chromium.app/Contents/MacOS/Chromium',
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/usr/bin/google-chrome',
-  '/usr/bin/chromium',
-].find((candidate) => candidate && existsSync(candidate));
-const browser = await chromium.launch({ headless: true, executablePath });
-const context = await browser.newContext();
-let launchRequests = 0;
-await context.route('**/api/business-os/launch-context', async (route) => {
-  launchRequests += 1;
-  if (launchRequests === 1) {
-    // The shell deadline, accelerated for the fixture, must cancel this request.
-    return new Promise(() => {});
+function launchChromium() {
+  const executablePath = [
+    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE,
+    chromium.executablePath(),
+    '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+  ].find((candidate) => candidate && existsSync(candidate));
+  return chromium.launch({ headless: true, executablePath });
+}
+
+async function assertLaunchContextDeadline() {
+  const browser = await launchChromium();
+  const context = await browser.newContext();
+  let launchRequests = 0;
+
+  await context.route('**/api/business-os/launch-context', async (route) => {
+    launchRequests += 1;
+    if (launchRequests === 1) {
+      // The shell deadline, accelerated for the fixture, must cancel this request.
+      return new Promise(() => {});
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        session: { ok: true, authenticated: false, auth_required: true, reason: 'pairing_config_missing' },
+        config: null,
+        designTemplates: [],
+      }),
+    });
+  });
+  await context.addInitScript((productionDeadline) => {
+    const originalSetTimeout = globalThis.setTimeout.bind(globalThis);
+    globalThis.setTimeout = (callback, delay, ...args) => originalSetTimeout(
+      callback,
+      delay === productionDeadline ? 100 : delay,
+      ...args,
+    );
+  }, LAUNCH_CONTEXT_DEADLINE_MS);
+
+  try {
+    const page = await context.newPage();
+    const pageErrors = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    await page.goto(`http://127.0.0.1:${server.address().port}/business-os/index.html`);
+    await page.waitForSelector('#startup-error-card:not([hidden])', { state: 'visible' });
+
+    const failed = await page.evaluate(() => ({
+      title: document.querySelector('.friendly-error-title')?.textContent?.trim(),
+      details: document.getElementById('startup-error-msg')?.textContent?.trim(),
+      retryVisible: !document.getElementById('startup-retry-btn')?.closest('[hidden]'),
+      retryText: document.getElementById('startup-retry-btn')?.textContent?.trim(),
+    }));
+    assert.equal(failed.title, 'Netzwerk-Zeitüberschreitung beim Start');
+    assert.match(failed.details, /Business OS launch context timed out after 30 seconds/);
+    assert.equal(failed.retryVisible, true);
+    assert.match(failed.retryText, /Erneut versuchen/);
+
+    await page.click('#startup-retry-btn');
+    await page.waitForSelector('html[data-auth-state="locked"]');
+    // The unauthenticated/logout gate must not mount either companion.
+    const lockedCompanions = await page.evaluate(() => ({
+      reporter: Boolean(document.querySelector('[data-ctox-reporter]')),
+      chat: Boolean(document.querySelector('[data-ctox-chat-root]')),
+    }));
+    assert.deepEqual(lockedCompanions, { reporter: false, chat: false });
+    assert.ok(launchRequests >= 2, 'Retry must issue a new launch-context request');
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    await context.close();
+    await browser.close();
   }
-  await route.fulfill({
+}
+
+async function assertCompanionsStartDuringStalledModuleLaunch() {
+  const browser = await launchChromium();
+  const context = await browser.newContext();
+  let stalledModuleRequests = 0;
+
+  await context.route('**/api/business-os/launch-context', (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({
-      session: { ok: true, authenticated: false, auth_required: true, reason: 'pairing_config_missing' },
-      config: null,
+      session: {
+        ok: true,
+        authenticated: true,
+        auth_required: false,
+        source: 'fixture',
+        user: { id: 'fixture-user', display_name: 'Fixture User', role: 'admin' },
+        reason: null,
+      },
+      config: {
+        ok: true,
+        app_hosting: 'local',
+        sync_mode: 'p2p-first',
+        instance_id: 'startup-companions-fixture',
+        peer_id: 'browser-fixture',
+        peer_role: 'browser',
+        sync_room: 'ctox-business-os:startup-companions-fixture:fixture',
+        signaling_urls: ['ws://127.0.0.1:9/ctox-business-os'],
+        ice_servers: [],
+      },
       designTemplates: [],
     }),
+  }));
+  await context.route(/^http:\/\/127\.0\.0\.1:\d+\/api\/(?!business-os\/launch-context)/, (route) => route.abort());
+  await context.route(/^ws:\/\//, (route) => route.abort());
+  await context.route('**/modules/notes/index.js*', () => {
+    stalledModuleRequests += 1;
+    return new Promise(() => {});
   });
-});
-await context.addInitScript((productionDeadline) => {
-  const originalSetTimeout = globalThis.setTimeout.bind(globalThis);
-  globalThis.setTimeout = (callback, delay, ...args) => originalSetTimeout(
-    callback,
-    delay === productionDeadline ? 100 : delay,
-    ...args,
-  );
-}, LAUNCH_CONTEXT_DEADLINE_MS);
 
-try {
   const page = await context.newPage();
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
-  await page.goto(`http://127.0.0.1:${server.address().port}/business-os/index.html`);
-  await page.waitForSelector('#startup-error-card:not([hidden])', { state: 'visible' });
 
-  const failed = await page.evaluate(() => ({
-    title: document.querySelector('.friendly-error-title')?.textContent?.trim(),
-    details: document.getElementById('startup-error-msg')?.textContent?.trim(),
-    retryVisible: !document.getElementById('startup-retry-btn')?.closest('[hidden]'),
-    retryText: document.getElementById('startup-retry-btn')?.textContent?.trim(),
-  }));
-  assert.equal(failed.title, 'Netzwerk-Zeitüberschreitung beim Start');
-  assert.match(failed.details, /Business OS launch context timed out after 30 seconds/);
-  assert.equal(failed.retryVisible, true);
-  assert.match(failed.retryText, /Erneut versuchen/);
-
-  await page.click('#startup-retry-btn');
-  await page.waitForSelector('html[data-auth-state="locked"]');
-  assert.ok(launchRequests >= 2, 'Retry must issue a new launch-context request');
-  assert.deepEqual(pageErrors, []);
-} finally {
-  await browser.close();
-  await new Promise((resolveServer) => server.close(resolveServer));
+  try {
+    await page.goto(`http://127.0.0.1:${server.address().port}/business-os/index.html#notes`);
+    await page.waitForFunction(() => Boolean(
+      document.querySelector('[data-ctox-reporter]')
+      && document.querySelector('[data-ctox-chat-root]')
+    ), null, { timeout: 10_000 });
+    assert.ok(stalledModuleRequests >= 1, 'fixture must actually hold the selected module launch');
+    const companions = await page.evaluate(() => ({
+      reporter: Boolean(document.querySelector('[data-ctox-reporter]')),
+      chat: Boolean(document.querySelector('[data-ctox-chat-root]')),
+    }));
+    assert.deepEqual(companions, { reporter: true, chat: true });
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    await context.close();
+    await browser.close();
+  }
 }
-
 function contentType(path) {
   return ({
     '.css': 'text/css; charset=utf-8',
@@ -110,4 +183,11 @@ function contentType(path) {
 function send(response, status, body, type) {
   response.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
   response.end(body);
+}
+
+try {
+  await assertLaunchContextDeadline();
+  await assertCompanionsStartDuringStalledModuleLaunch();
+} finally {
+  await new Promise((resolveServer) => server.close(resolveServer));
 }
