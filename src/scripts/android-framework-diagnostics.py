@@ -579,8 +579,11 @@ class FrameworkMonitor:
                     reason = "collection_failure"
                     failure_reason = "child_cleanup_failure"
                 elif no_successful_measurements:
-                    reason = "collection_failure"
-                    failure_reason = "all_samples_unknown"
+                    if reason == "deadline":
+                        failure_reason = "no_successful_measurements"
+                    else:
+                        reason = "collection_failure"
+                        failure_reason = "all_samples_unknown"
         except OSError:
             failure_reason = "output_failure"
             reason = "collection_failure"
@@ -935,7 +938,8 @@ def _parse_monitor_output(path: Path) -> tuple[list[dict[str, Any]], dict[str, A
                     value.get("collection_failure_reason"),
                     {
                         "none", "sampling_failure", "output_bound", "output_failure",
-                        "no_samples", "all_samples_unknown", "child_cleanup_failure",
+                        "no_samples", "all_samples_unknown",
+                        "no_successful_measurements", "child_cleanup_failure",
                     },
                     "all_samples_unknown",
                 ),
