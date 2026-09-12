@@ -36,9 +36,21 @@ jobs:
         with:
           toolchain: '1.93.0'
           targets: x86_64-unknown-linux-gnu
+      - name: Resolve Cargo output directory
+        id: cargo-layout
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          metadata = json.loads(subprocess.check_output([
+              'cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'
+          ], text=True))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('target_relative_path=' + os.path.relpath(metadata['target_directory'], os.getcwd()) + '\n')
+          PY
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
         with:
-          key: native-integration-linux-x64-release
+          key: native-integration-linux-x64-release-metadata-v2
+          workspaces: . -> ${{ steps.cargo-layout.outputs.target_relative_path }}
           cache-on-failure: true
           cache-workspace-crates: true
       - name: Install native dependencies

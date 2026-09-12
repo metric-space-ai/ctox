@@ -107,9 +107,10 @@ def main():
         raise RuntimeError('Test execution does not prove every discovered case passed')
     run('native-build', ['cargo', 'build', '--locked', '--release', '--bin', 'ctox',
                          '--target', TARGET, '--jobs', '2'])
-    target_dir = Path(os.environ.get('CARGO_TARGET_DIR', 'target'))
-    if not target_dir.is_absolute():
-        target_dir = ROOT / target_dir
+    metadata = json.loads(capture(['cargo', 'metadata', '--locked', '--no-deps',
+                                   '--format-version', '1']))
+    target_dir = Path(metadata['target_directory'])
+    RECORD['cargo_target_directory'] = str(target_dir)
     binary = target_dir / TARGET / 'release/ctox'
     RECORD['binary_sha256'] = digest(binary)
     run('spawn-liveness', [str(binary), 'process-mining', 'spawn-liveness'])
