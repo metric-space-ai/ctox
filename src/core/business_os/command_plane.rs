@@ -282,8 +282,11 @@ mod crew_cockpit_tests;
 #[cfg(test)]
 #[path = "crew_identity_command_tests.rs"]
 mod crew_identity_tests;
+#[cfg(test)]
+#[path = "guest_command_tests.rs"]
+mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 94] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 96] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -315,6 +318,8 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 94] = [
     "ctox.command.cancel",
     "ctox.file.export",
     "ctox.file.materialize",
+    "ctox.guest.input",
+    "ctox.guest.observe",
     "ctox.mailserver.delete_domain",
     "ctox.mailserver.delete_user",
     "ctox.mailserver.get_config",
@@ -617,6 +622,24 @@ pub fn accept_rxdb_business_command_with_origin(
     document: Value,
     origin: CommandOrigin,
 ) -> anyhow::Result<Value> {
+    accept_rxdb_business_command_with_guest_runtime(
+        root,
+        document,
+        origin,
+        super::guest_commands::GuestRuntimeInjection::Unregistered,
+    )
+}
+
+/// Same intake as [`accept_rxdb_business_command_with_origin`], with an explicit
+/// guest owner/driver injection. The public wrappers pass `Unregistered`; a
+/// registered owner is only supplied by this internal boundary. There is no
+/// process-global registry.
+pub(super) fn accept_rxdb_business_command_with_guest_runtime(
+    root: &Path,
+    document: Value,
+    origin: CommandOrigin,
+    guest_runtime: super::guest_commands::GuestRuntimeInjection,
+) -> anyhow::Result<Value> {
     let command_id = document
         .get("command_id")
         .or_else(|| document.get("id"))
@@ -893,6 +916,7 @@ pub fn accept_rxdb_business_command_with_origin(
     }
 
     let mut prepared = PreparedBusinessCommand::from_command(&command)?;
+    prepared.guest_owner = guest_runtime;
     prepared.domain_effect_hash = domain_effect_hash;
     prepared.owns_new_control_claim = owns_new_control_claim;
     match CommandAuthorizationStage::for_command(&command) {
@@ -981,6 +1005,8 @@ enum CentralCommandPolicyRequirement {
     ThreadExternalApproval,
     WorkjetSessionDataRead,
     WorkjetSessionDataWrite,
+    GuestObserve,
+    GuestInput,
 }
 
 impl CentralCommandPolicyRequirement {
@@ -1087,6 +1113,10 @@ impl CentralCommandPolicyRequirement {
             return Some(Self::WorkjetSessionDataWrite);
         } else if command_type == "ctox.workjet.session.transfer.status" {
             return Some(Self::WorkjetSessionDataRead);
+        } else if command_type == "ctox.guest.observe" {
+            return Some(Self::GuestObserve);
+        } else if command_type == "ctox.guest.input" {
+            return Some(Self::GuestInput);
         } else if is_appsec_business_command(command_type) {
             let permission = if appsec_business_command_requires_data_write(command_type) {
                 BusinessOsPermission::DataWrite
@@ -1174,6 +1204,30 @@ impl CentralCommandPolicyRequirement {
                     scope,
                 ))
             }
+            Self::GuestObserve => {
+                super::guest_commands::require_authenticated_actor(session)?;
+                Ok(CommandPolicyRequirement::scoped(
+                    BusinessOsPermission::DataRead,
+                    BusinessOsScope {
+                        scope_type: BusinessOsScopeType::Record,
+                        scope_id: Some(super::guest_commands::guest_record_scope_id(command)),
+                        assigned_to_actor: false,
+                        owned_by_actor: false,
+                    },
+                ))
+            }
+            Self::GuestInput => {
+                super::guest_commands::require_authenticated_actor(session)?;
+                Ok(CommandPolicyRequirement::scoped(
+                    BusinessOsPermission::DataWrite,
+                    BusinessOsScope {
+                        scope_type: BusinessOsScopeType::Record,
+                        scope_id: Some(super::guest_commands::guest_record_scope_id(command)),
+                        assigned_to_actor: false,
+                        owned_by_actor: false,
+                    },
+                ))
+            }
             Self::ThreadExternalApproval => {
                 let approval_id = command
                     .payload
@@ -1219,6 +1273,7 @@ struct PreparedBusinessCommand {
     domain_effect_hash: Option<String>,
     owns_new_control_claim: bool,
     domain_effect_admission: Option<DomainEffectAdmission>,
+    guest_owner: super::guest_commands::GuestRuntimeInjection,
 }
 
 impl PreparedBusinessCommand {
@@ -1243,6 +1298,9 @@ impl PreparedBusinessCommand {
             }
             mutation.client_context = command.client_context.clone();
             prepared.report_mutation = Some(mutation);
+        }
+        if super::guest_commands::is_guest_command(&command.command_type) {
+            prepared.guest_owner = super::guest_commands::injection_from_runtime();
         }
         Ok(prepared)
     }
@@ -1561,6 +1619,21 @@ fn dispatch_business_command(
                 owner_email.as_deref(),
                 can_manage_all_records,
             ) {
+                Ok(outcome) => Ok(BusinessCommandDispatchOutcome::completed(outcome, None)),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
+                    None,
+                    serde_json::json!({
+                        "ok": false,
+                        "error": error.to_string(),
+                    }),
+                    error,
+                )),
+            }
+        }
+        "ctox.guest.observe" | "ctox.guest.input" => {
+            let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
+            super::guest_commands::require_authenticated_actor(session)?;
+            match super::guest_commands::execute_injected(&prepared.guest_owner, session, command) {
                 Ok(outcome) => Ok(BusinessCommandDispatchOutcome::completed(outcome, None)),
                 Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
                     None,
