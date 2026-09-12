@@ -114,6 +114,10 @@ async function assertCompanionsStartDuringStalledModuleLaunch() {
   const browser = await launchChromium();
   const context = await browser.newContext();
   let stalledModuleRequests = 0;
+  let resolveStalledModule;
+  const stalledModule = new Promise((resolveRequest) => {
+    resolveStalledModule = resolveRequest;
+  });
 
   await context.route('**/api/business-os/launch-context', (route) => route.fulfill({
     status: 200,
@@ -143,21 +147,40 @@ async function assertCompanionsStartDuringStalledModuleLaunch() {
   }));
   await context.route(/^http:\/\/127\.0\.0\.1:\d+\/api\/(?!business-os\/launch-context)/, (route) => route.abort());
   await context.route(/^ws:\/\//, (route) => route.abort());
-  await context.route('**/modules/notes/index.js*', () => {
+  await context.route('**/modules/notes/index.js*', (route) => {
+    // Catalog revision hashing fetches the same asset before module launch.
+    // Hold only its executable import so the fixture reaches that boundary.
+    if (route.request().resourceType() !== 'script') return route.continue();
     stalledModuleRequests += 1;
+    resolveStalledModule();
     return new Promise(() => {});
   });
 
   const page = await context.newPage();
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
+  const consoleErrors = [];
+  page.on('console', (message) => {
+    if (['error', 'warning'].includes(message.type()) && consoleErrors.length < 40) consoleErrors.push(message.text());
+  });
 
   try {
     await page.goto(`http://127.0.0.1:${server.address().port}/business-os/index.html#notes`);
-    await page.waitForFunction(() => Boolean(
-      document.querySelector('[data-ctox-reporter]')
-      && document.querySelector('[data-ctox-chat-root]')
-    ), null, { timeout: 10_000 });
+    let stalledModuleTimer;
+    try {
+      await Promise.all([
+        page.waitForFunction(() => Boolean(
+          document.querySelector('[data-ctox-reporter]')
+          && document.querySelector('[data-ctox-chat-root]')
+        ), null, { timeout: 10_000 }),
+        new Promise((resolveRequest, rejectRequest) => {
+          stalledModuleTimer = setTimeout(() => rejectRequest(new Error('Selected module import was not reached')), 10_000);
+          stalledModule.then(resolveRequest);
+        }),
+      ]);
+    } finally {
+      clearTimeout(stalledModuleTimer);
+    }
     assert.ok(stalledModuleRequests >= 1, 'fixture must actually hold the selected module launch');
     const companions = await page.evaluate(() => ({
       reporter: Boolean(document.querySelector('[data-ctox-reporter]')),
@@ -165,6 +188,17 @@ async function assertCompanionsStartDuringStalledModuleLaunch() {
     }));
     assert.deepEqual(companions, { reporter: true, chat: true });
     assert.deepEqual(pageErrors, []);
+  } catch (error) {
+    const state = await page.evaluate(() => ({
+      authState: document.documentElement.dataset.authState,
+      startupStatus: document.getElementById('startup-status-text')?.textContent,
+      resources: performance.getEntriesByType('resource').map((entry) => new URL(entry.name).pathname).filter((path) => /business-(chat|reporter)|notes|window-manager/.test(path)),
+      startupError: document.getElementById('startup-error-msg')?.textContent?.trim(),
+      reporter: Boolean(document.querySelector('[data-ctox-reporter]')),
+      chat: Boolean(document.querySelector('[data-ctox-chat-root]')),
+    }));
+    console.error(JSON.stringify({ stalledModuleRequests, pageErrors, consoleErrors, state }));
+    throw error;
   } finally {
     await context.close();
     await browser.close();
@@ -175,6 +209,7 @@ function contentType(path) {
     '.css': 'text/css; charset=utf-8',
     '.html': 'text/html; charset=utf-8',
     '.js': 'text/javascript; charset=utf-8',
+    '.mjs': 'text/javascript; charset=utf-8',
     '.json': 'application/json; charset=utf-8',
     '.svg': 'image/svg+xml',
   })[extname(path)] || 'application/octet-stream';
