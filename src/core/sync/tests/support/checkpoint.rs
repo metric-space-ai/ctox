@@ -2,8 +2,8 @@ use ctox_sync::{
     authority::{auth::SigningIdentity, ExecutionSpec, Ownership},
     checkpoint::CheckpointStore,
     contracts::{
-        ArtifactRef, CheckpointCopyReceipt, CheckpointManifest, SessionManifest, WorkspaceEntry,
-        WorkspaceEntryKind,
+        ArtifactRef, CheckpointCopyReceipt, CheckpointManifest, GitWorkspaceState, SessionManifest,
+        WorkspaceEntry, WorkspaceEntryKind,
     },
 };
 use sha2::{Digest, Sha256};
@@ -26,7 +26,7 @@ pub fn copy_receipt(
     };
     store.ingest_blob(&journal, Cursor::new(data)).unwrap();
     let manifest = CheckpointManifest {
-        version: 1,
+        version: 2,
         session: SessionManifest {
             version: 1,
             scope_id: spec.scope_id.clone(),
@@ -40,7 +40,13 @@ pub fn copy_receipt(
             credential_references: BTreeSet::new(),
         },
         sequence,
-        base_commit: None,
+        workspace_state: GitWorkspaceState {
+            base_commit: "a".repeat(40),
+            index_patch: journal.clone(),
+            worktree_patch: journal.clone(),
+            required_untracked: vec![],
+            deleted_paths: BTreeSet::new(),
+        },
         history: vec![journal.clone()],
         attachments: vec![],
         workspace: vec![],
