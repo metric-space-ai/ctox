@@ -792,7 +792,7 @@ pub(super) fn enqueue_gap_closure_if_needed(
     // Solange eine Nachrecherche eingereiht ist, LAEUFT die Recherche. Ohne
     // diese Zeile blieb der Lead auf `needs_review` stehen, waehrend der
     // Lueckenschluss-Worker arbeitete, und die Liste zeigte "Pruefung noetig"
-    // fuer einen laufenden Vorgang (thesen 09.09.2026, Hoffmann und AKEMI).
+    // fuer einen laufenden Vorgang.
     if let Some(mut lead) = store::load_rxdb_collection_record(root, LEAD_COLLECTION, record_id)? {
         lead["research_status"] = Value::String("running".to_string());
         lead["research_phase"] = Value::String("gap_closure".to_string());
@@ -1956,8 +1956,8 @@ fn validate_terminal_field(
 }
 
 /// Sellify, the customer's CRM, is the starting value of every field and one
-/// source (THESEN procedure, step 0; skill: "Sellify alone proves nothing, but
-/// counts as one source"). A CRM record has no web address, and every evidence
+/// source. It does not prove a value on its own. A CRM record has no web
+/// address, and every evidence
 /// check demanded HTTP(S), so no worker could cite it: a value held in Sellify
 /// and confirmed by Northdata ended as `no_match` (thesen, Sasol Germany,
 /// 11.09.2026: address, postcode, phone, WZ code, revenue, person e-mails).

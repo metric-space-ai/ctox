@@ -735,9 +735,31 @@ export function normalizeCommandClientContext({
   if (normalizedRecordType) context.record_type = normalizedRecordType;
   context.inbound_channel = cleanContextText(inboundChannel || context.inbound_channel || normalizedModule) || normalizedModule;
   context.dispatch_transport = 'rxdb-command-bus';
-  if (actor && !context.actor) {
-    context.actor = actor;
+  if (actor) {
+    if (!context.actor) {
+      context.actor = actor;
+    } else if (typeof context.actor === 'object') {
+      const existingId = actorIdentity(context.actor);
+      if (!existingId) {
+        context.actor = {
+          ...context.actor,
+          id: actor.id,
+          display_name: context.actor.display_name || actor.display_name,
+          role: context.actor.role || actor.role,
+          is_admin: context.actor.is_admin ?? actor.is_admin,
+        };
+      } else if (!cleanContextText(context.actor.id)) {
+        context.actor = { ...context.actor, id: existingId };
+      }
+    }
   }
+  const attributedOwner = firstNonPlaceholderIdentity(
+    context.owner_user_id,
+    typeof context.owner === 'string' ? context.owner : '',
+    context.actor,
+    actor,
+  );
+  if (attributedOwner) context.owner_user_id = attributedOwner;
   context.scope = normalizeCommandScope({
     context,
     payloadContext,
@@ -810,8 +832,24 @@ function normalizeCommandScope({
   return current;
 }
 
+function actorIdentity(actor) {
+  if (!actor) return '';
+  if (typeof actor !== 'object') return String(actor).trim();
+  return String(actor.id || actor.user_id || '').trim();
+}
+
+function firstNonPlaceholderIdentity(...candidates) {
+  for (const candidate of candidates) {
+    const value = typeof candidate === 'string' || candidate == null
+      ? cleanContextText(candidate)
+      : actorIdentity(candidate);
+    if (value && value !== 'local-dev') return value;
+  }
+  return '';
+}
+
 function resolveActorContext(command, session) {
-  if (command?.client_context?.actor) return null;
+  if (actorIdentity(command?.client_context?.actor)) return null;
   const currentSession = typeof session === 'function' ? session() : session;
   const user = currentSession?.user || {};
   const id = String(user.id || '').trim();
