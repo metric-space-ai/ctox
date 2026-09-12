@@ -363,10 +363,12 @@ async fn manager_thread_ids(client: &IsolatedClient) -> Vec<String> {
     ids
 }
 
-async fn run_named_persistent_thread_restart(scope: &mut ClientScope) {
-    let server = create_mock_responses_server_repeating_assistant(ASSISTANT_MARKER).await;
-    let codex_home = tempfile::TempDir::new().expect("tempdir");
-    let config = isolated_mock_config(codex_home.path(), &server.uri()).await;
+async fn run_named_persistent_thread_restart(
+    scope: &mut ClientScope,
+    codex_home: &tempfile::TempDir,
+    server_uri: &str,
+) {
+    let config = isolated_mock_config(codex_home.path(), server_uri).await;
 
     let created = {
         let id = scope.start(SessionSource::Exec, Arc::clone(&config)).await;
@@ -413,7 +415,7 @@ async fn run_named_persistent_thread_restart(scope: &mut ClientScope) {
                 "turn/start",
             )
             .await;
-        wait_for_turn_completed(&mut client, &thread_id).await;
+        wait_for_turn_completed(client, &thread_id).await;
         wait_for_session_index_name(codex_home.path()).await;
 
         let read: ThreadReadResponse = client
@@ -492,7 +494,7 @@ async fn run_named_persistent_thread_restart(scope: &mut ClientScope) {
         "rollout must survive manager shutdown"
     );
 
-    let restarted_config = isolated_mock_config(codex_home.path(), &server.uri()).await;
+    let restarted_config = isolated_mock_config(codex_home.path(), server_uri).await;
     let id = scope.start(SessionSource::Exec, restarted_config).await;
     let client = scope.get_mut(id);
     assert!(
@@ -608,14 +610,25 @@ async fn run_named_persistent_thread_restart(scope: &mut ClientScope) {
 
 #[tokio::test]
 async fn named_persistent_thread_survives_manager_restart_and_missing_resume_fails_closed() {
+    let server = timeout(
+        START_TIMEOUT,
+        create_mock_responses_server_repeating_assistant(ASSISTANT_MARKER),
+    )
+    .await
+    .expect("mock responses server start timed out");
+    let codex_home = tempfile::TempDir::new().expect("tempdir");
     let mut scope = ClientScope::default();
     let outcome = AssertUnwindSafe(timeout(
         FIXTURE_TIMEOUT,
-        run_named_persistent_thread_restart(&mut scope),
+        run_named_persistent_thread_restart(&mut scope, &codex_home, &server.uri()),
     ))
     .catch_unwind()
     .await;
     scope.shutdown_all().await;
+    // Keep the server and on-disk home alive until every client has stopped,
+    // including when the test body times out or panics.
+    drop(server);
+    drop(codex_home);
     match outcome {
         Ok(Ok(())) => {}
         Ok(Err(_)) => panic!("persistent-thread restart fixture timed out"),
