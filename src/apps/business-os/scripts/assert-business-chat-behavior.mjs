@@ -109,6 +109,9 @@ try {
           })),
         }));
         results.push({ scenario: 'crew-pool-day-arrow-geometry', crewMembers, collapsed, geometry });
+        if (crewMembers === 6) {
+          await page.screenshot({ path: path.join(outputDir, `business-chat-six-members-${collapsed ? 'collapsed' : 'expanded'}.png`) });
+        }
         expect(geometry.width < 360, `the empty dock must remain compact with ${crewMembers} members (collapsed=${collapsed}): ${JSON.stringify(geometry)}`);
       }
     });
