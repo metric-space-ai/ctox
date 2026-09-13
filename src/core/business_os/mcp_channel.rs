@@ -865,32 +865,68 @@ async fn connect_managed_gateway_async(
     root: &Path,
     options: BusinessOsMcpGatewayConnectOptions,
 ) -> anyhow::Result<()> {
+    run_managed_gateway_connector(
+        &options,
+        || connect_managed_gateway_once(root, &options),
+        |delay_ms| tokio::time::sleep(Duration::from_millis(delay_ms)),
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManagedGatewayConnectionExit {
+    MaxAgeReached,
+    StreamEnded,
+}
+
+// Keep the retry loop testable without sockets or wall-clock backoff waits.
+async fn run_managed_gateway_connector<Connect, Connection, Sleep, Delay>(
+    options: &BusinessOsMcpGatewayConnectOptions,
+    mut connect: Connect,
+    mut sleep: Sleep,
+) -> anyhow::Result<()>
+where
+    Connect: FnMut() -> Connection,
+    Connection: std::future::Future<Output = anyhow::Result<ManagedGatewayConnectionExit>>,
+    Sleep: FnMut(u64) -> Delay,
+    Delay: std::future::Future<Output = ()>,
+{
     let max_delay_ms = options
         .max_reconnect_delay_ms
         .max(250)
         .min(DEFAULT_GATEWAY_RECONNECT_MAX_DELAY_MS);
     let mut attempt = 0_u32;
     loop {
-        let result = connect_managed_gateway_once(root, &options).await;
+        let result = connect().await;
         if !options.reconnect {
-            return result;
+            return result.map(|_| ());
         }
-        if let Err(error) = &result {
-            eprintln!("[business-os-mcp] managed gateway disconnected: {error:#}");
-        } else {
-            eprintln!("[business-os-mcp] managed gateway disconnected");
+        match result {
+            Ok(ManagedGatewayConnectionExit::MaxAgeReached) => {
+                // A full connection lifetime is planned rotation, not another
+                // failure. Do not carry an old outage into this reconnect.
+                attempt = 0;
+                eprintln!("[business-os-mcp] managed gateway reached max age; rotating immediately");
+                continue;
+            }
+            Ok(ManagedGatewayConnectionExit::StreamEnded) => {
+                eprintln!("[business-os-mcp] managed gateway disconnected");
+            }
+            Err(error) => {
+                eprintln!("[business-os-mcp] managed gateway disconnected: {error:#}");
+            }
         }
         attempt = attempt.saturating_add(1);
         let delay_ms = reconnect_delay_ms(attempt, max_delay_ms);
         eprintln!("[business-os-mcp] reconnecting in {delay_ms}ms");
-        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+        sleep(delay_ms).await;
     }
 }
 
 async fn connect_managed_gateway_once(
     root: &Path,
     options: &BusinessOsMcpGatewayConnectOptions,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<ManagedGatewayConnectionExit> {
     install_rustls_crypto_provider();
     let mut request = options.url.as_str().into_client_request()?;
     if let Some(token) = options
@@ -948,7 +984,7 @@ async fn connect_managed_gateway_once(
                     .context("Business OS MCP gateway heartbeat failed")?;
             }
             _ = &mut reconnect_after => {
-                anyhow::bail!("Business OS MCP gateway connection reached max age of {max_connection_age_ms}ms");
+                return Ok(ManagedGatewayConnectionExit::MaxAgeReached);
             }
             message = read.next() => {
                 let Some(message) = message else {
@@ -966,8 +1002,12 @@ async fn connect_managed_gateway_once(
             }
         }
     }
-    Ok(())
+    Ok(ManagedGatewayConnectionExit::StreamEnded)
 }
+
+#[cfg(test)]
+#[path = "mcp_gateway_lifecycle_tests.rs"]
+mod gateway_lifecycle_tests;
 
 fn install_rustls_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
