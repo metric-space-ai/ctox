@@ -62,6 +62,7 @@
     "ctox.queue.retry",
     "ctox.runtime_settings.save",
     "ctox.secret.delete",
+    "ctox.secret.generate",
     "ctox.secret.list",
     "ctox.secret.put",
     "ctox.source.commit",
