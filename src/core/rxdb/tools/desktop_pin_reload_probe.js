@@ -5,7 +5,10 @@ const fs = require('node:fs');
 const { performance } = require('node:perf_hooks');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function capturePinRuntimeEvidence(page, error) {
-  return page.evaluate(async waitForError => {
+  const waitForError = String(error?.message || error);
+  const timeoutMs = 5000;
+  let diagnosticTimer = null;
+  const evaluate = page.evaluate(async waitForError => {
     const smoke = globalThis.ctoxBusinessOsSmoke;
     const state = smoke?.state;
     const syncDiagnostics = state?.syncDiagnostics?.collections?.desktop_layout || null;
@@ -28,10 +31,22 @@ async function capturePinRuntimeEvidence(page, error) {
       },
       desktopLayoutDiagnostics: syncDiagnostics,
     };
-  }, String(error?.message || error)).catch(diagnosticError => ({
+  }, waitForError).catch(diagnosticError => ({
     diagnosticError: String(diagnosticError?.message || diagnosticError),
-    waitForError: String(error?.message || error),
+    waitForError,
   }));
+  const timeout = new Promise((resolve) => {
+    diagnosticTimer = setTimeout(() => resolve({
+      diagnosticError: `diagnostic evaluate exceeded ${timeoutMs}ms`,
+      diagnosticTimeoutMs: timeoutMs,
+      waitForError,
+    }), timeoutMs);
+  });
+  try {
+    return await Promise.race([evaluate, timeout]);
+  } finally {
+    clearTimeout(diagnosticTimer);
+  }
 }
 async function openHeldPinContext({ browser, url, storageState, capturePinWrites = false }) {
   let held = true;
