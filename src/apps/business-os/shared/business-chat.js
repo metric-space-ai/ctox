@@ -8086,7 +8086,8 @@ ${CREW_CREATURE_BASE_CSS}
       grid-template-columns: max-content var(--ctox-date-pill-width) 26px minmax(0, min(350px, 36dvw)) 26px 36px;
     }
     .ctox-chat-fab {
-      display: inline-flex;
+      display: grid;
+      grid-template-columns: auto 1fr;
       align-items: center;
       gap: 6px;
       /* Reserve the full overlapping member row, including all six portraits. */
@@ -8126,6 +8127,14 @@ ${CREW_CREATURE_BASE_CSS}
     }
     .ctox-chat-fab-creatures.is-members .ctox-crew-creature {
       margin-left: 0;
+    }
+    /* Keep five/six full-size portraits within the four-member row width,
+       leaving both date controls and the reporter reservation their space. */
+    .ctox-chat-fab-creatures.is-members:has(.ctox-chat-crew-slot:nth-child(5)) {
+      padding-left: 16px;
+    }
+    .ctox-chat-fab-creatures.is-members:has(.ctox-chat-crew-slot:nth-child(5)) .ctox-chat-crew-slot {
+      margin-left: -16px;
     }
     /* A member at work on an app: small portrait in the corner of the window
        icon and on the desktop icon. Pure presence, no text. */
