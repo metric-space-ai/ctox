@@ -292,6 +292,8 @@ async function assertDelayedHarnessStatus(page) {
 async function assertStatusDuringTaskHydration(page) {
   await page.evaluate(async () => {
     const {state, hooks} = window.crewFixture;
+    state.detailDrawer = null;
+    document.getElementById("fixture-task-drawer")?.remove();
     let projection = {id:'harness',paused:false,worker_capacity:1,updated_at_ms:1};
     const listeners = new Set();
     const doc = value => ({toJSON: () => ({...value})});
