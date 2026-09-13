@@ -1455,7 +1455,12 @@ fn encrypt_secret_value(key_bytes: &[u8], plaintext: &[u8]) -> Result<EncryptedS
         .fill(&mut nonce_bytes)
         .map_err(|_| anyhow::anyhow!("failed to generate encryption nonce"))?;
     let nonce = aead::Nonce::assume_unique_for_key(nonce_bytes);
-    let mut buffer = Zeroizing::new(plaintext.to_vec());
+    // Reserve the tag before copying plaintext, so appending it cannot leave a
+    // deallocated, unzeroized plaintext allocation behind during Vec growth.
+    let mut buffer = Zeroizing::new(Vec::with_capacity(
+        plaintext.len() + aead::AES_256_GCM.tag_len(),
+    ));
+    buffer.extend_from_slice(plaintext);
     key.seal_in_place_append_tag(nonce, aead::Aad::empty(), &mut *buffer)
         .map_err(|_| anyhow::anyhow!("failed to encrypt secret value"))?;
     let ciphertext_b64 = BASE64_STANDARD.encode(buffer.as_slice());
