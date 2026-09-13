@@ -1,6 +1,8 @@
 // Origin: CTOX
 // License: Apache-2.0
 
+#[path = "store_credential_catalog.rs"]
+mod credential_catalog;
 #[path = "store_peer_revocations.rs"]
 mod peer_revocations;
 #[path = "store_security_projections.rs"]
@@ -13119,17 +13121,25 @@ pub fn fail_business_command_from_queue_error(
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CtoxSecretPutMutation {
     #[serde(default)]
     name: String,
     #[serde(default)]
     value: String,
+    scope: Option<String>,
+    id: Option<String>,
+    reference: Option<credential_catalog::CredentialReference>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CtoxSecretDeleteMutation {
     #[serde(default)]
     name: String,
+    scope: Option<String>,
+    id: Option<String>,
+    reference: Option<credential_catalog::CredentialReference>,
 }
 
 /// Validate a credential key is env-var shaped (UPPER_SNAKE_CASE). Keeps the
@@ -13154,46 +13164,7 @@ fn is_valid_credential_key(name: &str) -> bool {
 /// `list_secret_records` reads plaintext metadata columns only, and no secret
 /// value ever appears in the outcome.
 fn list_credentials_command(root: &Path) -> anyhow::Result<Value> {
-    let scope = crate::secrets::credential_scope();
-    let records = crate::secrets::list_secret_records(root, Some(scope))?;
-    let by_name: std::collections::BTreeMap<&str, &crate::secrets::SecretRecordView> = records
-        .iter()
-        .map(|record| (record.secret_name.as_str(), record))
-        .collect();
-    let catalog: Vec<Value> = crate::secrets::known_credential_keys()
-        .iter()
-        .map(|(name, description)| {
-            let record = by_name.get(*name);
-            serde_json::json!({
-                "name": name,
-                "description": description,
-                "is_set": record.is_some(),
-                "updated_at": record.map(|record| record.updated_at.clone()),
-            })
-        })
-        .collect();
-    let known: std::collections::BTreeSet<&str> = crate::secrets::known_credential_keys()
-        .iter()
-        .map(|(name, _)| *name)
-        .collect();
-    let extra: Vec<Value> = records
-        .iter()
-        .filter(|record| !known.contains(record.secret_name.as_str()))
-        .map(|record| {
-            serde_json::json!({
-                "name": record.secret_name,
-                "description": record.description,
-                "is_set": true,
-                "updated_at": record.updated_at,
-            })
-        })
-        .collect();
-    Ok(serde_json::json!({
-        "ok": true,
-        "scope": scope,
-        "catalog": catalog,
-        "extra": extra,
-    }))
+    credential_catalog::list(root)
 }
 
 /// Store/rotate a credential value in the encrypted secret store. The value is
@@ -13316,6 +13287,12 @@ fn take_secret_intake_value(command: &BusinessCommand) -> Option<String> {
 
 fn put_credential_command(root: &Path, mutation: &CtoxSecretPutMutation) -> anyhow::Result<Value> {
     let name = mutation.name.trim();
+    credential_catalog::validate_runtime_target(
+        name,
+        mutation.scope.as_deref(),
+        mutation.id.as_deref(),
+        mutation.reference.as_ref(),
+    )?;
     anyhow::ensure!(
         is_valid_credential_key(name),
         "invalid credential key: expected UPPER_SNAKE_CASE (A-Z, 0-9, _), max 64 chars"
@@ -13334,6 +13311,12 @@ fn delete_credential_command(
     mutation: &CtoxSecretDeleteMutation,
 ) -> anyhow::Result<Value> {
     let name = mutation.name.trim();
+    credential_catalog::validate_runtime_target(
+        name,
+        mutation.scope.as_deref(),
+        mutation.id.as_deref(),
+        mutation.reference.as_ref(),
+    )?;
     anyhow::ensure!(is_valid_credential_key(name), "invalid credential key");
     crate::secrets::delete_credential(root, name)?;
     Ok(serde_json::json!({ "ok": true, "name": name }))
