@@ -1178,7 +1178,9 @@ class CtoxWebRtcReplicationState {
     // the handshake for the same native peer session while a strict read is
     // awaiting its turn; that transport renewal must not manufacture
     // QUERY_CANCELLED: generation-replaced. If an older peer does not provide
-    // the full stable authority tuple, retain object-identity fencing.
+    // every required stable authority input (native session, storage
+    // generation, collection checkpoint and schema), retain conservative
+    // object-identity fencing.
     const remoteProtocol = negotiated.remoteProtocol || null;
     const peerSessionId = String(remoteProtocol?.peerSession?.sessionId || '').trim();
     const storageGeneration = String(remoteProtocol?.storageGeneration || '').trim();
@@ -1192,7 +1194,8 @@ class CtoxWebRtcReplicationState {
         || remoteProtocol?.collectionSchemas?.[this.collection?.name]?.schemaHash
         || '',
     ).trim();
-    const authority = peerSessionId && checkpointEpoch && schemaHash
+    const authority = peerSessionId && storageGeneration
+      && checkpointEpoch && schemaHash
       ? {
         peerSessionId,
         storageGeneration,

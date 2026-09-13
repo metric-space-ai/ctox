@@ -10248,7 +10248,7 @@ var CtoxWebRtcReplicationState = class {
     const schemaHash2 = String(
       collectionProtocol?.collection?.schemaHash || remoteProtocol?.collectionSchemas?.[this.collection?.name]?.schemaHash || ""
     ).trim();
-    const authority = peerSessionId && checkpointEpoch && schemaHash2 ? {
+    const authority = peerSessionId && storageGeneration && checkpointEpoch && schemaHash2 ? {
       peerSessionId,
       storageGeneration,
       checkpointEpoch,
