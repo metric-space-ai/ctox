@@ -134,7 +134,13 @@ def main():
     }
     if any(counts[key] != count for key, count in expected_counts.items()):
         raise RuntimeError(f'Required exact test counts differ: {counts}')
-    if counts['completed_empty_query'] + counts['invalid_empty_query_receipts'] < 4:
+    empty_cases = {
+        'completed_empty_query_persists_current_receipt_without_fabricated_or_old_records',
+        'invalid_empty_query_receipts_persist_failure_and_never_become_success',
+        'outbound_completed_empty_query_preserves_extraction_test_failure',
+        'outbound_completed_empty_query_rejects_missing_mismatched_and_tampered_evidence',
+    }
+    if not empty_cases.issubset({name.rsplit('::', 1)[-1] for name in names}):
         raise RuntimeError('Required completed-empty receipt cases are absent')
     guest_cases = {
         'opened_char_device_rdev_must_match_sysfs_dev',
