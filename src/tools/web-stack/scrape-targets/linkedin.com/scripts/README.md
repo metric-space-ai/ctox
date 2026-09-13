@@ -25,7 +25,16 @@ gender, guessed titles and administrative email addresses are not accepted.
 Only supported first/last-name, position and profile URL fields are emitted.
 
 `advanceCollection` requires injected `loadSecret`, `fetch`, `claimSubmission`
-and `saveState`. The production implementation must provide:
+and `saveState`. `brightdata-state.cjs` now supplies the latter two through an
+append-only POSIX operation journal: complete fsynced files are published with
+atomic no-replace hard links, followed by directory fsync. Revisions form a
+bounded contiguous hash chain; stale writers conflict rather than overwrite.
+State roots/revisions reject symlinks and inappropriate permissions. Only
+allowlisted state fields are persisted; no credentials or raw provider bodies.
+The runner still has to derive a real durable operation ID and trusted state
+root. The journal is not yet wired into native execution.
+
+The production implementation must provide:
 
 - Manifest-owned encrypted CTOX secret reference, resolved only in memory.
 - Atomically claimed, durable operation identity tied to the actual research
@@ -52,10 +61,12 @@ raw provider/CLI errors. Snapshot/query identity failures stop admission.
 
 ## Verification
 
-`node --test --test-concurrency=1 src/tools/web-stack/scrape-targets/tests/brightdata-core.test.mjs`
+`node --test --test-concurrency=1 src/tools/web-stack/scrape-targets/tests/brightdata-core.test.mjs src/tools/web-stack/scrape-targets/tests/brightdata-state.test.mjs`
 
-Ten deterministic tests pass. Network, credentials and state persistence are
-injected test doubles; this is not native durable-state or live-provider proof.
+Eighteen tests pass. Core tests inject network/credentials/persistence. State
+tests use actual files, reopen journals, race two bounded child processes and
+exit a child immediately after its durable claim. Mac tests require TMPDIR on
+/Volumes/tmp. These are not a native research-resume or live-provider proof.
 Remaining: native runner/Secret Store/state wiring, verified company discovery,
-registration and API entitlement, crash/restart tests, registry activation,
+registration and API entitlement, native crash/restart tests, registry activation,
 real DE/AT/CH research and reload acceptance. Keep the PR draft until completed.
