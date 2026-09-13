@@ -84,7 +84,15 @@ pub(super) trait GuestCommandOwner: Send + Sync {
     fn driver(&self, guest_id: &str) -> Result<&Self::Driver>;
     fn authorization(&self) -> &Self::Authorization;
     fn scope(&self, guest_id: &str) -> Result<GuestScope>;
-    fn caller(&self, session: &BusinessOsSession, scope: &GuestScope) -> Result<GuestCaller>;
+    /// Resolve the actual session/execution from native admission evidence for
+    /// this command. BusinessOsSession identifies a user, not a browser session
+    /// or worker execution. Payload/client_context identity claims are not proof.
+    fn caller(
+        &self,
+        session: &BusinessOsSession,
+        scope: &GuestScope,
+        command: &BusinessCommand,
+    ) -> Result<GuestCaller>;
 }
 
 pub(super) fn execute_injected(
@@ -108,6 +116,13 @@ pub(super) fn execute<O: GuestCommandOwner>(
     command: &BusinessCommand,
 ) -> Result<Value> {
     require_authenticated_actor(session)?;
+    validate_identifier(
+        command
+            .id
+            .as_deref()
+            .context("guest command is missing its admission identity")?,
+        "command_id",
+    )?;
     let request = parse_guest_command(command)?;
     dispatch_authorized(owner, session, command, request)
 }
@@ -121,7 +136,7 @@ fn dispatch_authorized<O: GuestCommandOwner>(
 ) -> Result<Value> {
     let scope = owner.scope(&request.guest_id)?;
     apply_scope_claims(&scope, command)?;
-    let caller = owner.caller(session, &scope)?;
+    let caller = owner.caller(session, &scope, command)?;
     let driver = owner.driver(&request.guest_id)?;
     let outcome = block_on_guest(dispatch_guest(
         driver,

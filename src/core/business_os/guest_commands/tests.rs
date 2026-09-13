@@ -195,7 +195,19 @@ impl GuestCommandOwner for Owner {
         Ok(scope())
     }
 
-    fn caller(&self, session: &BusinessOsSession, bound: &GuestScope) -> Result<GuestCaller> {
+    fn caller(
+        &self,
+        session: &BusinessOsSession,
+        bound: &GuestScope,
+        command: &BusinessCommand,
+    ) -> Result<GuestCaller> {
+        ensure!(
+            command
+                .id
+                .as_deref()
+                .is_some_and(|id| id.starts_with("cmd-")),
+            "unknown command admission"
+        );
         let user_id = session_user_id(session).context("missing session user")?;
         ensure!(
             user_id == self.bound_user_id && user_id == bound.user_id,
@@ -441,6 +453,18 @@ fn observe_and_input_rights_are_rechecked_and_revocation_blocks_publication() ->
     assert_eq!(revoked.state.captures.load(Ordering::SeqCst), 1);
     assert_eq!(revoked.state.published.load(Ordering::SeqCst), 0);
     Ok(())
+}
+
+#[test]
+fn registered_dispatch_requires_a_command_admission_identity() {
+    let owner = Owner::new(false);
+    for id in [None, Some(""), Some(" cmd-padded ")] {
+        let mut command = observe_command("cmd-valid", json!({"guest_id": "guest-a"}));
+        command.id = id.map(str::to_owned);
+        assert!(execute(&owner, &session_for("owner"), &command).is_err());
+    }
+    assert_eq!(owner.state.captures.load(Ordering::SeqCst), 0);
+    assert_eq!(owner.state.inputs.load(Ordering::SeqCst), 0);
 }
 
 #[test]
