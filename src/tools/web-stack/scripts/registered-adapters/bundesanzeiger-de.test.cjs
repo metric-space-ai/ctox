@@ -199,16 +199,13 @@ test("generated browser flow cannot reuse an old query response or a server erro
   assert.equal(adapter.isCompletedEmptyQuery(company, await simulateBrowser(company, { status: 503 })), false);
 });
 
-for (const update of ["delayed", "absent"]) {
-  test(`old result container plus AJAX200 with ${update} DOM update cannot emit completion`, async () => {
-    // The old container is already present. A current-query AJAX200 is not a
-    // document commit; neither a delayed nor an absent update may reuse it.
-    const value = await simulateBrowser(company, { navigation: false });
-    assert.deepEqual(value.entries, []);
-    assert.equal(value.results_page, false);
-    assert.equal(adapter.isCompletedEmptyQuery(company, value), false);
-  });
-}
+test("no current-document navigation cannot reuse an existing result container", async () => {
+  // One fail-closed guard scenario, not a measurement of real AJAX DOM timing.
+  const value = await simulateBrowser(company, { navigation: false });
+  assert.deepEqual(value.entries, []);
+  assert.equal(value.results_page, false);
+  assert.equal(adapter.isCompletedEmptyQuery(company, value), false);
+});
 
 test("CLI stdout contains only current receipt reference and empty records", (t) => {
   const f = fixture(t);
