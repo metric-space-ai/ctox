@@ -307,7 +307,14 @@ async function assertStatusDuringTaskHydration(page) {
       for (const release of releases.splice(0)) release([]);
     };
     state.ctx.db = {collection: name => name === 'ctox_harness_status' ? {
-      findOne: () => ({exec: async () => doc(projection)}),
+      findOne: () => ({exec: async () => {
+        const snapshot = doc(projection);
+        if (window.holdNextStatusRead) {
+          window.holdNextStatusRead = false;
+          return new Promise(resolve => { window.releaseOlderStatusRead = () => resolve(snapshot); });
+        }
+        return snapshot;
+      }}),
       $: {subscribe: listener => {listeners.add(listener); return {unsubscribe: () => listeners.delete(listener)};}},
     } : {
       findOne: () => ({exec: async () => null}),
@@ -329,9 +336,19 @@ async function assertStatusDuringTaskHydration(page) {
       for (const listener of listeners) listener({documentData:{...projection}});
     };
     window.stopHeldTaskStatus = hooks.wireLocalRealtime(state);
+    state.harnessStatus = null;
+    hooks.renderMain(state);
+    window.releaseOlderStatusRead = null;
+    window.holdNextStatusRead = true;
     await hooks.renderFromLocalCache(state);
+  });
+  assert.equal(await page.locator('[data-harness-pause]').count(), 0, 'initial task hydration can finish before status');
+  await page.evaluate(() => window.releaseOlderStatusRead());
+  await page.locator('[data-harness-pause]').waitFor({state:'attached'});
+  assert.equal(await page.locator('[data-harness-capacity]').inputValue(), '1');
+  await page.evaluate(() => {
     window.holdStatusTaskReads = true;
-    window.pendingTaskHydration = hooks.renderFromLocalCache(state);
+    window.pendingTaskHydration = window.crewFixture.hooks.renderFromLocalCache(window.crewFixture.state);
   });
   await page.waitForFunction(() => window.statusTaskReadsHeld > 0 && window.crewFixture.state.refreshInFlight);
   const menu = page.locator('[data-ctox-main] .ctox-more-actions > summary');
@@ -359,8 +376,37 @@ async function assertStatusDuringTaskHydration(page) {
   assert.equal(await harness.getAttribute('aria-label'), 'Die Crew bearbeitet die Aufgabenliste');
   assert.equal(await page.locator('.ctox-paused-note').isVisible(), false);
   assert.equal(await page.evaluate(() => window.crewFixture.state.refreshInFlight), true, 'task detail reads must still be pending');
+  // A superseded status read must not briefly apply its captured paused value.
+  await page.evaluate(() => {
+    window.observedStatusChanges = [];
+    window.statusObserver = new MutationObserver(() => window.observedStatusChanges.push(document.querySelector('[data-harness-pause]').getAttribute('aria-pressed')));
+    window.statusObserver.observe(document.querySelector('[data-harness-pause]'), {attributes:true,attributeFilter:['aria-pressed']});
+    window.releaseOlderStatusRead = null;
+    window.holdNextStatusRead = true;
+    window.publishHeldTaskStatus(true);
+  });
+  await page.waitForFunction(() => typeof window.releaseOlderStatusRead === 'function');
+  await page.evaluate(() => {window.publishHeldTaskStatus(false); window.releaseOlderStatusRead();});
+  await page.waitForFunction(() => !window.crewFixture.state.harnessStatusRead);
+  assert.equal(await page.evaluate(() => window.observedStatusChanges.includes('true')), false, 'superseded status read must never publish its stale value');
+  await page.evaluate(() => {window.statusObserver.disconnect(); window.publishHeldTaskStatus(true);});
+  await page.waitForFunction(() => document.querySelector('[data-harness-pause]')?.getAttribute('aria-pressed') === 'true');
+  // Mutation delivery occurs after the read loop returns, before its finalizer.
+  await page.evaluate(() => {
+    window.settlementEventDelivered = false;
+    const observer = new MutationObserver(() => {
+      observer.disconnect();
+      window.settlementEventDelivered = true;
+      window.publishHeldTaskStatus(true);
+    });
+    observer.observe(document.querySelector('[data-harness-pause]'), {attributes:true,attributeFilter:['aria-pressed']});
+    window.publishHeldTaskStatus(false);
+  });
+  await page.waitForFunction(() => window.settlementEventDelivered && !window.crewFixture.state.harnessStatusRead);
+  assert.equal(await button.getAttribute('aria-pressed'), 'true', 'status event at promise settlement must receive a follow-up read');
   await page.evaluate(async () => {window.releaseStatusTaskReads(); await window.pendingTaskHydration;});
-  assert.equal(await button.getAttribute('aria-pressed'), 'false', 'older general hydration must not restore paused status');
+  assert.equal(await button.getAttribute('aria-pressed'), 'true', 'general hydration started with false must not overwrite the newer true status');
+  assert.equal(await harness.getAttribute('aria-label'), 'Die Crew ist pausiert');
   await page.evaluate(() => window.stopHeldTaskStatus());
   results.push({scenario:'pause-resume-during-selected-task-hydration',passed:true});
 }

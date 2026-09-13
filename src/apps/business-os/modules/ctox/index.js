@@ -907,23 +907,23 @@ async function renderFromLocalCache(state) {
 // One load path. Every collection is a bounded RxDB read; there is no HTTP
 // fallback and no poll loop — subscriptions (wireLocalRealtime) call this.
 async function hydrateFromLocal(state) {
+  // Status must not wait for task lists or selected-task event queries.
+  refreshConfirmedHarnessStatus(state);
   // The two task sources fail loudly: a failed read must never look like an
   // idle harness (showDataError keeps the last good model). Secondary sources
   // degrade quietly.
-  const [commands, queueTasks, bugReports, webStack, blobFlow, crewMembers, harnessStatus, channelAccounts] = await Promise.all([
+  const [commands, queueTasks, bugReports, webStack, blobFlow, crewMembers, channelAccounts] = await Promise.all([
     loadLocalCommands(state.ctx),
     loadLocalQueueTasks(state.ctx),
     loadLocalBugReports(state.ctx).catch(() => []),
     loadLocalWebStackOverview(state.ctx).catch((error) => ({ ok: false, error: error.message || String(error) })),
     loadHarnessFlowSnapshot(state.ctx).catch(() => emptyHarnessFlow('harness_flow_unavailable')),
     loadLocalCrewMembers(state.ctx).catch(() => []),
-    loadLocalHarnessStatus(state.ctx).catch(() => null),
     loadLocalChannelAccounts(state.ctx).catch(() => null),
   ]);
   if (state.disposed) return;
   state.crewMembers = crewMembers;
   state.channelAccounts = channelAccounts;
-  state.harnessStatus = harnessStatus;
   armExpressionRefresh(state);
   state.webStack = {
     loading: false,
@@ -994,6 +994,7 @@ function wireLocalRealtime(state) {
       if (!collection?.$?.subscribe) return null;
       return collection.$.subscribe((change) => {
         if (selectedTaskOnly.has(collectionName) && !changeConcernsSelectedTask(state, change)) return;
+        if (collectionName === "ctox_harness_status") refreshConfirmedHarnessStatus(state);
         scheduleRender();
       }) || null;
     })
@@ -2438,12 +2439,7 @@ function renderMain(state) {
   main.querySelector('.ctox-history-fold')?.addEventListener('toggle', (event) => {
     state.historyOpen = event.currentTarget.open;
   });
-  main.querySelector('[data-harness-pause]')?.addEventListener('click', () => {
-    runHarnessControl(state, 'pause', !state.harnessStatus?.paused);
-  });
-  main.querySelector('[data-harness-capacity]')?.addEventListener('change', (event) => {
-    runHarnessControl(state, 'capacity', event.currentTarget.value);
-  });
+  wireHarnessControls(state, main);
   main.querySelector('[data-webstack-toggle]')?.addEventListener('click', () => {
     if (state.detailDrawer?.type === 'webstack') {
       closeDetailDrawer(state);
@@ -4762,6 +4758,39 @@ function crewMemberById(state, memberId) {
   return (state?.crewMembers || []).find((member) => member.id === memberId) || null;
 }
 
+// One independent, coalesced read lane. Events arriving during a read invalidate
+// its result and request one follow-up; task hydration never assigns status.
+function refreshConfirmedHarnessStatus(state) {
+  if (state.disposed) return Promise.resolve();
+  state.harnessStatusRequest = (state.harnessStatusRequest || 0) + 1;
+  if (state.harnessStatusRead) return state.harnessStatusRead;
+  let request;
+  state.harnessStatusRead = (async () => {
+    do {
+      request = state.harnessStatusRequest;
+      try {
+        const status = await loadLocalHarnessStatus(state.ctx);
+        if (state.disposed) return;
+        if (request !== state.harnessStatusRequest) continue;
+        if (status) {
+          state.harnessStatus = status;
+          state.harnessHealth = deriveHarnessHealth(state);
+          syncHarnessControlStatus(state);
+          syncHarnessHealthUiState(state);
+        }
+      } catch (error) {
+        if (!state.disposed) console.warn('[ctox] harness status read failed', error);
+      }
+    } while (!state.disposed && request !== state.harnessStatusRequest);
+  })().finally(() => {
+    state.harnessStatusRead = null;
+    // A subscriber may have queued work after the loop settled but before this
+    // finalizer. Serve that request too; no retry exists without a new request.
+    if (!state.disposed && request !== state.harnessStatusRequest) return refreshConfirmedHarnessStatus(state);
+  });
+  return state.harnessStatusRead;
+}
+
 async function loadLocalHarnessStatus(ctx) {
   const collection = ctoxCollection(ctx, 'ctox_harness_status');
   if (!collection) return null;
@@ -5943,6 +5972,16 @@ function syncHarnessControlStatus(state) {
   if (!main || !state.harnessStatus) return;
   const paused = state.harnessStatus.paused === true;
   const t = labels[state.lang];
+  if (!main.querySelector('[data-harness-pause]') && mayManageWorkspace(state)) {
+    const menu = main.querySelector('.ctox-more-actions-body');
+    if (menu) {
+      menu.insertAdjacentHTML('afterbegin', harnessControlsMarkup(state));
+      wireHarnessControls(state, main);
+    }
+  }
+  const capacity = main.querySelector('[data-harness-capacity]');
+  if (capacity && document.activeElement !== capacity) capacity.value = String(Number(state.harnessStatus.worker_capacity) || 1);
+  else if (capacity) state.mainRenderPending = true;
   const button = main.querySelector('[data-harness-pause]');
   if (button) {
     button.textContent = paused ? t.resumeHarness : t.pauseHarness;
@@ -5954,6 +5993,15 @@ function syncHarnessControlStatus(state) {
     note.textContent = t.harnessPaused;
     note.hidden = !paused;
   }
+}
+
+function wireHarnessControls(state, main) {
+  main.querySelector('[data-harness-pause]')?.addEventListener('click', () => {
+    runHarnessControl(state, 'pause', !state.harnessStatus?.paused);
+  });
+  main.querySelector('[data-harness-capacity]')?.addEventListener('change', (event) => {
+    runHarnessControl(state, 'capacity', event.currentTarget.value);
+  });
 }
 
 function harnessControlsMarkup(state) {
