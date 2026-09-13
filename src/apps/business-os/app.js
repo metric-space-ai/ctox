@@ -1,15 +1,15 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
-import { CtoxResizer } from './shared/resizer.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
-import { createAppActions } from './shared/app-actions.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+import { CtoxResizer } from './shared/resizer.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+import { createAppActions } from './shared/app-actions.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
+} from './shared/app-lifecycle.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -17,20 +17,20 @@ import {
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
+} from './shared/permissions.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
+} from './shared/branding.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
+} from './shared/presentation.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -41,9 +41,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
-import { createDocumentsFacade } from './shared/documents.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
+} from './shared/shell-permissions-ui.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+import { createDocumentsFacade } from './shared/documents.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -51,16 +51,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
+} from './shared/maintenance-state.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
+} from './shared/workspace-session.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
+} from './shared/taskbar-pins.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -68,9 +68,9 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -78,8 +78,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20260913-shell-v2-sync-diagnostics-menu-v376';
+} from './shared/startup-deadlines.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -90,11 +90,15 @@ const RXDB_BOOTSTRAP_VERSION_KEY = 'ctox.businessOs.rxdbBootstrapVersion';
 const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
+const TASKBAR_PIN_HYDRATION_TIMEOUT_MS = 20_000;
+const TASKBAR_PIN_HYDRATION_RETRY_BASE_MS = 500;
+const TASKBAR_PIN_HYDRATION_RETRY_WINDOW_MS = 60_000;
+const TASKBAR_PIN_HYDRATION_ATTEMPT_DIAGNOSTICS_MAX = 8;
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260913-shell-v2-sync-diagnostics-menu-v376';
+const APP_BUILD = '20260913-shell-v2-authoritative-pin-retry-v384';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -239,6 +243,11 @@ function assertCriticalSyncCollectionsMatchBundle(rxdb) {
 }
 let moduleLayoutSaveTimer = null;
 let taskbarPinSaveTimer = null;
+let taskbarPinHydrationRetryTimer = null;
+let taskbarPinHydrationRetryCount = 0;
+let taskbarPinHydrationRetryStartedAtMs = 0;
+let taskbarPinHydrationGeneration = 0;
+let taskbarPinHydrationAttemptSequence = 0;
 let workspaceSessionSaveTimer = null;
 let desktopOpenIconObserver = null;
 let desktopOpenIconObserverTarget = null;
@@ -314,6 +323,11 @@ const state = {
   governance: null,
   moduleLayout: null,
   taskbarPins: [],
+  taskbarPinHydrationRetryCount: 0,
+  taskbarPinHydrationRetryStartedAtMs: 0,
+  taskbarPinHydrationLastError: null,
+  taskbarPinHydrationAttempts: [],
+  taskbarPinsKnown: false,
   taskbarPinsUpdatedAtMs: 0,
   schemaRegistrations: new Map(),
   schemaRegistrationQueue: Promise.resolve(),
@@ -696,6 +710,7 @@ if (new URLSearchParams(window.location.search).has('rxdbSmoke')) {
     createModuleContext,
     createModulePermissionFacade,
     storageKeys: businessOsStorageKeys,
+    appBuild: APP_BUILD,
     renderTabs,
     listLaunchTargets,
     openAppLifecycleDrawer,
@@ -1348,7 +1363,9 @@ async function bootstrap() {
   }
   state.governance = modules.governance || null;
   state.moduleLayout = normalizeModuleLayout(await loadModuleLayout(), state.modules);
-  state.taskbarPins = normalizeTaskbarPins(readTaskbarPins(), state.modules);
+  state.taskbarPins = normalizeTaskbarPins(readTaskbarPins(), state.modules, {
+    preserveKnownEmpty: state.taskbarPinsKnown === true,
+  });
   persistModuleLayout();
   renderTabs();
   const shellUi = await loadShellUiModules();
@@ -1556,6 +1573,11 @@ async function openBusinessDataPlane(syncConfig) {
   try {
     state.syncConfig = syncConfig;
     const dbName = businessDbName(syncConfig);
+    // Pending edits and known-empty state are scoped to the database/session
+    // identity now opening. Never let a replacement race inherit them.
+    state.taskbarPins = [];
+    state.taskbarPinsKnown = false;
+    state.taskbarPinsUpdatedAtMs = 0;
 
     await openBusinessDbAndRegisterCoreCollections(dbName);
 
@@ -1619,9 +1641,24 @@ async function openBusinessDataPlane(syncConfig) {
     });
     // Reconcile only after transport registration. An unresolved native read
     // must not become an empty layout or a fresh local write during startup.
-    void hydrateTaskbarPinsFromDesktopLayout().then(() => renderTabs()).catch((error) => {
-      console.warn('[business-os] taskbar pin hydration failed:', error);
-    });
+    // A replaced peer generation is a transport boundary, not authoritative
+    // absence; retry the same strict read briefly so late signaling converges.
+    clearTaskbarPinHydrationRetry({ resetAttempts: true });
+    const pinHydrationGeneration = taskbarPinHydrationGeneration;
+    void hydrateTaskbarPinsFromDesktopLayout(pinHydrationGeneration)
+      .then(() => {
+        if (taskbarPinHydrationGeneration === pinHydrationGeneration) renderTabs();
+      })
+      .catch((error) => {
+        if (taskbarPinHydrationGeneration !== pinHydrationGeneration) return;
+        state.taskbarPinHydrationLastError = String(error?.message || error);
+        console.warn('[business-os] taskbar pin hydration failed:', error);
+      })
+      .finally(() => {
+        if (taskbarPinHydrationGeneration === pinHydrationGeneration) {
+          scheduleTaskbarPinHydrationRetry();
+        }
+      });
     startShellCtoxHealthMonitor();
     startWorkspaceBrandingMonitor();
 
@@ -5313,7 +5350,9 @@ function renderTabs() {
   const fragment = document.createDocumentFragment();
   const tabsTarget = { append: (node) => fragment.append(node) };
   state.moduleLayout = normalizeModuleLayout(state.moduleLayout || readModuleLayout(), state.modules);
-  state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules);
+  state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules, {
+    preserveKnownEmpty: state.taskbarPinsKnown === true,
+  });
   const rendered = new Set();
   for (const id of state.taskbarPins) {
     const target = launchTargetForId(id);
@@ -5634,7 +5673,10 @@ function toggleTaskbarPin(targetId, shouldPin = !isTaskbarPinned(targetId)) {
   if (!launchTargetForId(targetId)) return;
   const pins = state.taskbarPins.filter((id) => id !== targetId);
   if (shouldPin) pins.push(targetId);
-  state.taskbarPins = normalizeTaskbarPins(pins, state.modules);
+  state.taskbarPins = normalizeTaskbarPins(pins, state.modules, {
+    preserveKnownEmpty: true,
+  });
+  state.taskbarPinsKnown = true;
   persistTaskbarPins();
   renderTabs();
 }
@@ -5645,7 +5687,10 @@ function moveTaskbarPinBefore(targetId, beforeTargetId) {
   const index = pins.indexOf(beforeTargetId);
   if (index >= 0) pins.splice(index, 0, targetId);
   else pins.push(targetId);
-  state.taskbarPins = normalizeTaskbarPins(pins, state.modules);
+  state.taskbarPins = normalizeTaskbarPins(pins, state.modules, {
+    preserveKnownEmpty: true,
+  });
+  state.taskbarPinsKnown = true;
   persistTaskbarPins();
   renderTabs();
 }
@@ -5659,10 +5704,14 @@ function draggedTaskbarPinId(event) {
 function readTaskbarPins() {
   const cached = decodeTaskbarPinCache(readScopedLocalStorage(TASKBAR_PINS_KEY));
   state.taskbarPinsUpdatedAtMs = cached.updatedAtMs;
-  return cached.pins.length ? cached.pins : null;
+  // A valid cache exists even when its selection is deliberately empty.
+  // Missing or malformed storage is unknown, not native/native-empty.
+  state.taskbarPinsKnown = cached.present === true;
+  return cached.pins;
 }
 
 function persistTaskbarPins() {
+  state.taskbarPinsKnown = true;
   state.taskbarPinsUpdatedAtMs = Date.now();
   writeScopedLocalStorage(
     TASKBAR_PINS_KEY,
@@ -5684,7 +5733,10 @@ function normalizeTaskbarPins(rawPins, modules, options = {}) {
     .map((id) => String(id || '').trim())
     .filter((id, index, arr) => id && valid.has(id) && arr.indexOf(id) === index);
   if (options.compactLegacyAllPins && looksLikeLegacyAllPins(pins, valid)) pins = [];
-  if (!pins.length) {
+  // Preserve only an explicitly supplied empty selection. Do not turn a
+  // non-empty native list whose ids are currently invalid into a user choice.
+  const suppliedEmpty = Array.isArray(rawPins) && rawPins.length === 0;
+  if (!pins.length && !(options.preserveKnownEmpty && suppliedEmpty)) {
     pins = DEFAULT_TASKBAR_PIN_IDS.filter((id) => valid.has(id));
     if (!pins.length) pins = listLaunchTargets('module').slice(0, 4).map((target) => target.id);
   }
@@ -5697,34 +5749,207 @@ function looksLikeLegacyAllPins(pins, valid) {
   return coverage >= 0.75;
 }
 
-async function hydrateTaskbarPinsFromDesktopLayout() {
-  const database = state.db;
-  const collection = database?.collection?.('desktop_layout');
-  if (!collection) {
-    state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules);
+function clearTaskbarPinHydrationRetry({ resetAttempts = false } = {}) {
+  if (taskbarPinHydrationRetryTimer) {
+    window.clearTimeout(taskbarPinHydrationRetryTimer);
+    taskbarPinHydrationRetryTimer = null;
+  }
+  if (resetAttempts) {
+    // Fence in-flight authority reads as well as their timers. A late
+    // settlement belongs to the replaced startup/reconnect session.
+    taskbarPinHydrationGeneration += 1;
+    taskbarPinHydrationRetryCount = 0;
+    taskbarPinHydrationRetryStartedAtMs = 0;
+    state.taskbarPinHydrationRetryCount = 0;
+    state.taskbarPinHydrationRetryStartedAtMs = 0;
+    state.taskbarPinHydrationLastError = null;
+    state.taskbarPinHydrationAttempts = [];
+  }
+}
+
+function scheduleTaskbarPinHydrationRetry({ now = Date.now } = {}) {
+  if (!state.sync?.readCollectionNativeDocument || state.taskbarPinsKnown === true) return;
+  if (taskbarPinHydrationRetryCount === 0) {
+    taskbarPinHydrationRetryStartedAtMs = now();
+    state.taskbarPinHydrationRetryStartedAtMs = taskbarPinHydrationRetryStartedAtMs;
+  } else if (
+    now() - taskbarPinHydrationRetryStartedAtMs
+      >= TASKBAR_PIN_HYDRATION_RETRY_WINDOW_MS
+  ) {
     return;
   }
-  const doc = await collection.findOne('layout').exec();
-  if (state.db !== database) return; // Do not apply a late read to another session.
-  const layout = doc?.toJSON?.() || null;
-  const local = decodeTaskbarPinCache(readScopedLocalStorage(TASKBAR_PINS_KEY));
+  if (taskbarPinHydrationRetryTimer) return;
+  const attempt = taskbarPinHydrationRetryCount + 1;
+  const generation = taskbarPinHydrationGeneration;
+  taskbarPinHydrationRetryTimer = window.setTimeout(() => {
+    // Check both fences when the timer actually runs. A busy tab can deliver
+    // the callback after the retry window has already elapsed.
+    if (taskbarPinHydrationGeneration !== generation) return;
+    taskbarPinHydrationRetryTimer = null;
+    if (now() - taskbarPinHydrationRetryStartedAtMs
+      >= TASKBAR_PIN_HYDRATION_RETRY_WINDOW_MS) return;
+    taskbarPinHydrationRetryCount = attempt;
+    state.taskbarPinHydrationRetryCount = attempt;
+    state.taskbarPinHydrationLastError = null;
+    void hydrateTaskbarPinsFromDesktopLayout(generation)
+      .then(() => {
+        if (taskbarPinHydrationGeneration === generation) renderTabs();
+      })
+      .catch((error) => {
+        if (taskbarPinHydrationGeneration !== generation) return;
+        state.taskbarPinHydrationLastError = String(error?.message || error);
+        console.warn('[business-os] taskbar pin hydration retry failed:', error);
+      })
+      .finally(() => {
+        if (taskbarPinHydrationGeneration === generation) {
+          scheduleTaskbarPinHydrationRetry({ now });
+        }
+      });
+  }, Math.min(5000, TASKBAR_PIN_HYDRATION_RETRY_BASE_MS * attempt));
+}
+
+async function hydrateTaskbarPinsFromDesktopLayout(
+  hydrationGeneration = taskbarPinHydrationGeneration,
+  { now = Date.now } = {},
+) {
+  const database = state.db;
+  const sync = state.sync;
+  const storageKey = scopedStorageKey(TASKBAR_PINS_KEY);
+  if (!sync?.readCollectionNativeDocument || !database) {
+    state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules, {
+      preserveKnownEmpty: state.taskbarPinsKnown === true,
+    });
+    return;
+  }
+
+  // Keep the last few actual native-read boundaries. This is intentionally
+  // separate from retry bookkeeping: a swallowed rejection must remain visible
+  // as a failed strict read, while a stale result is recorded as discarded.
+  const attemptId = ++taskbarPinHydrationAttemptSequence;
+  const attempt = {
+    schema: 'ctox.taskbarPinHydrationAttempt.v1',
+    id: attemptId,
+    generation: hydrationGeneration,
+    timeoutMs: TASKBAR_PIN_HYDRATION_TIMEOUT_MS,
+    outcome: 'pending',
+    startedAtMs: now(),
+  };
+  if (taskbarPinHydrationGeneration === hydrationGeneration) {
+    state.taskbarPinHydrationAttempts = [
+      ...(Array.isArray(state.taskbarPinHydrationAttempts)
+        ? state.taskbarPinHydrationAttempts
+        : []),
+      attempt,
+    ].slice(-TASKBAR_PIN_HYDRATION_ATTEMPT_DIAGNOSTICS_MAX);
+  }
+  const finishAttempt = (outcome, details = {}, endedAtMs = now()) => {
+    if (taskbarPinHydrationGeneration !== hydrationGeneration) return;
+    const attempts = Array.isArray(state.taskbarPinHydrationAttempts)
+      ? state.taskbarPinHydrationAttempts
+      : [];
+    const index = attempts.findIndex((entry) => entry?.id === attemptId);
+    if (index < 0) return;
+    attempts[index] = {
+      ...attempts[index],
+      ...details,
+      outcome,
+      endedAtMs,
+      durationMs: Math.max(0, endedAtMs - attempts[index].startedAtMs),
+    };
+  };
+
+  // The native wrapper owns collection lifecycle, query readiness and an
+  // opaque authority token. It rejects pending, stale and cancelled reads;
+  // it never translates them into a completed empty answer.
+  let authoritativeDocument;
+  let nativeEndedAtMs;
+  try {
+    authoritativeDocument = await sync.readCollectionNativeDocument('desktop_layout', 'layout', {
+      timeoutMs: TASKBAR_PIN_HYDRATION_TIMEOUT_MS,
+    });
+    nativeEndedAtMs = now();
+  } catch (error) {
+    nativeEndedAtMs = now();
+    finishAttempt('rejected', {
+      failureReason: String(error?.code || error?.name || 'unknown').slice(0, 80),
+      failureMessage: String(error?.message || error).slice(0, 240),
+    }, nativeEndedAtMs);
+    throw error;
+  }
+  const identity = {
+    generationStale: taskbarPinHydrationGeneration !== hydrationGeneration,
+    databaseStale: state.db !== database,
+    syncStale: state.sync !== sync,
+    storageKeyStale: scopedStorageKey(TASKBAR_PINS_KEY) !== storageKey,
+  };
+  if (identity.generationStale || identity.databaseStale || identity.syncStale
+    || identity.storageKeyStale) {
+    finishAttempt('stale_discarded', { ...identity }, nativeEndedAtMs);
+    return;
+  }
+
+  state.taskbarPinsKnown = true;
+  const layout = authoritativeDocument?.toJSON?.() || null;
+  const cache = decodeTaskbarPinCache(readScopedLocalStorage(TASKBAR_PINS_KEY));
+  const cachePresent = cache.present === true;
+  const pendingLocal = state.taskbarPinsKnown
+    && Number(state.taskbarPinsUpdatedAtMs || 0) > Number(cache.updatedAtMs || 0);
+  const localPins = pendingLocal ? state.taskbarPins : cache.pins;
+  const localUpdatedAtMs = pendingLocal
+    ? Number(state.taskbarPinsUpdatedAtMs || 0)
+    : Number(cache.updatedAtMs || 0);
+  const localPresent = cachePresent || pendingLocal;
   const resolved = resolveTaskbarPinState({
-    localPins: local.pins,
-    localUpdatedAtMs: local.updatedAtMs,
+    localPins,
+    localUpdatedAtMs,
+    localPresent,
     remotePins: layout?.taskbar_pins,
     remoteUpdatedAtMs: layout?.updated_at_ms,
   });
-  state.taskbarPins = state.modules.length
-    ? normalizeTaskbarPins(resolved.pins, state.modules, {
-        compactLegacyAllPins: resolved.source === 'remote',
-      })
+  const reconciledPins = resolved.source === 'local' && !localPresent
+    ? state.taskbarPins
     : resolved.pins;
-  state.taskbarPinsUpdatedAtMs = resolved.updatedAtMs || Date.now();
-  writeScopedLocalStorage(
-    TASKBAR_PINS_KEY,
-    encodeTaskbarPinCache(state.taskbarPins, state.taskbarPinsUpdatedAtMs),
-  );
-  await syncTaskbarPinsToDesktopLayout();
+  state.taskbarPins = state.modules.length
+    ? normalizeTaskbarPins(reconciledPins, state.modules, {
+      compactLegacyAllPins: resolved.source === 'remote',
+      preserveKnownEmpty: true,
+    })
+    : reconciledPins;
+  // Confirmed absence is not a user edit. Preserve zero rather than inventing
+  // an initialization timestamp; remote and real pending values retain theirs.
+  state.taskbarPinsUpdatedAtMs = Number(resolved.updatedAtMs || 0);
+  finishAttempt('adopted', {
+    resultPresent: authoritativeDocument !== null,
+    remoteDocumentPresent: layout !== null,
+    remoteUpdatedAtMs: Number(layout?.updated_at_ms || 0),
+    remotePinCount: Array.isArray(layout?.taskbar_pins)
+      ? layout.taskbar_pins.length
+      : null,
+    resolvedSource: resolved.source,
+    knownAfterRead: state.taskbarPinsKnown === true,
+    adoptedPinCount: state.taskbarPins.length,
+    adoptedUpdatedAtMs: state.taskbarPinsUpdatedAtMs,
+  }, nativeEndedAtMs);
+  if (resolved.source === 'remote' || localUpdatedAtMs > 0) {
+    try {
+      writeScopedLocalStorage(
+        TASKBAR_PINS_KEY,
+        encodeTaskbarPinCache(state.taskbarPins, state.taskbarPinsUpdatedAtMs),
+      );
+    } catch (error) {
+      // The pending in-memory edit remains eligible for authoritative
+      // write-back even when private mode or quota blocks the cache.
+      console.warn('[business-os] taskbar pin cache write failed:', error);
+    }
+  }
+  renderTabs();
+  // Only a real, strictly newer local selection may write back. The existing
+  // authoritative handle avoids a second ordinary/local query.
+  const shouldWriteBack = resolved.source === 'local'
+    && localUpdatedAtMs > Number(layout?.updated_at_ms || 0);
+  if (shouldWriteBack && authoritativeDocument) {
+    await syncTaskbarPinsToDesktopLayout({ authoritativeDocument });
+  }
 }
 
 async function withStartupTimeout(promise, timeoutMs, fallback, label) {
@@ -5744,19 +5969,44 @@ async function withStartupTimeout(promise, timeoutMs, fallback, label) {
   }
 }
 
-async function syncTaskbarPinsToDesktopLayout() {
+async function syncTaskbarPinsToDesktopLayout(options = {}) {
   const database = state.db;
+  const sync = state.sync;
+  const storageKey = scopedStorageKey(TASKBAR_PINS_KEY);
+  if (!database) return;
+  let existing = options.authoritativeDocument || null;
+  if (!existing) {
+    if (!sync?.readCollectionNativeDocument) return;
+    try {
+      existing = await sync.readCollectionNativeDocument('desktop_layout', 'layout', {
+        timeoutMs: TASKBAR_PIN_HYDRATION_TIMEOUT_MS,
+      });
+    } catch (error) {
+      // Keep the in-memory pending edit. Storage/cache remains best effort.
+      console.warn('[business-os] taskbar pin write-back read failed:', error);
+      return;
+    }
+  }
+  if (state.db !== database || state.sync !== sync
+    || scopedStorageKey(TASKBAR_PINS_KEY) !== storageKey) {
+    return;
+  }
   const collection = database?.collection?.('desktop_layout');
   if (!collection) return;
-  const existing = await collection.findOne('layout').exec();
-  if (state.db !== database) return;
   const existingLayout = existing?.toJSON?.() || null;
-  const remoteUpdatedAtMs = Number(existingLayout?.updated_at_ms || 0);
-  if (remoteUpdatedAtMs > Number(state.taskbarPinsUpdatedAtMs || 0)) {
+  const resolved = resolveTaskbarPinState({
+    localPins: state.taskbarPins,
+    localUpdatedAtMs: state.taskbarPinsUpdatedAtMs,
+    localPresent: state.taskbarPinsKnown === true,
+    remotePins: existingLayout?.taskbar_pins,
+    remoteUpdatedAtMs: existingLayout?.updated_at_ms,
+  });
+  if (resolved.source === 'remote') {
     state.taskbarPins = normalizeTaskbarPins(existingLayout.taskbar_pins, state.modules, {
       compactLegacyAllPins: true,
+      preserveKnownEmpty: true,
     });
-    state.taskbarPinsUpdatedAtMs = remoteUpdatedAtMs;
+    state.taskbarPinsUpdatedAtMs = Number(existingLayout?.updated_at_ms || 0);
     writeScopedLocalStorage(
       TASKBAR_PINS_KEY,
       encodeTaskbarPinCache(state.taskbarPins, state.taskbarPinsUpdatedAtMs),
@@ -5764,21 +6014,25 @@ async function syncTaskbarPinsToDesktopLayout() {
     renderTabs();
     return;
   }
+  // Only a genuine user edit can reach here with a timestamp. Confirmed
+  // absence and unchanged values must not invent one or create a layout.
+  if (!state.taskbarPinsKnown || Number(state.taskbarPinsUpdatedAtMs || 0) <= 0) return;
   const remotePins = Array.isArray(existingLayout?.taskbar_pins)
     ? existingLayout.taskbar_pins.map((id) => String(id || '').trim()).filter(Boolean)
-    : [];
+    : null;
   const localPins = Array.isArray(state.taskbarPins)
     ? state.taskbarPins.map((id) => String(id || '').trim()).filter(Boolean)
     : [];
   if (existing
-    && remoteUpdatedAtMs === Number(state.taskbarPinsUpdatedAtMs || 0)
+    && Number(existingLayout?.updated_at_ms || 0) === Number(state.taskbarPinsUpdatedAtMs || 0)
+    && Array.isArray(remotePins)
     && remotePins.length === localPins.length
     && remotePins.every((id, index) => id === localPins[index])) {
     return;
   }
   const patch = {
     taskbar_pins: state.taskbarPins,
-    updated_at_ms: state.taskbarPinsUpdatedAtMs || Date.now(),
+    updated_at_ms: Number(state.taskbarPinsUpdatedAtMs || 0),
   };
   if (existing) {
     await existing.incrementalPatch(patch);
@@ -6479,6 +6733,11 @@ function createModuleContext(mod, overrides = {}) {
     runtimeCapabilities: createRuntimeCapabilityFacade(mod),
     storageScope: createStorageScopeFacade(mod),
     sync: moduleSync,
+    readNativeCollectionDocument: mod.id === 'desktop'
+      ? (collection, documentId, options = {}) =>
+          state.sync?.readCollectionNativeDocument(collection, documentId, options)
+            .then((document) => document ?? null)
+      : null,
     commandBus: createLiveCommandBusFacade(),
     actions: createAppActions({
       module: mod,
