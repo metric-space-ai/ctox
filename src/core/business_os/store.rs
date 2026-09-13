@@ -13274,8 +13274,10 @@ fn put_credential_command(root: &Path, mutation: &CtoxSecretPutMutation) -> anyh
 }
 
 fn generate_credential_command(root: &Path, payload: &Value) -> anyhow::Result<Value> {
-    let mutation: CtoxSecretGenerateMutation = serde_json::from_value(payload.clone())
-        .map_err(|_| anyhow::anyhow!("expected credential name and optional integer length only"))?;
+    let mutation: CtoxSecretGenerateMutation =
+        serde_json::from_value(payload.clone()).map_err(|_| {
+            anyhow::anyhow!("expected credential name and optional integer length only")
+        })?;
     let name = mutation.name.trim();
     anyhow::ensure!(is_valid_credential_key(name), "invalid credential key");
     let generation = crate::secrets::generate_secret_password(
@@ -40432,13 +40434,18 @@ pub(super) mod tests {
             root,
             command("generate_first", "global_admin", "TEST_PASSWORD"),
         )?;
-        assert_eq!(first.get("status").and_then(Value::as_str), Some("completed"));
+        assert_eq!(
+            first.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
         assert_eq!(
             first.pointer("/result/created").and_then(Value::as_bool),
             Some(true)
         );
         assert_eq!(
-            first.pointer("/result/secret_ref/name").and_then(Value::as_str),
+            first
+                .pointer("/result/secret_ref/name")
+                .and_then(Value::as_str),
             Some("TEST_PASSWORD")
         );
         let password = zeroize::Zeroizing::new(crate::secrets::read_secret_value(
