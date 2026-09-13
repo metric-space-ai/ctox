@@ -147,7 +147,7 @@ async fn dropped_stream_awaits_owned_open_startup_cleanup() {
             tokio::time::sleep(Duration::from_secs(8)).await;
             drop(stream);
         });
-        let (_, _client_db, mut client_options) =
+        let (_client_root, _client_db, mut client_options) =
             native_fixture::control_options(url, "business-data-room", "workjet-session").await;
         client_options.peer_role = NativePeerRole::WorkjetExecutor;
         let saved = SavedBusinessDataTarget {
@@ -339,7 +339,7 @@ async fn exercise_session(
         .await
         .unwrap();
 
-        let (_, client_db, client_options) = native_fixture::control_options(
+        let (_client_root, client_db, client_options) = native_fixture::control_options(
             signaling.url.clone(),
             "business-data-room",
             "workjet-session",
