@@ -8067,7 +8067,8 @@ ${CREW_CREATURE_BASE_CSS}
       100% { width: 58%; opacity: 0.9; }
     }
     .ctox-chat-dock {
-      --ctox-date-pill-width: 42px;
+      /* Two 24px day arrows, a 30px calendar, gaps, padding and border. */
+      --ctox-date-pill-width: 88px;
       grid-template-columns: 108px var(--ctox-date-pill-width) 36px;
       gap: 6px;
       padding: 5px;
