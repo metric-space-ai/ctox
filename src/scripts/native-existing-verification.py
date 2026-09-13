@@ -30,6 +30,13 @@ FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
            'completed_empty_query', 'invalid_empty_query_receipts',
            'sellify_lookup_receipts_distinguish_actual_success_empty_and_failure',
            'research_without_browser_capture_persists_actual_sellify_outcomes',
+           'sellify_lookup_requires_readable_projection_for_all_selector_modes',
+           'sellify_lookup_keeps_selector_dedupe_limits_and_literal_fuzzy_matching',
+           'provider_continuation', 'configured_research_binding', 'provider_poll_',
+           'provider_command_recovers_across_process_restart_without_duplicate_sources',
+           'business_control_changed_progress_survives_restart_without_new_attempt',
+           'generated_password', 'ctox_secret_generate',
+           'business_os::shell_update::tests::',
            'augmented_research_envelope_matches_returned_payload_and_manifest',
            'augmented_research_persistence_failure_is_not_reported_as_success',
            'business_os::mcp_channel::app_authority::tests::',
@@ -87,6 +94,11 @@ def main():
     revision = capture(['git', 'rev-parse', 'HEAD'])
     reviewed = os.environ['REVIEWED_SOURCE_REVISION']
     ancestors = {'reviewed_pi': reviewed,
+                 'pr139': 'f64bdb99ed09b3a786f909ea2f5b65f961b7e62a',
+                 'pr162': '2761e9597cf3115159c3d37517996236760bdea2',
+                 'pr163': '7fb6e03d68c489e7e92a33f1152bf81e33e92011',
+                 'pr164': '554fd34bc1df2ad956842289e16207e3e85d6aef',
+                 'pr165': 'e8e305bafa6b421c944f895e2003e8dcc508dc5d',
                  'pr113': 'fe33119aa0f960a4501bc68c22cafee2e1799c51',
                  'pr114': '1715d255ccb2023f39fe75768175712bd1178288',
                  'pr121': 'debf7a22c98d79201d285e3db9aacb441a16a5a2',
@@ -137,11 +149,29 @@ def main():
         'service_owned_turn_cannot_persist_success_without_a_completed_plan': 1,
         'sellify_lookup_receipts_distinguish_actual_success_empty_and_failure': 1,
         'research_without_browser_capture_persists_actual_sellify_outcomes': 1,
+        'sellify_lookup_requires_readable_projection_for_all_selector_modes': 1,
+        'sellify_lookup_keeps_selector_dedupe_limits_and_literal_fuzzy_matching': 1,
+        'provider_continuation': 5,
+        'configured_research_binding': 2,
+        'provider_poll_': 2,
+        'provider_command_recovers_across_process_restart_without_duplicate_sources': 1,
+        'business_control_changed_progress_survives_restart_without_new_attempt': 1,
+        'generated_password': 5,
+        'ctox_secret_generate': 3,
         'augmented_research_envelope_matches_returned_payload_and_manifest': 1,
         'augmented_research_persistence_failure_is_not_reported_as_success': 1,
     }
     if any(counts[key] != count for key, count in expected_counts.items()):
         raise RuntimeError(f'Required exact test counts differ: {counts}')
+    recovery_cases = {
+        'shell_recovery_first_activation_survives_restart_and_rolls_back_to_builtin',
+        'shell_recovery_slot_transitions_preserve_persisted_rollback_selection',
+        'shell_recovery_legacy_state_never_infers_a_builtin_previous_target',
+        'shell_recovery_invalid_slot_rollback_never_mutates_persisted_state',
+        'shell_recovery_inconsistent_or_unknown_target_fails_closed',
+    }
+    if not recovery_cases.issubset({name.rsplit('::', 1)[-1] for name in names}):
+        raise RuntimeError('Required shell recovery rollback cases are absent')
     empty_cases = {
         'completed_empty_query_persists_current_receipt_without_fabricated_or_old_records',
         'invalid_empty_query_receipts_persist_failure_and_never_become_success',
