@@ -122,31 +122,64 @@ function requestedQuery(input) {
 
 // Only a response to this form submission (or its redirect chain) can prove
 // query completion. An initial home-page response or analytics request cannot.
-function isQueryResponse(response, query, origin, mainFrame) {
-  try {
-    const url = new URL(response.url());
-    if (url.origin !== origin || url.username || url.password) return false;
-    if (response.status() >= 300 && response.status() < 400) return false;
-    const request = response.request();
-    if (request.frame() !== mainFrame) return false;
-    if (request.resourceType() !== "document" || !request.isNavigationRequest()) return false;
-    let foundQuery = false;
-    let current = request;
-    for (let depth = 0; current && depth < 8; current = current.redirectedFrom(), depth += 1) {
-      const requestUrl = new URL(current.url());
-      if (requestUrl.origin !== origin) return false;
-      const values = [
-        ...requestUrl.searchParams.getAll("fulltext"),
-        ...new URLSearchParams(current.postData() || "").getAll("fulltext"),
-      ];
-      if (values.length > 1 || (values.length === 1 && values[0] !== query)) return false;
-      foundQuery ||= values.length === 1;
-    }
-    return foundQuery && !current;
-  } catch {
-    // An unsupported/unreadable request cannot establish completion.
-  }
-  return false;
+function createQueryTrace(query, origin, initialFrame) {
+  let current = null;
+  const safeUrl = (value) => {
+    const url = new URL(value);
+    return url.origin === origin && !url.username && !url.password;
+  };
+  return {
+    capture(event, data) {
+      try {
+        if (event === "Network.requestWillBeSent") {
+          if (data.type !== "Document" || data.frameId !== initialFrame.id) return;
+          const same = current && current.request_id === data.requestId;
+          const previousUrl = same ? current.url : null;
+          if (!same) current = { request_id: data.requestId, loader_id: data.loaderId,
+            valid: typeof data.requestId === "string" && data.requestId.length > 0
+              && typeof data.loaderId === "string" && data.loaderId.length > 0
+              && data.loaderId !== initialFrame.loaderId,
+            query_found: false, hops: 0, finished: false, response: null };
+          current.hops += 1;
+          const url = new URL(data.request.url);
+          const values = [...url.searchParams.getAll("fulltext"),
+            ...new URLSearchParams(data.request.postData || "").getAll("fulltext")];
+          current.valid &&= current.hops <= 8 && safeUrl(url.href)
+            && data.loaderId === current.loader_id
+            && !(data.request.hasPostData && typeof data.request.postData !== "string")
+            && values.length <= 1 && (values.length === 0 || values[0] === query)
+            && (same ? Boolean(data.redirectResponse)
+              && data.redirectResponse.url === previousUrl
+              && data.redirectResponse.status >= 300 && data.redirectResponse.status < 400
+              : !data.redirectResponse);
+          current.query_found ||= values.length === 1;
+          current.url = url.href;
+          current.finished = false;
+          current.response = null;
+        } else if (current && data.requestId === current.request_id) {
+          if (event === "Network.responseReceived") {
+            const response = data.response;
+            current.valid &&= data.type === "Document" && data.frameId === initialFrame.id
+              && data.loaderId === current.loader_id && safeUrl(response.url)
+              && response.url === current.url && Number.isInteger(response.status)
+              && response.status >= 200 && response.status < 300
+              && !response.fromServiceWorker && !response.fromDiskCache;
+            current.response = { url: response.url, status: response.status };
+          } else if (event === "Network.loadingFinished") current.finished = true;
+          else if (event === "Network.loadingFailed") current.valid = false;
+        }
+      } catch {
+        // Missing or unsupported network data cannot establish completion.
+        if (current) current.valid = false;
+      }
+    },
+    snapshot(frame) {
+      if (!current?.valid || !current.query_found || !current.finished || !current.response
+          || frame.id !== initialFrame.id || frame.loaderId !== current.loader_id
+          || frame.url !== current.response.url) return null;
+      return { ...current.response, request_id: current.request_id, loader_id: current.loader_id };
+    },
+  };
 }
 
 function isCompletedEmptyQuery(company, result) {
@@ -299,15 +332,23 @@ function browserSearch(company) {
   const source = `// ctox-browser: timeout_ms=${BROWSER_TIMEOUT_MS}
 const searchUrl = ${JSON.stringify(SEARCH_URL)};
 const query = ${JSON.stringify(company)};
-const isQueryResponse = ${isQueryResponse.toString()};
+const createQueryTrace = ${createQueryTrace.toString()};
 let queryResponse = null;
-const completedResult = (result) => ({
+let queryTrace = null;
+let cdp = null;
+const completedResult = async (result) => {
+  const { frameTree } = await cdp.send("Page.getFrameTree");
+  const current = queryTrace.snapshot(frameTree.frame);
+  return ({
   ...result,
   query,
-  query_completed: Boolean(queryResponse) && result.url === queryResponse.url,
+  query_completed: Boolean(current && queryResponse)
+    && current.request_id === queryResponse.request_id
+    && current.loader_id === queryResponse.loader_id && result.url === current.url,
   http_status: queryResponse?.status ?? null,
   response_url: queryResponse?.url ?? null,
-});
+  });
+};
 await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
 await page.waitForTimeout(1500);
 
@@ -344,10 +385,22 @@ if (await searchInput.count() !== 1) {
   return { url: page.url(), blocked: false, results_page: false, entries: [] };
 }
 
+// Patchright's high-level navigation response can be an internal injection
+// response. Only the actual CDP network chain and document loader are evidence.
+cdp = await page.context().newCDPSession(page);
+try {
+await cdp.send("Network.enable");
+await cdp.send("Page.enable");
+for (const event of ["Network.requestWillBeSent", "Network.responseReceived",
+  "Network.loadingFinished", "Network.loadingFailed"]) {
+  cdp.on(event, data => queryTrace?.capture(event, data));
+}
 let onResults = false;
 for (let attempt = 0; attempt < 2 && !onResults; attempt += 1) {
   await searchInput.fill(query);
   queryResponse = null;
+  const { frameTree } = await cdp.send("Page.getFrameTree");
+  queryTrace = createQueryTrace(query, new URL(searchUrl).origin, frameTree.frame);
   // Register before submitting. A pre-existing result container or a completed
   // AJAX request cannot satisfy this current-document navigation boundary.
   const navigationPromise = page.waitForNavigation({
@@ -362,9 +415,10 @@ for (let attempt = 0; attempt < 2 && !onResults; attempt += 1) {
     await searchInput.press("Enter");
   }
   const response = await navigationPromise;
-  if (response && isQueryResponse(response, query, new URL(searchUrl).origin, page.mainFrame())
-      && await response.finished().catch(() => "failed") === null) {
-    queryResponse = { status: response.status(), url: response.url() };
+  if (response) {
+    await page.waitForLoadState("load", { timeout: 30000 }).catch(() => {});
+    const { frameTree: currentFrame } = await cdp.send("Page.getFrameTree");
+    queryResponse = queryTrace.snapshot(currentFrame.frame);
   }
   if (!queryResponse || queryResponse.status < 200 || queryResponse.status >= 300) {
     const state = await challengeState();
@@ -424,6 +478,9 @@ const result = await page.evaluate(() => {
   };
 });
 return completedResult(result);
+} finally {
+  await cdp.detach().catch(() => {});
+}
 `;
   const payload = runCtox(
     ["web", "browser-automation", "--timeout-ms", String(BROWSER_TIMEOUT_MS)],
@@ -480,7 +537,7 @@ module.exports = {
   normalizeCompanyName,
   selectMatchingEntry,
   requestedQuery,
-  isQueryResponse,
+  createQueryTrace,
   isCompletedEmptyQuery,
   writeQueryCompletion,
   browserSearch,

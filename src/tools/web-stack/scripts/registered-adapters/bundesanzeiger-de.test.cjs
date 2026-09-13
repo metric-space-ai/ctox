@@ -29,19 +29,23 @@ function fixture(t) {
   return { dir, run, env: { CTOX_SCRAPE_RUN_DIR: run, CTOX_SCRAPE_TARGET_KEY: "bundesanzeiger-de" } };
 }
 
-function request(query, frame, options = {}) {
-  return {
-    url: () => options.url || origin + "/pub/de/suche",
-    frame: () => frame,
-    resourceType: () => options.type || "document",
-    isNavigationRequest: () => (options.type || "document") === "document",
-    postData: () => query === null ? null : new URLSearchParams({ fulltext: query }).toString(),
-    redirectedFrom: () => options.from || null,
-  };
+const initialFrame = { id: "main", loaderId: "previous", url: origin + "/pub/de/suche" };
+const currentFrame = { id: "main", loaderId: "current", url: resultUrl };
+function networkEvents(query = company) {
+  const ids = { requestId: "request-current", loaderId: "current", frameId: "main", type: "Document" };
+  return [
+    ["Network.requestWillBeSent", { ...ids, request: { url: origin + "/pub/de/suche", hasPostData: true,
+      postData: new URLSearchParams({ fulltext: query }).toString() } }],
+    ["Network.requestWillBeSent", { ...ids, request: { url: resultUrl },
+      redirectResponse: { url: origin + "/pub/de/suche", status: 302 } }],
+    ["Network.responseReceived", { ...ids, response: { url: resultUrl, status: 200 } }],
+    ["Network.loadingFinished", { requestId: ids.requestId }],
+  ];
 }
-
-function response(req, status = 200, url = resultUrl) {
-  return { request: () => req, status: () => status, url: () => url, finished: async () => null };
+function replay(events, frame = currentFrame) {
+  const trace = adapter.createQueryTrace(company, origin, initialFrame);
+  for (const [event, data] of events) trace.capture(event, data);
+  return trace.snapshot(frame);
 }
 
 function generatedBrowserScript(query) {
@@ -56,21 +60,41 @@ function generatedBrowserScript(query) {
   return script;
 }
 
-async function simulateBrowser(query, { status = 200, matchingResponse = true, noResults = false, navigation = true } = {}) {
-  const frame = {};
+async function simulateBrowser(query, { status = 200, matchingResponse = true, noResults = false, navigation = true, replacedAfterRead = false } = {}) {
   let evaluations = 0;
   let filled;
+  let navigated = false;
+  let resolveNavigation;
+  let rejectNavigation;
+  let detached = false;
+  const handlers = new Map();
+  const cdp = {
+    send: async (method) => {
+      assert.equal(detached, false, "CDP must remain attached through final document check");
+      const frame = navigated ? currentFrame : initialFrame;
+      return method === "Page.getFrameTree" ? { frameTree: { frame: replacedAfterRead && evaluations >= 2
+        ? { ...frame, loaderId: "later-same-url-document" } : frame } } : {};
+    },
+    on: (event, handler) => handlers.set(event, handler),
+    detach: async () => { detached = true; },
+  };
   const page = {
     goto: async () => undefined,
     waitForTimeout: async () => undefined,
     getByRole: () => ({ first: () => ({ count: async () => 0 }) }),
     locator: (selector) => ({ count: async () => 1, fill: async (value) => { filled = value; },
-      click: async () => { assert.equal(filled, query); }, press: async () => {} }),
-    mainFrame: () => frame,
-    waitForNavigation: async () => {
-      if (!navigation) throw new Error("AJAX completed but no current-document navigation");
-      return response(request(matchingResponse ? query : "old query", frame), status);
-    },
+      click: async () => {
+        assert.equal(filled, query);
+        assert.equal(typeof resolveNavigation, "function", "waiter must precede submission");
+        if (!navigation) { rejectNavigation(new Error("no current-document navigation")); return; }
+        const events = networkEvents(matchingResponse ? query : "old query");
+        events[2][1].response.status = status;
+        for (const [event, data] of events) handlers.get(event)(data);
+        navigated = true;
+        resolveNavigation({ url: () => "https://patchright-init-script-inject.internal/", status: () => 200 });
+      }, press: async () => {} }),
+    context: () => ({ newCDPSession: async () => cdp }),
+    waitForNavigation: () => new Promise((resolve, reject) => { resolveNavigation = resolve; rejectNavigation = reject; }),
     waitForLoadState: async () => {},
     waitForSelector: async () => { if (noResults) throw new Error("no table on explicit empty page"); },
     evaluate: async () => ++evaluations === 1 || noResults || !navigation || !matchingResponse || status >= 300
@@ -79,7 +103,9 @@ async function simulateBrowser(query, { status = 200, matchingResponse = true, n
     url: () => resultUrl,
   };
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-  return new AsyncFunction("page", generatedBrowserScript(query))(page);
+  const result = await new AsyncFunction("page", generatedBrowserScript(query))(page);
+  assert.equal(detached, true, "observer must be detached on return");
+  return result;
 }
 
 test("receipt binds exact raw UTF-8 bytes and actual query/run/provider, without records", (t) => {
@@ -163,25 +189,22 @@ test("receipt cannot overwrite stale evidence or follow an outputs symlink", (t)
 });
 
 test("response binding follows the submitted query through a same-origin redirect", () => {
-  const frame = {};
-  const initial = request(company, frame);
-  const redirected = request(null, frame, { from: initial });
-  assert.equal(adapter.isQueryResponse(response(redirected), company, origin, frame), true);
-  assert.equal(adapter.isQueryResponse(response(request("old company", frame)), company, origin, frame), false);
-  assert.equal(adapter.isQueryResponse(response(request(company, {})), company, origin, frame), false);
-  assert.equal(adapter.isQueryResponse(response(initial, 200, "https://example.com/"), company, origin, frame), false);
-  assert.equal(adapter.isQueryResponse(response(request(null, frame)), company, origin, frame), false);
+  assert.deepEqual(replay(networkEvents()), { url: resultUrl, status: 200, request_id: "request-current", loader_id: "current" });
+  assert.equal(replay(networkEvents("old company")), null);
+  assert.equal(replay(networkEvents(), initialFrame), null);
+  assert.equal(replay(networkEvents(), { ...currentFrame, id: "other" }), null);
+  assert.equal(replay(networkEvents(), { ...currentFrame, loaderId: "later" }), null);
 });
 
 test("rejects ambiguous URL/body query values and AJAX-only responses", () => {
-  const frame = {};
-  const url = origin + "/pub/de/suche?" + new URLSearchParams({ fulltext: company });
   for (const body of ["Old Company", company]) {
-    assert.equal(adapter.isQueryResponse(response(request(body, frame, { url })), company, origin, frame), false);
+    const events = networkEvents(body);
+    events[0][1].request.url += "?" + new URLSearchParams({ fulltext: company });
+    assert.equal(replay(events), null);
   }
-  const duplicate = request(null, frame, { url: url + "&fulltext=" + encodeURIComponent(company) });
-  assert.equal(adapter.isQueryResponse(response(duplicate), company, origin, frame), false);
-  assert.equal(adapter.isQueryResponse(response(request(company, frame, { type: "xhr" })), company, origin, frame), false);
+  const ajax = networkEvents();
+  for (const [, data] of ajax) if (data.type) data.type = "XHR";
+  assert.equal(replay(ajax), null);
 });
 
 test("generated browser flow captures current response and explicit empty page", async () => {
@@ -192,6 +215,38 @@ test("generated browser flow captures current response and explicit empty page",
     assert.equal(value.response_url, resultUrl);
     assert.equal(adapter.isCompletedEmptyQuery(company, value), true);
   }
+});
+
+for (const [name, mutate] of [
+  ["synthetic_response", e => { e[2][1].response.url = "https://patchright-init-script-inject.internal/"; }],
+  ["cross_origin_redirect", e => { e[1][1].request.url = "https://example.com/results"; }],
+  ["missing_post_data", e => { delete e[0][1].request.postData; }],
+  ["missing_redirect_hop", e => { delete e[1][1].redirectResponse; }],
+  ["wrong_redirect_origin", e => { e[1][1].redirectResponse.url = "https://example.com/search"; }],
+  ["duplicate_query_body", e => { e[0][1].request.postData += "&fulltext=" + encodeURIComponent(company); }],
+  ["wrong_response_frame", e => { e[2][1].frameId = "other"; }],
+  ["wrong_response_loader", e => { e[2][1].loaderId = "other"; }],
+  ["previous_document_loader", e => { for (const [, d] of e) if (d.loaderId) d.loaderId = "previous"; }],
+  ["unfinished_response", e => { e.pop(); }],
+  ["failed_response", e => { e.push(["Network.loadingFailed", { requestId: "request-current" }]); }],
+  ["disk_cache_response", e => { e[2][1].response.fromDiskCache = true; }],
+  ["service_worker_response", e => { e[2][1].response.fromServiceWorker = true; }],
+  ["auth_response", e => { e[2][1].response.status = 403; }],
+  ["oversized_redirect_chain", e => { e.splice(2, 0, ...Array.from({length: 7}, () => ["Network.requestWillBeSent", {
+    ...e[1][1], redirectResponse: { url: resultUrl, status: 302 }, request: { url: resultUrl },
+  }])); }],
+]) {
+  test(`raw network trace rejects ${name}`, () => {
+    const events = networkEvents();
+    mutate(events);
+    assert.equal(replay(events), null);
+  });
+}
+
+test("a later document at the same URL invalidates extracted rows", async () => {
+  const value = await simulateBrowser(company, { replacedAfterRead: true });
+  assert.equal(value.query_completed, false);
+  assert.equal(adapter.isCompletedEmptyQuery(company, value), false);
 });
 
 test("generated browser flow cannot reuse an old query response or a server error", async () => {
