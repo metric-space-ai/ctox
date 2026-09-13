@@ -3666,6 +3666,46 @@ fn backup_sqlite_database(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
+fn backup_secret_master_key(state_root: &Path, backup_root: &Path) -> Result<()> {
+    let source = state_root.join(secrets::SECRET_MASTER_KEY_FILE);
+    let metadata = match fs::symlink_metadata(&source) {
+        Ok(metadata) => metadata,
+        // Older stores may still carry their key inside the SQLite snapshot.
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).context("failed to inspect secret master key for backup"),
+    };
+    anyhow::ensure!(
+        metadata.file_type().is_file(),
+        "state backup aborted: secret master key must be a regular file"
+    );
+    let mut source_options = OpenOptions::new();
+    source_options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        source_options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut source_file = source_options
+        .open(&source)
+        .context("failed to open secret master key for backup")?;
+    let destination = backup_root.join(secrets::SECRET_MASTER_KEY_FILE);
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut destination_file = options
+        .open(destination)
+        .context("failed to create backup secret master key")?;
+    copy(&mut source_file, &mut destination_file).context("failed to back up secret master key")?;
+    destination_file
+        .sync_all()
+        .context("failed to sync backup secret master key")?;
+    Ok(())
+}
+
 fn backup_state_root(state_root: &Path) -> Result<PathBuf> {
     let backup_root = state_root
         .join("backups")
@@ -3772,6 +3812,10 @@ fn backup_state_root(state_root: &Path) -> Result<PathBuf> {
             }
         }
     }
+    // Copy the protected key after the databases: migrating a legacy embedded
+    // key writes this file before deleting the database value. A failed key
+    // copy must abort before the backup is marked complete.
+    backup_secret_master_key(state_root, &backup_root)?;
     let manifest_path = backup_root.join("backup_manifest.json");
     let manifest = json!({
         "created_at": now_rfc3339(),
@@ -5576,6 +5620,86 @@ mod tests {
         assert!(err
             .to_string()
             .contains("ChatGPT subscription auth backup missing"));
+    }
+
+    #[test]
+    fn state_backup_restores_encrypted_credentials_without_original_store() {
+        let temp = tempdir().unwrap();
+        let original = temp.path().join("original");
+        let state = original.join("runtime");
+        ensure_dir(&state).unwrap();
+        secrets::write_secret_record(
+            &original,
+            "fixture",
+            "token",
+            "synthetic-backup-secret",
+            None,
+            json!({}),
+        )
+        .unwrap();
+        let key_name = secrets::SECRET_MASTER_KEY_FILE;
+        assert!(state.join(key_name).is_file());
+        let db = rusqlite::Connection::open(secrets::secret_store_path(&original)).unwrap();
+        let embedded: i64 = db
+            .query_row(
+                "SELECT count(*) FROM ctox_secret_kv WHERE key = 'secret_master_key_b64'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(embedded, 0);
+        drop(db);
+        fs::write(state.join("unrelated.key"), "excluded fixture").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(state.join(key_name), fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let backup = backup_state_root(&state).unwrap();
+        assert!(!backup.join("unrelated.key").exists());
+        let isolated = temp.path().join("backup-only");
+        fs::rename(backup, &isolated).unwrap();
+        fs::remove_dir_all(&original).unwrap();
+        assert!(!original.exists());
+        let restored = temp.path().join("restored");
+        restore_state_backup(&isolated, &restored.join("runtime")).unwrap();
+        // Check permissions before reading secrets: that API also repairs modes.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for key in [
+                isolated.join(key_name),
+                restored.join("runtime").join(key_name),
+            ] {
+                assert_eq!(
+                    fs::metadata(key).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+            }
+        }
+        assert_eq!(
+            secrets::read_secret_value(&restored, "fixture", "token").unwrap(),
+            "synthetic-backup-secret"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn state_backup_rejects_master_key_symlink() {
+        let temp = tempdir().unwrap();
+        let state = temp.path().join("state");
+        ensure_dir(&state).unwrap();
+        let outside = temp.path().join("outside-key");
+        fs::write(&outside, "synthetic key").unwrap();
+        std::os::unix::fs::symlink(&outside, state.join(secrets::SECRET_MASTER_KEY_FILE)).unwrap();
+        assert!(backup_state_root(&state)
+            .unwrap_err()
+            .to_string()
+            .contains("regular file"));
+        for entry in fs::read_dir(state.join("backups")).unwrap() {
+            assert!(!entry.unwrap().path().join("backup_manifest.json").exists());
+        }
+        assert_eq!(fs::read_to_string(outside).unwrap(), "synthetic key");
     }
 
     #[test]
