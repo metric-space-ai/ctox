@@ -348,6 +348,137 @@ try {
     expect(!(await page.locator('.ctox-chat-window.is-active .ctox-chat-messages').innerText()).includes('Ein neuer Arbeitsschritt läuft.'), 'work status must not appear as a crew reply');
   });
 
+  await scenario(page, 'crew-expression-rebuild-preserves-current-draft-and-reader', {
+    count: 1, activeIndex: 0, groupedResearch: true, progressTracking: true,
+    crewMembers: 1, messagesPerChat: 28, longMessages: true,
+  }, async () => {
+    const windowSelector = '.ctox-chat-window.is-active';
+    const input = page.locator(windowSelector + ' textarea');
+    const inspection = page.locator(windowSelector + ' .ctox-chat-inspection');
+    await page.getByPlaceholder('Aufgabe für Pico...').waitFor();
+    await inspection.locator('summary').click();
+    await input.fill('Erster Entwurf vor der Synchronisierung.');
+    await page.evaluate(async () => window.chatHarness.publishMessage('chat_0', {
+      id: 'hydration-before-crew-change', role: 'ctox', kind: 'status',
+      taskId: 'task_research_0', commandId: 'task_research_0', status: 'running',
+      text: 'Synchronisierung vor dem Zustandswechsel.', createdAt: Date.now(),
+    }));
+    await inspection.getByText('Synchronisierung vor dem Zustandswechsel.', { exact: true }).first().waitFor();
+    const draft = 'Dieser neue Entwurf bleibt auch nach dem Zustandswechsel erhalten.';
+    await input.fill(draft);
+    const retained = await page.evaluate(() => {
+      const win = document.querySelector('.ctox-chat-window.is-active');
+      const input = win.querySelector('textarea');
+      const pane = win.querySelector('.ctox-chat-messages');
+      input.setSelectionRange(7, 12, 'backward');
+      pane.scrollTop = 12;
+      return { top: pane.scrollTop, overflow: pane.scrollHeight > pane.clientHeight };
+    });
+    expect(retained.overflow && retained.top === 12, 'fixture must have a reader scrolled away from the bottom');
+    await page.evaluate(async () => {
+      const oldInput = document.querySelector('.ctox-chat-window.is-active textarea');
+      window.chatHarness.updateCrewMember('member_0', { state: 'home' });
+      await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-active textarea') !== oldInput).catch(error => {
+        throw new Error(error.message + '; crew=' + JSON.stringify(window.chatHarness.chatReadStats)
+          + '; signature=' + document.querySelector('[data-crew-pool-signature]')?.dataset.crewPoolSignature);
+      });
+      await window.chatHarness.waitForPaint();
+    });
+    expect(await input.inputValue() === draft, 'crew state rebuild must preserve typing after hydration');
+    expect(await input.evaluate(e => e === document.activeElement), 'crew state rebuild must restore typing focus');
+    expect(await input.evaluate(e => e.selectionStart === 7 && e.selectionEnd === 12 && e.selectionDirection === 'backward'), 'crew state rebuild must preserve the text selection');
+    expect(await inspection.getAttribute('open') === '', 'crew state rebuild must preserve the open inspection');
+    expect(await page.locator(windowSelector + ' .ctox-chat-messages').evaluate(e => Math.abs(e.scrollTop - 12) < 1), 'crew state rebuild must preserve the reader scroll position');
+  });
+
+  await scenario(page, 'first-request-from-past-date-stays-visible-today', {
+    count: 0,
+  }, async () => {
+    for (let day = 0; day < 4; day += 1) await page.locator('[data-chat-date-prev]').click();
+    await page.locator('[data-chat-new]').click();
+    const input = page.locator('.ctox-chat-window.is-active textarea');
+    await input.fill('Neue Aufgabe aus einem bisher leeren historischen Fenster.');
+    await page.locator('.ctox-chat-window.is-active [data-chat-send]').click();
+    const after = await page.evaluate(async () => {
+      await window.chatHarness.waitFor(() => window.chatHarness.lastCommand);
+      await window.chatHarness.waitForPaint();
+      const state = JSON.parse(localStorage.getItem('ctox.businessOs.chat.v1'));
+      const chat = state.chats.find(chat => chat.id === state.activeChatId);
+      const now = new Date();
+      const today = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
+      const created = new Date(chat.createdAt);
+      const createdDate = [created.getFullYear(), String(created.getMonth() + 1).padStart(2, '0'), String(created.getDate()).padStart(2, '0')].join('-');
+      return { today, createdDate, selectedDate: state.selectedDate,
+        visible: document.querySelector('.ctox-chat-window.is-active')?.dataset.chatId === chat.id };
+    });
+    expect(after.createdDate === after.today, 'first submission must date the new chat today even with a typed draft');
+    expect(after.selectedDate === after.today && after.visible, 'first submission must keep the submitted chat visible on today');
+  });
+
+  await scenario(page, 'future-first-request-keeps-scheduled-date', {
+    count: 0,
+  }, async () => {
+    for (let day = 0; day < 2; day += 1) await page.locator('[data-chat-date-next]').click();
+    await page.locator('[data-chat-new]').click();
+    await page.locator('.ctox-chat-window.is-active textarea').fill('Bitte erst am ausgewählten zukünftigen Tag ausführen.');
+    await page.locator('.ctox-chat-window.is-active [data-chat-send]').click();
+    const after = await page.evaluate(async () => {
+      await window.chatHarness.waitFor(() => {
+        const state = JSON.parse(localStorage.getItem('ctox.businessOs.chat.v1'));
+        return state.chats.some(chat => chat.messages.some(message => message.status === 'scheduled'));
+      });
+      const state = JSON.parse(localStorage.getItem('ctox.businessOs.chat.v1'));
+      return { future: state.chats.find(chat => chat.id === state.activeChatId).createdAt > Date.now(),
+        dispatched: Boolean(window.chatHarness.lastCommand) };
+    });
+    expect(after.future && !after.dispatched, 'future drafts must remain scheduled without immediate dispatch');
+  });
+
+  await scenario(page, 'retained-form-submits-current-hydrated-conversation', {
+    count: 1, activeIndex: 0, messagesPerChat: 2,
+  }, async () => {
+    await page.evaluate(async () => window.chatHarness.publishMessage('chat_0', {
+      id: 'reply-before-follow-up', role: 'ctox', kind: 'reply',
+      text: 'Diese Antwort ist vor der Rückfrage eingetroffen.', createdAt: Date.now(),
+    }));
+    await page.getByText('Diese Antwort ist vor der Rückfrage eingetroffen.', { exact: true }).waitFor();
+    const followUp = 'Bitte erläutere diese Antwort genauer.';
+    await page.locator('.ctox-chat-window.is-active textarea').fill(followUp);
+    await page.locator('.ctox-chat-window.is-active [data-chat-send]').click();
+    await page.evaluate(async () => {
+      await window.chatHarness.waitFor(() => window.chatHarness.lastCommand);
+      await window.chatHarness.waitForPaint();
+    });
+    await page.locator('.ctox-chat-window.is-active .ctox-chat-messages').getByText(followUp, { exact: true }).waitFor();
+    expect(await page.locator('.ctox-chat-window.is-active .ctox-chat-messages').getByText('Diese Antwort ist vor der Rückfrage eingetroffen.', { exact: true }).count() === 1, 'submitting a retained form must retain the newly hydrated reply exactly once');
+  });
+
+  await scenario(page, 'hydration-keeps-in-flight-submit-locked', {
+    count: 1, activeIndex: 0, holdCommand: true,
+  }, async () => {
+    const input = page.locator('.ctox-chat-window.is-active textarea');
+    await input.fill('Diese Aufgabe genau einmal absenden.');
+    await page.locator('.ctox-chat-window.is-active [data-chat-send]').click();
+    await page.evaluate(async () => {
+      await window.chatHarness.waitFor(() => window.chatHarness.releaseCommand);
+      await window.chatHarness.publishMessage('chat_0', {
+        id: 'reply-during-dispatch', role: 'ctox', kind: 'reply',
+        text: 'Während der Annahme synchronisierte Nachricht.', createdAt: Date.now(),
+      });
+    });
+    await page.getByText('Während der Annahme synchronisierte Nachricht.', { exact: true }).waitFor();
+    await input.fill('Noch nicht erneut absenden.');
+    await page.locator('.ctox-chat-window.is-active [data-chat-send]').click();
+    const count = await page.evaluate(async () => {
+      await window.chatHarness.waitForPaint();
+      const count = window.chatHarness.dispatchCount;
+      window.chatHarness.releaseCommand();
+      return count;
+    });
+    expect(count === 1, 'hydration must not unlock a still-pending submission');
+    expect(await input.inputValue() === 'Noch nicht erneut absenden.', 'blocked repeat submit must retain its draft');
+  });
+
   await scenario(page, 'task-link-opens-unobstructed-flow', { count: 1, activeIndex: 0, groupedResearch: true }, async () => {
     await page.locator('.ctox-chat-inspection > summary').click();
     const navigation = await page.evaluate(async () => {
@@ -1113,6 +1244,8 @@ function harnessHtml() {
       sessionStorage.clear();
       chatCollectionSubscribers = new Set();
       window.chatHarness.lastCommand = null;
+      window.chatHarness.dispatchCount = 0;
+      delete window.chatHarness.releaseCommand;
       const eventBus = createEventBus();
       const on = eventBus.on;
       const off = eventBus.off;
@@ -1350,7 +1483,11 @@ function harnessHtml() {
     function makeCommandBus(options) {
       return {
         dispatch: async (command) => {
+          window.chatHarness.dispatchCount = (window.chatHarness.dispatchCount || 0) + 1;
           window.chatHarness.lastCommand = structuredClone(command);
+          if (options.holdCommand) {
+            await new Promise(resolve => { window.chatHarness.releaseCommand = resolve; });
+          }
           if (options.commandError === 'transient') {
             throw new Error('Timed out waiting for WebRTC response rxdb.query.fetch');
           }
@@ -1391,6 +1528,12 @@ function harnessHtml() {
         await emitChats();
       };
       const crewMembers = makeCrewMembers(crewMemberCount);
+      window.chatHarness.updateCrewMember = (id, patch) => {
+        const member = crewMembers.find(member => member.id === id);
+        if (!member) throw new Error('Unknown fixture crew member: ' + id);
+        Object.assign(member, patch);
+        window.chatHarness.emitCrew();
+      };
       const commands = commandDocs.map((doc) => structuredClone(doc));
       const tasks = queueTasks.map((doc) => structuredClone(doc));
       const commandSubscribers = new Set();

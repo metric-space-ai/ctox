@@ -14,6 +14,7 @@ import {
 
 const CHAT_STYLE_ID = 'ctox-business-chat-style';
 const CHAT_STATE_KEY = 'ctox.businessOs.chat.v1';
+const CHAT_SUBMISSIONS = new WeakMap();
 const CHAT_CHANNEL = 'business_os.llm.chat';
 const CHAT_COLLECTION = 'business_chats';
 const CHAT_OPEN_EVENT = 'ctox-business-os-chat-open';
@@ -571,7 +572,11 @@ export function initBusinessChat({
           crewChangeSubscription = db?.raw?.ctox_crew_members?.$?.subscribe?.(() => {
             if (crewPoolDisposed) return;
             loadCrewMembers({ state, db }).then((next) => {
-              if (next && !crewPoolDisposed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
+              // The app-presence subscriber can load the shared member state
+              // first. Compare the rendered pool as well as the loader's delta.
+              if (!crewPoolDisposed && (next || root.dataset?.crewPoolSignature !== crewPoolSignature(state))) {
+                renderChatRoot({ root, state, commandBus, db, getActiveModule });
+              }
             }).catch(() => {});
           }) || null;
         } catch {}
@@ -1664,6 +1669,21 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   const previousStripScrollLeft = previousStrip?.scrollLeft || 0;
   const previousActiveChatId = root.dataset?.activeChatId || '';
   const hadRenderedDock = Boolean(root.querySelector('[data-chat-dock]'));
+  // Crew expression changes rebuild the dock. Preserve the reader's position
+  // and the composer selection across that rebuild, just as on in-place ticks.
+  const retainedWindows = new Map(existingWindows.map((win) => {
+    const input = win.querySelector('[name="message"]');
+    const messages = win.querySelector('.ctox-chat-messages');
+    return [win.dataset.chatId, {
+      scrollTop: messages?.scrollTop || 0,
+      atBottom: messages ? isScrolledToBottom(messages) : true,
+      focused: Boolean(input && (win.ownerDocument || document).activeElement === input),
+      selectionStart: input?.selectionStart,
+      selectionEnd: input?.selectionEnd,
+      selectionDirection: input?.selectionDirection,
+      inputScrollTop: input?.scrollTop || 0,
+    }];
+  }));
 
   if (root.dataset) root.dataset.crewPoolSignature = crewPoolSignature(state);
   root.innerHTML = `
@@ -1979,7 +1999,9 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         textarea.style.height = `${textarea.scrollHeight}px`;
       };
       textarea.addEventListener('input', (event) => {
-        chat.draft = event.currentTarget.value;
+        // Hydration can replace the chat object while retaining this textarea.
+        const currentChat = state.chats.find((item) => item.id === node.dataset.chatId);
+        if (currentChat) currentChat.draft = event.currentTarget.value;
         adjustHeight();
       });
       textarea.addEventListener('paste', async (e) => {
@@ -2042,6 +2064,18 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   });
   updateChatStripOverflowState(root);
   publishChatLayout(root, state);
+  root.querySelectorAll('.ctox-chat-window').forEach((win) => {
+    const retained = retainedWindows.get(win.dataset.chatId);
+    if (!retained) return;
+    const messages = win.querySelector('.ctox-chat-messages');
+    if (messages) messages.scrollTop = retained.atBottom ? messages.scrollHeight : retained.scrollTop;
+    const input = win.querySelector('[name="message"]');
+    if (input && retained.focused && win.dataset.chatId === activeExpandedChat?.id) {
+      input.focus({ preventScroll: true });
+      input.setSelectionRange(retained.selectionStart, retained.selectionEnd, retained.selectionDirection);
+      input.scrollTop = retained.inputScrollTop;
+    }
+  });
   window.requestAnimationFrame(() => {
     root.querySelectorAll('.ctox-chat-window.no-left-transition').forEach((win) => {
       win.classList.remove('no-left-transition');
@@ -2051,7 +2085,12 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
 }
 
 async function submitChatForm({ root, state, chat, node, commandBus, db, sync, getActiveModule }) {
-  if (chat.__submitting) return;
+  // A retained form must submit the current hydrated chat, not its old closure.
+  chat = state.chats.find((item) => item.id === chat.id);
+  if (!chat) return;
+  let submitting = CHAT_SUBMISSIONS.get(state);
+  if (!submitting) CHAT_SUBMISSIONS.set(state, submitting = new Set());
+  if (submitting.has(chat.id)) return;
   captureDrafts(root, state);
   const input = node.querySelector('[name="message"]');
   const text = String(input?.value || chat.draft || '').trim();
@@ -2062,7 +2101,7 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, sync, g
 
   const isFuture = chat.createdAt > Date.now();
   if (isFuture) {
-    chat.__submitting = true;
+    submitting.add(chat.id);
     chat.draft = '';
     chat.showFollowUp = false;
     if (input) input.value = '';
@@ -2103,12 +2142,12 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, sync, g
       await persistChatState({ state, db });
       renderChatRoot({ root, state, commandBus, db, getActiveModule });
     } finally {
-      delete chat.__submitting;
+      submitting.delete(chat.id);
     }
     return;
   }
 
-  chat.__submitting = true;
+  submitting.add(chat.id);
   chat.draft = '';
   const isFollowUpSubmission = chat.showFollowUp === true || Boolean(chat.lastTrackingId);
   chat.showFollowUp = false; // Reset follow-up container state
@@ -2131,12 +2170,18 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, sync, g
         root.__ctoxChatOnTrackingStateChanged?.();
       },
     });
-    if (delivered) chat.attachments = [];
+    const currentChat = state.chats.find((item) => item.id === chat.id);
+    if (delivered && currentChat) {
+      const submitted = new Set(attachments.map((attachment) => attachmentSignature({ attachments: [attachment] })));
+      currentChat.attachments = (currentChat.attachments || []).filter((attachment) => (
+        !submitted.has(attachmentSignature({ attachments: [attachment] }))
+      ));
+    }
     await persistChatState({ state, db });
     renderChatRoot({ root, state, commandBus, db, getActiveModule });
     root.__ctoxChatOnTrackingStateChanged?.();
   } finally {
-    delete chat.__submitting;
+    submitting.delete(chat.id);
   }
 }
 
@@ -2403,9 +2448,12 @@ function preferredChatForDockOpen(state) {
 }
 
 function moveEmptyHistoricalChatToToday(state, chat) {
-  if (!state || !chat || !isChatEmptyForDeletion(chat)) return false;
+  // A typed draft (or its attachments) is the new request, not prior history.
+  // Keep the stricter deletion predicate separate from first-submission dating.
+  if (!state || !chat || chat.messages?.length || String(chat.lastTrackingId || '').trim()
+    || hasScheduledChatAttachments(chat.scheduledAttachmentsByCommand)) return false;
   const today = getLocalDateString(Date.now());
-  if (getLocalDateString(chat.createdAt) === today) return false;
+  if (getLocalDateString(chat.createdAt) >= today) return false;
   const now = Date.now();
   chat.createdAt = now;
   chat.updated_at_ms = now;
