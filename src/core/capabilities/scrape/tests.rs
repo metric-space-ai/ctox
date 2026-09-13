@@ -644,6 +644,153 @@ fn register_script_self_path_preserves_validated_bytes() {
     assert_eq!(stored_body, body);
     cleanup_test_root(&root);
 }
+#[test]
+fn register_script_current_path_new_revision_preserves_validated_bytes() {
+    let root = temp_root("script-current-new-revision");
+    let target = upsert_target(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        json!({
+            "target_key": "script-current-new-revision",
+            "display_name": "Script Current New Revision",
+            "start_url": "https://example.com",
+            "target_kind": "company",
+            "config": {"skip_probe": true},
+            "output_schema": {"schema_key": "company.v1"}
+        }),
+    )
+    .unwrap();
+    let first_body = "\nprocess.stdout.write('A');\n";
+    let script = root.join("adapter.js");
+    fs::write(&script, first_body).unwrap();
+    let first = register_script(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        script.to_str().unwrap(),
+        "javascript",
+        Some("first"),
+        None,
+    )
+    .unwrap();
+    let current = PathBuf::from(first["current_path"].as_str().unwrap());
+    let second_body = "\n  process.stdout.write('B');\n  \n";
+    fs::write(&current, second_body).unwrap();
+    let second = register_script(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        current.to_str().unwrap(),
+        "javascript",
+        Some("current-overwrite"),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(second["deduplicated"], json!(false));
+    assert!(second["revision_no"].as_i64().unwrap() > first["revision_no"].as_i64().unwrap());
+    let revision = PathBuf::from(second["script_path"].as_str().unwrap());
+    assert_eq!(fs::read_to_string(&current).unwrap(), second_body);
+    assert_eq!(fs::read_to_string(revision).unwrap(), second_body);
+    let (stored_body, stored_hash): (String, String) = open_db(&root)
+        .unwrap()
+        .query_row(
+            r#"
+            SELECT script_body, script_sha256
+            FROM scrape_script_revision
+            WHERE target_id = ?1 AND revision_no = ?2
+            "#,
+            params![target.target_id, second["revision_no"].as_i64().unwrap()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(stored_body, second_body);
+    assert_eq!(stored_hash, compute_sha256(second_body.trim()));
+    cleanup_test_root(&root);
+}
+
+#[test]
+fn register_source_current_path_new_revision_preserves_validated_bytes() {
+    let root = temp_root("source-current-new-revision");
+    let target = upsert_target(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        json!({
+            "target_key": "source-current-new-revision",
+            "display_name": "Source Current New Revision",
+            "start_url": "https://example.com",
+            "target_kind": "company",
+            "config": {
+                "skip_probe": true,
+                "sources": [{
+                    "source_key": "primary",
+                    "display_name": "Primary",
+                    "start_url": "https://example.com",
+                    "source_kind": "html",
+                    "extraction_module": "sources/primary/extractor.js"
+                }]
+            },
+            "output_schema": {"schema_key": "company.v1"}
+        }),
+    )
+    .unwrap();
+    let first_body = "\nmodule.exports = 'A';\n";
+    let module = root.join("extractor.js");
+    fs::write(&module, first_body).unwrap();
+    let first = register_source_module(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        "primary",
+        module.to_str().unwrap(),
+        "javascript",
+        Some("first"),
+        None,
+    )
+    .unwrap();
+    let current = PathBuf::from(first["current_path"].as_str().unwrap());
+    let second_body = "\n  module.exports = 'B';\n  \n";
+    fs::write(&current, second_body).unwrap();
+    let second = register_source_module(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        "primary",
+        current.to_str().unwrap(),
+        "javascript",
+        Some("current-overwrite"),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(second["deduplicated"], json!(false));
+    assert!(second["revision_no"].as_i64().unwrap() > first["revision_no"].as_i64().unwrap());
+    let revision = PathBuf::from(second["module_path"].as_str().unwrap());
+    let current = PathBuf::from(second["current_path"].as_str().unwrap());
+    let configured = PathBuf::from(second["configured_path"].as_str().unwrap());
+    for path in [revision, current, configured] {
+        assert_eq!(fs::read_to_string(path).unwrap(), second_body);
+    }
+    let (stored_body, stored_hash): (String, String) = open_db(&root)
+        .unwrap()
+        .query_row(
+            r#"
+            SELECT module_body, module_sha256
+            FROM scrape_source_revision
+            WHERE target_id = ?1 AND source_key = ?2 AND revision_no = ?3
+            "#,
+            params![
+                target.target_id,
+                "primary",
+                second["revision_no"].as_i64().unwrap()
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(stored_body, second_body);
+    assert_eq!(stored_hash, compute_sha256(second_body.trim()));
+    cleanup_test_root(&root);
+}
 
 #[test]
 fn register_source_self_path_preserves_validated_bytes() {
