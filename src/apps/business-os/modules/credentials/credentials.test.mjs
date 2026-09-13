@@ -8,7 +8,7 @@ import { build } from 'esbuild';
 
 // Bundle the browser module exactly as the shell would load it, then import
 // the pure test hooks. This proves the module's logic evaluates without error
-// and honours the write-only contract; the server side is covered by the Rust
+// and keeps ordinary metadata/export paths value-free; the server side is covered by the Rust
 // guard test ctox_secret_put_keeps_value_out_of_command_record_and_lists_metadata.
 const bundled = await build({
   entryPoints: [fileURLToPath(new URL('./index.js', import.meta.url))],
@@ -110,7 +110,7 @@ test('EXPORT is metadata-only — the payload never contains a secret value', ()
   );
   const serialized = JSON.stringify(payload);
   assert.doesNotMatch(serialized, /"value"/, 'export payload must not contain a value field');
-  assert.match(payload._comment, /WRITE-ONLY/i, 'export header states the write-only contract');
+  assert.match(payload._comment, /Secret values are never exported/, 'export remains metadata-only');
   assert.equal(payload.kind, 'ctox-credentials-metadata');
   assert.equal(payload.credentials.length, 2);
   assert.equal(payload.credentials[0].name, 'OPENAI_API_KEY');
@@ -215,7 +215,7 @@ test('the manual refresh button is gone; the list is reactive via a subscription
   assert.doesNotMatch(html, /data-action="refresh"/, 'no refresh button in the markup');
   assert.doesNotMatch(indexJs, /=== 'refresh'/, 'no refresh action handler');
   // Reactive: subscribe to business_commands for secret put/delete landings.
-  assert.match(indexJs, /command_type:\s*\{\s*\$in:\s*\[PUT_COMMAND,\s*DELETE_COMMAND\]/, 'subscription scoped to put/delete');
+  assert.match(indexJs, /command_type:\s*\{\s*\$in:\s*\[PUT_COMMAND,\s*DELETE_COMMAND,\s*GENERATE_COMMAND\]/, 'subscription includes generate as well as put/delete');
   assert.match(indexJs, /\.\$\?\.subscribe/, 'subscribes to the collection query');
 });
 
