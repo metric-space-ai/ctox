@@ -265,17 +265,17 @@ function nativeSync(implementation) {
   let renderCount = 0;
   const hydrate = async () => {
     nativeReads += 1;
-    if (nativeReads === 1) throw new Error('QUERY_CANCELLED: generation-replaced');
+    if (nativeReads < 7) throw new Error(`QUERY_CANCELLED: generation-replaced (${nativeReads})`);
     state.taskbarPins = ['remote-after-retry'];
     state.taskbarPinsUpdatedAtMs = 500;
     state.taskbarPinsKnown = true;
   };
   const start = new Function(
     'state', 'window', 'console', 'TASKBAR_PIN_HYDRATION_RETRY_BASE_MS',
-    'TASKBAR_PIN_HYDRATION_RETRY_LIMIT', 'hydrateTaskbarPinsFromDesktopLayout', 'renderTabs',
-    `let taskbarPinHydrationRetryTimer = null; let taskbarPinHydrationRetryCount = 0; ${retrySource}; return { start(runtimeState) { state = runtimeState; scheduleTaskbarPinHydrationRetry(); } };`,
+    'TASKBAR_PIN_HYDRATION_RETRY_WINDOW_MS', 'hydrateTaskbarPinsFromDesktopLayout', 'renderTabs',
+    `let taskbarPinHydrationRetryTimer = null; let taskbarPinHydrationRetryCount = 0; let taskbarPinHydrationRetryStartedAtMs = 0; ${retrySource}; return { start(runtimeState) { state = runtimeState; scheduleTaskbarPinHydrationRetry(); } };`,
   )(
-    state, window, { warn() {} }, 500, 4,
+    state, window, { warn() {} }, 1, 20,
     () => hydrate(), () => { renderCount += 1; },
   );
   const runCurrentTimer = async () => {
@@ -290,12 +290,21 @@ function nativeSync(implementation) {
   const first = await runCurrentTimer();
   assert.equal(nativeReads, 1, 'first retry must observe the replaced generation');
   assert.equal(state.taskbarPinsKnown, false, 'a cancelled native read remains unknown');
-  assert.equal(first.delay, 500, 'retry backoff starts bounded');
+  assert.equal(first.delay, 1, 'retry backoff starts bounded');
   assert.equal(timers.length, 1, 'the rejected read schedules exactly one follow-up');
 
+  // More rejected generations than the former four-attempt count must still
+  // converge inside the retry window when signaling finally opens.
+  for (let attempt = 2; attempt <= 6; attempt += 1) await runCurrentTimer();
+  assert.equal(state.taskbarPinsKnown, false);
+  assert.equal(state.taskbarPinHydrationRetryCount, 6);
+  assert.equal(typeof state.taskbarPinHydrationLastError, 'string');
+
   await runCurrentTimer();
-  assert.equal(nativeReads, 2, 'the follow-up reads the newly available authority');
+  assert.equal(nativeReads, 7, 'a later follow-up reads the newly available authority');
   assert.equal(state.taskbarPinsKnown, true);
+  assert.equal(state.taskbarPinHydrationRetryCount, 7);
+  assert.equal(state.taskbarPinHydrationLastError, null);
   assert.deepEqual(state.taskbarPins, ['remote-after-retry']);
   assert.equal(state.taskbarPinsUpdatedAtMs, 500);
   assert.equal(renderCount >= 1, true);

@@ -21,6 +21,11 @@ async function capturePinRuntimeEvidence(page, error) {
         timestamp: state?.taskbarPinsUpdatedAtMs || 0,
         known: state?.taskbarPinsKnown === true,
       },
+      hydrationRetry: {
+        count: state?.taskbarPinHydrationRetryCount || 0,
+        startedAtMs: state?.taskbarPinHydrationRetryStartedAtMs || 0,
+        lastError: state?.taskbarPinHydrationLastError || null,
+      },
       desktopLayoutDiagnostics: syncDiagnostics,
     };
   }, String(error?.message || error)).catch(diagnosticError => ({
