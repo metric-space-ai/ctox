@@ -177,4 +177,49 @@ function openCheckpoint({ stateRoot, operationId, binding: rawBinding }) {
     saveState: state => { append(state, false); } };
 }
 
-module.exports = { openCheckpoint };
+// Immutable operation-scoped receipts use the same protected filesystem and
+// atomic, fsynced no-replace publication as collection checkpoints. Readers
+// receive only caller-validated objects, never arbitrary serialized provider
+// responses. A crash before publication leaves an owned temporary file only.
+function immutableReceipt(stateRoot, operationId, kind, canonicalize) {
+  const root = checkedDirectory(stateRoot);
+  if (!/^research-v1-[a-f0-9]{64}$/.test(operationId || "") ||
+      !["discovery", "company"].includes(kind)) throw new Error("invalid_operation_receipt");
+  const operationHash = hash(operationId);
+  const destination = path.join(root, `${operationHash}-${kind}.json`);
+  function load() {
+    checkedDirectory(root);
+    let raw;
+    try { raw = readBounded(destination); }
+    catch (error) { if (error.code === "ENOENT") return null; throw error; }
+    const entry = JSON.parse(raw);
+    if (entry.schema !== "ctox.brightdata.operation_receipt.v1" ||
+        entry.operation_hash !== operationHash || entry.kind !== kind) throw new Error("invalid_operation_receipt");
+    const value = canonicalize(entry.value);
+    if (JSON.stringify(value) !== JSON.stringify(entry.value)) throw new Error("noncanonical_operation_receipt");
+    return value;
+  }
+  function save(input) {
+    const value = canonicalize(input);
+    const raw = JSON.stringify({ schema: "ctox.brightdata.operation_receipt.v1", operation_hash: operationHash, kind, value });
+    if (Buffer.byteLength(raw) > MAX_BYTES) throw new Error("operation_receipt_too_large");
+    const temporary = path.join(root, `receipt-${randomUUID()}.tmp`);
+    let fd, created = false;
+    try {
+      checkedDirectory(root);
+      fd = fs.openSync(temporary, "wx", 0o600); created = true;
+      fs.writeFileSync(fd, raw); fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
+      fs.linkSync(temporary, destination); syncDirectory(root);
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      if (JSON.stringify(load()) !== JSON.stringify(value)) throw new Error("operation_receipt_conflict");
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+      if (created) fs.unlinkSync(temporary);
+    }
+    return value;
+  }
+  return { load, save };
+}
+
+module.exports = { openCheckpoint, immutableReceipt, checkedDirectory };

@@ -6,11 +6,14 @@ const { createHash } = require('node:crypto');
 const raw = process.env.CTOX_SCRAPE_INPUT_JSON;
 const input = JSON.parse(raw);
 const runDir = process.env.CTOX_SCRAPE_RUN_DIR;
+const instanceRoot = process.env.CTOX_ROOT;
+if (!instanceRoot || !path.isAbsolute(instanceRoot)) throw new Error('missing native instance root');
 const counterPath = path.resolve(runDir, '..', '..', 'fixture-counter.json');
 const state = fs.existsSync(counterPath)
   ? JSON.parse(fs.readFileSync(counterPath, 'utf8')) : { calls: 0, submissions: 0, operations: [] };
 state.calls++;
 state.operations.push(input.research_operation_id);
+state.instance_roots = [...(state.instance_roots || []), instanceRoot];
 const pending = input.source_id === 'linkedin.com' && state.calls === 1;
 if (pending) state.submissions++;
 fs.writeFileSync(counterPath, JSON.stringify(state), { mode: 0o600 });

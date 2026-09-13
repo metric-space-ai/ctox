@@ -258,6 +258,12 @@ mod tests {
         };
         assert_eq!(counter("xing")["calls"], 1);
         assert_eq!(counter("linkedin")["submissions"], 1);
+        let expected_root = std::fs::canonicalize(root)?.to_string_lossy().into_owned();
+        assert_eq!(counter("xing")["instance_roots"], json!([expected_root]));
+        assert_eq!(
+            counter("linkedin")["instance_roots"],
+            json!([expected_root])
+        );
         child_phase(root, "early");
         assert_eq!(canonical(root)["result"], first["result"]);
         assert_eq!(counter("xing")["calls"], 1);
@@ -290,6 +296,10 @@ mod tests {
         assert_eq!(linkedin["submissions"], 1);
         assert_eq!(linkedin["operations"][0], receipts[0]["operation_id"]);
         assert_eq!(linkedin["operations"][1], receipts[0]["operation_id"]);
+        assert_eq!(
+            linkedin["instance_roots"],
+            json!([expected_root, expected_root])
+        );
         assert_eq!(
             counter("xing")["calls"],
             1,

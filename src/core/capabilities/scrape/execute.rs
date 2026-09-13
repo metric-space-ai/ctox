@@ -134,6 +134,7 @@ pub(crate) fn execute_scrape_with_outcome(
     );
 
     let execution = execute_registered_script(
+        root,
         &target,
         &run_dir,
         &output_dir,
@@ -521,6 +522,7 @@ pub(super) fn kill_runner_process_tree(child: &mut std::process::Child) {
 }
 
 pub(super) fn execute_registered_script(
+    root: &Path,
     target: &RegisteredTarget,
     run_dir: &Path,
     output_dir: &Path,
@@ -557,6 +559,10 @@ pub(super) fn execute_registered_script(
     child
         .args(&args)
         .current_dir(&target.workspace_root)
+        // Instance context comes from this execution, never the ambient daemon
+        // environment or caller-supplied scrape input. Nested secret/search CLI
+        // calls must address the same instance even when targets live elsewhere.
+        .env("CTOX_ROOT", fs::canonicalize(root)?)
         .env("CTOX_SCRAPE_TARGET_KEY", &target.view.target_key)
         .env(
             "CTOX_SCRAPE_TARGET_DIR",
