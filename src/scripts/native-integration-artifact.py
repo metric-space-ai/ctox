@@ -96,9 +96,14 @@ def main():
     counts = {selector: sum(selector in name for name in names) for selector in FILTERS}
     if not all(counts.values()):
         raise RuntimeError(f'A required test group is absent: {counts}')
-    required = 'inherited_minimax_route_drives_real_pi_tools_through_native_bridge'
-    if not any(required in name for name in names):
-        raise RuntimeError('Required real-Pi/mock-provider regression is absent')
+    required = {
+        'coding_agents::pi_sidecar::tests::inherited_minimax_route_drives_real_pi_tools_through_native_bridge',
+        'coding_agents::pi_sidecar::tests::responses_edit_owner_applies_only_complete_source_and_session',
+        'coding_agents::pi_sidecar::tests::incomplete_failure_detail_only_preserves_allowlisted_enum_and_counts',
+    }
+    missing = required - set(names)
+    if missing:
+        raise RuntimeError(f'Required native Pi regressions are absent: {sorted(missing)}')
     RECORD.update(discovered_tests=names, group_counts=counts)
     save()
     output = run('native-tests', command + ['--test-threads=2'])
