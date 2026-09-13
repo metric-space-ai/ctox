@@ -37,6 +37,15 @@ export type CtoxTurnResponse = {
   id?: string;
   ok: boolean;
   error?: string;
+  diagnostics?: {
+    terminal_stop_reason: string;
+    assistant_turns: number;
+    tool_calls: number;
+    terminal_tool_calls: number;
+    tool_results: number;
+    tool_errors: number;
+    max_assistant_turns: number;
+  };
   messages?: TurnResult["messages"];
   events?: TurnResult["events"];
   snapshot?: TurnResult["snapshot"];
@@ -133,7 +142,28 @@ export async function handleTurnRequest(
     if (terminalAssistant?.role !== "assistant" || terminalAssistant.stopReason !== "stop") {
       // A bounded turn can stop immediately after a tool edit. That is an
       // unfinished in-memory workspace, not an atomic app-source release.
-      return { id: request.id, ok: false, error: "pi coding turn failed: incomplete_turn" };
+      const assistants = result.messages.filter((message) => message.role === "assistant");
+      const toolResults = result.messages.filter((message) => message.role === "toolResult");
+      const stopReason = terminalAssistant?.role === "assistant" ? terminalAssistant.stopReason : "missing";
+      const limit = request.maxAssistantTurns ?? 12;
+      return {
+        id: request.id,
+        ok: false,
+        error: "pi coding turn failed: incomplete_turn",
+        // Only enum/count evidence crosses the failed-turn boundary. In
+        // particular do not include provider text, tool arguments or results.
+        diagnostics: {
+          terminal_stop_reason: ["stop", "length", "toolUse", "error", "aborted", "missing"].includes(stopReason)
+            ? stopReason : "unknown",
+          assistant_turns: assistants.length,
+          tool_calls: assistants.reduce((count, message) => count + message.content.filter((part) => part.type === "toolCall").length, 0),
+          terminal_tool_calls: terminalAssistant?.role === "assistant"
+            ? terminalAssistant.content.filter((part) => part.type === "toolCall").length : 0,
+          tool_results: toolResults.length,
+          tool_errors: toolResults.filter((message) => message.isError).length,
+          max_assistant_turns: Number.isSafeInteger(limit) && limit >= 0 ? limit : 0,
+        },
+      };
     }
     return {
       id: request.id,

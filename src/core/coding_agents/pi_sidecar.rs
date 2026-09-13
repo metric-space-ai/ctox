@@ -900,10 +900,7 @@ fn run_module_coding_turn_inner(
     anyhow::ensure!(
         response.get("ok").and_then(Value::as_bool) == Some(true),
         "pi-sidecar turn failed: {}",
-        response
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
+        pi_turn_failure_detail(&response)
     );
     let empty = Vec::new();
     let snapshot = response
@@ -935,6 +932,54 @@ fn run_module_coding_turn_inner(
         "message_count": message_count,
         "assistant_text": coding_turn_assistant_text(&response),
     }))
+}
+
+/// Failure evidence from the less-privileged sidecar is an allowlist, never a
+/// generic JSON/log dump. A failed turn still returns before source application
+/// or successful-session logging, even when it produced in-memory edits.
+fn pi_turn_failure_detail(response: &Value) -> String {
+    let error = response
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    if error != "pi coding turn failed: incomplete_turn" {
+        return error.to_owned();
+    }
+    let Some(diagnostics) = response.get("diagnostics").and_then(Value::as_object) else {
+        return error.to_owned();
+    };
+    let reason = diagnostics
+        .get("terminal_stop_reason")
+        .and_then(Value::as_str);
+    if !matches!(
+        reason,
+        Some("stop" | "length" | "toolUse" | "error" | "aborted" | "missing" | "unknown")
+    ) {
+        return error.to_owned();
+    }
+    let mut safe = serde_json::Map::new();
+    safe.insert(
+        "terminal_stop_reason".to_owned(),
+        Value::String(reason.unwrap().to_owned()),
+    );
+    for field in [
+        "assistant_turns",
+        "tool_calls",
+        "terminal_tool_calls",
+        "tool_results",
+        "tool_errors",
+        "max_assistant_turns",
+    ] {
+        let Some(count) = diagnostics
+            .get(field)
+            .and_then(Value::as_u64)
+            .filter(|count| *count <= 1_000_000)
+        else {
+            return error.to_owned();
+        };
+        safe.insert(field.to_owned(), Value::from(count));
+    }
+    format!("{error}; diagnostics={}", Value::Object(safe))
 }
 
 fn apply_changed_turn_snapshot(
@@ -1017,6 +1062,35 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use tiny_http::{Header, Response, Server};
+
+    #[test]
+    fn incomplete_failure_detail_only_preserves_allowlisted_enum_and_counts() {
+        let mut response = serde_json::json!({
+            "ok": false, "error": "pi coding turn failed: incomplete_turn",
+            "messages": "RAW_SECRET", "snapshot": "RAW_SECRET",
+            "diagnostics": {
+                "terminal_stop_reason":"length", "assistant_turns":2,
+                "tool_calls":1, "terminal_tool_calls":0, "tool_results":1,
+                "tool_errors":0, "max_assistant_turns":8,
+                "provider_error":"RAW_SECRET", "arguments":"RAW_SECRET"
+            }
+        });
+        let rendered = pi_turn_failure_detail(&response);
+        assert!(rendered.contains("\"terminal_stop_reason\":\"length\""));
+        assert!(rendered.contains("\"max_assistant_turns\":8"));
+        assert!(!rendered.contains("RAW_SECRET"));
+        response["diagnostics"]["terminal_stop_reason"] = Value::String("RAW_SECRET".into());
+        assert_eq!(
+            pi_turn_failure_detail(&response),
+            "pi coding turn failed: incomplete_turn"
+        );
+        response["diagnostics"]["terminal_stop_reason"] = Value::String("toolUse".into());
+        response["diagnostics"]["tool_errors"] = Value::String("RAW_SECRET".into());
+        assert_eq!(
+            pi_turn_failure_detail(&response),
+            "pi coding turn failed: incomplete_turn"
+        );
+    }
 
     fn repo_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
