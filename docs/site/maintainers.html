@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; base-uri 'none'; object-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'self'; frame-src https://sweeper.ctox.dev; connect-src 'self'; form-action 'self';"
+    />
+    <meta
+      name="description"
+      content="CTOX owner/admin embed scaffold for conservative issue, pull request, and Business OS app submission review."
+    />
+    <meta name="robots" content="noindex,nofollow" />
+    <title>CTOX Sweeper Admin</title>
+    <link rel="icon" href="assets/ctox-app-icon.png" />
+    <link rel="preload" href="assets/ctox-full-logo.png" as="image" />
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #151515;
+        --muted: #646b75;
+        --line: #d9dfe8;
+        --surface: #f5f7fb;
+        --panel: #ffffff;
+        --cyan: #00a8df;
+        --magenta: #ec2b87;
+        --green: #0f8d5f;
+        --shadow: 0 24px 70px rgba(16, 22, 34, 0.12);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--surface);
+        color: var(--ink);
+      }
+
+      a {
+        color: inherit;
+      }
+
+      code {
+        padding: 0.12em 0.32em;
+        background: #edf2f8;
+        font-family: "SFMono-Regular", ui-monospace, "Cascadia Code", monospace;
+        font-size: 0.92em;
+      }
+
+      .topline {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        border-bottom: 1px solid var(--line);
+        background: rgba(245, 247, 251, 0.94);
+        backdrop-filter: blur(14px);
+      }
+
+      .topline-inner,
+      .section-inner,
+      footer .inner {
+        width: min(1180px, calc(100% - 40px));
+        margin: 0 auto;
+      }
+
+      .topline-inner {
+        display: flex;
+        min-height: 72px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+      }
+
+      .topline img {
+        display: block;
+        width: 128px;
+        height: auto;
+      }
+
+      .top-actions {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .top-actions a {
+        text-decoration: none;
+      }
+
+      .nav-cta {
+        display: inline-flex;
+        min-height: 40px;
+        align-items: center;
+        justify-content: center;
+        padding: 0 16px;
+        background: var(--ink);
+        color: #fff;
+        font-weight: 750;
+      }
+
+      .hero {
+        padding: 58px 0 34px;
+        border-bottom: 1px solid var(--line);
+        background:
+          linear-gradient(90deg, rgba(255, 255, 255, 0.96), rgba(245, 247, 251, 0.88)),
+          linear-gradient(135deg, rgba(0, 168, 223, 0.14), rgba(236, 43, 135, 0.1));
+      }
+
+      .eyebrow {
+        margin: 0 0 16px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        max-width: 900px;
+        margin: 0;
+        font-size: clamp(42px, 6vw, 78px);
+        line-height: 0.98;
+        letter-spacing: 0;
+      }
+
+      .lead {
+        max-width: 780px;
+        margin: 24px 0 0;
+        color: #323943;
+        font-size: clamp(18px, 2vw, 23px);
+        line-height: 1.45;
+      }
+
+      .status-strip {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1px;
+        margin-top: 38px;
+        border: 1px solid var(--line);
+        background: var(--line);
+      }
+
+      .status-strip div {
+        min-height: 116px;
+        padding: 20px;
+        background: rgba(255, 255, 255, 0.9);
+      }
+
+      .status-strip b {
+        display: block;
+        font-size: 17px;
+      }
+
+      .status-strip span {
+        display: block;
+        margin-top: 10px;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
+      .workspace {
+        padding: 34px 0 76px;
+      }
+
+      .workspace-header {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 24px;
+        margin-bottom: 22px;
+      }
+
+      .workspace-header h2 {
+        margin: 0;
+        font-size: clamp(28px, 4vw, 42px);
+        line-height: 1;
+      }
+
+      .workspace-header p {
+        max-width: 560px;
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .open-sweeper {
+        display: inline-flex;
+        min-height: 44px;
+        align-items: center;
+        justify-content: center;
+        padding: 0 16px;
+        background: var(--ink);
+        color: #fff;
+        font-weight: 750;
+        text-decoration: none;
+        transition:
+          transform 180ms ease,
+          background 180ms ease;
+      }
+
+      .open-sweeper:hover,
+      .open-sweeper:focus-visible {
+        background: #27313d;
+        transform: translateY(-2px);
+        outline: none;
+      }
+
+      .frame-shell {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        background: #fff;
+        box-shadow: var(--shadow);
+      }
+
+      .sweeper-frame {
+        display: block;
+        width: 100%;
+        min-height: min(78svh, 880px);
+        border: 0;
+        background: #fff;
+      }
+
+      footer {
+        padding: 28px 0;
+        border-top: 1px solid #222a34;
+        background: #111418;
+        color: rgba(249, 251, 255, 0.54);
+        font-size: 13px;
+      }
+
+      footer .inner {
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+        flex-wrap: wrap;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+          transition-duration: 1ms !important;
+        }
+      }
+
+      @media (max-width: 900px) {
+        .status-strip {
+          grid-template-columns: 1fr;
+        }
+
+        .workspace-header {
+          display: grid;
+        }
+
+        .sweeper-frame {
+          min-height: 720px;
+        }
+      }
+
+      @media (max-width: 620px) {
+        .topline-inner,
+        .section-inner,
+        footer .inner {
+          width: min(100% - 28px, 1180px);
+        }
+
+        .topline img {
+          width: 108px;
+        }
+
+        .top-actions {
+          flex-wrap: wrap;
+          justify-content: flex-end;
+          gap: 10px;
+          font-size: 13px;
+        }
+
+        .top-actions a[href*="github"] {
+          display: none;
+        }
+
+        .hero {
+          padding-top: 42px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topline" aria-label="Maintainer header">
+      <div class="topline-inner">
+        <a href="index.html" aria-label="CTOX home">
+          <img src="assets/ctox-full-logo.png" alt="CTOX" />
+        </a>
+        <div class="top-actions">
+          <a href="index.html">Overview</a>
+          <a href="docs.html">Docs</a>
+          <a href="cli.html">CLI Reference</a>
+          <a href="https://github.com/metric-space-ai/ctox">GitHub</a>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="maintainer-title">
+        <div class="section-inner">
+          <p class="eyebrow">Owner/Admin Console</p>
+          <h1 id="maintainer-title">CTOX Sweeper admin workspace.</h1>
+          <p class="lead">
+            Private conservative triage for CTOX issues, pull requests, and Business OS app
+            submissions, with agent execution kept outside the web control plane.
+          </p>
+          <div class="status-strip" aria-label="Sweeper deployment boundaries">
+            <div>
+              <b>Parent visibility</b>
+              <span>Deploy the final ctox.dev entry behind platform owner/admin access.</span>
+            </div>
+            <div>
+              <b>Executor plane</b>
+              <span>GitHub Actions or Linux runners own repository checkout, Codex review, and artifacts.</span>
+            </div>
+            <div>
+              <b>Pilot posture</b>
+              <span>This static page validates iframe wiring; Sweeper access remains separately gated.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="workspace" aria-labelledby="sweeper-frame-title">
+        <div class="section-inner">
+          <div class="workspace-header">
+            <div>
+              <p class="eyebrow">Embedded Workspace</p>
+              <h2 id="sweeper-frame-title">Sweeper dashboard</h2>
+            </div>
+            <p>
+              This scaffold does not grant access by itself. The Sweeper child requires the trusted
+              ctox.dev parent handshake and a server-side admin session before private reports or
+              dispatch controls load.
+            </p>
+          </div>
+          <div class="frame-shell">
+            <iframe
+              id="sweeper-frame"
+              class="sweeper-frame"
+              title="CTOX Sweeper dashboard"
+              src="https://sweeper.ctox.dev/"
+              loading="lazy"
+              referrerpolicy="no-referrer"
+              sandbox="allow-forms allow-popups allow-same-origin allow-scripts"
+              allow="clipboard-write"
+            ></iframe>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="inner">
+        <span>CTOX maintainer console</span>
+        <span>metric-space-ai/ctox</span>
+      </div>
+    </footer>
+    <script src="assets/maintainers.js"></script>
+  </body>
+</html>
