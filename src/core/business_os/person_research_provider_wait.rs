@@ -354,7 +354,11 @@ mod tests {
                 command_type: "web_stack.person_research".into(),
                 record_id: Some("fixture-company".into()),
                 payload: serde_json::json!({"company":"Fixture GmbH","country":"DE","mode":"new_record",
-                    "fields":["person_linkedin","person_xing"],"include_private":["linkedin.com","xing.com"]}),
+                "fields":["person_linkedin","person_xing"],"include_private":["linkedin.com","xing.com"],
+                "source_policy":{"sources":[
+                    {"id":"linkedin.com","url":"https://www.linkedin.com/","target_key":"linkedin-com"},
+                    {"id":"xing.com","url":"https://www.xing.com/","target_key":"xing-com"}
+                ]}}),
                 client_context: serde_json::json!({"actor":{"id":"researcher"},"capability_token":token}),
             };
             crate::channels::claim_business_control_command(

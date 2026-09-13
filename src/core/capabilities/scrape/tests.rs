@@ -51,6 +51,71 @@ if(input.mode==='prior') {
         target
     }
 
+    #[test]
+    fn configured_research_binding_rejects_provider_and_script_drift_before_execution() {
+        let root = temp_root("configured-research-binding");
+        fixture(&root);
+        assert!(configured_research_target_binding(&root, "absent", "linkedin.com").is_err());
+        assert!(configured_research_target_binding(&root, "linkedin-com", "xing.com").is_err());
+        let binding =
+            configured_research_target_binding(&root, "linkedin-com", "linkedin.com").unwrap();
+        let script = root.join("changed-provider.js");
+        fs::write(&script, format!("{SCRIPT}\n// changed revision\n")).unwrap();
+        register_script(
+            &root,
+            DEFAULT_RUNTIME_ROOT,
+            "linkedin-com",
+            script.to_str().unwrap(),
+            "javascript",
+            None,
+            None,
+        )
+        .unwrap();
+        let changed =
+            configured_research_target_binding(&root, "linkedin-com", "linkedin.com").unwrap();
+        assert_ne!(binding, changed);
+        let args = vec![
+            "--target-key".into(),
+            "linkedin-com".into(),
+            "--input-json".into(),
+            json!({"mode":"prior"}).to_string(),
+        ];
+        let error = execute_scrape_with_research_binding(&root, &args, &binding).unwrap_err();
+        assert!(error.to_string().contains("changed before dispatch"));
+        let conn = open_db(&root).unwrap();
+        let runs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM scrape_run", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(runs, 0, "stale binding must not start a provider run");
+        drop(conn);
+        cleanup_test_root(&root);
+    }
+
+    #[test]
+    fn configured_research_binding_tracks_registered_config_changes() {
+        let root = temp_root("configured-research-config");
+        fixture(&root);
+        let before =
+            configured_research_target_binding(&root, "linkedin-com", "linkedin.com").unwrap();
+        upsert_target(
+            &root,
+            DEFAULT_RUNTIME_ROOT,
+            json!({
+                "target_key":"linkedin-com", "display_name":"LinkedIn fixture",
+                "start_url":"https://www.linkedin.com/", "target_kind":"prospect-research",
+                "config":{"skip_probe":true,"expected_min_records":2,
+                    "async_provider":"brightdata","expected_provider":"linkedin.com",
+                    "llm_enrichment":{"enabled":false}},
+                "output_schema":{"schema_key":"prospect.v1"}
+            }),
+        )
+        .unwrap();
+        let after =
+            configured_research_target_binding(&root, "linkedin-com", "linkedin.com").unwrap();
+        assert_ne!(before, after);
+        cleanup_test_root(&root);
+    }
+
     fn execute(root: &Path, mode: &str) -> ScrapeExecutionOutcome {
         execute_scrape_with_outcome(root, &[
             "--target-key".into(), "linkedin-com".into(), "--allow-heal".into(),

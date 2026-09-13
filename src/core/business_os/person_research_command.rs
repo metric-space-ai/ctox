@@ -2085,25 +2085,63 @@ fn execute(
         workspace: Some(workspace),
         persist_workspace: true,
     };
+    // Resolve only explicitly configured canonical sources. The Workjet planner
+    // calls the resolver after country, field and private-source admission.
+    let mut configured_sources = std::collections::BTreeMap::new();
+    for source in &request.source_policy.sources {
+        if let Some(module) = ctox_web_stack::sources::find(source.id.trim()) {
+            anyhow::ensure!(
+                safe_runtime_source_identifier(source.target_key.trim(), 128),
+                "invalid configured research target identifier"
+            );
+            anyhow::ensure!(
+                configured_sources
+                    .insert(module.id(), source.target_key.trim())
+                    .is_none(),
+                "duplicate configured research source"
+            );
+        }
+    }
+    let resolved_targets =
+        std::cell::RefCell::new(std::collections::BTreeMap::<String, String>::new());
+    let mut resolver =
+        |source_id: &str| -> anyhow::Result<Option<ctox_web_stack::ConfiguredResearchTarget>> {
+            let Some(target_key) = configured_sources.get(source_id) else {
+                return Ok(None);
+            };
+            let binding = crate::capabilities::scrape::configured_research_target_binding(
+                root, target_key, source_id,
+            )?;
+            resolved_targets
+                .borrow_mut()
+                .insert(target_key.to_string(), binding.clone());
+            Ok(Some(ctox_web_stack::ConfiguredResearchTarget {
+                target_key: target_key.to_string(),
+                registry_binding_sha256: binding,
+            }))
+        };
     let mut dispatch = |target_key: &str, input: &Value| -> anyhow::Result<Value> {
-        let outcome = crate::capabilities::scrape::execute_scrape_with_outcome(
-            root,
-            &[
-                "--target-key".into(),
-                target_key.into(),
-                "--trigger-kind".into(),
-                "manual".into(),
-                "--allow-heal".into(),
-                "--input-json".into(),
-                input.to_string(),
-            ],
-        )?;
+        let args = [
+            "--target-key".into(),
+            target_key.into(),
+            "--trigger-kind".into(),
+            "manual".into(),
+            "--allow-heal".into(),
+            "--input-json".into(),
+            input.to_string(),
+        ];
+        let outcome = if let Some(binding) = resolved_targets.borrow().get(target_key) {
+            crate::capabilities::scrape::execute_scrape_with_research_binding(root, &args, binding)?
+        } else {
+            crate::capabilities::scrape::execute_scrape_with_outcome(root, &args)?
+        };
         Ok(serde_json::to_value(outcome)?)
     };
-    let mut result = ctox_web_stack::run_ctox_person_research_with_dispatch(
+    let mut result = ctox_web_stack::run_ctox_person_research_with_configured_dispatch(
         root,
         &research_request,
         previous,
+        &mut resolver,
         &mut dispatch,
     )?;
     result["research_instructions_len"] = serde_json::json!(research_instructions_len);

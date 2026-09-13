@@ -61,6 +61,67 @@ pub(crate) fn execute_scrape_with_outcome(
     root: &Path,
     args: &[String],
 ) -> Result<ScrapeExecutionOutcome> {
+    execute_scrape_with_expected_binding(root, args, None)
+}
+
+/// Bind a configured research source to the registered script/configuration,
+/// returning only a digest, never credential values or raw configuration.
+pub(crate) fn configured_research_target_binding(
+    root: &Path,
+    target_key: &str,
+    expected_provider: &str,
+) -> Result<String> {
+    let conn = open_db(root)?;
+    let target = load_registered_target(root, &conn, target_key)?
+        .context("configured research target is not registered")?;
+    anyhow::ensure!(
+        target.view.status == "active",
+        "configured research target is inactive"
+    );
+    anyhow::ensure!(
+        target
+            .view
+            .config
+            .get("expected_provider")
+            .and_then(Value::as_str)
+            == Some(expected_provider),
+        "configured research target provider mismatch"
+    );
+    registered_research_digest(&conn, &target)
+}
+
+fn registered_research_digest(
+    conn: &rusqlite::Connection,
+    target: &RegisteredTarget,
+) -> Result<String> {
+    use sha2::Digest;
+    let binding = json!({
+        "schema": "ctox.research.registered_target.v1",
+        "target_id": target.view.target_id, "target_key": target.view.target_key,
+        "status": target.view.status, "start_url": target.view.start_url,
+        "config": target.view.config, "output_schema": target.view.output_schema,
+        "script_revision_no": target.script.revision_no, "script_sha256": target.script.script_sha256,
+        "sources": latest_source_revision_map(conn, &target.view.target_id)?,
+    });
+    Ok(format!(
+        "{:x}",
+        sha2::Sha256::digest(serde_json::to_vec(&binding)?)
+    ))
+}
+
+pub(crate) fn execute_scrape_with_research_binding(
+    root: &Path,
+    args: &[String],
+    expected_binding: &str,
+) -> Result<ScrapeExecutionOutcome> {
+    execute_scrape_with_expected_binding(root, args, Some(expected_binding))
+}
+
+fn execute_scrape_with_expected_binding(
+    root: &Path,
+    args: &[String],
+    expected_binding: Option<&str>,
+) -> Result<ScrapeExecutionOutcome> {
     let execution_started = Instant::now();
     let target_key = required_flag_value(args, "--target-key")
         .context("usage: ctox scrape execute --target-key <key> [--trigger-kind <manual|scheduled|repair>] [--scheduled-for <iso>] [--timeout-seconds <n>] [--runtime-root <path>] [--allow-heal] [--input-json <text>] [--input-file <path>] [--thread-key <key>] [--owner-user-id <id>] [--queue-priority <urgent|high|normal|low>]")?;
@@ -98,6 +159,12 @@ pub(crate) fn execute_scrape_with_outcome(
         load_registered_target(root, &conn, target_key)?.context("target_key not found")?;
     let workspace_dir = resolve_workspace_dir(root, &target.view.workspace_dir);
     let _run_lock = acquire_target_run_lock(&workspace_dir, target_key)?;
+    if let Some(expected) = expected_binding {
+        anyhow::ensure!(
+            registered_research_digest(&conn, &target)? == expected,
+            "configured research target changed before dispatch"
+        );
+    }
     let run_started_at = now_iso_string();
     let run_id = format!(
         "scrape_run-{}",
