@@ -1339,7 +1339,9 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   const matchesCurrentDate = datePickerEl && datePickerEl.value === selectedDate;
   const existingWindows = Array.from(root.querySelectorAll('.ctox-chat-window'));
   for (const win of existingWindows) {
-    const chat = visibleWindowChats.find(item => item.id === win.dataset.chatId);
+    // A minimized or off-date window is about to leave the DOM, but its
+    // inspection choice still belongs to the retained conversation.
+    const chat = state.chats.find(item => item.id === win.dataset.chatId);
     if (chat) chat.inspectionOpen = Boolean(win.querySelector('.ctox-chat-inspection')?.open);
   }
   const hasBusyPanel = Boolean(root.querySelector('[data-chat-busy-panel]'));
