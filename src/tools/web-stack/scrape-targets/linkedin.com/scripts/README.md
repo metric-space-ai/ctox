@@ -15,8 +15,15 @@ script alone would be unusable in ordinary research. `discoverProfiles` accepts
 company/country and one injected native search call; it keeps at most three
 canonical LinkedIn profile candidates from the first twenty results. Search
 snippets are never field evidence. Provider failures are not successful empty
-searches. The production wrapper must bind the selected company page to the
-requested legal company/country before calling `collectionBinding`.
+searches. `discoverCompanies` uses the same bounded native-search contract for
+company-page candidates. `verifyCompanySnapshot` admits exactly one matching
+name and requested country from a complete, URL-bound company-dataset snapshot;
+errors, missing rows, duplicate URLs and ambiguous matching companies fail
+closed. It treats the provider's comma-separated country codes as reported
+country presence, not proof of registered headquarters or legal registration.
+Employee previews and related companies are never person evidence. The runner
+still must retrieve and verify that dataset/snapshot before calling this gate,
+then use the admitted company URL in `collectionBinding`.
 
 The extraction gate requires matching requested/input/returned profile URLs,
 exact current employer name and company page URL, and unmasked structured names.
@@ -62,6 +69,7 @@ raw provider/CLI errors. Snapshot/query identity failures stop admission.
 ## Sources checked 2026-09-13
 
 - [Profile collection](https://docs.brightdata.com/api-reference/scrapers/social-media-apis/linkedin-profiles-collect-by-url)
+- [Company collection](https://docs.brightdata.com/api-reference/scrapers/social-media-apis/linkedin-companies-collect-by-url)
 - [Async requests](https://docs.brightdata.com/api-reference/rest-api/scraper/asynchronous-requests)
 - [Progress](https://docs.brightdata.com/api-reference/scrapers/management-apis/monitor-progress)
 - [Download](https://docs.brightdata.com/api-reference/scrapers/delivery-apis/download-snapshot)
@@ -70,11 +78,11 @@ raw provider/CLI errors. Snapshot/query identity failures stop admission.
 
 `node --test --test-concurrency=1 src/tools/web-stack/scrape-targets/tests/brightdata-core.test.mjs src/tools/web-stack/scrape-targets/tests/brightdata-state.test.mjs`
 
-Twenty-one tests pass. Core tests inject network/credentials/persistence. State
+Twenty-four tests pass. Core tests inject network/credentials/persistence. State
 tests use actual files, reopen journals, race two bounded child processes and
 exit a child immediately after its durable claim, and restart after a persisted
 HTTP401 to verify bounded reauthorization. Mac tests require TMPDIR on
 /Volumes/tmp. These are not a native research-resume or live-provider proof.
-Remaining: native runner/Secret Store/state wiring, verified company discovery,
+Remaining: native runner/Secret Store/state wiring, company collection and verification wiring,
 registration and API entitlement, native crash/restart tests, registry activation,
 real DE/AT/CH research and reload acceptance. Keep the PR draft until completed.

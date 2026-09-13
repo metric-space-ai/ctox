@@ -6,6 +6,7 @@
 const { createHash } = require("node:crypto");
 const ORIGIN = "https://api.brightdata.com";
 const DATASET = "gd_l1viktl72bvl7bjuj0";
+const COMPANY_DATASET = "gd_l1vikfnt1wgvvqz95w";
 const MAX_PROFILES = 3;
 const MAX_SUBMISSIONS = 2;
 const identity = value => typeof value === "string"
@@ -34,7 +35,16 @@ function checkedQuery(input) {
 }
 
 async function discoverProfiles(input, search) {
+  return discoverLinkedIn(input, search, "in");
+}
+
+async function discoverCompanies(input, search) {
+  return discoverLinkedIn(input, search, "company");
+}
+
+async function discoverLinkedIn(input, search, kind) {
   const query = checkedQuery(input);
+  if (kind === "company") query.query = query.query.replace("site:linkedin.com/in/", "site:linkedin.com/company/");
   let payload;
   try { payload = await search(query); }
   catch { return { ok: false, code: "discovery_unavailable", ...query, urls: [] }; }
@@ -45,10 +55,45 @@ async function discoverProfiles(input, search) {
   }
   // Search snippets are discovery only, never employer/person field evidence.
   const urls = [...new Set(payload.results.slice(0, 20)
-    .map(hit => canonicalLinkedIn(hit?.url, "in")).filter(Boolean))].slice(0, MAX_PROFILES);
-  return { ok: urls.length > 0, code: urls.length ? "discovered" : "no_profiles_in_bounded_search",
+    .map(hit => canonicalLinkedIn(hit?.url, kind)).filter(Boolean))].slice(0, MAX_PROFILES);
+  return { ok: urls.length > 0, code: urls.length ? "discovered" : kind === "company" ? "no_companies_in_bounded_search" : "no_profiles_in_bounded_search",
     ...query, provider: payload.provider, urls, inspected_count: Math.min(payload.results.length, 20),
     truncated: payload.results.length > 20, evidence_eligible: false };
+}
+
+// Receives only a completed company-dataset snapshot from the native runner,
+// whose snapshot/dataset transport identity must already be verified. Snippets,
+// embedded employee previews and related companies are not identity evidence.
+function verifyCompanySnapshot(rows, input, requestedUrls) {
+  const query = checkedQuery(input);
+  const urls = Array.isArray(requestedUrls) ? requestedUrls.map(url => canonicalLinkedIn(url, "company")) : [];
+  const fail = code => ({ ok: false, code, company: query.company, country: query.country, records: [] });
+  if (!urls.length || urls.length > MAX_PROFILES || urls.some(url => !url) || new Set(urls).size !== urls.length)
+    return fail("invalid_company_candidates");
+  if (!Array.isArray(rows) || rows.length !== urls.length) return fail("company_snapshot_incomplete");
+  const seen = new Set(), matches = [];
+  for (const row of rows) {
+    const url = canonicalLinkedIn(row?.url, "company");
+    if (!row || row.error || row.error_code || !url || !urls.includes(url) || seen.has(url))
+      return fail("company_snapshot_identity_invalid");
+    seen.add(url);
+    if (typeof row.name !== "string" || !row.name.trim() || row.name.length > 250 ||
+        /[\x00-\x1f\x7f*]/.test(row.name) || typeof row.country_code !== "string" ||
+        row.country_code.length > 800) return fail("company_snapshot_fields_invalid");
+    const countries = row.country_code.split(",").map(value => value.trim());
+    if (!countries.length || countries.some(country => !/^[A-Z]{2}$/.test(country)))
+      return fail("company_snapshot_fields_invalid");
+    if (identity(row.name) === identity(query.company) && countries.includes(query.country))
+      matches.push({ company_profile_url: url, name: row.name.trim(), countries: [...new Set(countries)].sort() });
+  }
+  if (!matches.length) return fail("no_exact_company_in_snapshot");
+  if (matches.length !== 1) return fail("ambiguous_company_identity");
+  return { ok: true, code: "company_matched", company: query.company, country: query.country,
+    company_profile_url: matches[0].company_profile_url, records: [],
+    company_evidence: { dataset_id: COMPANY_DATASET, source_url: matches[0].company_profile_url,
+      reported_name: matches[0].name, reported_country_codes: matches[0].countries,
+      checked_company_urls: urls, returned_count: rows.length,
+      country_match_kind: "reported_presence_not_registered_headquarters" } };
 }
 
 function collectionBinding(query, companyUrl, urls) {
@@ -205,4 +250,5 @@ async function advanceCollection(binding, state, dependencies) {
   finally { secret = ""; }
 }
 
-module.exports = { canonicalLinkedIn, checkedQuery, discoverProfiles, collectionBinding, extractProfiles, advanceCollection, DATASET };
+module.exports = { canonicalLinkedIn, checkedQuery, discoverProfiles, discoverCompanies,
+  verifyCompanySnapshot, collectionBinding, extractProfiles, advanceCollection, DATASET, COMPANY_DATASET };

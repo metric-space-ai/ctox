@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { canonicalLinkedIn, checkedQuery, discoverProfiles, collectionBinding,
-  extractProfiles, advanceCollection, DATASET } = require('../linkedin.com/scripts/brightdata-core.cjs');
+  discoverCompanies, verifyCompanySnapshot, extractProfiles, advanceCollection, DATASET,
+  COMPANY_DATASET } = require('../linkedin.com/scripts/brightdata-core.cjs');
 const profile = 'https://www.linkedin.com/in/fixture-person/';
 const companyUrl = 'https://www.linkedin.com/company/fixture-company/';
 const query = { company: 'Fixture GmbH', country: 'DE' };
@@ -12,6 +13,53 @@ const row = () => ({ url: profile, input_url: profile, first_name: 'Erika', last
   position: 'Geschäftsführung', current_company: { name: query.company, link: companyUrl },
   current_company_name: query.company, email: 'not-authoritative@example.invalid', gender: 'female' });
 const reply = (body, status = 200) => new Response(JSON.stringify(body), { status });
+
+test('company discovery is company/country-bound and never trusts search snippets', async () => {
+  const discovered = await discoverCompanies(query, async q => {
+    assert.equal(q.query, '"Fixture GmbH" site:linkedin.com/company/');
+    assert.equal(q.country, 'DE');
+    return { provider: 'fixture-search', source_failures: [], results: [
+      { url: companyUrl, title: 'Other company' }, { url: profile },
+      { url: companyUrl + '?duplicate=1' }, { url: 'https://evil.invalid/company/x/' }] };
+  });
+  assert.deepEqual(discovered.urls, [companyUrl]);
+  assert.equal(discovered.evidence_eligible, false);
+  assert.equal((await discoverCompanies(query, async () => ({ provider: 'fixture', source_failures: [], results: [] }))).code,
+    'no_companies_in_bounded_search');
+});
+
+test('verified company snapshot binds exact name, URL and reported country presence', () => {
+  const result = verifyCompanySnapshot([{ url: companyUrl, name: ' Fixture GmbH ', country_code: 'AT,DE,CH',
+    employees: [{ title: 'not-person-evidence' }] }], query, [companyUrl]);
+  assert.equal(result.ok, true);
+  assert.equal(result.company_profile_url, companyUrl);
+  assert.equal(result.company_evidence.dataset_id, COMPANY_DATASET);
+  assert.deepEqual(result.company_evidence.reported_country_codes, ['AT', 'CH', 'DE']);
+  assert.equal(result.company_evidence.country_match_kind, 'reported_presence_not_registered_headquarters');
+  assert.deepEqual(result.records, []);
+});
+
+test('company country mismatch, duplicate identity, partial and error snapshots fail closed', () => {
+  const other = 'https://www.linkedin.com/company/fixture-other/';
+  const company = { url: companyUrl, name: query.company, country_code: 'DE' };
+  for (const [rows, urls, code] of [
+    [[{ ...company, name: 'Other GmbH' }], [companyUrl], 'no_exact_company_in_snapshot'],
+    [[{ ...company, country_code: 'AT,CH' }], [companyUrl], 'no_exact_company_in_snapshot'],
+    [[{ ...company, country_code: 'DE,not-a-country' }], [companyUrl], 'company_snapshot_fields_invalid'],
+    [[{ ...company, name: 'Fi*** GmbH' }], [companyUrl], 'company_snapshot_fields_invalid'],
+    [[{ ...company, url: other }], [companyUrl], 'company_snapshot_identity_invalid'],
+    [[{ ...company, error: 'private-provider-error' }], [companyUrl], 'company_snapshot_identity_invalid'],
+    [[], [companyUrl], 'company_snapshot_incomplete'],
+    [[company, company], [companyUrl, other], 'company_snapshot_identity_invalid'],
+    [[company, { ...company, url: other }], [companyUrl, other], 'ambiguous_company_identity'],
+    [[company], [companyUrl, companyUrl], 'invalid_company_candidates'],
+  ]) {
+    const result = verifyCompanySnapshot(rows, query, urls);
+    assert.equal(result.ok, false); assert.equal(result.code, code);
+    assert.deepEqual(result.records, []);
+    assert(!JSON.stringify(result).includes('private-provider-error'));
+  }
+});
 
 test('canonical URLs reject credentials, foreign hosts, encoded paths and non-profile routes', () => {
   assert.equal(canonicalLinkedIn('https://de.linkedin.com/in/fixture-person?trk=x', 'in'), profile);
