@@ -273,7 +273,8 @@ async function assertDelayedHarnessStatus(page) {
     assert.equal(await note.isVisible(), paused, 'paused note must follow the native projection in both directions');
     await assertHarnessStatus(paused);
     assert.equal(await pause.textContent(), paused ? 'Crew weiterarbeiten lassen' : 'Crew pausieren');
-    assert.equal(await page.evaluate(() => window.crewFixture.state.mainRenderPending), true);
+    // Status patches arrive ahead of the debounced general render.
+    await page.waitForFunction(() => window.crewFixture.state.mainRenderPending, null, {timeout:10000});
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !window.crewFixture.state.mainRenderPending);
     assert.equal(await page.locator('.ctox-more-actions-body:popover-open').count(), 0, 'closing the menu must flush the deferred main render');
