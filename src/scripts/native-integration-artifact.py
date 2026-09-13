@@ -100,6 +100,10 @@ def main():
         'coding_agents::pi_sidecar::tests::inherited_minimax_route_drives_real_pi_tools_through_native_bridge',
         'coding_agents::pi_sidecar::tests::responses_edit_owner_applies_only_complete_source_and_session',
         'coding_agents::pi_sidecar::tests::incomplete_failure_detail_only_preserves_allowlisted_enum_and_counts',
+        'coding_agents::pi_sidecar::tests::module_source_is_complete_beyond_collection_and_module_page_limits',
+        'coding_agents::pi_sidecar::tests::module_source_preserves_native_and_rxdb_version_precedence',
+        'coding_agents::pi_sidecar::tests::module_source_rejects_invalid_or_ambiguous_snapshots_without_content',
+        'coding_agents::pi_sidecar::tests::missing_module_source_stops_before_model_or_sidecar_and_session_write',
     }
     missing = required - set(names)
     if missing:
@@ -119,6 +123,21 @@ def main():
     binary = target_dir / TARGET / 'release/ctox'
     RECORD['binary_sha256'] = digest(binary)
     run('spawn-liveness', [str(binary), 'process-mining', 'spawn-liveness'])
+    # Business OS directory requirements, on the same reviewed product source.
+    run('cargo-check', ['cargo', 'check', '--locked', '--jobs', '2'])
+    run('rxdb-native-tests', ['cargo', 'test', '--locked', '--manifest-path',
+                             'src/core/rxdb/Cargo.toml', '--jobs', '2',
+                             '--', '--test-threads=2'])
+    run('browser-dependencies', ['npm', '--prefix', 'src/apps/business-os', 'ci'])
+    run('browser-runtime', ['npm', '--prefix', 'src/apps/business-os', 'exec',
+                            'playwright', 'install', '--with-deps', 'chromium'])
+    run('rxdb-wire-fixture', ['cargo', 'build', '--locked', '--manifest-path',
+                             'src/core/rxdb/Cargo.toml', '--example',
+                             'v15_wire_daemon', '--target-dir', str(target_dir),
+                             '--jobs', '2'])
+    os.environ['COMMAND_PLANE_BASELINE_PATH'] = str(EVIDENCE / 'command-plane.json')
+    run('rxdb-js-tests', ['node', 'src/apps/business-os/rxdb/tests/run-all.mjs',
+                         '--require-wire-daemon'])
     bundle = OUT / 'bundle'
     bundle.mkdir()
     # Export only tracked runtime source; never copy checkout dependencies or state.
