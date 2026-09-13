@@ -4975,6 +4975,10 @@ fn collect_module_source_files(
 ) -> anyhow::Result<()> {
     for entry in fs::read_dir(current)? {
         let entry = entry?;
+        // Source reads must not follow file symlinks out of the app either.
+        if entry.file_type()?.is_symlink() {
+            continue;
+        }
         let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
@@ -5045,13 +5049,13 @@ pub(super) fn resolve_module_source_root(
     app_root: &Path,
     module_id: &str,
 ) -> anyhow::Result<PathBuf> {
-    let core = app_root.join("modules").join(module_id);
-    if core.join("module.json").is_file() {
-        return Ok(core);
-    }
-    let installed = app_root.join("installed-modules").join(module_id);
-    if installed.join("module.json").is_file() {
-        return Ok(installed);
+    for namespace in ["modules", "installed-modules", "local-modules"] {
+        if let Some(manifest) = checked_module_manifest_candidate(app_root, namespace, module_id)? {
+            return Ok(manifest
+                .parent()
+                .context("module manifest parent missing")?
+                .to_path_buf());
+        }
     }
     anyhow::bail!("module `{module_id}` was not found")
 }
@@ -5063,7 +5067,12 @@ pub(super) fn resolve_module_source_root_for_root(
 ) -> anyhow::Result<(PathBuf, PathBuf)> {
     let manifest_path = module_manifest_path(root, app_root, module_id)?;
     let source_app_root = app_root_for_module_manifest(app_root, &manifest_path);
-    let module_root = resolve_module_source_root(&source_app_root, module_id)?;
+    // Keep the exact selected manifest; re-searching another root can pick a
+    // shadowed module with the same id instead of the authorized source.
+    let module_root = manifest_path
+        .parent()
+        .context("module manifest parent missing")?
+        .to_path_buf();
     Ok((module_root, source_app_root))
 }
 
@@ -5961,23 +5970,78 @@ pub(super) fn module_manifest_path(
     let module_id = module_id.trim();
     let installed_app_root = resolve_business_os_installed_app_root(root);
     let mut candidates = vec![
-        app_root.join("modules").join(module_id).join("module.json"),
-        app_root
-            .join("installed-modules")
-            .join(module_id)
-            .join("module.json"),
-        installed_app_root
-            .join("installed-modules")
-            .join(module_id)
-            .join("module.json"),
+        (app_root, "modules"),
+        (app_root, "installed-modules"),
+        (installed_app_root.as_path(), "installed-modules"),
+        (app_root, "local-modules"),
+        (installed_app_root.as_path(), "local-modules"),
     ];
     candidates.dedup();
-    for candidate in candidates {
-        if candidate.is_file() {
+    for (base, namespace) in candidates {
+        if let Some(candidate) = checked_module_manifest_candidate(base, namespace, module_id)? {
+            let module_dir = candidate
+                .parent()
+                .context("module manifest parent missing")?;
+            let manifest: Value = serde_json::from_slice(&fs::read(&candidate)?)?;
+            if namespace == "modules" {
+                super::customer_apps::authorize_global_module(module_dir, &manifest)?;
+            } else {
+                super::customer_apps::authorize_runtime_module(root, module_dir, &manifest)?;
+            }
             return Ok(candidate);
         }
     }
     anyhow::bail!("module manifest not found: {module_id}")
+}
+
+fn checked_module_manifest_candidate(
+    app_root: &Path,
+    namespace: &str,
+    module_id: &str,
+) -> anyhow::Result<Option<PathBuf>> {
+    anyhow::ensure!(
+        !module_id.is_empty()
+            && module_id
+                .bytes()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == b'-' || ch == b'_'),
+        "unsafe module id"
+    );
+    let relative = PathBuf::from(namespace).join(module_id).join("module.json");
+    ensure_source_path_has_no_symlink_components(app_root, &relative)?;
+    let candidate = app_root.join(relative);
+    if !candidate.is_file() {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        candidate
+            .canonicalize()?
+            .starts_with(app_root.canonicalize()?),
+        "module manifest escapes its source root"
+    );
+    let manifest: Value = serde_json::from_slice(&fs::read(&candidate)?)?;
+    anyhow::ensure!(
+        manifest.get("id").and_then(Value::as_str) == Some(module_id),
+        "module manifest id does not match source directory"
+    );
+    Ok(Some(candidate))
+}
+
+/// Source tools can resolve operator-owned local modules, but delegated app
+/// authoring currently only has installed/source sandbox and validator modes.
+/// Resolve the authorized source, never a caller-supplied install_target/path:
+/// admitting a local app here would create an installed-module shadow.
+pub(super) fn ensure_delegated_app_modify_target_supported(
+    root: &Path,
+    module_id: &str,
+) -> anyhow::Result<()> {
+    let app_root = resolve_business_os_app_root(root)?;
+    let (module_root, _) = resolve_module_source_root_for_root(root, &app_root, module_id)?;
+    anyhow::ensure!(
+        module_root.parent().and_then(Path::file_name).and_then(|name| name.to_str())
+            != Some("local-modules"),
+        "local_app_authoring_unsupported: module `{module_id}` is operator-owned under local-modules; delegated modify_app has no local sandbox/validation lifecycle contract and must not create an installed-module shadow"
+    );
+    Ok(())
 }
 
 pub(super) fn app_root_for_module_manifest(
@@ -5993,7 +6057,7 @@ pub(super) fn app_root_for_module_manifest(
     if collection_dir
         .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| matches!(name, "modules" | "installed-modules"))
+        .is_some_and(|name| matches!(name, "modules" | "installed-modules" | "local-modules"))
     {
         return collection_dir
             .parent()
@@ -6410,16 +6474,34 @@ pub fn list_revoked_business_peers(root: &Path) -> anyhow::Result<Vec<Value>> {
     Ok(rows)
 }
 
-pub fn record_command(
+pub fn record_command(root: &Path, command: BusinessCommand) -> anyhow::Result<CommandAccepted> {
+    record_command_inner(root, command, None)
+}
+
+pub(super) fn record_mcp_app_command(
+    root: &Path,
+    authority: Option<super::mcp_channel::AuthenticatedMcpAppCommand>,
+    command: BusinessCommand,
+) -> anyhow::Result<CommandAccepted> {
+    record_command_inner(root, command, authority.as_ref())
+}
+
+fn record_command_inner(
     root: &Path,
     mut command: BusinessCommand,
+    authority: Option<&super::mcp_channel::AuthenticatedMcpAppCommand>,
 ) -> anyhow::Result<CommandAccepted> {
     let command_id = command
         .id
         .clone()
         .unwrap_or_else(|| format!("cmd_{}", Uuid::new_v4()));
     command.id = Some(command_id.clone());
-    if let Some(_decision) = reject_app_build_command_if_denied(root, &command)? {
+    let authenticated_session = authority
+        .map(|authority| authority.session(root, &command))
+        .transpose()?;
+    if let Some(_decision) =
+        reject_app_build_command_if_denied(root, &command, authenticated_session.as_ref())?
+    {
         return Ok(CommandAccepted {
             ok: false,
             command_id,
@@ -6429,7 +6511,16 @@ pub fn record_command(
             ..CommandAccepted::default()
         });
     }
-    let native_authorization = queue_command_native_authorization(root, &command)?;
+    if command.command_type == "ctox.business_os.app.modify" {
+        let (_, module_id) = app_build_command_policy_target(&command)
+            .context("app modification target is missing")?;
+        ensure_delegated_app_modify_target_supported(root, &module_id)?;
+    }
+    let mut native_authorization =
+        queue_command_native_authorization(root, &command, authenticated_session.as_ref())?;
+    if let (Some(authority), Some(receipt)) = (authority, native_authorization.as_mut()) {
+        receipt["managed_mcp_authority"] = authority.receipt()?;
+    }
     {
         let conn = open_store(root)?;
         if let Some(denied) = claim_or_reject_business_chat(root, &conn, &command_id, &command)? {
@@ -8097,11 +8188,15 @@ pub(super) fn claim_or_reject_business_chat(
 fn reject_app_build_command_if_denied(
     root: &Path,
     command: &BusinessCommand,
+    authenticated_session: Option<&BusinessOsSession>,
 ) -> anyhow::Result<Option<PolicyDecision>> {
     let Some((permission, module_id)) = app_build_command_policy_target(command) else {
         return Ok(None);
     };
-    let session = rxdb_authenticated_session(root, command)?;
+    let session = match authenticated_session {
+        Some(session) => session.clone(),
+        None => rxdb_authenticated_session(root, command)?,
+    };
     let decision = match permission {
         BusinessOsPermission::AppsModify => {
             module_policy_decision(root, &session, permission, &module_id)?
@@ -8114,7 +8209,16 @@ fn reject_app_build_command_if_denied(
         )?,
     };
     if decision.allowed {
-        record_business_policy_decision_event(root, command, &decision)?;
+        if let Some(session) = authenticated_session {
+            record_business_policy_decision_event_with_actor(
+                root,
+                command,
+                &decision,
+                session_audit_actor_context(session),
+            )?;
+        } else {
+            record_business_policy_decision_event(root, command, &decision)?;
+        }
         return Ok(None);
     }
     reject_command_if_policy_denied(root, command, &decision)?;
@@ -8145,11 +8249,15 @@ pub(super) fn queue_command_policy_target(
 fn queue_command_native_authorization(
     root: &Path,
     command: &BusinessCommand,
+    authenticated_session: Option<&BusinessOsSession>,
 ) -> anyhow::Result<Option<Value>> {
-    if !matches!(command.origin, CommandOrigin::ReplicatedPeer) {
+    if authenticated_session.is_none() && !matches!(command.origin, CommandOrigin::ReplicatedPeer) {
         return Ok(None);
     }
-    let session = rxdb_authenticated_session(root, command)?;
+    let session = match authenticated_session {
+        Some(session) => session.clone(),
+        None => rxdb_authenticated_session(root, command)?,
+    };
     let decision = queue_command_policy_decision(root, &session, command)?;
     anyhow::ensure!(
         decision.allowed,
@@ -8206,6 +8314,26 @@ fn revalidate_queue_native_authorization(
         .and_then(Value::as_str)
         .map(normalize_business_role)
         .context("Business OS command authorized actor role is missing")?;
+    if let Some(receipt) = authorization.get("managed_mcp_authority") {
+        let authority =
+            super::mcp_channel::AuthenticatedMcpAppCommand::from_native_receipt(receipt)?;
+        let session = authority.session(root, command)?;
+        let user = session
+            .user
+            .as_ref()
+            .context("managed MCP app actor is missing")?;
+        anyhow::ensure!(
+            user.id == actor_id && user.role == authorized_role,
+            "native managed MCP authorization actor changed"
+        );
+        let decision = queue_command_policy_decision(root, &session, command)?;
+        anyhow::ensure!(
+            decision.allowed,
+            "Business OS execution permission was revoked: {}",
+            decision.display_reason
+        );
+        return Ok((session, decision));
+    }
     let conn = open_store(root)?;
     seed_configured_business_users(&conn)?;
     let user = active_business_user(&conn, actor_id)?
@@ -8259,6 +8387,11 @@ pub(crate) fn revalidate_business_command_execution_authorization(
         session.authenticated,
         "Business OS actor is no longer authenticated at harness lease"
     );
+    if command.command_type == "ctox.business_os.app.modify" {
+        let (_, module_id) = app_build_command_policy_target(&command)
+            .context("app modification target is missing")?;
+        ensure_delegated_app_modify_target_supported(root, &module_id)?;
+    }
     let missing_dependencies = missing_business_command_dependencies(root, &command)?;
     anyhow::ensure!(
         missing_dependencies.is_empty(),
@@ -8391,6 +8524,20 @@ pub(super) fn record_business_policy_decision_event(
     command: &BusinessCommand,
     decision: &PolicyDecision,
 ) -> anyhow::Result<()> {
+    record_business_policy_decision_event_with_actor(
+        root,
+        command,
+        decision,
+        policy_audit_actor_context(root, command),
+    )
+}
+
+fn record_business_policy_decision_event_with_actor(
+    root: &Path,
+    command: &BusinessCommand,
+    decision: &PolicyDecision,
+    actor: Value,
+) -> anyhow::Result<()> {
     let command_id = command.id.as_deref().context("command id is required")?;
     let event_type = if decision.allowed {
         "business_os.policy.allowed"
@@ -8398,7 +8545,6 @@ pub(super) fn record_business_policy_decision_event(
         "business_os.policy.denied"
     };
     let observed_at_ms = now_ms() as i64;
-    let actor = policy_audit_actor_context(root, command);
     let client_context = policy_audit_client_context(command);
     let conn = open_store(root)?;
     insert_business_event(

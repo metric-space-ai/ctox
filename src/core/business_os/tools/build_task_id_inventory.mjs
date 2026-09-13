@@ -30,7 +30,7 @@ const classifications = new Map(Object.entries({
   process_source_parse_command: ['execution_link', 'execution_task_id'],
   process_systematic_research_command: ['execution_link', 'execution_task_id'],
   push_repair_action: ['domain_queue_reference', 'target_task_id or a domain-specific repair-task reference'],
-  record_command: ['execution_link', 'execution_task_id'],
+  record_command_inner: ['execution_link', 'execution_task_id'],
   record_report: ['execution_link', 'execution_task_id'],
   record_report_command: ['execution_link', 'execution_task_id'],
   reusable_web_stack_auth_assist_request: ['execution_link', 'execution_task_id'],

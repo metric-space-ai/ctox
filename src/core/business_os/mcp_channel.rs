@@ -36,6 +36,9 @@ use super::store;
 #[path = "mcp_writeback.rs"]
 mod command_writeback;
 pub(crate) use command_writeback::supports_command_writeback;
+#[path = "mcp_app_authority.rs"]
+mod app_authority;
+pub(super) use app_authority::AuthenticatedMcpAppCommand;
 
 const DEFAULT_LIMIT: usize = 25;
 const MAX_LIMIT: usize = 100;
@@ -93,9 +96,9 @@ pub struct McpChannelRequestContext {
     pub tool: String,
     pub request_id: String,
     pub confirmation_state: McpConfirmationState,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub trusted_role: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub trusted_role_source: Option<String>,
 }
 
@@ -1951,8 +1954,9 @@ pub fn create_app(
         "install_target": "runtime-installed-module",
         "required_skills": ["business-os-app-module-development"]
     });
-    let accepted = store::record_command(
+    let accepted = store::record_mcp_app_command(
         root,
+        AuthenticatedMcpAppCommand::from_context(context)?,
         store::BusinessCommand {
             origin: store::CommandOrigin::TrustedLocal,
             id: None,
@@ -2011,6 +2015,7 @@ pub fn modify_app(
     enforce_module_policy(root, &module_id)?;
     enforce_business_os_mcp_policy(root, context, "business_os.modify_app", arguments)?;
     let _module = get_module(root, context, &module_id)?;
+    store::ensure_delegated_app_modify_target_supported(root, &module_id)?;
     let title = optional_string_arg(arguments, "title")
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| format!("Modify {}", title_from_module_id(&module_id)));
@@ -2031,8 +2036,9 @@ pub fn modify_app(
         "install_target": "runtime-installed-module",
         "required_skills": ["business-os-app-module-development"]
     });
-    let accepted = store::record_command(
+    let accepted = store::record_mcp_app_command(
         root,
+        AuthenticatedMcpAppCommand::from_context(context)?,
         store::BusinessCommand {
             origin: store::CommandOrigin::TrustedLocal,
             id: None,
@@ -6586,7 +6592,10 @@ fn context_from_arguments_with_trusted_gateway_context(
     arguments: &Value,
     trusted_gateway_context: Option<&Value>,
 ) -> anyhow::Result<McpChannelRequestContext> {
-    let context = arguments.get("_context").unwrap_or(&Value::Null);
+    // The role and its actor/workspace must have the same provenance. Never
+    // combine a verified gateway role with caller-selected identity fields.
+    let context = trusted_gateway_context
+        .unwrap_or_else(|| arguments.get("_context").unwrap_or(&Value::Null));
     let trusted_role = trusted_managed_gateway_role(trusted_gateway_context);
     let internal_context = trusted_gateway_context.filter(|context| {
         string_field(context, "auth_source").as_deref() == Some(MCP_INTERNAL_SESSION_AUTH_SOURCE)
