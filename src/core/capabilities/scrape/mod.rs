@@ -1963,3 +1963,40 @@ use semantic_enrichment::{
 
 #[cfg(test)]
 mod tests;
+
+/// Register a real executable fixture through the production registry. The
+/// recovery test substitutes provider I/O only, never command execution.
+#[cfg(test)]
+pub(crate) fn register_provider_recovery_fixture(
+    root: &Path,
+    target_key: &str,
+    source_id: &str,
+    script: &str,
+) -> Result<PathBuf> {
+    let mut config = json!({"skip_probe":true,"expected_min_records":1,
+        "expected_provider":source_id,"llm_enrichment":{"enabled":false}});
+    if source_id == "linkedin.com" {
+        config["async_provider"] = json!("brightdata");
+    }
+    let target = upsert_target(
+        root,
+        DEFAULT_RUNTIME_ROOT,
+        json!({
+            "target_key":target_key, "display_name":"Recovery fixture",
+            "start_url":format!("https://www.{source_id}/"), "target_kind":"prospect-research",
+            "config":config, "output_schema":{"schema_key":"prospect.v1"}
+        }),
+    )?;
+    let entry = root.join(format!("{target_key}-recovery-fixture.cjs"));
+    fs::write(&entry, script)?;
+    register_script(
+        root,
+        DEFAULT_RUNTIME_ROOT,
+        target_key,
+        entry.to_str().context("fixture path")?,
+        "javascript",
+        None,
+        None,
+    )?;
+    Ok(resolve_workspace_dir(root, &target.workspace_dir).join("fixture-counter.json"))
+}

@@ -2085,12 +2085,27 @@ fn execute(
         workspace: Some(workspace),
         persist_workspace: true,
     };
-    let mut result = match previous {
-        Some(previous) => {
-            ctox_web_stack::resume_ctox_person_research_tool(root, &research_request, previous)?
-        }
-        None => ctox_web_stack::run_ctox_person_research_tool(root, &research_request)?,
+    let mut dispatch = |target_key: &str, input: &Value| -> anyhow::Result<Value> {
+        let outcome = crate::capabilities::scrape::execute_scrape_with_outcome(
+            root,
+            &[
+                "--target-key".into(),
+                target_key.into(),
+                "--trigger-kind".into(),
+                "manual".into(),
+                "--allow-heal".into(),
+                "--input-json".into(),
+                input.to_string(),
+            ],
+        )?;
+        Ok(serde_json::to_value(outcome)?)
     };
+    let mut result = ctox_web_stack::run_ctox_person_research_with_dispatch(
+        root,
+        &research_request,
+        previous,
+        &mut dispatch,
+    )?;
     result["research_instructions_len"] = serde_json::json!(research_instructions_len);
     result["workspace_root"] = Value::String(
         research_request

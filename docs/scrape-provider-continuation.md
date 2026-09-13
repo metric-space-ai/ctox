@@ -90,3 +90,14 @@ Account/API entitlement,
 encrypted-secret/native-runner wiring, real daemon restart tests and the full
 DE/AT/CH app research/reload acceptance remain required. No live target has been
 activated by these changes.
+
+The native recovery regression launches separate bounded test processes against
+one isolated persisted root. It drives real `recover_once`, worker execution,
+Workjet planning/resume, registered fixture scripts and native scrape receipts.
+It checks a not-yet-due restart, a due restart, unchanged completed-source call
+count/receipt, a single provider submission, stable operation and persisted
+terminal readback. The adapter-dispatch seam replaces only provider execution
+transport, not the command worker or planner. Provider fixture counters are
+written by actual registered scripts; no whole-execute mock fabricates them.
+The regression still requires native compilation and execution before it can
+be used as restart evidence; it is not a real provider or live tenant test.

@@ -181,6 +181,217 @@ pub(super) fn prepare_outcome(
 mod tests {
     use super::*;
 
+    const RECOVERY_ID: &str = "provider-recovery-process-fixture";
+
+    fn canonical(root: &Path) -> Value {
+        crate::channels::business_command_projection(root, RECOVERY_ID).unwrap()
+    }
+
+    fn child_phase(root: &Path, phase: &str) {
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+        let name = format!(
+            "{}::provider_recovery_process_fixture",
+            module_path!().split_once("::").unwrap().1
+        );
+        let log_path = root.join(format!("{phase}.log"));
+        let log = std::fs::File::create(&log_path).unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &name,
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("CTOX_PROVIDER_RECOVERY_TEST_ROOT", root)
+            .env("CTOX_PROVIDER_RECOVERY_TEST_PHASE", phase)
+            .stdout(Stdio::from(log.try_clone().unwrap()))
+            .stderr(Stdio::from(log))
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(40);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(
+                    status.success(),
+                    "fixture {phase} failed: {}",
+                    std::fs::read_to_string(&log_path).unwrap_or_default()
+                );
+                break;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("fixture {phase} exceeded its 40-second bound");
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    #[test]
+    fn provider_command_recovers_across_process_restart_without_duplicate_sources(
+    ) -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        std::fs::write(root.join("provider-recovery-owned"), b"isolated test root")?;
+        child_phase(root, "first");
+        let first = canonical(root);
+        assert_eq!(first["execution_phase"], "running");
+        assert_eq!(first["terminal_status"], "none");
+        assert_eq!(first["result"]["status"], "awaiting_provider");
+        let xing = first["result"]["scrape_runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|run| run["source_id"] == "xing.com")
+            .unwrap()
+            .clone();
+        assert_eq!(xing["classification"], "succeeded");
+        let receipts = first["result"]["provider_wait"]["receipts"].clone();
+        let paths: Value =
+            serde_json::from_slice(&std::fs::read(root.join("fixture-counters.json"))?)?;
+        let counter = |source: &str| -> Value {
+            let path = Path::new(paths[source].as_str().unwrap());
+            assert!(path.starts_with(root));
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+        };
+        assert_eq!(counter("xing")["calls"], 1);
+        assert_eq!(counter("linkedin")["submissions"], 1);
+        child_phase(root, "early");
+        assert_eq!(canonical(root)["result"], first["result"]);
+        assert_eq!(counter("xing")["calls"], 1);
+        assert_eq!(counter("linkedin")["calls"], 1);
+
+        // Move only the persisted wake time into the past instead of sleeping
+        // 30s. Operation, receipts, poll count and original deadline stay real.
+        let conn = rusqlite::Connection::open(crate::paths::core_db(root))?;
+        assert_eq!(
+            conn.execute(
+                "UPDATE business_command_aggregates
+            SET result_json=json_set(result_json,'$.provider_wait.next_poll_at_ms',0)
+            WHERE command_id=?1 AND execution_phase='running'",
+                [RECOVERY_ID]
+            )?,
+            1
+        );
+        drop(conn);
+        child_phase(root, "resume");
+        let terminal = canonical(root);
+        assert_eq!(terminal["terminal_status"], "completed");
+        assert_eq!(terminal["attempt"], 1);
+        assert_eq!(terminal["result"]["ok"], true);
+        assert!(terminal["result"]["scrape_runs"]
+            .as_array()
+            .unwrap()
+            .contains(&xing));
+        let linkedin = counter("linkedin");
+        assert_eq!(linkedin["calls"], 2);
+        assert_eq!(linkedin["submissions"], 1);
+        assert_eq!(linkedin["operations"][0], receipts[0]["operation_id"]);
+        assert_eq!(linkedin["operations"][1], receipts[0]["operation_id"]);
+        assert_eq!(
+            counter("xing")["calls"],
+            1,
+            "completed native adapter reran after restart"
+        );
+        child_phase(root, "terminal");
+        assert_eq!(canonical(root)["result"], terminal["result"]);
+        assert_eq!(counter("linkedin")["calls"], 2);
+        assert_eq!(counter("xing")["calls"], 1);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "bounded subprocess fixture; invoked by provider_command_recovers_across_process_restart_without_duplicate_sources"]
+    fn provider_recovery_process_fixture() -> anyhow::Result<()> {
+        let root = PathBuf::from(
+            std::env::var_os("CTOX_PROVIDER_RECOVERY_TEST_ROOT")
+                .context("fixture root required")?,
+        );
+        anyhow::ensure!(
+            std::fs::read(root.join("provider-recovery-owned"))? == b"isolated test root",
+            "not a fixture root"
+        );
+        let phase = std::env::var("CTOX_PROVIDER_RECOVERY_TEST_PHASE")?;
+        if phase == "first" {
+            store::tests::seed_business_user(&root, "researcher", "chef")?;
+            crate::inference::runtime_env::set_runtime_env_value(
+                &root,
+                "CTOX_WEB_SEARCH_PROVIDER",
+                "mock",
+            )?;
+            let script = include_str!("fixtures/person-research-provider-recovery.cjs");
+            let linkedin = crate::capabilities::scrape::register_provider_recovery_fixture(
+                &root,
+                "linkedin-com",
+                "linkedin.com",
+                script,
+            )?;
+            let xing = crate::capabilities::scrape::register_provider_recovery_fixture(
+                &root, "xing-com", "xing.com", script,
+            )?;
+            std::fs::write(
+                root.join("fixture-counters.json"),
+                serde_json::to_vec(&serde_json::json!({"linkedin":linkedin,"xing":xing}))?,
+            )?;
+            let (token, _) =
+                store::issue_business_os_capability_token(&root, "researcher", now_ms())?;
+            let command = BusinessCommand {
+                origin: store::CommandOrigin::TrustedLocal,
+                id: Some(RECOVERY_ID.into()),
+                module: "research".into(),
+                command_type: "web_stack.person_research".into(),
+                record_id: Some("fixture-company".into()),
+                payload: serde_json::json!({"company":"Fixture GmbH","country":"DE","mode":"new_record",
+                    "fields":["person_linkedin","person_xing"],"include_private":["linkedin.com","xing.com"]}),
+                client_context: serde_json::json!({"actor":{"id":"researcher"},"capability_token":token}),
+            };
+            crate::channels::claim_business_control_command(
+                &root,
+                store::business_command_core_claim(RECOVERY_ID, &command)?,
+            )?;
+            let conn = store::open_store(&root)?;
+            conn.execute("INSERT INTO business_commands
+                (command_id,module,command_type,record_id,status,payload_json,client_context_json,observed_at_ms)
+                VALUES (?1,'research','web_stack.person_research','fixture-company','accepted',?2,?3,1)",
+                rusqlite::params![RECOVERY_ID,serde_json::to_string(&command.payload)?,serde_json::to_string(&command.client_context)?])?;
+        }
+        let started = super::super::recover_once(&root)?;
+        if matches!(phase.as_str(), "early" | "terminal") {
+            assert_eq!(started, 0);
+            return Ok(());
+        }
+        anyhow::ensure!(
+            matches!(phase.as_str(), "first" | "resume"),
+            "unknown fixture phase"
+        );
+        assert_eq!(started, 1);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let current = canonical(&root);
+            assert_ne!(
+                current["terminal_status"],
+                "failed",
+                "native recovery failed: {:?}",
+                current.pointer("/result/error_code")
+            );
+            let done = if phase == "first" {
+                current["result"]["status"] == "awaiting_provider"
+            } else {
+                current["terminal_status"] == "completed"
+            };
+            if done {
+                return Ok(());
+            }
+            anyhow::ensure!(
+                std::time::Instant::now() < deadline,
+                "native recovery worker exceeded fixture deadline"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
+
     fn checkpoint() -> Value {
         serde_json::json!({
             "status":"awaiting_provider", "fields":{"firma_name":{"value":"ACME"}},
