@@ -172,8 +172,11 @@ pub(super) trait GuestAuthorization {
         Fut: Future<Output = Result<()>> + Send;
 }
 
-fn identifier(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+pub(super) fn identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.trim() == value
+        && value.len() <= 256
+        && !value.chars().any(char::is_control)
 }
 
 impl GuestInput {

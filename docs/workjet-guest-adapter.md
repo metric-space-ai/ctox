@@ -40,6 +40,8 @@ The command connector is `src/core/business_os/guest_commands.rs`. Payloads are 
 
 The command plane carries `GuestRuntimeInjection` on the prepared command. Ordinary `accept_rxdb_business_command` / `accept_rxdb_business_command_with_origin` pass only `Unregistered`, so dispatch fails closed. `accept_rxdb_business_command_with_guest_runtime` is the explicit injection boundary: `Registered` holds a type-erased `GuestCommandExecutor` that calls `dispatch_guest`. Tests use that boundary; they do not install a process-global owner, and this slice does not register a production lifecycle owner.
 
+The synchronous connector rejects execution from a Tokio current-thread runtime before polling the guest effect. A production owner must arrange dispatch on its supervised execution runtime or a blocking boundary; simply injecting it into a current-thread intake is not an operational integration. Optional scope identifiers are validated before owner lookup, and the guest runtime shares the same identifier predicate.
+
 This path must not reinterpret ctox.browser.live.v1's current human-controller semantics. Remaining unowned work: VM provision/guest readiness, a production GuestAuthorization plus frame/delivery path, P2P streaming attachment, takeover fencing, and two-host restore. Only after those exist and are verified can Workjet advertise VM in its capability catalog.
 
 ## QEMU monitor adapter

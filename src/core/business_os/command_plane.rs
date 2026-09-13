@@ -1299,9 +1299,7 @@ impl PreparedBusinessCommand {
             mutation.client_context = command.client_context.clone();
             prepared.report_mutation = Some(mutation);
         }
-        if super::guest_commands::is_guest_command(&command.command_type) {
-            prepared.guest_owner = super::guest_commands::injection_from_runtime();
-        }
+
         Ok(prepared)
     }
 }

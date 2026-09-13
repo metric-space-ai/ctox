@@ -25,7 +25,6 @@ pub(super) const GUEST_OBSERVE_COMMAND_TYPE: &str = "ctox.guest.observe";
 pub(super) const GUEST_INPUT_COMMAND_TYPE: &str = "ctox.guest.input";
 
 const MAX_GUEST_COMMAND_PAYLOAD_BYTES: usize = 20_480;
-const MAX_IDENTIFIER_BYTES: usize = 256;
 
 /// Owner/driver slot carried by the command plane.
 ///
@@ -61,17 +60,6 @@ impl GuestCommandExecutor {
     fn run(&self, session: &BusinessOsSession, command: &BusinessCommand) -> Result<Value> {
         (self.dispatch)(session, command)
     }
-}
-
-pub(super) fn is_guest_command(command_type: &str) -> bool {
-    matches!(
-        command_type,
-        GUEST_OBSERVE_COMMAND_TYPE | GUEST_INPUT_COMMAND_TYPE
-    )
-}
-
-pub(super) fn injection_from_runtime() -> GuestRuntimeInjection {
-    GuestRuntimeInjection::Unregistered
 }
 
 /// Native authority/driver owner. Tests supply a fake; production has none
@@ -161,6 +149,12 @@ fn parse_guest_command(command: &BusinessCommand) -> Result<GuestRequest> {
                 serde_json::from_value(command.payload.clone())
                     .context("invalid ctox.guest.observe payload")?;
             validate_identifier(&payload.guest_id, "guest_id")?;
+            validate_optional_scope_identifiers([
+                payload.instance_id.as_deref(),
+                payload.project_id.as_deref(),
+                payload.thread_id.as_deref(),
+                payload.worker_profile_id.as_deref(),
+            ])?;
             Ok(GuestRequest {
                 guest_id: payload.guest_id,
                 action: GuestAction::Observe,
@@ -170,6 +164,12 @@ fn parse_guest_command(command: &BusinessCommand) -> Result<GuestRequest> {
             let payload: GuestInputCommandPayload = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.guest.input payload")?;
             validate_identifier(&payload.guest_id, "guest_id")?;
+            validate_optional_scope_identifiers([
+                payload.instance_id.as_deref(),
+                payload.project_id.as_deref(),
+                payload.thread_id.as_deref(),
+                payload.worker_profile_id.as_deref(),
+            ])?;
             validate_identifier(&payload.frame_id, "frame_id")?;
             Ok(GuestRequest {
                 guest_id: payload.guest_id,
@@ -224,12 +224,23 @@ fn claim_matches(claim: Option<&str>, canonical: &str, field: &str) -> Result<()
 
 fn validate_identifier(value: &str, field: &str) -> Result<()> {
     ensure!(
-        !value.is_empty()
-            && value.trim() == value
-            && value.len() <= MAX_IDENTIFIER_BYTES
-            && !value.chars().any(char::is_control),
+        super::guest_runtime::identifier(value),
         "guest {field} is invalid"
     );
+    Ok(())
+}
+
+fn validate_optional_scope_identifiers(claims: [Option<&str>; 4]) -> Result<()> {
+    for (claim, field) in claims.into_iter().zip([
+        "instance_id",
+        "project_id",
+        "thread_id",
+        "worker_profile_id",
+    ]) {
+        if let Some(value) = claim {
+            validate_identifier(value, field)?;
+        }
+    }
     Ok(())
 }
 

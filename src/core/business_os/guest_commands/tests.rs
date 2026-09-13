@@ -20,6 +20,7 @@ struct State {
     captures: AtomicUsize,
     inputs: AtomicUsize,
     published: AtomicUsize,
+    scope_lookups: AtomicUsize,
 }
 
 impl Default for State {
@@ -31,6 +32,7 @@ impl Default for State {
             captures: AtomicUsize::new(0),
             inputs: AtomicUsize::new(0),
             published: AtomicUsize::new(0),
+            scope_lookups: AtomicUsize::new(0),
         }
     }
 }
@@ -152,6 +154,7 @@ struct Owner {
     driver: Driver,
     authority: Authority,
     bound_user_id: String,
+    admissions: std::collections::HashMap<&'static str, &'static str>,
 }
 
 pub(super) fn test_runtime(revoke_during_capture: bool) -> GuestRuntimeInjection {
@@ -173,6 +176,22 @@ impl Owner {
             },
             state,
             bound_user_id: "owner".into(),
+            admissions: [
+                "cmd-observe-ok",
+                "cmd-observe-first",
+                "cmd-input-ok",
+                "cmd-observe-rights",
+                "cmd-input-denied",
+                "cmd-text",
+                "cmd-observe-revoked",
+                "cmd-frame",
+                "cmd-actor",
+                "cmd-guest-observe-registered",
+                "cmd-guest-input-registered",
+            ]
+            .into_iter()
+            .map(|id| (id, "human-session-a"))
+            .collect(),
         }
     }
 }
@@ -191,6 +210,7 @@ impl GuestCommandOwner for Owner {
     }
 
     fn scope(&self, guest_id: &str) -> Result<GuestScope> {
+        self.state.scope_lookups.fetch_add(1, Ordering::SeqCst);
         ensure!(guest_id == "guest-a", "unknown guest");
         Ok(scope())
     }
@@ -201,20 +221,17 @@ impl GuestCommandOwner for Owner {
         bound: &GuestScope,
         command: &BusinessCommand,
     ) -> Result<GuestCaller> {
-        ensure!(
-            command
-                .id
-                .as_deref()
-                .is_some_and(|id| id.starts_with("cmd-")),
-            "unknown command admission"
-        );
+        let admitted_session = self
+            .admissions
+            .get(command.id.as_deref().context("missing command admission")?)
+            .context("unknown command admission")?;
         let user_id = session_user_id(session).context("missing session user")?;
         ensure!(
             user_id == self.bound_user_id && user_id == bound.user_id,
             "guest actor does not match the bound guest"
         );
         Ok(GuestCaller::Human {
-            session_id: user_id.to_string(),
+            session_id: (*admitted_session).to_string(),
         })
     }
 }
@@ -455,6 +472,79 @@ fn observe_and_input_rights_are_rechecked_and_revocation_blocks_publication() ->
     Ok(())
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn current_thread_dispatch_fails_before_guest_effects() {
+    let owner = Owner::new(false);
+    let error = execute(
+        &owner,
+        &session_for("owner"),
+        &observe_command("cmd-observe-ok", json!({"guest_id": "guest-a"})),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("current-thread runtime"));
+    assert_eq!(owner.state.captures.load(Ordering::SeqCst), 0);
+    assert_eq!(owner.state.inputs.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn malformed_optional_claims_never_consult_the_owner() {
+    let owner = Owner::new(false);
+    for field in [
+        "instance_id",
+        "project_id",
+        "thread_id",
+        "worker_profile_id",
+    ] {
+        for value in [
+            String::new(),
+            " padded ".into(),
+            "x".repeat(257),
+            "bad\nvalue".into(),
+        ] {
+            let mut observe = json!({"guest_id": "guest-a"});
+            observe[field] = json!(value);
+            let mut input = click_payload();
+            input[field] = json!(value);
+            for command in [
+                observe_command("cmd-observe-ok", observe),
+                input_command("cmd-input-ok", input),
+            ] {
+                assert!(execute(&owner, &session_for("owner"), &command).is_err());
+            }
+        }
+    }
+    assert_eq!(owner.state.scope_lookups.load(Ordering::SeqCst), 0);
+    assert_eq!(owner.state.captures.load(Ordering::SeqCst), 0);
+    assert_eq!(owner.state.inputs.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn caller_uses_native_admission_not_payload_or_user_identity() -> Result<()> {
+    let owner = Owner::new(false);
+    let mut command = observe_command("cmd-observe-ok", json!({"guest_id": "guest-a"}));
+    command.client_context["session_id"] = json!("forged-session");
+    let caller = owner.caller(&session_for("owner"), &scope(), &command)?;
+    assert!(matches!(caller, GuestCaller::Human { session_id } if session_id == "human-session-a"));
+    command.id = Some("cmd-not-admitted".into());
+    assert!(execute(&owner, &session_for("owner"), &command).is_err());
+    assert_eq!(owner.state.captures.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[test]
+fn shared_identifier_rejects_padding_control_and_oversize() {
+    for value in [
+        String::new(),
+        " padded ".into(),
+        "x".repeat(257),
+        "bad\nvalue".into(),
+    ] {
+        assert!(!super::super::guest_runtime::identifier(&value));
+        assert!(validate_identifier(&value, "test").is_err());
+    }
+    assert!(super::super::guest_runtime::identifier("guest-a"));
+}
+
 #[test]
 fn registered_dispatch_requires_a_command_admission_identity() {
     let owner = Owner::new(false);
@@ -493,12 +583,9 @@ fn registered_dispatch_rejects_invalid_sessions_before_driver_access() {
 }
 
 #[test]
-fn injection_from_runtime_is_unregistered() {
+fn default_injection_is_unregistered() {
     assert!(matches!(
-        injection_from_runtime(),
+        GuestRuntimeInjection::default(),
         GuestRuntimeInjection::Unregistered
     ));
-    assert!(is_guest_command(GUEST_OBSERVE_COMMAND_TYPE));
-    assert!(is_guest_command(GUEST_INPUT_COMMAND_TYPE));
-    assert!(!is_guest_command("ctox.workjet.session.create"));
 }
