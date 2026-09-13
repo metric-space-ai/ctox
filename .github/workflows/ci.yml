@@ -375,6 +375,10 @@ jobs:
             src/apps/business-os/rxdb/tests/storage-index-smoke.mjs
           if-no-files-found: error
 
+      - name: Update backup credential and SQLite recovery
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --bin ctox --jobs 2 state_backup -- --test-threads=2
+
       - name: Business OS command idempotency
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo test --locked --bin ctox native_peer_consumes_pending_business_command
