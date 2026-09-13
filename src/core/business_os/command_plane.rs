@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 96] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 97] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -345,6 +345,7 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 96] = [
     "ctox.provider_subscription.status",
     "ctox.runtime_settings.save",
     "ctox.secret.delete",
+    "ctox.secret.generate",
     "ctox.secret.list",
     "ctox.secret.put",
     "ctox.source.commit",
@@ -1644,6 +1645,7 @@ fn dispatch_business_command(
             }
         }
         "ctox.secret.list"
+        | "ctox.secret.generate"
         | "ctox.secret.put"
         | "ctox.secret.delete"
         | "ctox.provider_subscription.disconnect"
