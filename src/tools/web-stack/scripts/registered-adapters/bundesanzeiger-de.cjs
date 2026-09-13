@@ -129,15 +129,20 @@ function isQueryResponse(response, query, origin, mainFrame) {
     if (response.status() >= 300 && response.status() < 400) return false;
     const request = response.request();
     if (request.frame() !== mainFrame) return false;
-    if (!["document", "xhr", "fetch"].includes(request.resourceType())) return false;
-    for (let current = request, depth = 0; current && depth < 8; current = current.redirectedFrom(), depth += 1) {
+    if (request.resourceType() !== "document" || !request.isNavigationRequest()) return false;
+    let foundQuery = false;
+    let current = request;
+    for (let depth = 0; current && depth < 8; current = current.redirectedFrom(), depth += 1) {
       const requestUrl = new URL(current.url());
       if (requestUrl.origin !== origin) return false;
-      for (const params of [requestUrl.searchParams, new URLSearchParams(current.postData() || "")]) {
-        const values = params.getAll("fulltext");
-        if (values.length === 1 && values[0] === query) return true;
-      }
+      const values = [
+        ...requestUrl.searchParams.getAll("fulltext"),
+        ...new URLSearchParams(current.postData() || "").getAll("fulltext"),
+      ];
+      if (values.length > 1 || (values.length === 1 && values[0] !== query)) return false;
+      foundQuery ||= values.length === 1;
     }
+    return foundQuery && !current;
   } catch {
     // An unsupported/unreadable request cannot establish completion.
   }
@@ -299,7 +304,7 @@ let queryResponse = null;
 const completedResult = (result) => ({
   ...result,
   query,
-  query_completed: Boolean(queryResponse),
+  query_completed: Boolean(queryResponse) && result.url === queryResponse.url,
   http_status: queryResponse?.status ?? null,
   response_url: queryResponse?.url ?? null,
 });
@@ -343,10 +348,11 @@ let onResults = false;
 for (let attempt = 0; attempt < 2 && !onResults; attempt += 1) {
   await searchInput.fill(query);
   queryResponse = null;
-  const responsePromise = page.waitForResponse(
-    response => isQueryResponse(response, query, new URL(searchUrl).origin, page.mainFrame()),
-    { timeout: 30000 },
-  ).catch(() => null);
+  // Register before submitting. A pre-existing result container or a completed
+  // AJAX request cannot satisfy this current-document navigation boundary.
+  const navigationPromise = page.waitForNavigation({
+    waitUntil: "domcontentloaded", timeout: 30000,
+  }).catch(() => null);
   // Honeypot-aware: a hidden decoy input[name="search-button"] exists; only
   // the visible valued submit triggers the search.
   const searchButton = page.locator('input[name="search-button"][value="Suchen"]');
@@ -355,9 +361,14 @@ for (let attempt = 0; attempt < 2 && !onResults; attempt += 1) {
   } else {
     await searchInput.press("Enter");
   }
-  const response = await responsePromise;
-  if (response && await response.finished().catch(() => "failed") === null) {
+  const response = await navigationPromise;
+  if (response && isQueryResponse(response, query, new URL(searchUrl).origin, page.mainFrame())
+      && await response.finished().catch(() => "failed") === null) {
     queryResponse = { status: response.status(), url: response.url() };
+  }
+  if (!queryResponse || queryResponse.status < 200 || queryResponse.status >= 300) {
+    const state = await challengeState();
+    return { url: page.url(), blocked: state.blocked, results_page: false, entries: [] };
   }
   await page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
   onResults = await page.waitForSelector(".result_container", { timeout: 20000 })

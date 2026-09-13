@@ -34,6 +34,7 @@ function request(query, frame, options = {}) {
     url: () => options.url || origin + "/pub/de/suche",
     frame: () => frame,
     resourceType: () => options.type || "document",
+    isNavigationRequest: () => (options.type || "document") === "document",
     postData: () => query === null ? null : new URLSearchParams({ fulltext: query }).toString(),
     redirectedFrom: () => options.from || null,
   };
@@ -55,7 +56,7 @@ function generatedBrowserScript(query) {
   return script;
 }
 
-async function simulateBrowser(query, { status = 200, matchingResponse = true, noResults = false } = {}) {
+async function simulateBrowser(query, { status = 200, matchingResponse = true, noResults = false, navigation = true } = {}) {
   const frame = {};
   let evaluations = 0;
   let filled;
@@ -66,16 +67,13 @@ async function simulateBrowser(query, { status = 200, matchingResponse = true, n
     locator: (selector) => ({ count: async () => 1, fill: async (value) => { filled = value; },
       click: async () => { assert.equal(filled, query); }, press: async () => {} }),
     mainFrame: () => frame,
-    waitForResponse: async (predicate) => {
-      // A home response must never satisfy the query-specific waiter.
-      assert.equal(predicate(response(request(null, frame))), false);
-      const reply = response(request(matchingResponse ? query : "old query", frame), status);
-      if (!predicate(reply)) throw new Error("no matching query response");
-      return reply;
+    waitForNavigation: async () => {
+      if (!navigation) throw new Error("AJAX completed but no current-document navigation");
+      return response(request(matchingResponse ? query : "old query", frame), status);
     },
     waitForLoadState: async () => {},
     waitForSelector: async () => { if (noResults) throw new Error("no table on explicit empty page"); },
-    evaluate: async () => ++evaluations === 1 || noResults
+    evaluate: async () => ++evaluations === 1 || noResults || !navigation || !matchingResponse || status >= 300
       ? { blocked: false, noResults }
       : { url: resultUrl, blocked: false, results_page: true, entries: [{ name: "Other AG" }] },
     url: () => resultUrl,
@@ -172,6 +170,18 @@ test("response binding follows the submitted query through a same-origin redirec
   assert.equal(adapter.isQueryResponse(response(request("old company", frame)), company, origin, frame), false);
   assert.equal(adapter.isQueryResponse(response(request(company, {})), company, origin, frame), false);
   assert.equal(adapter.isQueryResponse(response(initial, 200, "https://example.com/"), company, origin, frame), false);
+  assert.equal(adapter.isQueryResponse(response(request(null, frame)), company, origin, frame), false);
+});
+
+test("rejects ambiguous URL/body query values and AJAX-only responses", () => {
+  const frame = {};
+  const url = origin + "/pub/de/suche?" + new URLSearchParams({ fulltext: company });
+  for (const body of ["Old Company", company]) {
+    assert.equal(adapter.isQueryResponse(response(request(body, frame, { url })), company, origin, frame), false);
+  }
+  const duplicate = request(null, frame, { url: url + "&fulltext=" + encodeURIComponent(company) });
+  assert.equal(adapter.isQueryResponse(response(duplicate), company, origin, frame), false);
+  assert.equal(adapter.isQueryResponse(response(request(company, frame, { type: "xhr" })), company, origin, frame), false);
 });
 
 test("generated browser flow captures current response and explicit empty page", async () => {
@@ -188,6 +198,17 @@ test("generated browser flow cannot reuse an old query response or a server erro
   assert.equal(adapter.isCompletedEmptyQuery(company, await simulateBrowser(company, { matchingResponse: false })), false);
   assert.equal(adapter.isCompletedEmptyQuery(company, await simulateBrowser(company, { status: 503 })), false);
 });
+
+for (const update of ["delayed", "absent"]) {
+  test(`old result container plus AJAX200 with ${update} DOM update cannot emit completion`, async () => {
+    // The old container is already present. A current-query AJAX200 is not a
+    // document commit; neither a delayed nor an absent update may reuse it.
+    const value = await simulateBrowser(company, { navigation: false });
+    assert.deepEqual(value.entries, []);
+    assert.equal(value.results_page, false);
+    assert.equal(adapter.isCompletedEmptyQuery(company, value), false);
+  });
+}
 
 test("CLI stdout contains only current receipt reference and empty records", (t) => {
   const f = fixture(t);

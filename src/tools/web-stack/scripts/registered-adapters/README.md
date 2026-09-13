@@ -13,6 +13,12 @@ submitted query. Home-page status, old queries, errors and unknown selectors
 do not establish completion. The receipt does not claim exhaustive pagination
 or certify absence of a company from the provider.
 
+Query completion currently requires a matching full-document navigation,
+awaited from before submission through DOMContentLoaded. AJAX-only responses
+are rejected: their completion does not prove that an existing result table
+was replaced with the current query's results. A future AJAX implementation
+must establish that binding before admitting a receipt.
+
 Run the bounded, network-free adapter checks with temporary files on the
 designated disposable volume:
 
