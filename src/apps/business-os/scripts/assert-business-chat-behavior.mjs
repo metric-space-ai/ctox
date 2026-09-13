@@ -378,7 +378,10 @@ try {
     await page.evaluate(async () => {
       const oldInput = document.querySelector('.ctox-chat-window.is-active textarea');
       window.chatHarness.updateCrewMember('member_0', { state: 'home' });
-      await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-active textarea') !== oldInput);
+      await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-active textarea') !== oldInput).catch(error => {
+        throw new Error(error.message + '; crew=' + JSON.stringify(window.chatHarness.chatReadStats)
+          + '; signature=' + document.querySelector('[data-crew-pool-signature]')?.dataset.crewPoolSignature);
+      });
       await window.chatHarness.waitForPaint();
     });
     expect(await input.inputValue() === draft, 'crew state rebuild must preserve typing after hydration');

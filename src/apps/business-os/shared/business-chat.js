@@ -572,7 +572,11 @@ export function initBusinessChat({
           crewChangeSubscription = db?.raw?.ctox_crew_members?.$?.subscribe?.(() => {
             if (crewPoolDisposed) return;
             loadCrewMembers({ state, db }).then((next) => {
-              if (next && !crewPoolDisposed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
+              // The app-presence subscriber can load the shared member state
+              // first. Compare the rendered pool as well as the loader's delta.
+              if (!crewPoolDisposed && (next || root.dataset?.crewPoolSignature !== crewPoolSignature(state))) {
+                renderChatRoot({ root, state, commandBus, db, getActiveModule });
+              }
             }).catch(() => {});
           }) || null;
         } catch {}
