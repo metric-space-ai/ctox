@@ -403,30 +403,39 @@ pub fn project_module_source(
     root: &Path,
     module_id: &str,
 ) -> anyhow::Result<serde_json::Map<String, Value>> {
-    let records = crate::business_os::store::pull_collection_records(
-        root,
-        "business_module_source_files",
-        None,
-        None,
-    )?;
+    let documents =
+        crate::business_os::store::pull_coding_module_source_records(root, module_id)
+            .map_err(|_| anyhow::anyhow!("pi coding source unavailable: source_read_failed"))?;
     let mut files = serde_json::Map::new();
-    if let Some(documents) = records.get("documents").and_then(Value::as_array) {
-        for document in documents {
-            if document.get("module_id").and_then(Value::as_str) != Some(module_id) {
-                continue;
-            }
-            if document.get("_deleted").and_then(Value::as_bool) == Some(true) {
-                continue;
-            }
-            let (Some(path), Some(content)) = (
-                document.get("path").and_then(Value::as_str),
-                document.get("content").and_then(Value::as_str),
-            ) else {
-                continue;
-            };
-            files.insert(path.to_string(), Value::String(content.to_string()));
+    for document in documents {
+        anyhow::ensure!(
+            document.get("module_id").and_then(Value::as_str) == Some(module_id),
+            "pi coding source unavailable: invalid_source_record"
+        );
+        if document.get("_deleted").and_then(Value::as_bool) == Some(true) {
+            continue;
         }
+        let (Some(path), Some(content)) = (
+            document.get("path").and_then(Value::as_str),
+            document.get("content").and_then(Value::as_str),
+        ) else {
+            anyhow::bail!("pi coding source unavailable: invalid_source_record");
+        };
+        anyhow::ensure!(
+            !path.contains('\\') && path.split('/').all(|part| !matches!(part, "" | "." | "..")),
+            "pi coding source unavailable: invalid_source_path"
+        );
+        anyhow::ensure!(
+            files
+                .insert(path.to_string(), Value::String(content.to_string()))
+                .is_none(),
+            "pi coding source unavailable: duplicate_source_path"
+        );
     }
+    anyhow::ensure!(
+        !files.is_empty(),
+        "pi coding source unavailable: empty_module_source"
+    );
     Ok(files)
 }
 
@@ -1062,6 +1071,224 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use tiny_http::{Header, Response, Server};
+
+    fn seed_coding_source_records(
+        root: &Path,
+        rxdb: bool,
+        records: &[Value],
+    ) -> anyhow::Result<()> {
+        let mut db = if rxdb {
+            std::fs::create_dir_all(crate::paths::runtime_dir(root))?;
+            let db = rusqlite::Connection::open(
+                crate::paths::runtime_dir(root).join("business-os-rxdb.sqlite3"),
+            )?;
+            db.execute_batch("CREATE TABLE IF NOT EXISTS ctox_business_os__business_module_source_files__v0 (id TEXT PRIMARY KEY, data TEXT NOT NULL, lastWriteTime REAL NOT NULL)")?;
+            db
+        } else {
+            crate::business_os::store::open_store(root)?
+        };
+        let tx = db.transaction()?;
+        for record in records {
+            let id = record["id"].as_str().context("fixture id")?;
+            if rxdb {
+                tx.execute("INSERT INTO ctox_business_os__business_module_source_files__v0 VALUES (?1, ?2, 1)", rusqlite::params![id, record.to_string()])?;
+            } else {
+                tx.execute("INSERT INTO business_records (collection, record_id, rev, deleted, updated_at_ms, payload_json) VALUES ('business_module_source_files', ?1, '1-test', ?2, 1, ?3)", rusqlite::params![id, record["_deleted"].as_bool().unwrap_or(false), record.to_string()])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    #[test]
+    fn module_source_is_complete_beyond_collection_and_module_page_limits() -> anyhow::Result<()> {
+        for rxdb in [false, true] {
+            let temp = tempfile::tempdir()?;
+            let mut records = Vec::new();
+            for index in 0..600 {
+                records.push(serde_json::json!({"id":format!("a-{index:04}"), "module_id":"other", "path":format!("other-{index}.js"), "content":"UNRELATED"}));
+            }
+            for index in 0..501 {
+                records.push(serde_json::json!({"id":format!("z-{index:04}"), "module_id":"widget", "path":format!("src/file-{index}.js"), "content":format!("source {index}")}));
+            }
+            records.push(serde_json::json!({"id":"z-deleted", "module_id":"widget", "path":"deleted.js", "content":"DELETED", "_deleted":true}));
+            seed_coding_source_records(temp.path(), rxdb, &records)?;
+            let old_page = crate::business_os::store::pull_collection_records(
+                temp.path(),
+                "business_module_source_files",
+                None,
+                None,
+            )?;
+            assert_eq!(old_page["documents"].as_array().unwrap().len(), 500);
+            assert!(old_page["documents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|doc| doc["module_id"] == "other"));
+            let files = project_module_source(temp.path(), "widget")?;
+            assert_eq!(files.len(), 501);
+            for index in 0..501 {
+                assert_eq!(
+                    files[&format!("src/file-{index}.js")],
+                    format!("source {index}")
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn module_source_preserves_native_and_rxdb_version_precedence() -> anyhow::Result<()> {
+        for native in ["unrelated", "tombstone", "target", "none"] {
+            let temp = tempfile::tempdir()?;
+            seed_coding_source_records(
+                temp.path(),
+                true,
+                &[
+                    serde_json::json!({"id":"rxdb", "module_id":"widget", "path":"index.js", "content":"RXDB"}),
+                ],
+            )?;
+            if native != "none" {
+                seed_coding_source_records(
+                    temp.path(),
+                    false,
+                    &[
+                        serde_json::json!({"id":"native", "module_id":if native == "unrelated" {"other"} else {"widget"}, "path":"index.js", "content":"NATIVE", "_deleted":native == "tombstone"}),
+                    ],
+                )?;
+            }
+            let source = project_module_source(temp.path(), "widget");
+            match native {
+                "target" => assert_eq!(source?["index.js"], "NATIVE"),
+                "none" => assert_eq!(source?["index.js"], "RXDB"),
+                _ => assert_eq!(
+                    source.unwrap_err().to_string(),
+                    "pi coding source unavailable: empty_module_source"
+                ),
+            }
+        }
+        let temp = tempfile::tempdir()?;
+        seed_coding_source_records(
+            temp.path(),
+            true,
+            &[
+                serde_json::json!({"id":"old", "module_id":"widget", "path":"index.js", "content":"OLD_VERSION"}),
+            ],
+        )?;
+        let db = rusqlite::Connection::open(
+            crate::paths::runtime_dir(temp.path()).join("business-os-rxdb.sqlite3"),
+        )?;
+        db.execute_batch("CREATE TABLE ctox_business_os__business_module_source_files__v1 (id TEXT PRIMARY KEY, data TEXT NOT NULL, lastWriteTime REAL NOT NULL)")?;
+        assert_eq!(
+            project_module_source(temp.path(), "widget")
+                .unwrap_err()
+                .to_string(),
+            "pi coding source unavailable: empty_module_source"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn module_source_rejects_invalid_or_ambiguous_snapshots_without_content() -> anyhow::Result<()>
+    {
+        for rxdb in [false, true] {
+            for invalid in ["missing_content", "absolute", "parent", "duplicate"] {
+                let temp = tempfile::tempdir()?;
+                let mut bad = serde_json::json!({"id":"bad", "module_id":"widget", "path":"index.js", "content":"PRIVATE_SOURCE"});
+                match invalid {
+                    "missing_content" => bad["content"] = Value::Null,
+                    "absolute" => bad["path"] = Value::String("/private/source.js".into()),
+                    "parent" => bad["path"] = Value::String("../source.js".into()),
+                    _ => {}
+                }
+                seed_coding_source_records(
+                    temp.path(),
+                    rxdb,
+                    &[
+                        serde_json::json!({"id":"good", "module_id":"widget", "path":"index.js", "content":"GOOD_SOURCE"}),
+                        bad,
+                    ],
+                )?;
+                let error = project_module_source(temp.path(), "widget")
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.starts_with("pi coding source unavailable:"));
+                assert!(!error.contains("PRIVATE_SOURCE") && !error.contains("GOOD_SOURCE"));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn missing_module_source_stops_before_model_or_sidecar_and_session_write() -> anyhow::Result<()>
+    {
+        for deleted in [false, true] {
+            let temp = tempfile::tempdir()?;
+            let root = temp.path();
+            seed_coding_source_records(
+                root,
+                false,
+                &[
+                    serde_json::json!({"id":"source", "module_id":if deleted {"widget"} else {"other"}, "path":"index.js", "content":"UNCHANGED", "_deleted":deleted}),
+                ],
+            )?;
+            let db = rusqlite::Connection::open(
+                crate::paths::runtime_dir(root).join("business-os-rxdb.sqlite3"),
+            )?;
+            for collection in ["coding_agent_sessions", "coding_agent_events"] {
+                db.execute_batch(&format!("CREATE TABLE ctox_business_os__{collection}__v0 (id TEXT PRIMARY KEY, data TEXT NOT NULL, lastWriteTime REAL NOT NULL)"))?;
+            }
+            crate::business_os::store::record_coding_agent_session_turn(
+                root,
+                "widget",
+                "baseline",
+                &[],
+                1,
+            )?;
+            let before: String = db.query_row(
+                "SELECT data FROM ctox_business_os__coding_agent_sessions__v0",
+                [],
+                |row| row.get(0),
+            )?;
+            let error = run_module_coding_turn_inner(
+                root,
+                &root.join("missing-sidecar.js"),
+                "widget",
+                "PRIVATE_PROMPT",
+                false,
+                Some(serde_json::json!({"invalid":"model"})),
+                None,
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "pi coding source unavailable: empty_module_source"
+            );
+            let after: String = db.query_row(
+                "SELECT data FROM ctox_business_os__coding_agent_sessions__v0",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(after, before);
+            let events: i64 = db.query_row(
+                "SELECT COUNT(*) FROM ctox_business_os__coding_agent_events__v0",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(events, 1);
+            let native = crate::business_os::store::open_store(root)?;
+            let content: String = native.query_row("SELECT json_extract(payload_json, '$.content') FROM business_records WHERE collection='business_module_source_files'", [], |row| row.get(0))?;
+            assert_eq!(content, "UNCHANGED");
+        }
+        let temp = tempfile::tempdir()?;
+        assert_eq!(
+            project_module_source(temp.path(), "missing")
+                .unwrap_err()
+                .to_string(),
+            "pi coding source unavailable: empty_module_source"
+        );
+        Ok(())
+    }
 
     #[test]
     fn incomplete_failure_detail_only_preserves_allowlisted_enum_and_counts() {

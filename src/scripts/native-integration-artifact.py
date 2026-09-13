@@ -89,8 +89,26 @@ def main():
                   sidecar_lock_sha256=digest(sidecar.parent.parent / 'package-lock.json'),
                   workflow_run=os.environ.get('GITHUB_RUN_ID'))
     save()
-    command = ['cargo', 'test', '--locked', '--release', '--bin', 'ctox',
-               '--target', TARGET, '--jobs', '2', '--', *FILTERS]
+    compiled = run('test-compile', ['cargo', 'test', '--locked', '--release',
+                   '--bin', 'ctox', '--target', TARGET, '--jobs', '2',
+                   '--no-run', '--message-format=json'])
+    executables = set()
+    for line in compiled.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (event.get('reason') == 'compiler-artifact'
+                and event.get('target', {}).get('name') == 'ctox'
+                and event.get('profile', {}).get('test') is True
+                and event.get('executable')):
+            executables.add(event['executable'])
+    if len(executables) != 1:
+        raise RuntimeError('Expected exactly one compiled ctox test executable')
+    executable = executables.pop()
+    RECORD['test_executable'] = executable
+    RECORD['test_executable_sha256'] = digest(Path(executable))
+    command = [executable, *FILTERS]
     listing = run('test-list', command + ['--list'])
     names = re.findall(r'^(.+): test$', listing, re.MULTILINE)
     counts = {selector: sum(selector in name for name in names) for selector in FILTERS}
@@ -100,6 +118,10 @@ def main():
         'coding_agents::pi_sidecar::tests::inherited_minimax_route_drives_real_pi_tools_through_native_bridge',
         'coding_agents::pi_sidecar::tests::responses_edit_owner_applies_only_complete_source_and_session',
         'coding_agents::pi_sidecar::tests::incomplete_failure_detail_only_preserves_allowlisted_enum_and_counts',
+        'coding_agents::pi_sidecar::tests::module_source_is_complete_beyond_collection_and_module_page_limits',
+        'coding_agents::pi_sidecar::tests::module_source_preserves_native_and_rxdb_version_precedence',
+        'coding_agents::pi_sidecar::tests::module_source_rejects_invalid_or_ambiguous_snapshots_without_content',
+        'coding_agents::pi_sidecar::tests::missing_module_source_stops_before_model_or_sidecar_and_session_write',
     }
     missing = required - set(names)
     if missing:
@@ -110,12 +132,27 @@ def main():
     summaries = re.findall(r'test result: ok\. (\d+) passed; 0 failed; 0 ignored;', output)
     if len(summaries) != 1 or int(summaries[0]) != len(names):
         raise RuntimeError('Test execution does not prove every discovered case passed')
-    run('native-build', ['cargo', 'build', '--locked', '--release', '--bin', 'ctox',
-                         '--target', TARGET, '--jobs', '2'])
     metadata = json.loads(capture(['cargo', 'metadata', '--locked', '--no-deps',
                                    '--format-version', '1']))
     target_dir = Path(metadata['target_directory'])
     RECORD['cargo_target_directory'] = str(target_dir)
+    # Business OS directory requirements, on the same reviewed product source.
+    run('cargo-check', ['cargo', 'check', '--locked', '--jobs', '2'])
+    run('rxdb-native-tests', ['cargo', 'test', '--locked', '--manifest-path',
+                             'src/core/rxdb/Cargo.toml', '--jobs', '2',
+                             '--', '--test-threads=2'])
+    run('browser-dependencies', ['npm', '--prefix', 'src/apps/business-os', 'ci'])
+    run('browser-runtime', ['npm', '--prefix', 'src/apps/business-os', 'exec',
+                            'playwright', 'install', '--with-deps', 'chromium'])
+    run('rxdb-wire-fixture', ['cargo', 'build', '--locked', '--manifest-path',
+                             'src/core/rxdb/Cargo.toml', '--example',
+                             'v15_wire_daemon', '--target-dir', str(target_dir),
+                             '--jobs', '2'])
+    os.environ['COMMAND_PLANE_BASELINE_PATH'] = str(EVIDENCE / 'command-plane.json')
+    run('rxdb-js-tests', ['node', 'src/apps/business-os/rxdb/tests/run-all.mjs',
+                         '--require-wire-daemon'])
+    run('native-build', ['cargo', 'build', '--locked', '--release', '--bin', 'ctox',
+                         '--target', TARGET, '--jobs', '2'])
     binary = target_dir / TARGET / 'release/ctox'
     RECORD['binary_sha256'] = digest(binary)
     run('spawn-liveness', [str(binary), 'process-mining', 'spawn-liveness'])

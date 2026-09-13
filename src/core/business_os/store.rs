@@ -10619,6 +10619,68 @@ pub(super) fn process_business_chat_reply(
     })
 }
 
+/// Complete source snapshot for the coding owner. Select the same collection
+/// plane as `pull_collection_records`, before filtering by module, and never
+/// splice an RxDB snapshot into a partially populated native collection.
+pub(crate) fn pull_coding_module_source_records(
+    root: &Path,
+    module_id: &str,
+) -> anyhow::Result<Vec<Value>> {
+    let native = with_store_connection(root, |conn| {
+        let tx = conn.unchecked_transaction()?;
+        let has_collection: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM business_records
+             WHERE collection = 'business_module_source_files')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_collection {
+            return Ok(None);
+        }
+        let mut statement = tx.prepare(
+            "SELECT payload_json FROM business_records
+             WHERE collection = 'business_module_source_files'
+               AND deleted = 0 AND json_extract(payload_json, '$.module_id') = ?1
+             ORDER BY record_id",
+        )?;
+        let rows = statement.query_map([module_id], |row| row.get::<_, String>(0))?;
+        let mut documents = Vec::new();
+        for row in rows {
+            documents.push(serde_json::from_str::<Value>(&row?)?);
+        }
+        Ok(Some(documents))
+    })?;
+    if let Some(documents) = native {
+        return Ok(documents);
+    }
+
+    let path = rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let tx = conn.unchecked_transaction()?;
+    for version in (0..=1).rev() {
+        let table = format!("ctox_business_os__business_module_source_files__v{version}");
+        if !rxdb_table_exists_cached(&path, &tx, &table)? {
+            continue;
+        }
+        let mut statement = tx.prepare(&format!(
+            "SELECT data FROM {table}
+             WHERE json_extract(data, '$.module_id') = ?1
+               AND COALESCE(json_extract(data, '$._deleted'), 0) = 0
+             ORDER BY id"
+        ))?;
+        let rows = statement.query_map([module_id], |row| row.get::<_, String>(0))?;
+        let mut documents = Vec::new();
+        for row in rows {
+            documents.push(serde_json::from_str::<Value>(&row?)?);
+        }
+        return Ok(documents);
+    }
+    Ok(Vec::new())
+}
+
 pub fn pull_collection_records(
     root: &Path,
     collection: &str,

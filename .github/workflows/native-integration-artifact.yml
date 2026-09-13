@@ -25,7 +25,7 @@ jobs:
       RAYON_NUM_THREADS: '2'
       CARGO_INCREMENTAL: '0'
       CARGO_TERM_COLOR: never
-      REVIEWED_SOURCE_REVISION: a56a47a38e053feb749196098e7d81276d9b1609
+      REVIEWED_SOURCE_REVISION: 9b05b54e7fd700736b3fee26d1940dd6c1447019
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
@@ -56,7 +56,7 @@ jobs:
       - name: Install native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev libcap-dev libpcap-dev
+          sudo apt-get install -y libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev libcap-dev libpcap-dev ripgrep
       - name: Verify reviewed source, test, and package
         timeout-minutes: 85
         run: python3 src/scripts/native-integration-artifact.py
