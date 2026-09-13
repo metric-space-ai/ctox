@@ -76,6 +76,14 @@ test('query hash binds country, exact company URL and the bounded URL set', () =
   assert.throws(() => collectionBinding(query, 'https://evil.invalid', [profile]));
 });
 
+test('masked and control-bearing positions are omitted without losing independent person facts', () => {
+  for (const position of ['Chief *** Officer', 'Chief\u0000Officer', 'Chief\u007fOfficer', 'Chief\nOfficer']) {
+    const result = extractProfiles([{ ...row(), position }], binding());
+    assert.equal(result.matched_profiles, 1);
+    assert.deepEqual(result.records.map(r => r.field), ['person_vorname', 'person_nachname', 'person_linkedin']);
+  }
+});
+
 test('async collection persists claim then snapshot and resumes without another POST', async () => {
   let state = null;
   const requests = [], saved = [];

@@ -23,6 +23,8 @@ exact current employer name and company page URL, and unmasked structured names.
 Past employers, conflicting current_company_name, unrelated recommendations,
 gender, guessed titles and administrative email addresses are not accepted.
 Only supported first/last-name, position and profile URL fields are emitted.
+Masked/control-bearing positions are omitted without discarding independently
+verified names or the profile URL.
 
 `advanceCollection` requires injected `loadSecret`, `fetch`, `claimSubmission`
 and `saveState`. `brightdata-state.cjs` now supplies the latter two through an
@@ -31,6 +33,11 @@ atomic no-replace hard links, followed by directory fsync. Revisions form a
 bounded contiguous hash chain; stale writers conflict rather than overwrite.
 State roots/revisions reject symlinks and inappropriate permissions. Only
 allowlisted state fields are persisted; no credentials or raw provider bodies.
+An explicit POST HTTP401 persists `rejected`, permitting at most one further
+submission with credentials loaded again. The journal enforces the monotonic
+attempt count and exact query binding; ambiguous transport/acceptance still
+remains `submitting` and cannot retry automatically. Other provider rejections
+are not broadened into this safe-reauthorization exception.
 The runner still has to derive a real durable operation ID and trusted state
 root. The journal is not yet wired into native execution.
 
@@ -63,9 +70,10 @@ raw provider/CLI errors. Snapshot/query identity failures stop admission.
 
 `node --test --test-concurrency=1 src/tools/web-stack/scrape-targets/tests/brightdata-core.test.mjs src/tools/web-stack/scrape-targets/tests/brightdata-state.test.mjs`
 
-Eighteen tests pass. Core tests inject network/credentials/persistence. State
+Twenty-one tests pass. Core tests inject network/credentials/persistence. State
 tests use actual files, reopen journals, race two bounded child processes and
-exit a child immediately after its durable claim. Mac tests require TMPDIR on
+exit a child immediately after its durable claim, and restart after a persisted
+HTTP401 to verify bounded reauthorization. Mac tests require TMPDIR on
 /Volumes/tmp. These are not a native research-resume or live-provider proof.
 Remaining: native runner/Secret Store/state wiring, verified company discovery,
 registration and API entitlement, native crash/restart tests, registry activation,

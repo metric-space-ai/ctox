@@ -49,11 +49,16 @@ function readBounded(file) {
 
 function canonicalState(value, binding) {
   if (!value || value.query_hash !== binding.query_hash ||
-      !["submitting", "pending", "ready", "completed"].includes(value.phase))
+      !["submitting", "rejected", "pending", "ready", "completed"].includes(value.phase))
     throw new Error("checkpoint_state_invalid");
   // Strip all non-contract fields, including accidental credentials/errors.
-  const state = { phase: value.phase, query_hash: binding.query_hash, binding };
-  if (value.phase !== "submitting") {
+  const attempt = value.submission_attempt ?? 1;
+  if (!Number.isInteger(attempt) || attempt < 1 || attempt > 2) throw new Error("checkpoint_attempt_invalid");
+  const state = { phase: value.phase, query_hash: binding.query_hash, binding, submission_attempt: attempt };
+  if (value.phase === "rejected") {
+    if (value.error_code !== "api_unauthorized") throw new Error("checkpoint_rejection_invalid");
+    state.error_code = "api_unauthorized";
+  } else if (value.phase !== "submitting") {
     if (!/^(?:sd|s)_[A-Za-z0-9]{1,100}$/.test(value.snapshot_id || ""))
       throw new Error("checkpoint_snapshot_invalid");
     state.snapshot_id = value.snapshot_id;
@@ -65,9 +70,11 @@ function canonicalState(value, binding) {
 }
 
 function validateTransition(previous, next) {
-  const allowed = { submitting: ["pending"], pending: ["pending", "ready"], ready: ["completed"], completed: ["completed"] };
+  const allowed = { submitting: ["pending", "rejected"], rejected: ["submitting"], pending: ["pending", "ready"], ready: ["completed"], completed: ["completed"] };
   if (!previous ? next.phase !== "submitting" : !allowed[previous.phase].includes(next.phase))
     throw new Error("checkpoint_transition_invalid");
+  const expectedAttempt = !previous ? 1 : previous.submission_attempt + (previous.phase === "rejected" ? 1 : 0);
+  if (next.submission_attempt !== expectedAttempt) throw new Error("checkpoint_attempt_transition_invalid");
   if (previous?.snapshot_id && previous.snapshot_id !== next.snapshot_id)
     throw new Error("checkpoint_snapshot_changed");
 }
@@ -116,7 +123,7 @@ function openCheckpoint({ stateRoot, operationId, binding: rawBinding }) {
     checkedDirectory(directory);
     const state = canonicalState(value, binding);
     const previous = observed;
-    if (claim && previous) return false;
+    if (claim && previous && previous.state.phase !== "rejected") return false;
     validateTransition(previous?.state, state);
     const revision = (previous?.revision || 0) + 1;
     if (revision > MAX_REVISIONS) throw new Error("checkpoint_revision_limit");

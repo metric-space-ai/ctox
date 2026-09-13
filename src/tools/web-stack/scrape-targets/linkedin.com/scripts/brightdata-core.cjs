@@ -7,6 +7,7 @@ const { createHash } = require("node:crypto");
 const ORIGIN = "https://api.brightdata.com";
 const DATASET = "gd_l1viktl72bvl7bjuj0";
 const MAX_PROFILES = 3;
+const MAX_SUBMISSIONS = 2;
 const identity = value => typeof value === "string"
   ? value.normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase("de-DE") : "";
 
@@ -85,6 +86,7 @@ function extractProfiles(rows, binding) {
     for (const [field, value] of [["person_vorname", row.first_name], ["person_nachname", row.last_name],
       ["person_position", row.position], ["person_linkedin", url]]) {
       if (typeof value !== "string" || !value.trim() || value.length > 1000) continue;
+      if (field === "person_position" && /[\x00-\x1f\x7f*]/.test(value)) continue;
       records.push({ field, value: value.trim(), source_url: url, source_id: "linkedin.com",
         source_key: "primary", confidence: "high", provider_record_id: url,
         note: "BrightData public profile; exact current employer name and company URL matched." });
@@ -128,8 +130,15 @@ async function advanceCollection(binding, state, dependencies) {
   if (checked.query_hash !== binding.query_hash || (state && state.query_hash !== checked.query_hash))
     return failure("checkpoint_query_mismatch");
   if (state?.phase === "submitting") return failure("submission_outcome_unknown");
-  if (state && !["pending", "ready", "completed"].includes(state.phase)) return failure("checkpoint_phase_invalid");
-  if (state && !/^(?:sd|s)_[A-Za-z0-9]{1,100}$/.test(state.snapshot_id || ""))
+  if (state && !["rejected", "pending", "ready", "completed"].includes(state.phase)) return failure("checkpoint_phase_invalid");
+  const priorAttempt = state?.submission_attempt ?? 1;
+  if (!Number.isInteger(priorAttempt) || priorAttempt < 1 || priorAttempt > MAX_SUBMISSIONS)
+    return failure("checkpoint_attempt_invalid");
+  if (state?.phase === "rejected" && state.error_code !== "api_unauthorized") return failure("checkpoint_rejection_invalid");
+  if (state?.phase === "rejected" && priorAttempt >= MAX_SUBMISSIONS) return failure("reauthorization_budget_exhausted", "auth_required");
+  const submittingNow = !state || state.phase === "rejected";
+  const attempt = state?.phase === "rejected" ? priorAttempt + 1 : priorAttempt;
+  if (state && !submittingNow && !/^(?:sd|s)_[A-Za-z0-9]{1,100}$/.test(state.snapshot_id || ""))
     return failure("checkpoint_snapshot_invalid");
   let secret;
   try {
@@ -142,8 +151,8 @@ async function advanceCollection(binding, state, dependencies) {
   try {
     const headers = { Authorization: `Bearer ${secret}`, "Content-Type": "application/json", accept: "application/json" };
     let endpoint, method = "GET", body;
-    if (!state) {
-      const submitting = { phase: "submitting", query_hash: checked.query_hash, binding: checked };
+    if (submittingNow) {
+      const submitting = { phase: "submitting", query_hash: checked.query_hash, binding: checked, submission_attempt: attempt };
       if (!await claimSubmission(submitting)) return failure("collection_already_claimed");
       endpoint = `/datasets/v3/trigger?dataset_id=${DATASET}&include_errors=true&limit_per_input=1&limit_multiple_results=${MAX_PROFILES}`;
       method = "POST";
@@ -154,18 +163,22 @@ async function advanceCollection(binding, state, dependencies) {
     }
     let response;
     try { response = await request(ORIGIN + endpoint, { method, headers, body, redirect: "error", signal: AbortSignal.timeout(20_000) }); }
-    catch { return failure(!state ? "submission_outcome_unknown" : "api_transport_failed", "temporary_unreachable", { api_query_evidence: receipt }); }
-    if (response.status === 401) return failure("api_unauthorized", "auth_required", { api_query_evidence: receipt });
+    catch { return failure(submittingNow ? "submission_outcome_unknown" : "api_transport_failed", "temporary_unreachable", { api_query_evidence: receipt }); }
+    if (response.status === 401) {
+      if (submittingNow) await saveState({ phase: "rejected", query_hash: checked.query_hash,
+        binding: checked, submission_attempt: attempt, error_code: "api_unauthorized" });
+      return failure("api_unauthorized", "auth_required", { api_query_evidence: receipt });
+    }
     if (response.status === 403) return failure("api_forbidden", "blocked", { api_query_evidence: receipt });
     if (response.status !== 200 && response.status !== 202)
       return failure("api_unexpected_status", "temporary_unreachable", { api_query_evidence: receipt });
     let payload;
     try { payload = await boundedJson(response); }
-    catch { return failure(!state ? "submission_outcome_unknown" : "api_invalid_response", "portal_drift", { api_query_evidence: receipt }); }
-    if (!state) {
+    catch { return failure(submittingNow ? "submission_outcome_unknown" : "api_invalid_response", "portal_drift", { api_query_evidence: receipt }); }
+    if (submittingNow) {
       if (!/^(?:sd|s)_[A-Za-z0-9]{1,100}$/.test(payload?.snapshot_id || ""))
         return failure("submission_outcome_unknown", "portal_drift", { api_query_evidence: receipt });
-      const next = { ...receipt, snapshot_id: payload.snapshot_id, phase: "pending", binding: checked };
+      const next = { ...receipt, snapshot_id: payload.snapshot_id, phase: "pending", binding: checked, submission_attempt: attempt };
       await saveState(next);
       return failure("collection_pending", "temporary_unreachable", { api_query_evidence: { ...receipt, snapshot_id: payload.snapshot_id }, continuation: next });
     }

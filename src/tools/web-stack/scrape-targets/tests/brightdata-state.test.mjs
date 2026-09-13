@@ -11,7 +11,7 @@ const { openCheckpoint } = require(modulePath);
 const { collectionBinding, advanceCollection } = require('../linkedin.com/scripts/brightdata-core.cjs');
 const binding = collectionBinding({ company: 'Fixture GmbH', country: 'DE' },
   'https://www.linkedin.com/company/fixture/', ['https://www.linkedin.com/in/fixture-person/']);
-const submitting = () => ({ query_hash: binding.query_hash, phase: 'submitting', binding });
+const submitting = () => ({ query_hash: binding.query_hash, phase: 'submitting', binding, submission_attempt: 1 });
 const pending = () => ({ ...submitting(), phase: 'pending', snapshot_id: 'sd_fixture' });
 
 function fixture(t) {
@@ -79,6 +79,44 @@ test('stale writers cannot overwrite or regress a newer durable revision', t => 
   assert.equal(openCheckpoint(options).load().phase, 'ready');
   assert.throws(() => a.saveState(pending()), /checkpoint_transition_invalid/);
   assert.throws(() => a.saveState({ ...pending(), phase: 'completed', snapshot_id: 'sd_other' }), /snapshot_changed/);
+});
+
+test('restart after definite HTTP401 permits one newly authenticated submission', async t => {
+  const options = fixture(t);
+  const result = await child(options, `const { openCheckpoint } = require(process.argv[1]);
+    const { advanceCollection } = require(require('node:path').join(require('node:path').dirname(process.argv[1]), 'brightdata-core.cjs'));
+    const o = JSON.parse(process.argv[2]); const s = openCheckpoint(o);
+    advanceCollection(o.binding,s.load(),{...s,loadSecret:async()=> 'old-canary',
+      fetch:async()=>new Response('{}',{status:401})}).then(r=>console.log(r.error_code));`);
+  assert.equal(result.code, 0); assert.equal(result.stdout.trim(), 'api_unauthorized');
+  const reopened = openCheckpoint(options);
+  assert.equal(reopened.load().phase, 'rejected');
+  let posts = 0;
+  const outcome = await advanceCollection(binding, reopened.load(), { ...reopened,
+    loadSecret: async () => 'new-canary', fetch: async (_url, request) => {
+      posts++; assert.equal(request.headers.Authorization, 'Bearer new-canary');
+      return new Response(JSON.stringify({ snapshot_id: 'sd_afterreauth' }));
+    } });
+  assert.equal(posts, 1); assert.equal(outcome.error_code, 'collection_pending');
+  const finalState = openCheckpoint(options).load();
+  assert.equal(finalState.phase, 'pending'); assert.equal(finalState.submission_attempt, 2);
+  assert.equal(finalState.snapshot_id, 'sd_afterreauth');
+});
+
+test('definite rejection retry is bounded and cannot change the operation query', async t => {
+  const options = fixture(t);
+  let posts = 0, loads = 0;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const state = openCheckpoint(options);
+    const result = await advanceCollection(binding, state.load(), { ...state,
+      loadSecret: async () => { loads++; return 'bad-canary'; },
+      fetch: async () => { posts++; return new Response('{}', { status: 401 }); } });
+    assert.equal(result.error_code, attempt < 3 ? 'api_unauthorized' : 'reauthorization_budget_exhausted');
+  }
+  assert.equal(posts, 2); assert.equal(loads, 2);
+  const state = openCheckpoint(options);
+  assert.throws(() => state.claimSubmission({ ...submitting(), submission_attempt: 1 }), /attempt_transition_invalid/);
+  assert.throws(() => state.claimSubmission({ ...submitting(), submission_attempt: 3 }), /attempt_invalid/);
 });
 
 test('a changed query cannot reuse an operation; a separate operation remains independent', t => {
