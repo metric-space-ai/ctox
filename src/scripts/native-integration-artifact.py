@@ -89,8 +89,26 @@ def main():
                   sidecar_lock_sha256=digest(sidecar.parent.parent / 'package-lock.json'),
                   workflow_run=os.environ.get('GITHUB_RUN_ID'))
     save()
-    command = ['cargo', 'test', '--locked', '--release', '--bin', 'ctox',
-               '--target', TARGET, '--jobs', '2', '--', *FILTERS]
+    compiled = run('test-compile', ['cargo', 'test', '--locked', '--release',
+                   '--bin', 'ctox', '--target', TARGET, '--jobs', '2',
+                   '--no-run', '--message-format=json'])
+    executables = set()
+    for line in compiled.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (event.get('reason') == 'compiler-artifact'
+                and event.get('target', {}).get('name') == 'ctox'
+                and event.get('profile', {}).get('test') is True
+                and event.get('executable')):
+            executables.add(event['executable'])
+    if len(executables) != 1:
+        raise RuntimeError('Expected exactly one compiled ctox test executable')
+    executable = executables.pop()
+    RECORD['test_executable'] = executable
+    RECORD['test_executable_sha256'] = digest(Path(executable))
+    command = [executable, *FILTERS]
     listing = run('test-list', command + ['--list'])
     names = re.findall(r'^(.+): test$', listing, re.MULTILINE)
     counts = {selector: sum(selector in name for name in names) for selector in FILTERS}
@@ -114,15 +132,10 @@ def main():
     summaries = re.findall(r'test result: ok\. (\d+) passed; 0 failed; 0 ignored;', output)
     if len(summaries) != 1 or int(summaries[0]) != len(names):
         raise RuntimeError('Test execution does not prove every discovered case passed')
-    run('native-build', ['cargo', 'build', '--locked', '--release', '--bin', 'ctox',
-                         '--target', TARGET, '--jobs', '2'])
     metadata = json.loads(capture(['cargo', 'metadata', '--locked', '--no-deps',
                                    '--format-version', '1']))
     target_dir = Path(metadata['target_directory'])
     RECORD['cargo_target_directory'] = str(target_dir)
-    binary = target_dir / TARGET / 'release/ctox'
-    RECORD['binary_sha256'] = digest(binary)
-    run('spawn-liveness', [str(binary), 'process-mining', 'spawn-liveness'])
     # Business OS directory requirements, on the same reviewed product source.
     run('cargo-check', ['cargo', 'check', '--locked', '--jobs', '2'])
     run('rxdb-native-tests', ['cargo', 'test', '--locked', '--manifest-path',
@@ -138,6 +151,11 @@ def main():
     os.environ['COMMAND_PLANE_BASELINE_PATH'] = str(EVIDENCE / 'command-plane.json')
     run('rxdb-js-tests', ['node', 'src/apps/business-os/rxdb/tests/run-all.mjs',
                          '--require-wire-daemon'])
+    run('native-build', ['cargo', 'build', '--locked', '--release', '--bin', 'ctox',
+                         '--target', TARGET, '--jobs', '2'])
+    binary = target_dir / TARGET / 'release/ctox'
+    RECORD['binary_sha256'] = digest(binary)
+    run('spawn-liveness', [str(binary), 'process-mining', 'spawn-liveness'])
     bundle = OUT / 'bundle'
     bundle.mkdir()
     # Export only tracked runtime source; never copy checkout dependencies or state.
