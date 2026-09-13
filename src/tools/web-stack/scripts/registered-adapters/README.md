@@ -1,6 +1,6 @@
 # Registered adapter sources
 
-`bundesanzeiger-de.cjs` is the versioned successor to THESEN's native
+`bundesanzeiger-de.cjs` is the versioned successor to the previously registered native
 Bundesanzeiger revision 21 (trimmed UTF-8 SHA-256
 `fe2fb95cd97780d1296f4f37394bb7272f0fd9bddc1eb452e55215e30211a2b8`).
 It retains public result-table extraction and exact publisher matching. It does
