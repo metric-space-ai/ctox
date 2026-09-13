@@ -147,7 +147,7 @@ async fn dropped_stream_awaits_owned_open_startup_cleanup() {
             tokio::time::sleep(Duration::from_secs(8)).await;
             drop(stream);
         });
-        let (_client_root, _client_db, mut client_options) =
+        let (client_root, client_db, mut client_options) =
             native_fixture::control_options(url, "business-data-room", "workjet-session").await;
         client_options.peer_role = NativePeerRole::WorkjetExecutor;
         let saved = SavedBusinessDataTarget {
@@ -192,6 +192,8 @@ async fn dropped_stream_awaits_owned_open_startup_cleanup() {
         service.shutdown().await.unwrap();
         assert_eq!(service.owned_cleanup_count(), 0);
         accepted.await.unwrap();
+        client_db.close().await.unwrap();
+        drop(client_root);
     })
     .await
     .expect("owned startup cleanup deadline");
@@ -339,7 +341,9 @@ async fn exercise_session(
         .await
         .unwrap();
 
-        let (_client_root, client_db, client_options) = native_fixture::control_options(
+        // Keep SQLite's directory alive until the session and database close.
+        // A wildcard drops TempDir here, unlinking storage during bring-up.
+        let (client_root, client_db, client_options) = native_fixture::control_options(
             signaling.url.clone(),
             "business-data-room",
             "workjet-session",
@@ -510,7 +514,7 @@ async fn exercise_session(
         server.shutdown().await;
         client_db.close().await.unwrap();
         server_db.close().await.unwrap();
-        drop((server_root, signaling));
+        drop((client_root, server_root, signaling));
     })
     .await
     .expect("private native BusinessData IPC deadline");
