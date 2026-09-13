@@ -69,6 +69,50 @@ artifact path still needs verification before using it for the requested
 no-plaintext-registration workflow. The password generator alone does not certify
 that path or account activation through email.
 
+## Authorized display and clipboard
+
+The Credentials app also offers explicit **Show / Hide / Copy** for an existing
+credential, masked by default. This does not rotate the credential. JSON login
+bundles using the native username/email/login/login_hint and
+password/credential/secret aliases show individually copyable username/password
+fields; scalar API keys and unknown formats retain their exact raw value.
+
+`ctox.credentials.reveal.v1` is a transient auxiliary WebRTC method with one
+exact `{name}` parameter, not a business command or an MCP action. Native policy
+requires current `SecretsManage` workspace authority and read access to the
+`business_commands` channel. Scope is fixed to `credentials`; invalid, stale,
+revoked or unprivileged capabilities fail closed. Authorization is rechecked
+after the encrypted-store read, together with signaling-peer and durable-browser-
+session revocations and the captured connection generation/capability/session.
+The native transport retains the session id from the admitted existing handshake
+beside its capability and removes it on generation-owned peer teardown. Missing
+session identity fails closed; request payloads cannot supply or override it.
+Responses and errors are not persisted as
+commands, projections, audit payloads, or application logs. Metadata lists and
+exports still exclude values.
+
+Credentials requires the distinct `ctx.sync.requestPrivateNative` API. An older
+shell exposing only `requestNative` fails before issuing any secret request;
+there is deliberately no legacy fallback. The private runtime method calls the
+direct transport only, never the coordinator proxy, even across role changes.
+The browser additionally forbids this method on the cross-tab proxy, both before a follower
+sends and in the leader relay handler. Use the directly connected tab; there is
+no BroadcastChannel, HTTP or storage fallback. Values live only in transient
+response/UI memory and an explicitly requested clipboard write. Display clears
+after 30 seconds, on Hide, blur/pagehide, hidden document, selection/re-render,
+and disposal. Late responses are discarded. DOM insertion uses text, not HTML.
+JavaScript garbage collection and OS clipboard/history are not a zeroization
+guarantee; the app does not clear or overwrite the user's clipboard afterward.
+
+The new native `credential_reveal_*` cases cover unchanged stored metadata/value,
+synthetic-canary absence across fixture files, exact request shape, missing
+values, invalid/unprivileged/stale capabilities, generic errors, deterministic
+peer/session revocation during a real encrypted read, and connection retirement.
+A native transport regression checks session identity across replacement and
+late teardown. They must
+execute before native acceptance. Controller tests use DOM/clipboard doubles;
+they are not a live THESEN or real WebRTC permission test.
+
 ## Verification
 
 Added native regressions cover length/classes, sample uniqueness (not an entropy
@@ -95,6 +139,10 @@ The Credentials UI also has dependency-free module/event-handler regressions:
 
 ```sh
 node --experimental-vm-modules --test --test-concurrency=1 src/apps/business-os/modules/credentials/generation.test.mjs
+node --test --test-concurrency=1 src/apps/business-os/modules/credentials/reveal.test.mjs
+node --test --test-concurrency=1 src/apps/business-os/modules/credentials/private-channel.test.mjs
+cargo test --locked --bin ctox credential_reveal -- --test-threads=2
+cargo test --manifest-path src/core/rxdb/Cargo.toml credential_reveal -- --test-threads=2
 ```
 
 They exercise selector-only dispatch, receipt validation, create-only existing
