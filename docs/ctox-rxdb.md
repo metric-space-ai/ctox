@@ -1774,6 +1774,7 @@ persisted even on failure. This is the retained-profile browser cohort only;
 | `query-api-smoke` | Query API surface. |
 | `query-fetch-capability-smoke` | Capability negotiation surface. |
 | `query-demand-authoritative-generation-smoke` | Strict authority tokens reject absent/replaced/cancelled generations, accept native empty, and reuse only the same token/generation. |
+| `webrtc-authority-generation-smoke` | Transport renegotiation with the same native session/checkpoint/schema keeps strict query generation stable; changed native authority rejects it. |
 | `query-fingerprint-corpus-smoke` | JS fingerprints match the shared JS/Rust corpus byte-for-byte. |
 | `quota-recovery-smoke` | Sidecar behaviour under quota pressure. |
 | `replication-demand-race-smoke` | Concurrent `masterChangesSince` vs query-fetch does not corrupt state. |

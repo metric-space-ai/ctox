@@ -10237,14 +10237,33 @@ var CtoxWebRtcReplicationState = class {
     if (!negotiated || negotiated.peerId !== peerId) return "";
     const connection = this.shared?.peer?.connections?.get?.(peerId) || null;
     if (!this.shared?.isPeerOpen?.(peerId)) return "";
+    const remoteProtocol = negotiated.remoteProtocol || null;
+    const peerSessionId = String(remoteProtocol?.peerSession?.sessionId || "").trim();
+    const storageGeneration = String(remoteProtocol?.storageGeneration || "").trim();
+    const collectionProtocol = this.shared.remoteProtocolForCollection?.(
+      remoteProtocol,
+      this.collection?.name
+    ) || remoteProtocol;
+    const checkpointEpoch = String(collectionProtocol?.checkpoint?.epoch || "").trim();
+    const schemaHash2 = String(
+      collectionProtocol?.collection?.schemaHash || remoteProtocol?.collectionSchemas?.[this.collection?.name]?.schemaHash || ""
+    ).trim();
+    const authority = peerSessionId && checkpointEpoch && schemaHash2 ? {
+      peerSessionId,
+      storageGeneration,
+      checkpointEpoch,
+      schemaHash: schemaHash2
+    } : {
+      negotiatedObjectId: generationObjectId(negotiated),
+      connectionObjectId: generationObjectId(connection)
+    };
     return JSON.stringify({
       databaseName: this.collection?.storageCollection?.databaseName || "",
       collectionName: this.collection?.name || "",
       schemaVersion: this.collection?.schema?.version ?? null,
       shared: generationObjectId(this.shared),
-      negotiated: generationObjectId(negotiated),
-      connection: generationObjectId(connection),
-      peerId
+      peerId,
+      authority
     });
   }
   publishQueryReady(peerId) {
