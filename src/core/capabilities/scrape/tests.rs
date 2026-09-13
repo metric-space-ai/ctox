@@ -91,6 +91,61 @@ if(input.mode==='prior') {
         assert!(pending.fields_extracted.is_empty());
         let receipt = pending.continuation.as_ref().unwrap();
         assert_eq!(receipt["run_id"], pending.run_id);
+        let operation = format!("research-v1-{}", "a".repeat(64));
+        assert_eq!(
+            load_provider_wait_receipt(
+                &root,
+                &pending.run_id,
+                "linkedin-com",
+                &operation,
+                "Fixture GmbH",
+                "DE"
+            )
+            .unwrap(),
+            *receipt
+        );
+        for (run_id, target, operation, company, country) in [
+            (
+                prior.run_id.as_str(),
+                "linkedin-com",
+                operation.as_str(),
+                "Fixture GmbH",
+                "DE",
+            ),
+            (
+                pending.run_id.as_str(),
+                "other-target",
+                operation.as_str(),
+                "Fixture GmbH",
+                "DE",
+            ),
+            (
+                pending.run_id.as_str(),
+                "linkedin-com",
+                "foreign-operation",
+                "Fixture GmbH",
+                "DE",
+            ),
+            (
+                pending.run_id.as_str(),
+                "linkedin-com",
+                operation.as_str(),
+                "Other GmbH",
+                "DE",
+            ),
+            (
+                pending.run_id.as_str(),
+                "linkedin-com",
+                operation.as_str(),
+                "Fixture GmbH",
+                "CH",
+            ),
+        ] {
+            assert!(
+                load_provider_wait_receipt(&root, run_id, target, operation, company, country)
+                    .is_err()
+            );
+        }
         let (status, result): (String, String) = conn
             .query_row(
                 "SELECT status,result_json FROM scrape_run WHERE run_id=?1",

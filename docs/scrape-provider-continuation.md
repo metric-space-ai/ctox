@@ -45,6 +45,29 @@ binding every resumed attempt to its own current run/input. The native runner
 must exit zero after emitting a valid wait. It must never print the unprojected
 internal `temporary_unreachable` pending payload as the adapter result.
 
+## Native research continuation
+
+Person-research keeps the canonical execution phase `running`, with result
+status `awaiting_provider`. A changed running checkpoint advances the canonical
+projection version/outbox without creating a new execution attempt; identical
+checkpoints remain idempotent and terminal commands cannot be reopened.
+
+Each wake loads this native command checkpoint, never a browser document or a
+workspace-selected file. It verifies the waiting scrape run in native SQLite
+against the command-derived operation, company, country and target. Recovery
+waits at least 30 seconds (honoring longer provider hints up to 300 seconds),
+persists the next poll count/time before execution, and retains the original
+six-hour deadline. The limit is 120 total attempts; exhaustion becomes a
+visible failed command, not an unbounded poller or successful empty result.
+
+Workjet's additive resume API binds the entire request and source plan to the
+native workspace, reuses completed-source receipts and pre-ranking evidence
+(including people outside the top-ranked person), and invokes only waiting
+providers. Native CRM/runtime/capture augmentation runs after the compiled
+source phase finishes, not on every poll. Pending commands bypass terminal
+completion and gap-closure enqueueing. The adapter journal still owns uncertain
+POST acceptance and must never resubmit an ambiguous accepted operation.
+
 ## Integration and verification still required
 
 The native registered-script execution regression seeds a real prior success,
@@ -58,11 +81,9 @@ injected provider, stable identity over separate native attempts, query changes,
 invalid/partial/error outcomes and exclusion of paths/secrets. They are not
 live-provider tests.
 
-This contract alone does not complete research resumption. Before registry
-activation, the actual Workjet research path must retain this continuation,
-skip fallback/cascade/history substitution, and native command execution must
-persist a nonterminal bounded wait and resume the same operation on wake/restart.
-Preserve other sources' completed work. Do not complete the command, restart a
-provider POST or treat a cached earlier result as completion. Account/API
-entitlement, encrypted-secret/native-runner wiring, native restart tests and
-the full DE/AT/CH app research/reload acceptance remain required.
+The resume API and command integration require the coordinated Workjet pin and
+native compilation/tests on that exact composition; source implementation is
+not acceptance. The company-collection executable path, account/API entitlement,
+encrypted-secret/native-runner wiring, real daemon restart tests and the full
+DE/AT/CH app research/reload acceptance remain required. No live target has been
+activated by these changes.

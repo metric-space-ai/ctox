@@ -6,6 +6,49 @@ use super::CommandExecution;
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::Path;
+
+/// Read only a receipt already accepted by the native executor. A caller's
+/// JSON receipt or output path is not evidence that a provider job exists.
+pub(crate) fn load_provider_wait_receipt(
+    root: &Path,
+    run_id: &str,
+    target_key: &str,
+    operation_id: &str,
+    company: &str,
+    country: &str,
+) -> Result<Value> {
+    let conn = rusqlite::Connection::open_with_flags(
+        super::registry::resolve_db_path(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?;
+    let raw: String = conn
+        .query_row(
+            "SELECT run.result_json FROM scrape_run AS run
+         JOIN scrape_target AS target ON target.target_id = run.target_id
+         WHERE run.run_id = ?1 AND target.target_key = ?2 AND run.status = 'awaiting_provider'",
+            rusqlite::params![run_id, target_key],
+            |row| row.get(0),
+        )
+        .context("provider wait has no matching native scrape receipt")?;
+    let result: Value = serde_json::from_str(&raw)?;
+    let receipt: ProviderContinuation = serde_json::from_value(result["continuation"].clone())?;
+    ensure!(
+        receipt.schema == "ctox.scrape.provider_continuation.v1"
+            && receipt.run_id == run_id
+            && receipt.target_key == target_key
+            && receipt.operation_id == operation_id
+            && receipt.company == company.trim()
+            && receipt.country == country
+            && receipt.source_id == "linkedin.com"
+            && receipt.provider == "brightdata"
+            && (5..=300).contains(&receipt.retry_after_seconds)
+            && result["exit_code"] == 0
+            && result["timed_out"] == false,
+        "native provider receipt belongs to another operation or query"
+    );
+    Ok(serde_json::to_value(receipt)?)
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

@@ -28,6 +28,7 @@ pub(crate) use cli::dispatch_capturing;
 pub use cli::handle_scrape_command;
 mod classify;
 mod continuation;
+pub(crate) use continuation::load_provider_wait_receipt;
 mod query_completion;
 use classify::Classification;
 pub(crate) use classify::ScrapeRunStatus;
