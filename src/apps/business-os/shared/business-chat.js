@@ -5660,7 +5660,7 @@ function installChatStyles() {
       max-width: none;
     }
     .ctox-chat-dock.is-collapsed {
-      grid-template-columns: 88px var(--ctox-date-pill-width);
+      grid-template-columns: max-content var(--ctox-date-pill-width);
       width: auto;
     }
     .ctox-chat-dock.is-collapsed .ctox-chat-nav,
@@ -8069,7 +8069,7 @@ ${CREW_CREATURE_BASE_CSS}
     .ctox-chat-dock {
       /* Two 24px day arrows, a 30px calendar, gaps, padding and border. */
       --ctox-date-pill-width: 88px;
-      grid-template-columns: 108px var(--ctox-date-pill-width) 36px;
+      grid-template-columns: max-content var(--ctox-date-pill-width) 36px;
       gap: 6px;
       padding: 5px;
       border-color: color-mix(in srgb, var(--line) 48%, transparent);
@@ -8077,20 +8077,21 @@ ${CREW_CREATURE_BASE_CSS}
       background: var(--surface);
     }
     .ctox-chat-dock.has-visible-chats {
-      grid-template-columns: 108px var(--ctox-date-pill-width) minmax(48px, auto) 36px;
+      grid-template-columns: max-content var(--ctox-date-pill-width) minmax(48px, auto) 36px;
     }
     .ctox-chat-dock.has-nav {
-      grid-template-columns: 108px var(--ctox-date-pill-width) 26px minmax(0, auto) 26px 36px;
+      grid-template-columns: max-content var(--ctox-date-pill-width) 26px minmax(0, auto) 26px 36px;
     }
     .ctox-chat-dock.has-many-chats {
-      grid-template-columns: 108px var(--ctox-date-pill-width) 26px minmax(0, min(350px, 36dvw)) 26px 36px;
+      grid-template-columns: max-content var(--ctox-date-pill-width) 26px minmax(0, min(350px, 36dvw)) 26px 36px;
     }
     .ctox-chat-fab {
       display: grid;
       grid-template-columns: auto 1fr;
       align-items: center;
       gap: 6px;
-      width: 108px;
+      /* Reserve the full overlapping member row, including all six portraits. */
+      width: max-content;
       min-width: 108px;
       height: 42px;
       padding: 0 8px;
@@ -8101,7 +8102,7 @@ ${CREW_CREATURE_BASE_CSS}
       display: flex;
       align-items: center;
       justify-content: flex-end;
-      width: 100%;
+      width: max-content;
       height: 34px;
       padding-left: 8px;
     }
@@ -8126,6 +8127,14 @@ ${CREW_CREATURE_BASE_CSS}
     }
     .ctox-chat-fab-creatures.is-members .ctox-crew-creature {
       margin-left: 0;
+    }
+    /* Keep five/six full-size portraits within the four-member row width,
+       leaving both date controls and the reporter reservation their space. */
+    .ctox-chat-fab-creatures.is-members:has(.ctox-chat-crew-slot:nth-child(5)) {
+      padding-left: 16px;
+    }
+    .ctox-chat-fab-creatures.is-members:has(.ctox-chat-crew-slot:nth-child(5)) .ctox-chat-crew-slot {
+      margin-left: -16px;
     }
     /* A member at work on an app: small portrait in the corner of the window
        icon and on the desktop icon. Pure presence, no text. */
@@ -8305,11 +8314,11 @@ ${CREW_CREATURE_BASE_CSS}
       max-width: 100%;
     }
     .ctox-chat-dock.has-visible-chats:not(.is-collapsed) {
-      grid-template-columns: 108px var(--ctox-date-pill-width) minmax(48px, auto) 36px;
+      grid-template-columns: max-content var(--ctox-date-pill-width) minmax(48px, auto) 36px;
     }
     .ctox-chat-dock.has-few-chats:not(.is-collapsed),
     .ctox-chat-dock.has-many-chats:not(.is-collapsed) {
-      grid-template-columns: 108px var(--ctox-date-pill-width) 26px minmax(0, 1fr) 26px 36px;
+      grid-template-columns: max-content var(--ctox-date-pill-width) 26px minmax(0, 1fr) 26px 36px;
       justify-self: stretch;
       width: 100%;
       max-width: 100%;

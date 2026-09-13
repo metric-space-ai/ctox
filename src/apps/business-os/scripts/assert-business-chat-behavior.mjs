@@ -73,6 +73,50 @@ try {
     expect(m.dockWidth < 360, `zero dock should be compact, got ${m.dockWidth}`);
   });
 
+  for (const crewMembers of [4, 6]) {
+    await scenario(page, `crew-${crewMembers}-members-leave-day-arrows-clickable`, {
+      count: 0, crewMembers,
+    }, async () => {
+      await page.waitForFunction((count) => document.querySelectorAll('.ctox-chat-fab-creatures.is-members .ctox-chat-crew-slot').length === count, crewMembers);
+      for (const collapsed of [false, true]) {
+        if (collapsed) await page.locator('.ctox-chat-fab-label').click();
+        const initialDate = await page.locator('[data-chat-date-picker]').inputValue();
+        for (const direction of ['prev', 'next']) {
+          const arrow = page.locator(`[data-chat-date-${direction}]`);
+          const hit = await arrow.evaluate((button) => {
+            const rect = button.getBoundingClientRect();
+            return [0.25, 0.5, 0.75].every((fraction) => {
+              const target = document.elementFromPoint(rect.left + rect.width * fraction, rect.top + rect.height / 2);
+              return target === button || button.contains(target);
+            });
+          });
+          expect(hit, `${crewMembers} members must leave the ${direction} arrow unobstructed (collapsed=${collapsed})`);
+          await arrow.click();
+          const expectedDate = direction === 'next' ? initialDate : await page.evaluate((date) => {
+            const previous = new Date(date + 'T12:00:00');
+            previous.setDate(previous.getDate() - 1);
+            return [previous.getFullYear(), String(previous.getMonth() + 1).padStart(2, '0'), String(previous.getDate()).padStart(2, '0')].join('-');
+          }, initialDate);
+          expect(await page.locator('[data-chat-date-picker]').inputValue() === expectedDate, 'normal arrow click must change the selected day, not toggle Crew');
+          expect(await page.locator('.ctox-chat-dock').evaluate((dock) => dock.classList.contains('is-collapsed')) === collapsed, 'day navigation must preserve dock expansion');
+        }
+        const geometry = await page.locator('.ctox-chat-dock').evaluate((dock) => ({
+          width: dock.getBoundingClientRect().width,
+          columns: getComputedStyle(dock).gridTemplateColumns,
+          children: Array.from(dock.children).map((child) => ({
+            className: child.className, width: child.getBoundingClientRect().width,
+            margin: getComputedStyle(child).margin,
+          })),
+        }));
+        results.push({ scenario: 'crew-pool-day-arrow-geometry', crewMembers, collapsed, geometry });
+        if (crewMembers === 6) {
+          await page.screenshot({ path: path.join(outputDir, `business-chat-six-members-${collapsed ? 'collapsed' : 'expanded'}.png`) });
+        }
+        expect(geometry.width < 360, `the empty dock must remain compact with ${crewMembers} members (collapsed=${collapsed}): ${JSON.stringify(geometry)}`);
+      }
+    });
+  }
+
   await scenario(page, 'future-date-no-phantom-chat', { count: 0 }, async (m) => {
     const after = await page.evaluate(async () => {
       document.querySelector('[data-chat-date-next]').click();
