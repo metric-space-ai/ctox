@@ -62,16 +62,32 @@ fn reveal_with_reader(
     peer_id: &str,
     session_id: &str,
     capability_token: &str,
-    mut params: Vec<Value>,
+    params: Vec<Value>,
     is_current: impl Fn() -> bool,
     read: impl FnOnce(&str) -> Result<String, String>,
 ) -> Result<Value, String> {
-    let may_release = || {
-        is_current()
-            && matches!(store::is_business_peer_revoked(root, peer_id), Ok(false))
-            && matches!(store::is_business_peer_revoked(root, session_id), Ok(false))
-            && authorized(root, capability_token)
-    };
+    reveal_with_validation(
+        params,
+        is_current,
+        || {
+            matches!(store::is_business_peer_revoked(root, peer_id), Ok(false))
+                && matches!(store::is_business_peer_revoked(root, session_id), Ok(false))
+                && authorized(root, capability_token)
+        },
+        read,
+    )
+}
+
+fn reveal_with_validation(
+    mut params: Vec<Value>,
+    is_current: impl Fn() -> bool,
+    validate_store: impl Fn() -> bool,
+    read: impl FnOnce(&str) -> Result<String, String>,
+) -> Result<Value, String> {
+    // A handshake can replace the token/session without changing the transport
+    // generation while SQLite authorization reads block. Validate the captured
+    // transport identity again AFTER those reads, including before release.
+    let may_release = || is_current() && validate_store() && is_current();
     if !may_release() {
         return Err(DENIED.into());
     }
@@ -110,6 +126,67 @@ mod tests {
     use super::*;
 
     const CANARY: &str = "synthetic-reveal-canary-9JxZ-not-a-real-password";
+
+    #[test]
+    fn credential_reveal_discards_value_when_identity_changes_during_store_validation(
+    ) -> anyhow::Result<()> {
+        for replace_token in [true, false] {
+            let root = tempfile::tempdir()?;
+            let token = token(root.path(), "chef")?;
+            let session = "fixture-session";
+            let identity = std::cell::RefCell::new((token.clone(), session.to_string()));
+            let validations = std::cell::Cell::new(0);
+            let reads = std::cell::Cell::new(0);
+            crate::secrets::write_secret_record(
+                root.path(),
+                "credentials",
+                "TEST_LOGIN",
+                CANARY,
+                None,
+                json!({}),
+            )?;
+            let result = reveal_with_validation(
+                vec![json!({"name":"TEST_LOGIN"})],
+                || {
+                    let current = identity.borrow();
+                    current.0 == token && current.1 == session
+                },
+                || {
+                    validations.set(validations.get() + 1);
+                    let allowed = matches!(
+                        store::is_business_peer_revoked(root.path(), "fixture-peer"),
+                        Ok(false)
+                    ) && matches!(
+                        store::is_business_peer_revoked(root.path(), session),
+                        Ok(false)
+                    ) && authorized(root.path(), &token);
+                    assert!(allowed, "captured actor token remains authorized");
+                    if validations.get() == 2 {
+                        // Deterministic same-generation handshake interleaving:
+                        // the store checks still admit the captured identity,
+                        // but the transport now belongs to another token/session.
+                        let mut current = identity.borrow_mut();
+                        if replace_token {
+                            current.0 = "replacement-token".to_string();
+                        } else {
+                            current.1 = "replacement-session".to_string();
+                        }
+                    }
+                    allowed
+                },
+                |name| {
+                    reads.set(reads.get() + 1);
+                    crate::secrets::read_secret_value(root.path(), "credentials", name)
+                        .map_err(|_| "fixture read failed".to_string())
+                },
+            );
+            assert_eq!(validations.get(), 2);
+            assert_eq!(reads.get(), 1);
+            assert!(matches!(result, Err(ref error) if error == DENIED));
+            assert_no_plaintext_files(root.path())?;
+        }
+        Ok(())
+    }
 
     #[test]
     fn credential_reveal_discards_value_when_peer_or_session_is_revoked_during_read(
