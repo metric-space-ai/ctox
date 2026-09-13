@@ -994,7 +994,7 @@ function wireLocalRealtime(state) {
       if (!collection?.$?.subscribe) return null;
       return collection.$.subscribe((change) => {
         if (selectedTaskOnly.has(collectionName) && !changeConcernsSelectedTask(state, change)) return;
-        if (collectionName === "ctox_harness_status") refreshConfirmedHarnessStatus(state);
+        if (collectionName === "ctox_harness_status") refreshConfirmedHarnessStatus(state, true);
         scheduleRender();
       }) || null;
     })
@@ -4760,10 +4760,15 @@ function crewMemberById(state, memberId) {
 
 // One independent, coalesced read lane. Events arriving during a read invalidate
 // its result and request one follow-up; task hydration never assigns status.
-function refreshConfirmedHarnessStatus(state) {
+function refreshConfirmedHarnessStatus(state, invalidate = false) {
   if (state.disposed) return Promise.resolve();
+  if (state.harnessStatusRead) {
+    // General hydration joins the current read; only a newer status event
+    // invalidates it. Busy task updates must not starve confirmed status.
+    if (invalidate) state.harnessStatusRequest += 1;
+    return state.harnessStatusRead;
+  }
   state.harnessStatusRequest = (state.harnessStatusRequest || 0) + 1;
-  if (state.harnessStatusRead) return state.harnessStatusRead;
   let request;
   state.harnessStatusRead = (async () => {
     do {

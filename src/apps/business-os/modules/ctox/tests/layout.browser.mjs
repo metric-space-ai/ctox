@@ -301,6 +301,7 @@ async function assertStatusDuringTaskHydration(page) {
     const command = {id:'status-command',command_id:'status-command',execution_task_id:'status-task',execution_mode:'queue',status:'completed',payload:{title:'Completed status fixture'},updated_at_ms:1};
     window.holdStatusTaskReads = false;
     window.statusTaskReadsHeld = 0;
+    window.statusReadCount = 0;
     const releases = [];
     window.releaseStatusTaskReads = () => {
       window.holdStatusTaskReads = false;
@@ -308,6 +309,7 @@ async function assertStatusDuringTaskHydration(page) {
     };
     state.ctx.db = {collection: name => name === 'ctox_harness_status' ? {
       findOne: () => ({exec: async () => {
+        window.statusReadCount++;
         const snapshot = doc(projection);
         if (window.holdNextStatusRead) {
           window.holdNextStatusRead = false;
@@ -343,9 +345,15 @@ async function assertStatusDuringTaskHydration(page) {
     await hooks.renderFromLocalCache(state);
   });
   assert.equal(await page.locator('[data-harness-pause]').count(), 0, 'initial task hydration can finish before status');
+  await page.evaluate(async () => {
+    const {state, hooks} = window.crewFixture;
+    await hooks.renderFromLocalCache(state);
+    await hooks.renderFromLocalCache(state);
+  });
   await page.evaluate(() => window.releaseOlderStatusRead());
   await page.locator('[data-harness-pause]').waitFor({state:'attached'});
   assert.equal(await page.locator('[data-harness-capacity]').inputValue(), '1');
+  assert.equal(await page.evaluate(() => window.statusReadCount), 1, 'unrelated hydration must join the pending status read without invalidating it');
   await page.evaluate(() => {
     window.holdStatusTaskReads = true;
     window.pendingTaskHydration = window.crewFixture.hooks.renderFromLocalCache(window.crewFixture.state);
