@@ -196,7 +196,8 @@ fn apply_scope_claims(scope: &GuestScope, command: &BusinessCommand) -> Result<(
 }
 
 fn claim_matches(claim: Option<&str>, canonical: &str, field: &str) -> Result<()> {
-    if let Some(claim) = claim.filter(|value| !value.is_empty()) {
+    if let Some(claim) = claim {
+        validate_identifier(claim, field)?;
         ensure!(
             claim == canonical,
             "guest {field} does not match the bound guest"
@@ -208,6 +209,7 @@ fn claim_matches(claim: Option<&str>, canonical: &str, field: &str) -> Result<()
 fn validate_identifier(value: &str, field: &str) -> Result<()> {
     ensure!(
         !value.is_empty()
+            && value.trim() == value
             && value.len() <= MAX_IDENTIFIER_BYTES
             && !value.chars().any(char::is_control),
         "guest {field} is invalid"
@@ -330,9 +332,7 @@ pub(super) fn require_authenticated_actor(session: &BusinessOsSession) -> Result
 
 #[cfg(test)]
 pub(super) fn test_guest_runtime(revoke_during_capture: bool) -> GuestRuntimeInjection {
-    GuestRuntimeInjection::Registered(GuestCommandExecutor::from_owner(tests::test_owner(
-        revoke_during_capture,
-    )))
+    tests::test_runtime(revoke_during_capture)
 }
 
 #[cfg(test)]

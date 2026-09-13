@@ -147,15 +147,17 @@ impl GuestAuthorization for Authority {
     }
 }
 
-pub(super) struct Owner {
+struct Owner {
     state: Arc<State>,
     driver: Driver,
     authority: Authority,
     bound_user_id: String,
 }
 
-pub(super) fn test_owner(revoke_during_capture: bool) -> Owner {
-    Owner::new(revoke_during_capture)
+pub(super) fn test_runtime(revoke_during_capture: bool) -> GuestRuntimeInjection {
+    GuestRuntimeInjection::Registered(GuestCommandExecutor::from_owner(Owner::new(
+        revoke_during_capture,
+    )))
 }
 
 impl Owner {
@@ -368,6 +370,11 @@ fn wrong_guest_project_thread_worker_actor_or_frame_never_reach_the_driver() {
     let owner = Owner::new(false);
     let session = session_for("owner");
     let cases = [
+        observe_command(
+            "cmd-empty-project",
+            json!({"guest_id": "guest-a", "project_id": ""}),
+        ),
+        observe_command("cmd-padded-guest", json!({"guest_id": " guest-a "})),
         observe_command("cmd-guest", json!({"guest_id": "guest-b"})),
         observe_command(
             "cmd-project",

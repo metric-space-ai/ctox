@@ -10,6 +10,21 @@ use super::*;
 use serde_json::json;
 use tempfile::tempdir;
 
+fn seed_guest_command_users(root: &std::path::Path) -> anyhow::Result<()> {
+    drop(create_repair_rxdb_tables(root)?);
+    // Resolve roles from managed users, independent of local login defaults.
+    for id in ["owner", "owner-1"] {
+        issue_business_os_capability_token_for_managed_user(
+            root,
+            id,
+            id,
+            "admin",
+            now_ms() as i64,
+        )?;
+    }
+    Ok(())
+}
+
 fn actor(id: &str, role: &str) -> serde_json::Value {
     json!({
         "id": id,
@@ -46,7 +61,7 @@ fn document(
 #[test]
 fn guest_observe_without_owner_fails_closed_and_writes_failed_receipt() -> anyhow::Result<()> {
     let root = tempdir()?;
-    drop(create_repair_rxdb_tables(root.path())?);
+    seed_guest_command_users(root.path())?;
     let command_id = "cmd-guest-observe-unregistered";
     let outcome = accept_rxdb_business_command(
         root.path(),
@@ -86,7 +101,7 @@ fn guest_observe_without_owner_fails_closed_and_writes_failed_receipt() -> anyho
 #[test]
 fn guest_input_user_is_denied_before_dispatch() -> anyhow::Result<()> {
     let root = tempdir()?;
-    drop(create_repair_rxdb_tables(root.path())?);
+    seed_guest_command_users(root.path())?;
     let issued_at_ms = now_ms() as i64;
     let (token, _) = issue_business_os_capability_token_for_managed_user(
         root.path(),
@@ -120,7 +135,7 @@ fn guest_input_user_is_denied_before_dispatch() -> anyhow::Result<()> {
 #[test]
 fn guest_observe_rejects_unknown_fields_and_arbitrary_commands() -> anyhow::Result<()> {
     let root = tempdir()?;
-    drop(create_repair_rxdb_tables(root.path())?);
+    seed_guest_command_users(root.path())?;
     for (command_id, command_type, payload) in [
         (
             "cmd-guest-actor",
@@ -162,7 +177,7 @@ fn guest_observe_rejects_unknown_fields_and_arbitrary_commands() -> anyhow::Resu
 #[test]
 fn guest_command_replay_keeps_failed_receipt_correlated() -> anyhow::Result<()> {
     let root = tempdir()?;
-    drop(create_repair_rxdb_tables(root.path())?);
+    seed_guest_command_users(root.path())?;
     let command_id = "cmd-guest-observe-replay";
     let request = document(
         command_id,
@@ -189,7 +204,7 @@ fn guest_command_replay_keeps_failed_receipt_correlated() -> anyhow::Result<()> 
 #[test]
 fn registered_guest_owner_observe_and_input_use_command_plane_receipts() -> anyhow::Result<()> {
     let root = tempdir()?;
-    drop(create_repair_rxdb_tables(root.path())?);
+    seed_guest_command_users(root.path())?;
     let injection = super::super::guest_commands::test_guest_runtime(false);
     let observe = accept_rxdb_business_command_with_guest_runtime(
         root.path(),
@@ -243,7 +258,7 @@ fn registered_guest_owner_observe_and_input_use_command_plane_receipts() -> anyh
 #[test]
 fn public_intake_wrapper_stays_unregistered_and_cannot_execute() -> anyhow::Result<()> {
     let root = tempdir()?;
-    drop(create_repair_rxdb_tables(root.path())?);
+    seed_guest_command_users(root.path())?;
     let error = accept_rxdb_business_command_with_origin(
         root.path(),
         document(
