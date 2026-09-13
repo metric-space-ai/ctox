@@ -1307,7 +1307,7 @@ ExecStart=$BIN_DIR/ctox service --foreground
 Restart=always
 RestartSec=5
 KillMode=control-group
-TimeoutStopSec=20
+TimeoutStopSec=315
 
 [Install]
 WantedBy=default.target
@@ -1519,20 +1519,20 @@ populate_rebuild_release_layout() {
   ctox_binary="$(resolve_ctox_binary_path "$release_root" 2>/dev/null || true)"
   ctox_desktop_host_binary="$(resolve_ctox_desktop_host_binary_path "$release_root" 2>/dev/null || true)"
 
-  mkdir -p "$release_root/bin" "$release_root/tools/model-runtime/bin" "$INSTALL_ROOT/bin"
+  # Preparation is release-local. The Rust updater publishes launchers only
+  # after stopping the old daemon and switching current.
+  mkdir -p "$release_root/bin" "$release_root/tools/model-runtime/bin"
 
   if [[ -n "$ctox_binary" && -x "$ctox_binary" ]]; then
     cp "$ctox_binary" "$release_root/bin/ctox-real"
     codesign_binary "$release_root/bin/ctox-real"
     write_managed_launch_wrapper "$release_root/bin/ctox" "$release_root" "$release_root/bin/ctox-real"
-    cp "$release_root/bin/ctox-real" "$BIN_DIR/ctox-real" 2>/dev/null || true
-    codesign_binary "$BIN_DIR/ctox-real"
-    write_managed_launch_wrapper "$INSTALL_ROOT/bin/ctox" "$release_root" "$BIN_DIR/ctox-real"
+
   fi
 
   if [[ -n "$ctox_desktop_host_binary" && -x "$ctox_desktop_host_binary" ]]; then
     cp "$ctox_desktop_host_binary" "$release_root/bin/ctox-desktop-host"
-    cp "$release_root/bin/ctox-desktop-host" "$INSTALL_ROOT/bin/ctox-desktop-host" 2>/dev/null || true
+
   fi
 
   if [[ -x "$TOOLS_ROOT/model-runtime/bin/ctox-engine" ]]; then
@@ -2666,20 +2666,8 @@ run_rebuild() {
   setup_browser_runtime "$root" || true
   build_google_fetch_helper "$root" || true
 
-  # Ensure ctox is available as a command everywhere
-  write_wrapper_script "$root"
-  ensure_command_shim
-
-  # Ensure BIN_DIR is in PATH for future shells
-  local shell_rc=""
-  case "${SHELL:-}" in
-    */zsh)  shell_rc="$HOME/.zshrc" ;;
-    */bash) shell_rc="$HOME/.bashrc" ;;
-    */fish) shell_rc="$HOME/.config/fish/config.fish" ;;
-  esac
-  if [[ -n "$shell_rc" ]] && ! grep -q "$BIN_DIR" "$shell_rc" 2>/dev/null; then
-    printf '\nexport PATH="%s:$PATH"\n' "$BIN_DIR" >> "$shell_rc"
-  fi
+  # Do not publish the public command, launch binary or service here. A
+  # watchdog restart during preparation must still launch the old release.
 }
 
 ensure_web_runtime_defaults() {
