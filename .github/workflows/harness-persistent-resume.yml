@@ -22,13 +22,19 @@ jobs:
       CARGO_BUILD_JOBS: "2"
       CMAKE_BUILD_PARALLEL_LEVEL: "2"
       RUST_TEST_THREADS: "2"
-      CARGO_TARGET_DIR: ${{ runner.temp }}/ctox-persistent-resume/target
-      CARGO_HOME: ${{ runner.temp }}/ctox-persistent-resume/cargo-home
-      TMPDIR: ${{ runner.temp }}/ctox-persistent-resume/tmp
       CARGO_TERM_COLOR: never
     steps:
       - name: Prepare disposable directories
-        run: mkdir -p "$CARGO_TARGET_DIR" "$CARGO_HOME" "$TMPDIR"
+        shell: bash
+        run: |
+          set -euo pipefail
+          task_root="$RUNNER_TEMP/ctox-persistent-resume"
+          mkdir -p "$task_root/target" "$task_root/cargo-home" "$task_root/tmp"
+          {
+            echo "CARGO_TARGET_DIR=$task_root/target"
+            echo "CARGO_HOME=$task_root/cargo-home"
+            echo "TMPDIR=$task_root/tmp"
+          } >> "$GITHUB_ENV"
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
