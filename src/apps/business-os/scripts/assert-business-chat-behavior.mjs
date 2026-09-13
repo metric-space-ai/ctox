@@ -316,6 +316,31 @@ try {
     await page.screenshot({ path: progressScreenshotPath, fullPage: true });
   });
 
+  for (const transition of ['minimize', 'date']) {
+    await scenario(page, `inspection-survives-${transition}-and-return`, {
+      count: 1, activeIndex: 0, crewMembers: 0,
+    }, async () => {
+      const win = page.locator('.ctox-chat-window[data-chat-id="chat_0"]');
+      const inspection = win.locator('.ctox-chat-inspection');
+      for (const open of [true, false]) {
+        await inspection.locator('summary').click();
+        expect(await inspection.evaluate(node => node.open) === open, 'fixture must establish the intended fold state');
+        if (transition === 'minimize') {
+          await win.locator('[data-chat-minimize]').click();
+          await page.locator('[data-chat-focus="chat_0"].is-minimized').waitFor();
+          expect(await win.count() === 0, 'minimized window must leave the DOM');
+          await page.locator('[data-chat-focus="chat_0"]').click();
+        } else {
+          await page.locator('[data-chat-date-next]').click();
+          expect(await win.count() === 0, 'off-date window must leave the DOM');
+          await page.locator('[data-chat-date-prev]').click();
+        }
+        await inspection.waitFor();
+        expect(await inspection.evaluate(node => node.open) === open, `${transition} and return must preserve the chosen inspection fold`);
+      }
+    });
+  }
+
   await scenario(page, 'inspection-survives-live-projection-while-typing', {
     count: 1, activeIndex: 0, groupedResearch: true, progressTracking: true, crewMembers: 4,
   }, async () => {
