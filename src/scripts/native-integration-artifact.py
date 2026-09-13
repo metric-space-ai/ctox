@@ -18,7 +18,14 @@ EVIDENCE.mkdir(parents=True, exist_ok=True)
 DEADLINE = time.monotonic() + 4800
 TARGET = 'x86_64-unknown-linux-gnu'
 FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
-           'business_chat', 'repair_queue_projections']
+           'business_chat', 'repair_queue_projections',
+           'business_os::mcp_channel::app_authority::tests::',
+           'business_os::mcp_channel::gateway_lifecycle_tests::',
+           'business_os::mcp_channel::tests::gateway_',
+           'business_os::mcp_channel::tests::person_research',
+           'business_os::mcp_channel::tests::mcp_ignores_spoofed_context_role_without_gateway_trust',
+           'install::tests::state_backup', 'install::tests::restore_state_backup',
+           'install::tests::update_backup_retention', 'install::tests::aborted_updates']
 RECORD = {'stages': [], 'complete': False}
 
 
@@ -115,6 +122,17 @@ def main():
     if not all(counts.values()):
         raise RuntimeError(f'A required test group is absent: {counts}')
     required = {
+        'business_os::mcp_channel::tests::person_research_binding_accepts_runtime_lead_name_fields',
+        'business_os::mcp_channel::tests::person_research_binding_runtime_leads_preserve_identity_and_scope',
+        'business_os::mcp_channel::app_authority::tests::mcp_app_authority_local_source_compare_and_save_preserves_target_and_conflicts',
+        'business_os::mcp_channel::gateway_lifecycle_tests::healthy_rotations_never_sleep_or_accumulate_failure_backoff',
+        'business_os::mcp_channel::gateway_lifecycle_tests::healthy_rotation_resets_saturated_failure_backoff',
+        'business_os::mcp_channel::gateway_lifecycle_tests::stream_ends_and_errors_share_bounded_failure_backoff',
+        'business_os::mcp_channel::gateway_lifecycle_tests::reconnect_disabled_returns_each_outcome_without_retry_or_sleep',
+        'business_os::mcp_channel::gateway_lifecycle_tests::cancellation_drops_active_connection_after_rotation',
+        'business_os::mcp_channel::gateway_lifecycle_tests::cancellation_drops_failure_backoff_without_another_attempt',
+        'install::tests::state_backup_restores_encrypted_credentials_without_original_store',
+        'install::tests::state_backup_rejects_master_key_symlink',
         'coding_agents::pi_sidecar::tests::inherited_minimax_route_drives_real_pi_tools_through_native_bridge',
         'coding_agents::pi_sidecar::tests::responses_edit_owner_applies_only_complete_source_and_session',
         'coding_agents::pi_sidecar::tests::incomplete_failure_detail_only_preserves_allowlisted_enum_and_counts',
