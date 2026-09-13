@@ -56,7 +56,10 @@ jobs:
       - name: Install native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev libcap-dev libpcap-dev ripgrep
+          sudo apt-get install -y libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev libcap-dev libpcap-dev ripgrep xvfb maim xdotool x11-utils qemu-system-x86 qemu-utils
+          for tool in qemu-img qemu-system-x86_64 Xvfb maim xdotool xev; do
+            test -x "/usr/bin/$tool" || { echo "Missing guest test prerequisite: /usr/bin/$tool" >&2; exit 1; }
+          done
       - name: Verify existing reviewed corrections
         timeout-minutes: 85
         run: python3 src/scripts/native-existing-verification.py
