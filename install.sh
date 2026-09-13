@@ -247,7 +247,7 @@ run_build_module() {
     printf "Error: build admission requires python3 and src/scripts/build-cache.py from the source checkout.\\n" >&2
     return 1
   fi
-  python3 "$helper" --cache-root "$CACHE_ROOT" run --cwd "$workdir" -- "$@" || return $?
+  python3 "$helper" --cache-root "$CACHE_ROOT" run --installer --cwd "$workdir" -- "$@" || return $?
   tui_module_done "$label" "$started"
 }
 
@@ -269,26 +269,13 @@ prepare_cargo_target_cache() {
       ;;
   esac
 
-  local cache_dir="$CACHE_ROOT/cargo-target/$cache_key"
-  mkdir -p "$cache_dir"
-
-  if [[ -L "$link_path" ]]; then
-    ln -sfn "$cache_dir" "$link_path"
-    return 0
+  local helper="${BUILD_CACHE_HELPER:-${SCRIPT_DIR}/src/scripts/build-cache.py}"
+  if [[ ! -f "$helper" ]] || ! command -v python3 >/dev/null 2>&1; then
+    printf 'Error: tracked target preparation requires python3 and build-cache.py.\n' >&2
+    return 1
   fi
-  if [[ ! -e "$link_path" ]]; then
-    mkdir -p "$(dirname "$link_path")"
-    ln -s "$cache_dir" "$link_path" 2>/dev/null || true
-    return 0
-  fi
-  if [[ -d "$link_path" ]] && [[ -z "$(find "$link_path" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
-    rmdir "$link_path" 2>/dev/null || true
-    ln -s "$cache_dir" "$link_path" 2>/dev/null || true
-    return 0
-  fi
-
-  printf '  %b%breusing local cargo target at %s; cache link skipped because it already exists%b\n' \
-    "$C_BOLD" "$C_GREY" "$link_path" "$C_RESET" >&2
+  python3 "$helper" --cache-root "$CACHE_ROOT" prepare \
+    --link-path "$link_path" --cache-key "$cache_key"
 }
 
 remove_tree_with_retry() {

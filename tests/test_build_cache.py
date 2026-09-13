@@ -68,12 +68,13 @@ class CacheTests(unittest.TestCase):
         with self.assertRaises(ValueError):m.sweep(self.root,self.settings,True,self.now)
         self.assertTrue(p.exists())
 
-    def test_symlink_inside_entry_never_traversed_or_deleted(self):
+    def test_expired_entry_unlinks_symlink_without_touching_target(self):
         p=self.entry('old',8); outside=self.cache/'valuable'; outside.write_text('keep')
         (p/'escape').symlink_to(outside)
-        with self.assertRaises(ValueError):m.sweep(self.root,self.settings,True,self.now)
+        report=m.sweep(self.root,self.settings,True,self.now)
+        self.assertEqual(report['removed'], ['old'])
         self.assertEqual(outside.read_text(),'keep')
-        self.assertTrue(p.exists())
+        self.assertFalse(p.exists())
 
     def test_live_lease_blocks_second_sweep(self):
         with m.locked(self.cache):
@@ -147,6 +148,91 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(meta['state'], 'active')
         with m.locked(self.cache) as (root, fd):
             self.assertEqual(m.sweep(root, self.settings, True)['removed'], [])
+
+    def test_successful_output_link_does_not_block_next_build(self):
+        outside=self.cache/'external'; outside.mkdir()
+        (outside/'sentinel').write_text('keep')
+        command=[sys.executable, '-c',
+                 'import os,pathlib,sys; p=pathlib.Path(os.environ["CARGO_TARGET_DIR"]); '
+                 'p.mkdir(); (p/"library.so").symlink_to(sys.argv[1], target_is_directory=True)', str(outside)]
+        with m.locked(self.cache) as (root, fd):
+            self.assertEqual(m.run(root,fd,self.settings,'owner','linked',self.cache,command,3),0)
+        # Exercise the CLI admission path for the subsequent build, not only inventory.
+        (self.cache/'build-cache-policy.json').write_text(json.dumps({'min_free_bytes':1}))
+        result=subprocess.run([sys.executable,str(SCRIPT),'--cache-root',str(self.cache),
+                               'run','--owner','next','--entry','next','--cwd',str(self.cache),
+                               '--',sys.executable,'-c','pass'],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.settings['soft_bytes']=1
+        report=m.sweep(self.root,self.settings,True)
+        self.assertIn('linked',report['removed'])
+        self.assertEqual((outside/'sentinel').read_text(),'keep')
+
+    def test_entry_symlink_is_protected_without_blocking_inventory(self):
+        outside=self.cache/'external'; outside.mkdir()
+        (outside/'sentinel').write_text('keep')
+        (self.root/'linked-entry').symlink_to(outside,target_is_directory=True)
+        report=m.sweep(self.root,self.settings,True)
+        self.assertEqual(report['removed'],[])
+        self.assertEqual(report['entries'][0]['reason'],'entry_symlink')
+        self.assertEqual((outside/'sentinel').read_text(),'keep')
+
+    def test_real_installer_producer_registers_expires_and_preserves_legacy(self):
+        (self.cache/'build-cache-policy.json').write_text(json.dumps({'min_free_bytes':1}))
+        repo=SCRIPT.parents[2]
+        source=self.cache/'source'; source.mkdir()
+        legacy=self.cache/'cargo-target'/'legacy'; legacy.mkdir(parents=True)
+        (legacy/'sentinel').write_text('keep')
+        (source/'target').symlink_to(legacy,target_is_directory=True)
+        script='''source "$1/install.sh"
+CACHE_ROOT="$2"; SCRIPT_DIR="$1"; INSTALL_ROOT="$2/releases"
+prepare_cargo_target_cache "$2/source/target" ctox-main
+prepare_cargo_target_cache "$2/source/target" ctox-main
+run_build_module fixture "$2/source" "$3" -c 'from pathlib import Path; Path("target/output").write_text("built")'
+# Keep the installer alive while a second helper tries pressure eviction.
+"$3" -c 'import json,sys; from pathlib import Path; Path(sys.argv[1]).write_text(json.dumps({"min_free_bytes":1,"soft_bytes":1}))' "$2/build-cache-policy.json"
+"$3" "$1/src/scripts/build-cache.py" --cache-root "$2" sweep --apply
+cp "$2/source/target/output" "$2/copied-output"
+'''
+        result=subprocess.run(['bash','-c',script,'bash',str(repo),str(self.cache),sys.executable],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        entries=list(self.root.glob('installer-*'))
+        self.assertEqual(len(entries),1,'duplicate preparation should reuse this producer target')
+        entry=entries[0]
+        self.assertEqual((source/'target').resolve(),entry/'target')
+        self.assertEqual((self.cache/'copied-output').read_text(),'built')
+        metadata=json.loads((entry/m.MARKER).read_text())
+        self.assertEqual(metadata['state'],'completed')
+        self.assertTrue(metadata['owner'].startswith('installer:'))
+        reused=subprocess.run(['bash','-c',script,'bash',str(repo),str(self.cache),sys.executable],capture_output=True,text=True)
+        self.assertEqual(reused.returncode,0,reused.stderr)
+        self.assertEqual(list(self.root.glob('installer-*')),[entry])
+        # The producer has exited: the real output is now age-retained, without adoption.
+        report=m.sweep(self.root,self.settings,True,time.time()+8*86400)
+        self.assertEqual(report['removed'],[entry.name])
+        self.assertEqual((legacy/'sentinel').read_text(),'keep')
+        self.assertEqual((self.cache/'copied-output').read_text(),'built')
+        # The next producer must repair the now-dangling output link automatically.
+        again=subprocess.run(['bash','-c',script,'bash',str(repo),str(self.cache),sys.executable],capture_output=True,text=True)
+        self.assertEqual(again.returncode,0,again.stderr)
+        self.assertTrue((source/'target'/'output').is_file())
+        self.assertEqual((legacy/'sentinel').read_text(),'keep')
+
+    def test_another_live_producer_cannot_retarget_output_link(self):
+        target=self.cache/'source-target'
+        m.prepare_target(self.root,self.settings,target,'ctox-main')
+        original=target.resolve()
+        with patch.object(m.os,'getppid',return_value=os.getpid()):
+            with self.assertRaisesRegex(ValueError,'another live producer'):
+                m.prepare_target(self.root,self.settings,target,'ctox-main')
+        self.assertEqual(target.resolve(),original)
+
+    def test_unclassified_real_producer_directory_is_preserved(self):
+        path=self.cache/'source-target'; path.mkdir()
+        (path/'sentinel').write_text('keep')
+        with self.assertRaisesRegex(ValueError,'unclassified'):
+            m.prepare_target(self.root,self.settings,path,'ctox-main')
+        self.assertEqual((path/'sentinel').read_text(),'keep')
 
 
 if __name__ == '__main__':unittest.main()

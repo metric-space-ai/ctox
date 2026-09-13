@@ -37,11 +37,24 @@ entry. Preserve useful test evidence elsewhere before completion. Failed command
 also complete their disposable cache lifetime; interrupted commands remain
 protected. Existing paths cannot be adopted or silently reused.
 
-Installer builds without `--entry` keep their existing output locations and
-managed-release lifecycle; they gain space admission and opportunistic sweeping
-of explicitly registered entries. Existing arbitrary operator/Cargo directories
-are **not automatically classified or deleted**. Future operator jobs must use
-the named-entry invocation above to participate in retention.
+The installer producer `prepare_cargo_target_cache` automatically registers new
+source-build targets under `builds/installer-<key>-<id>/target` and points the
+source target link there. `run_build_module` passes `--installer` to the helper
+to record completion for that installer’s prepared outputs after each command. The installer shell PID
+keeps them protected through subsequent modules and binary-copy steps; age/cap
+retention applies only once that owner exits. PID-reuse or permission uncertainty
+conservatively protects the entry. Repeated preparation within one installer
+reuses its registered target. A later installer can reclaim that same completed,
+inactive target for incremental builds; unknown or interrupted entries are never
+reclassified. If retention already removed it, preparation repairs the dangling
+producer link with a fresh registered target.
+
+Existing legacy symlink targets are preserved when the producer link is redirected.
+A nonempty unclassified real target directory is preserved and preparation fails
+with a request for a fresh build path. Managed release-local targets keep their
+existing release retention because they may contain runtime dependencies. Disabled
+persistent caching retains its explicit opt-out. Arbitrary operator directories
+are never adopted; operator jobs outside the installer use the named-entry command.
 
 Inspect or apply the same sweep manually, or invoke it from an existing scheduled
 maintenance job (no additional scheduler is created):
@@ -54,9 +67,11 @@ python3 src/scripts/build-cache.py --cache-root "$HOME/.cache/ctox" sweep --appl
 Sweeps also run before admitted builds. Thus seven days is an eligibility age,
 not an expiration SLA while no maintenance/build runs. Completed entries are
 removed oldest-first when expired or over budget. Active, missing-owner,
-unclassified and future-completion entries are protected. Invalid metadata,
-symlinks, mount crossings, special files or inventory-budget exhaustion stop the
-sweep without deleting anything. Traversal is limited to 250,000 objects and ten
+unclassified and future-completion entries are protected. Interior build-output
+symlinks are counted as link inodes, never traversed; removing an expired entry
+unlinks them without touching their targets. A top-level entry symlink remains
+protected. Invalid metadata, mount crossings, special files or inventory-budget
+exhaustion stop the sweep without deleting anything. Traversal is limited to 250,000 objects and ten
 seconds. A shared nonblocking filesystem lease excludes concurrent cooperating
 builds/sweeps; its descriptor is inherited by the child. Uncooperative writers
 must not mutate managed entries.

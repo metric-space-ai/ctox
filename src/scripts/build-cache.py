@@ -14,6 +14,7 @@ import stat
 import subprocess
 import sys
 import time
+import uuid
 
 GIB = 1024 ** 3
 DEFAULTS = {"completed_days": 7, "soft_bytes": 10 * GIB, "min_free_bytes": 20 * GIB}
@@ -54,7 +55,7 @@ def locked(cache):
 
 
 def measure(path, budget):
-    """Bound traversal and reject symlinks/mounts; uncertain trees are never deleted."""
+    """Count link inodes without following targets; reject mounts and special files."""
     total = 0
     device = path.lstat().st_dev
     pending = [path]
@@ -65,17 +66,32 @@ def measure(path, budget):
             raise ValueError("build cache inventory budget exceeded; no cleanup performed")
         item = pending.pop()
         info = item.lstat()
-        if stat.S_ISLNK(info.st_mode) or info.st_dev != device:
-            raise ValueError("symlink or mount in cache entry")
+        if info.st_dev != device:
+            raise ValueError("mount in cache entry")
         identity = (info.st_dev, info.st_ino)
         if identity not in seen:
             total += info.st_blocks * 512
             seen.add(identity)
+        if stat.S_ISLNK(info.st_mode):
+            continue
         if stat.S_ISDIR(info.st_mode):
             pending.extend(item.iterdir())
         elif not stat.S_ISREG(info.st_mode):
             raise ValueError("special file in cache entry")
     return total
+
+
+def producer_alive(pid):
+    # PID reuse/permission uncertainty conservatively protects, never authorizes deletion.
+    if type(pid) is not int or pid <= 0:
+        return True
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
 
 
 def inventory(root, now):
@@ -86,6 +102,10 @@ def inventory(root, now):
             continue
         item = {"name": path.name, "bytes": 0, "eligible": False, "reason": "unknown"}
         try:
+            if path.is_symlink():
+                item.update(bytes=path.lstat().st_blocks * 512, reason="entry_symlink")
+                entries.append(item)
+                continue
             if path.lstat().st_dev != root.stat().st_dev or os.path.ismount(path):
                 raise ValueError("mount at cache entry boundary")
             item["bytes"] = measure(path, budget)
@@ -101,6 +121,8 @@ def inventory(root, now):
                         and meta.get("state") == "completed"
                         and type(done) in (int, float) and math.isfinite(done) and 0 < done <= now):
                     item.update(eligible=True, completed_at=done, reason="completed")
+                if "producer_pid" in meta and producer_alive(meta["producer_pid"]):
+                    item.update(eligible=False, reason="active_owner")
         except (OSError, ValueError, TypeError, AttributeError) as exc:
             # An incomplete size must never masquerade as an aggregate total.
             raise ValueError(f"cannot safely inventory {path.name}: {exc}") from exc
@@ -153,7 +175,64 @@ def save(path, value):
     os.replace(tmp, path / MARKER)
 
 
-def run(root, lease, settings, owner, name, cwd, command, timeout):
+def prepare_target(root, settings, link, cache_key):
+    """Register new installer output, preserving every legacy target's contents."""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,60}", cache_key):
+        raise ValueError("invalid installer cache key")
+    link = link.absolute()
+    link = link.parent.resolve() / link.name
+    anchor = link.parent
+    while not anchor.exists():
+        anchor = anchor.parent
+    admit([root, anchor], settings)
+    parent_pid = os.getppid()
+    # Reject simultaneous installers targeting the same source-tree link. The shell
+    # remains its owner through copying the built binaries, after each module exits.
+    for candidate in root.iterdir():
+        marker = candidate / MARKER
+        if candidate.is_symlink() or marker.is_symlink() or not marker.is_file():
+            continue
+        if marker.stat().st_size > 16384:
+            raise ValueError("oversized cache metadata")
+        recorded = json.loads(marker.read_text())
+        if recorded.get("producer_link") != str(link):
+            continue
+        pid = recorded.get("producer_pid")
+        if pid != parent_pid and producer_alive(pid):
+            raise ValueError("installer target is owned by another live producer")
+        if (recorded.get("schema") == 1 and recorded.get("kind") == "disposable_build"
+                and link.is_symlink() and link.resolve() == candidate / "target"
+                and not (candidate / "target").is_symlink()):
+            if pid == parent_pid:
+                return
+            completed = recorded.get("completed_at")
+            if (recorded.get("state") == "completed" and type(completed) in (int, float)
+                    and math.isfinite(completed) and 0 < completed <= time.time()):
+                recorded.update(owner=f"installer:{parent_pid}", producer_pid=parent_pid,
+                                state="active", started_at=time.time())
+                save(candidate, recorded)
+                return
+    if link.exists() and not link.is_symlink():
+        if not link.is_dir() or any(link.iterdir()):
+            raise ValueError("unclassified target directory preserved; choose a fresh build path")
+        link.rmdir()  # Only an empty producer placeholder, never legacy artifacts.
+    entry = root / f"installer-{cache_key}-{uuid.uuid4().hex[:16]}"
+    entry.mkdir(mode=0o700)
+    (entry / "target").mkdir()
+    save(entry, {"schema": 1, "kind": "disposable_build", "owner": f"installer:{parent_pid}",
+                 "producer_pid": parent_pid, "producer_link": str(link),
+                 "state": "active", "started_at": time.time()})
+    link.parent.mkdir(parents=True, exist_ok=True)
+    staging = link.parent / f".{link.name}.{uuid.uuid4().hex}.link"
+    try:
+        staging.symlink_to(entry / "target", target_is_directory=True)
+        os.replace(staging, link)
+    finally:
+        if staging.is_symlink():
+            staging.unlink()
+
+
+def run(root, lease, settings, owner, name, cwd, command, timeout, installer=False):
     if name and (not owner or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,100}", name)):
         raise ValueError("named build cache requires an owner and a simple entry name")
     entry = root / name if name else None
@@ -176,6 +255,17 @@ def run(root, lease, settings, owner, name, cwd, command, timeout):
         env["CARGO_TARGET_DIR"] = str(entry / "target")
         env["TMPDIR"] = str(entry / "tmp")
         (entry / "tmp").mkdir()
+    producer_entries = []
+    if installer:
+        for candidate in root.iterdir():
+            marker = candidate / MARKER
+            if candidate.is_symlink() or marker.is_symlink() or not marker.is_file():
+                continue
+            recorded = json.loads(marker.read_text())
+            if recorded.get("producer_pid") == os.getppid() and recorded.get("kind") == "disposable_build":
+                recorded.update(state="active")
+                save(candidate, recorded)
+                producer_entries.append((candidate, recorded))
     child = subprocess.Popen(command, cwd=cwd, env=env, pass_fds=(lease,), start_new_session=True)
     try:
         result = child.wait(timeout=timeout)
@@ -197,6 +287,9 @@ def run(root, lease, settings, owner, name, cwd, command, timeout):
     if meta is not None:
         meta.update(state="completed", completed_at=time.time(), exit_code=result)
         save(entry, meta)
+    for candidate, recorded in producer_entries:
+        recorded.update(state="completed", completed_at=time.time(), exit_code=result)
+        save(candidate, recorded)
     print(json.dumps(sweep(root, settings)), file=sys.stderr, flush=True)
     return result
 
@@ -205,9 +298,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cache-root", required=True, type=Path)
     sub = parser.add_subparsers(dest="action", required=True)
+    prepare = sub.add_parser("prepare")
+    prepare.add_argument("--link-path", required=True, type=Path)
+    prepare.add_argument("--cache-key", required=True)
     cleanup = sub.add_parser("sweep")
     cleanup.add_argument("--apply", action="store_true")
     build = sub.add_parser("run")
+    build.add_argument("--installer", action="store_true")
     build.add_argument("--owner")
     build.add_argument("--entry")
     build.add_argument("--cwd", type=Path, default=Path.cwd())
@@ -217,6 +314,9 @@ def main():
     cache = args.cache_root.resolve()
     settings = policy(cache)
     with locked(cache) as (root, lease):
+        if args.action == "prepare":
+            prepare_target(root, settings, args.link_path, args.cache_key)
+            return 0
         if args.action == "sweep":
             report = sweep(root, settings, args.apply)
             print(json.dumps(report))
@@ -224,7 +324,7 @@ def main():
         command = args.command[1:] if args.command[:1] == ["--"] else args.command
         if not command or not math.isfinite(args.timeout_seconds) or args.timeout_seconds <= 0:
             raise ValueError("command and positive finite timeout are required")
-        return run(root, lease, settings, args.owner, args.entry, args.cwd.resolve(), command, args.timeout_seconds)
+        return run(root, lease, settings, args.owner, args.entry, args.cwd.resolve(), command, args.timeout_seconds, args.installer)
 
 
 def stop_requested(signum, frame):
