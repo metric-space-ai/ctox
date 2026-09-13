@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded verification of existing native corrections; no runtime package."""
+"""Bounded verification and runtime packaging of existing integrated corrections."""
 import hashlib
 import json
 import os
@@ -94,11 +94,12 @@ def main():
     revision = capture(['git', 'rev-parse', 'HEAD'])
     reviewed = os.environ['REVIEWED_SOURCE_REVISION']
     ancestors = {'reviewed_pi': reviewed,
-                 'pr139': 'f64bdb99ed09b3a786f909ea2f5b65f961b7e62a',
-                 'pr162': '2761e9597cf3115159c3d37517996236760bdea2',
+                 'pr111': 'cc2ae0d6eb3ea68a7f611cedd2348f767b0b5570',
+                 'pr139': '76198cea81a81162d296c92129408ea12e602e94',
+                 'pr162': '4872366ec039dd49015c144d2a2ea57eeb226802',
                  'pr163': '7fb6e03d68c489e7e92a33f1152bf81e33e92011',
                  'pr164': '554fd34bc1df2ad956842289e16207e3e85d6aef',
-                 'pr165': 'e8e305bafa6b421c944f895e2003e8dcc508dc5d',
+                 'pr165': '0d3eeecbe6c5d9f53183eca33fb8d414773975b4',
                  'pr113': 'fe33119aa0f960a4501bc68c22cafee2e1799c51',
                  'pr114': '1715d255ccb2023f39fe75768175712bd1178288',
                  'pr121': 'debf7a22c98d79201d285e3db9aacb441a16a5a2',
@@ -235,6 +236,16 @@ def main():
                              'src/core/rxdb/Cargo.toml', '--jobs', '2',
                              '--', '--test-threads=2'])
     run('browser-dependencies', ['npm', '--prefix', 'src/apps/business-os', 'ci'])
+    run('credentials-ui-tests', ['node', '--experimental-vm-modules', '--test',
+         '--test-concurrency=1',
+         'src/apps/business-os/modules/credentials/credentials.test.mjs',
+         'src/apps/business-os/modules/credentials/generation.test.mjs'])
+    run('shell-pins-tests', ['node', '--test', '--test-concurrency=1',
+         'src/apps/business-os/shared/taskbar-pins.test.mjs',
+         'src/apps/business-os/modules/desktop/layout-authority.test.mjs',
+         'src/apps/business-os/shared/shell-permissions-ui.test.mjs'])
+    run('email-subject-tests', ['node', '--test', '--test-concurrency=1',
+         'src/tools/web-stack/scripts/registered-adapters/email-subject.test.cjs'])
     run('native-business-data-session', ['cargo', 'test', '--locked', '--manifest-path',
          'src/core/sync/Cargo.toml', '--features', 'webrtc', '--test',
          'native_business_data_session', '--jobs', '2', '--', '--test-threads=2'])
