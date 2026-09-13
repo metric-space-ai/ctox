@@ -220,14 +220,21 @@ async function runDesktopPinReload({ page, readNativeLayout, outputPath }) {
       return JSON.stringify(pins) === JSON.stringify(expected.taskbar_pins);
     }, expected, { timeout: 10000 });
     report.visiblePinsMs = performance.now() - started;
-    assert.ok(matches(await readNativeLayout()), 'fresh browser overwrote native pins');
+    const nativeBeforeReload = await readNativeLayout();
+    report.nativeBeforeReload = nativeBeforeReload;
+    assert.ok(matches(nativeBeforeReload), 'fresh browser overwrote native pins');
     await fresh.reload({ waitUntil: 'commit', timeout: 60000 });
     await fresh.waitForFunction(expected => {
       const state = globalThis.ctoxBusinessOsSmoke?.state;
       return state?.taskbarPinsUpdatedAtMs === expected.updated_at_ms
         && JSON.stringify(state.taskbarPins) === JSON.stringify(expected.taskbar_pins);
     }, expected, { timeout: 60000 });
-    assert.ok(matches(await readNativeLayout()), 'reload changed native pins');
+    const nativeAfterReload = await readNativeLayout();
+    report.nativeAfterReload = nativeAfterReload;
+    assert.ok(
+      matches(nativeAfterReload),
+      `reload changed native pins: ${JSON.stringify({ expected, before: nativeBeforeReload, after: nativeAfterReload })}`,
+    );
     // Exercise a real user edit while a second fresh session's signaling is
     // held. This is not a synthetic state mutation: it uses the taskbar
     // context menu's trailing pin action and the production cache path.
