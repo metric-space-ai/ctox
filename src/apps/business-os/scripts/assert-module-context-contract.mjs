@@ -58,6 +58,7 @@ const CONTRACT_FIELDS = [
   'permissions',
   'pinToTaskbar',
   'presence',
+  'readNativeCollectionDocument',
   'reportFileIntegrityError',
   'reportIssue',
   'right',
