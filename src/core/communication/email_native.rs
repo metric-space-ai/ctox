@@ -41,6 +41,8 @@ const DEFAULT_GRAPH_BASE_URL: &str = "https://graph.microsoft.com/v1.0";
 const DEFAULT_GRAPH_USER: &str = "me";
 const DEFAULT_EWS_VERSION: &str = "Exchange2013";
 const DEFAULT_EWS_AUTH_TYPE: &str = "basic";
+const EWS_GET_ITEM_BATCH_SIZE: usize = 20;
+const EWS_MAX_FOLDER_ITEMS: usize = 100;
 const DEFAULT_ACTIVE_SYNC_PATH: &str = "Microsoft-Server-ActiveSync";
 const DEFAULT_ACTIVE_SYNC_DEVICE_TYPE: &str = "CodexCLI";
 const DEFAULT_ACTIVE_SYNC_PROTOCOL_VERSION: &str = "14.1";
@@ -2858,7 +2860,7 @@ impl EwsClient {
         Ok(headers)
     }
 
-    fn request(&self, op_name: &str, op_attributes: &str, body: &str) -> Result<Document<'static>> {
+    fn request(&self, op_name: &str, op_attributes: &str, body: &str) -> Result<String> {
         let envelope = format!(
             r#"<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages" xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types">
@@ -2881,10 +2883,9 @@ impl EwsClient {
         if !(200..300).contains(&response.status) && !body.trim_start().starts_with('<') {
             bail!("EWS HTTP {}: {}", response.status, body);
         }
-        let leaked: &'static str = Box::leak(body.into_boxed_str());
-        let document = Document::parse(leaked).context("failed to parse EWS XML response")?;
+        let document = Document::parse(&body).context("failed to parse EWS XML response")?;
         assert_ews_success(response.status, &document)?;
-        Ok(document)
+        Ok(body)
     }
 
     fn list_folder(
@@ -2893,35 +2894,9 @@ impl EwsClient {
         top: usize,
         query: Option<&str>,
     ) -> Result<Vec<MailboxMessage>> {
-        let parent_folder = distinguished_folder_xml(folder_id);
-        let query_xml = query
-            .filter(|value| !value.trim().is_empty())
-            .map(|value| format!("<m:QueryString>{}</m:QueryString>", xml_escape(value)))
-            .unwrap_or_default();
-        let body = format!(
-            r#"<m:ItemShape>
-<t:BaseShape>IdOnly</t:BaseShape>
-<t:AdditionalProperties>
-<t:FieldURI FieldURI="item:Subject"/>
-<t:FieldURI FieldURI="message:From"/>
-<t:FieldURI FieldURI="message:ToRecipients"/>
-<t:FieldURI FieldURI="message:CcRecipients"/>
-<t:FieldURI FieldURI="item:DateTimeReceived"/>
-<t:FieldURI FieldURI="message:IsRead"/>
-<t:FieldURI FieldURI="item:HasAttachments"/>
-<t:FieldURI FieldURI="item:ConversationId"/>
-</t:AdditionalProperties>
-</m:ItemShape>
-<m:ParentFolderIds>{}</m:ParentFolderIds>
-<m:IndexedPageItemView MaxEntriesReturned="{}" Offset="0" BasePoint="Beginning"/>{}"#,
-            parent_folder, top, query_xml
-        );
-        let document = self.request("FindItem", r#" Traversal="Shallow""#, &body)?;
-        Ok(document
-            .descendants()
-            .filter(|node| node.is_element() && node.tag_name().name() == "Message")
-            .filter_map(|node| normalize_ews_mail_item(node, folder_id))
-            .collect())
+        list_ews_folder(folder_id, top, query, |operation, attributes, body| {
+            self.request(operation, attributes, body)
+        })
     }
 
     fn send_mail(
@@ -2976,6 +2951,142 @@ impl EwsClient {
     }
 }
 
+// FindItem is discovery only: GetItem returns the full body. Best preserves the
+// stored text/HTML format. Keep each batch small, with no retries or partial poll
+// success; the caller must not persist envelope-only messages after a failure.
+// https://learn.microsoft.com/en-us/exchange/client-developer/web-service-reference/bodytype
+// https://learn.microsoft.com/en-us/exchange/client-developer/exchange-web-services/how-to-process-email-messages-in-batches-by-using-ews-in-exchange
+fn list_ews_folder(
+    folder_id: &str,
+    top: usize,
+    query: Option<&str>,
+    mut request: impl FnMut(&str, &str, &str) -> Result<String>,
+) -> Result<Vec<MailboxMessage>> {
+    if top == 0 {
+        return Ok(Vec::new());
+    }
+    if top > EWS_MAX_FOLDER_ITEMS {
+        bail!("EWS folder limit {top} exceeds bounded maximum {EWS_MAX_FOLDER_ITEMS}");
+    }
+    let query_xml = query
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("<m:QueryString>{}</m:QueryString>", xml_escape(value)))
+        .unwrap_or_default();
+    let body = format!(
+        r#"<m:ItemShape><t:BaseShape>IdOnly</t:BaseShape></m:ItemShape>
+<m:IndexedPageItemView MaxEntriesReturned="{top}" Offset="0" BasePoint="Beginning"/>
+<m:ParentFolderIds>{}</m:ParentFolderIds>{query_xml}"#,
+        distinguished_folder_xml(folder_id),
+    );
+    let xml = request("FindItem", r#" Traversal="Shallow""#, &body)?;
+    let document = Document::parse(&xml).context("failed to parse EWS FindItem response")?;
+    let responses = ews_response_messages(&document, "FindItemResponseMessage", 1)?;
+    let items = responses[0]
+        .children()
+        .find(|node| node.has_tag_name("RootFolder"))
+        .and_then(|node| node.children().find(|child| child.has_tag_name("Items")))
+        .context("EWS FindItem response is missing RootFolder/Items")?;
+    let mut ids = Vec::new();
+    let mut unique_ids = BTreeSet::new();
+    for node in items.children().filter(|node| node.has_tag_name("Message")) {
+        let id = node
+            .children()
+            .find(|child| child.has_tag_name("ItemId"))
+            .and_then(|child| child.attribute("Id"))
+            .filter(|id| !id.trim().is_empty())
+            .context("EWS FindItem message is missing ItemId")?;
+        if !unique_ids.insert(id) {
+            bail!("EWS FindItem returned a duplicate ItemId");
+        }
+        ids.push(id.to_string());
+        if ids.len() > top {
+            bail!("EWS FindItem returned more messages than requested");
+        }
+    }
+    let mut messages = Vec::with_capacity(ids.len());
+    for (batch_index, batch) in ids.chunks(EWS_GET_ITEM_BATCH_SIZE).enumerate() {
+        let item_ids = batch
+            .iter()
+            .map(|id| format!(r#"<t:ItemId Id="{}"/>"#, xml_escape(id)))
+            .collect::<String>();
+        // InReplyTo belongs to item:, not message:, in the EWS FieldURI schema.
+        let body = format!(
+            r#"<m:ItemShape>
+<t:BaseShape>IdOnly</t:BaseShape><t:BodyType>Best</t:BodyType>
+<t:AdditionalProperties>
+<t:FieldURI FieldURI="item:Body"/>
+<t:FieldURI FieldURI="item:Subject"/>
+<t:FieldURI FieldURI="message:From"/>
+<t:FieldURI FieldURI="message:ToRecipients"/>
+<t:FieldURI FieldURI="message:CcRecipients"/>
+<t:FieldURI FieldURI="item:DateTimeReceived"/>
+<t:FieldURI FieldURI="item:DateTimeSent"/>
+<t:FieldURI FieldURI="message:IsRead"/>
+<t:FieldURI FieldURI="item:HasAttachments"/>
+<t:FieldURI FieldURI="item:ConversationId"/>
+<t:FieldURI FieldURI="message:InternetMessageId"/>
+<t:FieldURI FieldURI="item:InReplyTo"/>
+<t:FieldURI FieldURI="message:References"/>
+</t:AdditionalProperties></m:ItemShape><m:ItemIds>{item_ids}</m:ItemIds>"#,
+        );
+        let hydrated = (|| -> Result<Vec<MailboxMessage>> {
+            let xml = request("GetItem", "", &body)?;
+            let document = Document::parse(&xml).context("failed to parse EWS GetItem response")?;
+            let responses =
+                ews_response_messages(&document, "GetItemResponseMessage", batch.len())?;
+            let mut by_id = BTreeMap::new();
+            for response in responses {
+                let items = response
+                    .children()
+                    .find(|node| node.has_tag_name("Items"))
+                    .context("EWS GetItem response is missing Items")?;
+                let mut items = items.children().filter(|node| node.is_element());
+                let node = items.next().context("EWS GetItem returned no message")?;
+                if !node.has_tag_name("Message") || items.next().is_some() {
+                    bail!("EWS GetItem must return exactly one Message per response");
+                }
+                let message = normalize_ews_mail_item(node, folder_id)?;
+                if !batch.contains(&message.remote_id) {
+                    bail!("EWS GetItem returned an unrequested ItemId");
+                }
+                if by_id.insert(message.remote_id.clone(), message).is_some() {
+                    bail!("EWS GetItem returned a duplicate ItemId");
+                }
+            }
+            batch
+                .iter()
+                .map(|id| {
+                    by_id
+                        .remove(id)
+                        .context("EWS GetItem omitted a requested ItemId")
+                })
+                .collect()
+        })()
+        .with_context(|| format!("EWS GetItem hydration batch {} failed", batch_index + 1))?;
+        messages.extend(hydrated);
+    }
+    Ok(messages)
+}
+
+fn ews_response_messages<'a, 'input>(
+    document: &'a Document<'input>,
+    name: &str,
+    expected: usize,
+) -> Result<Vec<roxmltree::Node<'a, 'input>>> {
+    assert_ews_success(200, document)?;
+    let responses = document
+        .descendants()
+        .filter(|node| node.has_tag_name(name))
+        .collect::<Vec<_>>();
+    if responses.len() != expected {
+        bail!(
+            "EWS {name}: expected {expected} responses, received {}",
+            responses.len()
+        );
+    }
+    Ok(responses)
+}
+
 fn build_ews_file_attachments_xml(paths: &[String]) -> Result<String> {
     let attachments = load_outbound_attachments(paths)?;
     if attachments.is_empty() {
@@ -3007,20 +3118,16 @@ fn assert_ews_success(status: u16, document: &Document<'_>) -> Result<()> {
             descendant_text(fault, "faultstring").unwrap_or_else(|| "SOAP Fault".to_string());
         bail!("EWS SOAP Fault: {text}");
     }
-    for response_message in document.descendants().filter(|node| {
-        node.is_element()
-            && node
-                .tag_name()
-                .name()
-                .to_lowercase()
-                .contains("responsemessage")
-    }) {
+    for response_message in document
+        .descendants()
+        .filter(|node| node.is_element() && node.tag_name().name().ends_with("ResponseMessage"))
+    {
         let response_class = response_message
             .attribute("ResponseClass")
-            .unwrap_or("Success");
-        if response_class != "Success" {
-            let code = descendant_text(response_message, "ResponseCode")
-                .unwrap_or_else(|| "Error".to_string());
+            .unwrap_or("MissingResponseClass");
+        let code = descendant_text(response_message, "ResponseCode")
+            .unwrap_or_else(|| "MissingResponseCode".to_string());
+        if response_class != "Success" || code != "NoError" {
             let text = descendant_text(response_message, "MessageText")
                 .unwrap_or_else(|| "EWS error".to_string());
             bail!("EWS {response_class}: {code} - {text}");
@@ -3042,11 +3149,13 @@ fn distinguished_folder_xml(folder_id: &str) -> String {
 fn normalize_ews_mail_item(
     node: roxmltree::Node<'_, '_>,
     folder_id_fallback: &str,
-) -> Option<MailboxMessage> {
+) -> Result<MailboxMessage> {
     let remote_id = node
         .children()
         .find(|child| child.is_element() && child.tag_name().name() == "ItemId")
-        .and_then(|child| child.attribute("Id"))?
+        .and_then(|child| child.attribute("Id"))
+        .filter(|id| !id.trim().is_empty())
+        .context("EWS GetItem message is missing ItemId")?
         .to_string();
     let conversation_id = node
         .children()
@@ -3075,34 +3184,127 @@ fn normalize_ews_mail_item(
                 sender_address.clone()
             }
         });
-    Some(MailboxMessage {
+    let subject = descendant_text(node, "Subject").unwrap_or_else(|| "(ohne Betreff)".to_string());
+    let body = node
+        .children()
+        .find(|child| child.has_tag_name("Body"))
+        .context("EWS GetItem message is missing Body")?;
+    if body
+        .attribute("IsTruncated")
+        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+    {
+        bail!("EWS GetItem returned a truncated Body");
+    }
+    // roxmltree decodes XML entities and CDATA once. Preserve body whitespace;
+    // an explicitly empty Body is valid, unlike an omitted hydration property.
+    let content = body
+        .children()
+        .filter(|child| child.is_text())
+        .filter_map(|child| child.text())
+        .collect::<String>();
+    let (body_text, body_html) = match body.attribute("BodyType") {
+        Some("Text") => (content, String::new()),
+        Some("HTML") => (ews_html_body_text(&content), content),
+        _ => bail!("EWS GetItem Body has missing or unsupported BodyType"),
+    };
+    let received_at = descendant_text(node, "DateTimeReceived");
+    let sent_at = descendant_text(node, "DateTimeSent");
+    let external_created_at = if mailbox_folder_to_hint(folder_id_fallback) == "sent" {
+        sent_at.or(received_at)
+    } else {
+        received_at.or(sent_at)
+    }
+    .unwrap_or_else(now_iso_string);
+    let internet_message_id = descendant_text(node, "InternetMessageId").unwrap_or_default();
+    Ok(MailboxMessage {
         remote_id,
         thread_key: conversation_id.clone(),
         folder_hint: mailbox_folder_to_hint(folder_id_fallback),
-        subject: descendant_text(node, "Subject").unwrap_or_else(|| "(ohne Betreff)".to_string()),
+        subject: subject.clone(),
         sender_display,
         sender_address,
         recipient_addresses: descendant_mailbox_addresses(node, "ToRecipients"),
         cc_addresses: descendant_mailbox_addresses(node, "CcRecipients"),
-        body_text: String::new(),
-        body_html: String::new(),
-        preview: preview_text(
-            "",
-            &descendant_text(node, "Subject").unwrap_or_else(|| "(ohne Betreff)".to_string()),
-        ),
+        preview: preview_text(&body_text, &subject),
+        body_text,
+        body_html,
         seen: descendant_text(node, "IsRead")
             .map(|value| value.to_lowercase() != "false")
             .unwrap_or(true),
         has_attachments: descendant_text(node, "HasAttachments")
             .map(|value| value.eq_ignore_ascii_case("true"))
             .unwrap_or(false),
-        external_created_at: descendant_text(node, "DateTimeReceived")
-            .unwrap_or_else(now_iso_string),
+        external_created_at,
         metadata: json!({
             "conversationId": conversation_id,
             "ewsFolderId": folder_id_fallback,
+            "internetMessageId": internet_message_id,
+            "messageId": internet_message_id,
+            "inReplyTo": descendant_text(node, "InReplyTo").unwrap_or_default(),
+            "references": descendant_text(node, "References").unwrap_or_default(),
         }),
     })
+}
+
+fn ews_html_body_text(input: &str) -> String {
+    // Parse markup before decoding its text: stripping tags after replacing
+    // &lt;/&gt; loses literal angle-bracket content from human replies.
+    let document = scraper::Html::parse_document(input);
+    let mut output = String::new();
+    // An explicit stack keeps deeply nested mail from growing the call stack.
+    let mut pending = vec![(document.tree.root(), false)];
+    while let Some((node, closing_block)) = pending.pop() {
+        if closing_block {
+            output.push(' ');
+            continue;
+        }
+        match node.value() {
+            scraper::Node::Text(text) => output.push_str(text),
+            scraper::Node::Element(element) => {
+                if matches!(element.name(), "head" | "style" | "script" | "template") {
+                    continue;
+                }
+                if matches!(
+                    element.name(),
+                    "address"
+                        | "article"
+                        | "aside"
+                        | "blockquote"
+                        | "br"
+                        | "div"
+                        | "dl"
+                        | "dt"
+                        | "dd"
+                        | "footer"
+                        | "h1"
+                        | "h2"
+                        | "h3"
+                        | "h4"
+                        | "h5"
+                        | "h6"
+                        | "header"
+                        | "hr"
+                        | "li"
+                        | "main"
+                        | "ol"
+                        | "p"
+                        | "pre"
+                        | "section"
+                        | "table"
+                        | "td"
+                        | "th"
+                        | "tr"
+                        | "ul"
+                ) {
+                    output.push(' ');
+                    pending.push((node, true));
+                }
+                pending.extend(node.children().rev().map(|child| (child, false)));
+            }
+            _ => pending.extend(node.children().rev().map(|child| (child, false))),
+        }
+    }
+    output.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn descendant_text(node: roxmltree::Node<'_, '_>, name: &str) -> Option<String> {
@@ -4201,6 +4403,367 @@ mod tests {
         assert!(xml.contains("<t:FileAttachment>"));
         assert!(xml.contains("<t:ContentType>text/csv; charset=utf-8</t:ContentType>"));
         assert!(xml.contains("<t:Content>YSxiCg==</t:Content>"));
+    }
+
+    fn ews_envelope(operation: &str, responses: &str) -> String {
+        format!(
+            r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"
+            xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages"
+            xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types">
+            <s:Body><m:{operation}Response><m:ResponseMessages>{responses}</m:ResponseMessages>
+            </m:{operation}Response></s:Body></s:Envelope>"#
+        )
+    }
+
+    fn ews_find_fixture(ids: &[&str]) -> String {
+        let items = ids
+            .iter()
+            .map(|id| {
+                format!(
+                    r#"<t:Message><t:ItemId Id="{}" ChangeKey="old"/></t:Message>"#,
+                    super::xml_escape(id),
+                )
+            })
+            .collect::<String>();
+        ews_envelope(
+            "FindItem",
+            &format!(
+                r#"<m:FindItemResponseMessage ResponseClass="Success">
+            <m:ResponseCode>NoError</m:ResponseCode><m:RootFolder IncludesLastItemInRange="true">
+            <t:Items>{items}</t:Items></m:RootFolder></m:FindItemResponseMessage>"#
+            ),
+        )
+    }
+
+    fn ews_get_fixture_item(id: &str, body: &str) -> String {
+        format!(
+            r#"<m:GetItemResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode>
+            <m:Items><t:Message><t:ItemId Id="{}" ChangeKey="new"/>
+            <t:Subject>Re: Project &amp; next steps</t:Subject>{body}
+            <t:ConversationId Id="conversation-1"/>
+            <t:InternetMessageId>&lt;reply@example.test&gt;</t:InternetMessageId>
+            <t:InReplyTo>&lt;parent@example.test&gt;</t:InReplyTo>
+            <t:References>&lt;root@example.test&gt; &lt;parent@example.test&gt;</t:References>
+            <t:From><t:Mailbox><t:Name>Sender</t:Name><t:EmailAddress>sender@example.test</t:EmailAddress></t:Mailbox></t:From>
+            <t:ToRecipients><t:Mailbox><t:EmailAddress>AGENT@example.test</t:EmailAddress></t:Mailbox></t:ToRecipients>
+            <t:CcRecipients><t:Mailbox><t:EmailAddress>CC@example.test</t:EmailAddress></t:Mailbox></t:CcRecipients>
+            <t:IsRead>false</t:IsRead><t:HasAttachments>true</t:HasAttachments>
+            <t:DateTimeReceived>2026-09-12T08:00:00Z</t:DateTimeReceived>
+            <t:DateTimeSent>2026-09-12T07:59:00Z</t:DateTimeSent>
+            </t:Message></m:Items></m:GetItemResponseMessage>"#,
+            super::xml_escape(id)
+        )
+    }
+
+    #[test]
+    fn ews_hydrates_full_reply_body_and_preserves_ids_and_headers() -> anyhow::Result<()> {
+        // Longer than a FindItem preview; XML entities and CDATA must decode once.
+        let reply = format!(
+            "  Thanks & agreed.\n{}<literal>\n",
+            "Full reply text. ".repeat(80)
+        );
+        let mut calls = 0;
+        let messages =
+            super::list_ews_folder("inbox", 1, Some("Project & next steps"), |op, _, body| {
+                calls += 1;
+                if op == "FindItem" {
+                    assert!(body.contains("<t:BaseShape>IdOnly</t:BaseShape>"));
+                    assert!(
+                        body.find("IndexedPageItemView").unwrap()
+                            < body.find("ParentFolderIds").unwrap()
+                    );
+                    assert!(body.contains("Project &amp; next steps"));
+                    return Ok(ews_find_fixture(&["item&1"]));
+                }
+                assert_eq!(op, "GetItem");
+                assert!(body.contains(r#"<t:ItemId Id="item&amp;1"/>"#));
+                assert!(
+                    !body.contains("ChangeKey"),
+                    "read the current version after discovery"
+                );
+                for field in [
+                    "item:Body",
+                    "item:InReplyTo",
+                    "message:References",
+                    "message:InternetMessageId",
+                ] {
+                    assert!(body.contains(field));
+                }
+                assert!(body.contains("<t:BodyType>Best</t:BodyType>"));
+                Ok(ews_envelope(
+                    "GetItem",
+                    &ews_get_fixture_item(
+                        "item&1",
+                        &format!(
+                            "<t:Body BodyType=\"Text\">{}</t:Body>",
+                            super::xml_escape(&reply),
+                        ),
+                    ),
+                ))
+            })?;
+        assert_eq!(calls, 2);
+        let mail = &messages[0];
+        assert_eq!(mail.body_text, reply);
+        assert!(mail.body_html.is_empty());
+        assert!(mail.preview.contains("Thanks & agreed."));
+        assert_eq!(mail.remote_id, "item&1");
+        assert_eq!(mail.thread_key, "conversation-1");
+        assert_eq!(mail.metadata["messageId"], "<reply@example.test>");
+        assert_eq!(mail.metadata["internetMessageId"], "<reply@example.test>");
+        assert_eq!(mail.metadata["inReplyTo"], "<parent@example.test>");
+        assert_eq!(
+            mail.metadata["references"],
+            "<root@example.test> <parent@example.test>"
+        );
+        assert_eq!(mail.recipient_addresses, ["agent@example.test"]);
+        assert_eq!(mail.cc_addresses, ["cc@example.test"]);
+        assert_eq!(mail.sender_address, "sender@example.test");
+        assert!(!mail.seen);
+        assert!(mail.has_attachments);
+        assert_eq!(mail.external_created_at, "2026-09-12T08:00:00Z");
+        Ok(())
+    }
+
+    #[test]
+    fn ews_html_reply_and_sent_timestamp_are_hydrated() -> anyhow::Result<()> {
+        let html =
+            "<html><body><p>Yes &amp; thanks.</p><div>Next steps<br/>Tomorrow</div></body></html>";
+        for body in [
+            format!(
+                "<t:Body BodyType=\"HTML\">{}</t:Body>",
+                super::xml_escape(html)
+            ),
+            format!("<t:Body BodyType=\"HTML\"><![CDATA[{html}]]></t:Body>"),
+        ] {
+            let messages = super::list_ews_folder("sentitems", 1, None, |op, _, _| {
+                Ok(if op == "FindItem" {
+                    ews_find_fixture(&["sent-1"])
+                } else {
+                    ews_envelope("GetItem", &ews_get_fixture_item("sent-1", &body))
+                })
+            })?;
+            let mail = &messages[0];
+            assert_eq!(mail.body_html, html);
+            assert_eq!(mail.body_text, "Yes & thanks. Next steps Tomorrow");
+            assert_eq!(mail.preview, "Yes & thanks. Next steps Tomorrow");
+            assert_eq!(mail.folder_hint, "sent");
+            assert_eq!(mail.remote_id, "sent-1");
+            assert_eq!(mail.external_created_at, "2026-09-12T07:59:00Z");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ews_html_hydration_preserves_literals_and_excludes_document_metadata() -> anyhow::Result<()>
+    {
+        let html = "<html><head><title>Mail title</title><style>p { color: red }</style></head><body><p>Please keep &lt;literal&gt; &amp; &#x1F642;</p><div>Agree<b>d</b>.</div>Next<br>line<script>tracking()</script></body></html>";
+        let messages = super::list_ews_folder("inbox", 1, None, |op, _, _| {
+            Ok(if op == "FindItem" {
+                ews_find_fixture(&["one"])
+            } else {
+                ews_envelope(
+                    "GetItem",
+                    &ews_get_fixture_item(
+                        "one",
+                        &format!(
+                            "<t:Body BodyType=\"HTML\">{}</t:Body>",
+                            super::xml_escape(html),
+                        ),
+                    ),
+                )
+            })
+        })?;
+        assert_eq!(messages[0].body_html, html);
+        assert_eq!(
+            messages[0].body_text,
+            "Please keep <literal> & 🙂 Agreed. Next line"
+        );
+        assert_eq!(
+            messages[0].preview,
+            "Please keep <literal> & 🙂 Agreed. Next line"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ews_batches_are_bounded_and_matched_by_id_in_discovery_order() -> anyhow::Result<()> {
+        let ids = (0..45).map(|i| format!("id-{i}")).collect::<Vec<_>>();
+        let mut sizes = Vec::new();
+        let messages = super::list_ews_folder("inbox", ids.len(), None, |op, _, body| {
+            if op == "FindItem" {
+                return Ok(ews_find_fixture(
+                    &ids.iter().map(String::as_str).collect::<Vec<_>>(),
+                ));
+            }
+            let xml = format!(r#"<root xmlns:m="m" xmlns:t="t">{body}</root>"#);
+            let doc = roxmltree::Document::parse(&xml)?;
+            let batch = doc
+                .descendants()
+                .filter(|node| node.has_tag_name("ItemId"))
+                .map(|node| node.attribute("Id").unwrap())
+                .collect::<Vec<_>>();
+            sizes.push(batch.len());
+            Ok(ews_envelope(
+                "GetItem",
+                &batch
+                    .iter()
+                    .rev()
+                    .map(|id| ews_get_fixture_item(id, r#"<t:Body BodyType="Text">Reply</t:Body>"#))
+                    .collect::<String>(),
+            ))
+        })?;
+        assert_eq!(sizes, [20, 20, 5]);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|mail| &mail.remote_id)
+                .collect::<Vec<_>>(),
+            ids.iter().collect::<Vec<_>>()
+        );
+        assert!(messages.iter().all(|mail| mail.body_text == "Reply"));
+        Ok(())
+    }
+
+    #[test]
+    fn ews_rejects_partial_or_invalid_hydration() {
+        let good = ews_get_fixture_item("one", r#"<t:Body BodyType="Text">Reply</t:Body>"#);
+        let second = ews_get_fixture_item("two", r#"<t:Body BodyType="Text">Reply two</t:Body>"#);
+        let error = r#"<m:GetItemResponseMessage ResponseClass="Error"><m:ResponseCode>ErrorItemNotFound</m:ResponseCode></m:GetItemResponseMessage>"#;
+        for bad in [
+            ews_envelope("GetItem", &format!("{good}{error}")),
+            ews_envelope("GetItem", &good),
+            ews_envelope("GetItem", &format!("{good}{good}")),
+            ews_envelope(
+                "GetItem",
+                &format!("{good}{}", second.replace("Id=\"two\"", "Id=\"unknown\"")),
+            ),
+            ews_envelope(
+                "GetItem",
+                &format!("{good}{}", ews_get_fixture_item("two", "")),
+            ),
+            ews_envelope(
+                "GetItem",
+                &format!(
+                    "{good}{}",
+                    second.replace(
+                        "BodyType=\"Text\"",
+                        "BodyType=\"Text\" IsTruncated=\"true\""
+                    )
+                ),
+            ),
+            ews_envelope(
+                "GetItem",
+                &format!(
+                    "{good}{}",
+                    second.replace("BodyType=\"Text\"", "BodyType=\"Unknown\"")
+                ),
+            ),
+            ews_envelope(
+                "GetItem",
+                &format!("{good}{}", second.replace("NoError", "ErrorServerBusy")),
+            ),
+            ews_envelope(
+                "GetItem",
+                &format!("{good}{}", second.replace("ResponseClass=\"Success\"", "")),
+            ),
+            ews_envelope(
+                "GetItem",
+                &format!(
+                    "{good}{}",
+                    second.replace("<m:ResponseCode>NoError</m:ResponseCode>", "")
+                ),
+            ),
+            ews_envelope(
+                "GetItem",
+                &format!(
+                    "{good}{}",
+                    second.replace("ResponseClass=\"Success\"", "ResponseClass=\"Warning\"")
+                ),
+            ),
+            ews_envelope("GetItem", ""),
+            "<malformed".to_string(),
+        ] {
+            let result = super::list_ews_folder("inbox", 2, None, |op, _, _| {
+                Ok(if op == "FindItem" {
+                    ews_find_fixture(&["one", "two"])
+                } else {
+                    bad.clone()
+                })
+            });
+            assert!(result.is_err(), "must reject invalid hydration: {bad}");
+        }
+    }
+
+    #[test]
+    fn ews_later_batch_transport_failure_returns_no_partial_poll() {
+        let ids = (0..45).map(|i| format!("id-{i}")).collect::<Vec<_>>();
+        let mut calls = 0;
+        let result = super::list_ews_folder("inbox", ids.len(), None, |op, _, _| {
+            calls += 1;
+            if op == "FindItem" {
+                return Ok(ews_find_fixture(
+                    &ids.iter().map(String::as_str).collect::<Vec<_>>(),
+                ));
+            }
+            if calls == 3 {
+                anyhow::bail!("synthetic timeout");
+            }
+            Ok(ews_envelope(
+                "GetItem",
+                &ids[..20]
+                    .iter()
+                    .map(|id| ews_get_fixture_item(id, r#"<t:Body BodyType="Text">Reply</t:Body>"#))
+                    .collect::<String>(),
+            ))
+        });
+        assert_eq!(
+            calls, 3,
+            "do not retry or fetch another batch after failure"
+        );
+        let error = format!("{:#}", result.unwrap_err());
+        assert!(error.contains("batch 2"));
+        assert!(error.contains("synthetic timeout"));
+    }
+
+    #[test]
+    fn ews_empty_folder_limits_and_explicit_empty_body() -> anyhow::Result<()> {
+        assert!(super::list_ews_folder("inbox", 0, None, |_, _, _| panic!("no request")).is_ok());
+        assert!(super::list_ews_folder(
+            "inbox",
+            super::EWS_MAX_FOLDER_ITEMS + 1,
+            None,
+            |_, _, _| panic!("no request")
+        )
+        .is_err());
+        let empty = super::list_ews_folder("inbox", 1, None, |op, _, _| {
+            assert_eq!(op, "FindItem");
+            Ok(ews_find_fixture(&[]))
+        })?;
+        assert!(empty.is_empty());
+        for bad in [
+            "<root/>".to_string(),
+            ews_find_fixture(&["one", "one"]),
+            ews_find_fixture(&["one", "two"]),
+            ews_find_fixture(&[""]),
+        ] {
+            assert!(super::list_ews_folder("inbox", 1, None, |op, _, _| {
+                assert_eq!(op, "FindItem");
+                Ok(bad.clone())
+            })
+            .is_err());
+        }
+        let empty_body = super::list_ews_folder("inbox", 1, None, |op, _, _| {
+            Ok(if op == "FindItem" {
+                ews_find_fixture(&["one"])
+            } else {
+                ews_envelope(
+                    "GetItem",
+                    &ews_get_fixture_item("one", r#"<t:Body BodyType="Text"/>"#),
+                )
+            })
+        })?;
+        assert!(empty_body[0].body_text.is_empty());
+        Ok(())
     }
 
     #[test]
