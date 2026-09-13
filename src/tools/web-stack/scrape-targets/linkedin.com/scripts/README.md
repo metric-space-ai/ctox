@@ -43,6 +43,9 @@ and `saveState`. `brightdata-state.cjs` now supplies the latter two through an
 append-only POSIX operation journal: complete fsynced files are published with
 atomic no-replace hard links, followed by directory fsync. Revisions form a
 bounded contiguous hash chain; stale writers conflict rather than overwrite.
+Unchanged pending/completed observations reread the full chain and no-op only
+when the observed revision/hash still match; they do not consume revisions.
+This preserves the native 120-poll budget while a stale process still conflicts.
 State roots/revisions reject symlinks and inappropriate permissions. Only
 allowlisted state fields are persisted; no credentials or raw provider bodies.
 An explicit POST HTTP401 persists `rejected`, permitting at most one further
@@ -94,7 +97,7 @@ raw provider/CLI errors. Snapshot/query identity failures stop admission.
 
 `node --test --test-concurrency=1 src/tools/web-stack/scrape-targets/tests/brightdata-core.test.mjs src/tools/web-stack/scrape-targets/tests/brightdata-state.test.mjs src/tools/web-stack/scrape-targets/tests/brightdata-continuation.test.mjs src/tools/web-stack/scrape-targets/tests/brightdata-company-flow.test.mjs`
 
-Thirty-two JavaScript tests pass (zero failures/skips, latest3532ms). The company
+Thirty-four JavaScript tests pass (zero failures/skips, latest18985ms). The company
 flow uses actual journals across reopenings, exactly one POST per dataset,
 separate snapshots under the same operation, company-to-profile identity binding,
 wrong-dataset rejection and ambiguous-acceptance no-resubmit. Native tests remain

@@ -57,6 +57,30 @@ test('two actual child processes can claim an operation only once', async t => {
   assert.equal(openCheckpoint(options).load().phase, 'submitting');
 });
 
+test('native 120-poll budget does not exhaust revisions on unchanged pending state', t => {
+  const options = fixture(t), journal = openCheckpoint(options);
+  journal.claimSubmission(submitting()); journal.saveState(pending());
+  for (let poll = 0; poll < 120; poll++) journal.saveState(pending());
+  const directory = fs.readdirSync(options.stateRoot).map(name => path.join(options.stateRoot, name))[0];
+  assert.equal(fs.readdirSync(directory).filter(name => /^revision-/.test(name)).length, 2);
+  journal.saveState({ ...pending(), phase: 'ready' });
+  journal.saveState({ ...pending(), phase: 'completed' });
+  for (let reread = 0; reread < 120; reread++) journal.saveState({ ...pending(), phase: 'completed' });
+  assert.equal(fs.readdirSync(directory).filter(name => /^revision-/.test(name)).length, 4);
+  assert.equal(openCheckpoint(options).load().phase, 'completed');
+});
+
+test('unchanged pending save does not silently accept a stale process checkpoint', async t => {
+  const options = fixture(t), stale = openCheckpoint(options);
+  stale.claimSubmission(submitting()); stale.saveState(pending());
+  const result = await child(options, `const {openCheckpoint}=require(process.argv[1]);
+    const journal=openCheckpoint(JSON.parse(process.argv[2]));
+    journal.saveState({...journal.load(),phase:'ready'});`);
+  assert.equal(result.code, 0, result.stderr);
+  assert.throws(() => stale.saveState(pending()), /checkpoint_write_conflict/);
+  assert.equal(openCheckpoint(options).load().phase, 'ready');
+});
+
 test('process exit after durable claim does not authorize another provider POST', async t => {
   const options = fixture(t);
   const result = await child(options, `const { openCheckpoint } = require(process.argv[1]);

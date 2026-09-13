@@ -127,6 +127,17 @@ function openCheckpoint({ stateRoot, operationId, binding: rawBinding }) {
     const previous = observed;
     if (claim && previous && previous.state.phase !== "rejected") return false;
     validateTransition(previous?.state, state);
+    // Native continuation owns the poll budget. Reobserving the same pending
+    // (or completed) state must not consume a journal revision per poll. Read
+    // the complete chain first: a stale writer still conflicts if another
+    // process advanced it. A no-op linearizes at that successful read and
+    // never overwrites a subsequently published revision.
+    if (!claim && previous && JSON.stringify(previous.state) === JSON.stringify(state)) {
+      load();
+      if (observed?.revision !== previous.revision || observed.sha256 !== previous.sha256)
+        throw new Error("checkpoint_write_conflict");
+      return true;
+    }
     const revision = (previous?.revision || 0) + 1;
     if (revision > MAX_REVISIONS) throw new Error("checkpoint_revision_limit");
     const entry = { schema: "ctox.brightdata.checkpoint.v1", operation_hash: operationHash,
