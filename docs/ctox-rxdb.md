@@ -137,6 +137,23 @@ Consequences (all from `src/apps/business-os/rxdb/README.md`):
 - No feature gates, paid-tier checks, or runtime add-on unlocks.
   `addRxPlugin()` exists only as a transition shim for old bootstrap code.
 
+### Collection notifications during initial demand
+
+`collection.$.subscribe(listener)` continues to emit complete collection
+snapshots as `{ collectionName, documents }`, starting only after its initial
+query succeeds. Committed changes during that query are merged into the first
+snapshot; a pending or failed query is never presented as an empty ready list.
+
+An invalidation-only consumer may explicitly opt into
+`subscribe(listener, { emitPendingChanges: true })`. While initialization is
+pending, debounced committed changes additionally emit
+`{ collectionName, initialPending: true, changedDocuments }`. This event has
+**no `documents` field** and does not certify collection readiness. Consumers
+must distinguish it from a complete snapshot. The built-in Crew subscribes this
+way only for harness status and triggers its existing authoritative row read;
+it does not render the changed-document payload as a fully loaded collection.
+The shell's scoped collection facade preserves this subscription option.
+
 The Rust side is a byte-correct port of RxDB 16.20.0 (upstream pin
 `c69c94bb…`, see `src/core/rxdb/PORTING.md` and `vendor/rxdb.version`),
 reduced to the CTOX-as-WebRTC-peer scope. The
