@@ -1,4 +1,5 @@
 import { createRxDatabase, ctoxRxdbTestInternals } from '../dist/ctox-rxdb-js.mjs';
+import { readFile } from "node:fs/promises";
 
 const {
   matchesSelector,
@@ -187,7 +188,19 @@ const initialDemand = new Promise(resolve => {releaseInitial = resolve;});
 pendingCollection.setDemandLoader({resolveQuery: () => initialDemand});
 const earlyChanges = [];
 const defaultSnapshots = [];
-const pendingSub = pendingCollection.$.subscribe(event => earlyChanges.push(event), {emitPendingChanges:true});
+const shellSource = await readFile(new URL("../../app.js", import.meta.url), "utf8");
+const shellFunction = name => {
+  const start = shellSource.indexOf(`function ${name}(`);
+  assert(start >= 0, `missing actual shell function ${name}`);
+  const end = shellSource.indexOf("\nfunction ", start + 1);
+  return shellSource.slice(start, end);
+};
+const shellState = {db:{collection: name => name === "ctox_harness_status" ? pendingCollection : null},maintenance:{active:false}};
+const makeScopedFacade = new Function("state", `${shellFunction("maintenanceReadOnlyCollection")}\n${shellFunction("createScopedSystemDbFacade")}\nreturn createScopedSystemDbFacade;`)(shellState);
+const scoped = makeScopedFacade("module:ctox", ["ctox_harness_status"]);
+assert(scoped.collection("business_users") === null, "shell scope must retain denied collections");
+assert(scoped.collection("ctox_harness_status") === pendingCollection, "normal shell scope must preserve the actual collection handle");
+const pendingSub = scoped.collection("ctox_harness_status").$.subscribe(event => earlyChanges.push(event), {emitPendingChanges:true});
 const defaultPendingSub = pendingCollection.$.subscribe(event => defaultSnapshots.push(event));
 pendingStorage.emitChange({harness:{id:'harness',paused:true}});
 await waitFor(() => earlyChanges.length === 1);
@@ -199,6 +212,10 @@ releaseInitial([{id:'harness',paused:false}]);
 await waitFor(() => defaultSnapshots.length === 1 && earlyChanges.length === 2);
 assert(defaultSnapshots[0].documents[0].toJSON().paused === true, 'initial snapshot must overlay changes committed during its read');
 assert(earlyChanges[1].documents[0].toJSON().paused === true, 'opt-in listener must eventually receive full reconciled snapshot');
+pendingStorage.emitChange({harness:{id:'harness',paused:false}});
+await waitFor(() => earlyChanges.length === 3 && defaultSnapshots.length === 2);
+assert(earlyChanges[2].documents[0].toJSON().paused === false, 'after initialization the opt-in subscription must use normal full snapshots');
+assert(!Object.hasOwn(earlyChanges[2], 'initialPending'), 'normal snapshots must not remain pending');
 pendingSub.unsubscribe();
 defaultPendingSub.unsubscribe();
 await pendingDb.close();
