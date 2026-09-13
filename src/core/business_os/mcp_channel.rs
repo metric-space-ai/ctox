@@ -903,7 +903,9 @@ where
                 // A full connection lifetime is planned rotation, not another
                 // failure. Do not carry an old outage into this reconnect.
                 attempt = 0;
-                eprintln!("[business-os-mcp] managed gateway reached max age; rotating immediately");
+                eprintln!(
+                    "[business-os-mcp] managed gateway reached max age; rotating immediately"
+                );
                 continue;
             }
             Ok(ManagedGatewayConnectionExit::StreamEnded) => {
