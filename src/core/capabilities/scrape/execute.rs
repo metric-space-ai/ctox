@@ -4,7 +4,7 @@
 use super::classify::{classify_outcome, Classification, ScrapeRunStatus};
 use super::registry::{load_registered_target, open_db};
 use super::{
-    bind_scrape_record_provenance, build_repair_prompt, build_run_artifacts,
+    artifact_record, bind_scrape_record_provenance, build_repair_prompt, build_run_artifacts,
     contains_human_verification, default_entry_command, emit_reauthorization_handoff,
     extracted_record_fields, find_flag_value, latest_source_revision_map, load_last_successful_run,
     materialize_latest_records, maybe_record_template_from_target, maybe_run_llm_enrichment,
@@ -185,6 +185,47 @@ pub(crate) fn execute_scrape_with_outcome(
             reason: format!("session_expired_login_landing:{host}"),
         };
     }
+    let mut query_completion = None;
+    let mut query_evidence_bytes = None;
+    if payload.get("query_completion").is_some() {
+        let validation = super::query_completion::validate_query_completion(
+            &payload,
+            &run_dir,
+            &run_id,
+            &target.view.target_key,
+            &target.view.start_url,
+            input_json.as_deref(),
+            &probe,
+            &execution,
+        );
+        match validation {
+            Ok((receipt, bytes))
+                if classification.reason == "empty_record_set_on_reachable_portal"
+                    && reauthorization.is_none() =>
+            {
+                query_completion = Some(serde_json::to_value(receipt)?);
+                query_evidence_bytes = Some(bytes);
+                classification = Classification {
+                    status: ScrapeRunStatus::CompletedEmpty,
+                    should_queue_repair: false,
+                    reason: "current_query_completed_without_matches".to_string(),
+                };
+            }
+            Err(error)
+                if classification.reason == "empty_record_set_on_reachable_portal"
+                    || classification.status == ScrapeRunStatus::Succeeded =>
+            {
+                classification = Classification {
+                    status: ScrapeRunStatus::PortalDrift,
+                    should_queue_repair: true,
+                    reason: format!("invalid_query_completion:{error}"),
+                };
+            }
+            // Existing authentication, probe, timeout and partial-output failures
+            // outrank a receipt and retain their existing recovery disposition.
+            _ => {}
+        }
+    }
     let run_finished_at = now_iso_string();
     let default_schema_key = target
         .view
@@ -281,6 +322,16 @@ pub(crate) fn execute_scrape_with_outcome(
     if let Some(enrichment) = &enrichment {
         artifacts.extend(enrichment.artifacts.clone());
     }
+    if let Some(bytes) = query_evidence_bytes {
+        let path = output_dir.join("verified-query-evidence.json");
+        fs::write(&path, bytes)?;
+        artifacts.push(artifact_record(
+            "query_completion_evidence",
+            &path,
+            Some("ctox.scrape.query_completion.v1"),
+            Some(0),
+        )?);
+    }
     record_run(
         root,
         &conn,
@@ -306,6 +357,7 @@ pub(crate) fn execute_scrape_with_outcome(
             }),
             result: json!({
                 "records_found": records_found,
+                "query_completion": query_completion,
                 "enriched_records_found": materialized_records.map(|items| items.len() as i64),
                 "source_count": target_sources(&target.view).len(),
                 "failure_mode": failure_mode,
@@ -383,7 +435,9 @@ pub(crate) fn execute_scrape_with_outcome(
     // output still delivered records, so it counts as ok-with-reason.
     let run_ok = matches!(
         classification.status,
-        ScrapeRunStatus::Succeeded | ScrapeRunStatus::PartialOutput
+        ScrapeRunStatus::Succeeded
+            | ScrapeRunStatus::CompletedEmpty
+            | ScrapeRunStatus::PartialOutput
     );
     Ok(ScrapeExecutionOutcome {
         ok: run_ok,
@@ -398,6 +452,7 @@ pub(crate) fn execute_scrape_with_outcome(
             .min(u64::MAX as u128) as u64,
         reason: classification.reason,
         error,
+        query_completion,
         probe: probe_to_json(&probe),
         should_queue_repair: classification.should_queue_repair,
         repair_request_path: repair_request_path

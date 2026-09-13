@@ -27,6 +27,7 @@ mod cli;
 pub(crate) use cli::dispatch_capturing;
 pub use cli::handle_scrape_command;
 mod classify;
+mod query_completion;
 use classify::Classification;
 pub(crate) use classify::ScrapeRunStatus;
 
@@ -368,6 +369,7 @@ impl ScrapeRunStatus {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Succeeded => "succeeded",
+            Self::CompletedEmpty => "completed_empty",
             Self::TemporaryUnreachable => "temporary_unreachable",
             Self::PortalDrift => "portal_drift",
             Self::Blocked => "blocked",
@@ -388,6 +390,7 @@ pub(crate) struct ScrapeExecutionOutcome {
     pub(crate) latency_ms: u64,
     pub(crate) reason: String,
     pub(crate) error: Option<String>,
+    pub(crate) query_completion: Option<Value>,
     probe: Value,
     should_queue_repair: bool,
     repair_request_path: Option<String>,
@@ -1108,7 +1111,10 @@ fn scrape_error_diagnostic(
     probe: &ProbeResult,
     execution: &CommandExecution,
 ) -> Option<String> {
-    if classification.status == ScrapeRunStatus::Succeeded {
+    if matches!(
+        classification.status,
+        ScrapeRunStatus::Succeeded | ScrapeRunStatus::CompletedEmpty
+    ) {
         return None;
     }
     let mut details = vec![format!(
