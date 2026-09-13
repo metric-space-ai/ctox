@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded Linux integration proof and installer-compatible candidate bundle."""
+"""Bounded verification of existing native corrections; no runtime package."""
 import hashlib
 import json
 import os
@@ -28,6 +28,10 @@ FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
            'service_owned_turn_cannot_persist_success_without_a_completed_plan',
            'current_path_new_revision_preserves_validated_bytes',
            'completed_empty_query', 'invalid_empty_query_receipts',
+           'sellify_lookup_receipts_distinguish_actual_success_empty_and_failure',
+           'research_without_browser_capture_persists_actual_sellify_outcomes',
+           'augmented_research_envelope_matches_returned_payload_and_manifest',
+           'augmented_research_persistence_failure_is_not_reported_as_success',
            'business_os::mcp_channel::app_authority::tests::',
            'business_os::mcp_channel::gateway_lifecycle_tests::',
            'business_os::mcp_channel::tests::gateway_',
@@ -131,6 +135,10 @@ def main():
     expected_counts = {
         'current_path_new_revision_preserves_validated_bytes': 2,
         'service_owned_turn_cannot_persist_success_without_a_completed_plan': 1,
+        'sellify_lookup_receipts_distinguish_actual_success_empty_and_failure': 1,
+        'research_without_browser_capture_persists_actual_sellify_outcomes': 1,
+        'augmented_research_envelope_matches_returned_payload_and_manifest': 1,
+        'augmented_research_persistence_failure_is_not_reported_as_success': 1,
     }
     if any(counts[key] != count for key, count in expected_counts.items()):
         raise RuntimeError(f'Required exact test counts differ: {counts}')
@@ -157,6 +165,8 @@ def main():
     if not all(counts.values()):
         raise RuntimeError(f'A required test group is absent: {counts}')
     required = {
+        'business_os::mcp_channel::app_authority::tests::mcp_app_authority_source_load_skips_absent_module_in_symlinked_namespace',
+        'business_os::mcp_channel::app_authority::tests::mcp_app_authority_source_rejects_dangling_module_symlink_before_fallback',
         'business_os::mcp_channel::tests::person_research_binding_accepts_runtime_lead_name_fields',
         'business_os::mcp_channel::tests::person_research_binding_runtime_leads_preserve_identity_and_scope',
         'business_os::mcp_channel::app_authority::tests::mcp_app_authority_local_source_compare_and_save_preserves_target_and_conflicts',
@@ -195,6 +205,9 @@ def main():
                              'src/core/rxdb/Cargo.toml', '--jobs', '2',
                              '--', '--test-threads=2'])
     run('browser-dependencies', ['npm', '--prefix', 'src/apps/business-os', 'ci'])
+    run('native-business-data-session', ['cargo', 'test', '--locked', '--manifest-path',
+         'src/core/sync/Cargo.toml', '--features', 'webrtc', '--test',
+         'native_business_data_session', '--jobs', '2', '--', '--test-threads=2'])
     run('browser-runtime', ['npm', '--prefix', 'src/apps/business-os', 'exec',
                             'playwright', 'install', '--with-deps', 'chromium'])
     run('rxdb-wire-fixture', ['cargo', 'build', '--locked', '--manifest-path',
