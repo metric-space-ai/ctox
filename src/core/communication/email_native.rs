@@ -336,7 +336,17 @@ fn execute_send(options: &EmailOptions, request: &EmailSendCommandRequest<'_>) -
             )?;
         }
         "activesync" => {
-            bail!("ActiveSync outbound send is not implemented in the native Rust adapter.");
+            let raw_message = build_smtp_raw_message(
+                &options.email,
+                request.to,
+                request.cc,
+                request.subject,
+                request.body,
+                &message_id,
+                request.thread_key,
+                request.attachments,
+            )?;
+            ActiveSyncClient::from_options(options)?.send_mail(&message_id, &raw_message)?;
         }
         other => bail!("Unsupported email provider: {other}"),
     }
@@ -2501,7 +2511,7 @@ pub(crate) fn http_request(
     headers: &BTreeMap<String, String>,
     body: Option<&[u8]>,
 ) -> Result<HttpResponse> {
-    let mut request = ureq::request(method, url);
+    let mut request = ureq::request(method, url).timeout(Duration::from_secs(20));
     for (key, value) in headers {
         request = request.set(key, value);
     }
@@ -3249,6 +3259,11 @@ fn eas_tag_to_token(name: &str) -> Option<(u8, u8)> {
         "AirSyncBase:Body" => (17, 0x0a),
         "AirSyncBase:Data" => (17, 0x0b),
         "AirSyncBase:Preview" => (17, 0x19),
+        "ComposeMail:SendMail" => (21, 0x05),
+        "ComposeMail:SaveInSentItems" => (21, 0x08),
+        "ComposeMail:Mime" => (21, 0x10),
+        "ComposeMail:ClientId" => (21, 0x11),
+        "ComposeMail:Status" => (21, 0x12),
         _ => return None,
     })
 }
@@ -3301,6 +3316,11 @@ fn eas_token_to_tag(page: u8, token: u8) -> Option<&'static str> {
         (17, 0x0a) => "AirSyncBase:Body",
         (17, 0x0b) => "AirSyncBase:Data",
         (17, 0x19) => "AirSyncBase:Preview",
+        (21, 0x05) => "ComposeMail:SendMail",
+        (21, 0x08) => "ComposeMail:SaveInSentItems",
+        (21, 0x10) => "ComposeMail:Mime",
+        (21, 0x11) => "ComposeMail:ClientId",
+        (21, 0x12) => "ComposeMail:Status",
         _ => return None,
     })
 }
@@ -3351,6 +3371,31 @@ fn wbxml_encode(root: &EasNode) -> Result<Vec<u8>> {
     }
     encode_node(root, &mut out, &mut current_page)?;
     Ok(out)
+}
+
+fn wbxml_encode_active_sync_send_mail(client_id: &str, mime: &[u8]) -> Vec<u8> {
+    // ComposeMail is code page 21. ActiveSync 14.0+ wraps the MIME message
+    // in an opaque WBXML blob (MS-ASCMD 2.2.1.17).
+    let mut out = vec![0x03, 0x01, 0x6a, 0x00, 0x00, 0x15];
+    out.extend_from_slice(&[0x45, 0x51, 0x03]);
+    out.extend_from_slice(client_id.as_bytes());
+    out.extend_from_slice(&[0x00, 0x01, 0x48, 0x50, 0xc3]);
+    out.extend_from_slice(&wbxml_mb_u32(mime.len() as u32));
+    out.extend_from_slice(mime);
+    out.push(0x01);
+    out.push(0x01);
+    out
+}
+
+fn wbxml_mb_u32(mut value: u32) -> Vec<u8> {
+    let mut bytes = vec![value as u8 & 0x7f];
+    value >>= 7;
+    while value > 0 {
+        bytes.push((value as u8 & 0x7f) | 0x80);
+        value >>= 7;
+    }
+    bytes.reverse();
+    bytes
 }
 
 fn wbxml_decode(bytes: &[u8]) -> Result<Option<EasNode>> {
@@ -3532,6 +3577,31 @@ impl ActiveSyncClient {
         }
         if !(200..300).contains(&response.status) {
             bail!("ActiveSync OPTIONS failed: HTTP {}", response.status);
+        }
+        Ok(())
+    }
+
+    fn send_mail(&self, client_id: &str, raw_message: &str) -> Result<()> {
+        let body = wbxml_encode_active_sync_send_mail(client_id, raw_message.as_bytes());
+        let response = http_request(
+            "POST",
+            &self.command_url("SendMail")?,
+            &self.headers(false, true),
+            Some(&body),
+        )?;
+        if response.status == 401 {
+            bail!("ActiveSync auth failed (401). Username/Passwort pruefen.");
+        }
+        if !(200..300).contains(&response.status) {
+            bail!("ActiveSync SendMail failed: HTTP {}", response.status);
+        }
+        if !response.body.is_empty() {
+            if let Some(root) = wbxml_decode(&response.body)? {
+                let status = root.text_child("ComposeMail:Status").unwrap_or_default();
+                if !status.is_empty() && status != "1" {
+                    bail!("ActiveSync SendMail status {status}");
+                }
+            }
         }
         Ok(())
     }
@@ -4258,5 +4328,20 @@ mod tests {
         assert_eq!(parsed.attachments.len(), 1);
         assert_eq!(parsed.attachments[0]["name"], "result.csv");
         assert_eq!(parsed.attachments[0]["contentType"], "text/csv");
+    }
+
+    #[test]
+    fn active_sync_send_mail_uses_compose_mail_opaque_mime_payload() {
+        use super::wbxml_encode_active_sync_send_mail;
+
+        let encoded = wbxml_encode_active_sync_send_mail("cid", b"From: a\r\n");
+        assert_eq!(
+            encoded,
+            vec![
+                0x03, 0x01, 0x6a, 0x00, 0x00, 0x15, 0x45, 0x51, 0x03, b'c', b'i', b'd', 0x00, 0x01,
+                0x48, 0x50, 0xc3, 0x09, b'F', b'r', b'o', b'm', b':', b' ', b'a', b'\r', b'\n',
+                0x01, 0x01,
+            ]
+        );
     }
 }

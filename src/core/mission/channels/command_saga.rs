@@ -1110,7 +1110,11 @@ pub(crate) fn transition_business_command_for_task(
     let mut conn = open_channel_db(&db_path)?;
     ensure_queue_account(&mut conn)?;
     attach_queue_projection_store(root, &conn)?;
-    let tx = conn.transaction()?;
+    // Immediate: the transaction reads, then writes across the attached queue
+    // projection store the RxDB peer writes constantly. A deferred read cannot be
+    // promoted once the peer committed (SQLite 517, "database is locked" at once,
+    // without the busy timeout): 15 of 43 worker starts failed so on 11.09.2026.
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let transitioned = transition_business_command_for_task_in_transaction(
         &tx,
         task_id,
@@ -1383,7 +1387,11 @@ pub(crate) fn retry_failed_app_create_business_command(
     let mut conn = open_channel_db(&db_path)?;
     ensure_queue_account(&mut conn)?;
     attach_queue_projection_store(root, &conn)?;
-    let tx = conn.transaction()?;
+    // Immediate: the transaction reads, then writes across the attached queue
+    // projection store the RxDB peer writes constantly. A deferred read cannot be
+    // promoted once the peer committed (SQLite 517, "database is locked" at once,
+    // without the busy timeout): 15 of 43 worker starts failed so on 11.09.2026.
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let (task_id, command_type, from_phase, terminal_status, projection_version) = tx
         .query_row(
             "SELECT link.task_id, aggregate.command_type, aggregate.execution_phase,

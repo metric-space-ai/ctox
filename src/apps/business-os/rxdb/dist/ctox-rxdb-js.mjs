@@ -12552,7 +12552,7 @@ var CtoxRxCollection = class {
   }
   get $() {
     return {
-      subscribe: (listener) => {
+      subscribe: (listener, { emitPendingChanges = false } = {}) => {
         let active = true;
         const registry = getActiveCollectionRegistry();
         registry.subscriptionStarted(this.name);
@@ -12561,6 +12561,7 @@ var CtoxRxCollection = class {
         let initialRetryAttempt = 0;
         let initialized = false;
         let pendingSuccess = {};
+        let pendingChanges = {};
         const documentsById = /* @__PURE__ */ new Map();
         const debounceMs = OBSERVABLE_DEBOUNCE_MS;
         const emitSnapshot = () => {
@@ -12607,12 +12608,25 @@ var CtoxRxCollection = class {
           }
           applySuccess(pendingSuccess);
           pendingSuccess = {};
+          pendingChanges = {};
+          if (pendingTimer != null) clearTimeout(pendingTimer);
+          pendingTimer = null;
           initialized = true;
           emitSnapshot();
         };
         const flushDelta = () => {
           pendingTimer = null;
-          if (!active || !initialized) return;
+          if (!active) return;
+          if (!initialized) {
+            const changes = Object.values(pendingChanges);
+            pendingChanges = {};
+            if (emitPendingChanges && changes.length) listener({
+              collectionName: this.name,
+              initialPending: true,
+              changedDocuments: changes.map((doc) => new CtoxRxDocument(this, doc))
+            });
+            return;
+          }
           applySuccess(pendingSuccess);
           pendingSuccess = {};
           emitSnapshot();
@@ -12622,7 +12636,10 @@ var CtoxRxCollection = class {
             ...pendingSuccess,
             ...successPayloadFromChangeEvent(event)
           };
-          if (!initialized) return;
+          if (!initialized) {
+            if (!emitPendingChanges) return;
+            pendingChanges = { ...pendingChanges, ...successPayloadFromChangeEvent(event) };
+          }
           if (pendingTimer != null) return;
           pendingTimer = setTimeout(flushDelta, debounceMs);
         };

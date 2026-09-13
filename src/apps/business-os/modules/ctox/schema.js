@@ -1,4 +1,8 @@
+import { collections as conversationCollections } from '../conversations/schema.js';
+
 export const collections = {
+  // Reuse the canonical channel schema so Crew can load accounts before Mail or Conversations opens.
+  communication_accounts: conversationCollections.communication_accounts,
   ctox_crew_members: {
     version: 0,
     primaryKey: 'id',

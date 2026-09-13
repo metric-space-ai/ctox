@@ -4,6 +4,30 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const { performance } = require('node:perf_hooks');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function capturePinRuntimeEvidence(page, error) {
+  return page.evaluate(async waitForError => {
+    const smoke = globalThis.ctoxBusinessOsSmoke;
+    const state = smoke?.state;
+    const syncDiagnostics = state?.syncDiagnostics?.collections?.desktop_layout || null;
+    return {
+      waitForError,
+      appBuild: smoke?.appBuild || null,
+      appEntryUrl: document.querySelector('script[type="module"][src*="app.js"]')?.src || null,
+      rxdbBundleUrls: performance.getEntriesByType('resource')
+        .map(entry => entry.name)
+        .filter(name => name.includes('ctox-rxdb-js.mjs')),
+      taskbar: {
+        pins: [...(state?.taskbarPins || [])],
+        timestamp: state?.taskbarPinsUpdatedAtMs || 0,
+        known: state?.taskbarPinsKnown === true,
+      },
+      desktopLayoutDiagnostics: syncDiagnostics,
+    };
+  }, String(error?.message || error)).catch(diagnosticError => ({
+    diagnosticError: String(diagnosticError?.message || diagnosticError),
+    waitForError: String(error?.message || error),
+  }));
+}
 async function openHeldPinContext({ browser, url, storageState, capturePinWrites = false }) {
   let held = true;
   let heldBytes = 0;
@@ -148,11 +172,16 @@ async function runDesktopPinReload({ page, readNativeLayout, outputPath }) {
     assert.ok(messages.length > 0, 'test must actually hold signaling messages');
     report.signalingReleasedMs = performance.now() - started;
     release();
-    await fresh.waitForFunction(expected => {
-      const state = globalThis.ctoxBusinessOsSmoke?.state;
-      return state?.taskbarPinsUpdatedAtMs === expected.updated_at_ms
-        && JSON.stringify(state.taskbarPins) === JSON.stringify(expected.taskbar_pins);
-    }, expected, { timeout: 60000 });
+    try {
+      await fresh.waitForFunction(expected => {
+        const state = globalThis.ctoxBusinessOsSmoke?.state;
+        return state?.taskbarPinsUpdatedAtMs === expected.updated_at_ms
+          && JSON.stringify(state.taskbarPins) === JSON.stringify(expected.taskbar_pins);
+      }, expected, { timeout: 60000 });
+    } catch (error) {
+      report.firstPinConvergenceRuntime = await capturePinRuntimeEvidence(fresh, error);
+      throw error;
+    }
     report.pinConvergenceMs = performance.now() - started;
     await fresh.waitForFunction(expected => {
       const pins = [...document.querySelectorAll('button.module-tab[data-pinned="true"]')]

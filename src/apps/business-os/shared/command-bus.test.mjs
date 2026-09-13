@@ -75,6 +75,38 @@ test('dispatch receipt lifecycle reports elapsed time from the original dispatch
   }
 });
 
+test('sync_queue_tasks:false as a dispatch option skips the queue-task collection', async () => {
+  let stored;
+  const started = [];
+  const commands = {
+    async insert(document) { stored = { ...document }; },
+    findOne() {
+      return {
+        $: { subscribe(listener) {
+          listener({ toJSON: () => ({ ...stored }) });
+          return { unsubscribe() {} };
+        } },
+        async exec() { return stored ? { toJSON: () => ({ ...stored }) } : null; },
+      };
+    },
+  };
+  const bus = createCommandBus({
+    db: { raw: { business_commands: commands } },
+    sync: { async startCollection(name) {
+      started.push(name);
+      return { state: { async pushDocumentsToRemotePeers() {
+        stored = { ...stored, status: 'queued', replication_phase: 'native_observed' };
+        return true;
+      } } };
+    } },
+  });
+  await bus.dispatch({ id: 'cmd-option-no-queue', command_type: 'ctox.secret.list' }, {
+    until: 'accepted',
+    sync_queue_tasks: false,
+  });
+  assert.deepEqual(started.filter((name) => name === 'ctox_queue_tasks'), []);
+  assert.ok(started.includes('business_commands'));
+});
 
 function leaseTestState(connected) {
   const listeners = new Set();
@@ -286,6 +318,48 @@ test('command client context normalizer does not overwrite caller actor', () => 
   assert.equal(context.target, 'external-agent');
   assert.equal(context.scope.app.module_id, 'coding-agents');
   assert.equal(context.scope.command.type, 'ctox.coding.turn');
+});
+
+test('command client context fills placeholder actor identity from the session', () => {
+  const sessionActor = { id: 'user-1', display_name: 'Operator', role: 'user', is_admin: false };
+  const context = normalizeCommandClientContext({
+    command: {
+      module: 'ctox',
+      command_type: 'business_os.chat.task',
+      client_context: {
+        actor: { display_name: 'Operator', role: 'user' },
+        owner: 'user-1',
+      },
+    },
+    moduleId: 'ctox',
+    commandType: 'business_os.chat.task',
+    inboundChannel: 'business_os_chat',
+    actor: sessionActor,
+  });
+
+  assert.equal(context.actor.id, 'user-1');
+  assert.equal(context.actor.display_name, 'Operator');
+  assert.equal(context.owner_user_id, 'user-1');
+});
+
+test('command client context skips local-dev owner_user_id before actor identity', () => {
+  const sessionActor = { id: 'user-1', display_name: 'Operator', role: 'user', is_admin: false };
+  const context = normalizeCommandClientContext({
+    command: {
+      module: 'ctox',
+      command_type: 'business_os.chat.task',
+      client_context: {
+        owner_user_id: 'local-dev',
+        actor: { user_id: 'user-1', display_name: 'Operator' },
+      },
+    },
+    moduleId: 'ctox',
+    commandType: 'business_os.chat.task',
+    inboundChannel: 'business_os_chat',
+    actor: sessionActor,
+  });
+  assert.equal(context.owner_user_id, 'user-1');
+  assert.equal(context.actor.id, 'user-1');
 });
 
 test('command bus scopes demand-only desktop chunk dependencies with leases', () => {

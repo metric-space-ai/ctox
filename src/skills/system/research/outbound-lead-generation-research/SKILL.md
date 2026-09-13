@@ -176,6 +176,7 @@ When to write a script: a source you will hit again for many leads (register lis
 ## 6. Evidence rules
 
 - A field is `verified` only with a value and **two independent sources on different hosts**; each source has `source_id`, `url` and a verbatim `quote`. Two pages of one host are one source. Sellify alone proves nothing, but counts as one source.
+- **Sellify as a source.** When a field's value equals what `sellify_company` / `known_person_records` hold, and **one** independent external source confirms it, report the field `verified` with that one external source. The server compares the value with the Sellify record itself and adds Sellify as the second source (`sellify://company/<contact_id>`, `sellify://person/<sellify_person_id>`). Do **not** mark such a field `no_match` for having "only one source". For person fields use the Sellify id (`sellify-person-…`) as `person_key`. Sellify is never enough on its own: without an external source the field stays open. You may cite `sellify://…` yourself; the server accepts it only for the carried record and the stored value.
 - `no_match` only after at least one documented search and two documented page reads for that field.
 - `action_required` only for a login or approval you could not get: reference the auth-assist (`source_id` and your command id) or a source with `requires_credential=true`. Also for conflicts: keep both candidates with their sources, leave the value empty, reason `conflict`.
 - `unsupported` only when the field cannot be researched under this contract (e.g. AT-only field on a DE lead).
@@ -184,7 +185,7 @@ When to write a script: a source you will hit again for many leads (register lis
 
 ## 7. Writeback — the only way results reach the lead
 
-One writeback per lead, sent through the **MCP tool `business_os.execute_writeback`** of the
+The writeback goes through the **MCP tool `business_os.execute_writeback`** of the
 `ctox-business-os` server. The server binds `module` and `research_command_id` to your task
 itself, validates the payload with the native handler, writes the lead collection, and the UI
 updates through replication. Nothing else counts: **do not** run `ctox business-os commands
@@ -225,19 +226,20 @@ until a retry succeeds.
 
 ### Validation rules the daemon enforces (get them right on the first attempt)
 
-Build the writeback in this order, then send it once: (1) collect the terminal status per field, (2) copy each verified value **identically** into `result.fields`, (3) attach sources with absolute URLs, (4) give every person value and its evidence the same `person_key`, (5) check that the key set equals `payload.fields`. These five are the reasons live runs were rejected.
+Build the writeback in this order: (1) collect the terminal status per field, (2) copy each verified value **identically** into `result.fields`, (3) attach sources with absolute URLs, (4) give every person value and its evidence the same `person_key`, (5) check that the key set equals `payload.fields`. These five are the reasons live runs were rejected.
 
-- `field_status` covers **every field of `payload.fields`** (normally all 32) with a terminal status; a missing or extra field is rejected. Reporting only the fields you worked on is not accepted — an untouched field is `no_match` (with its evidence) or keeps the status it had.
+- Across all parts, `field_status` covers **every field of `payload.fields`** (normally all 32) with a terminal status; a field that was not requested is rejected. One part may carry a subset — the server fills the rest from earlier parts. An untouched field is `no_match` (with its evidence) or keeps the status it had.
 - Every `field_status` entry is an object with `status`; `value` only for `verified`.
 - For a `verified` field the value in `result.fields.<field>.value` must be **identical** to `field_status.<field>.value` — same string, no reformatting, no added prefix.
 - Every populated `person_*` value, in `result.fields` and in `person_records`, needs the `person_key` of the person it belongs to. Keep the `person_key` from `known_person_records` for a Sellify person; invent a stable one only for a new person.
 - `result.fields` holds objects (`{"value": …, "sources": [...]}`), never bare strings.
 - Every evidence entry needs `field_key`, `source_id`, `url`; person evidence also `person_key`, and it must be **the same `person_key`** the value in `result.fields` carries.
-- Every `url` — in sources and in evidence — is an absolute `http(s)://` URL. A file path, a note or an empty string is rejected.
+- Every `url` — in sources and in evidence — is an absolute `http(s)://` URL, or a Sellify citation `sellify://company/<contact_id>` / `sellify://person/<sellify_person_id>` (§6). A file path, a note or an empty string is rejected.
 - A **non-verified** field (`no_match`, `unsupported`, `action_required`) must NOT carry a populated `value`. State the reason instead.
 - Person fields describe the priority contact(s) you actually found: when you report persons in `person_records`, set the matching `person_*` fields `verified` with their `person_key` instead of `no_match`. `no_match` on a person field means you found no such person at all.
 - Person fields carry a `person_key`; `result.fields` holds structured objects only, never free text.
-- **Exactly one writeback call per lead.** Never dispatch read commands (`outbound.task.readback`, `outbound.lead.read`, `outbound.queue_task.read`, `outbound.lead.show` or anything similar) to check your own result, and never enqueue Business OS actions (`business_os.execute_action`, `business_os.propose_action`) for the writeback — they are not the writeback and are rejected outside the task contract. Every dispatched command becomes its own queue task and its own agent turn — twelve such reads once blocked a whole campaign for three hours.
+- **Send large results in parts.** A tool call is limited by the model's output size: a 50 KB writeback (all 32 fields with sources) breaks off and the turn ends without a receipt (Sasol, 11.09.2026, twice). Send at most about 10 fields per `execute_writeback` call; the server merges the parts, a field missing from one part keeps the status an earlier part gave it, and the response lists `open_fields` still to send. Do not re-send fields that are already stored.
+- Never dispatch read commands (`outbound.task.readback`, `outbound.lead.read`, `outbound.queue_task.read`, `outbound.lead.show` or anything similar) to check your own result, and never enqueue Business OS actions (`business_os.execute_action`, `business_os.propose_action`) for the writeback — they are not the writeback and are rejected outside the task contract. Every dispatched command becomes its own queue task and its own agent turn — twelve such reads once blocked a whole campaign for three hours.
 - Done means `business_os.execute_writeback` returned status `accepted` or `completed`. Report the counts (verified / no_match / action_required / unsupported) and the persons found in one short chat message.
 
 ## 8. Unblocking across turns (login, captcha, MFA)
@@ -264,7 +266,7 @@ The human is not always at the keyboard, and your turn is bounded. The system th
 | Scrape target classifies `temporary_unreachable` / `blocked` | Fall back to another source; do not queue a repair. |
 | No adapter for a recurring source | Write the extraction script, `register-script`, `execute --allow-heal`. For a one-off page use `web read` or `browser-capture` instead — do not build a target for a single lead. |
 | Two sources contradict each other | Leave the value empty, keep both in `candidates` with their sources, status `action_required`, reason `conflict`. Never average, never pick the prettier one. |
-| Sellify already holds a value | It is the starting value and counts as one source. Confirm it with one independent source (then `verified`), or contradict it with two (then take the new value and say so in `reason`). |
+| Sellify already holds a value | It is the starting value and counts as one source (the server adds it, see §6). Confirm it with one independent source (then `verified` with that source), or contradict it with two (then take the new value and say so in `reason`). A value found only in Sellify and one external page is `verified`, not `no_match`. |
 | A Sellify person is outdated (left the company) | Keep the `person_key`, set the function to the documented state (for example "Geschäftsführung (ausgeschieden)"), and add the current holder as a new person. Never delete a Sellify person. |
 | Two persons look like one (same name, different profile) | Distinct `person_key` each; only merge with a document that shows they are the same person. |
 | A profile URL as `person_key` | Do not do it. `person_key` is a stable key (Sellify id or a key you keep for this lead), not a URL — profile URLs change and produce duplicates. |

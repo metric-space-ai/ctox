@@ -21,7 +21,7 @@ use crate::mission::channels;
 use anyhow::Context;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1249,10 +1249,89 @@ fn outbound_handle_research_source_registry_read(
             "latest_script_revision_no": ziel.get("latest_script_revision_no").cloned().unwrap_or(Value::Null),
         }));
     }
+    let script = match command
+        .payload
+        .get("include_script_target")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+    {
+        Some(key) => outbound_registry_latest_script(root, key)?,
+        None => Value::Null,
+    };
     Ok(serde_json::json!({
         "ok": true,
         "schema": "ctox.outbound.research_source_registry.v1",
         "targets": eintraege,
+        "script": script,
+    }))
+}
+
+/// Latest registered script of one scrape target, for the Outbound app's
+/// "Adapter-Skript ansehen" dialog. The dialog could never show a script: the
+/// app looked for it in its own adapter records, while scripts live only in
+/// the scrape registry (Klicktest-Befund P4 V14, 11.09.2026). Bounded so the
+/// command result stays inside the peer wire budget.
+fn outbound_registry_latest_script(root: &Path, target_key: &str) -> anyhow::Result<Value> {
+    const MAX_SCRIPT_BYTES: usize = 150_000;
+    let antwort = scrape::dispatch_capturing(
+        root,
+        &[
+            "show-target".to_string(),
+            "--target-key".to_string(),
+            target_key.to_string(),
+        ],
+    )
+    .with_context(|| format!("scrape target {target_key} could not be read"))?;
+    let Some(revision) = antwort
+        .pointer("/target/revisions")
+        .and_then(Value::as_array)
+        .and_then(|revisions| {
+            revisions.iter().max_by_key(|revision| {
+                revision
+                    .get("revision_no")
+                    .and_then(Value::as_i64)
+                    .unwrap_or_default()
+            })
+        })
+    else {
+        return Ok(serde_json::json!({ "target_key": target_key, "available": false }));
+    };
+    let script_path = revision
+        .get("script_path")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let path = if Path::new(script_path).is_absolute() {
+        std::path::PathBuf::from(script_path)
+    } else {
+        root.join(script_path)
+    };
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return Ok(serde_json::json!({
+                "target_key": target_key,
+                "available": false,
+                "revision_no": revision.get("revision_no").cloned().unwrap_or(Value::Null),
+                "error": format!("script file not readable: {error}"),
+            }))
+        }
+    };
+    let truncated = bytes.len() > MAX_SCRIPT_BYTES;
+    let mut text =
+        String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_SCRIPT_BYTES)]).into_owned();
+    if truncated {
+        text.push_str("\n/* … gekürzt: Skript größer als 150 KB … */\n");
+    }
+    Ok(serde_json::json!({
+        "target_key": target_key,
+        "available": true,
+        "revision_no": revision.get("revision_no").cloned().unwrap_or(Value::Null),
+        "language": revision.get("language").cloned().unwrap_or(Value::Null),
+        "script_sha256": revision.get("script_sha256").cloned().unwrap_or(Value::Null),
+        "created_at": revision.get("created_at").cloned().unwrap_or(Value::Null),
+        "truncated": truncated,
+        "text": text,
     }))
 }
 
@@ -1304,7 +1383,17 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
     };
     // Campaign imports must see the FULL membership of one campaign; the
     // usual dedupe/lookup cap of 100 would silently truncate it.
-    let limit_cap = if entity == "campaign" { 2000 } else { 100 };
+    // A name search groups rows server-side (see below), so it may scan many
+    // more rows than it returns.
+    let group_by_name =
+        entity == "campaign" && payload.get("group_by").and_then(Value::as_str) == Some("name");
+    let limit_cap = if group_by_name {
+        50_000
+    } else if entity == "campaign" {
+        2000
+    } else {
+        100
+    };
     let limit = payload
         .get("limit")
         .and_then(Value::as_u64)
@@ -1399,6 +1488,58 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
                 if seen.insert(id) {
                     records.push(record);
                 }
+            }
+        }
+    }
+    // Beauty, 11.09.2026: a campaign search returned 2000 full rows (1.1 MB);
+    // the peer dropped the result ("exceeds peer wire budget", 256 KB) and the
+    // browser reported "no Sellify campaign found". A search needs names and
+    // counts, an import only a few columns.
+    if group_by_name {
+        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+        for record in &records {
+            let name = record
+                .get("name")
+                .or_else(|| record.get("title"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("");
+            if !name.is_empty() && record.get("is_deleted").and_then(Value::as_bool) != Some(true) {
+                *counts.entry(name.to_string()).or_default() += 1;
+            }
+        }
+        let mut groups = counts.into_iter().collect::<Vec<_>>();
+        groups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let truncated = records.len() >= limit;
+        let groups = groups
+            .into_iter()
+            .take(200)
+            .map(|(name, count)| serde_json::json!({ "name": name, "count": count }))
+            .collect::<Vec<_>>();
+        return Ok(serde_json::json!({
+            "ok": true,
+            "entity": entity,
+            "groups": groups,
+            "scanned": records.len(),
+            "truncated": truncated,
+            "records": [],
+        }));
+    }
+    let fields = payload
+        .get("fields")
+        .and_then(Value::as_array)
+        .map(|fields| {
+            fields
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter(|fields| !fields.is_empty());
+    if let Some(fields) = fields {
+        for record in records.iter_mut() {
+            if let Some(object) = record.as_object_mut() {
+                object.retain(|key, _| key == "id" || fields.iter().any(|field| field == key));
             }
         }
     }
@@ -1825,6 +1966,38 @@ pub(super) fn apply_outbound_adapter_reconciliation_reply(
             outbound_put_string(&mut source_record, "adapter_status", status);
             outbound_put_string(&mut source_record, "scrape_status", scrape_status);
             outbound_put_string(&mut source_record, "auth_status", auth_status);
+            // The worker's auth_status is a guess about the portal, not about
+            // the credential store: a reconciliation reported "required" for
+            // XING although XING_BROWSER_LOGIN is stored, and every built-in
+            // login source lost "credential_available" (Klicktest P4 T71,
+            // thesen 11.09.2026). A stored credential wins over that guess.
+            if source_record
+                .get("requires_credential")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                && matches!(
+                    source_record.get("auth_status").and_then(Value::as_str),
+                    Some("required" | "not_required" | "credential_missing")
+                )
+            {
+                if let Some(secret_name) =
+                    outbound_string(&source_record, &["credential_secret_name"])
+                {
+                    if crate::secrets::secret_exists(
+                        root,
+                        crate::secrets::credential_scope(),
+                        &secret_name,
+                    )
+                    .unwrap_or(false)
+                    {
+                        outbound_put_string(
+                            &mut source_record,
+                            "auth_status",
+                            "credential_available".to_string(),
+                        );
+                    }
+                }
+            }
             outbound_put_i64(&mut source_record, "updated_at_ms", now);
             upsert_business_record(
                 conn,
@@ -6125,6 +6298,138 @@ mod tests {
     };
     use super::*;
     use tempfile::tempdir;
+
+    // Klicktest P4 V14 (11.09.2026): "Adapter-Skript ansehen" could never show
+    // a script; the registry read now carries the latest script of one target.
+    #[test]
+    fn the_registry_read_carries_the_latest_script_of_the_asked_target() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let target_file = root.join("uitest-target.json");
+        fs::write(
+            &target_file,
+            serde_json::to_vec(&serde_json::json!({
+                "target_key": "uitest-script",
+                "display_name": "UITEST Skript",
+                "start_url": "https://uitest-script.ctox.dev/",
+                "target_kind": "prospect-research",
+            }))?,
+        )?;
+        scrape::dispatch_capturing(
+            root,
+            &[
+                "upsert-target".to_string(),
+                "--input".to_string(),
+                target_file.display().to_string(),
+            ],
+        )?;
+        let script_file = root.join("uitest-script.js");
+        fs::write(
+            &script_file,
+            "// UITEST_SCRIPT_MARKER\nexport default async () => [];\n",
+        )?;
+        scrape::dispatch_capturing(
+            root,
+            &[
+                "register-script".to_string(),
+                "--target-key".to_string(),
+                "uitest-script".to_string(),
+                "--script-file".to_string(),
+                script_file.display().to_string(),
+            ],
+        )?;
+        let command = BusinessCommand {
+            id: Some("cmd_registry_script".to_string()),
+            module: "outbound".to_string(),
+            command_type: "outbound.research_source.registry_read".to_string(),
+            record_id: Some("registry".to_string()),
+            payload: serde_json::json!({
+                "target_keys": ["uitest-script"],
+                "include_script_target": "uitest-script",
+            }),
+            client_context: serde_json::json!({}),
+            origin: CommandOrigin::TrustedLocal,
+        };
+        let result = outbound_handle_research_source_registry_read(root, &command)?;
+        assert_eq!(
+            result.pointer("/script/available").and_then(Value::as_bool),
+            Some(true),
+            "{result:#}"
+        );
+        assert!(result
+            .pointer("/script/text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.contains("UITEST_SCRIPT_MARKER")));
+        assert_eq!(
+            result
+                .pointer("/script/revision_no")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+        // Without the flag the answer stays metadata only.
+        let plain = outbound_handle_research_source_registry_read(
+            root,
+            &BusinessCommand {
+                payload: serde_json::json!({ "target_keys": ["uitest-script"] }),
+                ..command
+            },
+        )?;
+        assert!(plain.get("script").is_some_and(Value::is_null));
+        Ok(())
+    }
+
+    #[test]
+    fn a_campaign_search_returns_names_and_an_import_only_the_asked_columns() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        drop(super::super::store::open_store(root)?);
+        super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+            root,
+            "sellify_campaigns",
+        )?;
+        for (id, name, contact) in [
+            ("c1", "Beauty - Welle 5 – 10.09.2026", 3181),
+            ("c2", "Beauty - Welle 5 – 10.09.2026", 3182),
+            ("c3", "Beauty - 2023 - Welle 1 - 07.06.2023", 3183),
+            ("c4", "Chemie D – 01.07.2026", 3184),
+        ] {
+            super::super::store::upsert_rxdb_collection_record(
+                root,
+                "sellify_campaigns",
+                id,
+                1,
+                serde_json::json!({"id": id, "name": name, "contact_id": contact,
+                    "company_id": format!("sellify-company-{contact}"), "note_text": "x".repeat(500)}),
+            )?;
+        }
+        let search = outbound_sellify_lookup(
+            root,
+            &serde_json::json!({"entity": "campaign", "group_by": "name", "limit": 50000,
+                "fuzzy_selectors": [{"field": "name", "value": "Beauty"}]}),
+        )?;
+        assert_eq!(
+            search["groups"],
+            serde_json::json!([
+                {"name": "Beauty - Welle 5 – 10.09.2026", "count": 2},
+                {"name": "Beauty - 2023 - Welle 1 - 07.06.2023", "count": 1}
+            ])
+        );
+        assert_eq!(search["records"], serde_json::json!([]));
+        let import = outbound_sellify_lookup(
+            root,
+            &serde_json::json!({"entity": "campaign", "limit": 2000,
+                "fields": ["contact_id", "company_id", "name"],
+                "selectors": [{"field": "name", "value": "Beauty - Welle 5 – 10.09.2026"}]}),
+        )?;
+        let rows = import["records"].as_array().context("records")?;
+        assert_eq!(rows.len(), 2);
+        assert!(rows
+            .iter()
+            .all(|row| row.get("note_text").is_none() && row["contact_id"].is_number()));
+        Ok(())
+    }
 
     #[test]
     fn outbound_adapter_reconciliation_projects_typed_result_without_secrets() -> anyhow::Result<()>
