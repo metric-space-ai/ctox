@@ -2031,7 +2031,7 @@ fn write_rxdb_control_command_state(
             now
         ],
     )?;
-    let chat_id = if is_business_chat_command(command) {
+    let chat_id = if is_business_chat_command(command) && status != "failed" {
         Some(materialize_control_business_chat_state(
             root, &conn, command_id, command, status, &result, terminal, now,
         )?)
@@ -2204,7 +2204,8 @@ pub(super) fn complete_and_project_business_control_command(
 mod tests {
     use super::super::store::{
         business_command_core_claim, issue_business_os_capability_token_for_managed_user,
-        load_rxdb_collection_record, rxdb_store_path,
+        load_business_command, load_rxdb_collection_record, process_business_chat_reply,
+        rxdb_store_path,
     };
     use super::super::store_projections::tests::create_repair_rxdb_tables;
     use super::super::store_workjet_projects::tests::create_workjet_rxdb_projection_tables;
@@ -2419,6 +2420,730 @@ mod tests {
             "unterminated string-literal dispatcher arm: {arm_pattern}"
         );
         exact_types
+    }
+
+    fn issue_role_token(root: &std::path::Path, user: &str, role: &str) -> anyhow::Result<String> {
+        let (token, _) =
+            super::super::store::issue_business_os_capability_token_for_managed_user_with_email(
+                root,
+                user,
+                Some(user),
+                user,
+                role,
+                now_ms() as i64,
+            )?;
+        Ok(token)
+    }
+
+    fn issue_chef_token(root: &std::path::Path, user: &str) -> anyhow::Result<String> {
+        issue_role_token(root, user, "chef")
+    }
+
+    fn accept_chat_task(
+        root: &std::path::Path,
+        command_id: &str,
+        token: &str,
+        chat_id: &str,
+        title: &str,
+        instruction: &str,
+        message_id: &str,
+    ) -> anyhow::Result<Value> {
+        accept_chat_task_with_client_context(
+            root,
+            command_id,
+            token,
+            chat_id,
+            title,
+            instruction,
+            message_id,
+            serde_json::json!({}),
+        )
+    }
+
+    fn accept_chat_task_with_client_context(
+        root: &std::path::Path,
+        command_id: &str,
+        token: &str,
+        chat_id: &str,
+        title: &str,
+        instruction: &str,
+        message_id: &str,
+        extra_client_context: Value,
+    ) -> anyhow::Result<Value> {
+        let mut client_context = serde_json::json!({
+            "capability_token": token,
+            "chat_id": chat_id,
+            "reply_to": chat_id
+        });
+        if let Some(extra) = extra_client_context.as_object() {
+            for (key, value) in extra {
+                client_context[key] = value.clone();
+            }
+        }
+        accept_rxdb_business_command_with_origin(
+            root,
+            serde_json::json!({
+                "id": command_id,
+                "command_id": command_id,
+                "module": "ctox",
+                "command_type": "business_os.chat.task",
+                "record_id": chat_id,
+                "payload": {
+                    "title": title,
+                    "instruction": instruction,
+                    "chat_id": chat_id,
+                    "reply_to": chat_id,
+                    "message_id": message_id
+                },
+                "client_context": client_context
+            }),
+            CommandOrigin::ReplicatedPeer,
+        )
+    }
+
+    fn accept_trusted_local_chat_task(
+        root: &std::path::Path,
+        command_id: &str,
+        chat_id: &str,
+        title: &str,
+        instruction: &str,
+        message_id: &str,
+    ) -> anyhow::Result<Value> {
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": command_id,
+                "command_id": command_id,
+                "module": "ctox",
+                "command_type": "business_os.chat.task",
+                "record_id": chat_id,
+                "payload": {
+                    "title": title,
+                    "instruction": instruction,
+                    "chat_id": chat_id,
+                    "reply_to": chat_id,
+                    "message_id": message_id
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "chat_id": chat_id,
+                    "reply_to": chat_id
+                }
+            }),
+        )
+    }
+
+    fn seed_unattributed_chat(
+        root: &std::path::Path,
+        chat_id: &str,
+        owner: &str,
+        message: &str,
+    ) -> anyhow::Result<Value> {
+        let conn = open_store(root)?;
+        let payload = serde_json::json!({
+            "id": chat_id,
+            "owner_user_id": owner,
+            "title": "Legacy chat",
+            "messages": [{
+                "id": "legacy-msg",
+                "role": "user",
+                "text": message
+            }]
+        });
+        upsert_business_record(
+            &conn,
+            "business_chats",
+            chat_id,
+            now_ms() as i64,
+            payload.clone(),
+        )?;
+        Ok(payload)
+    }
+
+    fn chat_exists(root: &std::path::Path, chat_id: &str) -> anyhow::Result<bool> {
+        let conn = open_store(root)?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_records WHERE collection = 'business_chats' AND record_id = ?1 AND deleted = 0",
+            params![chat_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    fn load_chat(root: &std::path::Path, chat_id: &str) -> anyhow::Result<Value> {
+        let conn = open_store(root)?;
+        let payload: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'business_chats' AND record_id = ?1",
+            params![chat_id],
+            |row| row.get(0),
+        )?;
+        Ok(serde_json::from_str(&payload)?)
+    }
+
+    fn command_exists(root: &std::path::Path, command_id: &str) -> anyhow::Result<bool> {
+        let conn = open_store(root)?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_commands WHERE command_id = ?1",
+            params![command_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    fn queue_mentions(root: &std::path::Path, command_id: &str) -> anyhow::Result<bool> {
+        let conn = open_store(root)?;
+        let like = format!("%{command_id}%");
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_records WHERE collection = 'ctox_queue_tasks' AND payload_json LIKE ?1",
+            params![like],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    fn assert_denied_unchanged(
+        root: &std::path::Path,
+        outcome: &Value,
+        command_id: &str,
+        chat_id: &str,
+        owner: &str,
+        messages: &Value,
+    ) -> anyhow::Result<()> {
+        assert_eq!(outcome.get("ok").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            outcome
+                .pointer("/result/error_code")
+                .and_then(Value::as_str),
+            Some("chat_owner_mismatch")
+        );
+        assert!(
+            outcome
+                .get("task_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .is_empty(),
+            "foreign targeting must not enqueue queue work"
+        );
+        assert!(
+            !command_exists(root, command_id)?,
+            "foreign targeting must not persist a command"
+        );
+        assert!(
+            !queue_mentions(root, command_id)?,
+            "foreign targeting must not enqueue queue work"
+        );
+        let after = load_chat(root, chat_id)?;
+        assert_eq!(
+            after.get("owner_user_id").and_then(Value::as_str),
+            Some(owner)
+        );
+        assert_eq!(
+            after.get("messages"),
+            Some(messages),
+            "foreign targeting must not inject messages"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn replicated_peer_cannot_enqueue_work_on_another_users_business_chat() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let user_a = "user-a@example.test";
+        let user_b = "user-b@example.test";
+        let token_a = issue_chef_token(root.path(), user_a)?;
+        let token_b = issue_chef_token(root.path(), user_b)?;
+        let chat_id = "chat-owner-a";
+        let owner_command = accept_chat_task(
+            root.path(),
+            "cmd-owner-a",
+            &token_a,
+            chat_id,
+            "Owner A chat",
+            "Create the owned chat.",
+            "chatmsg-owner-a",
+        )?;
+        assert_eq!(owner_command.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            owner_command.get("chat_id").and_then(Value::as_str),
+            Some(chat_id)
+        );
+        let before = load_chat(root.path(), chat_id)?;
+        let before_messages = before
+            .get("messages")
+            .cloned()
+            .unwrap_or(Value::Array(vec![]));
+        let foreign = accept_chat_task(
+            root.path(),
+            "cmd-owner-b",
+            &token_b,
+            chat_id,
+            "Foreign targeting",
+            "Inject into the other chat.",
+            "chatmsg-owner-b",
+        )?;
+        assert_denied_unchanged(
+            root.path(),
+            &foreign,
+            "cmd-owner-b",
+            chat_id,
+            user_a,
+            &before_messages,
+        )
+    }
+
+    #[test]
+    fn replicated_peer_cannot_adopt_existing_local_dev_business_chat() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let user_a = "user-a@example.test";
+        let user_b = "user-b@example.test";
+        let _token_a = issue_chef_token(root.path(), user_a)?;
+        let token_b = issue_chef_token(root.path(), user_b)?;
+        let chat_id = "chat-unattributed-local-dev";
+        let seeded = seed_unattributed_chat(
+            root.path(),
+            chat_id,
+            "local-dev",
+            "A leftover conversation.",
+        )?;
+        let messages = seeded
+            .get("messages")
+            .cloned()
+            .unwrap_or(Value::Array(vec![]));
+        let foreign = accept_chat_task(
+            root.path(),
+            "cmd-adopt-local-dev",
+            &token_b,
+            chat_id,
+            "Adopt placeholder",
+            "Claim the leftover chat.",
+            "chatmsg-adopt-local-dev",
+        )?;
+        assert_denied_unchanged(
+            root.path(),
+            &foreign,
+            "cmd-adopt-local-dev",
+            chat_id,
+            "local-dev",
+            &messages,
+        )
+    }
+
+    #[test]
+    fn replicated_peer_cannot_adopt_existing_empty_owner_business_chat() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let user_a = "user-a@example.test";
+        let user_b = "user-b@example.test";
+        let _token_a = issue_chef_token(root.path(), user_a)?;
+        let token_b = issue_chef_token(root.path(), user_b)?;
+        let chat_id = "chat-unattributed-empty";
+        let seeded = seed_unattributed_chat(root.path(), chat_id, "", "Empty-owner conversation.")?;
+        let messages = seeded
+            .get("messages")
+            .cloned()
+            .unwrap_or(Value::Array(vec![]));
+        let foreign = accept_chat_task(
+            root.path(),
+            "cmd-adopt-empty",
+            &token_b,
+            chat_id,
+            "Adopt empty owner",
+            "Claim the empty-owner chat.",
+            "chatmsg-adopt-empty",
+        )?;
+        assert_denied_unchanged(
+            root.path(),
+            &foreign,
+            "cmd-adopt-empty",
+            chat_id,
+            "",
+            &messages,
+        )
+    }
+
+    #[test]
+    fn trusted_policy_receipt_repairs_matching_legacy_chat_and_still_denies_foreign(
+    ) -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let user_a = "user-a@example.test";
+        let user_b = "user-b@example.test";
+        let token_a = issue_chef_token(root.path(), user_a)?;
+        let token_b = issue_chef_token(root.path(), user_b)?;
+        let chat_id = "chat-legacy-receipt";
+        let seeded = seed_unattributed_chat(
+            root.path(),
+            chat_id,
+            "local-dev",
+            "Legacy conversation still on local-dev.",
+        )?;
+        let conn = open_store(root.path())?;
+        conn.execute(
+            "INSERT INTO business_commands
+                (command_id, module, command_type, record_id, status, payload_json, client_context_json, observed_at_ms)
+             VALUES (?1, 'ctox', 'business_os.chat.task', ?2, 'completed', ?3, ?4, ?5)",
+            params![
+                "cmd-legacy-a",
+                chat_id,
+                serde_json::to_string(&serde_json::json!({
+                    "chat_id": chat_id,
+                    "reply_to": chat_id,
+                    "title": "Legacy"
+                }))?,
+                serde_json::to_string(&serde_json::json!({
+                    "source": "business-os-chat"
+                }))?,
+                now_ms() as i64
+            ],
+        )?;
+        conn.execute(
+            "INSERT INTO business_events
+                (event_id, collection, record_id, command_type, payload_json, observed_at_ms)
+             VALUES (?1, 'business_commands', ?2, 'business_os.policy.allowed', ?3, ?4)",
+            params![
+                "evt-legacy-a",
+                "cmd-legacy-a",
+                serde_json::to_string(&serde_json::json!({
+                    "event_type": "business_os.policy.allowed",
+                    "command_id": "cmd-legacy-a",
+                    "actor": { "id": user_a, "trusted": true },
+                    "client_context": { "source": "business-os-chat" }
+                }))?,
+                now_ms() as i64
+            ],
+        )?;
+        drop(conn);
+        let foreign = accept_chat_task(
+            root.path(),
+            "cmd-legacy-b",
+            &token_b,
+            chat_id,
+            "Foreign legacy",
+            "Inject into the legacy chat.",
+            "chatmsg-legacy-b",
+        )?;
+        assert_denied_unchanged(
+            root.path(),
+            &foreign,
+            "cmd-legacy-b",
+            chat_id,
+            "local-dev",
+            seeded.get("messages").unwrap(),
+        )?;
+        let repaired = accept_chat_task(
+            root.path(),
+            "cmd-legacy-repair-a",
+            &token_a,
+            chat_id,
+            "Repair legacy",
+            "Continue the legacy chat.",
+            "chatmsg-legacy-repair-a",
+        )?;
+        assert_eq!(repaired.get("ok").and_then(Value::as_bool), Some(true));
+        let after = load_chat(root.path(), chat_id)?;
+        assert_eq!(
+            after.get("owner_user_id").and_then(Value::as_str),
+            Some(user_a)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn trusted_policy_receipt_for_another_chat_cannot_recover_via_ignored_field(
+    ) -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let user_a = "user-a@example.test";
+        let token_a = issue_chef_token(root.path(), user_a)?;
+        let chat_id = "chat-legacy-ignored-field";
+        let other_chat_id = "chat-canonical-other";
+        let seeded = seed_unattributed_chat(
+            root.path(),
+            chat_id,
+            "local-dev",
+            "Legacy conversation must not be recovered from a foreign receipt.",
+        )?;
+        let conn = open_store(root.path())?;
+        conn.execute(
+            "INSERT INTO business_commands
+                (command_id, module, command_type, record_id, status, payload_json, client_context_json, observed_at_ms)
+             VALUES (?1, 'ctox', 'business_os.chat.task', ?2, 'completed', ?3, ?4, ?5)",
+            params![
+                "cmd-canonical-other",
+                chat_id,
+                serde_json::to_string(&serde_json::json!({
+                    "reply_to": other_chat_id,
+                    "chat_id": chat_id,
+                    "title": "Canonical other chat"
+                }))?,
+                serde_json::to_string(&serde_json::json!({
+                    "source": "business-os-chat",
+                    "chat_id": chat_id,
+                    "reply_to": chat_id
+                }))?,
+                now_ms() as i64
+            ],
+        )?;
+        conn.execute(
+            "INSERT INTO business_events
+                (event_id, collection, record_id, command_type, payload_json, observed_at_ms)
+             VALUES (?1, 'business_commands', ?2, 'business_os.policy.allowed', ?3, ?4)",
+            params![
+                "evt-canonical-other",
+                "cmd-canonical-other",
+                serde_json::to_string(&serde_json::json!({
+                    "event_type": "business_os.policy.allowed",
+                    "command_id": "cmd-canonical-other",
+                    "actor": { "id": user_a, "trusted": true },
+                    "client_context": { "source": "business-os-chat", "chat_id": chat_id }
+                }))?,
+                now_ms() as i64
+            ],
+        )?;
+        drop(conn);
+        let attempted = accept_chat_task(
+            root.path(),
+            "cmd-ignored-field-a",
+            &token_a,
+            chat_id,
+            "Adopt via ignored field",
+            "This receipt belongs to another chat.",
+            "chatmsg-ignored-field-a",
+        )?;
+        assert_denied_unchanged(
+            root.path(),
+            &attempted,
+            "cmd-ignored-field-a",
+            chat_id,
+            "local-dev",
+            seeded.get("messages").unwrap(),
+        )
+    }
+
+    #[test]
+    fn data_write_denied_peer_cannot_create_a_fresh_business_chat() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let user = "user-denied@example.test";
+        let token = issue_role_token(root.path(), user, "user")?;
+        let chat_id = "chat-denied-fresh";
+        let outcome = accept_chat_task(
+            root.path(),
+            "cmd-denied-fresh",
+            &token,
+            chat_id,
+            "Denied title",
+            "This caller lacks DataWrite.",
+            "chatmsg-denied-fresh",
+        )?;
+        assert_eq!(outcome.get("ok").and_then(Value::as_bool), Some(false));
+        assert_ne!(
+            outcome
+                .pointer("/result/error_code")
+                .and_then(Value::as_str),
+            Some("chat_owner_mismatch"),
+            "policy denial must fail before owner admission"
+        );
+        assert!(
+            !chat_exists(root.path(), chat_id)?,
+            "a DataWrite-denied caller must not reserve a fresh chat record"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fresh_chat_admission_preserves_title_and_auto_focus_through_reply() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let user = "user-a@example.test";
+        let token = issue_chef_token(root.path(), user)?;
+        let chat_id = "chat-title-focus";
+        let command_id = "cmd-title-focus";
+        let accepted = accept_chat_task_with_client_context(
+            root.path(),
+            command_id,
+            &token,
+            chat_id,
+            "Requested title",
+            "Keep the requested presentation.",
+            "chatmsg-title-focus",
+            serde_json::json!({ "business_chat_auto_focus": false }),
+        )?;
+        assert_eq!(accepted.get("ok").and_then(Value::as_bool), Some(true));
+        let after_admit = load_chat(root.path(), chat_id)?;
+        assert_eq!(
+            after_admit.get("title").and_then(Value::as_str),
+            Some("Requested title")
+        );
+        assert_eq!(
+            after_admit.get("minimized").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            after_admit.get("owner_user_id").and_then(Value::as_str),
+            Some(user)
+        );
+        let conn = open_store(root.path())?;
+        let command = load_business_command(&conn, command_id)?;
+        process_business_chat_reply(
+            root.path(),
+            &conn,
+            command_id,
+            &command,
+            None,
+            "Delivered reply.",
+        )?;
+        drop(conn);
+        let after_reply = load_chat(root.path(), chat_id)?;
+        assert_eq!(
+            after_reply.get("title").and_then(Value::as_str),
+            Some("Requested title")
+        );
+        assert_eq!(
+            after_reply.get("minimized").and_then(Value::as_bool),
+            Some(true)
+        );
+        let messages = after_reply
+            .get("messages")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            messages.iter().any(|item| {
+                item.get("role").and_then(Value::as_str) == Some("ctox")
+                    && item.get("text").and_then(Value::as_str) == Some("Delivered reply.")
+            }),
+            "reply delivery must append the assistant message"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn trusted_local_followup_continues_unattributed_chat_and_still_denies_peers(
+    ) -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let chat_id = "chat-trusted-local";
+        let first = accept_trusted_local_chat_task(
+            root.path(),
+            "cmd-trusted-local-1",
+            chat_id,
+            "Native chat",
+            "First trusted-local turn.",
+            "chatmsg-trusted-local-1",
+        )?;
+        assert_eq!(first.get("ok").and_then(Value::as_bool), Some(true));
+        let after_first = load_chat(root.path(), chat_id)?;
+        assert_eq!(
+            after_first.get("owner_user_id").and_then(Value::as_str),
+            Some("local-dev")
+        );
+        let second = accept_trusted_local_chat_task(
+            root.path(),
+            "cmd-trusted-local-2",
+            chat_id,
+            "Native chat",
+            "Second trusted-local turn.",
+            "chatmsg-trusted-local-2",
+        )?;
+        assert_eq!(second.get("ok").and_then(Value::as_bool), Some(true));
+        let after_second = load_chat(root.path(), chat_id)?;
+        assert_eq!(
+            after_second.get("owner_user_id").and_then(Value::as_str),
+            Some("local-dev")
+        );
+        let token = issue_chef_token(root.path(), "user-b@example.test")?;
+        let foreign = accept_chat_task(
+            root.path(),
+            "cmd-trusted-local-peer",
+            &token,
+            chat_id,
+            "Peer takeover",
+            "Replicated peer must not adopt the unproven chat.",
+            "chatmsg-trusted-local-peer",
+        )?;
+        assert_denied_unchanged(
+            root.path(),
+            &foreign,
+            "cmd-trusted-local-peer",
+            chat_id,
+            "local-dev",
+            after_second.get("messages").unwrap(),
+        )
+    }
+
+    #[test]
+    fn concurrent_peers_cannot_both_claim_the_same_new_business_chat() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let root_path = root.path().to_path_buf();
+        let user_a = "user-a@example.test";
+        let user_b = "user-b@example.test";
+        let token_a = issue_chef_token(&root_path, user_a)?;
+        let token_b = issue_chef_token(&root_path, user_b)?;
+        let chat_id = "chat-race";
+        let handle_a = std::thread::spawn({
+            let root_path = root_path.clone();
+            let token_a = token_a.clone();
+            move || {
+                accept_chat_task(
+                    &root_path,
+                    "cmd-race-a",
+                    &token_a,
+                    chat_id,
+                    "Race A",
+                    "Claim the fresh chat.",
+                    "chatmsg-race-a",
+                )
+            }
+        });
+        let handle_b = std::thread::spawn({
+            let root_path = root_path.clone();
+            let token_b = token_b.clone();
+            move || {
+                accept_chat_task(
+                    &root_path,
+                    "cmd-race-b",
+                    &token_b,
+                    chat_id,
+                    "Race B",
+                    "Claim the fresh chat.",
+                    "chatmsg-race-b",
+                )
+            }
+        });
+        let outcome_a = handle_a.join().expect("thread A")?;
+        let outcome_b = handle_b.join().expect("thread B")?;
+        let accepted = [&outcome_a, &outcome_b]
+            .into_iter()
+            .filter(|outcome| outcome.get("ok").and_then(Value::as_bool) == Some(true))
+            .count();
+        let denied = [&outcome_a, &outcome_b]
+            .into_iter()
+            .filter(|outcome| {
+                outcome.get("ok").and_then(Value::as_bool) == Some(false)
+                    && outcome
+                        .pointer("/result/error_code")
+                        .and_then(Value::as_str)
+                        == Some("chat_owner_mismatch")
+            })
+            .count();
+        assert_eq!(accepted, 1, "exactly one peer may claim a fresh chat id");
+        assert_eq!(denied, 1, "the other peer must be denied before queue work");
+        let owner = load_chat(&root_path, chat_id)?
+            .get("owner_user_id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        assert!(
+            owner == user_a || owner == user_b,
+            "claimed owner must be one authenticated peer"
+        );
+        let loser = if owner == user_a {
+            "cmd-race-b"
+        } else {
+            "cmd-race-a"
+        };
+        assert!(!command_exists(&root_path, loser)?);
+        assert!(!queue_mentions(&root_path, loser)?);
+        Ok(())
     }
 
     #[test]

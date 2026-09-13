@@ -1,15 +1,15 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260910-shell-v2-chat-inspection-row-v373';
-import { CtoxResizer } from './shared/resizer.js?v=20260910-shell-v2-chat-inspection-row-v373';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260910-shell-v2-chat-inspection-row-v373';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260910-shell-v2-chat-inspection-row-v373';
-import { createAppActions } from './shared/app-actions.js?v=20260910-shell-v2-chat-inspection-row-v373';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260913-shell-v2-pending-collection-changes-v375';
+import { CtoxResizer } from './shared/resizer.js?v=20260913-shell-v2-pending-collection-changes-v375';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260913-shell-v2-pending-collection-changes-v375';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260913-shell-v2-pending-collection-changes-v375';
+import { createAppActions } from './shared/app-actions.js?v=20260913-shell-v2-pending-collection-changes-v375';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260910-shell-v2-chat-inspection-row-v373';
+} from './shared/app-lifecycle.js?v=20260913-shell-v2-pending-collection-changes-v375';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -17,20 +17,20 @@ import {
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260910-shell-v2-chat-inspection-row-v373';
+} from './shared/permissions.js?v=20260913-shell-v2-pending-collection-changes-v375';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260910-shell-v2-chat-inspection-row-v373';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260910-shell-v2-chat-inspection-row-v373';
+} from './shared/branding.js?v=20260913-shell-v2-pending-collection-changes-v375';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260913-shell-v2-pending-collection-changes-v375';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260910-shell-v2-chat-inspection-row-v373';
+} from './shared/presentation.js?v=20260913-shell-v2-pending-collection-changes-v375';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -41,9 +41,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260910-shell-v2-chat-inspection-row-v373';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260910-shell-v2-chat-inspection-row-v373';
-import { createDocumentsFacade } from './shared/documents.js?v=20260910-shell-v2-chat-inspection-row-v373';
+} from './shared/shell-permissions-ui.js?v=20260913-shell-v2-pending-collection-changes-v375';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260913-shell-v2-pending-collection-changes-v375';
+import { createDocumentsFacade } from './shared/documents.js?v=20260913-shell-v2-pending-collection-changes-v375';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -51,16 +51,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260910-shell-v2-chat-inspection-row-v373';
+} from './shared/maintenance-state.js?v=20260913-shell-v2-pending-collection-changes-v375';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260910-shell-v2-chat-inspection-row-v373';
+} from './shared/workspace-session.js?v=20260913-shell-v2-pending-collection-changes-v375';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260910-shell-v2-chat-inspection-row-v373';
+} from './shared/taskbar-pins.js?v=20260913-shell-v2-pending-collection-changes-v375';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -68,9 +68,18 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260910-shell-v2-chat-inspection-row-v373';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260910-shell-v2-chat-inspection-row-v373';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260910-shell-v2-chat-inspection-row-v373';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260913-shell-v2-pending-collection-changes-v375';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260913-shell-v2-pending-collection-changes-v375';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260913-shell-v2-pending-collection-changes-v375';
+import {
+  LAUNCH_CONTEXT_DEADLINE_MS,
+  SHELL_GENERATION_PROBE_DEADLINE_MS,
+  cancelStartupResponseBody,
+  isStartupDeadlineError,
+  shouldPropagateGenerationProbeError,
+  withStartupDeadline,
+} from './shared/startup-deadlines.js?v=20260913-shell-v2-pending-collection-changes-v375';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20260913-shell-v2-pending-collection-changes-v375';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -85,7 +94,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260910-shell-v2-chat-inspection-row-v373';
+const APP_BUILD = '20260913-shell-v2-pending-collection-changes-v375';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -932,12 +941,20 @@ async function importBusinessOsModule(url, label) {
     } catch (error) {
       lastError = error;
       try {
-        const generationProbe = await fetch(`app.js?v=${APP_BUILD}`, { cache: 'no-store' });
-        if (scheduleShellGenerationReload(generationProbe)) {
+        const generationProbe = await withStartupDeadline(
+          (probeSignal) => fetch(`app.js?v=${APP_BUILD}`, { cache: 'no-store', signal: probeSignal }),
+          SHELL_GENERATION_PROBE_DEADLINE_MS,
+          `Shell generation probe timed out after ${SHELL_GENERATION_PROBE_DEADLINE_MS / 1000} seconds.`,
+        );
+        const reloadGeneration = scheduleShellGenerationReload(generationProbe);
+        await cancelStartupResponseBody(generationProbe);
+        if (reloadGeneration) {
           throw new Error(`${label} belongs to an inactive shell generation`);
         }
       } catch (generationError) {
-        if (shellGenerationReloadGuard.scheduled) throw generationError;
+        if (shouldPropagateGenerationProbeError(generationError, shellGenerationReloadGuard.scheduled)) {
+          throw generationError;
+        }
       }
       if (attempt < retryDelaysMs.length - 1) {
         console.warn(`[business-os] ${label} temporarily unavailable; retrying`, error);
@@ -1391,11 +1408,14 @@ async function bootstrap() {
     const workspaceSession = readWorkspaceSessionSnapshot();
     const explicitModule = location.hash.replace(/^#/, '').trim();
     beginPreferredDesktopAppFocus(explicitModule);
+    // Companions are shell chrome, not workspace-window children. Start them
+    // before the first module and restore loop so one slow/restored window
+    // cannot delay chat/reporter readiness.
+    scheduleBusinessCompanions();
     await openModule(explicitModule || workspaceSession?.activeModuleId || initialModuleRefAfterLogin());
     await restoreWorkspaceSession(workspaceSession, { preferredAppId: explicitModule });
     markBootTiming('shellVisibleMs');
     setWorkspaceStatus();
-    scheduleBusinessCompanions();
   } catch (error) {
     console.error('[business-os] module startup failed', error);
     if (isManagedCollectionAuthorizationError(error)) {
@@ -8605,6 +8625,7 @@ function sanitizeClientId(value) {
 }
 
 function renderLoginGate(session, options = {}) {
+  cancelBusinessCompanions();
   document.body.dataset.authState = 'locked';
   delete document.body.dataset.moduleShell;
   delete document.body.dataset.moduleLoading;
@@ -9139,6 +9160,7 @@ function writeAccountPrefs(nextPrefs) {
 }
 
 function clearStoredBrowserAuth() {
+  cancelBusinessCompanions();
   localStorage.removeItem(SESSION_TOKEN_KEY);
   localStorage.removeItem(AUTH_HEADER_KEY);
 }
@@ -9209,52 +9231,46 @@ function loadBusinessChatModule() {
   return businessChatModulePromise;
 }
 
+const businessCompanionScheduler = createBusinessCompanionScheduler({
+  loadBusinessReporterModule,
+  loadBusinessChatModule,
+  getSession: () => state.session,
+  findCtoxModule: () => state.modules.find((mod) => mod.id === 'ctox'),
+  registerModuleSchemas,
+  createReporterContext: (_session, reporterModule) => ({
+    getActiveModule: () => reporterModule.resolveBusinessReporterModule({
+      activeModule: state.activeModule,
+      modules: state.modules,
+      windowManager: state.windowManager,
+    }),
+    db: createScopedSystemDbFacade('business-reporter-companion', BUSINESS_REPORTER_DB_COLLECTIONS),
+    sync: createLiveSyncFacade(),
+    ensureReportCollections: async () => {
+      const reportsModule = state.modules.find((mod) => mod.id === 'reports');
+      if (!reportsModule) throw new Error('Bugs & Features ist noch nicht im Modulkatalog verfügbar.');
+      await registerModuleSchemas(reportsModule);
+    },
+  }),
+  createChatContext: () => ({
+    commandBus: createLiveCommandBusFacade(),
+    db: createScopedSystemDbFacade('business-chat-companion', BUSINESS_CHAT_DB_COLLECTIONS),
+    sync: createLiveSyncFacade(),
+    getActiveModule: () => state.activeModule,
+  }),
+  onError: (error) => {
+    console.warn('[business-os] companion surface lazy init failed', error);
+  },
+  onSchemaError: (error) => {
+    console.warn('[business-os] crew schema registration for the chat bar failed', error);
+  },
+});
+
 function scheduleBusinessCompanions() {
-  loadBusinessReporterModule()
-    .then(({ initBusinessReporter, resolveBusinessReporterModule }) => {
-      initBusinessReporter({
-        session: state.session,
-        getActiveModule: () => resolveBusinessReporterModule({
-          activeModule: state.activeModule,
-          modules: state.modules,
-          windowManager: state.windowManager,
-        }),
-        db: createScopedSystemDbFacade('business-reporter-companion', BUSINESS_REPORTER_DB_COLLECTIONS),
-        sync: createLiveSyncFacade(),
-        ensureReportCollections: async () => {
-          const reportsModule = state.modules.find((mod) => mod.id === 'reports');
-          if (!reportsModule) throw new Error('Bugs & Features ist noch nicht im Modulkatalog verfügbar.');
-          await registerModuleSchemas(reportsModule);
-        },
-      });
-    })
-    .catch((error) => {
-      console.warn('[business-os] reporter surface lazy init failed', error);
-    });
-  loadBusinessChatModule()
-    .then(async ({ initBusinessChat }) => {
-      // The crew bar is a shell surface: it needs the CTOX module's collections
-      // (crew members) registered before the first pool load, not only once the
-      // CTOX window has been opened.
-      const ctoxModule = state.modules.find((mod) => mod.id === 'ctox');
-      if (ctoxModule) {
-        try {
-          await registerModuleSchemas(ctoxModule);
-        } catch (error) {
-          console.warn('[business-os] crew schema registration for the chat bar failed', error);
-        }
-      }
-      initBusinessChat({
-        session: state.session,
-        commandBus: createLiveCommandBusFacade(),
-        db: createScopedSystemDbFacade('business-chat-companion', BUSINESS_CHAT_DB_COLLECTIONS),
-        sync: createLiveSyncFacade(),
-        getActiveModule: () => state.activeModule,
-      });
-    })
-    .catch((error) => {
-      console.warn('[business-os] chat surface lazy init failed', error);
-    });
+  return businessCompanionScheduler.schedule();
+}
+
+function cancelBusinessCompanions() {
+  businessCompanionScheduler.cancel();
 }
 
 function renderLeftContext(mod) {
@@ -10472,8 +10488,13 @@ async function loadLaunchContext() {
   }
   let payload;
   try {
-    payload = await fetchBusinessOsControlJson('/api/business-os/launch-context');
+    payload = await withStartupDeadline(
+      (signal) => fetchBusinessOsControlJson('/api/business-os/launch-context', { signal }),
+      LAUNCH_CONTEXT_DEADLINE_MS,
+      `Business OS launch context timed out after ${LAUNCH_CONTEXT_DEADLINE_MS / 1000} seconds.`,
+    );
   } catch (error) {
+    if (isStartupDeadlineError(error)) throw error;
     throw new Error(`Business OS launch context could not be loaded: ${error?.message || error}`);
   }
   const hasOwn = (key) => Object.prototype.hasOwnProperty.call(payload || {}, key);
@@ -10506,6 +10527,7 @@ async function fetchBusinessOsControlJson(url, options = {}) {
     body: options.body,
     credentials: 'same-origin',
     cache: 'no-store',
+    signal: options.signal,
   });
   const text = await response.text();
   let payload = null;
@@ -13048,7 +13070,54 @@ async function workjetProjectControl(request = {}) {
   }
   const action = boundedWorkjetProjectText(request.action, 'action', 64);
   const ownerUserId = boundedWorkjetProjectText(actorContext(state.session).id, 'owner_user_id', 256);
+  const requestSession = state.session;
+  const requestDb = state.db;
   const { projectBridge, workingCopyBridge } = await requireWorkjetProjectDataPlane();
+
+  if (action === 'project.worker.add' || action === 'project.chat.create') {
+    const creatingChat = action === 'project.chat.create';
+    const allowedKeys = new Set(['action', 'commandId', 'projectId', 'workerProfileId', 'createdAt']);
+    if (creatingChat) allowedKeys.add('title');
+    assertWorkjetProjectPayloadKeys(request, allowedKeys);
+    const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
+    const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
+    const workerProfileId = boundedWorkjetProjectText(request.workerProfileId, 'workerProfileId', 256);
+    boundedWorkjetProjectIsoDate(request.createdAt, 'createdAt');
+    const payload = { project_id: projectId, worker_profile_id: workerProfileId };
+    if (creatingChat) payload.title = boundedWorkjetProjectText(request.title, 'title', 256);
+    const assertCurrentSession = () => {
+      if (state.session !== requestSession || state.db !== requestDb
+        || actorContext(state.session).id !== ownerUserId) {
+        throw new Error('Workjet project session changed before the command result was delivered.');
+      }
+    };
+    assertCurrentSession();
+    const receipt = await state.commandBus.dispatch({
+      id: commandId,
+      command_id: commandId,
+      module: 'ctox',
+      command_type: creatingChat ? 'ctox.workjet.project.chat.create' : 'ctox.workjet.project.worker.add',
+      record_id: projectId,
+      payload,
+      client_context: {
+        source: 'workjet-project-control',
+        actor: actorContext(requestSession),
+      },
+    }, { until: 'terminal', timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
+    assertCurrentSession();
+    if (receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
+      || receipt.target_record_id !== projectId
+      || receipt.payload?.project_id !== projectId || receipt.payload?.worker_profile_id !== workerProfileId
+      || (creatingChat && receipt.payload?.title !== payload.title)
+      || receipt.result?.ok !== true || receipt.result?.contract !== 'workjet-project-chats.v1') {
+      throw new Error('Workjet project command returned an uncorrelated or unsuccessful receipt.');
+    }
+    const chatId = creatingChat ? receipt.result.chat_id : receipt.result.first_chat_id;
+    if (typeof chatId !== 'string' || !/^workjet_private_[A-Za-z0-9_-]+$/.test(chatId) || chatId.length > 256) {
+      throw new Error('Workjet project command did not return a private chat id.');
+    }
+    return { action, commandId, projectId, workerProfileId, chatId };
+  }
 
   if (action === 'project.list') {
     assertWorkjetProjectPayloadKeys(request, new Set(['action']));
@@ -14296,6 +14365,10 @@ function getFriendlyErrorMessage(error) {
     title = `${instanceName} konnte nicht geladen werden`;
     description = 'Die CTOX-Instanz hat den Zugriff auf die benötigten Business-OS-Daten abgelehnt. Der verwaltete Workspace wurde deshalb sicher gestoppt.';
     advice = 'Bitte die Berechtigungen dieser ctox.dev-Verbindung prüfen. Eine lokale Ersatzoberfläche wird nicht verwendet.';
+  } else if (isStartupDeadlineError(error)) {
+    title = 'Netzwerk-Zeitüberschreitung beim Start';
+    description = 'Eine benötigte Startanfrage hat nicht rechtzeitig geantwortet.';
+    advice = 'Bitte auf "Erneut versuchen" klicken. Bleibt die Meldung bestehen, prüfen Sie die Netzwerkverbindung und den CTOX-Dienst.';
   } else if (msg.includes('WebCrypto') || msg.includes('subtle') || !globalThis.crypto?.subtle) {
     title = 'Sicherer Kontext erforderlich (WebCrypto fehlt)';
     description = 'Safari blockiert notwendige Verschlüsselungsfunktionen, wenn die Seite über die IP-Adresse "127.0.0.1" geladen wird.';
@@ -14375,6 +14448,8 @@ async function resetLocalRxDbBeforeStartupRetry(error) {
 }
 
 function showStartupError(error) {
+  // A fatal startup failure must also stop companions whose imports or schema work is pending.
+  cancelBusinessCompanions();
   console.error('[business-os] bootstrap error caught:', error);
   const errMsg = error ? (error.message || String(error)) : 'Unbekannter Fehler';
 

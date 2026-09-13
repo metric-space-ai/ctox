@@ -12,7 +12,7 @@
   },
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/ctox-pi-sidecar.mjs --banner:js=\"import { createRequire as __ctoxCreateRequire } from 'module'; const require = __ctoxCreateRequire(import.meta.url); // CTOX pi-coding sidecar; self-contained; upstream Pi v0.80.2\"",
-    "smoke": "node test/turn-smoke.mjs",
+    "smoke": "node test/turn-smoke.mjs && node --test --test-concurrency=1 test/responses-edit.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

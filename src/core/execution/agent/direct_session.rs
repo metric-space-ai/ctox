@@ -56,6 +56,9 @@ pub(crate) use super::session_continuity::SessionPoisoned;
 use super::session_continuity::{
     bind_session_thread, start_bound_turn, RequestIdSeq, SessionControlTimeouts, SessionThreadSpec,
 };
+#[path = "direct_session_reply.rs"]
+mod reply_capture;
+use reply_capture::DirectSessionReplyCapture;
 
 const OPENAI_AUTH_MODE_KEY: &str = "CTOX_OPENAI_AUTH_MODE";
 const OPENAI_AUTH_MODE_CHATGPT_SUBSCRIPTION: &str = "chatgpt_subscription";
@@ -1770,10 +1773,11 @@ impl PersistentSession {
         let turn_id = turn_resp.turn.id;
 
         // Event loop
-        let mut final_message: Option<String> = None;
+        let mut reply_capture = DirectSessionReplyCapture::default();
+        let mut completion_message: Option<String> = None;
         // `AgentMessage` events carry no turn id, so an orphaned message from
         // a prior/interrupted turn still queued on this reused thread could
-        // set `final_message` and become this turn's reply (ctox#21 P1
+        // become this turn's reply (ctox#21 P1
         // review). Only trust `AgentMessage` once we have observed the
         // `TurnStarted` for OUR turn_id; everything before that belongs to an
         // earlier turn and is ignored for reply attribution.
@@ -2076,26 +2080,14 @@ impl PersistentSession {
                                 // has started — they belong to an earlier turn
                                 // draining off the reused thread.
                                 if saw_our_turn_started {
-                                    final_message = Some(am.message.clone());
+                                    reply_capture.observe(&am);
                                 }
                             }
                             EventMsg::TurnComplete(tc) if tc.turn_id == turn_id => {
-                                // The completion event's own last message is
-                                // authoritative when present. When it is
-                                // absent, fall back to a same-turn
-                                // `AgentMessage` (guarded by
-                                // `saw_our_turn_started`); if neither exists,
-                                // clear any stale value so we never return a
-                                // foreign turn's reply.
-                                match tc
-                                    .last_agent_message
-                                    .as_ref()
-                                    .filter(|last| !last.trim().is_empty())
-                                {
-                                    Some(last) => final_message = Some(last.clone()),
-                                    None if !saw_our_turn_started => final_message = None,
-                                    None => {}
-                                }
+                                // Preserve a witnessed explicit final answer
+                                // when the terminal item is only Crew metadata.
+                                // The reducer also rejects known commentary.
+                                completion_message = tc.last_agent_message;
                                 break;
                             }
                             EventMsg::TurnComplete(tc) => {
@@ -2186,6 +2178,9 @@ impl PersistentSession {
                 eprintln!("[ctox direct-session] cost tracking failed: {err}");
             }
         }
+
+        let final_message =
+            reply_capture.complete(completion_message.as_deref(), saw_our_turn_started);
 
         ctx_log.log(
             "turn_end",

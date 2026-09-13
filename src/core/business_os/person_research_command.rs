@@ -1179,13 +1179,11 @@ fn same_person_by_name(left: &Value, right: &Value) -> bool {
     left_first.is_empty() || right_first.is_empty() || left_first == right_first
 }
 
-/// The personal e-mail the research has already found, for the targets that
-/// check one address. Without it experte.de and mailtester.com stop at
-/// `CTOX_SCRAPE_INPUT_JSON.email missing`, and `person_email_validation` falls
-/// to `no_match` although the check itself works. Measured on THESEN
-/// 09.09.2026: eleven of 25 leads carried a contact address, none carried a
-/// validated one, and the release gate demands one — so no lead could ever
-/// reach Sellify.
+/// Return a candidate personal e-mail address already found by research for
+/// targets that validate a single address. Without this input, those targets
+/// report `CTOX_SCRAPE_INPUT_JSON.email missing`, leaving
+/// `person_email_validation` at `no_match`. Supplying the candidate allows
+/// validation to run; downstream release still requires a validated address.
 fn candidate_person_email(result: &Value) -> Option<String> {
     let looks_like_address = |value: &str| {
         let value = value.trim();

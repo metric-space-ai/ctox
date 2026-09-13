@@ -1,9 +1,8 @@
 //! Native e-mail validation for outbound leads.
 //!
 //! The release gate of the outbound app demands a contact whose e-mail address
-//! has been checked. Measured on the THESEN tenant 09./10.09.2026: of 25 leads
-//! eleven carried a contact address and not one carried a checked one, so no
-//! lead could ever be handed to the CRM.
+//! has been checked. A contact address without a validation verdict does not
+//! make a lead ready for handoff to the CRM.
 //!
 //! The check itself works. The registered scrape target `experte-de` answers a
 //! question about ONE address, driven like this:
@@ -82,9 +81,8 @@ fn contact_email(contact: &Value) -> Option<String> {
         .find_map(normalize_email)
 }
 
-/// Only a real verdict counts. On THESEN 10.09.2026 the research worker had
-/// written `no_match` into Ralph Weidling's `person_email_validation` — which
-/// only says the worker could not run the check — and treating any non-empty
+/// Only a real verdict counts. A worker writing `no_match` into
+/// `person_email_validation` could not run the check. Treating any non-empty
 /// value as a verdict would have skipped exactly that address forever.
 pub(super) fn is_email_verdict(value: &str) -> bool {
     let value = value.trim().to_lowercase();
@@ -283,7 +281,7 @@ fn run_dir_from_envelope(envelope: &Value) -> Option<PathBuf> {
 /// The run happens in-process against the daemon's own root. The first
 /// version shelled out to `ctox scrape execute --runtime-root <root>`; the CLI
 /// relays that call to the daemon, the relay refuses `--runtime-root`, and
-/// every check on THESEN 10.09.2026 died unseen before it started.
+/// every check failed before it started.
 fn run_validation(root: &Path, email: &str) -> anyhow::Result<Option<EmailVerdict>> {
     // The target's run lock names its holder by pid, and every in-process run
     // carries the daemon's pid: two checks at once would refuse each other.

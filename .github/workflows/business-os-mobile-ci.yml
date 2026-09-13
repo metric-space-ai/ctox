@@ -175,15 +175,7 @@ jobs:
             adb shell am start -W -n dev.ctox.businessosmobile/.MainActivity
             sleep 2
             adb exec-out screencap -p > "$RUNNER_TEMP/android-tablet-4x3.png"
-            python3 - <<'PY'
-            import os, struct
-            path = os.path.join(os.environ["RUNNER_TEMP"], "android-tablet-4x3.png")
-            with open(path, "rb") as image:
-                header = image.read(24)
-            width, height = struct.unpack(">II", header[16:24])
-            assert width > height, f"tablet did not rotate to landscape: {width}x{height}"
-            assert abs((width / height) - (4 / 3)) < 0.08, f"tablet is not 4:3: {width}x{height}"
-            PY
+            python3 src/scripts/assert_android_tablet_screenshot.py "$RUNNER_TEMP/android-tablet-4x3.png"
       - name: Package checksums and manifests
         run: |
           cp "$MOBILE_ROOT/android/app/build/outputs/apk/debug/app-debug.apk" "$RUNNER_TEMP/CTOXBusinessOSMobile-android-debug.apk"
