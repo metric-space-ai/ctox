@@ -418,6 +418,7 @@ fn virtio_port_fixture(target_name: &str, sysfs_name: &str) -> Result<VirtioPort
         sysfs_class.join(target_name).join("name"),
         format!("{sysfs_name}\n"),
     )?;
+    std::fs::write(sysfs_class.join(target_name).join("dev"), "10:1\n")?;
     Ok(VirtioPortFixture {
         _root: root,
         port_path,
@@ -442,8 +443,10 @@ fn udev_named_symlink_resolves_to_vport_identity() -> Result<()> {
             .ok_or_else(|| anyhow::anyhow!("vport name"))?,
     )?;
     ensure!(
-        open_named_virtio_port(&fixture.port_path, &fixture.sysfs_class)
-            == Err(GuestChannelError::Unavailable),
+        matches!(
+            open_named_virtio_port(&fixture.port_path, &fixture.sysfs_class),
+            Err(GuestChannelError::Unavailable)
+        ),
         "regular-file fixture was treated as a virtio character device"
     );
     ensure!(
@@ -496,6 +499,41 @@ fn udev_named_symlink_rejects_invalid_target() -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn opened_char_device_rdev_must_match_sysfs_dev() -> Result<()> {
+    let expected = parse_sysfs_device_id("10:1\n")?;
+    ensure!(expected == (10, 1), "sysfs dev parse");
+    pin_opened_device_id(libc::makedev(10 as _, 1 as _) as u64, expected)?;
+    ensure!(
+        pin_opened_device_id(libc::makedev(1 as _, 3 as _) as u64, expected)
+            == Err(GuestChannelError::Unavailable),
+        "rdev mismatch was accepted"
+    );
+    ensure!(parse_sysfs_device_id("10:1:2").is_err(), "extra field");
+    ensure!(parse_sysfs_device_id("").is_err(), "empty dev");
+    ensure!(parse_sysfs_device_id("a:1").is_err(), "non-numeric dev");
+
+    let fixture = virtio_port_fixture("vport0p1", GUEST_DESKTOP_PORT)?;
+    let from_sysfs = read_sysfs_device_id(&fixture.sysfs_class, std::ffi::OsStr::new("vport0p1"))?;
+    ensure!(from_sysfs == (10, 1), "fixture sysfs dev");
+    pin_opened_device_id(libc::makedev(10 as _, 1 as _) as u64, from_sysfs)?;
+    ensure!(
+        pin_opened_device_id(libc::makedev(1 as _, 3 as _) as u64, from_sysfs)
+            == Err(GuestChannelError::Unavailable),
+        "fixture rdev mismatch was accepted"
+    );
+
+    std::fs::write(fixture.sysfs_class.join("vport0p1").join("dev"), "1:3\n")?;
+    let mismatched = read_sysfs_device_id(&fixture.sysfs_class, std::ffi::OsStr::new("vport0p1"))?;
+    ensure!(
+        pin_opened_device_id(libc::makedev(10 as _, 1 as _) as u64, mismatched)
+            == Err(GuestChannelError::Unavailable),
+        "sysfs major:minor substitution was accepted"
+    );
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn missing_local_virtio_port_is_unavailable_and_creates_nothing() -> Result<()> {
@@ -523,6 +561,56 @@ fn nonblocking_pair() -> Result<(
 }
 
 #[cfg(unix)]
+struct ProgressIo<T> {
+    inner: T,
+    bytes_read: Arc<AtomicUsize>,
+}
+
+#[cfg(unix)]
+impl<T: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for ProgressIo<T> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        match std::pin::Pin::new(&mut self.inner).poll_read(cx, buf) {
+            Poll::Ready(Ok(())) => {
+                self.bytes_read
+                    .fetch_add(buf.filled().len() - before, Ordering::SeqCst);
+                Poll::Ready(Ok(()))
+            }
+            other => other,
+        }
+    }
+}
+
+#[cfg(unix)]
+impl<T: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for ProgressIo<T> {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn truncated_request_on_nonblocking_pair_hits_deadline_without_effect() -> Result<()> {
     let (mut host, guest) = nonblocking_pair()?;
@@ -546,8 +634,11 @@ async fn truncated_request_on_nonblocking_pair_hits_deadline_without_effect() ->
 async fn started_frame_wait_on_nonblocking_pair_is_cancellable() -> Result<()> {
     let (mut host, guest) = nonblocking_pair()?;
     let driver = RecordingDriver::new();
-    // Full length prefix for a body that never arrives: idle first-byte wait
-    // is over, and the remainder is the started-frame deadline.
+    let bytes_read = Arc::new(AtomicUsize::new(0));
+    let guest = ProgressIo {
+        inner: guest,
+        bytes_read: bytes_read.clone(),
+    };
     host.write_all(&32u32.to_be_bytes()).await?;
     host.flush().await?;
     let mut serving = Box::pin(serve_guest_desktop_timed(
@@ -555,22 +646,33 @@ async fn started_frame_wait_on_nonblocking_pair_is_cancellable() -> Result<()> {
         &driver,
         Duration::from_secs(5),
     ));
-    let deadline = std::time::Instant::now() + Duration::from_millis(200);
-    let mut saw_pending = false;
+    let deadline = std::time::Instant::now() + Duration::from_millis(500);
     loop {
         match futures_util::poll!(serving.as_mut()) {
             Poll::Ready(result) => {
                 anyhow::bail!("started frame completed before cancellation: {result:?}")
             }
-            Poll::Pending => saw_pending = true,
+            Poll::Pending => {}
+        }
+        if bytes_read.load(Ordering::SeqCst) >= 4 {
+            break;
         }
         if std::time::Instant::now() >= deadline {
-            break;
+            anyhow::bail!("header was never consumed before cancellation");
         }
         tokio::task::yield_now().await;
     }
-    ensure!(saw_pending, "started frame wait was never pending");
+    ensure!(
+        bytes_read.load(Ordering::SeqCst) >= 4,
+        "started-frame wait lacked header consumption"
+    );
     drop(serving);
+    let mut tail = [0_u8; 1];
+    match tokio::time::timeout(Duration::from_millis(200), host.read(&mut tail)).await {
+        Ok(Ok(0)) | Ok(Err(_)) => {}
+        Ok(Ok(_)) => anyhow::bail!("peer still readable after drop"),
+        Err(_) => anyhow::bail!("owned fd did not close after drop"),
+    }
     ensure!(driver.inputs.load(Ordering::SeqCst) == 0);
     Ok(())
 }

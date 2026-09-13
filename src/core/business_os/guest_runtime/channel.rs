@@ -14,7 +14,8 @@
 //! `org.ctox.guest.desktop`, appearing as `/dev/virtio-ports/org.ctox.guest.desktop`.
 //! systemd udev creates that path as `SYMLINK+="virtio-ports/$attr{name}"` to
 //! `/dev/vport<device>p<port>`. The guest hook follows only that named alias after
-//! pinning the vport identity; it does not open an arbitrary character device.
+//! pinning the sysfs port name and the opened character-device `rdev` against the
+//! sysfs `dev` major:minor. It does not open an arbitrary character device.
 //! https://www.qemu.org/docs/master/interop/qemu-ga.html
 //!
 //! Framing reuses the local IPC convention (u32be length prefix) rather than
@@ -490,10 +491,61 @@ fn pin_virtio_sysfs_name(
 }
 
 #[cfg(unix)]
+fn parse_sysfs_device_id(contents: &str) -> Result<(u32, u32), GuestChannelError> {
+    let line = contents.trim();
+    let (major, minor) = line.split_once(':').ok_or(GuestChannelError::Unavailable)?;
+    if major.is_empty()
+        || minor.is_empty()
+        || line.bytes().filter(|byte| *byte == b':').count() != 1
+        || !major.bytes().all(|byte| byte.is_ascii_digit())
+        || !minor.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(GuestChannelError::Unavailable);
+    }
+    Ok((
+        major.parse().map_err(|_| GuestChannelError::Unavailable)?,
+        minor.parse().map_err(|_| GuestChannelError::Unavailable)?,
+    ))
+}
+
+#[cfg(unix)]
+fn device_id_from_rdev(rdev: u64) -> (u32, u32) {
+    (
+        libc::major(rdev as libc::dev_t) as u32,
+        libc::minor(rdev as libc::dev_t) as u32,
+    )
+}
+
+#[cfg(unix)]
+fn pin_opened_device_id(rdev: u64, expected: (u32, u32)) -> Result<(), GuestChannelError> {
+    if device_id_from_rdev(rdev) != expected {
+        return Err(GuestChannelError::Unavailable);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn read_sysfs_device_id(
+    sysfs_class: &Path,
+    vport: &std::ffi::OsStr,
+) -> Result<(u32, u32), GuestChannelError> {
+    let dev_path = sysfs_class.join(vport).join("dev");
+    let metadata =
+        std::fs::symlink_metadata(&dev_path).map_err(|_| GuestChannelError::Unavailable)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(GuestChannelError::Unavailable);
+    }
+    let contents =
+        std::fs::read_to_string(&dev_path).map_err(|_| GuestChannelError::Unavailable)?;
+    parse_sysfs_device_id(&contents)
+}
+
+#[cfg(unix)]
 fn open_nonblocking_char_device(
     path: &Path,
+    expected: (u32, u32),
 ) -> Result<NonblockingIo<std::fs::File>, GuestChannelError> {
-    use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+    use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 
     let metadata = std::fs::symlink_metadata(path).map_err(|_| GuestChannelError::Unavailable)?;
     if metadata.file_type().is_symlink() || !metadata.file_type().is_char_device() {
@@ -511,6 +563,7 @@ fn open_nonblocking_char_device(
     if !opened.file_type().is_char_device() {
         return Err(GuestChannelError::Unavailable);
     }
+    pin_opened_device_id(opened.rdev(), expected)?;
     NonblockingIo::new(file).map_err(|_| GuestChannelError::Unavailable)
 }
 
@@ -522,7 +575,8 @@ fn open_named_virtio_port(
     let target = named_virtio_symlink_target(port_path)?;
     let basename = target.file_name().ok_or(GuestChannelError::Unavailable)?;
     pin_virtio_sysfs_name(sysfs_class, basename)?;
-    open_nonblocking_char_device(&target)
+    let expected = read_sysfs_device_id(sysfs_class, basename)?;
+    open_nonblocking_char_device(&target, expected)
 }
 
 #[cfg(unix)]
