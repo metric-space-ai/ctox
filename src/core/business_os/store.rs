@@ -13070,6 +13070,13 @@ struct CtoxSecretDeleteMutation {
     name: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CtoxSecretGenerateMutation {
+    name: String,
+    length: Option<usize>,
+}
+
 /// Validate a credential key is env-var shaped (UPPER_SNAKE_CASE). Keeps the
 /// credentials scope bounded and prevents odd names leaking into the store.
 fn is_valid_credential_key(name: &str) -> bool {
@@ -13264,6 +13271,32 @@ fn put_credential_command(root: &Path, mutation: &CtoxSecretPutMutation) -> anyh
     );
     crate::secrets::set_credential(root, name, &mutation.value)?;
     Ok(serde_json::json!({ "ok": true, "name": name }))
+}
+
+fn generate_credential_command(root: &Path, payload: &Value) -> anyhow::Result<Value> {
+    let mutation: CtoxSecretGenerateMutation = serde_json::from_value(payload.clone())
+        .map_err(|_| anyhow::anyhow!("expected credential name and optional integer length only"))?;
+    let name = mutation.name.trim();
+    anyhow::ensure!(is_valid_credential_key(name), "invalid credential key");
+    let generation = crate::secrets::generate_secret_password(
+        root,
+        crate::secrets::credential_scope(),
+        name,
+        mutation
+            .length
+            .unwrap_or(crate::secrets::DEFAULT_PASSWORD_LENGTH),
+    )?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "name": name,
+        "created": generation.created,
+        "secret_ref": {
+            "scope": generation.secret.scope,
+            "name": generation.secret.secret_name,
+            "secret_id": generation.secret.secret_id,
+        },
+        "secret_value_revealed": false,
+    }))
 }
 
 /// Remove a credential value from the encrypted secret store.
@@ -15223,6 +15256,38 @@ pub(super) fn handle_secret_command(
     command: &BusinessCommand,
 ) -> anyhow::Result<Value> {
     match command.command_type.as_str() {
+        "ctox.secret.generate" => {
+            // Generation accepts no password input and returns only a handle.
+            // Reuse the server's secret-management authority, never a UI claim.
+            return enforce_command_policy(
+                root,
+                command,
+                |_| {
+                    Ok(CommandPolicyRequirement::workspace(
+                        BusinessOsPermission::SecretsManage,
+                    ))
+                },
+                |_session| match generate_credential_command(root, &command.payload) {
+                    Ok(outcome) => write_rxdb_control_command_outcome(
+                        root,
+                        command,
+                        "completed",
+                        None,
+                        Some("completed"),
+                        outcome,
+                    ),
+                    Err(error) => write_rxdb_control_command_outcome(
+                        root,
+                        command,
+                        "failed",
+                        None,
+                        Some("failed"),
+                        serde_json::json!({"ok": false, "error": error.to_string()}),
+                    ),
+                },
+            )?
+            .into_outcome();
+        }
         "ctox.secret.list" => {
             return enforce_command_policy(
                 root,
@@ -40335,6 +40400,84 @@ pub(super) mod tests {
                 .and_then(Value::as_str),
             Some("denied_collection_and_module_policy")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn ctox_secret_generate_is_authorized_reference_only_and_replay_safe() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        fs::create_dir_all(root.join("runtime"))?;
+        seed_business_user(root, "global_admin", "admin")?;
+        seed_business_user(root, "qa", "user")?;
+        let command = |id: &str, actor: &str, name: &str| {
+            serde_json::json!({
+                "id": id, "module": "credentials", "type": "ctox.secret.generate",
+                "payload": {"name": name, "length": 24},
+                "client_context": {"actor": {"id": actor, "display_name": actor}},
+            })
+        };
+        let denied = accept_rxdb_business_command(
+            root,
+            command("generate_denied", "qa", "DENIED_PASSWORD"),
+        )?;
+        assert_eq!(denied.get("status").and_then(Value::as_str), Some("failed"));
+        assert!(!crate::secrets::secret_exists(
+            root,
+            crate::secrets::credential_scope(),
+            "DENIED_PASSWORD"
+        )?);
+        let first = accept_rxdb_business_command(
+            root,
+            command("generate_first", "global_admin", "TEST_PASSWORD"),
+        )?;
+        assert_eq!(first.get("status").and_then(Value::as_str), Some("completed"));
+        assert_eq!(
+            first.pointer("/result/created").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            first.pointer("/result/secret_ref/name").and_then(Value::as_str),
+            Some("TEST_PASSWORD")
+        );
+        let password = zeroize::Zeroizing::new(crate::secrets::read_secret_value(
+            root,
+            crate::secrets::credential_scope(),
+            "TEST_PASSWORD",
+        )?);
+        assert!(!serde_json::to_string(&first)?.contains(password.as_str()));
+        let replay = accept_rxdb_business_command(
+            root,
+            command("generate_retry", "global_admin", "TEST_PASSWORD"),
+        )?;
+        assert_eq!(
+            replay.pointer("/result/created").and_then(Value::as_bool),
+            Some(false)
+        );
+        let after = zeroize::Zeroizing::new(crate::secrets::read_secret_value(
+            root,
+            crate::secrets::credential_scope(),
+            "TEST_PASSWORD",
+        )?);
+        assert!(after.as_str() == password.as_str());
+        let conn = open_store(root)?;
+        for id in ["generate_first", "generate_retry"] {
+            let stored = outbound_load_required(&conn, "business_commands", id, "command")?;
+            assert!(!serde_json::to_string(&stored)?.contains(password.as_str()));
+        }
+        for payload in [
+            serde_json::json!({"name": "INVALID_PASSWORD", "length": 15}),
+            serde_json::json!({"name": "INVALID_PASSWORD", "value": "not-accepted"}),
+            serde_json::json!({"name": "INVALID_PASSWORD", "scope": "other"}),
+        ] {
+            assert!(generate_credential_command(root, &payload).is_err());
+        }
+        assert!(!crate::secrets::secret_exists(
+            root,
+            crate::secrets::credential_scope(),
+            "INVALID_PASSWORD"
+        )?);
         Ok(())
     }
 
