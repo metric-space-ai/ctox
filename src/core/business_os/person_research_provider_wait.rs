@@ -180,6 +180,7 @@ pub(super) fn prepare_outcome(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     const RECOVERY_ID: &str = "provider-recovery-process-fixture";
 
