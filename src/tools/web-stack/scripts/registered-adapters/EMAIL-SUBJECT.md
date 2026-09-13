@@ -1,6 +1,6 @@
 # Email validation result identity
 
-These standalone scripts preserve the live THESEN provider workflows while
+These standalone scripts preserve the registered provider workflows while
 adding an explicit, provider-evidenced `subject_email` to each accepted
 `person_email_validation` record. The research consumer must bind that subject
 to the same person's email; request metadata alone is not evidence.
