@@ -730,21 +730,14 @@ impl Drop for ModelClientSession {
 
 fn apply_required_initial_tool(
     mut tools: Vec<Value>,
-    input: &[ResponseItem],
+    _input: &[ResponseItem],
     required_initial_tool: Option<&str>,
 ) -> Result<(Vec<Value>, String)> {
     let Some(required_initial_tool) = required_initial_tool else {
         return Ok((tools, "auto".to_string()));
     };
-    let already_called = input.iter().any(|item| match item {
-        ResponseItem::FunctionCall { name, .. } | ResponseItem::CustomToolCall { name, .. } => {
-            name == required_initial_tool
-        }
-        _ => false,
-    });
-    if already_called {
-        return Ok((tools, "auto".to_string()));
-    }
+    // The turn loop clears this requirement after a call in the current turn.
+    // Retained history (including earlier turns) cannot satisfy a new turn.
 
     tools.retain(|tool| tool.get("name").and_then(Value::as_str) == Some(required_initial_tool));
     if tools.is_empty() {
@@ -754,8 +747,9 @@ fn apply_required_initial_tool(
     }
     // MiniMax-M3 exposes only `auto` and `none` through the managed Responses
     // proxy. Restricting the visible surface to this one tool still guarantees
-    // that any first external action is the required action; a text-only turn
-    // fails the service-owned completion gate.
+    // that any first external action is the required action. The turn loop
+    // corrects text-only responses within a finite budget; the service-owned
+    // durable completion gate remains the final authority.
     Ok((tools, "auto".to_string()))
 }
 

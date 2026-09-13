@@ -40,6 +40,22 @@ Attribution rule:
 
 - When a file under this subtree differs from the imported snapshot, describe it as a CTOX fork delta, not as an ambiguous upstream version.
 
+## 2026-09 Required-Tool Completion Recovery
+
+The turn loop tracks successful required-tool calls in the current turn, rather
+than accepting matching calls retained from earlier conversation history. The
+managed Responses request keeps `tool_choice: auto` for provider compatibility.
+If a response ends without the required call, the same bounded turn records a
+developer correction and samples again, at most twice. Repeated refusal emits a
+turn error; cancellation and the caller's existing turn deadline still apply.
+Only a successful real tool result releases the full tool surface. No plan or
+activity event is synthesized, and CTOX's durable missing-plan completion guard
+remains authoritative.
+
+Regression coverage in `core/src/codex_required_plan_tests.rs` drives the actual
+turn loop with deterministic Responses streams: text-only recovery, repeated
+refusal, retained history, unrelated calls, failed plan calls, and cancellation.
+
 ## 2026-09 Bound Web-Stack Auth Assist
 
 The typed `ctox_web_auth_assist_request` fork tool no longer treats model-provided
