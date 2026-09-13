@@ -2055,10 +2055,10 @@ fn execute(
     match merge_sellify_baseline_evidence(root, &mut result, company) {
         Ok(added) if added > 0 => {}
         Ok(_) => {}
-        Err(error) => {
+        Err(_error) => {
             eprintln!(
                 "[person-research] sellify baseline evidence merge failed for `{company}`: \
-                 {error:#}"
+                 see sellify_lookup_runs outcome"
             );
         }
     }
@@ -2162,10 +2162,6 @@ fn execute(
         }
         result["browser_assist_tasks"] = Value::Array(remaining_tasks);
         result["authenticated_source_capture_runs"] = Value::Array(capture_runs);
-        crate::service::business_os::repersist_augmented_person_research(
-            &research_request,
-            &mut result,
-        );
     }
     let populated = result
         .get("fields")
@@ -2250,16 +2246,60 @@ fn merge_sellify_baseline_evidence(
         lookup_payload["fuzzy_selectors"] =
             serde_json::json!([{ "field": "name", "value": probe }]);
     }
-    let lookup = super::store_outbound_commands::outbound_sellify_lookup(root, &lookup_payload)?;
-    let Some(record) = lookup
-        .get("records")
-        .and_then(Value::as_array)
-        .and_then(|records| records.first())
-        .cloned()
-    else {
-        return Ok(0);
+    let started_at_ms = now_ms();
+    let lookup = super::store_outbound_commands::outbound_sellify_lookup(root, &lookup_payload)
+        .and_then(|lookup| {
+            anyhow::ensure!(
+                lookup.get("ok").and_then(Value::as_bool) == Some(true),
+                "Sellify lookup did not report success"
+            );
+            let records = lookup
+                .get("records")
+                .and_then(Value::as_array)
+                .context("Sellify lookup is missing its records array")?;
+            Ok(records.clone())
+        });
+    let mut receipt = serde_json::json!({
+        "source_id": "sellify",
+        "via": "sellify_crm",
+        "collection": "sellify_companies",
+        "company": company,
+        "country": payload.get("country"),
+        "query": lookup_payload,
+        "started_at_ms": started_at_ms,
+        "completed_at_ms": now_ms(),
+        "classification": "failed",
+        "returned_record_count": Value::Null,
+        "selected_record_id": Value::Null,
+        "evidence_count": 0,
+    });
+    let outcome = match lookup {
+        Ok(records) => {
+            receipt["returned_record_count"] = serde_json::json!(records.len());
+            receipt["classification"] = serde_json::json!(if records.is_empty() {
+                "completed_empty"
+            } else {
+                "succeeded"
+            });
+            // Preserve existing first-candidate selection. A successful lookup
+            // with no requested field contribution is not an empty lookup.
+            let added = records.first().map_or(0, |record| {
+                receipt["selected_record_id"] = record.get("id").cloned().unwrap_or(Value::Null);
+                inject_sellify_candidates(payload, record)
+            });
+            receipt["evidence_count"] = serde_json::json!(added);
+            Ok(added)
+        }
+        Err(error) => {
+            // Do not copy raw database/provider errors into replicated evidence.
+            receipt["error_code"] = serde_json::json!("sellify_lookup_failed");
+            Err(error)
+        }
     };
-    Ok(inject_sellify_candidates(payload, &record))
+    // One baseline lookup per execution. This receipt belongs to the enclosing
+    // command/workspace, not a fabricated scrape run or independent smoke test.
+    payload["sellify_lookup_runs"] = serde_json::json!([receipt]);
+    outcome
 }
 
 /// Legal-form-free core of a company name, used as a containment probe for
@@ -2387,6 +2427,125 @@ fn inject_sellify_candidates(payload: &mut Value, record: &Value) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sellify_lookup_receipts_distinguish_actual_success_empty_and_failure() -> anyhow::Result<()>
+    {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+            root,
+            "sellify_companies",
+        )?;
+        let mut result = serde_json::json!({
+            "country": "DE", "fields": {"firma_name": {"value": null, "candidates": []}},
+            "plan": []
+        });
+        assert_eq!(
+            merge_sellify_baseline_evidence(root, &mut result, "Example GmbH")?,
+            0
+        );
+        let empty = &result["sellify_lookup_runs"][0];
+        assert_eq!(empty["classification"], "completed_empty");
+        assert_eq!(empty["returned_record_count"], 0);
+        assert_eq!(empty["evidence_count"], 0);
+        assert_eq!(empty["company"], "Example GmbH");
+        assert_eq!(empty["country"], "DE");
+        assert_eq!(empty["query"]["selectors"][0]["value"], "Example GmbH");
+        assert!(empty["completed_at_ms"].as_i64().is_some());
+        assert_eq!(result["plan"], serde_json::json!([]));
+
+        store::upsert_rxdb_collection_record(
+            root,
+            "sellify_companies",
+            "crm-42",
+            1,
+            serde_json::json!({"id": "crm-42", "name": "Example GmbH", "contact_id": "42"}),
+        )?;
+        assert_eq!(
+            merge_sellify_baseline_evidence(root, &mut result, "Example GmbH")?,
+            1
+        );
+        let success = &result["sellify_lookup_runs"][0];
+        assert_eq!(success["classification"], "succeeded");
+        assert_eq!(success["returned_record_count"], 1);
+        assert_eq!(success["selected_record_id"], "crm-42");
+        assert_eq!(success["evidence_count"], 1);
+        assert_eq!(result["fields"]["firma_name"]["source_id"], "sellify");
+
+        // A matching record with no newly admitted field remains a successful
+        // lookup, not completed_empty. Existing candidate dedupe is unchanged.
+        assert_eq!(
+            merge_sellify_baseline_evidence(root, &mut result, "Example GmbH")?,
+            0
+        );
+        assert_eq!(
+            result["sellify_lookup_runs"][0]["classification"],
+            "succeeded"
+        );
+        assert_eq!(result["sellify_lookup_runs"][0]["returned_record_count"], 1);
+        assert_eq!(result["sellify_lookup_runs"][0]["evidence_count"], 0);
+
+        // Actual native SQLite open failure, not a mocked top-level ok flag.
+        let broken = tempfile::tempdir()?;
+        std::fs::create_dir_all(store::rxdb_store_path(broken.path()))?;
+        let mut failure = serde_json::json!({"country": "AT", "fields": {}, "plan": []});
+        assert!(
+            merge_sellify_baseline_evidence(broken.path(), &mut failure, "Example AG").is_err()
+        );
+        let receipt = &failure["sellify_lookup_runs"][0];
+        assert_eq!(receipt["classification"], "failed");
+        assert!(receipt["returned_record_count"].is_null());
+        assert_eq!(receipt["evidence_count"], 0);
+        assert_eq!(receipt["error_code"], "sellify_lookup_failed");
+        assert!(receipt.get("error").is_none());
+        assert_eq!(failure["plan"], serde_json::json!([]));
+        Ok(())
+    }
+
+    #[test]
+    fn research_without_browser_capture_persists_actual_sellify_outcomes() -> anyhow::Result<()> {
+        for broken in [false, true] {
+            let temp = tempfile::tempdir()?;
+            let root = temp.path();
+            if broken {
+                std::fs::create_dir_all(store::rxdb_store_path(root))?;
+            } else {
+                super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+                    root,
+                    "sellify_companies",
+                )?;
+            }
+            // HaveData deliberately avoids external research in this native
+            // regression. The ordinary execute path still does its real CRM
+            // lookup, summary and final persistence with capture disabled.
+            let result = execute(
+                root,
+                "research-evidence-no-browser",
+                &serde_json::json!({
+                    "company": "Example GmbH", "country": "DE", "mode": "have_data",
+                    "auto_browser_capture": false,
+                }),
+                &Value::Null,
+            )?;
+            assert!(result.get("workspace_error").is_none());
+            assert_eq!(
+                result["sellify_lookup_runs"][0]["classification"],
+                if broken { "failed" } else { "completed_empty" }
+            );
+            assert!(result["summary"].is_string());
+            assert!(result.get("authenticated_source_capture_runs").is_none());
+            let workspace = Path::new(result["workspace"]["path"].as_str().unwrap());
+            let saved: Value =
+                serde_json::from_slice(&std::fs::read(workspace.join("envelope.json"))?)?;
+            assert_eq!(saved, result);
+            let manifest: Value =
+                serde_json::from_slice(&std::fs::read(workspace.join("manifest.json"))?)?;
+            assert_eq!(manifest["files"]["scrape_runs"], "scrape_runs.jsonl");
+            assert!(workspace.join("scrape_runs.jsonl").is_file());
+        }
+        Ok(())
+    }
 
     #[test]
     fn sellify_candidates_fill_missing_fields_and_stay_visible_on_filled_ones() {

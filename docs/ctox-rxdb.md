@@ -45,6 +45,26 @@ They cover the production field shape and request/record mismatch rejection;
 a passing proposal does not establish research execution, provider coverage,
 writeback, or browser acceptance. Native execution and a new live pipeline
 check remain required before claiming this repair deployed and verified.
+### Outbound research source receipts
+
+The native person-research command retains a `sellify_lookup_runs` receipt in
+its final result and workspace envelope, including actual lookup success,
+`completed_empty`, or failure. Returned CRM record count and contributed field
+count are separate: an existing CRM match can contribute no requested fields.
+A failed lookup has an unknown (`null`) record count and a bounded error code,
+not a false empty result or raw database error. The enclosing command/workspace
+binds the receipt to the research; it is not a synthetic scrape run.
+
+Final persistence runs after all native source augmentation and summary, even
+with `auto_browser_capture=false`. Successful persistence leaves `envelope.json`
+equal to the returned payload, including workspace metadata and recovered-error
+removal. The native wrapper exposes the existing `scrape_runs.jsonl` in the
+manifest. Final envelope and manifest replacements are individually atomic;
+the workspace as a whole is not a transactional snapshot. Persistence errors
+remain explicit in `workspace_error` and must not count as durable acceptance.
+These changes do not alter country/field/source selection, access grants,
+record binding or the WebRTC data boundary. A completed command remains distinct
+from all-provider success; inspect actual source outcomes and admissible evidence.
 
 Two implementations, one contract:
 
