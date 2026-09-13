@@ -247,7 +247,7 @@ async function assertDelayedHarnessStatus(page) {
   const harness = page.locator('[data-ctox-harness]');
   const assertHarnessStatus = async paused => {
     const accessibleStatus = await harness.getAttribute('aria-label');
-    assert.match(accessibleStatus, paused ? /^Die Crew ist pausiert:/ : /^Die Crew bearbeitet die Aufgabenliste$/);
+    assert.match(accessibleStatus, paused ? /^Die Crew ist pausiert$/ : /^Die Crew bearbeitet die Aufgabenliste$/);
     assert.equal(await harness.getAttribute('title'), accessibleStatus);
   };
   for (const paused of [true, false]) {
