@@ -2870,7 +2870,7 @@ dependencies = [
 [[package]]
 name = "ctox-pdf-parse"
 version = "0.1.0"
-source = "git+https://github.com/metric-space-ai/workjet?rev=b80535e2d49f578e183abf891ff45db31f1dc483#b80535e2d49f578e183abf891ff45db31f1dc483"
+source = "git+https://github.com/metric-space-ai/workjet?rev=39fce11405c0f73e9b047fda30a5fe8edf57b98a#39fce11405c0f73e9b047fda30a5fe8edf57b98a"
 dependencies = [
  "anyhow",
  "image",
@@ -3215,11 +3215,11 @@ dependencies = [
 [[package]]
 name = "ctox-web-stack"
 version = "0.1.0"
-source = "git+https://github.com/metric-space-ai/workjet?rev=b80535e2d49f578e183abf891ff45db31f1dc483#b80535e2d49f578e183abf891ff45db31f1dc483"
+source = "git+https://github.com/metric-space-ai/workjet?rev=39fce11405c0f73e9b047fda30a5fe8edf57b98a#39fce11405c0f73e9b047fda30a5fe8edf57b98a"
 dependencies = [
  "anyhow",
  "chrono",
- "ctox-pdf-parse 0.1.0 (git+https://github.com/metric-space-ai/workjet?rev=b80535e2d49f578e183abf891ff45db31f1dc483)",
+ "ctox-pdf-parse 0.1.0 (git+https://github.com/metric-space-ai/workjet?rev=39fce11405c0f73e9b047fda30a5fe8edf57b98a)",
  "libc",
  "rand 0.8.8",
  "regex",

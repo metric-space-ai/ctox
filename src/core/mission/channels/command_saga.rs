@@ -1037,17 +1037,33 @@ pub(crate) fn progress_business_control_command(
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
     let tx = conn.transaction()?;
-    let (phase, version) = tx.query_row(
-        "SELECT execution_phase, projection_version
+    let (phase, version, previous_result) = tx.query_row(
+        "SELECT execution_phase, projection_version, result_json
          FROM business_command_aggregates WHERE command_id = ?1",
         params![command_id],
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        },
     )?;
-    if phase == "terminal" || phase == execution_phase {
+    // Repeated identical progress is idempotent, but a new provider checkpoint
+    // must survive restart even though the execution remains `running`.
+    let unchanged = previous_result
+        .as_deref()
+        .map(serde_json::from_str::<Value>)
+        .transpose()?
+        .as_ref()
+        == Some(result);
+    if phase == "terminal" || (phase == execution_phase && unchanged) {
         tx.commit()?;
         return Ok(());
     }
-    crate::command_lifecycle::validate_execution_phase_transition(&phase, execution_phase)?;
+    if phase != execution_phase {
+        crate::command_lifecycle::validate_execution_phase_transition(&phase, execution_phase)?;
+    }
     let next_version = version.saturating_add(1);
     let now_ms = epoch_millis();
     tx.execute(

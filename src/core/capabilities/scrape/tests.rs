@@ -1,3 +1,266 @@
+mod provider_continuation_execution {
+    use super::*;
+
+    const SCRIPT: &str = r#"
+const {createHash}=require('node:crypto');
+const path=require('node:path');
+const raw=process.env.CTOX_SCRAPE_INPUT_JSON;
+const input=JSON.parse(raw);
+if(input.mode==='prior') {
+  console.log(JSON.stringify({records:[{id:'prior',company_name:'Previous Company'}]}));
+} else {
+  const receipt={schema:'ctox.scrape.provider_continuation.v1',
+    run_id:path.basename(process.env.CTOX_SCRAPE_RUN_DIR),
+    target_key:process.env.CTOX_SCRAPE_TARGET_KEY,
+    input_sha256:createHash('sha256').update(raw).digest('hex'),
+    operation_id:input.research_operation_id,source_id:input.source_id,
+    provider:'brightdata',company:input.company,country:input.country,
+    dataset_id:'gd_l1viktl72bvl7bjuj0',snapshot_id:'sd_fixture',
+    query_hash:'b'.repeat(64),phase:'pending',submission_attempt:1,retry_after_seconds:15};
+  if(input.mode==='foreign') receipt.operation_id='research-v1-'+'c'.repeat(64);
+  console.log(JSON.stringify({records:[],failure_mode:'awaiting_provider',continuation:receipt}));
+}
+"#;
+
+    fn fixture(root: &Path) -> ScrapeTargetView {
+        let target = upsert_target(
+            root,
+            DEFAULT_RUNTIME_ROOT,
+            json!({
+                "target_key":"linkedin-com", "display_name":"LinkedIn fixture",
+                "start_url":"https://www.linkedin.com/", "target_kind":"prospect-research",
+                "config":{"skip_probe":true,"expected_min_records":1,
+                    "async_provider":"brightdata","expected_provider":"linkedin.com",
+                    "llm_enrichment":{"enabled":false}},
+                "output_schema":{"schema_key":"prospect.v1"}
+            }),
+        )
+        .unwrap();
+        let script = root.join("provider-wait.js");
+        fs::write(&script, SCRIPT).unwrap();
+        register_script(
+            root,
+            DEFAULT_RUNTIME_ROOT,
+            &target.target_key,
+            script.to_str().unwrap(),
+            "javascript",
+            None,
+            None,
+        )
+        .unwrap();
+        target
+    }
+
+    #[test]
+    fn configured_research_binding_rejects_provider_and_script_drift_before_execution() {
+        let root = temp_root("configured-research-binding");
+        fixture(&root);
+        assert!(configured_research_target_binding(&root, "absent", "linkedin.com").is_err());
+        assert!(configured_research_target_binding(&root, "linkedin-com", "xing.com").is_err());
+        let binding =
+            configured_research_target_binding(&root, "linkedin-com", "linkedin.com").unwrap();
+        let script = root.join("changed-provider.js");
+        fs::write(&script, format!("{SCRIPT}\n// changed revision\n")).unwrap();
+        register_script(
+            &root,
+            DEFAULT_RUNTIME_ROOT,
+            "linkedin-com",
+            script.to_str().unwrap(),
+            "javascript",
+            None,
+            None,
+        )
+        .unwrap();
+        let changed =
+            configured_research_target_binding(&root, "linkedin-com", "linkedin.com").unwrap();
+        assert_ne!(binding, changed);
+        let args = vec![
+            "--target-key".into(),
+            "linkedin-com".into(),
+            "--input-json".into(),
+            json!({"mode":"prior"}).to_string(),
+        ];
+        let error = execute_scrape_with_research_binding(&root, &args, &binding).unwrap_err();
+        assert!(error.to_string().contains("changed before dispatch"));
+        let conn = open_db(&root).unwrap();
+        let runs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM scrape_run", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(runs, 0, "stale binding must not start a provider run");
+        drop(conn);
+        cleanup_test_root(&root);
+    }
+
+    #[test]
+    fn configured_research_binding_tracks_registered_config_changes() {
+        let root = temp_root("configured-research-config");
+        fixture(&root);
+        let before =
+            configured_research_target_binding(&root, "linkedin-com", "linkedin.com").unwrap();
+        upsert_target(
+            &root,
+            DEFAULT_RUNTIME_ROOT,
+            json!({
+                "target_key":"linkedin-com", "display_name":"LinkedIn fixture",
+                "start_url":"https://www.linkedin.com/", "target_kind":"prospect-research",
+                "config":{"skip_probe":true,"expected_min_records":2,
+                    "async_provider":"brightdata","expected_provider":"linkedin.com",
+                    "llm_enrichment":{"enabled":false}},
+                "output_schema":{"schema_key":"prospect.v1"}
+            }),
+        )
+        .unwrap();
+        let after =
+            configured_research_target_binding(&root, "linkedin-com", "linkedin.com").unwrap();
+        assert_ne!(before, after);
+        cleanup_test_root(&root);
+    }
+
+    fn execute(root: &Path, mode: &str) -> ScrapeExecutionOutcome {
+        execute_scrape_with_outcome(root, &[
+            "--target-key".into(), "linkedin-com".into(), "--allow-heal".into(),
+            "--input-json".into(), json!({"company":"Fixture GmbH","country":"DE",
+                "source_id":"linkedin.com", "research_operation_id":format!("research-v1-{}", "a".repeat(64)),
+                "mode":mode}).to_string(), "--timeout-seconds".into(), "10".into(),
+        ]).unwrap()
+    }
+
+    #[test]
+    fn provider_continuation_persists_wait_without_materialization_or_repair() {
+        let root = temp_root("provider-continuation");
+        let target = fixture(&root);
+        let prior = execute(&root, "prior");
+        assert_eq!(prior.status, ScrapeRunStatus::Succeeded, "{prior:?}");
+        let conn = open_db(&root).unwrap();
+        let before: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM scrape_record_latest WHERE target_id=?1",
+                params![target.target_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let pending = execute(&root, "pending");
+        assert_eq!(
+            pending.status,
+            ScrapeRunStatus::AwaitingProvider,
+            "{pending:?}"
+        );
+        assert!(!pending.ok);
+        assert!(pending.error.is_none());
+        assert!(!pending.should_queue_repair);
+        assert!(pending.repair_queue_task.is_none());
+        assert!(pending.repair_request_path.is_none());
+        assert!(pending.materialization.is_none());
+        assert!(pending.query_completion.is_none());
+        assert_eq!(pending.records_found, 0);
+        assert!(pending.fields_extracted.is_empty());
+        let receipt = pending.continuation.as_ref().unwrap();
+        assert_eq!(receipt["run_id"], pending.run_id);
+        let operation = format!("research-v1-{}", "a".repeat(64));
+        assert_eq!(
+            load_provider_wait_receipt(
+                &root,
+                &pending.run_id,
+                "linkedin-com",
+                &operation,
+                "Fixture GmbH",
+                "DE"
+            )
+            .unwrap(),
+            *receipt
+        );
+        for (run_id, target, operation, company, country) in [
+            (
+                prior.run_id.as_str(),
+                "linkedin-com",
+                operation.as_str(),
+                "Fixture GmbH",
+                "DE",
+            ),
+            (
+                pending.run_id.as_str(),
+                "other-target",
+                operation.as_str(),
+                "Fixture GmbH",
+                "DE",
+            ),
+            (
+                pending.run_id.as_str(),
+                "linkedin-com",
+                "foreign-operation",
+                "Fixture GmbH",
+                "DE",
+            ),
+            (
+                pending.run_id.as_str(),
+                "linkedin-com",
+                operation.as_str(),
+                "Other GmbH",
+                "DE",
+            ),
+            (
+                pending.run_id.as_str(),
+                "linkedin-com",
+                operation.as_str(),
+                "Fixture GmbH",
+                "CH",
+            ),
+        ] {
+            assert!(
+                load_provider_wait_receipt(&root, run_id, target, operation, company, country)
+                    .is_err()
+            );
+        }
+        let (status, result): (String, String) = conn
+            .query_row(
+                "SELECT status,result_json FROM scrape_run WHERE run_id=?1",
+                params![pending.run_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "awaiting_provider");
+        assert_eq!(
+            serde_json::from_str::<Value>(&result).unwrap()["continuation"],
+            *receipt
+        );
+        let manifest: Value =
+            serde_json::from_slice(&fs::read(&pending.run_manifest_path).unwrap()).unwrap();
+        assert_eq!(manifest["result"]["continuation"], *receipt);
+        assert_eq!(
+            load_last_successful_run(&conn, &target.target_id)
+                .unwrap()
+                .unwrap()["run_id"],
+            prior.run_id
+        );
+        let after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM scrape_record_latest WHERE target_id=?1",
+                params![target.target_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(before, after);
+        drop(conn);
+        cleanup_test_root(&root);
+    }
+
+    #[test]
+    fn provider_continuation_rejects_foreign_operation_before_any_repair() {
+        let root = temp_root("provider-continuation-foreign");
+        fixture(&root);
+        let outcome = execute(&root, "foreign");
+        assert!(!outcome.ok);
+        assert_eq!(outcome.reason, "invalid_provider_continuation");
+        assert_eq!(outcome.status, ScrapeRunStatus::PortalDrift);
+        assert!(outcome.continuation.is_none());
+        assert!(outcome.materialization.is_none());
+        assert!(outcome.query_completion.is_none());
+        assert!(!outcome.should_queue_repair);
+        assert!(outcome.repair_queue_task.is_none());
+        cleanup_test_root(&root);
+    }
+}
+
 mod completed_empty_query_contract {
     use super::*;
 

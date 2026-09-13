@@ -6065,6 +6065,46 @@ fn business_control_progress_is_durable_and_idempotent() {
 }
 
 #[test]
+fn business_control_changed_progress_survives_restart_without_new_attempt() {
+    let root = business_command_test_root("ctox-business-command-provider-checkpoint");
+    let id = "command-provider-checkpoint";
+    claim_business_control_command(
+        &root,
+        business_command_claim(id, "sha256:provider-checkpoint"),
+    )
+    .expect("claim control command");
+    progress_business_control_command(&root, id, "running", &json!({"status":"running"}))
+        .expect("start command");
+    let checkpoint = json!({"status":"awaiting_provider","provider_wait":{"poll_attempt":1,"next_poll_at_ms":123456}});
+    progress_business_control_command(&root, id, "running", &checkpoint)
+        .expect("save new checkpoint");
+    progress_business_control_command(&root, id, "running", &checkpoint)
+        .expect("same checkpoint is idempotent");
+    let reopened =
+        business_command_projection(&root, id).expect("read durable state through new connection");
+    assert_eq!(reopened["result"], checkpoint);
+    assert_eq!(reopened["execution_phase"], "running");
+    assert_eq!(reopened["terminal_status"], "none");
+    assert_eq!(reopened["attempt"], 1);
+    let version = reopened["projection_version"].as_i64().unwrap();
+    let next = json!({"status":"awaiting_provider","provider_wait":{"poll_attempt":2,"next_poll_at_ms":234567}});
+    progress_business_control_command(&root, id, "running", &next).expect("advance checkpoint");
+    let advanced = business_command_projection(&root, id).unwrap();
+    assert_eq!(advanced["projection_version"], version + 1);
+    assert_eq!(advanced["result"], next);
+    assert_eq!(advanced["attempt"], 1);
+    complete_business_control_command(&root, id, "completed", &json!({"ok":true}), None).unwrap();
+    let terminal = business_command_projection(&root, id).unwrap();
+    progress_business_control_command(&root, id, "running", &checkpoint)
+        .expect("late progress cannot reopen terminal");
+    let after = business_command_projection(&root, id).unwrap();
+    assert_eq!(after["result"], terminal["result"]);
+    assert_eq!(after["projection_version"], terminal["projection_version"]);
+    assert_eq!(after["terminal_status"], "completed");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn registered_saga_blocks_premature_success_and_persists_compensation() {
     let root = business_command_test_root("ctox-business-command-saga");
     let mut claim = business_command_claim("command-saga-1", "sha256:saga");
