@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import { mountCredentialReveal } from './reveal.mjs';
 
 // Execute the real module and event handlers, without bundling or browser deps.
 // Host/DOM doubles below prove command wiring, not real browser acceptance.
@@ -13,16 +14,19 @@ const receipt = name => ({ ok: true, name, created: true,
   secret_value_revealed: false });
 
 function element() {
-  return { value: '', dataset: {}, listeners: {}, attrs: {},
+  return { value: '', dataset: {}, listeners: {}, attrs: {}, style: {}, children: [], textContent: '',
     querySelector: () => null, querySelectorAll: () => [], contains: () => true,
     setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k]; },
     removeAttribute(k) { delete this.attrs[k]; },
     addEventListener(k, fn) { this.listeners[k] = fn; },
     removeEventListener(k) { delete this.listeners[k]; },
-    replaceChildren() {}, focus() {}, classList: { toggle() {} } };
+    replaceChildren(...children) { this.children = children; this.textContent = ''; },
+    append(...children) { this.children.push(...children); },
+    closest() { return this; },
+    focus() {}, classList: { toggle() {} } };
 }
 
-async function fixture({ allowed = true, generate = async p => receipt(p.name), existing = [] } = {}) {
+async function fixture({ allowed = true, generate = async p => receipt(p.name), existing = [], sync } = {}) {
   const root = element(), host = element(), nodes = new Map();
   for (const selector of ['.credentials-rail','[data-cred-list]','[data-cred-detail]',
     '[data-cred-form]','[data-cred-key]','[data-cred-value]','[data-cred-submit]',
@@ -31,6 +35,8 @@ async function fixture({ allowed = true, generate = async p => receipt(p.name), 
   root.querySelector = s => nodes.get(s) || null;
   root.querySelectorAll = () => [...nodes.values()];
   host.querySelector = () => root;
+  const revealHost = element(), copied = [];
+  nodes.get('[data-cred-detail]').querySelector = () => revealHost;
   const style = element(), commands = [], notifications = [];
   let subscriptionSelector;
   const context = vm.createContext({ URL, console, document: {
@@ -44,7 +50,10 @@ async function fixture({ allowed = true, generate = async p => receipt(p.name), 
   await module.link(async specifier => {
     if (specifier === './reveal.mjs') {
       return new vm.SyntheticModule(['mountCredentialReveal'], function() {
-        this.setExport('mountCredentialReveal', () => () => {});
+        this.setExport('mountCredentialReveal', args => mountCredentialReveal({ ...args,
+          documentTarget: { createElement: element }, windowTarget: null,
+          clipboard: { writeText: async value => copied.push(value) },
+        }));
       }, { context });
     }
     const exports = specifier.includes('i18n')
@@ -56,6 +65,7 @@ async function fixture({ allowed = true, generate = async p => receipt(p.name), 
   });
   await module.evaluate();
   const dispose = await module.namespace.mount({ host, locale: 'en',
+    sync,
     notifications: { show: notification => notifications.push(notification) },
     db: { collection: () => ({ find: query => {
       subscriptionSelector = plain(query);
@@ -68,7 +78,16 @@ async function fixture({ allowed = true, generate = async p => receipt(p.name), 
     } },
   });
   await tick();
-  return { api: module.namespace, commands, notifications, nodes, dispose,
+  return { api: module.namespace, commands, notifications, nodes, dispose, revealHost, copied,
+    select(name) {
+      nodes.get('[data-cred-list]').listeners.click({ target: { closest: () => ({ getAttribute: () => name }) } });
+    },
+    async clickReveal(action) {
+      const descendants = node => node.children.flatMap(child => [child, ...descendants(child)]);
+      const target = descendants(revealHost).find(node => node.dataset.revealAction === action);
+      assert.ok(target);
+      await revealHost.listeners.click({ target });
+    },
     get subscriptionSelector() { return subscriptionSelector; },
     clickGenerate(name = 'BRIGHTDATA_CREW_PASSWORD') {
       nodes.get('[data-cred-key]').value = name;
@@ -151,4 +170,19 @@ test('generator button is a non-submit action with explicit create-only help', a
   const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
   assert.match(html, /type="button"[^>]*data-action="generate"[^>]*data-cred-generate/);
   assert.match(html, /data-i18n="generate_hint"/);
+});
+
+test('new Credentials on a legacy shell issues zero reveal/relay/copy requests', async () => {
+  const requests = [];
+  const f = await fixture({ existing: [{ name: 'TEST_LOGIN', is_set: true }],
+    sync: { requestNative: async (...args) => { requests.push(args); return { value: 'must-not-be-reached' }; } },
+  });
+  f.select('TEST_LOGIN');
+  await f.clickReveal('show');
+  await f.clickReveal('copy-raw');
+  assert.deepEqual(requests, []);
+  assert.deepEqual(f.copied, []);
+  assert.equal(f.commands.filter(command => command.command_type !== 'ctox.secret.list').length, 0);
+  assert.ok(f.revealHost.children.some(node => node.textContent.includes('does not support private retrieval')));
+  f.dispose();
 });

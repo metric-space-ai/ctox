@@ -1394,11 +1394,18 @@ and actor epoch. This keeps the QR compact without an online reference service.
 peer. Its single exact `{name}` parameter selects an existing `credentials`
 Secret Store value. Native `SecretsManage` workspace permission and
 `business_commands` read permission are required and rechecked after the read.
+The exact current connection, captured capability and admitted browser session
+must still match, and neither signaling-peer nor browser-session identity may be
+revoked. The existing handshake's session id is retained natively with generation-
+owned teardown; it is never accepted from the reveal request body. A missing or
+changed identity fails closed. No wire field or browser storage schema changes.
 This operation creates no business command or replicated secret record. Its
 value-bearing response goes only to the requesting DataChannel; generic errors
 contain no value. It is not available through the Business OS MCP actions.
 
-The shell rejects this method in both cross-tab relay directions: a follower
+Credentials requires the new `requestPrivateNative` facade; a still-open older
+shell cannot fall back to its old `requestNative` relay. The private API always
+uses the direct transport. The shell also rejects this method in both cross-tab relay directions: a follower
 must use the directly connected tab rather than moving plaintext over the
 BroadcastChannel coordinator. The Credentials UI displays values only after
 Show, supports user-requested Copy, and clears transient display on its bounded

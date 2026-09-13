@@ -7310,6 +7310,15 @@ function createLiveSyncFacade({ host = null } = {}) {
     get mode() { return state.sync?.mode; },
     get config() { return state.sync?.config; },
     get diagnostics() { return state.sync?.diagnostics; },
+    requestPrivateNative: (...args) => {
+      assertActive();
+      if (typeof state.sync?.requestPrivateNative !== 'function') {
+        const error = new Error('An updated private native channel is required.');
+        error.code = 'credential_reveal_private_channel_required';
+        throw error;
+      }
+      return state.sync.requestPrivateNative(...args);
+    },
     requestNative: (...args) => {
       assertActive();
       // Fehlte die native Bruecke, lieferte das optionale Aufrufzeichen still

@@ -25,10 +25,10 @@ function fixture({ value = canary, allowed = true, response, clipboardError = fa
   const requests = [], copied = [], timers = new Map();
   const dispose = mountCredentialReveal({ host, name: 'TEST_LOGIN', allowed,
     windowTarget, documentTarget, t: key => key,
-    request: async (...args) => {
+    sync: { requestPrivateNative: async (...args) => {
       requests.push(args);
       return response ? response(...args) : { schema: 'ctox.credential-reveal.v1', name: 'TEST_LOGIN', value };
-    },
+    } },
     clipboard: { writeText: async text => {
       if (clipboardError) throw Error(canary);
       copied.push(text);

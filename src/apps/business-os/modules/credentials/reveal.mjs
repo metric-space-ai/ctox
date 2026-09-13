@@ -21,7 +21,7 @@ export function credentialFields(value) {
 // No storage/command/notification surface receives a value. Only explicit
 // display and clipboard actions do. Clearing drops references; JS cannot
 // promise physical zeroization of strings or the user's clipboard history.
-export function mountCredentialReveal({ host, name, allowed, request, t,
+export function mountCredentialReveal({ host, name, allowed, sync, t,
   clipboard = globalThis.navigator?.clipboard,
   windowTarget = globalThis.window, documentTarget = globalThis.document,
   schedule = globalThis.setTimeout, cancel = globalThis.clearTimeout,
@@ -78,7 +78,14 @@ export function mountCredentialReveal({ host, name, allowed, request, t,
     render();
   }
   async function read() {
-    const result = await request(CREDENTIAL_REVEAL_METHOD, { name }, {
+    // Never fall back to requestNative: an old shell can relay its result via
+    // an old leader, which cannot know the new method is private.
+    if (typeof sync?.requestPrivateNative !== 'function') {
+      const error = new Error('An updated private native channel is required.');
+      error.code = 'credential_reveal_private_channel_required';
+      throw error;
+    }
+    const result = await sync.requestPrivateNative(CREDENTIAL_REVEAL_METHOD, { name }, {
       collection: 'business_commands', timeoutMs: 10000,
     });
     if (result?.schema !== 'ctox.credential-reveal.v1' || result.name !== name
@@ -122,7 +129,8 @@ export function mountCredentialReveal({ host, name, allowed, request, t,
       }
     } catch (error) {
       message = error?.code === 'credential_reveal_direct_tab_required'
-        ? 'direct_tab_required' : action === 'copy-raw' ? 'copy_failed' : 'reveal_failed';
+        ? 'direct_tab_required' : error?.code === 'credential_reveal_private_channel_required'
+          ? 'private_channel_required' : action === 'copy-raw' ? 'copy_failed' : 'reveal_failed';
     } finally {
       pending = false;
       if (!disposed) render(turn === epoch ? message : '');

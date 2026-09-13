@@ -82,11 +82,20 @@ exact `{name}` parameter, not a business command or an MCP action. Native policy
 requires current `SecretsManage` workspace authority and read access to the
 `business_commands` channel. Scope is fixed to `credentials`; invalid, stale,
 revoked or unprivileged capabilities fail closed. Authorization is rechecked
-after the encrypted-store read. Responses and errors are not persisted as
+after the encrypted-store read, together with signaling-peer and durable-browser-
+session revocations and the captured connection generation/capability/session.
+The native transport retains the session id from the admitted existing handshake
+beside its capability and removes it on generation-owned peer teardown. Missing
+session identity fails closed; request payloads cannot supply or override it.
+Responses and errors are not persisted as
 commands, projections, audit payloads, or application logs. Metadata lists and
 exports still exclude values.
 
-The browser forbids this method on the cross-tab proxy, both before a follower
+Credentials requires the distinct `ctx.sync.requestPrivateNative` API. An older
+shell exposing only `requestNative` fails before issuing any secret request;
+there is deliberately no legacy fallback. The private runtime method calls the
+direct transport only, never the coordinator proxy, even across role changes.
+The browser additionally forbids this method on the cross-tab proxy, both before a follower
 sends and in the leader relay handler. Use the directly connected tab; there is
 no BroadcastChannel, HTTP or storage fallback. Values live only in transient
 response/UI memory and an explicitly requested clipboard write. Display clears
@@ -97,7 +106,10 @@ guarantee; the app does not clear or overwrite the user's clipboard afterward.
 
 The new native `credential_reveal_*` cases cover unchanged stored metadata/value,
 synthetic-canary absence across fixture files, exact request shape, missing
-values, invalid/unprivileged/stale capabilities, and generic errors. They must
+values, invalid/unprivileged/stale capabilities, generic errors, deterministic
+peer/session revocation during a real encrypted read, and connection retirement.
+A native transport regression checks session identity across replacement and
+late teardown. They must
 execute before native acceptance. Controller tests use DOM/clipboard doubles;
 they are not a live THESEN or real WebRTC permission test.
 
@@ -128,7 +140,9 @@ The Credentials UI also has dependency-free module/event-handler regressions:
 ```sh
 node --experimental-vm-modules --test --test-concurrency=1 src/apps/business-os/modules/credentials/generation.test.mjs
 node --test --test-concurrency=1 src/apps/business-os/modules/credentials/reveal.test.mjs
+node --test --test-concurrency=1 src/apps/business-os/modules/credentials/private-channel.test.mjs
 cargo test --locked --bin ctox credential_reveal -- --test-threads=2
+cargo test --manifest-path src/core/rxdb/Cargo.toml credential_reveal -- --test-threads=2
 ```
 
 They exercise selector-only dispatch, receipt validation, create-only existing

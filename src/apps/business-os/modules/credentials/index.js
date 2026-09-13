@@ -31,6 +31,7 @@ const labels = {
     copy_failed: 'Kopieren fehlgeschlagen. Wert anzeigen und erneut Kopieren wählen.',
     reveal_failed: 'Anzeigen nicht möglich. Bitte Berechtigung und Verbindung prüfen.',
     direct_tab_required: 'Bitte Zugangsdaten im direkt verbundenen Business-OS-Tab öffnen.',
+    private_channel_required: 'Diese Shell unterstützt noch keinen privaten Abruf. Bitte nach dem Update Business OS neu laden.',
     newAction: 'Neue Zugangsdaten',
     importAction: 'Importieren',
     exportAction: 'Exportieren',
@@ -94,6 +95,7 @@ const labels = {
     copy_failed: 'Copy failed. Show the value and choose Copy again.',
     reveal_failed: 'Cannot show this value. Check your permission and connection.',
     direct_tab_required: 'Open Credentials in the directly connected Business OS tab.',
+    private_channel_required: 'This shell does not support private retrieval yet. Reload Business OS after the update.',
     newAction: 'New credential',
     importAction: 'Import',
     exportAction: 'Export',
@@ -487,7 +489,7 @@ export async function mount(ctx) {
       const revealHost = detailEl.querySelector('[data-cred-reveal]');
       if (revealHost && rec.is_set && canManage) {
         disposeReveal = mountCredentialReveal({ host: revealHost, name: rec.name,
-          allowed: canManage, t, request: (...args) => ctx.sync.requestNative(...args) });
+          allowed: canManage, t, sync: ctx.sync });
       }
       detailEl.setAttribute('data-context-record-id', rec.name || '');
       detailEl.setAttribute('data-context-record-type', 'credential');

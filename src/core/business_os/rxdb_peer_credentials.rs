@@ -37,10 +37,42 @@ fn authorized(root: &Path, token: &str) -> bool {
 /// value; no command, audit payload, projection, or log is created here.
 pub(super) fn handle_credential_reveal_webrtc_request(
     root: &Path,
+    peer_id: &str,
+    session_id: &str,
+    capability_token: &str,
+    params: Vec<Value>,
+    is_current: impl Fn() -> bool,
+) -> Result<Value, String> {
+    reveal_with_reader(
+        root,
+        peer_id,
+        session_id,
+        capability_token,
+        params,
+        is_current,
+        |name| {
+            crate::secrets::read_secret_value(root, "credentials", name)
+                .map_err(|_| UNAVAILABLE.to_string())
+        },
+    )
+}
+
+fn reveal_with_reader(
+    root: &Path,
+    peer_id: &str,
+    session_id: &str,
     capability_token: &str,
     mut params: Vec<Value>,
+    is_current: impl Fn() -> bool,
+    read: impl FnOnce(&str) -> Result<String, String>,
 ) -> Result<Value, String> {
-    if !authorized(root, capability_token) {
+    let may_release = || {
+        is_current()
+            && matches!(store::is_business_peer_revoked(root, peer_id), Ok(false))
+            && matches!(store::is_business_peer_revoked(root, session_id), Ok(false))
+            && authorized(root, capability_token)
+    };
+    if !may_release() {
         return Err(DENIED.into());
     }
     if params.len() != 1 {
@@ -58,15 +90,12 @@ pub(super) fn handle_credential_reveal_webrtc_request(
     {
         return Err(INVALID.into());
     }
-    let value = Zeroizing::new(
-        crate::secrets::read_secret_value(root, "credentials", name)
-            .map_err(|_| UNAVAILABLE.to_string())?,
-    );
+    let value = Zeroizing::new(read(name).map_err(|_| UNAVAILABLE.to_string())?);
     if value.len() > 64 * 1024 {
         return Err(UNAVAILABLE.into());
     }
     // Recheck revocation/role/epoch after the potentially blocking store read.
-    if !authorized(root, capability_token) {
+    if !may_release() {
         return Err(DENIED.into());
     }
     Ok(json!({
@@ -81,6 +110,97 @@ mod tests {
     use super::*;
 
     const CANARY: &str = "synthetic-reveal-canary-9JxZ-not-a-real-password";
+
+    #[test]
+    fn credential_reveal_discards_value_when_peer_or_session_is_revoked_during_read(
+    ) -> anyhow::Result<()> {
+        for revoked_id in ["fixture-peer", "fixture-session"] {
+            let root = tempfile::tempdir()?;
+            let token = token(root.path(), "chef")?;
+            crate::secrets::write_secret_record(
+                root.path(),
+                "credentials",
+                "TEST_LOGIN",
+                CANARY,
+                None,
+                json!({}),
+            )?;
+            let result = reveal_with_reader(
+                root.path(),
+                "fixture-peer",
+                "fixture-session",
+                &token,
+                vec![json!({"name":"TEST_LOGIN"})],
+                || true,
+                |name| {
+                    // Deterministic interleaving: the actual encrypted read
+                    // succeeds, then an administrative action revokes the peer
+                    // before the read operation hands its value back.
+                    let value = crate::secrets::read_secret_value(root.path(), "credentials", name)
+                        .map_err(|_| "fixture read failed".to_string())?;
+                    store::revoke_business_peer(root.path(), revoked_id, "fixture-admin", "test")
+                        .map_err(|_| "fixture revoke failed".to_string())?;
+                    assert!(
+                        authorized(root.path(), &token),
+                        "actor epoch alone still admits this token"
+                    );
+                    Ok(value)
+                },
+            );
+            assert!(matches!(result, Err(ref error) if error == DENIED));
+            assert_no_plaintext_files(root.path())?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn credential_reveal_discards_value_when_connection_retires_during_read() -> anyhow::Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        let token = token(root.path(), "chef")?;
+        let current = std::cell::Cell::new(true);
+        let result = reveal_with_reader(
+            root.path(),
+            "fixture-peer",
+            "fixture-session",
+            &token,
+            vec![json!({"name":"TEST_LOGIN"})],
+            || current.get(),
+            |_| {
+                current.set(false);
+                Ok(CANARY.to_string())
+            },
+        );
+        assert!(matches!(result, Err(ref error) if error == DENIED));
+        assert_no_plaintext_files(root.path())?;
+        Ok(())
+    }
+
+    #[test]
+    fn credential_reveal_denies_missing_or_pre_revoked_peer_identity_without_reading(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let token = token(root.path(), "chef")?;
+        store::revoke_business_peer(root.path(), "revoked", "fixture-admin", "test")?;
+        for (peer, session) in [
+            ("", "session"),
+            ("peer", ""),
+            ("revoked", "session"),
+            ("peer", "revoked"),
+        ] {
+            let result = reveal_with_reader(
+                root.path(),
+                peer,
+                session,
+                &token,
+                vec![json!({"name":"TEST_LOGIN"})],
+                || true,
+                |_| panic!("denied peer must not read a secret"),
+            );
+            assert!(matches!(result, Err(ref error) if error == DENIED));
+        }
+        Ok(())
+    }
 
     fn token(root: &Path, role: &str) -> anyhow::Result<String> {
         Ok(store::issue_business_os_capability_token_for_managed_user(
@@ -128,8 +248,11 @@ mod tests {
         for _ in 0..2 {
             let response = handle_credential_reveal_webrtc_request(
                 root.path(),
+                "fixture-peer",
+                "fixture-session",
                 &token,
                 vec![json!({"name":"TEST_LOGIN"})],
+                || true,
             )
             .map_err(anyhow::Error::msg)?;
             assert_eq!(response["schema"], "ctox.credential-reveal.v1");
@@ -156,8 +279,11 @@ mod tests {
         for token in ["", "invalid-token", old.as_str(), unprivileged.as_str()] {
             let result = handle_credential_reveal_webrtc_request(
                 root.path(),
+                "fixture-peer",
+                "fixture-session",
                 token,
                 vec![json!({"name":"TEST_LOGIN"})],
+                || true,
             );
             assert!(matches!(result, Err(ref error) if error == DENIED));
         }
@@ -176,13 +302,23 @@ mod tests {
             vec![json!({"name":CANARY})],
             vec![json!({"name":"X".repeat(65)})],
         ] {
-            let result = handle_credential_reveal_webrtc_request(root.path(), &token, params);
+            let result = handle_credential_reveal_webrtc_request(
+                root.path(),
+                "fixture-peer",
+                "fixture-session",
+                &token,
+                params,
+                || true,
+            );
             assert!(matches!(result, Err(ref error) if error == INVALID));
         }
         let result = handle_credential_reveal_webrtc_request(
             root.path(),
+            "fixture-peer",
+            "fixture-session",
             &token,
             vec![json!({"name":"MISSING"})],
+            || true,
         );
         assert!(matches!(result, Err(ref error) if error == UNAVAILABLE));
         assert_no_plaintext_files(root.path())?;

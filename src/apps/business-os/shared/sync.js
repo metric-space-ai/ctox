@@ -26,7 +26,7 @@ import {
 import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260913-shell-v2-pending-collection-changes-v375';
 import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20260913-shell-v2-pending-collection-changes-v375';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
-import { assertNativeRequestPrivacy } from './native-request-privacy.mjs';
+import { assertNativeRequestPrivacy, CREDENTIAL_REVEAL_METHOD } from './native-request-privacy.mjs';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 // Multi-tab leadership may span a rolling Business OS release: an already
@@ -598,6 +598,16 @@ export function createSyncRuntime({
       if (dedupeKey) commandMetricSeen.add(dedupeKey);
       recordCommandPlaneMetric(diagnostics.commandPlane, name, metric.durationMs);
       emitDiagnostic({ phase: diagnostics.phase || 'ready' });
+    },
+    // A distinct API is essential during rolling updates: older live shell
+    // objects expose requestNative but lack both private-path relay guards.
+    // This path never calls the coordinator proxy, including after role changes.
+    async requestPrivateNative(method, params = {}, options = {}) {
+      if (stopped) throw new Error('Business OS sync runtime has been stopped');
+      if (method !== CREDENTIAL_REVEAL_METHOD) throw new Error('Unsupported private native request.');
+      const coordinator = multiTabCoordinator;
+      assertNativeRequestPrivacy(method, { isLeader: !coordinator || coordinator.isLeader?.() === true });
+      return requestNativeDirectly(method, params, options);
     },
     async requestNative(method, params = {}, options = {}) {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
