@@ -170,6 +170,35 @@ pub(crate) fn execute_scrape_with_outcome(
         records_found,
         expected_min_records,
     );
+    let mut continuation = None;
+    if payload.get("failure_mode").and_then(Value::as_str) == Some("awaiting_provider")
+        || payload.get("continuation").is_some()
+    {
+        match super::continuation::validate_provider_continuation(
+            &payload,
+            &run_id,
+            &target.view.target_key,
+            &target.view.config,
+            input_json.as_deref(),
+            &execution,
+        ) {
+            Ok(receipt) => {
+                continuation = Some(serde_json::to_value(receipt)?);
+                classification = Classification {
+                    status: ScrapeRunStatus::AwaitingProvider,
+                    should_queue_repair: false,
+                    reason: "current_provider_collection_pending".to_string(),
+                };
+            }
+            Err(_) => {
+                classification = Classification {
+                    status: ScrapeRunStatus::PortalDrift,
+                    should_queue_repair: false,
+                    reason: "invalid_provider_continuation".to_string(),
+                };
+            }
+        }
+    }
     // Capability 10: an expired/invalid session on a credential-protected
     // source lands on the source's own login page. That is not portal drift —
     // upgrade the classification and persist the precise reauthorization
@@ -356,6 +385,7 @@ pub(crate) fn execute_scrape_with_outcome(
                 "last_successful_run": last_successful_run,
             }),
             result: json!({
+                "continuation": continuation,
                 "records_found": records_found,
                 "query_completion": query_completion,
                 "enriched_records_found": materialized_records.map(|items| items.len() as i64),
@@ -444,6 +474,7 @@ pub(crate) fn execute_scrape_with_outcome(
         target_key: target.view.target_key,
         run_id,
         status: classification.status,
+        continuation,
         records_found,
         fields_extracted,
         latency_ms: execution_started

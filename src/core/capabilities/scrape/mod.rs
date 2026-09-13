@@ -27,6 +27,7 @@ mod cli;
 pub(crate) use cli::dispatch_capturing;
 pub use cli::handle_scrape_command;
 mod classify;
+mod continuation;
 mod query_completion;
 use classify::Classification;
 pub(crate) use classify::ScrapeRunStatus;
@@ -368,6 +369,7 @@ struct EnrichmentOutcome {
 impl ScrapeRunStatus {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
+            Self::AwaitingProvider => "awaiting_provider",
             Self::Succeeded => "succeeded",
             Self::CompletedEmpty => "completed_empty",
             Self::TemporaryUnreachable => "temporary_unreachable",
@@ -385,6 +387,8 @@ pub(crate) struct ScrapeExecutionOutcome {
     pub(crate) target_key: String,
     pub(crate) run_id: String,
     pub(crate) status: ScrapeRunStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    continuation: Option<Value>,
     pub(crate) records_found: i64,
     pub(crate) fields_extracted: Vec<String>,
     pub(crate) latency_ms: u64,
@@ -1113,7 +1117,9 @@ fn scrape_error_diagnostic(
 ) -> Option<String> {
     if matches!(
         classification.status,
-        ScrapeRunStatus::Succeeded | ScrapeRunStatus::CompletedEmpty
+        ScrapeRunStatus::Succeeded
+            | ScrapeRunStatus::CompletedEmpty
+            | ScrapeRunStatus::AwaitingProvider
     ) {
         return None;
     }

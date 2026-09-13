@@ -48,6 +48,15 @@ are not broadened into this safe-reauthorization exception.
 The runner still has to derive a real durable operation ID and trusted state
 root. The journal is not yet wired into native execution.
 
+`brightdata-continuation.cjs` now maps internal pending collection transitions
+to the native `ctox.scrape.provider_continuation.v1` receipt. The native scrape
+executor validates current run/input/operation/target and company/country,
+persists `awaiting_provider`, and neither materializes records nor queues repair.
+The runner must emit the projected receipt and exit zero, never print the core's
+internal `temporary_unreachable` pending result. See
+`docs/scrape-provider-continuation.md`. Actual Research command wake/resume and
+Workjet continuation propagation still need integration before activation.
+
 The production implementation must provide:
 
 - Manifest-owned encrypted CTOX secret reference, resolved only in memory.
@@ -76,9 +85,11 @@ raw provider/CLI errors. Snapshot/query identity failures stop admission.
 
 ## Verification
 
-`node --test --test-concurrency=1 src/tools/web-stack/scrape-targets/tests/brightdata-core.test.mjs src/tools/web-stack/scrape-targets/tests/brightdata-state.test.mjs`
+`node --test --test-concurrency=1 src/tools/web-stack/scrape-targets/tests/brightdata-core.test.mjs src/tools/web-stack/scrape-targets/tests/brightdata-state.test.mjs src/tools/web-stack/scrape-targets/tests/brightdata-continuation.test.mjs`
 
-Twenty-four tests pass. Core tests inject network/credentials/persistence. State
+Twenty-eight JavaScript tests pass (the four projector tests rerun after final
+hardening). Five new native validator/executor tests are pending coordinated
+execution. Core tests inject network/credentials/persistence. State
 tests use actual files, reopen journals, race two bounded child processes and
 exit a child immediately after its durable claim, and restart after a persisted
 HTTP401 to verify bounded reauthorization. Mac tests require TMPDIR on
