@@ -6026,6 +6026,24 @@ fn checked_module_manifest_candidate(
     Ok(Some(candidate))
 }
 
+/// Source tools can resolve operator-owned local modules, but delegated app
+/// authoring currently only has installed/source sandbox and validator modes.
+/// Resolve the authorized source, never a caller-supplied install_target/path:
+/// admitting a local app here would create an installed-module shadow.
+pub(super) fn ensure_delegated_app_modify_target_supported(
+    root: &Path,
+    module_id: &str,
+) -> anyhow::Result<()> {
+    let app_root = resolve_business_os_app_root(root)?;
+    let (module_root, _) = resolve_module_source_root_for_root(root, &app_root, module_id)?;
+    anyhow::ensure!(
+        module_root.parent().and_then(Path::file_name).and_then(|name| name.to_str())
+            != Some("local-modules"),
+        "local_app_authoring_unsupported: module `{module_id}` is operator-owned under local-modules; delegated modify_app has no local sandbox/validation lifecycle contract and must not create an installed-module shadow"
+    );
+    Ok(())
+}
+
 pub(super) fn app_root_for_module_manifest(
     default_app_root: &Path,
     manifest_path: &Path,
@@ -6492,6 +6510,11 @@ fn record_command_inner(
             task_status: Some("failed".to_owned()),
             ..CommandAccepted::default()
         });
+    }
+    if command.command_type == "ctox.business_os.app.modify" {
+        let (_, module_id) = app_build_command_policy_target(&command)
+            .context("app modification target is missing")?;
+        ensure_delegated_app_modify_target_supported(root, &module_id)?;
     }
     let mut native_authorization =
         queue_command_native_authorization(root, &command, authenticated_session.as_ref())?;
@@ -8364,6 +8387,11 @@ pub(crate) fn revalidate_business_command_execution_authorization(
         session.authenticated,
         "Business OS actor is no longer authenticated at harness lease"
     );
+    if command.command_type == "ctox.business_os.app.modify" {
+        let (_, module_id) = app_build_command_policy_target(&command)
+            .context("app modification target is missing")?;
+        ensure_delegated_app_modify_target_supported(root, &module_id)?;
+    }
     let missing_dependencies = missing_business_command_dependencies(root, &command)?;
     anyhow::ensure!(
         missing_dependencies.is_empty(),

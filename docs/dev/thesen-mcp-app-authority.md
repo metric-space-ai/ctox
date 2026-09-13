@@ -45,10 +45,10 @@ may now fail closed and require explicit operator repair.
 
 ## Verification and integration
 
-Eight tests on Linux (six on non-Unix), all under filter `mcp_app_authority`:
+Ten tests on Linux (eight on non-Unix), all under filter `mcp_app_authority`:
 
-- gateway admin and owner survive native admission and lease without a local
-  user; channel revocation denies the lease;
+- gateway admin and owner survive installed-app native admission and lease
+  without a local user; channel revocation denies the lease;
 - spoofed JSON/context/native receipt and tokenless replicated commands deny;
 - gateway actor/workspace binding, module scope revocation, inactive native
   account, downgrade and unsupported managed user role deny;
@@ -57,6 +57,11 @@ Eight tests on Linux (six on non-Unix), all under filter `mcp_app_authority`:
 - namespace/module/manifest symlinks deny (Unix);
 - symlinked file reads and relative path escapes deny (Unix);
 - bundled, installed, local source precedence is unchanged.
+- local-app delegated modification rejects caller-supplied installed/source/
+  local targets at both MCP and native admission, with no command/queue/shadow
+  created and no local manifest change;
+- a queued installed-app modification whose target becomes operator-owned
+  local is rejected at lease, without recreating an installed shadow.
 
 Parent-owned THESEN run (two workers, shared native verification lock):
 
@@ -77,8 +82,34 @@ Copernicus's `leadfeeder.rs` package. Native adapters are web-stack scrape
 targets; historical shared queue-lease failures are not proved fixed by this
 MCP app repair.
 
-Remaining scope: existing MCP app-development response paths still describe
-runtime-installed targets; this package fixes native admission and source
-resolution, not that authoring/delivery contract. Parent must validate the
-actual target and lifecycle before delegating edits to an operator-owned local
-app. App validation/deployment and all adapter verification remain parent-owned.
+## Local authoring follow-up: fail closed, not a new target dialect
+
+Delegated modification of operator-owned local apps is explicitly unsupported
+and now rejected with `local_app_authoring_unsupported`, after authorization
+and before queue creation. The same native guard runs on lease, protecting
+already queued work if its selected source becomes local. Resolution uses the
+checked native manifest/root, never request `install_target`, `app_directory`,
+`source_root` or `development_contract`. Source listing/read remains available.
+The allowed authority tests now use genuine installed modules; local-source
+read tests remain local. No live local module is converted or installed.
+
+This cannot safely be enabled by changing only MCP payload/response paths:
+
+- `store::business_os_app_command_target_metadata` and
+  `business_os_app_command_target_prompt_block` encode installed vs source only;
+- `service_business_os_app_authoring::business_os_app_module_target_from_metadata`
+  maps every non-installed target to `--source`;
+- `configure_business_os_app_file_system_scope` only reserves and grants a
+  writable installed-module directory, explicitly creating that directory;
+- validator modes and completion metadata need an agreed local-source target,
+  sandbox grant, version/ownership and schema-refresh contract together;
+- `module_manifest_loader::load_local_module_manifests` explicitly declares
+  local apps operator-owned, editable but nondeletable, outside app-store
+  lifecycle management.
+
+A complete typed local authoring lifecycle is a separate package. This patch
+does not grant broader runtime writes, invent an install target, or use a
+source-mode fallback. Parent's native test/build/unit state is untouched;
+the already running immutable `6b76bb38b` verification remains that revision,
+not verification of this follow-up. All deployment/adapter checks remain
+parent-owned.

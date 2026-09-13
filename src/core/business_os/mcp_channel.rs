@@ -2015,6 +2015,7 @@ pub fn modify_app(
     enforce_module_policy(root, &module_id)?;
     enforce_business_os_mcp_policy(root, context, "business_os.modify_app", arguments)?;
     let _module = get_module(root, context, &module_id)?;
+    store::ensure_delegated_app_modify_target_supported(root, &module_id)?;
     let title = optional_string_arg(arguments, "title")
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| format!("Modify {}", title_from_module_id(&module_id)));

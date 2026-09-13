@@ -124,6 +124,24 @@ mod tests {
             "auth_source": "ctox_dev_managed_mcp_token", "workspace": "tenant:thesen"})
     }
 
+    fn installed_fixture(root: &Path) -> anyhow::Result<PathBuf> {
+        let local = fixture(root)?;
+        let installed = root
+            .join("runtime/business-os/installed-modules")
+            .join(MODULE);
+        fs::create_dir_all(installed.parent().context("installed parent")?)?;
+        fs::rename(local, &installed)?;
+        let mut manifest: Value =
+            serde_json::from_slice(&fs::read(installed.join("module.json"))?)?;
+        manifest["install_scope"] = serde_json::json!("installed");
+        manifest["entry"] = serde_json::json!(format!("installed-modules/{MODULE}/index.html"));
+        fs::write(
+            installed.join("module.json"),
+            serde_json::to_vec(&manifest)?,
+        )?;
+        Ok(installed)
+    }
+
     fn gateway_call(
         root: &Path,
         role: &str,
@@ -156,7 +174,7 @@ mod tests {
         for role in ["admin", "chef"] {
             let temp = tempdir()?;
             let root = temp.path();
-            fixture(root)?;
+            installed_fixture(root)?;
             let result = gateway_call(
                 root,
                 role,
@@ -245,7 +263,7 @@ mod tests {
     ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
-        fixture(root)?;
+        installed_fixture(root)?;
         let args = serde_json::json!({"module_id": MODULE, "instruction": "Modify",
             "_context": {"actor": "native-owner", "workspace": "spoofed", "role": "chef"}});
         let context = context_from_arguments_with_trusted_gateway_context(
@@ -278,6 +296,108 @@ mod tests {
             store::revalidate_business_command_execution_authorization(root, command_id).is_err()
         );
         assert!(gateway_call(root, "user", "business_os.modify_app", args).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_app_authority_local_modify_rejects_redirects_without_queue_or_shadow(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let local = fixture(root)?;
+        let before = fs::read(local.join("module.json"))?;
+        for target in ["runtime-installed-module", "source-module", "local-module"] {
+            let arguments = serde_json::json!({"module_id": MODULE, "instruction": "Modify local app",
+                "install_target": target, "app_directory": "runtime/business-os/installed-modules/outbound-lead-generation",
+                "source_root": "src/apps/business-os/modules/other", "development_contract": {"source_root": "outside"}});
+            let error = call_tool_with_trusted_gateway_context(
+                root,
+                "business_os.modify_app",
+                arguments,
+                Some(&gateway_context("admin")),
+            )
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("local_app_authoring_unsupported"),
+                "{error:#}"
+            );
+            // Also guard native admission; tool JSON cannot select another
+            // root even if a caller bypasses the MCP convenience function.
+            let context = context_from_arguments_with_trusted_gateway_context(
+                "business_os.modify_app",
+                &serde_json::json!({}),
+                Some(&gateway_context("admin")),
+            )?;
+            let command = store::BusinessCommand {
+                origin: store::CommandOrigin::TrustedLocal,
+                id: None,
+                module: "creator".into(),
+                command_type: "ctox.business_os.app.modify".into(),
+                record_id: Some(MODULE.into()),
+                payload: serde_json::json!({"module_id": MODULE, "instruction": "Modify local app", "install_target": target}),
+                client_context: serde_json::json!({"actor": {"id": ACTOR}}),
+            };
+            let error = store::record_mcp_app_command(
+                root,
+                AuthenticatedMcpAppCommand::from_context(&context)?,
+                command,
+            )
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("local_app_authoring_unsupported"),
+                "{error:#}"
+            );
+        }
+        assert_eq!(fs::read(local.join("module.json"))?, before);
+        assert!(!root
+            .join("runtime/business-os/installed-modules")
+            .join(MODULE)
+            .exists());
+        let conn = store::open_store(root)?;
+        let commands: i64 =
+            conn.query_row("SELECT COUNT(*) FROM business_commands", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(commands, 0);
+        let queues: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_records WHERE collection = 'ctox_queue_tasks'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(queues, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_app_authority_lease_rejects_target_that_became_operator_owned_local(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let installed = installed_fixture(root)?;
+        let accepted = gateway_call(
+            root,
+            "admin",
+            "business_os.modify_app",
+            serde_json::json!({"module_id": MODULE, "instruction": "Modify installed app"}),
+        )?;
+        assert_eq!(accepted["ok"], true);
+        let command_id = accepted["command_id"].as_str().context("command id")?;
+        let local = root.join("runtime/business-os/local-modules").join(MODULE);
+        fs::rename(&installed, &local)?;
+        let error = store::revalidate_business_command_execution_authorization(root, command_id)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("local_app_authoring_unsupported"),
+            "{error:#}"
+        );
+        assert!(!installed.exists());
+        assert!(local.join("module.json").is_file());
         Ok(())
     }
 
