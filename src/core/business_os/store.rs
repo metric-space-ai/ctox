@@ -86,8 +86,9 @@ use super::store_projections::tests::{create_repair_rxdb_tables, insert_rxdb_tes
 pub(super) use super::store_projections::upsert_business_record;
 use super::store_projections::{
     business_chat_id, business_chat_owner_user_id, business_chat_payload, business_chat_title,
-    business_command_queue_task_payload, enrich_queue_projection_payload, is_business_chat_command,
-    materialize_pending_business_chat, normalize_queue_status,
+    business_command_queue_task_payload, enrich_queue_projection_payload,
+    existing_business_chat_owner, initial_pending_business_chat_payload, is_business_chat_command,
+    is_placeholder_business_chat_owner, materialize_pending_business_chat, normalize_queue_status,
     persist_terminal_business_chat_command_projection, queue_projection_command_id,
     queue_projection_execution_phase, queue_projection_structured_status,
     queue_projection_terminal_status, queue_task_payload, refresh_queue_task_projection,
@@ -113,6 +114,7 @@ use rusqlite::types::Value as SqlValue;
 use rusqlite::Connection;
 use rusqlite::OpenFlags;
 use rusqlite::OptionalExtension;
+use rusqlite::TransactionBehavior;
 use security_projections::*;
 pub(crate) use security_projections::{
     appsec_business_command_requires_data_write, project_all_iot,
@@ -6428,6 +6430,12 @@ pub fn record_command(
         });
     }
     let native_authorization = queue_command_native_authorization(root, &command)?;
+    {
+        let conn = open_store(root)?;
+        if let Some(denied) = claim_or_reject_business_chat(root, &conn, &command_id, &command)? {
+            return Ok(denied);
+        }
+    }
     let missing_dependencies = missing_business_command_dependencies(root, &command)?;
     if !missing_dependencies.is_empty() {
         let evidence = Value::Array(missing_dependencies);
@@ -7631,6 +7639,459 @@ fn write_text(path: &Path, value: &str) -> anyhow::Result<()> {
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     fs::write(path, value).with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn authorized_business_chat_actor_id(
+    root: &Path,
+    command: &BusinessCommand,
+) -> anyhow::Result<Option<String>> {
+    if matches!(command.origin, CommandOrigin::ReplicatedPeer) {
+        let session = rxdb_authenticated_session(root, command)?;
+        return Ok(session_user_id(&session)
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && !is_placeholder_business_chat_owner(value))
+            .map(str::to_string));
+    }
+    let claimed = business_chat_owner_user_id(command);
+    Ok((!is_placeholder_business_chat_owner(&claimed)).then_some(claimed))
+}
+
+fn chat_owner_mismatch_accepted(command_id: &str, chat_id: &str) -> CommandAccepted {
+    CommandAccepted {
+        ok: false,
+        command_id: command_id.to_string(),
+        status: "failed",
+        execution_mode: "queue",
+        task_status: Some("failed".to_string()),
+        chat_id: Some(chat_id.to_string()),
+        result: Some(serde_json::json!({
+            "error_code": "chat_owner_mismatch",
+            "error": "Business chat belongs to another user."
+        })),
+        ..CommandAccepted::default()
+    }
+}
+
+pub(super) fn trusted_native_chat_owner(
+    conn: &Connection,
+    chat_id: &str,
+    exclude_command_id: &str,
+) -> anyhow::Result<Option<String>> {
+    // Bind recovery to the same canonical chat target as admission/materialization
+    // (`business_chat_id`). Do not OR caller-controlled candidate fields: an ignored
+    // record_id, payload.chat_id, or client_context value can point at a foreign
+    // legacy chat while the command's real target is elsewhere.
+    let mut stmt = conn.prepare(
+        "SELECT c.command_id,
+                c.module,
+                c.command_type,
+                c.record_id,
+                c.payload_json,
+                c.client_context_json,
+                json_extract(e.payload_json, '$.actor.id')
+         FROM business_events e
+         INNER JOIN business_commands c ON c.command_id = e.record_id
+         WHERE e.collection = 'business_commands'
+           AND e.command_type = 'business_os.policy.allowed'
+           AND (?1 = '' OR c.command_id != ?1)
+           AND CAST(COALESCE(json_extract(e.payload_json, '$.actor.trusted'), 0) AS INTEGER) = 1",
+    )?;
+    let mut owners = Vec::new();
+    let mut rows = stmt.query(params![exclude_command_id])?;
+    while let Some(row) = rows.next()? {
+        let command_id: String = row.get(0)?;
+        let module: String = row.get(1)?;
+        let command_type: String = row.get(2)?;
+        let record_id: Option<String> = row.get(3)?;
+        let payload_json: String = row.get(4)?;
+        let client_context_json: String = row.get(5)?;
+        let actor_id: Option<String> = row.get(6)?;
+        let Some(actor) = actor_id
+            .map(|item| item.trim().to_string())
+            .filter(|item| !is_placeholder_business_chat_owner(item))
+        else {
+            continue;
+        };
+        let payload = if payload_json.trim().is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(&payload_json).with_context(|| {
+                format!("invalid payload_json for trusted chat receipt {command_id}")
+            })?
+        };
+        let client_context = if client_context_json.trim().is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(&client_context_json).with_context(|| {
+                format!("invalid client_context_json for trusted chat receipt {command_id}")
+            })?
+        };
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some(command_id.clone()),
+            module,
+            command_type,
+            record_id,
+            payload,
+            client_context,
+        };
+        if !is_business_chat_command(&command) {
+            continue;
+        }
+        if business_chat_id(&command, &command_id) != chat_id {
+            continue;
+        }
+        owners.push(actor);
+    }
+    let Some(first) = owners.first().cloned() else {
+        return Ok(None);
+    };
+    if owners.iter().any(|item| item != &first) {
+        return Ok(None);
+    }
+    Ok(Some(first))
+}
+
+fn business_chat_owner_from_payload(payload: &Value) -> String {
+    payload
+        .get("owner_user_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string()
+}
+
+enum RxdbBusinessChatProjection {
+    Absent,
+    Tombstone,
+    Live(Value),
+}
+
+fn rxdb_collection_row_deleted(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+) -> anyhow::Result<bool> {
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    let path = rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let conn = Connection::open(&path)?;
+    let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
+        return Ok(false);
+    };
+    Ok(
+        match conn.query_row(
+            &format!("SELECT deleted FROM {table} WHERE id = ?1"),
+            [record_id],
+            |row| row.get::<_, i64>(0),
+        ) {
+            Ok(value) => value != 0,
+            Err(rusqlite::Error::QueryReturnedNoRows) => false,
+            Err(_) => false,
+        },
+    )
+}
+
+fn load_rxdb_business_chat_projection(
+    root: &Path,
+    chat_id: &str,
+) -> anyhow::Result<RxdbBusinessChatProjection> {
+    let Some(record) = load_rxdb_collection_record(root, "business_chats", chat_id)? else {
+        return Ok(RxdbBusinessChatProjection::Absent);
+    };
+    if is_rxdb_deleted_document(&record)
+        || rxdb_collection_row_deleted(root, "business_chats", chat_id)?
+    {
+        return Ok(RxdbBusinessChatProjection::Tombstone);
+    }
+    Ok(RxdbBusinessChatProjection::Live(record))
+}
+
+fn rxdb_business_chat_owner_is_placeholder_or_missing(
+    root: &Path,
+    chat_id: &str,
+) -> anyhow::Result<bool> {
+    Ok(match load_rxdb_business_chat_projection(root, chat_id)? {
+        RxdbBusinessChatProjection::Absent => true,
+        RxdbBusinessChatProjection::Tombstone => false,
+        RxdbBusinessChatProjection::Live(record) => {
+            is_placeholder_business_chat_owner(&business_chat_owner_from_payload(&record))
+        }
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    static RXDB_CHAT_OWNER_REPAIR_INTERLEAVE: RefCell<Option<Box<dyn FnMut(&Path, &str)>>> =
+        RefCell::new(None);
+}
+
+#[cfg(test)]
+pub(crate) struct RxdbChatOwnerRepairInterleaveGuard;
+
+#[cfg(test)]
+impl Drop for RxdbChatOwnerRepairInterleaveGuard {
+    fn drop(&mut self) {
+        RXDB_CHAT_OWNER_REPAIR_INTERLEAVE.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn set_rxdb_chat_owner_repair_interleave<F>(
+    hook: F,
+) -> RxdbChatOwnerRepairInterleaveGuard
+where
+    F: FnMut(&Path, &str) + 'static,
+{
+    RXDB_CHAT_OWNER_REPAIR_INTERLEAVE.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+    RxdbChatOwnerRepairInterleaveGuard
+}
+
+#[cfg(test)]
+fn invoke_rxdb_chat_owner_repair_interleave(root: &Path, chat_id: &str) {
+    RXDB_CHAT_OWNER_REPAIR_INTERLEAVE.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().as_mut() {
+            hook(root, chat_id);
+        }
+    });
+}
+
+pub(super) fn repair_placeholder_business_chat_owners(
+    root: &Path,
+    conn: &Connection,
+    rxdb_writers: &mut RxdbProjectionWriterCache,
+    apply: bool,
+    now: i64,
+    counters: &mut BTreeMap<&'static str, usize>,
+    actions: &mut Vec<Value>,
+) -> anyhow::Result<()> {
+    let chats = {
+        let mut stmt = conn.prepare(
+            "SELECT record_id, payload_json
+             FROM business_records
+             WHERE collection = 'business_chats' AND deleted = 0
+             ORDER BY record_id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (chat_id, payload_json) in chats {
+        let payload: Value = serde_json::from_str(&payload_json)
+            .with_context(|| format!("invalid business_chats payload for repair {chat_id}"))?;
+        let existing_owner = business_chat_owner_from_payload(&payload);
+        let proven = trusted_native_chat_owner(conn, &chat_id, "")?;
+        let native_placeholder = is_placeholder_business_chat_owner(&existing_owner);
+        let expected_owner = if native_placeholder {
+            proven.clone()
+        } else if proven.as_deref() == Some(existing_owner.as_str()) {
+            Some(existing_owner.clone())
+        } else {
+            None
+        };
+        let Some(expected_owner) = expected_owner else {
+            continue;
+        };
+        let rxdb_stale = rxdb_business_chat_owner_is_placeholder_or_missing(root, &chat_id)?;
+        if !native_placeholder && !rxdb_stale {
+            continue;
+        }
+        if !apply {
+            *counters.entry("chat_owner_repaired").or_insert(0) += 1;
+            push_repair_action(
+                actions,
+                "chat_owner_repaired",
+                &chat_id,
+                None,
+                &existing_owner,
+                &expected_owner,
+                Some("placeholder chat owner repaired from trusted native policy receipt"),
+            );
+            continue;
+        }
+
+        let mut repaired = false;
+        let mut native_payload = payload;
+        if native_placeholder {
+            let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+            let current_payload = tx
+                .query_row(
+                    "SELECT payload_json FROM business_records
+                     WHERE collection = 'business_chats' AND record_id = ?1 AND deleted = 0",
+                    params![chat_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            let Some(current_payload) = current_payload else {
+                tx.rollback()?;
+                continue;
+            };
+            let mut current: Value = serde_json::from_str(&current_payload)?;
+            let current_owner = business_chat_owner_from_payload(&current);
+            if is_placeholder_business_chat_owner(&current_owner) {
+                let Some(owner) = trusted_native_chat_owner(&tx, &chat_id, "")? else {
+                    tx.rollback()?;
+                    continue;
+                };
+                if let Some(obj) = current.as_object_mut() {
+                    obj.insert("owner_user_id".to_string(), Value::String(owner.clone()));
+                }
+                upsert_business_record(&tx, "business_chats", &chat_id, now, current.clone())?;
+                tx.commit()?;
+                native_payload = current;
+                repaired = true;
+            } else {
+                tx.rollback()?;
+                native_payload = current;
+            }
+        }
+
+        let native_owner = business_chat_owner_from_payload(&native_payload);
+        if native_owner == expected_owner {
+            #[cfg(test)]
+            invoke_rxdb_chat_owner_repair_interleave(root, &chat_id);
+            if rxdb_writers.repair_business_chat_placeholder_owner(
+                &chat_id,
+                &expected_owner,
+                native_payload,
+                now,
+            )? {
+                repaired = true;
+            }
+        }
+        if repaired {
+            *counters.entry("chat_owner_repaired").or_insert(0) += 1;
+            push_repair_action(
+                actions,
+                "chat_owner_repaired",
+                &chat_id,
+                None,
+                &existing_owner,
+                &expected_owner,
+                Some("placeholder chat owner repaired from trusted native policy receipt"),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn proven_existing_business_chat_owner(
+    conn: &Connection,
+    chat_id: &str,
+    existing_owner: &str,
+    exclude_command_id: &str,
+) -> anyhow::Result<Option<String>> {
+    if !is_placeholder_business_chat_owner(existing_owner) {
+        return Ok(Some(existing_owner.trim().to_string()));
+    }
+    trusted_native_chat_owner(conn, chat_id, exclude_command_id)
+}
+
+fn insert_business_chat_owner_claim(
+    conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+    chat_id: &str,
+    owner: &str,
+) -> anyhow::Result<()> {
+    let now = now_ms() as i64;
+    let mut payload =
+        initial_pending_business_chat_payload(command, command_id, owner, now, command_id);
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("id".to_string(), Value::String(chat_id.to_string()));
+        obj.insert(
+            "owner_user_id".to_string(),
+            Value::String(owner.to_string()),
+        );
+    }
+    upsert_business_record(conn, "business_chats", chat_id, now, payload)
+}
+
+fn stamp_business_chat_owner(conn: &Connection, chat_id: &str, owner: &str) -> anyhow::Result<()> {
+    let payload = conn
+        .query_row(
+            "SELECT payload_json FROM business_records
+             WHERE collection = 'business_chats' AND record_id = ?1 AND deleted = 0",
+            params![chat_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let mut value = payload
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .unwrap_or_else(|| serde_json::json!({ "id": chat_id, "messages": [] }));
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "owner_user_id".to_string(),
+            Value::String(owner.to_string()),
+        );
+    }
+    upsert_business_record(conn, "business_chats", chat_id, now_ms() as i64, value)
+}
+
+pub(super) fn claim_or_reject_business_chat(
+    root: &Path,
+    conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+) -> anyhow::Result<Option<CommandAccepted>> {
+    if !is_business_chat_command(command) {
+        return Ok(None);
+    }
+    let chat_id = business_chat_id(command, command_id);
+    let actor_id = authorized_business_chat_actor_id(root, command)?;
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let existing_owner = existing_business_chat_owner(&tx, &chat_id)?;
+    let denied = match existing_owner {
+        None => {
+            let owner = match actor_id.as_deref() {
+                Some(actor) => actor.to_string(),
+                None if matches!(command.origin, CommandOrigin::TrustedLocal) => {
+                    business_chat_owner_user_id(command)
+                }
+                None => {
+                    tx.rollback()?;
+                    return Ok(Some(chat_owner_mismatch_accepted(command_id, &chat_id)));
+                }
+            };
+            insert_business_chat_owner_claim(&tx, command_id, command, &chat_id, &owner)?;
+            None
+        }
+        Some(existing_owner) => {
+            let proven =
+                proven_existing_business_chat_owner(&tx, &chat_id, &existing_owner, command_id)?;
+            match (proven, actor_id.as_deref()) {
+                (Some(owner), Some(actor)) if owner == actor => {
+                    if is_placeholder_business_chat_owner(&existing_owner) {
+                        stamp_business_chat_owner(&tx, &chat_id, actor)?;
+                    }
+                    None
+                }
+                (None, None)
+                    if matches!(command.origin, CommandOrigin::TrustedLocal)
+                        && is_placeholder_business_chat_owner(&existing_owner) =>
+                {
+                    None
+                }
+                _ => Some(chat_owner_mismatch_accepted(command_id, &chat_id)),
+            }
+        }
+    };
+    if denied.is_some() {
+        tx.rollback()?;
+    } else {
+        tx.commit()?;
+    }
+    Ok(denied)
 }
 
 fn reject_app_build_command_if_denied(
@@ -10043,7 +10504,7 @@ pub fn complete_ready_documents_report_commands(
     })
 }
 
-fn process_business_chat_reply(
+pub(super) fn process_business_chat_reply(
     root: &Path,
     conn: &Connection,
     command_id: &str,
@@ -11037,6 +11498,32 @@ impl RxdbProjectionWriterCache {
         Ok(())
     }
 
+    pub(super) fn repair_business_chat_placeholder_owner(
+        &mut self,
+        record_id: &str,
+        expected_owner: &str,
+        absent_payload: Value,
+        updated_at_ms: i64,
+    ) -> anyhow::Result<bool> {
+        if !matches!(self.writers.get("business_chats"), Some(Some(_))) {
+            let writer = RxdbCollectionWriter::open(&self.root, "business_chats")?;
+            self.writers.insert("business_chats".to_string(), writer);
+        }
+        if let Some(Some(writer)) = self.writers.get_mut("business_chats") {
+            let result = writer.repair_placeholder_chat_owner(
+                record_id,
+                expected_owner,
+                absent_payload,
+                updated_at_ms,
+            );
+            if result.is_err() {
+                self.writers.remove("business_chats");
+            }
+            return result;
+        }
+        Ok(false)
+    }
+
     fn upsert_source_projection(
         &mut self,
         collection: &str,
@@ -11231,6 +11718,93 @@ impl RxdbCollectionWriter {
         )?;
         self.notify_committed_change();
         Ok(())
+    }
+
+    fn repair_placeholder_chat_owner(
+        &mut self,
+        record_id: &str,
+        expected_owner: &str,
+        mut absent_payload: Value,
+        updated_at_ms: i64,
+    ) -> anyhow::Result<bool> {
+        if let Some(obj) = absent_payload.as_object_mut() {
+            obj.insert("id".to_string(), Value::String(record_id.to_string()));
+            obj.insert(
+                "owner_user_id".to_string(),
+                Value::String(expected_owner.to_string()),
+            );
+        }
+        let table = self.table.clone();
+        let columns = self.columns.clone();
+        let demand_file_storage = self.demand_file_storage;
+        let deleted_column = ["deleted", "_deleted"]
+            .into_iter()
+            .find_map(|column| columns.contains(column).then_some(column));
+        let tx = rusqlite::Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        let current = if let Some(deleted_column) = deleted_column {
+            tx.query_row(
+                &format!("SELECT data, {deleted_column} FROM {table} WHERE id = ?1"),
+                [record_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?
+        } else {
+            tx.query_row(
+                &format!("SELECT data FROM {table} WHERE id = ?1"),
+                [record_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .map(|raw| (raw, 0))
+        };
+        let payload_to_write = match current {
+            None => Some(absent_payload),
+            Some((raw, row_deleted)) => {
+                let mut record: Value = serde_json::from_str(&raw)?;
+                if let Some(object) = record.as_object_mut() {
+                    object
+                        .entry("id".to_string())
+                        .or_insert_with(|| Value::String(record_id.to_string()));
+                }
+                if row_deleted != 0 || is_rxdb_deleted_document(&record) {
+                    None
+                } else {
+                    let owner = business_chat_owner_from_payload(&record);
+                    if owner == expected_owner {
+                        None
+                    } else if is_placeholder_business_chat_owner(&owner) {
+                        if let Some(obj) = record.as_object_mut() {
+                            obj.insert(
+                                "owner_user_id".to_string(),
+                                Value::String(expected_owner.to_string()),
+                            );
+                        }
+                        Some(record)
+                    } else {
+                        None
+                    }
+                }
+            }
+        };
+        let Some(payload) = payload_to_write else {
+            tx.rollback()?;
+            return Ok(false);
+        };
+        upsert_rxdb_collection_record_with_writer(
+            &tx,
+            &table,
+            &columns,
+            record_id,
+            updated_at_ms,
+            updated_at_ms,
+            payload,
+            demand_file_storage,
+            false,
+            false,
+        )?;
+        tx.commit()?;
+        self.notify_committed_change();
+        Ok(true)
     }
 
     fn read(&self, record_id: &str) -> anyhow::Result<Option<Value>> {
