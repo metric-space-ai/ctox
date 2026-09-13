@@ -2,14 +2,14 @@
 
 `brightdata-core.cjs` implements bounded profile discovery, canonical URL and
 current-employer admission, and one transition of an asynchronous BrightData
-profile collection. It is a library, **not yet an executable registered adapter**.
+company/profile collection. It is a library, **not yet an executable registered adapter**.
 The existing target.json and live target remain unchanged until integration and
 acceptance are complete. No edits to the excluded historical Rust crate or the
 Cargo dependency cache are used to claim a production fix.
 
 ## Contract
 
-The currently compiled Workjet b80535e scrape bridge supplies company, country
+The original Workjet b80535e scrape bridge supplies company, country
 and source_id before its later search cascade. Therefore a collect-by-URL
 script alone would be unusable in ordinary research. `discoverProfiles` accepts
 company/country and one injected native search call; it keeps at most three
@@ -22,8 +22,13 @@ errors, missing rows, duplicate URLs and ambiguous matching companies fail
 closed. It treats the provider's comma-separated country codes as reported
 country presence, not proof of registered headquarters or legal registration.
 Employee previews and related companies are never person evidence. The runner
-still must retrieve and verify that dataset/snapshot before calling this gate,
-then use the admitted company URL in `collectionBinding`.
+must use `companyCollectionBinding` to collect and verify that dataset/snapshot,
+then use the admitted company URL in `collectionBinding`. `advanceCollection`
+now supports both allowlisted datasets, including dataset-bound progress and
+complete company-snapshot validation. A verified company result is intermediate
+identity evidence, not a finished adapter/person result. Company and profile
+journals are isolated within the same operation; profile journal paths remain
+compatible. Query changes within either stage still fail closed.
 
 The extraction gate requires matching requested/input/returned profile URLs,
 exact current employer name and company page URL, and unmasked structured names.
@@ -54,8 +59,10 @@ executor validates current run/input/operation/target and company/country,
 persists `awaiting_provider`, and neither materializes records nor queues repair.
 The runner must emit the projected receipt and exit zero, never print the core's
 internal `temporary_unreachable` pending result. See
-`docs/scrape-provider-continuation.md`. Actual Research command wake/resume and
-Workjet continuation propagation still need integration before activation.
+`docs/scrape-provider-continuation.md`. Both datasets project typed native waits.
+Workjet099758 and CTOX163 implement bounded command wake/resume and completed-
+source preservation; their native tests and actual recovery integration proof
+remain outstanding before activation.
 
 The production implementation must provide:
 
@@ -85,11 +92,13 @@ raw provider/CLI errors. Snapshot/query identity failures stop admission.
 
 ## Verification
 
-`node --test --test-concurrency=1 src/tools/web-stack/scrape-targets/tests/brightdata-core.test.mjs src/tools/web-stack/scrape-targets/tests/brightdata-state.test.mjs src/tools/web-stack/scrape-targets/tests/brightdata-continuation.test.mjs`
+`node --test --test-concurrency=1 src/tools/web-stack/scrape-targets/tests/brightdata-core.test.mjs src/tools/web-stack/scrape-targets/tests/brightdata-state.test.mjs src/tools/web-stack/scrape-targets/tests/brightdata-continuation.test.mjs src/tools/web-stack/scrape-targets/tests/brightdata-company-flow.test.mjs`
 
-Twenty-eight JavaScript tests pass (the four projector tests rerun after final
-hardening). Five new native validator/executor tests are pending coordinated
-execution. Core tests inject network/credentials/persistence. State
+Thirty-two JavaScript tests pass (zero failures/skips, latest3532ms). The company
+flow uses actual journals across reopenings, exactly one POST per dataset,
+separate snapshots under the same operation, company-to-profile identity binding,
+wrong-dataset rejection and ambiguous-acceptance no-resubmit. Native tests remain
+pending coordinated execution. Core tests inject network/credentials/persistence. State
 tests use actual files, reopen journals, race two bounded child processes and
 exit a child immediately after its durable claim, and restart after a persisted
 HTTP401 to verify bounded reauthorization. Mac tests require TMPDIR on

@@ -2,7 +2,7 @@
 
 const path = require("node:path");
 const { createHash } = require("node:crypto");
-const { checkedQuery, collectionBinding, DATASET } = require("./brightdata-core.cjs");
+const { checkedQuery, checkedCollectionBinding, DATASET } = require("./brightdata-core.cjs");
 
 // The native runner owns this context. Neither research input nor provider
 // output may select a state directory, executable or credential reference.
@@ -24,19 +24,20 @@ function projectProviderWait(outcome, { rawInput, runDirectory, targetKey }) {
     if (!state || !["pending", "ready"].includes(state.phase) ||
         !/^(?:sd|s)_[A-Za-z0-9]{1,100}$/.test(state.snapshot_id || "") ||
         !Number.isInteger(state.submission_attempt) || state.submission_attempt < 1 || state.submission_attempt > 2) return fail();
-    const binding = collectionBinding(query, state.binding?.company_profile_url, state.binding?.urls);
+    const binding = checkedCollectionBinding(state.binding);
     if (state.query_hash !== binding.query_hash || state.binding.query_hash !== binding.query_hash ||
-        state.binding.company !== query.company || state.binding.country !== query.country || state.binding.dataset_id !== DATASET) return fail();
+        state.binding.company !== query.company || state.binding.country !== query.country) return fail();
     return { schema: "prospect.v1", provider: "linkedin.com", records: [],
       failure_mode: "awaiting_provider", error_code: "collection_pending",
       continuation: { schema: "ctox.scrape.provider_continuation.v1", run_id: runId,
         input_sha256: createHash("sha256").update(rawInput).digest("hex"),
         operation_id: operation, source_id: "linkedin.com", target_key: targetKey,
         provider: "brightdata", company: query.company, country: query.country,
-        dataset_id: DATASET, snapshot_id: state.snapshot_id, query_hash: binding.query_hash,
+        dataset_id: binding.dataset_id, snapshot_id: state.snapshot_id, query_hash: binding.query_hash,
         phase: state.phase, submission_attempt: state.submission_attempt, retry_after_seconds: 15 },
       api_query_evidence: { company: query.company, country: query.country,
-        query_hash: binding.query_hash, dataset_id: DATASET, profile_urls: binding.urls,
+        query_hash: binding.query_hash, dataset_id: binding.dataset_id,
+        [binding.dataset_id === DATASET ? "profile_urls" : "company_urls"]: binding.urls,
         snapshot_id: state.snapshot_id },
     };
   } catch { return fail(); }

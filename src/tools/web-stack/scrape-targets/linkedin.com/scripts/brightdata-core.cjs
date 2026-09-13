@@ -109,6 +109,24 @@ function collectionBinding(query, companyUrl, urls) {
   return { ...binding, query_hash: createHash("sha256").update(JSON.stringify(binding)).digest("hex") };
 }
 
+function companyCollectionBinding(query, urls) {
+  const checked = checkedQuery(query);
+  if (!Array.isArray(urls) || !urls.length || urls.length > MAX_PROFILES)
+    throw new Error("invalid_company_candidates");
+  const companies = urls.map(url => canonicalLinkedIn(url, "company"));
+  if (companies.some(url => !url) || new Set(companies).size !== companies.length)
+    throw new Error("invalid_company_candidates");
+  const binding = { company: checked.company, country: checked.country,
+    dataset_id: COMPANY_DATASET, urls: companies.sort() };
+  return { ...binding, query_hash: createHash("sha256").update(JSON.stringify(binding)).digest("hex") };
+}
+
+function checkedCollectionBinding(binding) {
+  if (binding?.dataset_id === COMPANY_DATASET) return companyCollectionBinding(binding, binding.urls);
+  if (binding?.dataset_id === DATASET) return collectionBinding(binding, binding.company_profile_url, binding.urls);
+  throw new Error("invalid_collection_dataset");
+}
+
 function extractProfiles(rows, binding) {
   if (!Array.isArray(rows) || rows.length > MAX_PROFILES) throw new Error("invalid_snapshot_records");
   const records = [], rejected = [], seen = new Set();
@@ -170,7 +188,7 @@ function failure(code, mode = "blocked", extra = {}) {
 async function advanceCollection(binding, state, dependencies) {
   const { fetch: request, loadSecret, saveState, claimSubmission } = dependencies;
   let checked;
-  try { checked = collectionBinding(binding, binding.company_profile_url, binding.urls); }
+  try { checked = checkedCollectionBinding(binding); }
   catch { return failure("invalid_collection_binding"); }
   if (checked.query_hash !== binding.query_hash || (state && state.query_hash !== checked.query_hash))
     return failure("checkpoint_query_mismatch");
@@ -192,14 +210,16 @@ async function advanceCollection(binding, state, dependencies) {
       throw new Error("invalid_secret");
   } catch { return failure("credential_unavailable", "auth_required"); }
   const receipt = { company: checked.company, country: checked.country, query_hash: checked.query_hash,
-    dataset_id: DATASET, profile_urls: checked.urls, snapshot_id: state?.snapshot_id || null };
+    dataset_id: checked.dataset_id,
+    [checked.dataset_id === DATASET ? "profile_urls" : "company_urls"]: checked.urls,
+    snapshot_id: state?.snapshot_id || null };
   try {
     const headers = { Authorization: `Bearer ${secret}`, "Content-Type": "application/json", accept: "application/json" };
     let endpoint, method = "GET", body;
     if (submittingNow) {
       const submitting = { phase: "submitting", query_hash: checked.query_hash, binding: checked, submission_attempt: attempt };
       if (!await claimSubmission(submitting)) return failure("collection_already_claimed");
-      endpoint = `/datasets/v3/trigger?dataset_id=${DATASET}&include_errors=true&limit_per_input=1&limit_multiple_results=${MAX_PROFILES}`;
+      endpoint = `/datasets/v3/trigger?dataset_id=${checked.dataset_id}&include_errors=true&limit_per_input=1&limit_multiple_results=${MAX_PROFILES}`;
       method = "POST";
       body = JSON.stringify(checked.urls.map(url => ({ url })));
     } else {
@@ -228,7 +248,7 @@ async function advanceCollection(binding, state, dependencies) {
       return failure("collection_pending", "temporary_unreachable", { api_query_evidence: { ...receipt, snapshot_id: payload.snapshot_id }, continuation: next });
     }
     if (state.phase === "pending") {
-      if (payload?.snapshot_id !== state.snapshot_id || payload?.dataset_id !== DATASET)
+      if (payload?.snapshot_id !== state.snapshot_id || payload?.dataset_id !== checked.dataset_id)
         return failure("progress_identity_mismatch", "portal_drift", { api_query_evidence: receipt });
       if (!["starting", "running", "ready"].includes(payload.status))
         return failure("provider_collection_failed", "blocked", { api_query_evidence: receipt });
@@ -237,6 +257,14 @@ async function advanceCollection(binding, state, dependencies) {
       return failure("collection_pending", "temporary_unreachable", { api_query_evidence: receipt, continuation: next });
     }
     if (response.status !== 200) return failure("snapshot_not_ready", "temporary_unreachable", { api_query_evidence: receipt });
+    if (checked.dataset_id === COMPANY_DATASET) {
+      const verified = verifyCompanySnapshot(payload, checked, checked.urls);
+      if (!verified.ok) return failure(verified.code, "partial_output", { api_query_evidence: receipt });
+      await saveState({ ...state, phase: "completed" });
+      // Intermediate identity evidence for the native two-stage runner, not a
+      // finished adapter result or an invented prospect/person record.
+      return { ...verified, company_verified: true, api_query_evidence: receipt };
+    }
     let extracted;
     try { extracted = extractProfiles(payload, checked); }
     catch { return failure("snapshot_invalid", "portal_drift", { api_query_evidence: receipt }); }
@@ -251,4 +279,5 @@ async function advanceCollection(binding, state, dependencies) {
 }
 
 module.exports = { canonicalLinkedIn, checkedQuery, discoverProfiles, discoverCompanies,
-  verifyCompanySnapshot, collectionBinding, extractProfiles, advanceCollection, DATASET, COMPANY_DATASET };
+  verifyCompanySnapshot, collectionBinding, companyCollectionBinding, checkedCollectionBinding,
+  extractProfiles, advanceCollection, DATASET, COMPANY_DATASET };

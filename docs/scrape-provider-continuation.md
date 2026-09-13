@@ -83,7 +83,10 @@ live-provider tests.
 
 The resume API and command integration require the coordinated Workjet pin and
 native compilation/tests on that exact composition; source implementation is
-not acceptance. The company-collection executable path, account/API entitlement,
+not acceptance. Company-dataset core execution, journal and wait projection now
+have a two-stage regression (one POST per dataset across real journal reopenings);
+the executable native runner still must wire them to registered execution.
+Account/API entitlement,
 encrypted-secret/native-runner wiring, real daemon restart tests and the full
 DE/AT/CH app research/reload acceptance remain required. No live target has been
 activated by these changes.

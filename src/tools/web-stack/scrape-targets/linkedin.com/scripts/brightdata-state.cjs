@@ -6,7 +6,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { createHash, randomUUID } = require("node:crypto");
-const { collectionBinding } = require("./brightdata-core.cjs");
+const { checkedCollectionBinding, COMPANY_DATASET } = require("./brightdata-core.cjs");
 const MAX_REVISIONS = 64;
 const MAX_BYTES = 16384;
 const hash = value => createHash("sha256").update(value).digest("hex");
@@ -63,8 +63,7 @@ function canonicalState(value, binding) {
       throw new Error("checkpoint_snapshot_invalid");
     state.snapshot_id = value.snapshot_id;
   }
-  if (value.binding && JSON.stringify(collectionBinding(value.binding,
-      value.binding.company_profile_url, value.binding.urls)) !== JSON.stringify(binding))
+  if (value.binding && JSON.stringify(checkedCollectionBinding(value.binding)) !== JSON.stringify(binding))
     throw new Error("checkpoint_binding_mismatch");
   return state;
 }
@@ -83,12 +82,15 @@ function openCheckpoint({ stateRoot, operationId, binding: rawBinding }) {
   const root = checkedDirectory(stateRoot);
   if (typeof operationId !== "string" || !operationId.trim() || operationId.length > 200 ||
       /[\x00-\x1f\x7f]/.test(operationId)) throw new Error("checkpoint_operation_invalid");
-  const binding = collectionBinding(rawBinding, rawBinding.company_profile_url, rawBinding.urls);
+  const binding = checkedCollectionBinding(rawBinding);
   if (binding.query_hash !== rawBinding.query_hash) throw new Error("checkpoint_binding_mismatch");
   const operationHash = hash(operationId);
   // Deliberately not keyed by query: changing a query within the SAME durable
   // operation must conflict rather than create a second provider submission.
-  const directory = path.join(root, operationHash);
+  // One command owns two independent accepted jobs. Preserve the existing
+  // profile journal path; the company stage has a fixed native-selected suffix.
+  // Both remain keyed by operation, so changed queries conflict within a stage.
+  const directory = path.join(root, operationHash + (binding.dataset_id === COMPANY_DATASET ? "-company" : ""));
   try { fs.mkdirSync(directory, { mode: 0o700 }); syncDirectory(root); }
   catch (error) { if (error.code !== "EEXIST") throw error; }
   checkedDirectory(directory);
