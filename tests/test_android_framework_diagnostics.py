@@ -787,7 +787,7 @@ class WorkflowIntegrationTest(unittest.TestCase):
         )
         self.assertGreater(
             self.workflow.index("Finalize bounded tablet framework diagnostics"),
-            self.workflow.index("tablet is not 4:3"),
+            self.workflow.index("assert_android_tablet_screenshot.py"),
         )
         upload = self.workflow[self.workflow.index("Upload sanitized tablet framework diagnostics"):]
         self.assertIn("if: always()", upload)
@@ -819,8 +819,7 @@ class WorkflowIntegrationTest(unittest.TestCase):
             "adb install -r src/apps/business-os-mobile/android/app/build/outputs/apk/debug/app-debug.apk",
             "adb shell settings put system accelerometer_rotation 0",
             "adb shell settings put system user_rotation 1",
-            "tablet did not rotate to landscape",
-            "tablet is not 4:3",
+            "python3 src/scripts/assert_android_tablet_screenshot.py \"$RUNNER_TEMP/android-tablet-4x3.png\"",
         ):
             self.assertIn(expected, self.workflow)
         self.assertNotIn("continue-on-error", self.workflow)
