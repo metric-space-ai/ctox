@@ -3,8 +3,7 @@
 
 use super::backup_restore::file_sha256;
 use super::store::{
-    find_rxdb_collection_record_by_string_field, find_rxdb_collection_records_by_string_field,
-    find_rxdb_collection_records_by_string_field_contains, insert_business_event,
+    find_rxdb_collection_record_by_string_field, insert_business_event,
     is_safe_rxdb_collection_name, load_rxdb_collection_record, now_ms, open_store,
     outbound_first_string, outbound_id_from_command, outbound_load_record,
     outbound_load_records_by_string_field, outbound_load_required, outbound_merge_fields,
@@ -1335,6 +1334,57 @@ fn outbound_registry_latest_script(root: &Path, target_key: &str) -> anyhow::Res
     }))
 }
 
+fn decode_sellify_lookup_record(id: &str, raw: &str) -> anyhow::Result<Value> {
+    let mut record: Value = serde_json::from_str(raw)?;
+    if let Some(object) = record.as_object_mut() {
+        object
+            .entry("id".to_string())
+            .or_insert_with(|| Value::String(id.to_string()));
+    }
+    Ok(record)
+}
+
+fn sellify_lookup_field_rows(
+    conn: &Connection,
+    table: &str,
+    field: &str,
+    value: &str,
+    contains: bool,
+    limit: usize,
+) -> anyhow::Result<Vec<(String, Value)>> {
+    if limit == 0 || (contains && value.trim().len() < 2) {
+        return Ok(Vec::new());
+    }
+    let (predicate, expected) = if contains {
+        let escaped = value
+            .trim()
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        ("LIKE ?2 ESCAPE '\\'", format!("%{escaped}%"))
+    } else {
+        ("= ?2", value.to_string())
+    };
+    let mut statement = conn.prepare(&format!(
+        "SELECT id, data FROM {table}
+         WHERE CAST(json_extract(data, ?1) AS TEXT) {predicate}
+         ORDER BY CAST(COALESCE(json_extract(data, '$.updated_at_ms'), 0) AS INTEGER) DESC, id DESC
+         LIMIT ?3"
+    ))?;
+    let rows = statement
+        .query_map(
+            params![format!("$.{field}"), expected, limit as i64],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter()
+        .map(|(id, raw)| {
+            let record = decode_sellify_lookup_record(&id, &raw)?;
+            Ok((id, record))
+        })
+        .collect()
+}
+
 pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::Result<Value> {
     let entity = outbound_required_string(payload, &["entity"])?;
     let (collection, allowed_fields): (&str, &[&str]) = match entity.as_str() {
@@ -1381,6 +1431,11 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
         ),
         _ => anyhow::bail!("entity must be company or person"),
     };
+    // A completed-empty CRM receipt requires an actual readable collection.
+    // Optional store readers deliberately tolerate absent projections elsewhere;
+    // they must not stand in for a successful Sellify research query here.
+    let (lookup_conn, lookup_table) =
+        super::store::required_rxdb_collection_read_connection(root, collection)?;
     // Campaign imports must see the FULL membership of one campaign; the
     // usual dedupe/lookup cap of 100 would silently truncate it.
     // A name search groups rows server-side (see below), so it may scan many
@@ -1411,7 +1466,15 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
             if records.len() >= limit {
                 break;
             }
-            if let Some(record) = load_rxdb_collection_record(root, collection, id)? {
+            let raw = lookup_conn
+                .query_row(
+                    &format!("SELECT data FROM {lookup_table} WHERE id = ?1"),
+                    [id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if let Some(raw) = raw {
+                let record = decode_sellify_lookup_record(id, &raw)?;
                 if seen.insert(id.to_string()) {
                     records.push(record);
                 }
@@ -1440,11 +1503,12 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
             if expected.is_empty() {
                 continue;
             }
-            for (id, record) in find_rxdb_collection_records_by_string_field(
-                root,
-                collection,
+            for (id, record) in sellify_lookup_field_rows(
+                &lookup_conn,
+                &lookup_table,
                 field,
                 expected,
+                false,
                 limit.saturating_sub(records.len()),
             )? {
                 if seen.insert(id) {
@@ -1478,11 +1542,12 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
             if needle.is_empty() {
                 continue;
             }
-            for (id, record) in find_rxdb_collection_records_by_string_field_contains(
-                root,
-                collection,
+            for (id, record) in sellify_lookup_field_rows(
+                &lookup_conn,
+                &lookup_table,
                 field,
                 needle,
+                true,
                 limit.saturating_sub(records.len()),
             )? {
                 if seen.insert(id) {

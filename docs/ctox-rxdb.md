@@ -36,6 +36,12 @@ A failed lookup has an unknown (`null`) record count and a bounded error code,
 not a false empty result or raw database error. The enclosing command/workspace
 binds the receipt to the research; it is not a synthetic scrape run.
 
+Sellify lookups require a readable collection and use one read-only SQLite
+transaction for ID, exact-field, and fuzzy-field probes. Missing, non-file,
+corrupt, or unprojected storage fails the lookup instead of producing
+`completed_empty`; a readable collection with no matching records is genuinely
+empty. Optional projection readers elsewhere retain their existing behavior.
+
 Final persistence runs after all native source augmentation and summary, even
 with `auto_browser_capture=false`. Successful persistence leaves `envelope.json`
 equal to the returned payload, including workspace metadata and recovered-error

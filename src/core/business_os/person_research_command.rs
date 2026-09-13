@@ -2504,6 +2504,107 @@ mod tests {
     }
 
     #[test]
+    fn sellify_lookup_requires_readable_projection_for_all_selector_modes() -> anyhow::Result<()> {
+        for state in ["missing", "directory", "no_collection", "corrupt", "empty"] {
+            let temp = tempfile::tempdir()?;
+            let root = temp.path();
+            let path = store::rxdb_store_path(root);
+            match state {
+                "missing" => {}
+                "directory" => std::fs::create_dir_all(&path)?,
+                "no_collection" => {
+                    std::fs::create_dir_all(path.parent().unwrap())?;
+                    drop(rusqlite::Connection::open(&path)?);
+                }
+                "corrupt" => {
+                    std::fs::create_dir_all(path.parent().unwrap())?;
+                    std::fs::write(&path, b"not a SQLite database")?;
+                }
+                "empty" => {
+                    super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+                        root,
+                        "sellify_companies",
+                    )?
+                }
+                _ => unreachable!(),
+            }
+            for selectors in [
+                serde_json::json!({"ids": ["crm-missing"]}),
+                serde_json::json!({"selectors": [{"field": "name", "value": "Missing GmbH"}]}),
+                serde_json::json!({"fuzzy_selectors": [{"field": "name", "value": "Missing"}]}),
+            ] {
+                let mut request = selectors;
+                request["entity"] = serde_json::json!("company");
+                let outcome =
+                    super::super::store_outbound_commands::outbound_sellify_lookup(root, &request);
+                if state == "empty" {
+                    let outcome = outcome?;
+                    assert_eq!(outcome["ok"], true);
+                    assert_eq!(outcome["records"], serde_json::json!([]));
+                } else {
+                    assert!(
+                        outcome.is_err(),
+                        "unavailable projection became empty: {state}"
+                    );
+                }
+                if state == "missing" {
+                    assert!(!path.exists(), "read-only lookup created a database");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sellify_lookup_keeps_selector_dedupe_limits_and_literal_fuzzy_matching() -> anyhow::Result<()>
+    {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+            root,
+            "sellify_companies",
+        )?;
+        for (id, name) in [("crm-1", "Acme%_AG"), ("crm-2", "AcmeZZAG")] {
+            store::upsert_rxdb_collection_record(
+                root,
+                "sellify_companies",
+                id,
+                1,
+                serde_json::json!({"id": id, "name": name}),
+            )?;
+        }
+        let matched = super::super::store_outbound_commands::outbound_sellify_lookup(
+            root,
+            &serde_json::json!({
+                "entity": "company", "ids": ["crm-1"],
+                "selectors": [{"field": "name", "value": "Acme%_AG"}],
+                "fuzzy_selectors": [{"field": "name", "value": "Acme%_"}],
+            }),
+        )?;
+        assert_eq!(matched["records"].as_array().unwrap().len(), 1);
+        assert_eq!(matched["records"][0]["id"], "crm-1");
+        let fuzzy = super::super::store_outbound_commands::outbound_sellify_lookup(
+            root,
+            &serde_json::json!({
+                "entity": "company", "fuzzy_selectors": [{"field": "name", "value": "Acme%_"}],
+            }),
+        )?;
+        assert_eq!(fuzzy["records"].as_array().unwrap().len(), 1);
+        assert_eq!(fuzzy["records"][0]["id"], "crm-1");
+        let limited = super::super::store_outbound_commands::outbound_sellify_lookup(
+            root,
+            &serde_json::json!({
+                "entity": "company", "ids": ["crm-1", "crm-2"], "limit": 1, "fields": ["name"],
+            }),
+        )?;
+        assert_eq!(
+            limited["records"],
+            serde_json::json!([{"id": "crm-1", "name": "Acme%_AG"}])
+        );
+        Ok(())
+    }
+
+    #[test]
     fn research_without_browser_capture_persists_actual_sellify_outcomes() -> anyhow::Result<()> {
         for broken in [false, true] {
             let temp = tempfile::tempdir()?;
