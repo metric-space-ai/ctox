@@ -207,7 +207,10 @@ try {
       await page.screenshot({path:path.join(out,'runtime-save-reload.png')});
       await settings.evaluate(e => e.remove());
     }
-    if (width === 1280) await assertDelayedHarnessStatus(page);
+    if (width === 1280) {
+      await assertDelayedHarnessStatus(page);
+      await assertStatusDuringTaskHydration(page);
+    }
     await page.close();
   }
   console.log(JSON.stringify({passed:results.length,results}));
@@ -284,4 +287,78 @@ async function assertDelayedHarnessStatus(page) {
   await page.screenshot({ path: path.join(out, 'harness-resumed-without-reload.png') });
   await page.evaluate(() => window.stopHarnessStatusFixture());
   results.push({ scenario: 'delayed-native-pause-resume-with-open-menu', passed: true });
+}
+
+async function assertStatusDuringTaskHydration(page) {
+  await page.evaluate(async () => {
+    const {state, hooks} = window.crewFixture;
+    let projection = {id:'harness',paused:false,worker_capacity:1,updated_at_ms:1};
+    const listeners = new Set();
+    const doc = value => ({toJSON: () => ({...value})});
+    const task = {id:'status-task',command_id:'status-command',status:'completed',updated_at_ms:1};
+    const command = {id:'status-command',command_id:'status-command',execution_task_id:'status-task',execution_mode:'queue',status:'completed',payload:{title:'Completed status fixture'},updated_at_ms:1};
+    window.holdStatusTaskReads = false;
+    window.statusTaskReadsHeld = 0;
+    const releases = [];
+    window.releaseStatusTaskReads = () => {
+      window.holdStatusTaskReads = false;
+      for (const release of releases.splice(0)) release([]);
+    };
+    state.ctx.db = {collection: name => name === 'ctox_harness_status' ? {
+      findOne: () => ({exec: async () => doc(projection)}),
+      $: {subscribe: listener => {listeners.add(listener); return {unsubscribe: () => listeners.delete(listener)};}},
+    } : {
+      findOne: () => ({exec: async () => null}),
+      find: () => ({exec: async () => {
+        if (['ctox_harness_events','ctox_runs'].includes(name) && window.holdStatusTaskReads) {
+          window.statusTaskReadsHeld++;
+          return new Promise(resolve => releases.push(resolve));
+        }
+        return name === 'business_commands' ? [doc(command)] : name === 'ctox_queue_tasks' ? [doc(task)] : [];
+      }}),
+    }};
+    window.statusCommands = [];
+    state.ctx.commandBus = {dispatch: async command => {
+      window.statusCommands.push(command);
+      return {status:'completed',result:{ok:true}};
+    }};
+    window.publishHeldTaskStatus = paused => {
+      projection = {...projection,paused,updated_at_ms:projection.updated_at_ms+1};
+      for (const listener of listeners) listener({documentData:{...projection}});
+    };
+    window.stopHeldTaskStatus = hooks.wireLocalRealtime(state);
+    await hooks.renderFromLocalCache(state);
+    window.holdStatusTaskReads = true;
+    window.pendingTaskHydration = hooks.renderFromLocalCache(state);
+  });
+  await page.waitForFunction(() => window.statusTaskReadsHeld > 0 && window.crewFixture.state.refreshInFlight);
+  const menu = page.locator('[data-ctox-main] .ctox-more-actions > summary');
+  const button = page.locator('[data-harness-pause]');
+  const harness = page.locator('[data-ctox-harness]');
+  await menu.click();
+  await button.click();
+  await page.waitForFunction(() => window.statusCommands.length === 1);
+  await page.locator('[data-ctox-main] .ctox-more-actions-body').waitFor({state:'hidden'});
+  await menu.click();
+  await page.evaluate(() => {
+    window.heldTaskPauseButton = document.querySelector('[data-harness-pause]');
+    window.publishHeldTaskStatus(true);
+  });
+  await page.waitForFunction(() => document.querySelector('[data-harness-pause]')?.getAttribute('aria-pressed') === 'true', null, {timeout:10000});
+  assert.equal(await harness.getAttribute('aria-label'), 'Die Crew ist pausiert');
+  assert.equal(await button.evaluate(node => node === window.heldTaskPauseButton), true);
+  assert.equal(await page.locator('.ctox-paused-note').isVisible(), true);
+  await button.click();
+  await page.waitForFunction(() => window.statusCommands.length === 2);
+  await page.locator('[data-ctox-main] .ctox-more-actions-body').waitFor({state:'hidden'});
+  assert.equal(await harness.getAttribute('aria-label'), 'Die Crew ist pausiert', 'completion alone must not resume the displayed status');
+  await page.evaluate(() => window.publishHeldTaskStatus(false));
+  await page.waitForFunction(() => document.querySelector('[data-harness-pause]')?.getAttribute('aria-pressed') === 'false', null, {timeout:10000});
+  assert.equal(await harness.getAttribute('aria-label'), 'Die Crew bearbeitet die Aufgabenliste');
+  assert.equal(await page.locator('.ctox-paused-note').isVisible(), false);
+  assert.equal(await page.evaluate(() => window.crewFixture.state.refreshInFlight), true, 'task detail reads must still be pending');
+  await page.evaluate(async () => {window.releaseStatusTaskReads(); await window.pendingTaskHydration;});
+  assert.equal(await button.getAttribute('aria-pressed'), 'false', 'older general hydration must not restore paused status');
+  await page.evaluate(() => window.stopHeldTaskStatus());
+  results.push({scenario:'pause-resume-during-selected-task-hydration',passed:true});
 }
