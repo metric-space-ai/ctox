@@ -1,7 +1,7 @@
 # Codex Desktop worker acceptance guide
 
-Use this checklist to accept the implemented worker workflow in PR #93. The
-current implementation has a bounded READY-only preparation integration and
+Use this checklist to accept the implemented worker workflow. The
+current implementation persists an execution contract without an initialization model turn and has
 focused protocol/lifecycle tests; passing those checks does **not** by itself
 prove a complete operator PR/merge/archive cycle. Complete the open review,
 retrospective, merge and archive steps below before declaring that full cycle
@@ -11,6 +11,10 @@ accepted.
 
 1. Start with one open issue in the target repository. The parent task owns the
    issue analysis, solution sketch, acceptance criteria and bounded handover.
+   The package covers a coherent outcome, including required tests, generated
+   outputs and consumers. Do not fragment it into one worker per file or check.
+   When independent packages are ready, verify concurrent worker execution
+   with separate ownership while heavy verification remains serialized by the gate.
 2. Check `/Volumes/tmp`, host capacity and the shared heavy-job gate. Put the
    dedicated Git worktree under `/Volumes/tmp/worktrees/...` and route build or
    cache output under `/Volumes/tmp/dev-artifacts/...`.
@@ -22,11 +26,12 @@ accepted.
 5. Create and persist the task with the installed helper's `create` command and
    its current required options: repository, worktree, model, reasoning, title,
    issue, parent thread, parent title and prompt file. The helper validates the
-   worktree and records the task before the preparation turn.
+   worktree and records the task before persisting its execution contract.
 6. Dispatch only after the returned registry record has
-   `preparation_status: "ready"`. This means the bounded, no-tool first turn
-   ended successfully with the exact `READY` reply and a real, nonempty
-   persisted rollout file. `thread/start` returning a path alone is not ready.
+   `preparation_status: "ready"` and `preparation_mode: "contract_without_inference"`.
+   This means the execution contract was persisted and read back without a model
+   turn. There must be no initialization user message or reply; the first actual
+   user request is the implementation assignment. A path alone is not ready.
 7. Record or verify the returned `thread_id`, `project_id`, requested `model`,
    `provider`, `reasoning`, branch, worktree, issue URL, prompt path and
    `rollout_path`.
@@ -69,10 +74,16 @@ accepted.
 
 ## 3. Apply parent corrections
 
-Send corrections to the same Desktop task with `send_message_to_thread`. Keep
+Wait until the reporting worker turn has ended, then send the consolidated
+corrections to the same Desktop task with `send_message_to_thread`. Verify a new
+active turn and changed source or fresh validation evidence. A successful send,
+an old test result or a correction embedded in a tool output is insufficient. Keep
 the same worktree, provider/model settings, branch and exactly one PR. The
 parent reviews the actual diff, pushed head and validation evidence after every
-rework; worker prose alone is not completion evidence.
+rework; worker prose alone is not completion evidence. The parent consolidates
+findings and resolves ordinary follow-on changes within the agreed outcome in
+this same PR. Supervisor acknowledgement is not a prerequisite for routine rework;
+only material goal/risk changes or cross-parent conflicts need escalation.
 
 ## 4. Retrospective, merge, archive and registry closure
 
@@ -123,7 +134,23 @@ Do not silently remap an alias, change the global provider, or record the event
 as a quality failure. An unchanged later review preserves earlier quality
 findings.
 
-## Evidence to retain
+## 7. Verify repeated context compaction
+
+Start with a small, explicit assignment as the first user request. Confirm there
+is no initialization exchange. Send a correction that changes an acceptance
+criterion and restricts publication, compact, and verify the worker retains both
+the assignment and correction. Send another correction, compact again, and verify
+the current requirements, completed work, remaining action and parent recipient.
+Require at least two successful real compactions; do not infer success merely
+from a compaction-start notification. Distinguish an app-server protocol test from
+the Desktop dispatch/resume path and record which path was actually exercised.
+
+For proxy workers, verify the effective worktree configuration is 256000 tokens
+with automatic compaction at 230400. Runtime may reserve part of that context;
+record the observed effective allowance separately. Confirm OpenAI task settings
+were not changed. Keep diagnostic tasks bounded and archive them after the test.
+
+## Evidence to retain privately
 
 Retain the issue and PR URLs, task and parent IDs, canonical project assignment,
 provider-appropriate Desktop listing evidence (`pinnedThreads` for proxy
@@ -132,5 +159,7 @@ and observed provider/model/reasoning, branch, worktree, preparation status and
 rollout path (or failure record), pushed commit, PR head, diff and validation
 results, review requests, retrospective JSON and assessed head, merge evidence,
 archive-readiness output, and archived registry state. Keep durable evidence in
-the worker registry, prompt/experience files and accessible PR—not only in the
-wiped `/Volumes/tmp` volume.
+the private worker registry and prompt/experience files outside the repository,
+not only in the wiped `/Volumes/tmp` volume. The accessible public PR retains only
+reviewed source and sanitized technical summaries. Never upload this private
+coordination bundle, raw history or operator metadata to the public PR.
