@@ -1664,6 +1664,21 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   const previousStripScrollLeft = previousStrip?.scrollLeft || 0;
   const previousActiveChatId = root.dataset?.activeChatId || '';
   const hadRenderedDock = Boolean(root.querySelector('[data-chat-dock]'));
+  // Crew expression changes rebuild the dock. Preserve the reader's position
+  // and the composer selection across that rebuild, just as on in-place ticks.
+  const retainedWindows = new Map(existingWindows.map((win) => {
+    const input = win.querySelector('[name="message"]');
+    const messages = win.querySelector('.ctox-chat-messages');
+    return [win.dataset.chatId, {
+      scrollTop: messages?.scrollTop || 0,
+      atBottom: messages ? isScrolledToBottom(messages) : true,
+      focused: Boolean(input && (win.ownerDocument || document).activeElement === input),
+      selectionStart: input?.selectionStart,
+      selectionEnd: input?.selectionEnd,
+      selectionDirection: input?.selectionDirection,
+      inputScrollTop: input?.scrollTop || 0,
+    }];
+  }));
 
   if (root.dataset) root.dataset.crewPoolSignature = crewPoolSignature(state);
   root.innerHTML = `
@@ -1979,7 +1994,9 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         textarea.style.height = `${textarea.scrollHeight}px`;
       };
       textarea.addEventListener('input', (event) => {
-        chat.draft = event.currentTarget.value;
+        // Hydration can replace the chat object while retaining this textarea.
+        const currentChat = state.chats.find((item) => item.id === node.dataset.chatId);
+        if (currentChat) currentChat.draft = event.currentTarget.value;
         adjustHeight();
       });
       textarea.addEventListener('paste', async (e) => {
@@ -2042,6 +2059,18 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   });
   updateChatStripOverflowState(root);
   publishChatLayout(root, state);
+  root.querySelectorAll('.ctox-chat-window').forEach((win) => {
+    const retained = retainedWindows.get(win.dataset.chatId);
+    if (!retained) return;
+    const messages = win.querySelector('.ctox-chat-messages');
+    if (messages) messages.scrollTop = retained.atBottom ? messages.scrollHeight : retained.scrollTop;
+    const input = win.querySelector('[name="message"]');
+    if (input && retained.focused && win.dataset.chatId === activeExpandedChat?.id) {
+      input.focus({ preventScroll: true });
+      input.setSelectionRange(retained.selectionStart, retained.selectionEnd, retained.selectionDirection);
+      input.scrollTop = retained.inputScrollTop;
+    }
+  });
   window.requestAnimationFrame(() => {
     root.querySelectorAll('.ctox-chat-window.no-left-transition').forEach((win) => {
       win.classList.remove('no-left-transition');
@@ -2051,6 +2080,9 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
 }
 
 async function submitChatForm({ root, state, chat, node, commandBus, db, sync, getActiveModule }) {
+  // A retained form must submit the current hydrated chat, not its old closure.
+  chat = state.chats.find((item) => item.id === chat.id);
+  if (!chat) return;
   if (chat.__submitting) return;
   captureDrafts(root, state);
   const input = node.querySelector('[name="message"]');
@@ -2403,9 +2435,12 @@ function preferredChatForDockOpen(state) {
 }
 
 function moveEmptyHistoricalChatToToday(state, chat) {
-  if (!state || !chat || !isChatEmptyForDeletion(chat)) return false;
+  // A typed draft (or its attachments) is the new request, not prior history.
+  // Keep the stricter deletion predicate separate from first-submission dating.
+  if (!state || !chat || chat.messages?.length || String(chat.lastTrackingId || '').trim()
+    || hasScheduledChatAttachments(chat.scheduledAttachmentsByCommand)) return false;
   const today = getLocalDateString(Date.now());
-  if (getLocalDateString(chat.createdAt) === today) return false;
+  if (getLocalDateString(chat.createdAt) >= today) return false;
   const now = Date.now();
   chat.createdAt = now;
   chat.updated_at_ms = now;
