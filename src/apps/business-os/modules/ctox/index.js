@@ -1111,6 +1111,8 @@ function render(state) {
   // flow canvas / drawer as before.
   renderTaskList(state);
   if (mainIsBusy(state)) {
+    // Confirmed control status must remain live even while the menu/editor is in use.
+    syncHarnessControlStatus(state);
     state.mainRenderPending = true;
   } else {
     state.mainRenderPending = false;
@@ -1346,7 +1348,7 @@ function buildTaskColumn(state, options = {}) {
   wireCompactMenus(left);
 }
 
-function wireCompactMenus(container) {
+function wireCompactMenus(container, onClose = null) {
   for (const details of container.querySelectorAll('.ctox-more-actions')) {
     const summary = details.querySelector('summary');
     const panel = details.querySelector('.ctox-more-actions-body');
@@ -1366,6 +1368,7 @@ function wireCompactMenus(container) {
       if (event.newState === 'closed') {
         details.open = false;
         summary.setAttribute('aria-expanded', 'false');
+        onClose?.();
       }
     });
     panel.addEventListener('keydown', (event) => {
@@ -2380,7 +2383,7 @@ function renderMain(state) {
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <h2 class="ctox-pane-title">${escapeHtml(selectedTask ? taskDisplayTitle(selectedTask, state) : t.doingNow)}</h2>
-          ${state.harnessStatus?.paused ? `<small class="ctox-paused-note">${escapeHtml(t.harnessPaused)}</small>` : ''}
+          <small class="ctox-paused-note" ${state.harnessStatus?.paused ? '' : 'hidden'}>${escapeHtml(t.harnessPaused)}</small>
         </div>
         <div class="ctox-pane-actions">
           ${selectedTask ? `<button type="button" class="ctox-button ctox-job-toggle" data-job-toggle aria-expanded="${Boolean(state.jobEditorOpen)}">${escapeHtml(t.editTask)}</button>` : ''}
@@ -2418,7 +2421,7 @@ function renderMain(state) {
   `;
   restoreFlowViewport(state, previousViewport);
   const editor = main.querySelector('[data-job-panel]');
-  wireCompactMenus(main);
+  wireCompactMenus(main, () => flushPendingMainRender(state));
   main.querySelector('[data-manage-channels]')?.addEventListener('click', () => {
     window.CTOX_BUSINESS_OS_APP?.openSettingsDrawer?.({ initialTab: 'channels' });
   });
@@ -5933,6 +5936,26 @@ function harnessStatusText(state) {
   return bits.join(' · ');
 }
 
+// Patch only facts from the hydrated native projection. Never infer acceptance
+// from a dispatched command, and do not replace the active menu/editor DOM.
+function syncHarnessControlStatus(state) {
+  const main = state.ctx?.host?.querySelector?.('[data-ctox-main]');
+  if (!main || !state.harnessStatus) return;
+  const paused = state.harnessStatus.paused === true;
+  const t = labels[state.lang];
+  const button = main.querySelector('[data-harness-pause]');
+  if (button) {
+    button.textContent = paused ? t.resumeHarness : t.pauseHarness;
+    button.setAttribute('aria-pressed', String(paused));
+    button.classList.toggle('is-active', paused);
+  }
+  const note = main.querySelector('.ctox-paused-note');
+  if (note) {
+    note.textContent = t.harnessPaused;
+    note.hidden = !paused;
+  }
+}
+
 function harnessControlsMarkup(state) {
   const t = labels[state.lang];
   const h = state.harnessStatus;
@@ -6980,4 +7003,6 @@ export const __ctoxTestHooks = {
   taskCrewNodeId,
   taskCrewStatus,
   wireTaskSourceReadiness,
+  wireLocalRealtime,
+  renderFromLocalCache,
 };

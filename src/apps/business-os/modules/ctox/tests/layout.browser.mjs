@@ -207,6 +207,7 @@ try {
       await page.screenshot({path:path.join(out,'runtime-save-reload.png')});
       await settings.evaluate(e => e.remove());
     }
+    if (width === 1280) await assertDelayedHarnessStatus(page);
     await page.close();
   }
   console.log(JSON.stringify({passed:results.length,results}));
@@ -214,4 +215,64 @@ try {
   await writeFile(path.join(out,'results.json'),JSON.stringify(results,null,2));
   await browser.close();
   await new Promise(resolve=>server.close(resolve));
+}
+
+async function assertDelayedHarnessStatus(page) {
+  await page.evaluate(async () => {
+    const {state, hooks} = window.crewFixture;
+    let projection = { id: 'harness', paused: false, service_running: true, worker_capacity: 1, updated_at_ms: 1 };
+    const listeners = new Set();
+    window.harnessControlCommands = [];
+    const emptyCollection = { find: () => ({ exec: async () => [] }), findOne: () => ({ exec: async () => null }) };
+    state.ctx.db = { collection: name => name === 'ctox_harness_status' ? {
+      findOne: () => ({ exec: async () => ({ toJSON: () => ({...projection}) }) }),
+      $: { subscribe: listener => { listeners.add(listener); return { unsubscribe: () => listeners.delete(listener) }; } },
+    } : emptyCollection };
+    state.ctx.commandBus = { dispatch: async command => {
+      window.harnessControlCommands.push(command);
+      // Command completion precedes the separate native status projection.
+      return { status: 'completed', result: { ok: true } };
+    } };
+    state.ctx.sync = { mode: 'webrtc', diagnostics: { peerConnected: true, channelState: 'open' } };
+    window.publishHarnessStatus = paused => {
+      projection = { ...projection, paused, updated_at_ms: projection.updated_at_ms + 1 };
+      for (const listener of listeners) listener({ documentData: {...projection} });
+    };
+    window.stopHarnessStatusFixture = hooks.wireLocalRealtime(state);
+    await hooks.renderFromLocalCache(state);
+  });
+  const menu = page.locator('[data-ctox-main] .ctox-more-actions > summary');
+  const pause = page.locator('[data-harness-pause]');
+  const note = page.locator('.ctox-paused-note');
+  for (const paused of [true, false]) {
+    await menu.click();
+    assert.equal(await pause.getAttribute('aria-pressed'), String(!paused));
+    await pause.click();
+    await page.waitForFunction(count => window.harnessControlCommands.length === count, paused ? 1 : 2);
+    assert.equal(await note.isVisible(), !paused, 'command completion must not optimistically change native status');
+    await page.locator('.ctox-more-actions-body').waitFor({ state: 'hidden' });
+    await menu.click();
+    assert.equal(await pause.getAttribute('aria-pressed'), String(!paused), 'reopening before projection must retain the last confirmed status');
+    await page.evaluate(paused => {
+      window.retainedPauseButton = document.querySelector('[data-harness-pause]');
+      window.publishHarnessStatus(paused);
+    }, paused);
+    await page.waitForFunction(paused => document.querySelector('[data-harness-pause]')?.getAttribute('aria-pressed') === String(paused), paused);
+    assert.equal(await pause.evaluate(button => button === window.retainedPauseButton), true, 'late projection must patch the active control without replacing its menu');
+    assert.equal(await page.locator('.ctox-more-actions-body:popover-open').count(), 1);
+    assert.equal(await note.isVisible(), paused, 'paused note must follow the native projection in both directions');
+    assert.equal(await pause.textContent(), paused ? 'Crew weiterarbeiten lassen' : 'Crew pausieren');
+    assert.equal(await page.evaluate(() => window.crewFixture.state.mainRenderPending), true);
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !window.crewFixture.state.mainRenderPending);
+    assert.equal(await page.locator('.ctox-more-actions-body:popover-open').count(), 0, 'closing the menu must flush the deferred main render');
+    assert.equal(await note.isVisible(), paused);
+  }
+  const commands = await page.evaluate(() => window.harnessControlCommands);
+  assert.deepEqual(commands.map(command => [command.command_type, command.payload.paused]), [
+    ['ctox.queue.pause', true], ['ctox.queue.pause', false],
+  ]);
+  await page.screenshot({ path: path.join(out, 'harness-resumed-without-reload.png') });
+  await page.evaluate(() => window.stopHarnessStatusFixture());
+  results.push({ scenario: 'delayed-native-pause-resume-with-open-menu', passed: true });
 }
