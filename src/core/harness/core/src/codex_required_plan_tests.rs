@@ -240,6 +240,40 @@ async fn required_initial_tool_failed_plan_call_keeps_tools_restricted() {
 }
 
 #[tokio::test]
+async fn required_initial_tool_survives_stream_disconnect_after_successful_plan() {
+    let server = MockServer::start().await;
+    // End the stream after the call, without response.completed.
+    let interrupted = sse(vec![ev_function_call(
+        "plan-before-disconnect",
+        "update_plan",
+        r#"{"plan":[{"step":"Calculate the sum","status":"completed"}]}"#,
+    )]);
+    let mock = mount_sse_sequence(&server, vec![interrupted, answer("resumed", "27")]).await;
+    let (session, context, events) = fixture(&server).await;
+    assert_eq!(
+        execute(session, context, CancellationToken::new())
+            .await
+            .as_deref(),
+        Some("27")
+    );
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    let resumed = requests[1].body_json();
+    assert!(resumed["tools"].as_array().unwrap().len() > 1);
+    assert!(resumed["input"].as_array().unwrap().iter().any(|item| {
+        item["type"] == "function_call_output" && item["call_id"] == "plan-before-disconnect"
+    }));
+    assert!(!resumed["input"].to_string().contains("correction 1 of 2"));
+    let mut plans = 0;
+    while let Ok(event) = events.try_recv() {
+        if matches!(event.msg, EventMsg::PlanUpdate(_)) {
+            plans += 1;
+        }
+    }
+    assert_eq!(plans, 1);
+}
+
+#[tokio::test]
 async fn required_initial_tool_cancelled_turn_does_not_request_correction() {
     let server = MockServer::start().await;
     let (session, context, _) = fixture(&server).await;

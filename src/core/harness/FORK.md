@@ -48,7 +48,9 @@ managed Responses request keeps `tool_choice: auto` for provider compatibility.
 If a response ends without the required call, the same bounded turn records a
 developer correction and samples again, at most twice. Repeated refusal emits a
 turn error; cancellation and the caller's existing turn deadline still apply.
-Only a successful real tool result releases the full tool surface. No plan or
+Successful tool results and their recorded outputs survive transport retries
+within the turn. Only a successful real tool result releases the full tool
+surface. No plan or
 activity event is synthesized, and CTOX's durable missing-plan completion guard
 remains authoritative.
 

@@ -5599,6 +5599,7 @@ pub(crate) async fn run_turn(
     // This evidence belongs to this turn, not to a matching call in retained
     // conversation history. Keep the provider-compatible auto tool choice.
     let mut pending_required_initial_tool = turn_context.required_initial_tool.clone();
+    let required_initial_tool_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut required_initial_tool_corrections = 0;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
@@ -5717,6 +5718,7 @@ pub(crate) async fn run_turn(
             skills_outcome,
             &mut server_model_warning_emitted_for_turn,
             pending_required_initial_tool.as_deref(),
+            Arc::clone(&required_initial_tool_called),
             cancellation_token.child_token(),
         )
         .await
@@ -5725,9 +5727,8 @@ pub(crate) async fn run_turn(
                 let SamplingRequestResult {
                     mut needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
-                    required_initial_tool_called,
                 } = sampling_request_output;
-                if required_initial_tool_called {
+                if required_initial_tool_called.load(std::sync::atomic::Ordering::Acquire) {
                     pending_required_initial_tool = None;
                 }
                 if !needs_follow_up && let Some(tool) = pending_required_initial_tool.as_deref() {
@@ -6243,6 +6244,7 @@ async fn run_sampling_request(
     skills_outcome: Option<&SkillLoadOutcome>,
     server_model_warning_emitted_for_turn: &mut bool,
     pending_required_initial_tool: Option<&str>,
+    required_initial_tool_called: Arc<std::sync::atomic::AtomicBool>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     let router = built_tools(
@@ -6282,6 +6284,17 @@ async fn run_sampling_request(
         .await;
     let mut retries = 0;
     loop {
+        if prompt.required_initial_tool.is_some()
+            && required_initial_tool_called.load(std::sync::atomic::Ordering::Acquire)
+        {
+            // A successful tool and its output may have been recorded before
+            // a retryable stream failure. Keep that evidence in this turn.
+            prompt.required_initial_tool = None;
+            prompt.input = sess
+                .clone_history()
+                .await
+                .for_prompt(&turn_context.model_info.input_modalities);
+        }
         let err = match try_run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),
@@ -6291,6 +6304,7 @@ async fn run_sampling_request(
             Arc::clone(&turn_diff_tracker),
             server_model_warning_emitted_for_turn,
             &prompt,
+            Arc::clone(&required_initial_tool_called),
             cancellation_token.child_token(),
         )
         .await
@@ -6507,7 +6521,6 @@ pub(crate) async fn built_tools(
 struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
-    required_initial_tool_called: bool,
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
@@ -7063,6 +7076,7 @@ async fn try_run_sampling_request(
     turn_diff_tracker: SharedTurnDiffTracker,
     server_model_warning_emitted_for_turn: &mut bool,
     prompt: &Prompt,
+    required_initial_tool_called: Arc<std::sync::atomic::AtomicBool>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     feedback_tags!(
@@ -7090,14 +7104,13 @@ async fn try_run_sampling_request(
         FuturesOrdered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
-    let required_initial_tool_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut active_item: Option<TurnItem> = None;
     let mut should_emit_turn_diff = false;
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
     let receiving_span = trace_span!("receiving_stream");
-    let mut outcome: CodexResult<SamplingRequestResult> = loop {
+    let outcome: CodexResult<SamplingRequestResult> = loop {
         let handle_responses = trace_span!(
             parent: &receiving_span,
             "handle_responses",
@@ -7117,7 +7130,9 @@ async fn try_run_sampling_request(
         };
 
         let event = match event {
-            Some(res) => res?,
+            Some(Ok(event)) => event,
+            Some(Err(error)) if prompt.required_initial_tool.is_some() => break Err(error),
+            Some(Err(error)) => return Err(error),
             None => {
                 break Err(CodexErr::Stream(
                     "stream closed before response.completed".into(),
@@ -7301,7 +7316,6 @@ async fn try_run_sampling_request(
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
                     last_agent_message,
-                    required_initial_tool_called: false,
                 });
             }
             ResponseEvent::OutputTextDelta(delta) => {
@@ -7405,10 +7419,6 @@ async fn try_run_sampling_request(
     .await;
 
     drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
-    if let Ok(result) = &mut outcome {
-        result.required_initial_tool_called =
-            required_initial_tool_called.load(std::sync::atomic::Ordering::Acquire);
-    }
 
     if cancellation_token.is_cancelled() {
         return Err(CodexErr::TurnAborted);
