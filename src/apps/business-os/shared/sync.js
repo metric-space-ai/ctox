@@ -24,7 +24,7 @@ import {
   normalizeCollectionReadinessState,
 } from './sync-contract.js?v=20260910-shell-v2-chat-inspection-row-v374';
 import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260910-shell-v2-chat-inspection-row-v374';
-import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20260910-shell-v2-chat-inspection-row-v374';
+import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20260913-pending-collection-changes-v375';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
