@@ -444,6 +444,31 @@ fn observe_and_input_rights_are_rechecked_and_revocation_blocks_publication() ->
 }
 
 #[test]
+fn registered_dispatch_rejects_invalid_sessions_before_driver_access() {
+    let owner = Owner::new(false);
+    let state = owner.state.clone();
+    let injection = GuestRuntimeInjection::Registered(GuestCommandExecutor::from_owner(owner));
+    let command = observe_command("cmd-invalid-session", json!({"guest_id": "guest-a"}));
+    for kind in 0..4 {
+        let mut session = session_for("owner");
+        match kind {
+            0 => session.authenticated = false,
+            1 => session.ok = false,
+            2 => session.user = None,
+            _ => session.user.as_mut().unwrap().id.clear(),
+        }
+        let error = execute_injected(&injection, &session, &command).unwrap_err();
+        assert!(
+            error.to_string().contains("authenticated session")
+                || error.to_string().contains("user identity"),
+            "{error}"
+        );
+    }
+    assert_eq!(state.captures.load(Ordering::SeqCst), 0);
+    assert_eq!(state.inputs.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn injection_from_runtime_is_unregistered() {
     assert!(matches!(
         injection_from_runtime(),

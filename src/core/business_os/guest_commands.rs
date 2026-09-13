@@ -107,6 +107,7 @@ pub(super) fn execute<O: GuestCommandOwner>(
     session: &BusinessOsSession,
     command: &BusinessCommand,
 ) -> Result<Value> {
+    require_authenticated_actor(session)?;
     let request = parse_guest_command(command)?;
     dispatch_authorized(owner, session, command, request)
 }
@@ -327,7 +328,13 @@ pub(super) fn guest_record_scope_id(command: &BusinessCommand) -> String {
 }
 
 pub(super) fn require_authenticated_actor(session: &BusinessOsSession) -> Result<&str> {
-    session_user_id(session).context("guest command is missing a user identity")
+    ensure!(
+        session.ok && session.authenticated,
+        "guest command requires an authenticated session"
+    );
+    let user_id = session_user_id(session).context("guest command is missing a user identity")?;
+    validate_identifier(user_id, "user identity")?;
+    Ok(user_id)
 }
 
 #[cfg(test)]
