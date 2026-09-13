@@ -2903,6 +2903,22 @@ async fn run_native_peer(
                 // already auto-registers every multiplexed collection inside
                 // `RxWebRTCReplicationPool::new_multi`.
                 register_demand_file_sources(pool, &database, &root);
+                let credential_reveal_root = root.clone();
+                pool.register_auxiliary_request_handler(
+                    super::rxdb_peer_credentials::CREDENTIAL_REVEAL_WEBRTC_METHOD,
+                    Arc::new(move |_peer_identity, capability_token, params| {
+                        let root = credential_reveal_root.clone();
+                        Box::pin(async move {
+                            tokio::task::spawn_blocking(move || {
+                                super::rxdb_peer_credentials::handle_credential_reveal_webrtc_request(
+                                    &root, &capability_token, params,
+                                )
+                            })
+                            .await
+                            .map_err(|_| "credential_reveal_unavailable".to_string())?
+                        })
+                    }),
+                )?;
                 let browser_live_root = root.clone();
                 let browser_live_database = Arc::clone(&database);
                 pool.register_auxiliary_request_handler(

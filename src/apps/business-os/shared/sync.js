@@ -26,6 +26,7 @@ import {
 import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260913-shell-v2-pending-collection-changes-v375';
 import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20260913-shell-v2-pending-collection-changes-v375';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
+import { assertNativeRequestPrivacy } from './native-request-privacy.mjs';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 // Multi-tab leadership may span a rolling Business OS release: an already
@@ -523,7 +524,10 @@ export function createSyncRuntime({
     // them. Without this the Browser app is dead in every tab but one.
     if (typeof multiTabCoordinator.onNativeRequest === 'function') {
       multiTabUnsubscribers.push(multiTabCoordinator.onNativeRequest(
-        (method, params, options) => requestNativeDirectly(method, params, options),
+        (method, params, options) => {
+          assertNativeRequestPrivacy(method, { relayed: true });
+          return requestNativeDirectly(method, params, options);
+        },
       ));
     }
     multiTabUnsubscribers.push(multiTabCoordinator.onRoleChange?.((status) => {
@@ -598,6 +602,7 @@ export function createSyncRuntime({
     async requestNative(method, params = {}, options = {}) {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
       const coordinator = multiTabCoordinator;
+      assertNativeRequestPrivacy(method, { isLeader: !coordinator || coordinator.isLeader?.() === true });
       // Only the leader holds the WebRTC data channel. A follower that opens
       // its own direct bridge never connects, so ask the leader first and keep
       // the direct path as the fallback for when no leader answers.

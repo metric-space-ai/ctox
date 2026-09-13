@@ -42,6 +42,11 @@ async function fixture({ allowed = true, generate = async p => receipt(p.name), 
   const module = new vm.SourceTextModule(source, { context,
     initializeImportMeta(meta) { meta.url = new URL('./index.js', import.meta.url).href; } });
   await module.link(async specifier => {
+    if (specifier === './reveal.mjs') {
+      return new vm.SyntheticModule(['mountCredentialReveal'], function() {
+        this.setExport('mountCredentialReveal', () => () => {});
+      }, { context });
+    }
     const exports = specifier.includes('i18n')
       ? { loadModuleMessages: async (_url, locale, labels) => labels[locale] }
       : { canUseBusinessPermission: () => allowed, BusinessOsPermissions: { SecretsManage: 'secrets.manage' } };
