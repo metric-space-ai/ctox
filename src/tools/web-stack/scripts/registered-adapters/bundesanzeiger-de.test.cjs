@@ -71,6 +71,10 @@ async function simulateBrowser(query, { status = 200, matchingResponse = true, n
   const cdp = {
     send: async (method) => {
       assert.equal(detached, false, "CDP must remain attached through final document check");
+      if (method === "Page.getFrameTree") {
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(detached, false, "pending document check must settle before detach");
+      }
       const frame = navigated ? currentFrame : initialFrame;
       return method === "Page.getFrameTree" ? { frameTree: { frame: replacedAfterRead && evaluations >= 2
         ? { ...frame, loaderId: "later-same-url-document" } : frame } } : {};

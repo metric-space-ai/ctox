@@ -434,7 +434,7 @@ for (let attempt = 0; attempt < 2 && !onResults; attempt += 1) {
       return { url: page.url(), blocked: true, results_page: false, entries: [] };
     }
     if (state.noResults) {
-      return completedResult({ url: page.url(), blocked: false, results_page: true, entries: [], no_results: true });
+      return await completedResult({ url: page.url(), blocked: false, results_page: true, entries: [], no_results: true });
     }
     // Wicket sometimes bounces back to the empty form; retry once.
     if (attempt === 0 && (await searchInput.count()) === 1) {
@@ -477,7 +477,7 @@ const result = await page.evaluate(() => {
     entries,
   };
 });
-return completedResult(result);
+return await completedResult(result);
 } finally {
   await cdp.detach().catch(() => {});
 }
