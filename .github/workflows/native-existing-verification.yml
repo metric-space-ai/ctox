@@ -60,7 +60,7 @@ jobs:
           for tool in qemu-img qemu-system-x86_64 Xvfb maim xdotool xev; do
             test -x "/usr/bin/$tool" || { echo "Missing guest test prerequisite: /usr/bin/$tool" >&2; exit 1; }
           done
-      - name: Verify existing reviewed corrections
+      - name: Verify corrections and package native candidate
         timeout-minutes: 85
         run: python3 src/scripts/native-existing-verification.py
       - name: Upload verification evidence
@@ -70,4 +70,11 @@ jobs:
           name: native-existing-evidence-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/native-integration/evidence/
           if-no-files-found: warn
+          retention-days: 14
+      - name: Upload verified runtime candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ctox-linux-x64-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/native-integration/artifacts/
+          if-no-files-found: error
           retention-days: 14

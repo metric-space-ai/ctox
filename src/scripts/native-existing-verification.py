@@ -247,8 +247,45 @@ def main():
     os.environ['COMMAND_PLANE_BASELINE_PATH'] = str(EVIDENCE / 'command-plane.json')
     run('rxdb-js-tests', ['node', 'src/apps/business-os/rxdb/tests/run-all.mjs',
                          '--require-wire-daemon'])
+    RECORD['scope'] = 'Verified native runtime candidate; no release publication or tenant activation'
+    run('native-build', ['cargo', 'build', '--locked', '--release', '--bin', 'ctox',
+                         '--target', TARGET, '--jobs', '2'])
+    binary = target_dir / TARGET / 'release/ctox'
+    RECORD['binary_sha256'] = digest(binary)
+    run('spawn-liveness', [str(binary), 'process-mining', 'spawn-liveness'])
+    bundle = OUT / 'bundle'
+    bundle.mkdir()
+    # Export only tracked runtime source; never copy checkout dependencies or state.
+    paths = ['install.sh', 'install.ps1', 'LICENSE', 'Cargo.toml', 'docs/legal/NOTICE',
+             'contracts/source_origins_manifest.json', 'contracts/binary_bundle_manifest.txt',
+             'src/apps/business-os', 'src/core/harness/Cargo.toml',
+             'src/core/rxdb/Cargo.toml', 'src/core/rxdb/tools/local_signaling_server.js',
+             'src/skills']
+    archive = OUT / 'tracked-runtime.tar'
+    subprocess.run(['git', 'archive', '--format=tar', '-o', str(archive), revision,
+                    '--', *paths], cwd=ROOT, check=True)
+    subprocess.run(['tar', '-xf', str(archive), '-C', str(bundle)], check=True)
+    (bundle / 'bin').mkdir()
+    shutil.copy2(binary, bundle / 'bin/ctox')
+    shutil.copytree(bundle / 'src/skills', bundle / 'skills')
+    shutil.copy2(bundle / 'docs/legal/NOTICE', bundle / 'NOTICE')
+    shutil.copytree(bundle / 'src/apps/business-os/rxdb', bundle / 'rxdb-js/app-local',
+                    ignore=shutil.ignore_patterns('node_modules'))
+    for line in (ROOT / 'contracts/binary_bundle_manifest.txt').read_text().splitlines():
+        path = line.strip()
+        if path and not path.startswith('#') and not (bundle / path).exists():
+            raise RuntimeError(f'Installer bundle manifest path missing: {path}')
     RECORD['complete'] = True
-    RECORD['scope'] = 'Native verification only; no release build or runtime artifact'
+    save()
+    (bundle / 'build-provenance.json').write_text(json.dumps(RECORD, indent=2) + '\n')
+    artifacts = OUT / 'artifacts'
+    artifacts.mkdir()
+    packaged = artifacts / 'ctox-linux-x64.tar.gz'
+    with tarfile.open(packaged, 'w:gz') as output:
+        output.add(bundle, arcname='.')
+    (artifacts / 'ctox-linux-x64.tar.gz.sha256').write_text(digest(packaged) + '  ctox-linux-x64.tar.gz\n')
+    shutil.copy2(bundle / 'build-provenance.json', artifacts / 'build-provenance.json')
+    RECORD['artifact_sha256'] = digest(packaged)
     save()
 
 
